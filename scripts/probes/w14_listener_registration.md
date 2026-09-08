@@ -31,7 +31,7 @@ Widening the scope means adding a coordinate to
 
 ## Observations
 
-Verbatim from `scripts/probes/w14_listener_registration/run.sh`, which runs `sweep.py`. **Every version below is the one the JAR itself reported** — read out of its own `META-INF/maven/*/pom.properties` — and **not the version the coordinate list asked for**. `sweep.py` compares the two and ABORTS when they disagree, rather than printing a version it did not read.
+Verbatim from `scripts/probes/w14_listener_registration/run.sh`, which runs `sweep.py`. **Every version below is the one the JAR itself reported** — and **not the version the coordinate list asked for**. WHERE each jar states it differs, so the run says which file answered rather than naming one source for all three: Maven's `META-INF/maven/*/pom.properties` where present, the manifest's `Implementation-Version` otherwise. Spring's own jars carry no `pom.properties` at all. `sweep.py` compares what it read against the coordinate and ABORTS when they disagree, rather than printing a version it did not read.
 
 | what the run read | 3.1.1 | 3.1.4 |
 |---|---|---|
@@ -51,28 +51,43 @@ Verbatim from `scripts/probes/w14_listener_registration/run.sh`, which runs `swe
 
 ### 2. The framework's own registrar: are the two levels separate paths?
 
-| registrar | methods taking a `Class` or a `Method` |
-|---|---|
-| `KafkaListenerAnnotationBeanPostProcessor` | `findListenerAnnotations(Class)`, `findListenerAnnotations(Method)`, `processMultiMethodListeners(Method)`, `processKafkaListener(Method)`, `processMainAndRetryListeners(Method)`, `checkProxy(Method)`, `noBeanFoundMessage(Class)`, `getBeansOfType(Class)` |
-| `RabbitListenerAnnotationBeanPostProcessor` | `buildMetadata(Class)`, `processMultiMethodListeners(Method)`, `processAmqpListener(Method)`, `checkProxy(Method)`, `noBeanFoundMessage(Class)`, `addToMap(Class)` |
-| `AbstractListenerAnnotationBeanPostProcessor` | `detectAnnotationsAndRegisterEndpoints(Class)`, `createAndConfigureEndpoint(Method)` |
+The second column is read from `postProcessAfterInitialization`'s own BYTECODE — what it loads immediately before branching to the class-level path. The first is the registrar's method signatures, which can show that two paths EXIST and can never show whether one excludes the other.
 
-### 3. What Sextant derives today, per shape (`spring-kafka.yml`)
+| registrar | methods taking a `Class` or a `Method` | what gates the class-level path |
+|---|---|---|
+| `KafkaListenerAnnotationBeanPostProcessor` | `findListenerAnnotations(Class)`, `findListenerAnnotations(Method)`, `processMultiMethodListeners(Method)`, `processKafkaListener(Method)`, `processMainAndRetryListeners(Method)`, `checkProxy(Method)`, `noBeanFoundMessage(Class)`, `getBeansOfType(Class)` | 247: invokedynamic #354, 0 // InvokeDynamic #5:get:(Ljava/util/Map;Ljava/lang/String;)Ljava/util/function/Supplier;<br>252: invokevirtual #357 // debug<br>255: iload 5<br>257: ifeq 270 |
+| `RabbitListenerAnnotationBeanPostProcessor` | `buildMetadata(Class)`, `processMultiMethodListeners(Method)`, `processAmqpListener(Method)`, `checkProxy(Method)`, `noBeanFoundMessage(Class)`, `addToMap(Class)` | 110: aload 4<br>112: getfield #259 // handlerMethods<br>115: arraylength<br>116: ifle 135 |
+| `AbstractListenerAnnotationBeanPostProcessor` | `detectAnnotationsAndRegisterEndpoints(Class)`, `createAndConfigureEndpoint(Method)` | no class-level path in this jar |
 
-| class-level `@KafkaListener` | method carries | rows | path derived |
+### 3. What Sextant derives, per shape (`spring-kafka.yml`)
+
+| class-level `@KafkaListener` | members | rows | paths derived |
 |---|---|---|---|
-| — | `@KafkaListener(topics=payments)` | 1 | `payments` |
-| `topics=orders` | `@KafkaHandler` | 1 | `orders` |
-| `topics=orders` | `@KafkaListener(topics=payments)` | 1 | `orderspayments` |
+| — | one `@KafkaListener(topics=payments)` | 1 | `payments` |
+| `topics=orders` | one `@KafkaHandler` | 1 | `orders` |
+| `topics=orders` | one `@KafkaListener(topics=payments)` | 1 | `payments` |
+| `topics=orders` | a `@KafkaHandler` AND a `@KafkaListener(topics=payments)` | 2 | `orders`, `payments` |
 
 ## Verdict
 
-**1. `@SqsListener` cannot be written on a type.** Its `@Target` is `METHOD` and
-nothing else, and `AbstractListenerAnnotationBeanPostProcessor` has exactly one
-endpoint-creating path, `createAndConfigureEndpoint(…, Method, …)`. **The
-class-plus-method question does not arise for SQS**, so a third of F2 §3.5's
-"measure per framework" is answered by the annotation's own declaration. A rule
-encoded for SQS would be a rule with no reachable case.
+**1. `@SqsListener` cannot be written on a type — AT 3.1.1, and not at 4.1.1.**
+Its `@Target` is `METHOD` and nothing else in the version this probe reads, and
+`AbstractListenerAnnotationBeanPostProcessor` has one endpoint-creating path,
+`createAndConfigureEndpoint(…, Method, …)`.
+
+**That bound is load-bearing and was nearly lost.** This verdict first said "the
+class-plus-method question does not arise for SQS" and "a rule encoded for SQS
+would be a rule with no reachable case" — unbounded sentences under a
+version-scope paragraph that correctly said 3.1.1.
+`scripts/probes/cp17_containers_and_class_level.md` had already measured 4.1.1:
+`@SqsListener` becomes `@Target({METHOD, TYPE})` (rows 2e/2f), `SqsHandler`
+appears declaring `isDefault()` (rows 4e/4f), and
+`detectAnnotationsAndRegisterEndpoints` runs `if (hasMethodLevelListeners) {…}`
+then `if (hasClassLevelListeners) {…}` (row 6f) — the Kafka shape, one major
+version later. `spring-sqs.yml`'s own `measured:` block names both versions, so a
+catalog written to the unbounded reading would have been wrong against a version
+the file claims to have been read against. It declares `class_level: sibling`.
+Recorded as OI-59, because the reusable part is the mistake and not the fact.
 
 **2. `@KafkaHandler` and `@RabbitHandler` declare exactly one attribute each —
 `isDefault()` — and no destination.** That settles the question §3.5 asks about
@@ -81,60 +96,69 @@ them without appealing to any behaviour: an annotation that names no destination
 registration the class-level annotation already made. `@KafkaListener` declares 20
 attributes including `topics`/`topicPattern`/`topicPartitions`; `@RabbitListener`
 declares 20 including `queues`/`queuesToDeclare`/`bindings`. The asymmetry is one
-against twenty, not a subtlety.
+against twenty. (Section 1 reports the counts; the attribute NAME is read the same
+way and is stated here rather than in the table.)
 
-This is why `spring-kafka.yml`'s prefix rule is right for the handler shape: a
+This is why `spring-kafka.yml`'s prefix rule was right for the handler shape: a
 `@KafkaHandler` contributes an EMPTY suffix, so "prefix plus suffix" is the
-class-level topic unchanged. Row 2 of section 3 measures that — `orders` in,
-`orders` out.
+class-level topic unchanged. Section 3's second row measures that — `orders` in,
+`orders` out — and it still holds under `sibling`.
 
-**3. Kafka and Rabbit each carry two independent registration paths.**
-`KafkaListenerAnnotationBeanPostProcessor` declares `findListenerAnnotations` twice
-— once taking a `Class`, once taking a `Method` — and then
-`processMultiMethodListeners(…)` for the class-level collection beside
-`processKafkaListener(…)` for each method-level one. `RabbitListener`'s registrar
-has the same pair (`processMultiMethodListeners` / `processAmqpListener`). Neither
-path excludes the other: both are invoked from the same post-processing method,
-the class-level one behind an emptiness check on the class-level collection and
-the method-level one in a loop over the annotated methods.
+**3. Two registration paths — and the three frameworks do NOT share a gate.**
+Section 2's third column is the guard's own bytecode, and the first version of this
+probe got this wrong by reading method SIGNATURES instead: signatures show that two
+paths exist and can never show whether one excludes the other. CP-17 says the same
+of its own question 5.
 
-**So a class carrying a class-level `@KafkaListener(topics="orders")` and a
-method-level `@KafkaListener(topics="payments")` registers TWO containers, on two
-different topics.**
+| framework | what guards the class-level path | so a class-level listener registers |
+|---|---|---|
+| Kafka | `iload 5; ifeq` — a boolean local set from the class-level annotation's presence | whenever the class carries one, even with **zero** `@KafkaHandler` methods |
+| Rabbit | `getfield handlerMethods; arraylength; ifle` | **only** when a `@RabbitHandler` method exists |
+| SQS 3.1.1 | no class-level path in the jar | never |
 
-**4. Sextant publishes one row, addressed to neither.** Section 3, row 3: `orders`
-prefixed onto `payments` gives **`orderspayments`** — a topic no broker carries,
-at `resolved`. Two readable destinations become one unreadable one. Row 1 is the
-control: the same method-level annotation with no class-level listener above it
-derives `payments` correctly, so the composition is what breaks it and not the
-method-level read.
+Both registrars do run the per-method loop regardless, so a method-level listener
+is always its own registration — which is what §3.5's conjunct turns on. What
+differs is whether the CLASS-level one also binds: Kafka builds and registers a
+`MultiMethodKafkaListenerEndpoint` with an empty handler list, so it binds a topic
+no method serves; Rabbit does not reach that call at all. "Registers" here means
+the registrar builds an endpoint down that path — what a running broker then does
+with a handler-less endpoint is not established by reading bytecode, and the
+boundary below says so.
 
-**What this means for W15.** The distinction to encode is not "Kafka versus HTTP".
-It is between an annotation that CARRIES a destination and one that does not:
+**4. Sextant published one row addressed to neither.** Section 3, third row:
+`orders` prefixed onto `payments` gave **`orderspayments`** — a topic no broker
+carries, at `resolution: resolved` (the table shows the path; the resolution was
+checked separately). Row 1 is the control: the same method-level annotation with no
+class-level listener above it derives `payments`, so the composition is what broke
+it and not the method-level read.
 
-- a class-level annotation carrying a destination is a **sibling registration** —
-  its address stands alone, and so does each method-level one;
-- a class-level annotation whose methods carry no destination of their own is a
-  **prefix** in effect, though only because the suffix is empty.
-
-Encoding the relationship as a per-catalog conjunct (§3.5's proposal) covers both,
-and the `@KafkaHandler` case keeps working under either reading — which is what
-makes the conjunct safe to add before every framework has been re-examined.
+**W15's conjunct fixes it, and row 4 is the row that proves it is a fix rather than
+a silencing.** The three-member shape — a class listener, a `@KafkaHandler` serving
+it, and a method listener of its own — derives **two** rows, `orders` and
+`payments`. A two-member shape cannot tell "no longer composed" from "gone", and
+§3.5 rejects the silent loss as firmly as the fabrication.
 
 ## What this probe deliberately did not measure
 
 - **A running broker, or a running Spring context.** Every finding above is read
   out of the shipped bytecode: `@Target` and the declared attributes are the
-  annotations' own statements, and the registrar's paths are its own method set.
-  What is NOT established this way is that both containers actually start — only
-  that the framework builds an endpoint down each path.
+  annotations' own statements, the registrar's paths are its own method set, and
+  the class-level guard is that method's own instructions. What is NOT established
+  this way is that either container actually starts — only that the framework
+  builds an endpoint down each path.
+- **Two verdict claims are read the same way as the tables but do not appear in
+  them**, and are named here rather than left to look generated: the handler
+  attribute's NAME (`isDefault()` — section 1 prints the count), and the
+  `resolution: resolved` on the `orderspayments` row (section 3 prints the path).
+  Both were read with the same commands the tables use.
 - **Whether a class-level and a method-level listener on the SAME topic dedupe.**
   Section 3 uses two different topics because that is the case that fabricates;
   the same-topic case would collapse on wire identity anyway (D02 §5) and says
   nothing about the composition rule.
 - **`@KafkaListeners` / `@RabbitListeners`**, the repeatable containers. They fold
   several annotations onto one element, which is a different question from
-  composing two levels, and `spring-kafka.yml` already declares the Kafka one.
+  composing two levels, and `spring-kafka.yml` and `spring-rabbit.yml` each already
+  declare their own.
 - **Any framework outside these three.** The sweep answers Kafka, Rabbit and SQS
   because those are what §3.5 names; a fourth messaging catalog needs its own row
   here before a relationship is declared for it.

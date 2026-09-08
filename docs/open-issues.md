@@ -1998,3 +1998,33 @@ workspaces when it next fails, then diff the parquet CONTENT (not bytes) to see
 whether a value or only the encoding moved. **Falsified by** showing the one
 observed failure was environmental (a truncated write, a full disk), which the
 captured workspaces would also settle.
+
+### OI-59 — a measurement bounded to one version, read as if it were general
+**Minor · found 2026-09-08 in the W14 review · this file, and
+`scripts/probes/w14_listener_registration.md`**
+
+This entry originally said `spring-sqs.yml` declares a `prefix_annotation` that can
+never match, because `@SqsListener` is `@Target(METHOD)`. That is true at
+spring-cloud-aws-sqs **3.1.1** and false at **4.1.1**, which
+`scripts/probes/cp17_containers_and_class_level.md` had already measured (rows
+2e/2f) and which `spring-sqs.yml`'s own `measured:` block names. The key is live,
+and the catalog now declares `class_level: sibling` because of it.
+
+**The entry is kept, rewritten, because the mistake is the reusable part.** W14's
+sweep read one version, its version-scope paragraph correctly bounded the reading
+to 3.1.1 — and then three sentences of its verdict, the ones W15 was going to
+consume, were written unbounded: "the question does not arise for SQS", "a rule
+encoded for SQS would be a rule with no reachable case". A bounded measurement
+narrated as a general fact is how a §5.4 scope statement stops protecting anything,
+and it nearly shipped a catalog that composes two SQS registrations into one
+address at 4.1.1.
+
+**Consequence:** none now — the verdict is corrected and the conjunct declared.
+The residual is that no mechanism connects a probe's verdict to the versions its
+own scope paragraph names.
+
+**Closes by** a check that a probe's Verdict does not assert about an artifact at
+versions outside its `## Observations` — which `tests/architecture/test_probe_provenance.py`
+already has the pieces for, since it parses both. **Falsified by** showing the
+existing scope test already catches this, which it does not: it compares column
+headers to the scope paragraph, never the prose to either.

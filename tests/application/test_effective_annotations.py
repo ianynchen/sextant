@@ -220,6 +220,7 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         direction="inbound",
         type_annotation=None,
         prefix_annotation=["com/acme/rest/Mapping#"],
+        class_level="prefix",
         mapping_annotations=[{"fqn": "com/acme/rest/Get#", "methods": ["GET"]}],
         path_from=["value"],
         prefix_from=["value"],

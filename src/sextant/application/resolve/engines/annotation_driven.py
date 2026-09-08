@@ -87,6 +87,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             else []
         ),
         prefix_annotation=prefix_fqns,
+        # F2 §3.5's relationship conjunct. How a class-level annotation relates
+        # to the methods inside it — `prefix` (compose, the HTTP shape) or
+        # `sibling` (a method naming its own destination is its OWN
+        # registration, the messaging shape). Defaults to `prefix`, which is
+        # what every catalog written before it assumed.
+        class_level=_class_level(mapping, catalog),
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
         mapping_annotations=mapping_annotations,
@@ -348,6 +354,56 @@ _PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
     "read_accessor_property": ("get", "is"),
     "write_accessor_property": ("set",),
 }
+
+
+# F2 §3.5. How a class-level annotation relates to the methods inside it.
+#
+# `prefix` composes the two, which is right where composition is real: an HTTP
+# `@RequestMapping("/api")` on the class and `@GetMapping("/orders")` on the
+# method address `/api/orders`, and a WebSocket `@ServerEndpoint("/live")` whose
+# `@OnMessage` methods carry no address of their own take the class's unchanged.
+#
+# `sibling` is right where it is not. Measured per framework in
+# `scripts/probes/w14_listener_registration.md`: `@KafkaListener` and
+# `@RabbitListener` are both `@Target(TYPE, METHOD)`, both declare a destination
+# attribute, and both registrars declare TWO paths — `findListenerAnnotations`
+# taking a `Class` beside one taking a `Method`, feeding
+# `processMultiMethodListeners` beside `processKafkaListener` — with neither
+# excluding the other. A class carrying both therefore registers TWO containers
+# on two topics, and composing them produced `orderspayments`, a destination no
+# broker carries, at `resolved`.
+_CLASS_LEVEL = "class_level"
+_PREFIX = "prefix"
+_SIBLING = "sibling"
+_CLASS_LEVEL_VALUES = (_PREFIX, _SIBLING)
+
+
+def _class_level(mapping: dict[str, Any], catalog: Catalog) -> str:
+    """The declared relationship, defaulting to `prefix`.
+
+    Defaulted rather than required, and this is the one decision here worth
+    stating: every catalog written before §3.5 assumed composition, so requiring
+    the key would refuse ten shipped files to describe a rule nine of them
+    already follow. The default is the OLD behaviour, so adding the key changes
+    only the catalogs that declare it.
+
+    What the default is NOT is a claim that composition is right for an
+    undeclared catalog — it is a claim that this key is how a catalog says
+    otherwise. A messaging catalog that declares neither still composes, which
+    is why `spring-kafka.yml` and `spring-rabbit.yml` declare it explicitly
+    rather than relying on anything.
+    """
+    declared = mapping.get(_CLASS_LEVEL, _PREFIX)
+    if declared not in _CLASS_LEVEL_VALUES:
+        # Unreachable through `derive_endpoints`, which refuses this in its
+        # pre-flight before `endpoints_reset` — kept because this function is
+        # also the one a future caller would reach first, and a reader should
+        # not have to know the pre-flight exists to know the value is closed.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{_CLASS_LEVEL}: {declared!r}` is not "
+            f"one of {list(_CLASS_LEVEL_VALUES)} (F2 §3.5)"
+        )
+    return str(declared)
 
 
 def _mapping_annotation(mapping: dict[str, Any], entry: dict[str, Any]) -> dict[str, object]:

@@ -84,7 +84,7 @@ def derive_endpoints(
     # engine that does not exist is a broken file, and a broken file must not
     # leave a half-emptied endpoints table behind it.
     engines = [
-        (catalog, _engine_for(_wire_identity_checked(_owner_form_checked(catalog))))
+        (catalog, _engine_for(_wire_identity_checked(_shape_checked(catalog))))
         for catalog in catalogs
     ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
@@ -245,9 +245,17 @@ def _at(holder: object, path: tuple[str, ...]) -> list[tuple[str, object]]:
     return [(f"{key}.{label}", value) for label, value in _at(holder[key], rest)]
 
 
-def _owner_form_checked(catalog: Catalog) -> Catalog:
-    """Refuses a catalog whose widened type-name keys hold neither a type nor a
-    list of them, and returns it otherwise.
+def _shape_checked(catalog: Catalog) -> Catalog:
+    """Refuses a catalog whose declared shape the derivation cannot honour, and
+    returns it otherwise. Two rules today: the widened type-name keys, and §3.5's
+    `class_level` vocabulary.
+
+    Both are here for the same reason, and it is the reason this function was
+    renamed from `_owner_form_checked`. A check that lives inside an ENGINE runs
+    after `endpoints_reset` — and worse, runs only when the catalog's
+    capabilities are met, so a typo in a skipped catalog is not caught at all
+    until the day the capability arrives. Shape is knowable without running
+    anything, so it is checked before anything is written.
 
     Here, in the pre-flight, for the reason stated above `endpoints_reset`: each
     conversion otherwise happens inside an engine, which runs once the table has
@@ -267,6 +275,17 @@ def _owner_form_checked(catalog: Catalog) -> Catalog:
     may write is a check with no consumer (OI-53).
     """
     matches = getattr(catalog, "matches", None)
+    mapping = matches.get("mapping") if isinstance(matches, dict) else None
+    if isinstance(mapping, dict) and "class_level" in mapping:
+        declared = mapping["class_level"]
+        if declared not in ("prefix", "sibling"):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `mapping.class_level: {declared!r}` is not "
+                f"one of ['prefix', 'sibling'] (F2 §3.5). `prefix` composes a class-level "
+                f"address with each method's; `sibling` lets a method that names its own "
+                f"destination stand alone. A typo falls through to the default and composes "
+                f"silently, which is the failure the conjunct exists to stop."
+            )
     for path in _WIDENED_KEYS:
         for label, declared in _at(matches, path):
             # An explicit `None` is "this catalog declares no such gate", which

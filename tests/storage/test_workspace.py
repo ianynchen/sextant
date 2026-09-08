@@ -252,6 +252,11 @@ _TOPIC_ENDPOINT_KWARGS = {
     "direction": "inbound",
     "type_annotation": None,
     "prefix_annotation": ["com/acme/messaging/annotation/Topic#"],
+    # F2 §3.5's relationship conjunct. `prefix` is the default the engine binds
+    # for a catalog that declares nothing, and these rows compose a class-level
+    # prefix with each method's — so `prefix` is what keeps them describing what
+    # they described before the conjunct existed.
+    "class_level": "prefix",
     "mapping_annotations": [{"fqn": "com/acme/messaging/annotation/OnMessage#", "methods": None}],
     "prefix_from": [],
     "peer_from": [],

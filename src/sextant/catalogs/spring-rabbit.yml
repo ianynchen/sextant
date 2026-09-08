@@ -53,6 +53,22 @@ matches:
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
+    # F2 §3.5's relationship conjunct. A class-level `@RabbitListener` and a
+    # method-level one are TWO INDEPENDENT REGISTRATIONS, not a prefix and a
+    # suffix — measured in `scripts/probes/w14_listener_registration.md`:
+    # `@RabbitListener` is `@Target(TYPE, METHOD)`, declares `queues` at both
+    # levels, and Rabbit's registrar declares two paths (one taking a
+    # `Class`, one a `Method`) with neither excluding the other. Composed, a
+    # class on `orders` and a method on `payments` published `orderspayments` —
+    # a destination no broker carries — at `resolved`.
+    #
+    # `@RabbitHandler` is unaffected and that is the point of the conjunct rather
+    # than of a special case: it declares exactly one attribute, `isDefault()`,
+    # and no destination, so it names none of its own and takes the class's
+    # under either value. The rule distinguishes "this member names a
+    # destination" from "this member names none", which is the distinction the
+    # framework itself makes.
+    class_level: sibling
     prefix_annotation: org.springframework.amqp.rabbit.annotation.RabbitListener
     annotations:
       # A plain, method-level `@RabbitListener` — the ordinary listener shape.

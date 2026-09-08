@@ -6736,3 +6736,166 @@ def test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling(
     scalar_rows = rows(shipped)
     assert scalar_rows, "the fixture derived nothing; this test would pass on any change"
     assert rows(listed) == scalar_rows
+
+
+# --- F2 §3.5's relationship conjunct (W14/W15) -----------------------------
+
+_KAFKA_LISTENER = "org/springframework/kafka/annotation/KafkaListener#"
+_KAFKA_HANDLER = "org/springframework/kafka/annotation/KafkaHandler#"
+
+
+def _kafka_class_facts(root: Path, class_topic: str | None, members: tuple) -> None:
+    """A class carrying an optional class-level `@KafkaListener`, plus one method
+    per `(annotation, topic)`."""
+    owner = "com/acme/orders/Orders#"
+    facts: list = [
+        SymbolFact(document_id="doc_k", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    if class_topic is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_k",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_KAFKA_LISTENER, args={"topics": [class_topic]}),
+            )
+        )
+    for index, (annotation, topic) in enumerate(members):
+        method = f"{owner}onEvent{index}(sig_{index})."
+        facts.append(
+            SymbolFact(
+                document_id="doc_k",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="V")),
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_k",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation=annotation, args={} if topic is None else {"topics": [topic]}
+                ),
+            )
+        )
+    write_fact_file(
+        root / "Orders.jsonl",
+        Document(
+            document_id="doc_k",
+            relative_path="com/acme/orders/Orders.java",
+            module_id="com.acme:orders-service",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=2,
+            scanner_id="asm",
+            content_hash="sha256:a",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:b",
+        ),
+        facts,
+    )
+
+
+def _kafka_paths(tmp_path: Path, class_topic: str | None, members: tuple) -> set[str]:
+    root = tmp_path / "facts"
+    _kafka_class_facts(root, class_topic, members)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    kafka = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-kafka")
+    derive_endpoints(
+        workspace,
+        [kafka],
+        capabilities={"annotation_args", "typed_signatures", "nested_annotation_args"},
+    )
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_class_and_a_method_listener_are_two_registrations_not_a_composed_one(tmp_path: Path):
+    """F2 §3.5, and the row it exists to change.
+
+    A class-level `@KafkaListener(topics="orders")` and a method-level
+    `@KafkaListener(topics="payments")` are TWO independent registrations —
+    measured in `scripts/probes/w14_listener_registration.md`: the annotation is
+    `@Target(TYPE, METHOD)`, declares `topics` at both levels, and Spring's
+    registrar declares two paths (one taking a `Class`, one a `Method`) with
+    neither excluding the other.
+
+    Composed, they published **`orderspayments`** — a topic no broker carries —
+    at `resolved`. Two readable destinations became one unreadable one.
+
+    The THREE-member shape is the one asserted, not the two-member one: a class
+    listener, a `@KafkaHandler` serving it, and a method listener of its own.
+    That is what distinguishes "the class topic is no longer composed onto the
+    method's" from "the class topic is gone" — the silent loss §3.5 rejects as
+    firmly as it rejects the fabrication.
+    """
+    assert _kafka_paths(
+        tmp_path, "orders", ((_KAFKA_HANDLER, None), (_KAFKA_LISTENER, "payments"))
+    ) == {"orders", "payments"}
+
+
+def test_a_kafka_handler_still_takes_the_class_level_topic(tmp_path: Path):
+    """The paired positive, and the reason the conjunct is a rule rather than a
+    special case: a `@KafkaHandler` declares exactly one attribute, `isDefault()`,
+    and NO destination — so it names none of its own and takes the class's under
+    either value of `class_level`. `sibling` distinguishes "this member names a
+    destination" from "this member names none", which is the distinction the
+    framework itself makes; it does not distinguish Kafka from HTTP."""
+    assert _kafka_paths(tmp_path, "orders", ((_KAFKA_HANDLER, None),)) == {"orders"}
+
+
+def test_an_http_class_level_mapping_still_composes(tmp_path: Path):
+    """The other half: `prefix` is the default and HTTP still composes. A rule
+    that silenced composition everywhere would pass both tests above."""
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    # `/v1` on the class, `/orders` on the methods — composed, as they must be.
+    assert paths == {"/v1/orders", "/v1/orders/{id}"}
+
+
+def test_a_catalog_declaring_an_unknown_class_level_value_is_refused(tmp_path: Path):
+    """The vocabulary is closed. A typo (`siblings`, `PREFIX`) would otherwise
+    fall through to the default and compose silently — the failure the conjunct
+    exists to stop, reintroduced by a spelling mistake.
+
+    Refused in `derive_endpoints`'s PRE-FLIGHT, not inside the engine, and the
+    capabilities passed here are what proves it: they are deliberately too few
+    for `spring-kafka` to run at all. A check inside the engine would not fire
+    for a skipped catalog, so a typo would sit unnoticed until the day the
+    capability arrived — and would then raise after `endpoints_reset`, taking
+    the previous run's rows with it."""
+    kafka = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-kafka")
+    broken = Catalog(
+        **{
+            **vars(kafka),
+            "matches": {
+                **kafka.matches,
+                "mapping": {**kafka.matches["mapping"], "class_level": "siblings"},
+            },
+        }
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.derive("endpoints_reset")
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, path) VALUES ('kafka','inbound','/prior')"
+        )
+        with pytest.raises(CatalogError) as refusal:
+            derive_endpoints(workspace, [broken], capabilities=set())
+        assert "class_level" in str(refusal.value)
+        # Refused BEFORE the reset: the previous run's row is still there.
+        assert [row["path"] for row in workspace.query("endpoints")] == ["/prior"]
+    finally:
+        workspace.close()

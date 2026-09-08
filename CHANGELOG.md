@@ -14,6 +14,53 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A class-level and a method-level listener were glued into one address that
+  addresses nothing** — `@KafkaListener(topics="orders")` on the class and
+  `@KafkaListener(topics="payments")` on a method published **`orderspayments`**, a
+  topic no broker carries, at `resolution: resolved` (W14/W15).
+
+  Measured per framework before encoding anything
+  (`scripts/probes/w14_listener_registration.md`), from the shipped bytecode rather
+  than from documentation. `@KafkaHandler` and `@RabbitHandler` declare exactly ONE
+  attribute each — `isDefault()` — and no destination, against `@KafkaListener`'s
+  twenty; an annotation that names no destination cannot be an independent
+  registration, which settles §3.5's question about them without appealing to any
+  behaviour. Both registrars run their per-method loop regardless of any
+  class-level annotation, so a method-level listener is always its own
+  registration.
+
+  **The three frameworks do not share a gate, and reading method signatures said
+  they did.** The first version of the probe inferred "two paths, neither excluding
+  the other" from a table of parameter types. Kafka's guard is `iload; ifeq` on the
+  class-level annotation's presence, so it registers even with zero handler
+  methods; Rabbit's is `getfield handlerMethods; arraylength; ifle`, so it does not
+  register at all without one. The probe prints the guard's own instructions now —
+  CP-17's convention for exactly this question — instead of describing them.
+
+  `mapping.class_level` declares the relationship: `prefix` composes (the default,
+  and what HTTP needs), `sibling` lets a method naming its own destination stand
+  alone. The distinction is **whether the member names a destination**, not
+  "messaging versus HTTP" — which is why `@KafkaHandler` needs no special case, and
+  why the three-member shape (class listener + handler + method listener) now
+  derives **two** rows, `orders` and `payments`, rather than trading a fabrication
+  for the silent loss §3.5 rejects just as firmly.
+
+  **`spring-sqs.yml` needed it too, and a bounded measurement read as a general one
+  nearly hid that.** `@SqsListener` is `@Target(METHOD)` at 3.1.1 — so the shape
+  cannot arise — and `@Target({METHOD, TYPE})` at 4.1.1, with an `SqsHandler` and a
+  `hasClassLevelListeners` branch, which `scripts/probes/cp17_containers_and_class_level.md`
+  had already measured and the catalog's own `measured:` block already names. The
+  probe's version scope said 3.1.1; three sentences of its verdict did not, and
+  those were the sentences the next wave was going to consume (OI-59).
+
+  The addresses-nothing gate is unchanged, and that is a finding rather than an
+  omission: both instances §3.5 named are closed at their sources. The
+  `StringConcatFactory` recipe is read since W7/W8, so a hole arrives as `{}` and
+  "the template is the wire identity" is a stated rule rather than half an address;
+  `orderspayments` never forms now. An empty HTTP address canonicalises to `/`,
+  which a controller genuinely serves, so the gate is correctly scoped to the
+  non-canonical protocols where an empty address really is nothing.
+
 - **Spring Boot 2's JMS surface was invisible, its SOAP operations were nameless, and its
   JMS envelope was published as a payload contract** — one package rename, three different
   failure modes (W11/W12).

@@ -304,6 +304,7 @@ matches:
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: "…annotation.RequestMapping"
+    class_level: prefix          # or `sibling`; `prefix` is the default
     annotations:
       - { fqn: "…annotation.RequestMapping" }
       - { fqn: "…annotation.GetMapping",    method: [GET] }
@@ -315,7 +316,37 @@ framework rather than working around it: `@GetMapping` *is* `@RequestMapping` wi
 pre-set, and its own class file says so — it is meta-annotated
 `@RequestMapping(method = [GET])` and declares no `method` attribute of its own.
 
-Four rules follow, and none of them names a framework:
+Five rules follow, and none of them names a framework:
+
+- **`class_level` says whether a class-level address COMPOSES with each method's**, and it is
+  the one rule here about the RELATIONSHIP between the two levels rather than about where a
+  value is read. Two values, and a value outside them is refused by name:
+
+  - **`prefix`** (the default) composes them. `@RequestMapping("/api")` on the class and
+    `@GetMapping("/orders")` on the method address `/api/orders`, and a WebSocket
+    `@ServerEndpoint("/live")` whose `@OnMessage` methods carry no address of their own take
+    the class's unchanged.
+  - **`sibling`** does not. A method that names its own destination is its OWN registration
+    and takes its own address whole; a method that names none still takes the class's, which
+    is what keeps the handler shape working under either value.
+
+  **Declared, not inferred from the protocol.** Measured per framework in
+  `scripts/probes/w14_listener_registration.md`: `@KafkaListener` and `@RabbitListener` are
+  `@Target(TYPE, METHOD)`, declare a destination at both levels, and their registrars each
+  declare two paths — one taking a `Class`, one a `Method` — with neither excluding the
+  other, so a class carrying both registers **two** containers on two topics. Composed, they
+  published `orderspayments`, a destination no broker carries, at `resolved`. `@SqsListener`
+  is `@Target(METHOD)` only, so the question cannot arise for it at all.
+
+  The distinction the value encodes is **whether the member names a destination of its own**,
+  not "messaging versus HTTP". That is why `@KafkaHandler` needs no special case: it declares
+  exactly one attribute, `isDefault()`, and no destination, so both values agree about it.
+
+  The default is `prefix` because every catalog written before this key assumed composition;
+  making it required would refuse ten shipped files to state a rule nine already follow. A
+  messaging catalog must therefore declare `sibling` explicitly rather than rely on anything.
+  The value is refused in `derive_endpoints`'s pre-flight, before any table is emptied — an
+  engine-level check would not fire at all for a catalog skipped on capabilities.
 
 - **`prefix_annotation` names the type-level annotation carrying the path prefix**, and it
   reads `path_from` like everything else. It stays a separate field rather than being inferred
@@ -415,6 +446,15 @@ matches:
   class-level `@KafkaListener`'s *topic name*, which has no segments, and a `/` inserted into
   one would invent a destination no broker carries. So the key is **opt-in, never an engine
   default**, and `spring-kafka.yml` says in place why it declares none.
+
+  **Declaring no separator was not the same as declaring no composition, and that gap was a
+  live fabrication.** With `path_separator` absent the seam stayed a bare concatenation, so a
+  class-level `@KafkaListener("orders")` and a method-level one on `payments` composed to
+  `orderspayments` — a topic no broker carries, at `resolved`. The separator key answers "with
+  what do the halves join"; it cannot answer "do they join at all". `class_level: sibling`
+  answers the second, and the two keys are independent: a `sibling` catalog needs no separator
+  because it never joins, and a `prefix` catalog without one joins bare, which is right where
+  the halves are meant to abut.
 
   Two forms were derived wrong while the seam was a bare concatenation, both ordinary Spring
   and both found live against `spring-petclinic-microservices`:

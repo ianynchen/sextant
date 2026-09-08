@@ -88,7 +88,23 @@ matches:
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
+    # F2 §3.5's relationship conjunct, and this catalog needs it at 4.1.1 even
+    # though the shape CANNOT ARISE at 3.1.1 — which is why it is declared rather
+    # than left to a reading of one version. Measured
+    # (`scripts/probes/cp17_containers_and_class_level.md`, rows 2e/2f, 4e/4f,
+    # 6e/6f): `@SqsListener` is `@Target(METHOD)` at 3.1.1 and
+    # `@Target({METHOD, TYPE})` at 4.1.1; `SqsHandler` is absent at 3.1.1 and
+    # declares `isDefault()` at 4.1.1; and 4.1.1's
+    # `detectAnnotationsAndRegisterEndpoints` runs `if (hasMethodLevelListeners)
+    # {...}` and `if (hasClassLevelListeners) {...}` in sequence, neither
+    # excluding the other — the same two-independent-registrations shape Kafka
+    # has, arriving one major version later.
+    #
+    # `measured:` above already covers both versions, so a catalog that composed
+    # here would be wrong against a version this file claims to have been read
+    # against.
     prefix_annotation: io.awspring.cloud.sqs.annotation.SqsListener
+    class_level: sibling
     annotations:
       # A plain, method-level `@SqsListener` — the ordinary listener shape.
       #

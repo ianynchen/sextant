@@ -127,6 +127,9 @@
 --                           deriving it is reading the framework rather than
 --                           guessing; a catalog that declares no default gets
 --                           no scope, never a plausible-looking one (DR-6).
+--   $class_level         -- `prefix` or `sibling` (F2 §3.5): whether a type-level
+--                           address COMPOSES with each member's, or a member
+--                           naming its own destination stands alone
 --   $path_separator      -- what joins a TYPE-level prefix to the address it
 --                           prefixes, and the character deduped at the seam
 --                           where both halves already carry it. NULL where a
@@ -985,7 +988,27 @@ derived AS (
         -- separator this engine would be inventing), and an empty
         -- `scoped_name` — the catalogs whose method-level annotation
         -- carries no path attribute at all — leaves the prefix alone.
-        CASE WHEN type_prefix = '' OR scoped_name = ''
+        --
+        -- F2 §3.5's relationship conjunct. `$class_level` says whether the two
+        -- halves COMPOSE at all. Under `sibling` a member that names its own
+        -- destination is its own registration and takes that address whole,
+        -- never the type-level one in front of it.
+        --
+        -- WHICH frameworks that describes is catalog data and is deliberately
+        -- not named here — the catalogs that declare `sibling` carry the
+        -- measurement, and `scripts/probes/w14_listener_registration.md` carries
+        -- the evidence. What this file needs to know is only the shape: where a
+        -- type-level and a member-level declaration each name a destination and
+        -- the two are independent registrations, composing them produces a third
+        -- address that neither names and nothing serves, published at `resolved`.
+        --
+        -- A member naming NO destination still takes the type-level one under
+        -- either value, which is what keeps the polymorphic-handler shape
+        -- working: such a member carries no address, so both values agree, and
+        -- they agree by construction rather than by a second rule.
+        CASE WHEN $class_level = 'sibling' AND scoped_name <> ''
+             THEN scoped_name
+             WHEN type_prefix = '' OR scoped_name = ''
                   OR $path_separator IS NULL
              THEN type_prefix || scoped_name
              ELSE rtrim(type_prefix, $path_separator) || $path_separator
