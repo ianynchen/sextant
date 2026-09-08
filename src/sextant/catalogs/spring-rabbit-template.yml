@@ -10,11 +10,24 @@ detect:
 measured:
   - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # `AmqpTemplate`, the interface a codebase declares its field as, is in
+  # spring-amqp rather than spring-rabbit where the template class lives — so it
+  # is a second artifact and needs its own row. CP-10's harness ABORTED until its
+  # coordinate was added, which is how the wrong artifact was caught.
+  - { artifact: org.springframework.amqp:spring-amqp, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.amqp.rabbit.core.RabbitTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework.amqp:spring-amqp 3.1.4 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.amqp.rabbit.core.RabbitTemplate
+    - org.springframework.amqp.core.AmqpTemplate
   # AMQP's wire identity is the exchange AND the routing key: a broker routes
   # on the pair, and either half alone names a different destination — the
   # exchange alone names everything bound to it, the routing key alone

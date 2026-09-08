@@ -40,7 +40,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
@@ -106,7 +106,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forwards it, and `direction` is the catalog's own declared field unless
     the matched row overrides it."""
     matches = catalog.matches
-    owner = _catalog_symbol(matches["owner"])
+    # A catalog may name ONE library under several names (§3.1): `JmsTemplate`
+    # and the `JmsOperations` interface a codebase more often declares its field
+    # as, or a type under its old package. A scalar stays valid and every shipped
+    # catalog still writes one, so this is a widening rather than a migration.
+    owners = catalog_symbols(matches["owner"])
     # A list, not a dict-by-name (Task 6): `arity` lets two rows share a
     # `name` — `send(topic, payload)` and `send(topic, key, payload)` — and a
     # dict keyed by name would let the second overwrite the first.
@@ -192,7 +196,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
     configured_addresses = _configured_addresses(
-        owner, default_address, call_sites, by_caller, field_sources, supertypes
+        owners, default_address, call_sites, by_caller, field_sources, supertypes
     )
     rows: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here: two calls whose paths
@@ -203,7 +207,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # declared capture failed (I1) and still dedup on the path it did read.
     seen: set[tuple[str, str, str, str]] = set()
     for site in call_sites:
-        if site["owner"] != owner:
+        if site["owner"] not in owners:
             continue
         arguments = site["arguments"]
         method = _matching_method(methods, site["name"], site[_DESCRIPTOR], arguments)
@@ -809,7 +813,7 @@ def _declaring_type(caller: str) -> str | None:
 
 
 def _configured_addresses(
-    owner: str,
+    owners: tuple[str, ...],
     setup: dict[str, Any] | None,
     call_sites: list[dict[str, Any]],
     by_caller: dict[str, list[dict[str, Any]]],
@@ -838,7 +842,7 @@ def _configured_addresses(
         return {}
     candidates: dict[str, set[str | None]] = {}
     for site in call_sites:
-        if site["owner"] != owner or site["name"] != setup["method"]:
+        if site["owner"] not in owners or site["name"] != setup["method"]:
             continue
         caller = str(site["caller"])
         declaring = _declaring_type(caller)

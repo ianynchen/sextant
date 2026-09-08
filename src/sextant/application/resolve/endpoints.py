@@ -25,6 +25,7 @@ from sextant.application.resolve.engines import (
     supertype_derived,
     supertype_dispatch,
 )
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 
 # The styles that run after every call-site and annotation style, whatever
 # their own declared direction (D02 §3). The `protocol_hint` precedent: a
@@ -82,7 +83,10 @@ def derive_endpoints(
     # Every style is resolved before anything is written. A catalog naming an
     # engine that does not exist is a broken file, and a broken file must not
     # leave a half-emptied endpoints table behind it.
-    engines = [(catalog, _engine_for(_wire_identity_checked(catalog))) for catalog in catalogs]
+    engines = [
+        (catalog, _engine_for(_wire_identity_checked(_owner_form_checked(catalog))))
+        for catalog in catalogs
+    ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
     # catalogs both matching and both producing endpoints, so a per-catalog
     # rebuild would leave only whichever ran last. Unconditional, so a resolve
@@ -182,6 +186,29 @@ def _derives_endpoint_rows(catalog: Catalog) -> bool:
         return False
     declared = _DERIVES_ROWS.get(catalog.style)
     return declared is None or declared(catalog)
+
+
+def _owner_form_checked(catalog: Catalog) -> Catalog:
+    """Refuses a catalog whose `matches.owner` is neither a type nor a list of
+    them, and returns it otherwise.
+
+    Here, in the pre-flight, for the reason stated above `endpoints_reset`: the
+    conversion itself lives in the call-site engine and runs once the table has
+    already been emptied, so a malformed `owner` raised there left every previous
+    run's endpoint gone and no new rows written — a broken file half-emptying the
+    table, which is exactly what resolving every style up front exists to
+    prevent. Converting here as well costs one pass over the catalogs and turns
+    the failure back into a refusal before anything is written.
+
+    Only `matches.owner`. The other `owner` keys — `channel_via`'s, the wrappers'
+    — still name one type each and are converted where they are read; §3.1
+    widened this key alone, and a check for a form nothing writes yet is a
+    mechanism with no consumer.
+    """
+    matches = getattr(catalog, "matches", None)
+    if isinstance(matches, dict) and "owner" in matches:
+        catalog_symbols(matches["owner"], f"{catalog.source}: matches.owner")
+    return catalog
 
 
 def _wire_identity_checked(catalog: Catalog) -> Catalog:

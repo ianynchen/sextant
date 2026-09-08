@@ -202,7 +202,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SINGLE_CALL,
-                find='        if site["owner"] != owner:',
+                # W9 widened this from one owner to the alternates a catalog may
+                # name (§3.1) — the class and the interface a codebase declares its
+                # field as. Still one conjunct, still the same guard: the receiver's
+                # type must be one the catalog names, rather than any type at all.
+                find='        if site["owner"] not in owners:',
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -216,9 +220,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if site["owner"] == root["owner"] and site["name"] '
+                find='            if site["owner"] in root["owners"] and site["name"] '
                 '== root["method"]',
-                replace='            if site["owner"] == root["owner"]  # guard disabled',
+                replace='            if site["owner"] in root["owners"]  # guard disabled',
             ),
         ),
     ),
@@ -232,7 +236,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SUPERTYPE_DISPATCH,
-                find='        if bare_descriptor(str(row["superclass"])) != supertype:',
+                find='        if bare_descriptor(str(row["superclass"])) not in supertypes:',
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -559,7 +563,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/derived_resource.py",
-                find="        if no_repository_bean not in annotations.get(parent, {}):",
+                find="        if not any(name in annotations.get(parent, {}) for name in no_repository_beans):",
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -621,7 +625,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ERROR_ADVICE,
-                find='            if row["annotation"] == handler_fqn and str(row["target"]) '
+                find='            if row["annotation"] in handler_fqns and str(row["target"]) '
                 "in methods",
                 replace='            if str(row["target"]) in methods  # guard disabled',
             ),

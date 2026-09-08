@@ -1331,7 +1331,12 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # and no other row in this test.
     # + 2: OI-48's `com/acme/orders/springscoped/` — `SpringScopedDetail` and its
     # `package-info`, a package declaring itself non-null in SPRING's spelling.
-    assert (None, 119) in origins
+    # + 3: that entry's own review — `apiscoped/package-info` declaring
+    # `@NonNullApi` ALONE (which scopes parameters and returns, never fields) plus
+    # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    assert (None, 122) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

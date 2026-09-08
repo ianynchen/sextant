@@ -1735,7 +1735,147 @@ cannot be null when the author said it can. Sextant does not declare
 permissive default and therefore accidentally right; the defect appears the moment
 someone adds it to the list without adding the meaning.
 
-**Closes by** `_SCOPE_MEANINGS` gaining `nullable_by_default`, the scope resolution
-taking the LONGEST matching prefix rather than any match (a nested scope must beat
-its parent), and `@NullUnmarked` declared. **Falsified by** measuring that no
-codebase Sextant reads nests scopes — which JSpecify's own design contradicts.
+**Closes by** `_SCOPE_MEANINGS` gaining `nullable_by_default` and `@NullUnmarked`
+declared. (The other half this entry used to ask for — longest matching prefix
+rather than any match — already shipped in `_scope_nullable`, and describing
+shipped work as remaining is what made this entry look bigger than it is.)
+**Falsified by** measuring that no codebase Sextant reads nests scopes — which
+JSpecify's own design contradicts.
+
+### OI-51 — a nested type's own access modifier is read from nowhere
+**Minor · found 2026-09-08 in the W8 review ·
+`extractor-jvm/.../ClassScanner.java` (`visitInnerClass`)**
+
+A `private` or `protected` nested type states that modifier in ONE place: the
+`InnerClasses` table (JVMS 4.7.6). The class file's own access word cannot carry
+it — a private nested class is written package-private there, a protected one is
+written public — so `modifiers` and `visibility` for every nested type are the
+outer approximation rather than what the source said.
+
+The field that held it (`nestedAccess`) was removed rather than left unread, because
+both attempts to consume it were wrong in opposite directions: read as VISIBILITY it
+flipped protected nested types to `other` (the class file says public), and read as
+the CONSTRUCT KIND it reported every nested record as `class` (that table has no
+`Record` attribute for ASM to synthesise `ACC_RECORD` from — 1,262 of 1,739 records
+in the local dependency cache). Two wrong consumers is a signal that the right one
+has to be chosen deliberately, not that the data is worthless.
+
+**Consequence:** measured over javac 21 output, a `private record Inner(int y)`
+reports `visibility: other` and no `private` modifier — the same as a
+package-private one. Nothing downstream distinguishes them today, which is why
+this is Minor rather than Major.
+
+**Closes by** `visitInnerClass` reading `access` into a field that feeds
+`modifiers` ONLY for the nesting modifiers (`ACC_PRIVATE`, `ACC_PROTECTED`,
+`ACC_STATIC`), never the whole word, with a fixture per modifier. **Falsified by**
+finding a consumer that already needs a nested type's declared visibility, which
+would make this Major instead.
+
+### OI-52 — the ledger's `jvms` section numbers and 18 of its access flags resolve against nothing
+**Minor · found 2026-09-08 in the W8 review ·
+`extractor-jvm/.../AttributeLedger.java`, `AttributeLedgerTest.java`**
+
+Two claims in the ledger are checked by nothing, and both are the same shape as the
+defect the ledger exists to catch — a value written down that no test can falsify.
+
+* `Entry::jvms` (the section number, `"4.7.30"`) is read by no test and by no
+  caller. `RuntimeInvisibleTypeAnnotations` carried `4.7.20` — its neighbour's
+  number, not its own `4.7.21` — from the day it was written until this review.
+  It is corrected now; nothing stops the next one.
+* Every `ATTRIBUTES` entry marked read has its reader resolved against the
+  scanner's source (`readerExists`). The 18 read `ACCESS_FLAGS` entries do not:
+  their `evidence` names a FACT KEY (`modifiers.varargs`, `construct_kind`) and
+  no test checks that the key is one the scanner emits. A flag whose writer was
+  deleted would still read as read.
+
+**Consequence:** neither is wrong today — both were checked by hand during this
+review — but "checked by hand once" is the state §2.3's ledger was built to
+replace.
+
+**Closes by** a test resolving each `jvms` value against JVMS 4.7's own numbering
+(the list is already in `every_attribute_jvms_defines_is_in_the_ledger_exactly_once`,
+keyed by name; pairing it with the number costs one column), and a test resolving
+each read flag's `evidence` against the fact keys the scanner actually writes —
+which the fixture fact files already enumerate. **Falsified by** showing the fact
+keys are not enumerable from the emitted facts, which the existing fixture-based
+assertions contradict.
+
+### OI-53 — 45 catalog conversion sites name no file and no key when they refuse
+**Minor · found 2026-09-08 in the W9/W10 review · re-measured after W9 ·
+`src/sextant/application/resolve/` (14 files)**
+
+`domain/symbols.type_descriptor` now REFUSES a non-string outright rather than
+stringifying it — which is what turned a silent `"['a/B']#"` into a loud failure.
+The refusal is loud but anonymous: it names the offending value's type and neither
+the catalog file nor the key. `catalog_symbols` takes a `where` string and says both.
+
+**Measured, not estimated.** 48 call sites across 15 files convert a catalog type
+name directly; 3 of them are `rooting.py`'s own, inside `catalog_symbols`, leaving
+**45 direct sites in 14 files**. (An earlier draft of this entry said "20 sites"
+from memory and listed keys rather than counting them — the mistake §8.1 rule 1
+names. W9 then routed 19 keys through `catalog_symbols`, which is why the count
+moved from 64 to 45 rather than staying put.)
+
+**These are not the §3.1 keys.** Every one of the 21 that holds a type name is
+widened and named. What remains reads keys that are single-valued by design — a
+wrapper's `type`, a `known_types` entry's `type`, `channel_via`'s `owner`, a
+combinator step's `owner`, `parse_binding`'s hierarchy names.
+
+**Consequence:** none to the derived facts. A list written at any of these is
+refused either way; the cost is what a reader holding 42 catalogs is told.
+
+**Closes by**, for each file below, either routing its sites through
+`catalog_symbols` with a `where` string or recording why that key's refusal needs
+no file name. The allowlist SHRINKS and never grows (§8.3); a new entry is a review
+finding, and the counts are what a check compares against:
+
+| file | direct sites |
+|---|---|
+| `resolve/engines/combinator.py` | 7 |
+| `resolve/shapes/expansion.py` | 6 |
+| `resolve/engines/annotation_driven.py` | 6 |
+| `resolve/engines/single_call.py` | 5 |
+| `resolve/engines/error_advice.py` | 4 |
+| `resolve/engines/fluent.py` | 4 |
+| `resolve/shapes/parse_binding.py` | 3 |
+| `resolve/shapes/arguments.py` | 2 |
+| `resolve/shapes/contracts.py` | 2 |
+| `resolve/engines/supertype_dispatch.py` | 2 |
+| `resolve/protocol_hint.py` | 1 |
+| `resolve/shapes/identity_calls.py` | 1 |
+| `resolve/engines/derived_resource.py` | 1 |
+| `resolve/engines/interface_implementation.py` | 1 |
+
+**Falsified by** finding that one of these keys is already list-valued in a shipped
+catalog, which would make it a live defect rather than a message-quality one.
+
+### OI-54 — `identity_marker` and `supertype_marker` were named as type-name sites and are not
+**Minor · found 2026-09-08 while delivering W9 ·
+`docs/superpowers/specs/2026-09-06-java-kotlin-completeness-design.md` §3.1**
+
+F2 §3.1 lists 21 scalar sites to widen. Nineteen hold a dotted type name and are
+widened. The other two do not hold a type name at all: each is a mapping of CALL
+specs, and the type sits one level below.
+
+```yaml
+identity_marker:
+  service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+supertype_marker:
+  service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+  method_name_call:  { owner: io.grpc.MethodDescriptor,  method: generateFullMethodName }
+```
+
+Widening the named key would mean accepting a list of MAPPINGS, which is a
+different feature and not what §3.1 describes. The widenable site is the nested
+`owner`, one level down, in `grpc-net-devh.yml` and `grpc-java.yml` — the only two
+catalogs that declare either key.
+
+**Consequence:** none. gRPC's descriptor classes have one spelling each, so no
+alternate is wanted today. The defect is in the design's own list, which is why
+`docs/components/D02-catalog-schema.md` states nineteen and says why, rather than
+matching the design's count and being wrong.
+
+**Closes by** correcting F2 §3.1's list to name `identity_marker.*.owner` and
+`supertype_marker.*.owner`, or recording that a nested call spec's owner is out of
+scope. **Falsified by** a gRPC descriptor class shipping under a second name, which
+would make this a live gap.

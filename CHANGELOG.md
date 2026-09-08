@@ -14,16 +14,79 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A catalog may spell one type under several names** (F2 §3.1, W9/W10).
+
+  `matches.owner` was one string compared with `==`, and a call site's owner is the
+  DECLARED type. `JmsOperations jms = ...; jms.convertAndSend(...)` — the construction
+  Spring's own guides show, and what autowiring by interface produces — named a type no
+  catalog listed, so it derived **nothing at all**: not a wrong row, no row, silently.
+
+  Nineteen catalog keys now accept a list of dotted names as well as one, across every
+  engine that reads a type name (`docs/components/D02-catalog-schema.md` lists them). A
+  scalar stays valid and is what almost every shipped catalog writes. Seven catalogs gained
+  an alternate — `JmsOperations`, `AmqpTemplate`, `SqsOperations`, `RestOperations`,
+  `KafkaOperations`, and Kafka's own `Consumer` and `Producer` — each measured against the
+  library's own bytecode by `scripts/probes/cp10_catalog_descriptors`, which checks every
+  alternate separately because an interface declaring a SUBSET of the class's methods would
+  match some call sites and miss the rest. All 53 alternate rows come back `declared`.
+
+  Two of the design's 21 named sites are **not** in the nineteen: `identity_marker` and
+  `supertype_marker` hold a mapping of call specs rather than a type name, so the type sits
+  one level below the key the design named (OI-54).
+
+  Where a widened value reaches its consumer the variable is now PLURAL (`owners`,
+  `handler_fqns`, `supertypes`). The rename is the mechanism: a consumer still comparing
+  with `==` fails loudly instead of comparing a string against a tuple and matching nothing.
+
+- **Every NESTED record reported `class`** — 73% of all records, introduced by W8 and
+  caught by its own review.
+
+  The construct kind was read from the `InnerClasses` access word (JVMS 4.7.6) rather than
+  from the class file's own. Measured over javac 21 output for a nested interface, enum,
+  `@interface`, record and plain class: the two words agree on `ACC_INTERFACE`, `ACC_ENUM`
+  and `ACC_ANNOTATION` — so four of five were right — and differ on `ACC_RECORD`, which
+  only the class file's word carries. ASM synthesises that flag in `visit` from the
+  `Record` attribute, and the `InnerClasses` table has no attribute to synthesise it from.
+  **1,262 of the 1,739 records in the local dependency cache are nested.**
+
+  Zero fixture covered a nested type of any kind, which is why a word that answers four
+  questions of five looked like it answered all five. `NestingHost` nests all five now and
+  the test asserts every one, because the point is the word, not the record.
+
+- **A package declaring `@NonNullApi` alone had every one of its fields called not-null**,
+  and a scoped package claimed its subpackages too.
+
+  Spring scopes parameters and return values with `@NonNullApi` and fields with
+  `@NonNullFields`; this scope is applied to a field symbol and to nothing else. The
+  justification for listing both — that a payload shape is also built from accessor
+  returns — had no consumer: nothing reads an accessor's return nullability. Measured over
+  1,672 cached jars: all 613 packages declaring `@NonNullFields` also declare
+  `@NonNullApi`, so dropping it costs no field scope anywhere, while **197 packages declare
+  `@NonNullApi` alone** — spring-data-mongodb (28), spring-data-repository (14), the
+  MongoDB driver (10), spring-hateoas (9) — and every field in them read `nullable: false`
+  at `resolution: resolved`.
+
+  Separately, a package scope was matched with `startswith`, so it claimed every deeper
+  package under it. `a/b/` and `a/b/c/` are two packages sharing a name prefix and nothing
+  else; **462 unmarked deeper packages were claimed by one**. The fixture declared both
+  annotations and had no subpackage, so neither half was exercised; it has both now.
+
+- **A malformed `matches.owner` half-emptied the endpoints table.** The conversion ran
+  inside the call-site engine, after `endpoints_reset` — so a broken catalog took the
+  previous run's rows with it and wrote none, the exact outcome `derive_endpoints`
+  resolves every style up front to prevent. It is refused in that same pre-flight now, and
+  the refusal names the catalog file and the key instead of only the offending type.
+
 - **A Spring package that declares itself non-null is believed** (OI-48).
 
   D02 §2e's scope rule inverts Java's permissive default: inside a `@NullMarked` or
-  `@NonNullApi` package, a field with NO annotation of its own is not-null, and only the
+  `@NonNullFields` package, a field with NO annotation of its own is not-null, and only the
   exceptions are marked. That is the whole mechanism — measured on spring-web 6.1.6,
   `HttpHeaders` declares 68 fields and **zero** carry an annotation, because the package
   declares the rule once.
 
   JSpecify's `@NullMarked` was declared in `shape-models/json.yml`. **Spring's
-  `@NonNullApi` and `@NonNullFields` were not** — and Spring is the framework this reads
+  `@NonNullFields` was not** — and Spring is the framework this reads
   most, with 58 such `package-info` classes in spring-web alone. So a Spring codebase
   declaring its packages non-null read as fully nullable, at `resolution: resolved`, which
   D00 defines as a certain claim rather than a guess.
@@ -34,7 +97,7 @@ here would restate those documents rather than add anything.
   unit test. It is a request body now (`POST /v1/orders/scoped`), and
   `com/acme/orders/springscoped/` declares the same rule in Spring's spelling, reached
   through the payload graph rather than a second endpoint. Both now report
-  `nullable: false`; removing the two Spring entries puts one back to `true`.
+  `nullable: false`; removing the Spring entry puts one back to `true`.
 
   *The entry that started this was itself wrong, and the correction is on it: it claimed no
   shipped catalog declares nullability, from grepping the catalogs for the block without

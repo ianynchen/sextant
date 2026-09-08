@@ -6072,6 +6072,46 @@ def test_a_convertandsend_on_an_owner_that_is_not_a_rabbit_template_derives_noth
     assert rows == []
 
 
+def test_a_convertandsend_on_the_declared_interface_derives_the_same_row(tmp_path: Path):
+    """W10, and the delivery W9 exists for: a catalog may name ONE library under
+    several names (§3.1), and a call site's owner is the DECLARED type.
+
+    A codebase that writes `AmqpTemplate rabbit` rather than `RabbitTemplate
+    rabbit` — which is the idiomatic Spring style, and what every Spring guide
+    shows — produced a call site whose owner the catalog did not name, so the
+    publication derived NOTHING. Not a wrong row: no row, silently.
+
+    The interface is a measured alternate, not a guessed one: CP-10's harness
+    resolves `AmqpTemplate` out of spring-amqp 3.1.4 and confirms it declares
+    every descriptor this catalog matches. It aborted the run until its
+    coordinate was added, which is how the wrong artifact was caught —
+    `AmqpTemplate` is in spring-amqp, not in spring-rabbit where the template
+    class lives.
+    """
+    caller = "com/acme/orders/messaging/OrderPublisher#publish()."
+    facts = [
+        _convert_and_send(
+            caller,
+            "org/springframework/amqp/core/AmqpTemplate#",
+            [
+                CallArgument(kind="string", value="orders.exchange"),
+                CallArgument(kind="string", value="order.created"),
+                CallArgument(kind="class", symbol=ORDER_VIEW),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    # The same row the class-typed call derives, composed address and all — which
+    # is the assertion: the alternate is a NAME for the same library, not a second
+    # rule with its own behaviour.
+    assert [(row["protocol"], row["path"]) for row in rows] == [
+        ("amqp", "orders.exchange/order.created")
+    ]
+
+
 # --- 2O Task 7 review, Critical 1, against the SHIPPED files: the two calls the
 # reviewer reproduced, each of which published a MESSAGE PAYLOAD as a wire
 # destination at `resolved`/`compiler`. Both descriptor sets are `javap -s`

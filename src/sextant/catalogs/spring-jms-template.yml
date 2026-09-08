@@ -14,7 +14,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.jms.core.JmsTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework:spring-jms 6.1.6 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.jms.core.JmsTemplate
+    - org.springframework.jms.core.JmsOperations
   # CHECKPOINT FACT (real javap descriptors, spring-jms 6.1.6):
   # `convertAndSend(String, Object)` arity 2; `convertAndSend(Object)` arity
   # 1 targets the template's own configured default destination — no

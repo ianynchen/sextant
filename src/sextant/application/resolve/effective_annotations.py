@@ -211,7 +211,7 @@ def inherited_rows(
     superclass_rows: list[dict[str, Any]],
     method_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
-    prefix_fqn: str | None,
+    prefix_fqns: list[str] | None,
 ) -> list[dict[str, Any]]:
     """Synthesizes one row per method that carries no mapping annotation of
     its own but implements or overrides one that does (spec §3): the same
@@ -398,8 +398,8 @@ def inherited_rows(
         # `@RequestMapping` prefix at the type level, once, never
         # separately per method (Task 7 review, M2).
         if (
-            prefix_fqn is not None
-            and _own_mapping(type_symbol, {prefix_fqn}, annotations_by_target) is None
+            prefix_fqns is not None
+            and _own_mapping(type_symbol, set(prefix_fqns), annotations_by_target) is None
         ):
             found_prefix = _resolve_prefix(
                 interfaces_of.get(type_symbol, []),
@@ -407,7 +407,7 @@ def inherited_rows(
                 interfaces_of,
                 supertype_of,
                 annotations_by_target,
-                prefix_fqn,
+                prefix_fqns,
                 {type_symbol},
             )
             if found_prefix is not None:
@@ -430,7 +430,7 @@ def _own_mapping(
     """The first (deterministically, by annotation fqn) mapping-shaped
     annotation a target carries directly — never one this pass itself
     walked up to find. `fqns` is `mapping_fqns` for a method-level check,
-    `{prefix_fqn}` for a class's own type-level one; the same helper serves
+    `set(prefix_fqns)` for a class's own type-level one; the same helper serves
     both "own wins outright" gates spec §3 states."""
     for annotation, args in annotations_by_target.get(target, []):
         if annotation in fqns:
@@ -502,17 +502,17 @@ def _resolve_prefix(
     interfaces_of: dict[str, list[str]],
     supertype_of: dict[str, str],
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]],
-    prefix_fqn: str,
+    prefix_fqns: list[str],
     visited: set[str],
 ) -> tuple[str, dict[str, Any]] | None:
     """The type-level twin of `_resolve_method`: walks the same
     interfaces-then-superclass order looking for an ancestor TYPE's own
-    `prefix_fqn` annotation rather than a same-key method's."""
+    `prefix_fqns` annotation rather than a same-key method's."""
     for interface in interfaces:
         if interface in visited:
             continue
         visited.add(interface)
-        found = _own_mapping(interface, {prefix_fqn}, annotations_by_target)
+        found = _own_mapping(interface, set(prefix_fqns), annotations_by_target)
         if found is not None:
             return found
         found = _resolve_prefix(
@@ -521,7 +521,7 @@ def _resolve_prefix(
             interfaces_of,
             supertype_of,
             annotations_by_target,
-            prefix_fqn,
+            prefix_fqns,
             visited,
         )
         if found is not None:
@@ -529,7 +529,7 @@ def _resolve_prefix(
     if supertype is None or supertype in visited:
         return None
     visited.add(supertype)
-    found = _own_mapping(supertype, {prefix_fqn}, annotations_by_target)
+    found = _own_mapping(supertype, set(prefix_fqns), annotations_by_target)
     if found is not None:
         return found
     return _resolve_prefix(
@@ -538,7 +538,7 @@ def _resolve_prefix(
         interfaces_of,
         supertype_of,
         annotations_by_target,
-        prefix_fqn,
+        prefix_fqns,
         visited,
     )
 

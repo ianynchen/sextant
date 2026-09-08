@@ -433,12 +433,16 @@ the gap list:
 `AttributeLedger` in exactly one of two states — read, naming the callback that reads it, or
 deliberately not read with a stated reason. **There is no third state**, and its absence is
 the point: an attribute nobody had read and an attribute nobody had thought about used to
-look identical from outside, because both simply produced no facts. Six are deliberately not
-read — `StackMapTable` (verification metadata, describes no declaration),
-`LocalVariableTypeTable` (duplicates `Signature`), the three `Module` attributes (module
-identity comes from the build's coordinates; measured, of 52 jars here carrying a descriptor
-none declares a main class), and class-level type annotations (no consumer reads a
-supertype's). Every access flag is in the same list on the same terms.
+look identical from outside, because both simply produced no facts. **Five** are deliberately
+not read — `StackMapTable` (verification metadata, describes no declaration),
+`LocalVariableTypeTable` (duplicates `Signature`), and the three `Module` attributes (module
+identity comes from the build's coordinates, and `module-info.class` is suppressed whole, so
+`ModuleMainClass` has no visitor to be read from; measured over 1,672 cached jars, 383 carry
+a module descriptor and 6 of those declare a main class). The two `TypeAnnotations`
+attributes are read on a field and on a method and **not** on the class's own supertypes, and
+their entries say so — that qualification used to live only in this paragraph while the
+ledger said `read`, which was the third state itself. Every access flag is in the same list
+on the same terms.
 
 `AttributeLedgerTest` is what makes it a claim rather than a sentence: it compares the ledger
 against JVMS's own list, refuses a reason that is a deferral in disguise, and resolves every
@@ -672,7 +676,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-mvc` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-pubsub` | `com.google.cloud:spring-cloud-gcp-pubsub` | 5.1.2 |
 | `spring-pulsar` | `org.springframework.pulsar:spring-pulsar` | 1.2.11, 2.0.7 |
-| `spring-rabbit-template` | `org.springframework.amqp:spring-rabbit` | 3.1.4 |
+| `spring-rabbit-template` | `org.springframework.amqp:spring-amqp` | 3.1.4 |
+|  | `org.springframework.amqp:spring-rabbit` | 3.1.4 |
 | `spring-rabbit` | `org.springframework.amqp:spring-rabbit` | 3.1.4, 4.1.1 |
 | `spring-restclient` | `org.springframework:spring-web` | 6.1.6, 7.0.2 |
 | `spring-resttemplate` | `org.springframework:spring-web` | 6.1.6 |

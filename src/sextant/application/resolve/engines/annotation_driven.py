@@ -19,7 +19,7 @@ from sextant.application.resolve.effective_annotations import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name
@@ -44,18 +44,30 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_naming(catalog, mapping)
     declared_on = _declared_on(catalog)
     type_annotation = catalog.matches.get("type_annotation")
-    type_annotation_fqn = None if type_annotation is None else _catalog_symbol(type_annotation)
+    # A LIST or a scalar (§3.1), and optional — None where the catalog declares no
+    # type-level gate at all, which the SQL still tests with `IS NULL`.
+    type_annotation_fqns = (
+        None
+        if type_annotation is None
+        else list(catalog_symbols(type_annotation, f"{catalog.source}: type_annotation"))
+    )
     flip = _direction_flip(workspace, catalog)
     prefix_annotation = mapping["prefix_annotation"]
     # Optional too (Retrofit, spring-jms): no class-level prefix shape.
-    prefix_fqn = None if prefix_annotation is None else _catalog_symbol(prefix_annotation)
+    prefix_fqns = (
+        None
+        if prefix_annotation is None
+        else list(
+            catalog_symbols(prefix_annotation, f"{catalog.source}: mapping.prefix_annotation")
+        )
+    )
     mapping_annotations = [_mapping_annotation(mapping, m) for m in mapping["annotations"]]
     workspace.derive(
         "endpoints",
         protocol=catalog.protocol,
         direction=catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
-        type_annotation=type_annotation_fqn,
+        type_annotation=type_annotation_fqns,
         # 2I design §4: WHICH KIND of construct this catalog's rules describe,
         # or NULL where the catalog describes declarations on any construct —
         # which is every catalog written before it. One annotation family can
@@ -74,7 +86,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if catalog.direction == "outbound" and declared_on == "interface"
             else []
         ),
-        prefix_annotation=prefix_fqn,
+        prefix_annotation=prefix_fqns,
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
         mapping_annotations=mapping_annotations,
@@ -185,7 +197,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # inheritance walk each time) and handed to the SQL as synthetic
         # `annotations` rows rather than as a second code path there.
         synthetic_annotations=_synthetic_annotations(
-            workspace, catalog, mapping_annotations, prefix_fqn, type_annotation_fqn
+            workspace, catalog, mapping_annotations, prefix_fqns, type_annotation_fqns
         ),
     )
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
@@ -419,7 +431,7 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
     return [
         {
             "ordinal": ordinal,
-            "annotation": _catalog_symbol(str(source["annotation"])),
+            "annotation": _catalog_symbol(source["annotation"]),
             "arg": str(source["arg"]),
         }
         for ordinal, source in enumerate(declared, start=1)
@@ -1104,8 +1116,8 @@ def _synthetic_annotations(
     workspace: Workspace,
     catalog: Catalog,
     mapping_annotations: list[dict[str, object]],
-    prefix_fqn: str | None,
-    type_annotation_fqn: str | None,
+    prefix_fqns: list[str] | None,
+    type_annotation_fqns: list[str] | None,
 ) -> list[dict[str, str]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
     CTE expects (D02 §2, §3): every row `folded_rows`, `composed_mapping_rows`
@@ -1195,9 +1207,9 @@ def _synthetic_annotations(
     composed = composed_mapping_rows(
         annotation_rows,
         scanned_targets,
-        mapping_fqns | ({type_annotation_fqn} if type_annotation_fqn is not None else set()),
+        mapping_fqns | (set(type_annotation_fqns) if type_annotation_fqns is not None else set()),
     )
-    run_inheritance = type_annotation_fqn is not None
+    run_inheritance = type_annotation_fqns is not None
     inherited = (
         inherited_rows(
             [*annotation_rows, *composed],
@@ -1205,7 +1217,7 @@ def _synthetic_annotations(
             _superclass_rows(workspace),
             _method_declaration_rows(workspace),
             mapping_fqns,
-            prefix_fqn,
+            prefix_fqns,
         )
         if run_inheritance
         else []
@@ -1227,7 +1239,7 @@ def _containers(catalog: Catalog) -> dict[str, str]:
     downstream compares a catalog spelling against a fact spelling.
     """
     return {
-        _catalog_symbol(str(entry[_CONTAINER])): _catalog_symbol(str(entry["fqn"]))
+        _catalog_symbol(entry[_CONTAINER]): _catalog_symbol(entry["fqn"])
         for entry in catalog.matches["mapping"]["annotations"]
         if entry.get(_CONTAINER) is not None
     }
@@ -1316,7 +1328,8 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
     that response type.
     """
     reply = catalog.matches["reply"]
-    reply_annotation = _catalog_symbol(reply["annotation"])
+    # A LIST or a scalar (§3.1); plural so a stale `==` cannot survive.
+    reply_annotations = catalog_symbols(reply["annotation"], f"{catalog.source}: reply.annotation")
     destination_attr = reply["destination_from"]
     rules = _rules_of(catalog)
     enums = _enum_symbols(workspace)
@@ -1350,7 +1363,7 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
         if descriptor is None:
             continue
         uses = workspace.query("annotations_of", target=handler)
-        reply_use = next((use for use in uses if use["annotation"] == reply_annotation), None)
+        reply_use = next((use for use in uses if use["annotation"] in reply_annotations), None)
         if reply_use is None:
             rows.append(_reply_row(catalog, handler, None, "unresolved", descriptor))
             continue

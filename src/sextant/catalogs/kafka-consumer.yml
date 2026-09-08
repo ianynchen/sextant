@@ -20,7 +20,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.apache.kafka.clients.consumer.KafkaConsumer
+  # The interface a codebase declares its field as (§3.1). A call site's
+  # owner is the DECLARED type, so a field typed by the interface carried
+  # an owner this catalog did not name and matched nothing.
+  # Measured: org.apache.kafka:kafka-clients 3.6.2 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.apache.kafka.clients.consumer.KafkaConsumer
+    - org.apache.kafka.clients.consumer.Consumer
   # CHECKPOINT FACT (real javap descriptors, kafka-clients 3.6.2):
   # `subscribe(Collection<String>)` and `subscribe(Pattern)` are BOTH arity
   # 1, indistinguishable by name+arity alone. They are now TWO rows, one per

@@ -13,7 +13,7 @@
 -- Parameters:
 --   $protocol            -- the catalog's declared protocol (D00's closed set)
 --   $direction           -- the catalog's declared direction (D00's closed set)
---   $type_annotation     -- fqn of the type-level annotation that marks a
+--   $type_annotation     -- LIST of fqns for the type-level annotation that marks a
 --                           controller or client, or NULL where the catalog
 --                           declares no type-level gate at all (D02 §2,
 --                           amended) — a Retrofit interface carries no marker,
@@ -31,7 +31,8 @@
 --                           against the catalog-level default by
 --                           `annotation_driven.py::_mapping_annotation`, so this
 --                           file never asks which level declared it.
---   $prefix_annotation   -- fqn of the type-level annotation carrying the path prefix
+--   $prefix_annotation   -- LIST of fqns for the type-level annotation carrying the
+--                           path prefix (§3.1: one annotation, several spellings)
 --   $path_from           -- attribute names that alias one another, first present wins
 --   $path_from_siblings  -- `OI-35`: {ordinal, annotation, arg} rows naming a
 --                           name source that lives on ANOTHER annotation of the
@@ -325,7 +326,7 @@ flip_handlers AS (
 controllers AS (
     SELECT DISTINCT target AS type_symbol
     FROM annotations_effective
-    WHERE annotation = $type_annotation
+    WHERE list_contains($type_annotation, annotation)
 ),
 declared AS (
     SELECT
@@ -428,7 +429,8 @@ declared AS (
 -- carrying one of this catalog's own mapping annotations ON THE TYPE ITSELF.
 --
 -- The same type-level join `qualifier_scopes` performs, and deliberately the
--- same one rather than `controllers`: `$type_annotation` is a single fqn, and
+-- same one rather than `controllers`: `$type_annotation` is one annotation (under
+-- one or more spellings, §3.1), and
 -- a framework whose gate has TWO spellings (one library renamed, both still in
 -- the wild) cannot be named by it — `mapping.annotations` is a list, so it
 -- can. Where a catalog declares `$type_annotation` as well, `derived`'s own
@@ -779,7 +781,7 @@ prefixes AS (
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS peer
     FROM annotations_effective a
-    WHERE a.annotation = $prefix_annotation
+    WHERE list_contains($prefix_annotation, a.annotation)
 ),
 -- Cross product of methods and paths (a two-topic, two-method mapping is
 -- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit

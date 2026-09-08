@@ -46,7 +46,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 
 _ANNOTATION = "annotation"
 _CONTAINER = "container"
@@ -137,8 +137,10 @@ def _declarations(workspace: Workspace, catalog: Catalog) -> list[tuple[str, dic
     invokes. `derive_endpoints.sql`'s own `handler-is-a-method` join is the
     same conjunct on the wire side.
     """
-    annotation = _catalog_symbol(str(catalog.matches[_ANNOTATION]))
-    container = _catalog_symbol(str(catalog.matches[_CONTAINER]))
+    # A LIST or a scalar (§3.1). Plural names, so any consumer left comparing
+    # with `==` fails loudly instead of matching nothing.
+    annotations = catalog_symbols(catalog.matches[_ANNOTATION], f"{catalog.source}: annotation")
+    containers = catalog_symbols(catalog.matches[_CONTAINER], f"{catalog.source}: container")
     methods = {str(row["symbol"]) for row in workspace.query("method_symbols")}
     found: list[tuple[str, dict[str, Any]]] = []
     for row in workspace.query("annotations"):
@@ -147,10 +149,10 @@ def _declarations(workspace: Workspace, catalog: Catalog) -> list[tuple[str, dic
             continue
         name = str(row["annotation"])
         args = _arguments(row["args"])
-        if name == annotation:
+        if name in annotations:
             found.append((target, args))
-        elif name == container:
-            found.extend((target, folded) for folded in _folded(args, annotation))
+        elif name in containers:
+            found.extend((target, folded) for folded in _folded(args, annotations))
     # `workspace.query("annotations")` is already ordered by (target,
     # annotation, type_path, args), and the folded uses keep the array order
     # javac wrote — which is the declaration order the source had. Sorting on
@@ -160,7 +162,7 @@ def _declarations(workspace: Workspace, catalog: Catalog) -> list[tuple[str, dic
     return sorted(found, key=lambda entry: entry[0])
 
 
-def _folded(args: dict[str, Any], annotation: str) -> list[dict[str, Any]]:
+def _folded(args: dict[str, Any], annotations: tuple[str, ...]) -> list[dict[str, Any]]:
     """The container's own folded uses, in the order javac wrote them.
 
     Every entry is checked against the annotation the catalog names rather than
@@ -182,7 +184,7 @@ def _folded(args: dict[str, Any], annotation: str) -> list[dict[str, Any]]:
         entry["args"]
         for entry in value
         if isinstance(entry, dict)
-        and entry.get(_ANNOTATION) == annotation
+        and entry.get(_ANNOTATION) in annotations
         and isinstance(entry.get("args"), dict)
     ]
 

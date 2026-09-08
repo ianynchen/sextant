@@ -14,7 +14,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: io.awspring.cloud.sqs.operations.SqsTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: io.awspring.cloud:spring-cloud-aws-sqs 3.1.1 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - io.awspring.cloud.sqs.operations.SqsTemplate
+    - io.awspring.cloud.sqs.operations.SqsOperations
   # CHECKPOINT FACT (real javap descriptors, spring-cloud-aws-sqs 3.1.1):
   # `send(String, T)` arity 2 is the covered form. `send(T)` (destination-
   # less) and `send(Consumer<SqsSendOptions<T>>)` (the queue-in-lambda

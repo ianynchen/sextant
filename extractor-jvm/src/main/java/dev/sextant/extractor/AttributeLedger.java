@@ -62,10 +62,24 @@ public final class AttributeLedger {
         read("RuntimeInvisibleAnnotations", "4.7.17", "visitAnnotation"),
         read("RuntimeVisibleParameterAnnotations", "4.7.18", "visitParameterAnnotation"),
         read("RuntimeInvisibleParameterAnnotations", "4.7.19", "visitParameterAnnotation"),
-        read("RuntimeVisibleTypeAnnotations", "4.7.20", "visitTypeAnnotation"),
-        read("RuntimeInvisibleTypeAnnotations", "4.7.20", "visitTypeAnnotation"),
+        // Read on a FIELD and on a METHOD, which is where `visitTypeAnnotation` is
+        // implemented. The class visitor does not implement it, so a type annotation
+        // on a supertype or a type parameter of the class itself is not read — and
+        // that was stated in `docs/COVERAGE.md` prose while both entries here said
+        // `read`, which is precisely the third state this ledger exists to forbid.
+        // The location is in the evidence now, so the ledger states it and the test
+        // resolves it.
+        read("RuntimeVisibleTypeAnnotations", "4.7.20",
+            "visitTypeAnnotation (field and method; NOT the class's own supertypes)"),
+        read("RuntimeInvisibleTypeAnnotations", "4.7.21",
+            "visitTypeAnnotation (field and method; NOT the class's own supertypes)"),
         read("AnnotationDefault", "4.7.22", "visitAnnotationDefault"),
-        read("BootstrapMethods", "4.7.23", "visitMethod"),
+        // NOT a `visit*` override: ASM's tree API materialises this attribute's
+        // entries onto the `InvokeDynamicInsnNode` for each `invokedynamic` site,
+        // and `lambdaSymbol` is what reads the bootstrap arguments to recover the
+        // lambda body a call site really targets. The entry said `visitMethod`,
+        // which reads no bootstrap anything.
+        read("BootstrapMethods", "4.7.23", "MethodFlow#lambdaSymbol"),
         read("MethodParameters", "4.7.24", "visitParameter"),
         skipped("Module", "4.7.25",
             "A module descriptor is not a type, and `module-info.class` yields no symbol "
@@ -77,13 +91,22 @@ public final class AttributeLedger {
             + "by one. Same reason as 4.7.25."),
         skipped("ModuleMainClass", "4.7.27",
             "Would give OI-22's `entry_point` root kind a producer that is a DECLARATION "
-            + "rather than a guess. Measured before deciding: of 52 jars in the local "
-            + "corpus carrying a module descriptor, NONE declares a main class — it is "
-            + "set for an executable module, not a library — so the producer would be "
-            + "correct and fire on nothing. OI-22 stays open, with this recorded as why."),
+            + "rather than a guess. It lives inside `module-info.class`, and the scanner "
+            + "suppresses a module descriptor whole (ACC_MODULE) for the reason 4.7.25 "
+            + "gives, so there is no visitor here to read it from. Re-measured over 1,672 "
+            + "cached jars: 383 carry a module descriptor and 6 of those declare a main "
+            + "class — Byte Buddy (4 versions), hsqldb and Eclipse OSGi. Six is not zero, "
+            + "so a producer would fire; it is still an executable module\u2019s flag rather "
+            + "than a library\u2019s, and reading it means un-suppressing the descriptor. "
+            + "OI-22 stays open, with this recorded as why."),
         read("NestHost", "4.7.28", "visitNestHost"),
         read("NestMembers", "4.7.29", "visitNestMember"),
-        read("Record", "4.7.30", "visit"),
+        // Read in `constructKindOf`, not merely "in `visit`". ASM synthesises
+        // ACC_RECORD from this attribute's PRESENCE and hands it to `visit`; the
+        // place that turns it into a fact is what the ledger has to name, because
+        // `visit` alone also names the `AnnotationVisitor.visit` overrides and so
+        // could not be falsified by deleting the reader.
+        read("Record", "4.7.30", "ClassScanner#constructKindOf"),
         read("PermittedSubclasses", "4.7.31", "visitPermittedSubclass"));
 
     /** Every access flag, on any of the three tables that carry them. `evidence` names

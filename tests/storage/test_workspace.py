@@ -251,7 +251,7 @@ _TOPIC_ENDPOINT_KWARGS = {
     "protocol": "kafka",
     "direction": "inbound",
     "type_annotation": None,
-    "prefix_annotation": "com/acme/messaging/annotation/Topic#",
+    "prefix_annotation": ["com/acme/messaging/annotation/Topic#"],
     "mapping_annotations": [{"fqn": "com/acme/messaging/annotation/OnMessage#", "methods": None}],
     "prefix_from": [],
     "peer_from": [],

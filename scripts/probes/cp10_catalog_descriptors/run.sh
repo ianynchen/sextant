@@ -48,6 +48,11 @@ ARTIFACTS=(
   "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-websocket|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.amqp|spring-rabbit|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
+  # W10. `AmqpTemplate` is the interface a codebase declares its field as, and it
+  # lives in spring-amqp rather than in spring-rabbit where the template class is.
+  # The harness ABORTED rather than leave it unmeasured, which is how the wrong
+  # artifact was caught — a provenance naming spring-rabbit could not be checked.
+  "org.springframework.amqp|spring-amqp|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.kafka|spring-kafka|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.ws|spring-ws-core|4.1.4|META-INF/MANIFEST.MF|Implementation-Version"
 )

@@ -74,6 +74,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
 
 _REQUIRED_MATCHES = ("supertype", "address", "members", "dispatch", "bypassed_by")
@@ -132,7 +133,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
 def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     matches = catalog.matches
-    supertype = type_descriptor(str(matches["supertype"]))
+    # A LIST or a scalar (§3.1): the abstract base may be reachable under more
+    # than one name — the javax/jakarta case is NOT this (those are separate
+    # catalogs, §3.3), but a base renamed between major versions of one library is.
+    supertypes = catalog_symbols(matches["supertype"], f"{catalog.source}: matches.supertype")
     address = matches["address"]
     annotation = type_descriptor(str(address["annotation"]))
     keys = [str(key) for key in address["args"]]
@@ -141,12 +145,12 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
 
     addresses_by_class = _addresses(workspace, annotation, keys)
     members_by_class = _members(workspace)
-    delegating = _delegating_members(workspace, supertype)
+    delegating = _delegating_members(workspace, supertypes)
 
     found: list[_ClassMatch] = []
     for row in workspace.query("superclasses"):
         implementer = str(row["symbol"])
-        if bare_descriptor(str(row["superclass"])) != supertype:
+        if bare_descriptor(str(row["superclass"])) not in supertypes:
             # Ordinary inheritance, or a different contract entirely. The
             # DIRECT edge only: `superclasses` carries one hop, so a class
             # reaching the supertype through an intermediate base of its own
@@ -280,7 +284,7 @@ def _strings(value: Any) -> list[str]:
     return []
 
 
-def _delegating_members(workspace: Workspace, supertype: str) -> frozenset[str]:
+def _delegating_members(workspace: Workspace, supertypes: tuple[str, ...]) -> frozenset[str]:
     """Every method symbol that calls the SUPERTYPE's own implementation of the
     method it is — the override that lets the supertype's dispatch keep running.
 
@@ -310,7 +314,7 @@ def _delegating_members(workspace: Workspace, supertype: str) -> frozenset[str]:
         if str(row["invoke_kind"]) != "special":
             continue
         caller = str(row["caller"])
-        if bare_descriptor(str(row["owner"] or "")) != supertype:
+        if bare_descriptor(str(row["owner"] or "")) not in supertypes:
             continue
         if str(row["name"]) != method_name(bare_descriptor(caller)):
             continue
@@ -404,10 +408,10 @@ def _validate_matches(catalog: Catalog) -> None:
             f"`members`, `dispatch` and `bypassed_by` (2O design §3b). `bypassed_by` may "
             f"be empty, but a supertype with no bypass says so rather than omitting it"
         )
-    if not isinstance(matches["supertype"], str):
+    if not isinstance(matches["supertype"], (str, list)):
         raise CatalogError(
-            f"loading catalog {catalog.source}: `supertype` must be a dotted type name, "
-            f"got {matches['supertype']!r} (2O design §3b)"
+            f"loading catalog {catalog.source}: `supertype` must be a dotted type name "
+            f"or a list of them (§3.1), got {matches['supertype']!r} (2O design §3b)"
         )
     if matches["members"] != _MEMBERS:
         raise CatalogError(

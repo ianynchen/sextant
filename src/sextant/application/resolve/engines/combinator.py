@@ -77,7 +77,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import _arg_at, _expanded_arguments
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
@@ -190,7 +190,7 @@ class _TreeContext:
     verbs: dict[tuple[str, str], dict[str, Any]]
     prefixes: dict[tuple[str, str], dict[str, Any]]
     media: dict[tuple[str, str], dict[str, Any]]
-    media_owner: str | None
+    media_owners: tuple[str, ...] | None
     media_values: dict[str, str]
     composers: dict[tuple[str, str], str]
     continuations: tuple[_Continuation, ...]
@@ -271,7 +271,14 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         verbs=_by_owner_method(vocabulary.get("verbs", [])),
         prefixes=_by_owner_method(vocabulary.get("prefixes", [])),
         media=_by_owner_method(vocabulary.get("media", [])),
-        media_owner=(_catalog_symbol(media_values["owner"]) if "owner" in media_values else None),
+        # A LIST or a scalar (§3.1): the enum carrying the wire values may be
+        # reachable under more than one name. `media_owners` plural for the same
+        # reason as every other widened owner — a stale `==` must not compile.
+        media_owners=(
+            catalog_symbols(media_values["owner"], f"{catalog.source}: media_values.owner")
+            if "owner" in media_values
+            else None
+        ),
         media_values=dict(media_values.get("values", {})),
         composers=composers,
         continuations=_continuations_of(matches.get("continuations", [])),
@@ -679,7 +686,7 @@ def _media_value(argument: dict[str, Any], context: _TreeContext) -> str | None:
     if symbol is None:
         return None
     symbol = str(symbol)
-    if context.media_owner is not None and owner_of(symbol) != context.media_owner:
+    if context.media_owners is not None and owner_of(symbol) not in context.media_owners:
         return None
     return context.media_values.get(member_name(symbol))
 

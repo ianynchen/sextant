@@ -74,6 +74,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.pluralize import pluralize
 from sextant.domain.symbols import (
@@ -324,9 +325,17 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
         type_descriptor(str(fqn)): frozenset(str(op) for op in operations)
         for fqn, operations in dict(matches["repositories"]).items()
     }
-    no_repository_bean = type_descriptor(str(matches["no_repository_bean"]))
-    resource_annotation = type_descriptor(str(matches["resource_annotation"]))
-    member_annotation = type_descriptor(str(matches["member_annotation"]))
+    # LISTS or scalars (§3.1). Plural names, so a consumer left doing a single
+    # dict lookup fails loudly rather than looking up a tuple and finding nothing.
+    no_repository_beans = catalog_symbols(
+        matches["no_repository_bean"], f"{catalog.source}: no_repository_bean"
+    )
+    resource_annotations = catalog_symbols(
+        matches["resource_annotation"], f"{catalog.source}: resource_annotation"
+    )
+    member_annotations = catalog_symbols(
+        matches["member_annotation"], f"{catalog.source}: member_annotation"
+    )
     path_attribute = str(matches["path_attribute"])
     exported_attribute = str(matches["exported_attribute"])
     crud_methods = {str(name) for name in matches["crud_methods"]}
@@ -337,12 +346,12 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
 
     repositories: list[_Repository] = []
     for descriptor, declaration in sorted(declarations.items()):
-        if no_repository_bean in annotations.get(descriptor, {}):
+        if any(name in annotations.get(descriptor, {}) for name in no_repository_beans):
             # A base repository is a template, never a bean of its own.
             continue
         if "public_only" in flags and declaration.visibility != "public":
             continue
-        declared = annotations.get(descriptor, {}).get(resource_annotation)
+        declared = _first_declared(annotations.get(descriptor, {}), resource_annotations)
         if "annotated_only" in flags and declared is None:
             continue
         if (
@@ -372,11 +381,11 @@ def _repositories(workspace: Workspace, catalog: Catalog) -> list[_Repository]:
                         contracts,
                         methods,
                         annotations,
-                        no_repository_bean,
+                        no_repository_beans,
                     ),
                     annotations,
                     crud_methods,
-                    member_annotation,
+                    member_annotations,
                     path_attribute,
                     exported_attribute,
                     flags,
@@ -493,7 +502,7 @@ def _exposed_methods(
     contracts: dict[str, frozenset[str]],
     methods: dict[str, list[tuple[str, str]]],
     annotations: dict[str, dict[str, dict[str, Any]]],
-    no_repository_bean: str,
+    no_repository_beans: tuple[str, ...],
     seen: frozenset[str] = frozenset(),
 ) -> list[tuple[str, str]]:
     """Every method a repository interface EXPOSES as a QUERY-method candidate
@@ -562,7 +571,7 @@ def _exposed_methods(
     for parent in declaration.interfaces:
         if parent in contracts:
             continue
-        if no_repository_bean not in annotations.get(parent, {}):
+        if not any(name in annotations.get(parent, {}) for name in no_repository_beans):
             # A FRAGMENT, not a base (CP-13 Q7). Its methods are custom methods
             # and the framework serves no `/search/` route for any of them.
             continue
@@ -573,7 +582,7 @@ def _exposed_methods(
                 contracts,
                 methods,
                 annotations,
-                no_repository_bean,
+                no_repository_beans,
                 seen | {descriptor},
             )
         )
@@ -584,7 +593,7 @@ def _queries(
     exposed_methods: list[tuple[str, str]],
     annotations: dict[str, dict[str, dict[str, Any]]],
     crud_methods: set[str],
-    member_annotation: str,
+    member_annotations: tuple[str, ...],
     path_attribute: str,
     exported_attribute: str,
     flags: frozenset[str],
@@ -619,7 +628,9 @@ def _queries(
     for name, method_symbol in exposed_methods:
         if name in crud_methods:
             continue
-        declared = annotations.get(bare_descriptor(method_symbol), {}).get(member_annotation)
+        declared = _first_declared(
+            annotations.get(bare_descriptor(method_symbol), {}), member_annotations
+        )
         if declared is not None:
             if "honors_exported" in flags and declared.get(exported_attribute) is False:
                 continue
@@ -718,6 +729,20 @@ class _Declaration:
     # 9.14 records only the parameterized ones, so a non-generic
     # superinterface is simply absent here.
     generic: dict[str, dict[str, Any]]
+
+
+def _first_declared(on_target: dict[str, Any], names: tuple[str, ...]) -> dict[str, Any] | None:
+    """The arguments of the first of `names` present on this target, or None.
+
+    First rather than merged: a list of names is one annotation under several
+    spellings (§3.1), so at most one is ever written on a given declaration, and
+    merging two would invent a declaration nobody made.
+    """
+    for name in names:
+        declared = on_target.get(name)
+        if declared is not None:
+            return dict(declared)
+    return None
 
 
 def _interface_declarations(workspace: Workspace) -> dict[str, _Declaration]:

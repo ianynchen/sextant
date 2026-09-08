@@ -57,7 +57,7 @@ from sextant.application.resolve.shapes.arguments import (
     url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
 
 # The capture fields whose declared value is an `argN` reference into
@@ -125,7 +125,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_channel_via_entries(matches.get("steps", []), catalog)
     roots = [
         {
-            "owner": _catalog_symbol(root["owner"]),
+            # A LIST or a scalar (§3.1): one library reachable under its class name
+            # and under the interface a codebase more often declares its field as.
+            # `owners`, not `owner` — the plural name is what makes every consumer
+            # of the old singular key fail loudly rather than compare a call site's
+            # owner against a tuple and silently match nothing.
+            "owners": catalog_symbols(root["owner"], f"{catalog.source}: roots[].owner"),
             "method": root["method"],
             "captures": _merged_captures(root),
             # Carried forward (never a root's own field, D02 §2's `fluent`
@@ -143,7 +148,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # name for two different roles on two different types (a
             # RestClient's `body(Object)` request-setter and its
             # `body(Class)` response-extractor).
-            "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
+            "owners": (
+                catalog_symbols(step["owner"], f"{catalog.source}: steps[].owner")
+                if "owner" in step
+                else None
+            ),
             "captures": _merged_captures(step),
             # D02 §2's `fluent` style: a step may declare a value guard on
             # another argument — None for the (default) unguarded step, read
@@ -306,7 +315,7 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
             break
         producers.append(producer)
         current = producer
-    owned = [step for step in context.steps if step["owner"] is not None]
+    owned = [step for step in context.steps if step["owners"] is not None]
     captures: dict[str, Any] = {}
     # `reversed`: `producers` was collected from the root outward, so this
     # folds the outermost producer first — real chain order, which is what
@@ -602,7 +611,7 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
         (
             root
             for root in roots
-            if site["owner"] == root["owner"] and site["name"] == root["method"]
+            if site["owner"] in root["owners"] and site["name"] == root["method"]
         ),
         None,
     )
@@ -623,7 +632,8 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
         (
             step
             for step in steps
-            if step["method"] == name and step["owner"] in (None, site["owner"])
+            if step["method"] == name
+            and (step["owners"] is None or site["owner"] in step["owners"])
         ),
         None,
     )
@@ -643,8 +653,19 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
     for method, group in by_method.items():
         if len(group) < 2:
             continue
-        owners = [step["owner"] for step in group]
-        if any(owner is None for owner in owners) or len(set(owners)) != len(owners):
+        # Two entries are distinguishable only when both declare owners and no
+        # owner is shared. Sets rather than values, because a list may now name
+        # several (§3.1): `[JmsTemplate, JmsOperations]` beside `[JmsOperations]`
+        # is two entries that both match a `JmsOperations` receiver, which is the
+        # same silent last-wins this refusal exists to prevent — a scalar pair
+        # could only collide by being equal.
+        owner_sets = [step["owners"] for step in group]
+        overlapping = any(
+            first is None or second is None or set(first) & set(second)
+            for index, first in enumerate(owner_sets)
+            for second in owner_sets[index + 1 :]
+        )
+        if overlapping:
             raise CatalogError(
                 f"loading catalog {catalog.source}: steps named `{method}` need distinct "
                 f"`owner`s to tell them apart (D02 §4's fluent style)"

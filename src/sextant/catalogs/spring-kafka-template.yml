@@ -14,7 +14,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.kafka.core.KafkaTemplate
+  # The interface a codebase declares its field as (§3.1). A call site's
+  # owner is the DECLARED type, so a field typed by the interface carried
+  # an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework.kafka:spring-kafka 3.1.4 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.kafka.core.KafkaTemplate
+    - org.springframework.kafka.core.KafkaOperations
   # CHECKPOINT FACT (real javap descriptors, spring-kafka 3.1.4):
   # `send(String, V)` arity 2, `send(String, K, V)` arity 3 — the payload
   # moves from arg 1 to arg 2 once the key joins the call, so `arity` tells
@@ -105,8 +112,11 @@ matches:
         descriptor: "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
         body_arg: 3 }
   # `ReplyingKafkaTemplate.sendAndReceive` gets its own file
-  # (`spring-kafka-replying.yml`): `matches.owner` is single-valued, and it
-  # is a different owner type from `KafkaTemplate` (checkpoint ruling).
+  # (`spring-kafka-replying.yml`). The reason used to be that `matches.owner` is
+  # single-valued; W9 made that false, so the real one: it is a DIFFERENT
+  # request/reply shape, not another name for this one. An alternate names one
+  # library reachable under two names and derives the same row; `sendAndReceive`
+  # derives a different row, so it stays a separate file (checkpoint ruling).
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }

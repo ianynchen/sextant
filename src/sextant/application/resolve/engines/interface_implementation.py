@@ -29,7 +29,7 @@ from sextant.application.resolve.shapes.arguments import (
     channel_of,
     linked_channels,
 )
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.symbols import bare_descriptor, method_name
 
 _REQUIRED_MATCHES = ("interface", "handler_method", "registration")
@@ -48,10 +48,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     split into a peer (§2d)."""
     _validate_matches(catalog)
     matches = catalog.matches
-    interface_symbol = _catalog_symbol(matches["interface"])
+    # A LIST or a scalar (§3.1): the handler interface may be reachable under
+    # more than one name. Plural, so any consumer left comparing with `==` fails.
+    interface_symbols = catalog_symbols(
+        matches["interface"], f"{catalog.source}: matches.interface"
+    )
     handler_method = matches["handler_method"]
     registration = matches["registration"]
-    owner = _catalog_symbol(registration["owner"])
+    # A LIST or a scalar (§3.1). Plural name, so a consumer still comparing with
+    # `==` fails loudly rather than matching nothing.
+    owners = catalog_symbols(registration["owner"], f"{catalog.source}: registration.owner")
     method_name = registration["method"]
     channel_arg = registration["channel_arg"]
     receiver_arg = registration["receiver_arg"]
@@ -86,7 +92,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `call_sites` is already ordered `caller, ordinal` (NFR-1); filtering it
     # in place, rather than grouping by owner first, keeps that order.
     for site in call_sites:
-        if site["owner"] != owner or site["name"] != method_name:
+        if site["owner"] not in owners or site["name"] != method_name:
             continue
         arguments = site["arguments"]
         caller = str(site["caller"])
@@ -113,7 +119,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         handler = _handler_of(
             receiver_argument,
             handler_method,
-            interface_symbol,
+            interface_symbols,
             implemented,
             method_symbols,
             declarations,
@@ -150,7 +156,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 def _handler_of(
     argument: dict[str, Any] | None,
     handler_method: str,
-    interface_symbol: str,
+    interface_symbols: tuple[str, ...],
     implemented: dict[str, list[str]],
     method_symbols: dict[str, str],
     declarations: "_Declarations",
@@ -193,7 +199,7 @@ def _handler_of(
         if symbol is None:
             return None
         symbol = str(symbol)
-        if interface_symbol in implemented.get(symbol, []):
+        if any(name in implemented.get(symbol, []) for name in interface_symbols):
             # `symbol` already carries its own trailing `#` (D00 §5a's bare
             # descriptor form), so the descriptor searched for is
             # `<type>#<handler_method>(` without a second separator — a
@@ -203,14 +209,14 @@ def _handler_of(
             candidates = [
                 found for bare, found in method_symbols.items() if bare.startswith(prefix)
             ]
-            return _sole_handler(candidates, handler_method, interface_symbol, declarations)
+            return _sole_handler(candidates, handler_method, interface_symbols, declarations)
     return None
 
 
 def _sole_handler(
     candidates: list[str],
     handler_method: str,
-    interface_symbol: str,
+    interface_symbols: tuple[str, ...],
     declarations: "_Declarations",
 ) -> str | None:
     """Which of an implementing type's same-named methods IS the handler.
@@ -261,7 +267,8 @@ def _sole_handler(
         return None
     declared = [
         parameters
-        for symbol, parameters in declarations.by_type.get(interface_symbol, [])
+        for name in interface_symbols
+        for symbol, parameters in declarations.by_type.get(name, [])
         if symbol == handler_method
     ]
     if len(declared) != 1:

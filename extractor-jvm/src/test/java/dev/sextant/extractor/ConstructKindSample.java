@@ -42,3 +42,25 @@ class DeprecatedType {
 
     int current = 2;
 }
+
+/** NESTED forms of every construct kind. `InnerClasses` (JVMS 4.7.6) has NO attribute
+ *  from which ASM could synthesise `ACC_RECORD`, so a nested record's entry in that
+ *  table is indistinguishable from a plain nested class — and reading the kind from
+ *  there reported all 1,262 nested records in the local dependency cache (73% of
+ *  1,739) as `class`. Every kind is nested here, not only the record, so the word the
+ *  kind is read from has to answer all five. */
+final class NestingHost {
+    record NestedRecord(int x) {}
+
+    private record PrivateNestedRecord(int y) {}
+
+    interface NestedInterface {}
+
+    @interface NestedAnnotation {}
+
+    enum NestedEnum {
+        ONE
+    }
+
+    static class NestedClass {}
+}

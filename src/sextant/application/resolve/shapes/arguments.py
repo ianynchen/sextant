@@ -508,8 +508,8 @@ def _field_sources(declared: Any, catalog: Catalog) -> FieldSources:
             f"getter_prefixes?}}` with dotted type names and string keys, got {declared!r}"
         )
     return FieldSources(
-        value_annotation=_catalog_symbol(str(declared["value_annotation"])),
-        properties_annotation=_catalog_symbol(str(declared["properties_annotation"])),
+        value_annotation=_catalog_symbol(declared["value_annotation"]),
+        properties_annotation=_catalog_symbol(declared["properties_annotation"]),
         prefix_from=str(declared["prefix_from"]),
         getter_prefixes=tuple(declared.get("getter_prefixes", [])),
     )

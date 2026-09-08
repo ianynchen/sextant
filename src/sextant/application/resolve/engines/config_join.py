@@ -50,7 +50,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.closed_sets import Direction, Protocol
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, method_name
@@ -309,9 +309,17 @@ def _candidates(workspace: Workspace, suffix_rules: list[dict[str, Any]]) -> dic
     choice.
     """
     implemented = _implemented_interfaces(workspace)
+    # A LIST or a scalar (§3.1): the interface a bean is recognised by may be
+    # reachable under more than one name. One entry per name, so the search below
+    # is unchanged — it already scans a list of candidates.
     declared = [
-        (str(rule["when"]["implements"]), _catalog_symbol(str(rule["when"]["implements"])), rule)
+        (str(name), symbol, rule)
         for rule in suffix_rules
+        for name, symbol in zip(
+            _declared_names(rule["when"]["implements"]),
+            catalog_symbols(rule["when"]["implements"], "config_join: when.implements"),
+            strict=True,
+        )
     ]
     found: dict[str, _Candidate] = {}
     for row in workspace.query("method_declarations"):
@@ -335,6 +343,20 @@ def _candidates(workspace: Workspace, suffix_rules: list[dict[str, Any]]) -> dic
         symbol = str(row["symbol"])
         found.setdefault(method_name(bare_descriptor(symbol)), _Candidate(symbol, returns, rule))
     return found
+
+
+def _declared_names(declared: object) -> tuple[str, ...]:
+    """The dotted names a `when.implements` writes, in the order it wrote them —
+    the dotted half of what `catalog_symbols` converts, kept beside it because the
+    suffix search below matches on the DOTTED name and the symbol both.
+
+    Any other shape falls through to `catalog_symbols`, which is the one place that
+    refuses it, naming the file and the key."""
+    if isinstance(declared, str):
+        return (declared,)
+    if isinstance(declared, list):
+        return tuple(str(name) for name in declared)
+    return ()
 
 
 def _implemented_interfaces(workspace: Workspace) -> dict[str, list[str]]:
@@ -649,7 +671,11 @@ def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
     rules = catalog.matches[_ADDRESS]["binding"][_CHANNELS]
     by_annotation: dict[str, list[dict[str, Any]]] = {}
     for rule in rules:
-        by_annotation.setdefault(_catalog_symbol(str(rule["annotation"])), []).append(rule)
+        # A LIST or a scalar (§3.1): one rule reachable under several annotation
+        # names files under each, which is what a dict keyed by symbol already
+        # expects — the rule object itself is shared, not copied.
+        for symbol in catalog_symbols(rule["annotation"], f"{catalog.source}: rule.annotation"):
+            by_annotation.setdefault(symbol, []).append(rule)
     methods = {str(row["symbol"]) for row in workspace.query("method_symbols")}
     found: list[_Channel] = []
     seen: set[tuple[str, str, str]] = set()

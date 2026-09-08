@@ -1202,6 +1202,43 @@ def test_a_package_scope_does_not_claim_a_sibling_package_sharing_its_prefix(tmp
     assert field["resolution"] == "resolved"
 
 
+def test_a_package_scope_does_not_reach_into_a_subpackage_of_its_own(tmp_path):
+    """`com/acme/orders/scoped/` must not claim `com/acme/orders/scoped/inner/`.
+
+    A Java package annotation is not inherited by subpackages — JLS 7.4.1 gives
+    `a.b` and `a.b.c` no relationship beyond the name — and the sibling test
+    above passes without this one, because a subpackage really does start with
+    its parent's full prefix, trailing `/` and all. Measured over 1,672 cached
+    jars: 1,479 packages declare a field scope and 462 unmarked subpackages were
+    claimed by one, Guava's `…/base/internal` and Spring Cloud AWS's
+    `…/sqs/config/legacy` among them.
+    """
+    owner = "com/acme/orders/scoped/inner/InnerRequest#"
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _write(
+        root / "InnerRequest.jsonl",
+        _document("doc_inner", "com/acme/orders/scoped/inner/InnerRequest.java"),
+        [
+            _type("doc_inner", owner),
+            _field("doc_inner", owner, "code", _string()),
+            _annotation(
+                "doc_inner",
+                _MODULE + "com/acme/orders/scoped/package-info#",
+                "org/jspecify/annotations/NullMarked#",
+                {},
+            ),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_shapes(workspace, _CATALOG, [owner])
+
+    field = field_of(workspace, owner, "code")
+    assert field["nullable"] is True
+    assert field["resolution"] == "resolved"
+
+
 def test_a_type_level_scope_does_not_claim_a_sibling_type_sharing_its_prefix(tmp_path):
     """`…/ScopedType#` must not match `…/ScopedTypeLarge#code.` — the trailing
     `#` a type-level target already carries is the boundary."""

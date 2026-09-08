@@ -99,17 +99,30 @@ def catalog_rows() -> list[dict[str, str]]:
     for path in sorted(CATALOGS.glob("*.yml")):
         catalog = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         matches = catalog.get("matches") or {}
+        # A catalog may name ONE library under several names (§3.1) — the class and
+        # the interface a codebase more often declares its field as. One row per
+        # owner, because the question is per owner: an interface declaring a SUBSET
+        # of the class's methods matches some call sites and misses the rest, and a
+        # check reading only the first name would never see it. The harness makes
+        # the same split, and these two lists are compared against each other.
+        declared_owner = matches.get("owner")
+        owners = (
+            [declared_owner]
+            if isinstance(declared_owner, str) or declared_owner is None
+            else list(declared_owner)
+        )
         for method in matches.get("methods") or []:
             if isinstance(method, dict) and "descriptor" in method:
-                rows.append(
-                    {
-                        "catalog": path.stem,
-                        "owner": str(matches.get("owner")),
-                        "name": str(method["name"]),
-                        "arity": "—" if method.get("arity") is None else str(method["arity"]),
-                        "descriptor": str(method["descriptor"]),
-                    }
-                )
+                for owner in owners:
+                    rows.append(
+                        {
+                            "catalog": path.stem,
+                            "owner": str(owner),
+                            "name": str(method["name"]),
+                            "arity": "—" if method.get("arity") is None else str(method["arity"]),
+                            "descriptor": str(method["descriptor"]),
+                        }
+                    )
     return rows
 
 

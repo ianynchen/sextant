@@ -1787,9 +1787,16 @@ def test_a_package_scope_makes_an_unannotated_field_not_null(
 
     Both spellings, because a Spring codebase writes Spring's: JSpecify's
     `@NullMarked` was declared in `shape-models/json.yml` and Spring's
-    `@NonNullApi`/`@NonNullFields` were not — so every Spring package declaring
-    itself non-null read as fully nullable. `SpringScopedDetail` is reached
-    through the payload graph rather than a second endpoint.
+    `@NonNullFields` was not — so every Spring package declaring itself non-null
+    read as fully nullable. `SpringScopedDetail` is reached through the payload
+    graph rather than a second endpoint.
+
+    The two negative cases travel the same way, and both were wrong. A package
+    declaring `@NonNullApi` and nothing else says nothing about FIELDS — Spring
+    scopes parameters and returns with it — and 197 of 1,672 cached jars'
+    packages declare it alone. A SUBpackage of a scoped package inherits nothing
+    (JLS 7.4.1), and matching the parent's prefix by bare `startswith` claimed
+    462 unmarked subpackages.
     """
     workspace, _ = resolved_fixture
     nullable_by_field = {
@@ -1802,6 +1809,10 @@ def test_a_package_scope_makes_an_unannotated_field_not_null(
     assert nullable_by_field[("ScopedRequest#", "code")] is False
     # Spring's, which is what a Spring codebase actually declares.
     assert nullable_by_field[("SpringScopedDetail#", "label")] is False
+    # `@NonNullApi` alone scopes no field.
+    assert nullable_by_field[("ApiScopedDetail#", "note")] is True
+    # A subpackage of a scoped package is not scoped by it.
+    assert nullable_by_field[("NestedScopedDetail#", "tag")] is True
 
 
 def test_a_batch_listeners_request_shape_is_an_array(

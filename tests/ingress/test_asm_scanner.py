@@ -44,6 +44,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
         "ApiGet.jsonl",
+        "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
@@ -82,6 +83,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -149,7 +151,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
         "package-info.jsonl",
-        # OI-48: two now — `scoped` (JSpecify) and `springscoped` (Spring).
+        # Three now: `scoped` (JSpecify's `@NullMarked`), `springscoped` (Spring's
+        # `@NonNullApi` AND `@NonNullFields`) and `apiscoped` (`@NonNullApi` alone,
+        # which scopes no field — the half `springscoped` cannot exercise).
+        "package-info.jsonl",
         "package-info.jsonl",
     ]
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
@@ -177,7 +182,12 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 107 since OI-48: `springscoped/SpringScopedDetail` and its `package-info`,
     # a package declaring itself non-null in SPRING's spelling — the one a Spring
     # codebase writes, and the one `shape-models/json.yml` did not declare.
-    assert report.documents == 107
+    # 110 since that entry's own review: `apiscoped` (a `package-info` declaring
+    # `@NonNullApi` ALONE, which scopes parameters and returns and says nothing
+    # about fields) plus its `ApiScopedDetail`, and `springscoped/nested`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    assert report.documents == 110
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -199,6 +209,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
         "ApiGet.jsonl",
+        "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
@@ -237,6 +248,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
@@ -304,7 +316,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
         "package-info.jsonl",
-        # OI-48: two now — `scoped` (JSpecify) and `springscoped` (Spring).
+        # Three now: `scoped` (JSpecify's `@NullMarked`), `springscoped` (Spring's
+        # `@NonNullApi` AND `@NonNullFields`) and `apiscoped` (`@NonNullApi` alone,
+        # which scopes no field — the half `springscoped` cannot exercise).
+        "package-info.jsonl",
         "package-info.jsonl",
     ]
 

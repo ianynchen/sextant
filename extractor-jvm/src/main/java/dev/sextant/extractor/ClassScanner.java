@@ -139,7 +139,6 @@ public final class ClassScanner {
         private final List<String> permittedSubclasses = new ArrayList<>();
         private String[] classInterfaces;
         private String enclosingSymbol;
-        private Integer nestedAccess;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -263,11 +262,13 @@ public final class ClassScanner {
         public void visitInnerClass(String name, String outerName, String innerName, int access) {
             if (!name.equals(internalName) || outerName == null) return;
             if (enclosingSymbol == null) enclosingSymbol = symbolOf(outerName + "#");
-            // The nested class's own access flags live HERE, not on the class
-            // file's own `access` (JVMS 4.7.6): a nested `private` class reports
-            // ACC_PUBLIC at the top level, because the JVM has no other place to
-            // put it. This is the only place the source's own modifier survives.
-            nestedAccess = access;
+            // This table's `access` word is NOT read. It carries the source's own
+            // nesting modifier — a `private` nested class reports package-private
+            // in the class file's own word, and ACC_PRIVATE only here — but nothing
+            // consumes that today, and the two attempts to consume it both went
+            // wrong: as visibility it flipped protected types to `other`, and as the
+            // construct kind it reported every nested record as `class`. Recovering
+            // the nesting modifier is OI-51; it starts by reading `access` here.
         }
 
         /** Capability 9.14: the parameterized superinterface references
@@ -355,8 +356,8 @@ public final class ClassScanner {
             if ((access & Opcodes.ACC_ENUM) != 0 && "java/lang/Enum".equals(superName)) {
                 return "enum";
             }
-            // W7. There is no ACC_RECORD: JVMS 4.7.30's `Record` attribute is what
-            // says so, and its presence is the whole signal. `record` has been in
+            // W7. JVMS 4.7.30's `Record` attribute is what says a type is a record,
+            // and its presence is the whole signal. `record` has been in
             // D00 §4's closed set since it was written and had NO producer — every
             // record in the estate reported `class` — which is the "declared, never
             // read" shape §2.3's ledger exists to catch, reached from the other side.
@@ -1458,8 +1459,18 @@ public final class ClassScanner {
             // the document is still written and counted.
             if ((classAccess & Opcodes.ACC_MODULE) != 0) return;
             int access = classAccess;
-            int constructFlags = nestedAccess != null ? nestedAccess : classAccess;
-            emit(typeSymbol, constructKindOf(constructFlags), enclosingSymbol, null, access, null,
+            // The construct kind is read from the class file's OWN access word, not
+            // from `nestedAccess`. Measured over javac 21 output for a nested
+            // interface, enum, @interface, record and plain class: the two words
+            // agree on ACC_INTERFACE, ACC_ENUM and ACC_ANNOTATION, and differ on
+            // ACC_RECORD, which only the class file's word carries — ASM synthesises
+            // it in `visit` from JVMS 4.7.30's `Record` attribute, and the
+            // `InnerClasses` table has no attribute to synthesise it from. Routing
+            // the kind through `nestedAccess` therefore reported every NESTED record
+            // as `class`: 1,262 of the 1,739 records in the local dependency cache,
+            // 73%. `nestedAccess` answers nesting and visibility, which is what
+            // JVMS 4.7.6 knows; it does not answer what the type IS.
+            emit(typeSymbol, constructKindOf(access), enclosingSymbol, null, access, null,
                  typeModifiersJson(access),
                  TypeRefs.genericSuperclassFromSignature(classSignature),
                  interfaceSymbolsJson(classInterfaces),

@@ -167,7 +167,12 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # package declaring itself non-null in SPRING's spelling rather than
     # JSpecify's — the one a Spring codebase actually writes, and the one
     # `shape-models/json.yml` did not declare.
-    assert metadata["coverage"]["documents"] == 120
+    # + 3: that entry's own review — `apiscoped/package-info` declaring
+    # `@NonNullApi` ALONE (which scopes parameters and returns, never fields) plus
+    # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    assert metadata["coverage"]["documents"] == 123
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

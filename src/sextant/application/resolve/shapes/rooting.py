@@ -19,9 +19,47 @@ from typing import Any
 # implicit-reexport rule only recognises the same-name `import X as X` form,
 # and this module's own importers (unchanged by this task) reach the name
 # through `rooting`, not through `domain.symbols`.
+from sextant.application.ports.catalogs import CatalogError
 from sextant.domain.symbols import type_descriptor
 
 _catalog_symbol = type_descriptor
+
+
+def catalog_symbols(declared: object, where: str = "a catalog site") -> tuple[str, ...]:
+    """Every symbol one catalog site names, whether it names one or several (§3.1).
+
+    A site may hold a scalar or a list, and a scalar stays valid — this is not a
+    migration, and 42 shipped catalogs spell these as scalars today. The list form
+    means ONE library reachable under more than one name: held by its interface
+    (`JmsOperations` beside `JmsTemplate`), or under its old package. It does not
+    mean two libraries — a javax/jakarta pair is two jars at two versions needing
+    two measurements, and stays two catalogs (§3.3).
+
+    The asymmetry that shows the scalar was accident rather than design:
+    `error_advice` already takes PLURAL lists for its advice and controller types
+    while its two annotation keys are scalar, in one file, for no stated reason.
+
+    Returns a tuple so a caller can iterate without caring which form was written,
+    and so the singular case costs one element rather than a branch at every site.
+
+    `where` is what the caller can say about the site — the catalog file and the
+    key, ideally. The refusal used to read "a catalog site must name a type…",
+    which told a reader holding 42 catalogs neither which file to open nor which
+    key to look at (§13.6: a loud failure that does not say WHERE is half of one).
+
+    A list is accepted and a tuple is not: YAML produces lists, and the two shapes
+    reaching here would mean two ways to spell one catalog. Callers converting
+    their own already-built tuples would be the second way in.
+    """
+    if isinstance(declared, str):
+        return (_catalog_symbol(declared),)
+    if isinstance(declared, list):
+        if not declared:
+            raise CatalogError(f"{where} names an EMPTY list; name at least one type")
+        return tuple(_catalog_symbol(name) for name in declared)
+    raise CatalogError(
+        f"{where} must name a type or a list of them, not {type(declared).__name__} ({declared!r})"
+    )
 
 
 @dataclass(frozen=True)

@@ -52,7 +52,7 @@ from sextant.application.resolve.shapes.identity_calls import (
     parsed_call_sites,
     split_call,
 )
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.symbols import bare_descriptor
 
 _REQUIRED_MATCHES = ("field_annotation", "identity_marker")
@@ -127,7 +127,10 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
 
 
 def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
-    field_annotation = _catalog_symbol(str(catalog.matches["field_annotation"]))
+    # A LIST or a scalar (§3.1); plural name so a stale `==` cannot compile away.
+    field_annotations = catalog_symbols(
+        catalog.matches["field_annotation"], f"{catalog.source}: field_annotation"
+    )
     marker = catalog.matches["identity_marker"]
     service_owner, service_method = split_call(marker["service_name_call"])
 
@@ -138,7 +141,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
 
     matches: list[_FieldMatch] = []
     for annotation in workspace.query("annotations"):
-        if str(annotation["annotation"]) != field_annotation:
+        if str(annotation["annotation"]) not in field_annotations:
             continue
         field = str(annotation["target"])
         stub_type = field_types.get(field)

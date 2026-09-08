@@ -67,6 +67,48 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
+**Nineteen type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+means ONE library or annotation reachable under more than one name — held by its interface
+(`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
+older package. A call site's owner is the DECLARED type, so a codebase writing the interface
+produced a call site the catalog did not name and derived nothing at all, silently.
+
+It does **not** mean two libraries: a `javax`/`jakarta` pair is two jars at two versions
+needing two measurements and stays two catalogs (§3.3). Every name in a list must be measured
+against the library's own bytecode before it is written — `scripts/probes/cp10_catalog_descriptors`
+checks each alternate separately, because an interface declaring a SUBSET of the class's
+methods would match some call sites and miss the rest.
+
+The keys, by the engine that reads them:
+
+| engine | keys |
+|---|---|
+| `single_call` | `matches.owner` |
+| `fluent` | `matches.roots[].owner`, `matches.steps[].owner` |
+| `annotation_driven` | `matches.type_annotation`, `mapping.prefix_annotation`, `reply.annotation` |
+| `interface_implementation` | `matches.interface`, `registration.owner` |
+| `injected_client` | `field_annotation` |
+| `scheduled_work` | `annotation`, `container` |
+| `error_advice` | `handler_annotation`, `status_annotation` |
+| `supertype_dispatch` | `matches.supertype` |
+| `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
+| `config_join` | `when.implements`, `rule.annotation` |
+| `combinator` | `media_values.owner` |
+
+**`identity_marker` and `supertype_marker` are NOT in this list**, though F2 §3.1 named them.
+Neither holds a type name: each is a mapping of CALL specs
+(`service_name_call: {owner, method}`), and the type name sits one level down under that
+`owner`. Widening the key itself would be widening a mapping. The nested `owner` is a
+candidate, and no shipped catalog needs one — the two that declare these keys name gRPC's own
+descriptor classes, which have no second spelling.
+
+The scalar form stays valid and is what almost every shipped catalog writes; this is a
+widening, not a migration. `application/resolve/shapes/rooting.catalog_symbols` is the one
+place that reads either form, and it refuses anything else — a mapping, a number, an empty
+list — naming the file and the key. Where a widened value reaches a consumer, the variable is
+PLURAL (`owners`, `handler_fqns`): the rename is what makes a consumer still comparing with
+`==` fail loudly instead of comparing a string against a tuple and matching nothing.
+
 **`detect.coordinates` is read, and it gates ONE style rather than the whole catalog set**
 (Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the
 loader ignored it). The value is now on the `Catalog` model, and

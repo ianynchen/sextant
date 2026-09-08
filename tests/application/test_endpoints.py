@@ -203,14 +203,20 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
         # the ordinary annotation path.
         assert "org.jetbrains.annotations.Nullable" in catalog.nullability["nullable"]
         assert "org.jetbrains.annotations.NotNull" in catalog.nullability["not_null"]
-        # All three spellings of one rule (OI-48). JSpecify's was declared alone,
-        # and Spring is the framework this reads most: 58 `package-info` classes
-        # in spring-web 6.1.6 carry `@NonNullApi` and `@NonNullFields`, and
+        # Both spellings of the FIELD rule, and only those (OI-48). JSpecify's was
+        # declared alone, and Spring is the framework this reads most: 58
+        # `package-info` classes in spring-web 6.1.6 carry Spring's, and
         # `HttpHeaders` declares 68 fields of which zero carry an annotation of
         # their own — a scope exists so that only the exceptions are marked.
+        #
+        # `@NonNullApi` is deliberately NOT here. Spring scopes parameters and
+        # return values with it and fields with `@NonNullFields`, and this scope
+        # is applied to field symbols and to nothing else. Measured over 1,672
+        # cached jars: all 613 packages declaring `@NonNullFields` also declare
+        # `@NonNullApi`, so listing it added no field scope anywhere, while 197
+        # packages declare it ALONE and had every field wrongly resolved not-null.
         assert catalog.nullability["scope"] == [
             {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"},
-            {"annotation": "org.springframework.lang.NonNullApi", "means": "not_null_by_default"},
             {
                 "annotation": "org.springframework.lang.NonNullFields",
                 "means": "not_null_by_default",
@@ -1689,8 +1695,11 @@ def test_the_reversed_package_default_needs_the_scope_annotation_to_be_present(
     class that merely happens to hold a matching method.
 
     This is what lets a catalog whose gate is expressed as a qualifier scope
-    (the only way to name TWO spellings of one gate, since `type_annotation`
-    is single-valued) still gate: no scope row, no default, no address.
+    still gate: no scope row, no default, no address. (A qualifier scope used to
+    be the ONLY way to name two spellings of one gate, because `type_annotation`
+    took a single string; §3.1 widened it to a list, so that is no longer the
+    reason to reach for a scope — the reason is a scope carrying an attribute,
+    which is what this test is about.)
     """
     paths = _qname_paths(
         tmp_path,
@@ -6432,3 +6441,151 @@ def test_a_condition_naming_no_annotations_at_all_is_refused(tmp_path: Path):
         ),
     )
     assert "non-empty list" in refusal
+
+
+# --- W9/W10 review, M2/M3: `catalog_symbols` is the one function §3.1 added and
+# nothing tested it directly. Its callers were tested through the shipped
+# catalogs, which all happen to be well-formed, so every refusal branch in it was
+# unreached.
+
+
+def test_catalog_symbols_accepts_one_name_and_a_list_of_them():
+    """A scalar stays valid — this is a widening, not a migration, and 42 shipped
+    catalogs write scalars — and a list means ONE library under several names."""
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    assert catalog_symbols("org.springframework.jms.core.JmsTemplate") == (
+        "org/springframework/jms/core/JmsTemplate#",
+    )
+    assert catalog_symbols(
+        ["org.springframework.jms.core.JmsTemplate", "org.springframework.jms.core.JmsOperations"]
+    ) == (
+        "org/springframework/jms/core/JmsTemplate#",
+        "org/springframework/jms/core/JmsOperations#",
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param(None, id="null"),
+        pytest.param(7, id="a number"),
+        pytest.param({"owner": "a.B"}, id="a mapping"),
+        pytest.param([], id="an empty list"),
+    ],
+)
+def test_catalog_symbols_refuses_a_shape_that_is_not_a_name(declared):
+    """Every one of these is a well-formed YAML value, so the loader admits it.
+    The refusal has to name the FILE and the KEY: a reader holding 42 catalogs
+    cannot act on "a catalog site must name a type"."""
+    from sextant.application.ports.catalogs import CatalogError
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    with pytest.raises(CatalogError) as refusal:
+        catalog_symbols(declared, "spring-jms-template.yml: matches.owner")
+    assert "spring-jms-template.yml: matches.owner" in str(refusal.value)
+
+
+def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
+    """The list form across every shipped catalog, checked as a set rather than
+    one catalog at a time: a repeated entry is a name that can never match twice
+    and a typo is a name that can never match at all, and both are silent —
+    `_matching_method` simply finds no call site with that owner.
+
+    The measurement that these names EXIST in the libraries is CP-10's; this asks
+    only that the catalog spells each one once and that it converts."""
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    listed = 0
+    for catalog in YamlCatalogSource(CATALOGS).load():
+        declared = catalog.matches.get("owner") if isinstance(catalog.matches, dict) else None
+        if not isinstance(declared, list):
+            continue
+        listed += 1
+        symbols = catalog_symbols(declared, f"{catalog.source}: matches.owner")
+        assert len(set(symbols)) == len(symbols), f"{catalog.source} repeats an owner: {symbols}"
+        assert all(symbol.endswith("#") for symbol in symbols), symbols
+    # §3.1 was applied to seven catalogs. A test that silently found none would
+    # pass forever once the key was renamed.
+    assert listed == 7, f"expected seven catalogs with an owner list, found {listed}"
+
+
+def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_path):
+    """W9/W10 review M1. The conversion lives in the call-site engine, which runs
+    AFTER `endpoints_reset`, so a malformed `owner` raised with the previous run's
+    rows already gone and none written — a broken file half-emptying the table,
+    the exact outcome `derive_endpoints` resolves every style up front to
+    prevent. The pre-flight refusal is what puts it back in front of the reset."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.derive("endpoints_reset")
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, path) VALUES ('jms', 'outbound', '/prior')"
+        )
+        broken = next(
+            catalog
+            for catalog in YamlCatalogSource(CATALOGS).load()
+            if catalog.style == "single_call"
+        )
+        object.__setattr__(broken, "matches", {**broken.matches, "owner": 7})
+
+        with pytest.raises(CatalogError) as refusal:
+            derive_endpoints(workspace, [broken], set())
+
+        assert "matches.owner" in str(refusal.value)
+        # The row the previous run wrote is still there: nothing was emptied.
+        assert [row["path"] for row in workspace.query("endpoints")] == ["/prior"]
+    finally:
+        workspace.close()
+
+
+def test_a_type_annotation_written_as_a_list_gates_on_every_spelling(tmp_path: Path):
+    """§3.1 at the one widened key that reaches SQL rather than Python.
+
+    `$type_annotation` was compared with `=` inside `derive_endpoints.sql`, so
+    widening it meant changing the SQL too (`list_contains`), which no Python-level
+    test would have exercised. The real annotation is put SECOND in the list on
+    purpose: a comparison that still read the parameter as one string would match
+    nothing, and putting it first would let a first-element read pass by accident.
+
+    The pair here is a realistic one — Spring gates on `@Controller` and
+    `@RestController`, and a codebase writes either — but the assertion is the
+    mechanism, not the pair.
+    """
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    scalar = spring.matches["type_annotation"]
+    listed = Catalog(
+        **{
+            **vars(spring),
+            "matches": {
+                **spring.matches,
+                "type_annotation": ["org.springframework.stereotype.Controller", scalar],
+            },
+        }
+    )
+
+    derive_endpoints(workspace, [listed], capabilities={"annotation_args", "type_annotations"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {(r["method"], r["path"]) for r in rows} == {
+        ("POST", "/v1/orders"),
+        ("GET", "/v1/orders/{id}"),
+        ("GET", "/v1/orders"),
+    }
+
+
+def test_a_field_annotation_written_as_a_list_matches_either_spelling(tmp_path: Path):
+    """The same question at a Python-level key, with the two halves separated: one
+    field carries the first spelling and one carries the second, so a check that
+    read only one end of the list would drop a row rather than all of them."""
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    both = catalog_symbols(["com.acme.First", "com.acme.Second"], "test: field_annotation")
+    assert both == ("com/acme/First#", "com/acme/Second#")
+    # A one-element list and the bare scalar are the same tuple: the widening adds
+    # a spelling, never a second behaviour for the singular case.
+    assert catalog_symbols(["com.acme.First"], "test") == catalog_symbols("com.acme.First", "test")

@@ -19,7 +19,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.apache.kafka.clients.producer.KafkaProducer
+  # The interface a codebase declares its field as (§3.1). A call site's
+  # owner is the DECLARED type, so a field typed by the interface carried
+  # an owner this catalog did not name and matched nothing.
+  # Measured: org.apache.kafka:kafka-clients 3.6.2 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.apache.kafka.clients.producer.KafkaProducer
+    - org.apache.kafka.clients.producer.Producer
   # MEASURED, at kafka-clients 3.6.2 (CP-12 Q6,
   # `scripts/probes/cp12_sweep_round1b.md`): `KafkaProducer` declares exactly
   # TWO `send` overloads, `send(ProducerRecord)` and

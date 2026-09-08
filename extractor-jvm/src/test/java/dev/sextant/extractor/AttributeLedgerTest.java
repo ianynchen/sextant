@@ -1,6 +1,7 @@
 package dev.sextant.extractor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -83,13 +84,56 @@ class AttributeLedgerTest {
         // renamed or deleted is exactly "declared, never read" — the defect the ledger
         // exists to make impossible — so the reader is resolved against the real
         // visitor classes rather than trusted.
-        Set<String> callbacks = visitorCallbacks();
         List<String> missing = AttributeLedger.ATTRIBUTES.stream()
             .filter(AttributeLedger.Entry::read)
-            .filter(entry -> !callbacks.contains(entry.evidence()))
+            .filter(entry -> !readerExists(readerToken(entry.evidence())))
             .map(entry -> entry.attribute() + " claims " + entry.evidence())
             .toList();
         assertTrue(missing.isEmpty(), "an attribute claims a reader that does not exist: " + missing);
+    }
+
+    @Test
+    void the_reader_check_fails_when_the_reader_is_not_there() {
+        // Negative test, because the check above is only worth its line if a WRONG
+        // claim fails it. Its first version matched any `visit(`-shaped text anywhere
+        // in the source — call sites and comments included — so `Record`'s claim of
+        // `visit` was satisfied by four unrelated `AnnotationVisitor.visit(` calls and
+        // could not have failed however the reader was renamed.
+        assertFalse(readerExists("visitRecordComponent"),
+            "a callback the scanner does NOT override resolved anyway");
+        assertFalse(readerExists("ClassScanner#noSuchMethod"),
+            "a method that does not exist resolved anyway");
+        assertFalse(readerExists("MethodFlow#constructKindOf"),
+            "a method resolved against the wrong file");
+        assertTrue(readerExists("visitLineNumber"), "a real override did not resolve");
+        assertTrue(readerExists("ClassScanner#constructKindOf"),
+            "a real method did not resolve");
+    }
+
+    /** The reader an `evidence` string names: everything before the first space, so a
+     *  claim may carry a qualification after it (`RuntimeVisibleTypeAnnotations` names
+     *  the two places it is NOT read). */
+    private static String readerToken(String evidence) {
+        int space = evidence.indexOf(' ');
+        return space < 0 ? evidence : evidence.substring(0, space);
+    }
+
+    /** Whether the source declares the named reader. Two spellings, because not every
+     *  attribute is read through a visitor callback: `File#method` is a method declared
+     *  in that file — ASM's tree API materialises `BootstrapMethods` onto an
+     *  `InvokeDynamicInsnNode` and no `visit*` override is involved — and a bare name
+     *  is a `visit*` override. */
+    private static boolean readerExists(String reader) {
+        int hash = reader.indexOf('#');
+        if (hash < 0) return visitorCallbacks().contains(reader);
+        String file = reader.substring(0, hash) + ".java";
+        String method = reader.substring(hash + 1);
+        return java.util.regex.Pattern
+            .compile("^\\s*(?:public|protected|private)?\\s*(?:static\\s+)?[\\w.$<>\\[\\], ]+?\\s+"
+                     + java.util.regex.Pattern.quote(method) + "\\s*\\(",
+                     java.util.regex.Pattern.MULTILINE)
+            .matcher(sourceOf(file))
+            .find();
     }
 
     /** Every `visit*` method the scanner overrides, read from its SOURCE.
@@ -102,23 +146,34 @@ class AttributeLedgerTest {
     private static Set<String> visitorCallbacks() {
         Set<String> names = new java.util.HashSet<>();
         for (String file : List.of("ClassScanner.java", "MethodFlow.java", "TypeRefs.java")) {
-            java.nio.file.Path source =
-                java.nio.file.Path.of("src/main/java/dev/sextant/extractor", file);
-            if (!java.nio.file.Files.isRegularFile(source)) continue;
-            String text;
-            try {
-                text = java.nio.file.Files.readString(source);
-            } catch (java.io.IOException unreadable) {
-                throw new AssertionError("cannot read " + source, unreadable);
-            }
             java.util.regex.Matcher found =
-                // `visit` itself as well as `visitX`: the class-level callback that
-                // carries the access flags is named plainly, and `Record` is read there.
-                java.util.regex.Pattern.compile("\\b(visit|visit[A-Z][A-Za-z]*)\\s*\\(").matcher(text);
+                // A DECLARATION, not any `visit(`-shaped text. The first version had no
+                // anchor and no return type, so it matched call sites and comments too:
+                // every `AnnotationVisitor.visit(...)` call in the file made the bare
+                // name `visit` resolve, and a claim that resolves to a call site cannot
+                // fail when the override behind it is deleted. A modifier and a return
+                // type in front is what makes this a declaration.
+                java.util.regex.Pattern
+                    .compile("^\\s*(?:public|protected|private)\\s+[\\w.$<>\\[\\], ]+?\\s+"
+                             + "(visit|visit[A-Z][A-Za-z]*)\\s*\\(",
+                             java.util.regex.Pattern.MULTILINE)
+                    .matcher(sourceOf(file));
             while (found.find()) names.add(found.group(1));
         }
         assertTrue(names.size() > 15, "found almost no callbacks; the source path is wrong");
         return names;
+    }
+
+    /** One extractor source file's text, or `""` when it is not on disk. */
+    private static String sourceOf(String file) {
+        java.nio.file.Path source =
+            java.nio.file.Path.of("src/main/java/dev/sextant/extractor", file);
+        if (!java.nio.file.Files.isRegularFile(source)) return "";
+        try {
+            return java.nio.file.Files.readString(source);
+        } catch (java.io.IOException unreadable) {
+            throw new AssertionError("cannot read " + source, unreadable);
+        }
     }
 
     @Test

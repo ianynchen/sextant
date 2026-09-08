@@ -206,7 +206,25 @@ def type_descriptor(dotted: str) -> str:
     `byte#[]`, so a catalog writing `byte[]` and a scanned parameter of that
     type must compare equal. Inert for every name without one, which is
     every catalog value written before 2G.
+
+    **Refuses anything that is not a string, rather than converting it.** Since
+    §3.1 a catalog site may name a LIST of types, and only a few sites can honour
+    one so far. At every other site the value reached here through `str(...)`,
+    and `str(["a.B"])` is `"['a.B']"` — a perfectly well-formed conversion of
+    nonsense, producing `"['a/B']#"`, which matches no fact, derives no row and
+    says nothing. Even a ONE-element list did it, which is the slip an author
+    makes first.
+
+    Refusing here removes the cause instead of testing for it at twenty sites:
+    a list written where it cannot yet be honoured stops the run with a message,
+    which is the §8.1 rule that deriving nothing beats deriving the wrong thing.
     """
+    if not isinstance(dotted, str):
+        raise TypeError(
+            f"a catalog type name must be a string, not {type(dotted).__name__} "
+            f"({dotted!r}). A list of alternates is only honoured at the sites "
+            f"converted for §3.1; elsewhere it must stay a single name."
+        )
     depth = 0
     while dotted.endswith(_ARRAY_SUFFIX):
         dotted = dotted[: -len(_ARRAY_SUFFIX)]

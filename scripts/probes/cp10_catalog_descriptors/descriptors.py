@@ -91,18 +91,30 @@ def catalog_descriptors() -> list[dict[str, object]]:
     for path in sorted(CATALOGS.glob("*.yml")):
         catalog = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         matches = catalog.get("matches") or {}
-        owner = matches.get("owner")
+        # A catalog may name ONE library under several names (§3.1) — the class and
+        # the interface a codebase more often declares its field as. Every one is a
+        # row of its own here, because the question this probe asks is per owner:
+        # an interface that declares a SUBSET of the class's methods would match
+        # some call sites and silently miss the rest, and a check that looked only
+        # at the first name would never see it.
+        declared_owner = matches.get("owner")
+        owners = (
+            [declared_owner]
+            if isinstance(declared_owner, str) or declared_owner is None
+            else list(declared_owner)
+        )
         for method in matches.get("methods") or []:
             if isinstance(method, dict) and "descriptor" in method:
-                rows.append(
-                    {
-                        "catalog": path.stem,
-                        "owner": str(owner),
-                        "name": str(method["name"]),
-                        "arity": method.get("arity"),
-                        "descriptor": str(method["descriptor"]),
-                    }
-                )
+                for owner in owners:
+                    rows.append(
+                        {
+                            "catalog": path.stem,
+                            "owner": str(owner),
+                            "name": str(method["name"]),
+                            "arity": method.get("arity"),
+                            "descriptor": str(method["descriptor"]),
+                        }
+                    )
     return rows
 
 

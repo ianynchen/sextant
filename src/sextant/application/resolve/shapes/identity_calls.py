@@ -45,7 +45,7 @@ def split_call(declared: dict[str, Any]) -> tuple[str, str]:
     `call_sites.owner` carries and the bare method name `call_sites.name`
     carries — parsed once, here, so every reader of this notation reads it
     the same way."""
-    return _catalog_symbol(str(declared["owner"])), str(declared["method"])
+    return _catalog_symbol(declared["owner"]), str(declared["method"])
 
 
 def caller_outer_class(caller: str) -> str | None:

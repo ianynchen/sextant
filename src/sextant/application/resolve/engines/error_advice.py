@@ -58,7 +58,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
-from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols, root_type
 from sextant.domain.symbols import bare_descriptor, is_type_descriptor, owner_of
 
 _HANDLER_ANNOTATION = "handler_annotation"
@@ -172,10 +172,17 @@ class _Rules:
     def of(cls, workspace: Workspace, catalog: Catalog) -> "_Rules":
         matches = catalog.matches
         rows = _annotation_universe(workspace, catalog)
-        handler_fqn = _catalog_symbol(str(matches[_HANDLER_ANNOTATION]))
-        status_fqn = _catalog_symbol(str(matches[_STATUS_ANNOTATION]))
-        advice = {_catalog_symbol(str(fqn)) for fqn in matches[_ADVICE_ANNOTATIONS]}
-        controllers = {_catalog_symbol(str(fqn)) for fqn in matches[_CONTROLLER_ANNOTATIONS]}
+        # LISTS or scalars (§3.1). The asymmetry §3.1 names as the proof this was
+        # accident rather than design lived in THIS file: the advice and controller
+        # keys below already took plural lists while these two took one string.
+        handler_fqns = catalog_symbols(
+            matches[_HANDLER_ANNOTATION], f"{catalog.source}: {_HANDLER_ANNOTATION}"
+        )
+        status_fqns = catalog_symbols(
+            matches[_STATUS_ANNOTATION], f"{catalog.source}: {_STATUS_ANNOTATION}"
+        )
+        advice = {_catalog_symbol(fqn) for fqn in matches[_ADVICE_ANNOTATIONS]}
+        controllers = {_catalog_symbol(fqn) for fqn in matches[_CONTROLLER_ANNOTATIONS]}
         scope_keys = [str(key) for key in matches[_SCOPE_FROM]]
         status_keys = [str(key) for key in matches[_STATUS_FROM]]
 
@@ -183,7 +190,7 @@ class _Rules:
         handlers = {
             str(row["target"]): row["args"]
             for row in rows
-            if row["annotation"] == handler_fqn and str(row["target"]) in methods
+            if row["annotation"] in handler_fqns and str(row["target"]) in methods
         }
         containers: dict[str, _Container] = {}
         for row in rows:
@@ -212,7 +219,7 @@ class _Rules:
         statuses = {
             bare_descriptor(str(row["target"])): status
             for row in rows
-            if row["annotation"] == status_fqn
+            if row["annotation"] in status_fqns
             for status in [_status(row["args"], status_keys)]
             if status is not None
         }
@@ -334,7 +341,7 @@ def _annotation_universe(workspace: Workspace, catalog: Catalog) -> list[dict[st
     ]
     scanned = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
     seeds = {
-        _catalog_symbol(str(fqn))
+        _catalog_symbol(fqn)
         for key in (_ADVICE_ANNOTATIONS, _CONTROLLER_ANNOTATIONS)
         for fqn in matches[key]
     }
@@ -358,7 +365,7 @@ def _exception_types(workspace: Workspace, roots: object) -> set[str]:
     facts — `extends` a class from an unscanned jar — simply stops, and the
     class is not proven. That is the under-report COVERAGE names.
     """
-    proven = {_catalog_symbol(str(root)) for root in roots} if isinstance(roots, list) else set()
+    proven = {_catalog_symbol(root) for root in roots} if isinstance(roots, list) else set()
     edges = {
         bare_descriptor(str(row["symbol"])): bare_descriptor(str(row["superclass"]))
         for row in workspace.query("superclasses")

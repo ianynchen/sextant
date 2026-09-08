@@ -224,6 +224,41 @@ class DeclarationAttributeTest {
     }
 
     @Test
+    void a_nested_type_reports_the_same_kind_a_top_level_one_would() throws Exception {
+        // The kind was read from the `InnerClasses` access word (JVMS 4.7.6). That
+        // word agrees with the class file's own on ACC_INTERFACE, ACC_ENUM and
+        // ACC_ANNOTATION, so four of these five passed — and it has no `Record`
+        // attribute for ASM to synthesise ACC_RECORD from, so every NESTED record
+        // read as `class`: 1,262 of the 1,739 records in the local dependency cache.
+        // All five are asserted, because a word that answers only four of them is
+        // the wrong word to read whichever one happens to be tested.
+        assertTrue(
+            symbol("NestingHost$NestedRecord", "NestingHost$NestedRecord#")
+                .contains("\"construct_kind\":\"record\""),
+            "a nested record read as something else");
+        assertTrue(
+            symbol("NestingHost$PrivateNestedRecord", "NestingHost$PrivateNestedRecord#")
+                .contains("\"construct_kind\":\"record\""),
+            "a private nested record read as something else");
+        assertTrue(
+            symbol("NestingHost$NestedInterface", "NestingHost$NestedInterface#")
+                .contains("\"construct_kind\":\"interface\""),
+            "a nested interface read as something else");
+        assertTrue(
+            symbol("NestingHost$NestedAnnotation", "NestingHost$NestedAnnotation#")
+                .contains("\"construct_kind\":\"annotation\""),
+            "a nested annotation read as something else");
+        assertTrue(
+            symbol("NestingHost$NestedEnum", "NestingHost$NestedEnum#")
+                .contains("\"construct_kind\":\"enum\""),
+            "a nested enum read as something else");
+        assertTrue(
+            symbol("NestingHost$NestedClass", "NestingHost$NestedClass#")
+                .contains("\"construct_kind\":\"class\""),
+            "a nested class read as something else");
+    }
+
+    @Test
     void deprecated_is_reported_on_a_type_and_on_a_field_too() throws Exception {
         // Neither was asserted anywhere: deleting the `deprecated` line from the type
         // writer AND from the field writer left the entire suite green, because the

@@ -219,7 +219,7 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         protocol="http",
         direction="inbound",
         type_annotation=None,
-        prefix_annotation="com/acme/rest/Mapping#",
+        prefix_annotation=["com/acme/rest/Mapping#"],
         mapping_annotations=[{"fqn": "com/acme/rest/Get#", "methods": ["GET"]}],
         path_from=["value"],
         prefix_from=["value"],
@@ -331,7 +331,7 @@ def test_an_interface_methods_mapping_lands_on_the_unannotated_implementing_meth
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -353,7 +353,7 @@ def test_the_implementing_methods_own_annotation_wins_outright_no_synthesis():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -378,7 +378,7 @@ def test_two_interfaces_mapping_the_same_method_resolve_to_declaration_order():
     implementation_rows = [_implements(_C, [_I, _I2])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -410,7 +410,7 @@ def test_a_direct_interfaces_own_ancestor_is_reached_before_the_next_direct_inte
     implementation_rows = [_implements(_C, [_I, _I2]), _implements(_I, [_IX])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -460,7 +460,7 @@ def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
         supertype_rows,
         method_rows,
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == [
@@ -502,7 +502,7 @@ def test_a_type_level_prefix_is_inherited_across_a_plain_extends(tmp_path: Path)
     method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
 
     result = inherited_rows(
-        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -526,7 +526,7 @@ def test_a_mapping_on_a_plain_extends_base_reaches_the_overriding_method(tmp_pat
     method_rows = [_method(base_ping, _B), _method(child_ping, _C)]
 
     result = inherited_rows(
-        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -552,7 +552,7 @@ def test_an_ancestor_that_declares_no_method_at_all_still_carries_its_prefix(tmp
     method_rows = [_method(_C + "get().", _C)]
 
     result = inherited_rows(
-        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -570,7 +570,7 @@ def test_a_plain_extends_of_a_base_that_maps_nothing_synthesizes_nothing(tmp_pat
     method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
 
     result = inherited_rows(
-        [], [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        [], [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -583,7 +583,7 @@ def test_a_type_level_prefix_is_inherited_from_the_interface_when_the_class_has_
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [{"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}}]
@@ -599,7 +599,7 @@ def test_a_type_level_prefix_is_not_inherited_when_the_class_carries_its_own():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -628,7 +628,7 @@ def test_a_type_level_prefix_applies_to_both_an_inherited_and_an_own_mapped_meth
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     # `_C`'s own `list` is left alone (its own real mapping already covers
@@ -688,7 +688,7 @@ def test_a_covariant_override_and_its_bridge_both_miss_without_modifiers():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -751,7 +751,7 @@ def test_a_generic_covariant_override_and_its_bridge_still_match_as_a_pair():
         [],
         method_rows,
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -832,7 +832,7 @@ def test_a_covariant_overrides_mapping_lands_on_the_method_someone_wrote():
         [],
         _covariant_pair(),
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert [row["target"] for row in result] == [_C + "find(sig_b)."]
@@ -862,7 +862,7 @@ def test_a_generic_overrides_mapping_stops_naming_the_bridge():
             _scanned_method(_C + "find(sig_b).", _C, {"parameters": string, "returns": void}),
         ],
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert [row["target"] for row in result] == [_C + "find(sig_b)."]
@@ -887,7 +887,7 @@ def test_a_bridge_with_two_same_named_real_overloads_resolves_nothing():
             ),
         ],
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -911,7 +911,7 @@ def test_a_redirected_mapping_never_lands_on_a_method_declaring_its_own():
         [],
         _covariant_pair(),
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -956,7 +956,7 @@ def test_two_ancestors_mapping_one_method_resolve_nothing_rather_than_one_of_the
             ),
         ],
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -1013,7 +1013,7 @@ def test_a_bridge_forwarding_into_a_superclass_redirects_to_nothing():
             ),
         ],
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -1051,7 +1051,7 @@ def test_a_same_name_overload_with_different_parameters_is_not_a_bridge():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -1082,7 +1082,7 @@ def test_a_composed_interface_side_row_inherits_onto_the_implementation():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [

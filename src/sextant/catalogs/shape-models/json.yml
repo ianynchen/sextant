@@ -70,11 +70,20 @@ nullability:
     # annotation of their own — the whole point of a scope is that you annotate
     # the exceptions, not the rule.
     #
-    # `@NonNullApi` scopes parameters and return values; `@NonNullFields` scopes
-    # fields. Both are listed because a payload shape is built from FIELDS and
-    # from accessor returns, and a package that declares one and not the other is
-    # ordinary — Spring's own packages declare both.
-    - { annotation: org.springframework.lang.NonNullApi, means: not_null_by_default }
+    # ONLY `@NonNullFields`. Spring scopes the two separately and means different
+    # things by them: `@NonNullApi` covers parameters and return values,
+    # `@NonNullFields` covers fields. This scope is applied to a FIELD symbol and
+    # to nothing else — `_nullability_of` has one caller and it passes a field —
+    # so `@NonNullApi` was answering a question it does not answer. It was listed
+    # on the grounds that a payload shape is also built from accessor returns;
+    # nothing reads an accessor's return nullability, so that half had no consumer.
+    #
+    # Measured over 1,672 cached jars: 613 packages declare `@NonNullFields` and
+    # every one of them also declares `@NonNullApi`, so dropping it costs no field
+    # scope at all; 197 more declare `@NonNullApi` ALONE — spring-data-mongodb
+    # (28), spring-data-repository (14), mongodb-driver (10), spring-hateoas (9) —
+    # and every field in those read `nullable: false` at `resolution: resolved`
+    # on the strength of an annotation that says nothing about fields.
     - { annotation: org.springframework.lang.NonNullFields, means: not_null_by_default }
 
 # D02 §2g. Types that are objects in code and something else on the wire.

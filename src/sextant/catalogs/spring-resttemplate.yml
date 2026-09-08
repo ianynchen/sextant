@@ -14,7 +14,14 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.web.client.RestTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework:spring-web 6.1.6 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.web.client.RestTemplate
+    - org.springframework.web.client.RestOperations
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
   call_wrappers:
     - { type: org.springframework.http.HttpEntity, payload_ctor_arg: 0 }
