@@ -810,6 +810,12 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # `resolve/engines/config_join.py`'s `gaps` and verified against that
         # writer's own `candidates` line.
         return f"{candidate['binding']}: binder `{candidate['binder']}` maps to no protocol"
+    if question == "unselected_binding":
+        # F2 §3.4: one candidate the cardinality rule declined to choose between,
+        # and the configuration key that would say which binds. Filed by
+        # `resolve/engines/config_join.py`'s `gaps`, and verified against that
+        # writer's own `candidates` line.
+        return f"{candidate['candidate']} (set `{candidate['selected_by']}` to choose)"
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

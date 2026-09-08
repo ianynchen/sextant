@@ -50,6 +50,15 @@ QUESTIONS = (
     # protocol is identity, so DR-5 linked the row into another consumer's graph
     # against endpoints this module never speaks to.
     "binder_protocol",
+    # F2 §3.4: a `sole` cardinality rule found several candidates and the selection
+    # key named none, so WHICH of them the application binds is unread. Candidates:
+    # the candidate names and the key that would answer it.
+    #
+    # It exists because the count taken here is not the count the framework takes:
+    # the framework counts registered beans, `config_join._candidates` counts every
+    # declared method returning one of the declared interfaces. Suppressing without
+    # this question turned a known over-report into a silent under-report.
+    "unselected_binding",
 )
 
 

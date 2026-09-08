@@ -2028,3 +2028,36 @@ versions outside its `## Observations` — which `tests/architecture/test_probe_
 already has the pieces for, since it parses both. **Falsified by** showing the
 existing scope test already catches this, which it does not: it compares column
 headers to the scope paragraph, never the prose to either.
+
+### OI-60 — the Stream candidate set counts methods where the framework counts beans
+**Major · found 2026-09-08 in the W13 review ·
+`src/sextant/application/resolve/engines/config_join.py` (`_candidates`)**
+
+`_candidates` keeps every declared method whose return type is `Function`,
+`Consumer` or `Supplier`. There is no `@Bean`, `@Component` or visibility conjunct,
+so an ordinary helper method that happens to return a functional interface is a
+candidate. `docs/COVERAGE.md` has recorded that over-count since `A-C5`.
+
+W13 made the over-count cost something new. The cardinality rule (`unselected_binds:
+sole`) mirrors the framework's "exactly one eligible function binds by default" — but
+the framework counts REGISTERED BEANS and this counts DECLARED METHODS. Measured: a
+module with one real `Consumer` bean and one helper returning `Function`, with no
+`spring.cloud.function.definition`, derives **no row** where the framework binds the
+bean.
+
+**The first version of the rule made that loss silent**, on the reasoning that the
+framework binds nothing so no row is the complete answer — reasoning that needed the
+two counts to be equal. It now files one `unselected_binding` question per candidate,
+so the loss is visible; the loss itself remains.
+
+**Consequence:** a single-function Spring Cloud Stream application that also declares
+any function-shaped helper method loses its real binding from the export, with
+questions in its place. `spring.cloud.function.definition` is optional exactly for
+single-function applications, so this is a common shape.
+
+**Closes by** measuring which registration forms Spring Cloud Function actually binds
+— `@Bean`, `@Component`, a programmatic `FunctionRegistry` entry — and adding the
+conjunct, at which point the count here becomes the count the framework takes and the
+question stops being filed for a module that has one real bean. §8.1 forbids inventing
+it. **Falsified by** showing the framework binds any function-shaped method regardless
+of registration, which would make the current count right and this entry wrong.

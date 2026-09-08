@@ -1663,10 +1663,14 @@ like every other protocol a catalog writes.
   for an application that serves neither. A sentence naming the framework as its
   authority, saying what the framework does not do; nothing had compared it to the code.
 
-  **Two or more under `sole` files no open question**, and the asymmetry with the binder
-  rule below is deliberate. The framework binds nothing, so "no row" is the complete and
-  correct answer rather than a gap — there is nothing unanswered to ask about. An unmapped
-  binder is the opposite: the module DOES bind something and the wire is unread.
+  **Two or more under `sole` files one `unselected_binding` question per candidate.** It
+  filed none at first, on the reasoning that the framework binds nothing so "no row" is
+  the complete answer — which needed the count taken by the engine to EQUAL the count the
+  framework takes. It does not: the framework counts registered BEANS, and
+  `config_join._candidates` counts every declared method returning one of the declared
+  interfaces, with no `@Bean` conjunct. A suppression here is therefore not evidence that
+  the framework suppressed, and suppressing silently lost a real single-bean binding
+  (OI-60).
 - **A configured binder name absent from `binder_protocols` derives NO ROW and files a
   `binder_protocol` question** (F2 §3.4). It used to take the catalog's own declared
   `protocol:`, described in place as "a gap to grow this map from, never a guessed

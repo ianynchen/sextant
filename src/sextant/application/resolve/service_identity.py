@@ -45,9 +45,14 @@ from sextant.application.resolve.open_questions import record_open_questions
 #
 # `config_join` is the fourth and the first to file a question of another kind
 # (`channel_destination`, 2O design §5). Membership is by style there too, and
-# its `gaps` is inert for every catalog of the style but the one shape that
-# earns the question — a `binding.from: annotation_value` block, whose channel
-# names configuration did not answer.
+# its `gaps` answers for BOTH shapes now (F2 §3.4): a `binding.from:
+# annotation_value` block whose channel names configuration did not answer files
+# `channel_destination`, and a `bean_name` block files `binder_protocol` and
+# `unselected_binding` where `run` wrote no row. The second is gated on the
+# module's build declaration inside `config_join` itself — this seam re-checks
+# neither `requires` nor the dependency gate, and that `gaps` does not re-walk
+# the facts `run` needed, so without the gate it published questions for a
+# catalog the run had declined.
 _GAP_ENGINES = {
     "supertype_derived": supertype_derived.gaps,
     "injected_client": injected_client.gaps,

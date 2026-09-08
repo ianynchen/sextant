@@ -606,12 +606,15 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed five-value set — `payload_binding`, `format_conflict`,
-`channel_destination`, `service_identity` and `environment_divergence`** — checked by the
-single owning module before any row is inserted, because the value is
-bound straight into a published artifact where a typo is indistinguishable from a kind of
-question nobody implemented. Adding a kind is a schema change (NFR-5): both the renderer
-and the export switch on it. *This paragraph said "two-value set" and named the first two
+`question` is a **closed SEVEN-value set — `payload_binding`, `format_conflict`,
+`channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol` and
+`unselected_binding`** — checked by the single owning module before any row is inserted,
+because the value is bound straight into a published artifact where a typo is
+indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
+change (NFR-5): the RENDERER switches on it, and the export carries the rows through
+unread. *This sentence said "both the renderer and the export" until F2 §3.4 added the
+last two; `open_questions.py`'s own comment had already corrected that and this paragraph
+had not caught up.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*

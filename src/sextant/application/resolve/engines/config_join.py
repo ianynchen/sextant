@@ -48,6 +48,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import catalog_symbols, names_a_type
@@ -94,6 +95,12 @@ _COMPOSITION_SEPARATOR = "|"
 # value outside it is refused).
 _CHANNEL_DESTINATION = "channel_destination"
 _BINDER_PROTOCOL = "binder_protocol"
+_UNSELECTED_BINDING = "unselected_binding"
+_UNCHOSEN = (
+    "{count} candidates were found and the selection key names none of them, so which one "
+    "this module binds was not read — the count taken here is over declared methods, not "
+    "over registered beans, so it is not the count the framework takes either"
+)
 _UNMAPPED_BINDER = (
     "the configured binder `{binder}` is absent from this catalog's `binder_protocols`, "
     "so the protocol this binding speaks was not read"
@@ -250,7 +257,18 @@ def _derive_bindings(workspace: Workspace, catalog: Catalog) -> None:
             # that never selected it. The configuration DID declare a
             # binding; that it names nobody is the finding, not a reason to
             # stay silent.
-            rows.append(_row(catalog, catalog.protocol, catalog.direction, None, None, None))
+            #
+            # The BINDER is resolved for this row too. It used to take
+            # `catalog.protocol` unconditionally, bypassing `_protocol_of`
+            # entirely — so `definition: a|b` under an unmapped binder published
+            # `protocol: kafka`, a wire nobody read, on the very path F2 §3.4
+            # says removes the default "entirely". Its `path` is NULL so it never
+            # linked by address, which is the only reason that was not the same
+            # defect as the row above; the column was wrong all the same.
+            degraded = _protocol_of(config, address, entry, catalog)
+            if degraded is None:
+                continue
+            rows.append(_row(catalog, degraded, catalog.direction, None, None, None))
             continue
         for suffix, direction, payload_arg in _rule_bindings(candidate.rule, catalog):
             name = entry + suffix
@@ -408,15 +426,29 @@ def _unselected(binding: dict[str, Any], candidates: dict[str, _Candidate]) -> l
 
     `sole` mirrors a framework that binds a lone candidate implicitly and refuses
     to choose between several. That is not a policy this engine invents: Spring
-    Cloud Function's own selection code opens its guard with
-    `eligibleFunction.size() == 1`, and with two eligible functions the
-    definition stays empty and no binding happens
+    Cloud Function's own `normalizeFunctionDefinition` opens its guard with
+    `eligibleFunction.size() == 1`, and `FunctionBindingRegistrar` then binds only
+    a definition with text, so with two eligible functions nothing binds
     (`scripts/probes/w13_stream_binding.md`).
 
-    **Two or more under `sole` derives NOTHING, and that is the whole point.**
-    Picking one would be a guess about which bean the application runs; binding
-    both fabricates an endpoint the application does not serve. The open question
-    the caller files is what carries the fact that candidates were found.
+    **Two or more under `sole` bind nothing HERE and earn a question**, and the
+    reason is a mismatch this engine cannot close on its own. The framework counts
+    registered BEANS; `_candidates` counts every declared method whose return type
+    is one of the declared interfaces — no `@Bean` conjunct exists yet
+    (`docs/COVERAGE.md` records the over-count). Those are different sets, so a
+    count taken here is not the count the framework takes.
+
+    The first version of this rule suppressed silently, on the reasoning that "the
+    framework binds nothing, so no row is the complete answer". That reasoning
+    needed our count to EQUAL the framework's, and it does not: measured, one real
+    `Consumer` bean beside one ordinary helper method returning `Function` derived
+    nothing at all, where the framework binds the bean. It traded a known
+    over-report for an unknown silent under-report, which is the worse of the two
+    by §8 — an absent row that nothing explains cannot be told from a module that
+    has no such boundary.
+
+    So the caller files one `unselected_binding` question naming every candidate.
+    Not a guess, not a fabricated row, and not silence.
     """
     declared = binding.get(_UNSELECTED, _ALL)
     if declared not in _UNSELECTED_VALUES:
@@ -428,6 +460,25 @@ def _unselected(binding: dict[str, Any], candidates: dict[str, _Candidate]) -> l
     if declared == _ALL or len(candidates) == 1:
         return list(candidates)
     return []
+
+
+def _suppressed_by_cardinality(
+    config: dict[str, dict[str, str | None]],
+    binding: dict[str, Any],
+    candidates: dict[str, _Candidate],
+) -> list[str]:
+    """The candidates `sole` declined to choose between, or nothing.
+
+    Empty whenever the selection key ANSWERED — a module that named its function
+    has no unanswered question — and whenever one candidate or `all` applies.
+    """
+    key = binding.get(_UNSELECTED, _ALL)
+    if key != _SOLE or len(candidates) < 2:
+        return []
+    selected = binding.get("selected_by")
+    if selected is not None and config.get(str(selected)) is not None:
+        return []
+    return sorted(candidates)
 
 
 def _selected_entries(
@@ -834,7 +885,7 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     if _ADDRESS not in catalog.matches:
         return []
     if _binding_source(catalog) != _ANNOTATION_VALUE:
-        return _unmapped_binder_questions(workspace, catalog)
+        return _bean_name_questions(workspace, catalog)
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
@@ -874,20 +925,30 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     return rows
 
 
-def _unmapped_binder_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
-    """One `binder_protocol` question per binding whose configured binder name
-    the catalog maps to no protocol (F2 §3.4).
+def _bean_name_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """The two questions the `bean_name` shape earns where `run` wrote no row
+    (F2 §3.4): `binder_protocol`, and `unselected_binding`.
 
-    Reached only for the `bean_name` shape, where `run` skipped the row because
-    `_protocol_of` returned None. The question carries the BINDING and the
-    configured NAME, which are the two things a reader needs to close it: add
-    the name to `binder_protocols` if that binder speaks a protocol D00 declares,
-    or record why it does not.
+    **Gated on the module's build declaration, unlike this file's other `gaps`.**
+    `record_service_identity_gaps` re-checks neither `requires` nor the dependency
+    gate, which costs nothing for a `gaps` that re-walks the same facts `run`
+    needed — but this one reads `method_declarations` and `resolved_config`, which
+    a skipped catalog's module still has. Without the gate a module that declares
+    no Spring Cloud Stream at all published a question asserting a binding
+    exists, for a catalog the run explicitly declined; the skip message names the
+    parent-POM case, which is exactly when configuration is present and the
+    coordinate is not.
+
+    `binder_protocol` carries the BINDING and the configured NAME — the two things
+    a reader needs to close it: add the name to `binder_protocols` if that binder
+    speaks a protocol D00 declares, or record why it does not.
 
     `protocol` on the question row itself is NULL, and that is the point of the
     whole change — a question that named a protocol would assert the very thing
     it says was unread.
     """
+    if unmet_dependency(workspace, catalog) is not None:
+        return []
     address = catalog.matches[_ADDRESS]
     binding = address.get("binding") or {}
     config = _config_values(workspace)
@@ -895,15 +956,35 @@ def _unmapped_binder_questions(workspace: Workspace, catalog: Catalog) -> list[d
     candidates = _candidates(workspace, rules)
     entries = _selected_entries(config, binding, candidates)
     protocols = address.get("binder_protocols") or {}
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = [
+        {
+            "protocol": None,
+            "method": None,
+            "path": name,
+            "question": _UNSELECTED_BINDING,
+            "candidates": json.dumps(
+                [{"candidate": name, "selected_by": str(binding.get("selected_by"))}],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "evidence": _UNCHOSEN.format(count=len(candidates)),
+        }
+        for name in _suppressed_by_cardinality(config, binding, candidates)
+    ]
     seen: set[tuple[str, str]] = set()
     composition = str(binding.get("composition_separator", _COMPOSITION_SEPARATOR))
     for entry in entries:
         candidate = None if composition in entry else candidates.get(entry)
-        if candidate is None:
-            continue
-        for suffix, _direction, _payload in _rule_bindings(candidate.rule, catalog):
-            name = entry + suffix
+        # A composed or ghost entry has no suffix rules to walk, so the BINDING
+        # is the entry itself. Skipping those left the degrade row's own dropped
+        # binder unquestioned — no row and no question, the silence this whole
+        # change exists to remove.
+        names = (
+            [entry]
+            if candidate is None
+            else [entry + suffix for suffix, _d, _p in _rule_bindings(candidate.rule, catalog)]
+        )
+        for name in names:
             configured = None
             template = address.get("binder_key")
             if template is not None:
@@ -1105,6 +1186,7 @@ def _validate_address(catalog: Catalog, address: Any) -> None:
             )
         for rule in suffix:
             _validate_suffix_rule(catalog, rule)
+        _validate_unselected(catalog, binding)
     for name, protocol in (address.get("binder_protocols") or {}).items():
         _closed(catalog, f"{_ADDRESS}.binder_protocols.{name}", protocol, Protocol)
 
@@ -1133,6 +1215,25 @@ def _validate_channel_rule(catalog: Catalog, rule: Any) -> None:
         rule.get("direction", catalog.direction),
         Direction,
     )
+
+
+def _validate_unselected(catalog: Catalog, binding: dict[str, Any]) -> None:
+    """Refuses an `unselected_binds` value outside the closed pair, at LOAD time.
+
+    `_unselected` also refuses it, and that was the only check — reached solely
+    when a module's configuration failed to answer the selection key. So a typo
+    shipped, behaved normally on every module that configured the key, and raised
+    mid-derivation on one that did not. Shape is knowable without running
+    anything, which is where it belongs.
+    """
+    declared = binding.get(_UNSELECTED, _ALL)
+    if declared not in _UNSELECTED_VALUES:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS}.binding.{_UNSELECTED}: "
+            f"{declared!r}` is not one of {list(_UNSELECTED_VALUES)} (F2 §3.4). `all` binds "
+            f"every candidate when the selection key names nobody; `sole` binds one only "
+            f"where there is exactly one, and files a question otherwise."
+        )
 
 
 def _validate_suffix_rule(catalog: Catalog, rule: Any) -> None:

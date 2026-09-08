@@ -659,3 +659,55 @@ def test_metadata_gap_lists_are_empty_by_default(tmp_path: Path):
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["schema_sources_not_compiled"] == []
     assert written["descriptors_not_interpreted"] == []
+
+
+def test_a_binder_protocol_question_renders_the_binding_and_the_binder():
+    """F2 §3.4's kind, and this test is the reason it has one at all: the whole
+    suite passed with the arm disabled. `open_questions.py`'s own comment says
+    the renderer is the ONLY switch on question kind, so an arm reading a key the
+    writer does not produce raises `KeyError` on the first real module with an
+    unmapped binder and nothing else would catch it — which is exactly the live
+    bug `service_identity`'s own arm test records.
+
+    `protocol` is EMPTY on purpose: a question reporting that a protocol was not
+    read must not name one."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "orders-in-0",
+            "question": "binder_protocol",
+            "candidates": json.dumps([{"binding": "orders-in-0", "binder": "rocketmq"}]),
+            "evidence": "the configured binder `rocketmq` is absent from binder_protocols",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `orders-in-0` — binder_protocol: orders-in-0: binder `rocketmq` maps to no protocol"
+    ) in text
+    assert "(unresolved)" not in text
+
+
+def test_an_unselected_binding_question_renders_the_candidate_and_the_key():
+    """The other kind F2 §3.4 added. It exists because the cardinality count taken
+    in the engine is over declared METHODS while the framework counts registered
+    BEANS — so a suppression here is not evidence the framework suppressed, and
+    the reader needs the key that would settle it."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "orders",
+            "question": "unselected_binding",
+            "candidates": json.dumps(
+                [{"candidate": "orders", "selected_by": "spring.cloud.function.definition"}]
+            ),
+            "evidence": "2 candidates were found and the selection key names none of them",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `orders` — unselected_binding: orders (set `spring.cloud.function.definition` to choose)"
+    ) in text

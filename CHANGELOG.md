@@ -47,10 +47,25 @@ here would restate those documents rather than add anything.
   derive four boundaries — which an existing test recorded as "the honest half" the
   dependency gate does not close.
 
-  **Only the binder case files a question, and the asymmetry is deliberate.** With two or
-  more candidates the framework binds nothing, so no row is the complete answer and there
-  is nothing unanswered to ask. With an unmapped binder the module does bind something and
-  the wire is unread. The first is knowledge; the second is a question.
+  **Both cases file a question, and the reasoning that said otherwise was wrong.** The
+  first version of this change filed one only for the binder, on the grounds that with two
+  or more candidates the framework binds nothing, so no row is the complete answer. That
+  needed the count taken here to EQUAL the framework's, and it does not: the framework
+  counts registered BEANS while `_candidates` counts every declared method returning one
+  of the declared interfaces, an over-count `docs/COVERAGE.md` has recorded since `A-C5`.
+
+  Measured — a module with one real `Consumer` bean beside one ordinary helper returning
+  `Function`, no definition configured — derived **nothing at all**, where the framework
+  binds the bean. A known over-report traded for an unknown SILENT under-report, which §8
+  ranks worse: an absent row nothing explains cannot be told from a module that has no
+  such boundary. `sole` files one `unselected_binding` question per candidate now. The
+  loss itself needs the `@Bean` conjunct, which is unmeasured (OI-60).
+
+  Two more paths were publishing the default that the first version missed: the
+  degrade row for a composed or ghost entry took `catalog.protocol` unconditionally,
+  bypassing the binder resolution entirely, and `gaps` filed questions for a catalog the
+  dependency gate had SKIPPED — asserting a binding exists for a module that declares no
+  Spring Cloud Stream. Both fixed, both tested.
 
   The ratchet hole §3.4 names in the same breath is closed by two guards, not by
   `test_defaulted_identity_values.py`: that audit reads shipped CATALOGS offline, and

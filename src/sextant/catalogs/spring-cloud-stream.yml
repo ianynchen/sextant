@@ -28,10 +28,16 @@ matches:
     key: "spring.cloud.stream.bindings.{binding}.destination"
     binding:
       from: bean_name
-      # The key that narrows the candidate set. Absent from configuration,
-      # every candidate binds (the framework's own default); present, only
-      # the beans it names do.
-        # F2 §3.4's cardinality conjunct. MEASURED against the framework's own
+      # The key that narrows the candidate set. Present, only the beans it names
+      # bind; absent, `unselected_binds` below decides.
+      #
+      # This comment used to end "absent from configuration, every candidate binds
+      # (the framework's own default)" — the sentence the conjunct below exists to
+      # correct, left standing three lines above the correction. It is the second
+      # half of the same defect: a claim about a framework that nobody checked
+      # against the framework.
+      #
+      # F2 §3.4's cardinality conjunct. MEASURED against the framework's own
       # selection code (`scripts/probes/w13_stream_binding.md`, section 1):
       # `SimpleFunctionRegistry.normalizeFunctionDefinition` defaults the
       # definition to a bean only when `eligibleFunction.size() == 1`. With two
@@ -66,9 +72,20 @@ matches:
             direction: [inbound, outbound], payload_arg: [0, 1] }
     # Where the binder is configured, and what each configured name speaks.
     # Most specific first: the binding's own declaration, then the module
-    # default. A name absent from `binder_protocols` leaves the row on this
-    # catalog's own declared protocol — a gap to grow this map from, never a
-    # guessed protocol.
+    # default.
+    #
+    # A name absent from this map derives NO ROW and files a `binder_protocol`
+    # question (F2 §3.4). It used to leave the row on this catalog's own declared
+    # protocol, described here as "a gap to grow this map from, never a guessed
+    # protocol" — and the parenthetical was false: measured, a module bound to
+    # `rocketmq` published a row on `kafka`, complete and confident, with no
+    # question anywhere. `protocol` is identity and DR-5 links across bundles on
+    # protocol equality, so that row reached graphs this analysis never sees.
+    #
+    # NO configured name at all is a different answer and still takes this file's
+    # `protocol:` — nothing was configured, so this file's own declaration is the
+    # only statement there is (D02 §2c), which is a declaration and not a
+    # fallback.
     binder_key: "spring.cloud.stream.bindings.{binding}.binder"
     default_binder_key: spring.cloud.stream.default-binder
     binder_protocols:

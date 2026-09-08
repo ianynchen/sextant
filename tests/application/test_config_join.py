@@ -1590,7 +1590,21 @@ def test_spring_cloud_stream_derives_nothing_for_a_module_that_does_not_declare_
     `rows == []` is the assertion the sweep's Tier-1 backlog requires, and the
     skip beside it is the other half: a catalog that derives nothing must be
     distinguishable from a framework that exposes nothing (M04, FR-17)."""
-    workspace = _workspace(tmp_path, _helpers_facts(), coordinates=("com.acme:something-else",))
+    # The selection NAMES one helper, so `rows == []` is attributable to the gate
+    # and to nothing else. Without it the three helpers bind nothing for the
+    # CARDINALITY reason (F2 §3.4) — measured: with the gate removed entirely,
+    # `rows == []` still held, and only the `skipped` bookkeeping assertion below
+    # caught it. A near-miss satisfied by a second, unrelated rule proves nothing
+    # about the rule it names.
+    workspace = _workspace(
+        tmp_path,
+        _helpers_facts(),
+        _bindings(
+            ("spring.cloud.function.definition", "auditSink"),
+            ("spring.cloud.stream.bindings.auditSink-in-0.destination", "audit.events"),
+        ),
+        coordinates=("com.acme:something-else",),
+    )
     skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
     rows = _rows(workspace)
     workspace.close()
@@ -2688,10 +2702,21 @@ def test_two_function_beans_and_no_definition_bind_nothing(tmp_path: Path):
     )
     skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
     rows = _rows(workspace)
+    questions = _stream_questions(workspace)
     workspace.close()
 
     assert skipped == [], f"skipped, so this test measures nothing: {skipped}"
     assert rows == []
+    # And the suppression is VISIBLE. Suppressing silently was the first version
+    # of this rule, on the reasoning that the framework binds nothing so no row is
+    # the complete answer — which needed our candidate count to equal the
+    # framework's. It does not: `_candidates` counts declared METHODS returning
+    # the declared interfaces, the framework counts registered BEANS. One real
+    # bean beside one ordinary helper derived nothing at all.
+    assert sorted((q["question"], q["path"]) for q in questions) == [
+        ("unselected_binding", "orders"),
+        ("unselected_binding", "payments"),
+    ]
 
 
 def test_one_function_bean_and_no_definition_still_binds(tmp_path: Path):
@@ -2774,3 +2799,92 @@ def test_a_mapped_binder_resolves_to_its_own_protocol_not_the_catalogs(tmp_path:
 
     assert rows == [("amqp", "orders.queue")]
     assert questions == []
+
+
+def test_a_lone_bean_beside_a_helper_method_is_not_silently_suppressed(tmp_path: Path):
+    """The Critical this rule's first version introduced, kept as a test.
+
+    One real `Consumer` bean and one ordinary helper returning `Function` — a
+    shape the framework binds, because it counts registered BEANS and sees one.
+    `_candidates` counts declared METHODS returning the declared interfaces and
+    sees two, so the cardinality rule suppressed both and the module's real
+    binding vanished with nothing saying so.
+
+    The count cannot be fixed here — closing it needs a `@Bean` conjunct nobody
+    has measured yet (`docs/COVERAGE.md` records the over-count). What CAN be
+    fixed is the silence, and that is what this asserts: no fabricated row, and
+    no absence that reads like a module with no such boundary.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [
+            _bean("orders", "java.util.function.Consumer", "java/lang/String#"),
+            _bean(
+                "nameHelper",
+                "java.util.function.Function",
+                "java/lang/String#",
+                "java/lang/String#",
+            ),
+        ],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert {q["question"] for q in questions} == {"unselected_binding"}
+    assert sorted(q["path"] for q in questions) == ["nameHelper", "orders"]
+
+
+def test_a_module_that_does_not_declare_the_dependency_files_no_question(tmp_path: Path):
+    """`record_service_identity_gaps` re-checks neither `requires` nor the
+    dependency gate, which costs nothing for a `gaps` that re-walks the same facts
+    `run` needed. This one reads `method_declarations` and `resolved_config`,
+    which a SKIPPED catalog's module still has — so it published a question
+    asserting a binding exists for a catalog the run explicitly declined.
+
+    The skip message names the parent-POM case, which is exactly when
+    configuration is present and the coordinate is not."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(("spring.cloud.stream.default-binder", "rocketmq")),
+        coordinates=("com.acme:something-else",),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert skipped != [], "the catalog was not skipped, so this test measures nothing"
+    assert questions == []
+
+
+def test_a_composed_definition_under_an_unmapped_binder_derives_no_row(tmp_path: Path):
+    """The degrade row took `catalog.protocol` unconditionally, bypassing the
+    binder resolution entirely — so `definition: a|b` under an unmapped binder
+    published `protocol: kafka`, a wire nobody read, on the very path §3.4 says
+    removes the default *entirely*. Its `path` is NULL so it never linked by
+    address, which is the only reason it was not the same defect as the row it
+    sits beside."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.function.definition", "orders|payments"),
+            ("spring.cloud.stream.default-binder", "rocketmq"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [q["question"] for q in questions] == ["binder_protocol"]

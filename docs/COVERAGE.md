@@ -1857,20 +1857,33 @@ outcome, not a deduplication the engine owes anyone.
 **Spring Cloud Stream's candidate scan is the return type and nothing else, and the dependency
 is what fences it** (`A-C5`, principles sweep §3.2). `config_join`'s `_candidates` reads EVERY
 declared method in the module and keeps the ones whose return type is `Function`, `Consumer` or
-`Supplier` — there is no `@Bean` or `@Configuration` conjunct — and where
-`spring.cloud.function.definition` is absent the framework's own default is to bind every
-candidate. On a module with no Spring Cloud Stream at all that published four Kafka boundaries
-from three ordinary utility methods; the catalog is now dependency-gated
-(`resolve/dependencies.py`), so such a module is SKIPPED with its reason instead.
+`Supplier` — there is **no `@Bean` or `@Configuration` conjunct**. On a module with no Spring
+Cloud Stream at all that published four Kafka boundaries from three ordinary utility methods;
+the catalog is now dependency-gated (`resolve/dependencies.py`), so such a module is SKIPPED
+with its reason instead.
 
-**The residual, stated rather than closed:** on a module that DOES declare Spring Cloud Stream,
-a `Function`-returning helper that is not a bean still derives a binding row. Narrowing that
-needs to know which registration forms the framework actually binds — `@Bean`, `@Component`, a
-programmatic `FunctionRegistry` entry — and that is unmeasured (rank 3 in the sweep's probe
-backlog: this catalog has no probe, no `javap` reference and no version anywhere). §8.1 forbids
-inventing the conjunct, so it is stated here until a probe answers it. **Falsified by** a Spring
-Cloud Stream module with function-shaped utility methods outside its binding configuration: each
-derives a boundary row the broker does not carry.
+*This paragraph used to end "and where `spring.cloud.function.definition` is absent the
+framework's own default is to bind every candidate". That is false, measured against the
+framework's own selection code (W13, `scripts/probes/w13_stream_binding.md`): the definition is
+defaulted to a bean only when exactly one is eligible, and `FunctionBindingRegistrar` binds only
+a definition with text.*
+
+**The residual, stated rather than closed, and it now cuts BOTH ways.** The over-count is
+unchanged: `_candidates` sees every function-shaped method, bean or not. What changed is what
+that over-count costs. Where the selection key names nobody, `unselected_binds: sole` declines
+to choose — so a module with one real bean beside one function-shaped helper derives **no row**
+and files one `unselected_binding` question per candidate, where before W13 it derived the real
+row plus a fabrication.
+
+Neither is right, and the question is the honest middle: a count taken over declared methods is
+not the count the framework takes over registered beans, so a suppression here is not evidence
+the framework suppressed. Closing it still needs to know which registration forms the framework
+binds — `@Bean`, `@Component`, a programmatic `FunctionRegistry` entry — and that is unmeasured
+(rank 3 in the sweep's probe backlog). §8.1 forbids inventing the conjunct.
+
+**Falsified by** a Spring Cloud Stream module with exactly one real function bean, no
+`spring.cloud.function.definition`, and any function-shaped utility method beside it: its real
+binding is absent from the export, with two open questions in its place.
 
 `KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
 `SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination
