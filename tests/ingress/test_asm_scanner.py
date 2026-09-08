@@ -145,8 +145,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
+        "SpringScopedDetail.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
+        "package-info.jsonl",
+        # OI-48: two now — `scoped` (JSpecify) and `springscoped` (Spring).
         "package-info.jsonl",
     ]
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
@@ -171,7 +174,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # one call per dispatch form the JVM has needs an interface with ONE
     # implementation, an interface with TWO, and a subclass that HIDES a
     # static rather than overriding it, which is what makes it seven.
-    assert report.documents == 105
+    # 107 since OI-48: `springscoped/SpringScopedDetail` and its `package-info`,
+    # a package declaring itself non-null in SPRING's spelling — the one a Spring
+    # codebase writes, and the one `shape-models/json.yml` did not declare.
+    assert report.documents == 107
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -294,8 +300,11 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
+        "SpringScopedDetail.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
+        "package-info.jsonl",
+        # OI-48: two now — `scoped` (JSpecify) and `springscoped` (Spring).
         "package-info.jsonl",
     ]
 

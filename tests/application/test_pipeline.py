@@ -183,6 +183,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `/api/composed`: the composed-AND-inherited case — `@ApiGet` on
         # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
         # BEFORE this task's own inheritance walk has anything to resolve.
+        ("POST", "/v1/orders/scoped"),
         # `/api/orders/{id}`: the COVARIANT case, and it derives now (OI-47).
         # `OrdersApiController#find` returns `DetailedOrderResult`, so its
         # descriptor differs from the interface's `find` and it misses the
@@ -824,9 +825,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # covariant override's descriptor cannot match its interface's and the only
     # method that can, javac's bridge, was excluded outright. Reading
     # `modifiers.synthetic` and carrying the bridge's mapping across to the
-    # method it forwards to recovers it. 122 -> 123 is the whole effect on this
-    # fixture, which is the measurement, not an estimate: nothing else moved.
-    assert len(report.endpoints) == 123
+    # method it forwards to recovers it. 122 -> 123 was the whole effect of that.
+    #
+    # OI-48 makes it 124: `POST /v1/orders/scoped`, added because `ScopedRequest`
+    # was referenced by NOTHING, so no endpoint rooted it, so the package-scope
+    # nullability rule ran only in a hand-built unit test and never in the
+    # pipeline. The fixture could not see the thing it was built to demonstrate.
+    assert len(report.endpoints) == 124
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1598,10 +1603,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 54 + 2: the prefix-seam controllers, one route each. They ride the
         # same `spring-web.yml` `protocol_hint` every other http row does and
         # are equally untouched by it.
-        # 57, not 56, since OI-47: `GET /api/orders/{id}` is the covariant
+        # 58 since OI-48 added `POST /v1/orders/scoped`; 57, not 56, since OI-47: `GET /api/orders/{id}` is the covariant
         # inherited mapping this pass used to lose with the bridge it was
         # reachable through. One row, and the only movement in this whole map.
-        "http": 57,
+        "http": 58,
         "jms": 8,
         "kafka": 22,
         "pubsub": 6,
@@ -1618,7 +1623,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 123
+    assert sum(counts.values()) == len(report.endpoints) == 124
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -1763,6 +1768,40 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
             "com/acme/orders/contracts/OrderEvent#"
         )
         assert row["response_shape"] is None
+
+
+def test_a_package_scope_makes_an_unannotated_field_not_null(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """D02 §2e's scope rule, exercised end to end at last (OI-48).
+
+    A package-level `@NullMarked` or `@NonNullApi` inverts Java's permissive
+    default: a field with NO annotation of its own is not-null, and only the
+    exceptions are marked. That is the whole point of the mechanism — measured on
+    spring-web 6.1.6, `HttpHeaders` declares 68 fields and ZERO carry an
+    annotation, because the package declares the rule once.
+
+    The resolver has always implemented it; nothing reached it. `ScopedRequest`
+    was referenced by no endpoint, so no shape was ever rooted at it and the rule
+    ran only in a hand-built unit test. It is a request body now.
+
+    Both spellings, because a Spring codebase writes Spring's: JSpecify's
+    `@NullMarked` was declared in `shape-models/json.yml` and Spring's
+    `@NonNullApi`/`@NonNullFields` were not — so every Spring package declaring
+    itself non-null read as fully nullable. `SpringScopedDetail` is reached
+    through the payload graph rather than a second endpoint.
+    """
+    workspace, _ = resolved_fixture
+    nullable_by_field = {
+        (str(row["shape_id"]).split("/")[-1], str(row["wire_name"])): row["nullable"]
+        for row in workspace.query("shape_fields")
+        if "Scoped" in str(row["shape_id"])
+    }
+
+    # JSpecify's spelling.
+    assert nullable_by_field[("ScopedRequest#", "code")] is False
+    # Spring's, which is what a Spring codebase actually declares.
+    assert nullable_by_field[("SpringScopedDetail#", "label")] is False
 
 
 def test_a_batch_listeners_request_shape_is_an_array(
@@ -3028,7 +3067,8 @@ def test_the_format_ladder_answers_every_live_row(
     # every other json-bodied http row here does.
     # + 1 (OI-47): `GET /api/orders/{id}`, the recovered covariant mapping,
     # which is a json-bodied http row like any other and reaches the same rung.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 51
+    # + 1 (OI-48): `POST /v1/orders/scoped`, likewise.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 52
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

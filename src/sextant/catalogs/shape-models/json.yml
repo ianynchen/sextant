@@ -63,6 +63,19 @@ nullability:
              org.jetbrains.annotations.NotNull]
   scope:
     - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+    # Spring spells the same rule two ways and neither is `@NullMarked`, so a
+    # Spring codebase declaring its packages non-null read as fully nullable.
+    # Measured on spring-web 6.1.6: 58 `package-info` classes, every one carrying
+    # BOTH of these, and `HttpHeaders` declares 68 fields of which ZERO carry an
+    # annotation of their own — the whole point of a scope is that you annotate
+    # the exceptions, not the rule.
+    #
+    # `@NonNullApi` scopes parameters and return values; `@NonNullFields` scopes
+    # fields. Both are listed because a payload shape is built from FIELDS and
+    # from accessor returns, and a package that declares one and not the other is
+    # ordinary — Spring's own packages declare both.
+    - { annotation: org.springframework.lang.NonNullApi, means: not_null_by_default }
+    - { annotation: org.springframework.lang.NonNullFields, means: not_null_by_default }
 
 # D02 §2g. Types that are objects in code and something else on the wire.
 # Which they are is SERIALISER knowledge, not language knowledge — `Instant` is

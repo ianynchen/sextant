@@ -95,7 +95,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # interface and reachable only through javac's bridge, since the covariant
     # override's descriptor is not the interface's — it used to be discarded
     # with the bridge, and is now carried across to the real override.
-    assert metadata["endpoints"]["inbound"]["http"] == 43
+    # + 1 (OI-48): `POST /v1/orders/scoped`. `ScopedRequest` was referenced by
+    # nothing, so no endpoint rooted it and the package-scope nullability rule was
+    # never exercised in the pipeline — only in a hand-built unit test.
+    assert metadata["endpoints"]["inbound"]["http"] == 44
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -160,7 +163,11 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # `StrictRefiner`, `Splitter`, `FirstSplitter`, `SecondSplitter`,
     # `TraceProbe`. Unannotated and unreferenced, so they move this count and
     # nothing else.
-    assert metadata["coverage"]["documents"] == 118
+    # + 2 (OI-48): `springscoped/SpringScopedDetail` and its `package-info`, a
+    # package declaring itself non-null in SPRING's spelling rather than
+    # JSpecify's — the one a Spring codebase actually writes, and the one
+    # `shape-models/json.yml` did not declare.
+    assert metadata["coverage"]["documents"] == 120
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

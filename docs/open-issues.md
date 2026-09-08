@@ -1635,46 +1635,51 @@ measured, and it was believed for two waves. The entry's `verify:` line proved
 the CAUSE and not the EFFECT. A row claiming "fixing X recovers Y" needs a probe
 that shows Y actually appearing.
 
-### OI-48 — package-level nullability is read and thrown away
-**Major · found 2026-09-07 while asking what `package-info` contributes ·
-`src/sextant/catalogs/*.yml`, `src/sextant/application/resolve/shapes/nullability.py`**
+### OI-48 — Spring's spelling of a package-level nullability scope was undeclared
+**CLOSED 2026-09-07 · `src/sextant/catalogs/shape-models/json.yml`,
+`fixtures/orders-service/src/main/java/com/acme/orders/`**
 
-`nullability.py` implements D02 §2e's SCOPE rule: a `@NullMarked` or
-`@NonNullApi` declared on a package or a class makes every field under it
-not-null by default, inverting Java's permissive one. The extractor emits the
-annotation, the resolver strips the trailing `package-info#` to recover the
-package it claims, and `tests/application/test_shapes.py` proves the whole path.
+**As first filed, this entry's premise was wrong, and correcting it is most of the
+value.** It said no shipped catalog declares a `nullability` block. They all do —
+42 of them name `shape_model: json`, and that model declares the nullable and
+not-null annotation lists (JSpecify, Spring, javax, jakarta, JetBrains) and a
+`@NullMarked` scope. The mistake was grepping `src/sextant/catalogs/*.yml` for
+`nullability:` and concluding from its absence, without looking for the indirection
+D02 §1b describes — the same "asserted without measuring" this branch has been
+correcting all week.
 
-**No shipped catalog declares one.** `rules.scope_annotations` is fed from a
-catalog's `nullability.scope` block; every `scope` in `src/sextant/catalogs/` is
-the word in a comment or the unrelated `scope_from`. So `_scope_prefixes` returns
-`[]` on the first line and the declaration is discarded.
-`verify: grep -rn "scope:" src/sextant/catalogs/*.yml`
+**What was actually missing: Spring's spelling of the scope.** JSpecify's
+`@NullMarked` was declared; `org.springframework.lang.NonNullApi` and
+`NonNullFields` were not. Spring is the dominant framework this reads, and it
+declares package-level nullability in its own vocabulary — measured on spring-web
+6.1.6, **58** `package-info` classes carrying both, and `HttpHeaders` declaring 68
+fields of which **zero** carry an annotation of their own, because the entire point
+of a scope is that you annotate the exceptions rather than the rule.
 
-**It is not a rare shape.** Measured on `spring-web-6.1.6`: **58**
-`package-info.class` files, carrying `org.springframework.lang.NonNullApi` and
-`NonNullFields`. JSpecify's entire design is package-level `@NullMarked`. Our own
-fixture declares one — `com/acme/orders/scoped/package-info.java` — and
-`ScopedRequest#code` is still reported `nullable: true`, the ordinary Java
-default, which is the OPPOSITE of what the package says.
+**And nothing exercised the rule end to end.** `ScopedRequest` — a fixture built to
+demonstrate exactly this, in a package called `scoped` — was referenced by NOTHING,
+so no endpoint rooted it, so `derive_shapes` never expanded it and the scope ran
+only in a hand-built unit test with an invented catalog. The fixture could not see
+the thing it existed for, which is the RUNBOOK entry on fixtures that cannot see
+their own defect, reached a third time.
 
-**Why this is a wrong answer rather than a missing one.** `nullable` has no
-`unknown`: D00 §5a says Java's type system settles it outright, so an unannotated
-reference field is `nullable: true` at `resolution: resolved` — a CERTAIN claim.
-A package that says otherwise makes that certainty false, and nothing downstream
-can tell, because the fact is well formed and carries full confidence.
+**Fixed** by declaring Spring's two scope annotations, making `ScopedRequest` a
+request body (`POST /v1/orders/scoped`), and adding `com/acme/orders/springscoped/`
+— a package declaring itself non-null in Spring's spelling, reached through the
+payload graph rather than a second endpoint. Measured after:
 
-**Closes by** a catalog declaring the scope annotations — jspecify's
-`@NullMarked`/`@NullUnmarked` and Spring's `@NonNullApi`/`@NonNullFields`/
-`@Nullable` — with a `measured:` row like any other, and the fixture's
-`ScopedRequest#code` reporting `nullable: false`. **Falsified by** measuring that
-the shape does not occur in a module Sextant is meant to read, which spring-web
-already contradicts.
+```
+ScopedRequest#code        nullable = False   (JSpecify @NullMarked)
+SpringScopedDetail#label  nullable = False   (Spring @NonNullApi/@NonNullFields)
+```
 
-**Consequence for `package-info.class` itself:** it is worth scanning ONLY for
-this. Its own symbol is a phantom and is no longer emitted (W7); the annotation
-it carries is the entire reason the file is read at all, and until this closes,
-that reason is unrealised.
+Removing the two Spring entries puts `label` back to `nullable = True`, so they are
+load-bearing rather than decorative.
+
+**Left open deliberately:** JSpecify's `@NullUnmarked`, which re-enables
+nullability inside a marked scope, has no `means:` value to declare —
+`_SCOPE_MEANINGS` holds one meaning, `not_null_by_default`. A codebase using it
+would read as non-null where it says otherwise. Filed as OI-50.
 
 ### OI-49 — twelve W7 fields are read and nothing reads them back
 **Minor · found 2026-09-07 by code review of W7 · `src/sextant/domain/facts.py`,
@@ -1713,3 +1718,24 @@ reader this count missed — the count is a grep and greps under-report.
 **Not proposed for removal here.** Several are one line and obviously correct, and
 `varargs` in particular is the recorded blocker for capability 9.15. What is wrong
 is the claim, not the code.
+
+### OI-50 — a scope can only be turned on, never off
+**Minor · found 2026-09-07 while closing OI-48 ·
+`src/sextant/application/resolve/shapes/expansion.py` (`_SCOPE_MEANINGS`)**
+
+D02 §2e's scope vocabulary has exactly one meaning, `not_null_by_default`, so a
+catalog can say "this package is non-null" and cannot say the opposite. JSpecify
+ships `@NullUnmarked` precisely to re-open a nested scope inside a marked one, and
+Spring has no equivalent.
+
+**Consequence:** a package or class marked `@NullUnmarked` inside a `@NullMarked`
+parent reads as non-null, which is the WRONG direction — a consumer told a field
+cannot be null when the author said it can. Sextant does not declare
+`@NullUnmarked` at all today, so the current answer for such a package is the
+permissive default and therefore accidentally right; the defect appears the moment
+someone adds it to the list without adding the meaning.
+
+**Closes by** `_SCOPE_MEANINGS` gaining `nullable_by_default`, the scope resolution
+taking the LONGEST matching prefix rather than any match (a nested scope must beat
+its parent), and `@NullUnmarked` declared. **Falsified by** measuring that no
+codebase Sextant reads nests scopes — which JSpecify's own design contradicts.

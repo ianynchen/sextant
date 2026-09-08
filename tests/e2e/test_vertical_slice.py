@@ -440,7 +440,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # (`GET /api/orders/{id}`) that used to be lost with the bridge it was
         # reachable through. The bundle answers what the workspace answers, so
         # this moves with `tests/cli/test_app.py`'s own count.
-        "http": 43,
+        # 44 since OI-48: `POST /v1/orders/scoped`, which roots the package-scope
+        # nullability case the fixture previously declared and never reached.
+        "http": 44,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -614,7 +616,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # OI-47: +1 inbound http — `GET /api/orders/{id}`, the covariant inherited
     # mapping that used to be discarded along with the bridge it was reachable
     # through — 88 + 1 = 89, for a 136-endpoint total (6 + 89 + 41 = 136).
-    assert rows == [("both", 6), ("inbound", 89), ("outbound", 41)]
+    # OI-48: +1 inbound http — `POST /v1/orders/scoped` — 89 + 1 = 90, for a
+    # 137-endpoint total (6 + 90 + 41 = 137).
+    assert rows == [("both", 6), ("inbound", 90), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1325,7 +1329,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # `SecondSplitter`, `TraceProbe`, one class file and one document each.
     # Annotated by nothing and referenced by nothing, so they move this count
     # and no other row in this test.
-    assert (None, 117) in origins
+    # + 2: OI-48's `com/acme/orders/springscoped/` — `SpringScopedDetail` and its
+    # `package-info`, a package declaring itself non-null in SPRING's spelling.
+    assert (None, 119) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

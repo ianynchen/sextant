@@ -203,8 +203,18 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
         # the ordinary annotation path.
         assert "org.jetbrains.annotations.Nullable" in catalog.nullability["nullable"]
         assert "org.jetbrains.annotations.NotNull" in catalog.nullability["not_null"]
+        # All three spellings of one rule (OI-48). JSpecify's was declared alone,
+        # and Spring is the framework this reads most: 58 `package-info` classes
+        # in spring-web 6.1.6 carry `@NonNullApi` and `@NonNullFields`, and
+        # `HttpHeaders` declares 68 fields of which zero carry an annotation of
+        # their own — a scope exists so that only the exceptions are marked.
         assert catalog.nullability["scope"] == [
-            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"}
+            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"},
+            {"annotation": "org.springframework.lang.NonNullApi", "means": "not_null_by_default"},
+            {
+                "annotation": "org.springframework.lang.NonNullFields",
+                "means": "not_null_by_default",
+            },
         ]
 
         assert catalog.serialization["name_from"] == [

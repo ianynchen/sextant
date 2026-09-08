@@ -14,6 +14,32 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Spring package that declares itself non-null is believed** (OI-48).
+
+  D02 §2e's scope rule inverts Java's permissive default: inside a `@NullMarked` or
+  `@NonNullApi` package, a field with NO annotation of its own is not-null, and only the
+  exceptions are marked. That is the whole mechanism — measured on spring-web 6.1.6,
+  `HttpHeaders` declares 68 fields and **zero** carry an annotation, because the package
+  declares the rule once.
+
+  JSpecify's `@NullMarked` was declared in `shape-models/json.yml`. **Spring's
+  `@NonNullApi` and `@NonNullFields` were not** — and Spring is the framework this reads
+  most, with 58 such `package-info` classes in spring-web alone. So a Spring codebase
+  declaring its packages non-null read as fully nullable, at `resolution: resolved`, which
+  D00 defines as a certain claim rather than a guess.
+
+  **Nothing exercised the rule end to end.** `ScopedRequest` — a fixture built to
+  demonstrate exactly this, in a package called `scoped` — was referenced by nothing, so no
+  endpoint rooted it, so the shape was never expanded and the rule ran only in a hand-built
+  unit test. It is a request body now (`POST /v1/orders/scoped`), and
+  `com/acme/orders/springscoped/` declares the same rule in Spring's spelling, reached
+  through the payload graph rather than a second endpoint. Both now report
+  `nullable: false`; removing the two Spring entries puts one back to `true`.
+
+  *The entry that started this was itself wrong, and the correction is on it: it claimed no
+  shipped catalog declares nullability, from grepping the catalogs for the block without
+  looking for the `shape_model:` indirection that 42 of them use.*
+
 - **Four W7 kinds read a flag, a name or a callback count where the class file states the
   answer** — the same defect class three earlier reviews caught, found again by review.
 
