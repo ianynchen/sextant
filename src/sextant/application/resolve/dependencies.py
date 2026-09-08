@@ -41,6 +41,7 @@ import json
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.domain.symbols import type_descriptor
 
 # The styles whose framework rule is conditional on the dependency being
 # declared (module docstring). Membership is a property of the STYLE, never a
@@ -144,11 +145,40 @@ def unmet_dependency(workspace: Workspace, catalog: Catalog) -> str | None:
         )
     wanted = ", ".join(catalog.detect_coordinates)
     declared = _declared_coordinates(workspace)
+    if declared is not None and not declared.isdisjoint(catalog.detect_coordinates):
+        return None
+    # The build did not answer. An annotation only this framework defines does
+    # (F2 §3.6, `Catalog.detect_satisfied_by`): `@ConnectMapping` is RSocket's
+    # connection-setup annotation, STOMP has no counterpart, and a class carrying
+    # one is running RSocket whether or not the recorded coordinates say so —
+    # which matters most on Maven, where a starter's own transitives are not
+    # recorded at all and the gate's answer is "could not tell".
+    #
+    # Checked only AFTER the build has failed to answer, so the ordinary path is
+    # unchanged and this query runs on the modules that would otherwise derive
+    # nothing.
+    if _carries_satisfying_annotation(workspace, catalog):
+        return None
     if declared is None:
         return _NOT_RECORDED.format(coordinates=wanted)
-    if declared.isdisjoint(catalog.detect_coordinates):
-        return _NOT_DECLARED.format(coordinates=wanted)
-    return None
+    return _NOT_DECLARED.format(coordinates=wanted)
+
+
+def _carries_satisfying_annotation(workspace: Workspace, catalog: Catalog) -> bool:
+    """Whether anything in the module carries one of the catalog's
+    `detect.satisfied_by` annotations.
+
+    Module-wide rather than per class, because that is what the rule says: the
+    presence of an RSocket-only annotation ANYWHERE means the module runs
+    RSocket, and the classes it then derives are the ones its own match finds.
+    """
+    if not catalog.detect_satisfied_by:
+        return False
+    # `type_descriptor` rather than a local spelling: the dotted-to-SCIP
+    # conversion lives in `domain/symbols.py` and nowhere else
+    # (`test_symbol_grammar_confinement.py`).
+    wanted = {type_descriptor(name) for name in catalog.detect_satisfied_by}
+    return any(str(row["annotation"]) in wanted for row in workspace.query("annotations"))
 
 
 def _declared_coordinates(workspace: Workspace) -> set[str] | None:

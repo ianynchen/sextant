@@ -817,10 +817,20 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # writer's own `candidates` line.
         return f"{candidate['candidate']} (set `{candidate['selected_by']}` to choose)"
     if question == "handler_protocol":
-        # F2 §3.6: the class and the annotation two frameworks share, filed by
-        # `resolve/engines/annotation_driven.py`'s `gaps` where the build names
+        # F2 §3.6: the class, the annotation two frameworks share, and the wire
+        # ONE of them would publish it on — filed by
+        # `resolve/engines/annotation_driven.py`'s `gaps` where the build settles
         # neither library. Verified against that writer's own `candidates` line.
-        return f"{candidate['class']} carries {candidate['annotation']}"
+        #
+        # The protocol is what makes a candidate answerable (§3.6 review, finding
+        # 3). Both catalogs ask about one class, `service_identity._merged` folds
+        # them into a single question, and its candidates are then one line per
+        # wire — without the protocol they rendered as the same sentence twice
+        # and a verdict could only ever anchor to the first.
+        #
+        # The wire leads, because the candidates render joined on one line and it
+        # is the only part that differs between them.
+        return f"`{candidate['protocol']}` — {candidate['class']} carries {candidate['annotation']}"
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

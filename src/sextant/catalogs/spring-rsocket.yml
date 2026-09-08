@@ -46,6 +46,19 @@ detect:
     - "io.rsocket:rsocket-core"
     - "io.rsocket:rsocket-transport-netty"
     - "org.springframework.boot:spring-boot-starter-rsocket"
+  # §3.6: "`@ConnectMapping` anywhere is positive RSocket evidence regardless of
+  # the build." This is the line that makes that true. `required: true` answers
+  # BEFORE any matching runs, so until this key existed the sentence was
+  # unreachable: a module whose build recorded no RSocket coordinate — the normal
+  # Maven case, where a starter's own transitives are not recorded — derived
+  # nothing from a `@ConnectMapping` class and asked nothing either.
+  #
+  # It is sound for this annotation and would not be for `@MessageMapping`:
+  # measured (`scripts/probes/w16_rsocket_versus_stomp.md` section 2),
+  # `@ConnectMapping` lives in `messaging/rsocket/annotation`, STOMP ships no
+  # counterpart, and `spring-stomp.yml` does not claim it.
+  satisfied_by:
+    - org.springframework.messaging.rsocket.annotation.ConnectMapping
 
 measured:
   - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],

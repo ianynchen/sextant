@@ -145,8 +145,8 @@ CREATE TABLE IF NOT EXISTS open_questions (
     path       TEXT,
     -- One of the closed set `payload_binding`, `format_conflict`,
     -- `channel_destination`, `service_identity`, `environment_divergence`,
-    -- `binder_protocol`, `unselected_binding`
-    -- (2G design §6, extended by 2O design §0 and F2 §3.4) — checked in
+    -- `binder_protocol`, `unselected_binding`, `handler_protocol`
+    -- (2G design §6, extended by 2O design §0, F2 §3.4 and F2 §3.6) — checked in
     -- `resolve/open_questions.py`, which owns the set and refuses anything
     -- outside it. This comment named the original TWO until 2O Task 9, which
     -- shipped the writer `channel_destination` had been waiting for; the

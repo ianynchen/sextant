@@ -460,7 +460,9 @@ table.
 ## 3. F2 — a catalog may spell a type exactly once
 
 **Root cause:** RC-2, **21 sites of one shape**. **Closes:** C4, C5, C7, C9, Q1, Q5, Fork 1,
-G-51, G-21, G-38, G-89.
+G-51, G-21, G-89. (*G-38 was listed here and is not closed by this section: W17 measured it
+and it was not an RC-2 site — `spring-mvc.yml` spelled a LIST of coordinates already, and
+nothing read it. §3.7 records what W17 did change.*)
 
 This is the single highest-leverage change in the spec. Twenty-one catalog keys accept one
 string where the world offers several, and every javax/jakarta miss, every
@@ -589,10 +591,43 @@ fact — plus `@ConnectMapping` as an RSocket-only positive marker.
 
 ### 3.7 WebFlux `@Controller` (Q4 amendment, G-38)
 
-`spring-mvc` is gated on the `spring-webmvc` coordinate. WebFlux's handler gate is
-byte-for-byte identical, so a WebFlux `@Controller` derives nothing. **This is a bug and it
-gets fixed**, not stated as a slice — either a WebFlux-coordinate catalog or widened
-coordinates, decided by measurement of the two gates.
+**Measured, and the bug is not there** (`scripts/probes/w17_webflux_controller.md`). This
+section said `spring-mvc` *is gated on* the `spring-webmvc` coordinate, so a WebFlux
+`@Controller` derives nothing. It is not gated on anything: `detect.coordinates` is read by
+the two styles in `resolve/dependencies.py`'s `DEPENDENCY_GATED` and by any catalog setting
+`detect.required`, and `spring-mvc` is `annotation_driven` and sets neither. Compiled against
+the real jars and run through the real scanner and the real derivation, all four shapes G-38
+names — `@Controller` + `@GetMapping`, `+ @ResponseBody`, returning `Mono<String>`, and
+`@RestController` — derive the same rows in a `spring-webflux`-only build as in a
+`spring-webmvc`-only one.
+
+**Where the prediction came from is the reusable part.** G-38 was written by reading a
+`detect.coordinates` line and reasoning about what a gate keyed on it would do, without
+asking whether a consumer reads it. GUIDELINES §8.1 — measure, never predict — and the mirror
+of §2: a capability with no consumer is half-shipped, and a *declared gate* with no consumer
+misleads its own readers into predicting behaviour the code does not have.
+
+**The widened-coordinates branch shipped anyway, for a different reason.** The list named one
+stack while both serve `@Controller` — the two `RequestMappingHandlerMapping.isHandler`
+implementations are four identical instructions at 6.1.6 and 7.0.2 in each artifact — so the
+sentence was false whether or not anything read it. §3.6 shipped `detect.required`, which is
+one line an author can add to have their coordinate list honoured; adding it to this file
+would have made G-38's prediction true for the first time. The list now names both, pinned
+by `test_the_shipped_coordinate_list_names_both_web_stacks` (the list's content, asserted
+offline) and by `test_narrowing_the_list_and_gating_on_it_is_what_would_lose_the_webflux_rows`
+(the pair of changes that would lose the rows — narrowing ALONE changes nothing, because
+nothing reads this catalog's list).
+
+A second WebFlux catalog was the other branch offered and is refused, on the mechanism the
+SQL actually has rather than the one first written here. `derive_endpoints.sql`'s insert ends
+`AND NOT EXISTS (… protocol = … AND direction = … AND method IS NOT DISTINCT FROM … AND
+path = …)`, and `catalog_id` is not in that key — so a twin catalog claiming the same
+`@Controller` + `@GetMapping` evidence on the same `http` protocol derives **no duplicate and
+no extra row at all**: it is silent dead weight, and the only thing it changes is which id
+gets the attribution, through `endpoints.py`'s filename tiebreak. (*This paragraph said the
+twin "would derive a duplicate row", citing §3.6. It would not, and §3.6 does not transfer:
+`spring-stomp` and `spring-rsocket` produce two rows because their PROTOCOLS differ, so that
+dedup key never applied to them.*)
 
 ### 3.8 Stated slices (Q4)
 
@@ -1526,7 +1561,7 @@ boundary with a support level (F6), never dropped.
 | G-35 | Major | `@MessageExceptionHandler` | F10 §11 |
 | G-36 | Major | `spring-ws.yml` | F2 §3.1 |
 | G-37 | Major | `spring-webflux-router.yml` | F2 §3.8 |
-| G-38 | Major | `spring-mvc.yml` / `spring-web.yml` | F2 §3.7 |
+| G-38 | Major (measured away; the coordinate list was corrected) | `spring-mvc.yml` | F2 §3.7 |
 | G-39 | Major | `netflix-dgs.yml` | F2 §3.1 |
 | G-40 | Major | `netflix-dgs.yml` | §13 |
 | G-41 | Major | `netflix-dgs.yml` | F2 §3.8 |

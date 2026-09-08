@@ -1027,6 +1027,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dependencies.satisfied-by-answers-the-gate": Guard(
+        what="a class carrying an annotation only ONE framework defines derives that "
+        "framework's row even when the build names none of its coordinates",
+        why="F2 §3.6 states it outright — `@ConnectMapping` anywhere is positive RSocket "
+        "evidence regardless of the build — and the catalog, the probe and the plan all "
+        "claimed it shipped. It had not: `detect.required` gates the WHOLE catalog before "
+        "any matching runs, so a module whose build recorded no RSocket coordinate derived "
+        "nothing from a `@ConnectMapping` class and asked no question either. Silent, in "
+        "exactly the case the sentence was written for — and it is the ordinary Maven case, "
+        "where a starter's own transitives never reach the module fact",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/dependencies.py",
+                find="    if _carries_satisfying_annotation(workspace, catalog):\n        return None",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        return None",
+            ),
+        ),
+    ),
     "config_join.unmapped-binder-derives-no-row": Guard(
         what="a binding whose configured binder name the catalog maps to no protocol derives "
         "NO ROW — never one on the catalog's own declared `protocol:`",

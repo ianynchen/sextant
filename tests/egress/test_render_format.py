@@ -713,15 +713,24 @@ def test_an_unselected_binding_question_renders_the_candidate_and_the_key():
     ) in text
 
 
-def test_a_handler_protocol_question_renders_the_class_and_annotation():
+def test_a_handler_protocol_question_renders_one_line_per_candidate_wire():
     """F2 §3.6's kind. Added with its arm test in the same change, because the
     review one wave earlier found the two preceding kinds shipping arms that
     nothing exercised — the whole suite passed with each disabled, and a wrong
-    key would raise `KeyError` on the first real module to file one."""
+    key would raise `KeyError` on the first real module to file one.
+
+    The row here is the SHIPPED one, byte for byte: `protocol` is `None` (the
+    writer's own value, not the `""` an earlier draft of this test passed, which
+    reached the same branch by luck), and the candidates are the two wires
+    `service_identity._merged` folds together. Both lines must appear and must
+    DIFFER — §3.6 review finding 3 was two byte-identical lines, under which a
+    verdict anchors to the first and the second stands unanswered forever.
+    """
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    annotation = "org/springframework/messaging/handler/annotation/MessageMapping#"
     open_questions = [
         {
-            "protocol": "",
+            "protocol": None,
             "method": None,
             "path": "com/acme/orders/LiveController#",
             "question": "handler_protocol",
@@ -729,16 +738,20 @@ def test_a_handler_protocol_question_renders_the_class_and_annotation():
                 [
                     {
                         "class": "com/acme/orders/LiveController#",
-                        "annotation": "org/springframework/messaging/handler/annotation/MessageMapping#",
+                        "annotation": annotation,
+                        "protocol": protocol,
                     }
+                    for protocol in ("rsocket", "websocket")
                 ]
             ),
-            "evidence": "this module's build records no dependency coordinates",
+            "evidence": "this module's build does not settle whether it declares one of x",
         }
     ]
     text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    # Candidates render joined onto the question's own line, so the assertion is
+    # that BOTH wires appear on it and that the two halves are not the same text.
     assert (
         "- `com/acme/orders/LiveController#` — handler_protocol: "
-        "com/acme/orders/LiveController# carries "
-        "org/springframework/messaging/handler/annotation/MessageMapping#"
+        f"`rsocket` — com/acme/orders/LiveController# carries {annotation}; "
+        f"`websocket` — com/acme/orders/LiveController# carries {annotation}"
     ) in text

@@ -38,7 +38,7 @@ matches:
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
-| `detect` | Coordinates that make this catalog's framework rule applicable to a module. **Read since Phase 2O Task 6, by one style** — see below |
+| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required` and `satisfied_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
@@ -115,15 +115,47 @@ list — naming the file and the key. Where a widened value reaches a consumer, 
 PLURAL (`owners`, `handler_fqns`): the rename is what makes a consumer still comparing with
 `==` fail loudly instead of comparing a string against a tuple and matching nothing.
 
-**`detect.coordinates` is read, and it gates ONE style rather than the whole catalog set**
-(Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the
-loader ignored it). The value is now on the `Catalog` model, and
+**`detect.coordinates` is read, and it gates SOME catalogs rather than the whole catalog
+set** (Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the
+loader ignored it). The value is on the `Catalog` model, and
 `application/resolve/dependencies.py` applies it to the styles whose framework rule is
-CONDITIONAL on the library being present — today `derived_resource` alone. Most catalogs
-need no such gate: their evidence NAMES the framework (an annotation only it defines, a
-call to a type only it ships), so the dependency is implied by the match itself.
+CONDITIONAL on the library being present — today `derived_resource` and `config_join`. Most
+catalogs need no such gate: their evidence NAMES the framework (an annotation only it
+defines, a call to a type only it ships), so the dependency is implied by the match itself.
 `derived_resource` is the opposite case — a repository interface mentions no HTTP anywhere
-— so without the antecedent there is no consequent to derive.
+— so without the antecedent there is no consequent to derive. *This paragraph said "ONE
+style … today `derived_resource` alone" after `config_join` had joined the set and again
+after `detect.required` shipped; it is corrected here rather than left as a document a
+reader would have to disbelieve (§5.3).*
+
+**`detect.required` (F2 §3.6) makes the coordinates a conjunct for ONE CATALOG whose style
+is not gated.** Style was a proxy for "is this catalog's evidence enough to name its
+framework", and `spring-stomp` / `spring-rsocket` are the pair where the proxy fails: both
+claim `@MessageMapping`, and Spring's own two handlers scan for it with the identical
+`@Controller` bean predicate, so no fact about the class separates them and the build is the
+only discriminator there is. Setting it refuses to load without `detect.coordinates` — a
+catalog requiring a dependency it does not name gates on nothing and derives nothing, which
+is the silent-disable shape rather than a strict one.
+
+**`detect.satisfied_by` names the annotations that answer the dependency question by
+themselves**, and is refused without `detect.required` (it would describe a bypass of a gate
+that is not there). The gate answers BEFORE any matching runs, so without this key an
+annotation only one framework defines could never be the positive evidence §3.6 says it is:
+a module whose build recorded no RSocket coordinate — the ordinary Maven case, where a
+starter's own transitives are not recorded — derived nothing from a `@ConnectMapping` class
+and asked nothing either. Declared per catalog rather than computed as "an annotation only
+one catalog claims", because a rule that changes when an unrelated catalog is added is a
+rule nobody can read off the file that states it.
+
+**A gated catalog that does not derive files a question rather than going quiet**, on
+either failing branch of the gate: no module fact recorded, and coordinates recorded that
+name none of the catalog's. The two are one finding, because on Maven a dependency reaching
+a module only as another artifact's own transitive is absent from the recorded set and
+cannot be told from real absence. The question is `handler_protocol`
+([D01](D01-graph-schema.md) §7), it is filed only for classes the catalog's whole match —
+`type_annotation` conjunct included — would have claimed and that nothing else derived a row
+for, and where two catalogs ask it about one class the rows are folded into one question
+carrying both wires as candidates.
 
 The coordinates a module's build declares reach the workspace as [D00](D00-fact-schema.md)
 §5's `module` fact (`dependency_coordinates`). **Their REACH differs by build system and

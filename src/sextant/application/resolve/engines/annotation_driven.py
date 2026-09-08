@@ -23,7 +23,7 @@ from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_o
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -220,9 +220,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 # list and `run` is untouched.
 _HANDLER_PROTOCOL = "handler_protocol"
 _UNRESOLVABLE_FRAMEWORK = (
-    "this module's build records no dependency coordinates, so whether it declares one of "
-    "{coordinates} could not be answered — and the annotation this class carries is claimed "
-    "by more than one framework, so which wire it serves is unread"
+    "this module's build does not settle whether it declares one of {coordinates}, so the "
+    "annotation this class carries — claimed by more than one framework — leaves which wire "
+    "it serves unread"
 )
 _CORROBORATES = "corroborates"
 _CLASS_ANNOTATIONS = "class_annotations"
@@ -309,34 +309,51 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
 def _unresolvable_framework_questions(
     workspace: Workspace, catalog: Catalog
 ) -> list[dict[str, Any]]:
-    """One `handler_protocol` question per class carrying this catalog's mapping
-    annotation, where the module's build cannot say whether this catalog's
-    framework is the one serving it (F2 §3.6).
+    """One `handler_protocol` question per class this catalog would have claimed,
+    where the module's build cannot say whether this catalog's framework is the
+    one serving it (F2 §3.6).
 
-    Only for a catalog declaring `detect.required`, and only where the gate came
-    back UNANSWERABLE rather than answered-no. Those are different findings: a
-    build that records coordinates and names neither library has said something,
-    while a build that records none — parent-POM inheritance, a workspace whose
-    facts predate the module fact — has said nothing, and F1 does not resolve
-    transitives to settle it.
+    **Both failing branches of the gate, not just one.** An earlier version fired
+    only where NO module fact was recorded, reasoning that "a build that records
+    coordinates and names neither library has said something". It has not, and
+    `dependencies.py`'s own `_NOT_DECLARED` message says so in the same breath:
+    on Maven a dependency reaching this module only as another artifact's own
+    transitive is absent from the recorded set and *cannot be told apart from
+    real absence here*. The case that reasoning lost is ordinary — a Maven module
+    whose STOMP dependency arrives through a company aggregate artifact derived
+    its five rows before W16 and afterwards derived nothing and asked nothing.
 
-    §3.6's own words: "Neither resolvable ... → open question, not a guess." The
-    guess it refuses is the one that stood before W16, where a `@MessageMapping`
-    class was published as `websocket` because one catalog happened to claim the
-    annotation first.
+    **Only classes this catalog's match would actually have claimed.** The
+    mapping annotation is not the whole rule: `A-C1` added the
+    `type_annotation` conjunct precisely so a bare `@MessageMapping` method could
+    not mint a declaration, and a question filed without it asks which wire is
+    served by a class neither framework's handler would scan.
+
+    **Only classes nothing derived a row for.** Where the sibling catalog's gate
+    WAS satisfied the class is already published on a protocol, and a question
+    asking which wire it serves is noise beside an answer. This is a property of
+    the finished `endpoints` table, which is why `record_service_identity_gaps`
+    runs every `gaps` after `derive_endpoints` rather than during it.
 
     The question's `protocol` is NULL. Naming one would answer the question the
     row exists to ask.
     """
     if not catalog.detect_required:
         return []
-    unmet = unmet_dependency(workspace, catalog)
-    if unmet is None or "recorded no dependency coordinates" not in unmet:
+    if unmet_dependency(workspace, catalog) is None:
         return []
     mapping = catalog.matches.get("mapping") or {}
     wanted = {_catalog_symbol(str(entry["fqn"])) for entry in mapping.get("annotations") or []}
     if not wanted:
         return []
+    # The `type_annotation` conjunct, in the same form `run` reads it.
+    declared_type_annotation = catalog.matches.get("type_annotation")
+    gate = (
+        None
+        if declared_type_annotation is None
+        # `catalog_symbols` already returns the `a/b/C#` form the table holds.
+        else set(catalog_symbols(declared_type_annotation, f"{catalog.source}: type_annotation"))
+    )
     # `method_declarations`, not `method_symbols`: the latter selects the symbol
     # alone, and the enclosing TYPE is what a question about a handler class has
     # to name.
@@ -344,13 +361,37 @@ def _unresolvable_framework_questions(
         str(row["symbol"]): str(row["enclosing"] or "")
         for row in workspace.query("method_declarations")
     }
+    annotations = list(workspace.query("annotations"))
+    gated_classes = (
+        None
+        if gate is None
+        else {str(row["target"]) for row in annotations if str(row["annotation"]) in gate}
+    )
+    # A class already published on some wire is answered, not open.
+    # `owner_of` rather than slicing the symbol here: the grammar lives in one
+    # module (`test_symbol_grammar_confinement.py`, which matches the offending
+    # spelling in comments too, so this one describes it instead of writing it).
+    # It answers `None` for an ownerless
+    # descriptor, which is a real answer here — a free function is not a handler
+    # class — so those drop out rather than being coerced.
+    published = {
+        owner
+        for row in workspace.query("endpoints")
+        if row["handler"] is not None
+        for owner in [owner_of(str(row["handler"]))]
+        if owner is not None
+    }
     found: dict[str, str] = {}
-    for row in workspace.query("annotations"):
+    for row in annotations:
         annotation = str(row["annotation"])
         if annotation not in wanted:
             continue
         target = str(row["target"])
         owner = enclosing.get(target) or target
+        if gated_classes is not None and owner not in gated_classes:
+            continue
+        if owner in published:
+            continue
         found.setdefault(owner, annotation)
     return [
         {
@@ -359,7 +400,11 @@ def _unresolvable_framework_questions(
             "path": owner,
             "question": _HANDLER_PROTOCOL,
             "candidates": json.dumps(
-                [{"class": owner, "annotation": annotation}],
+                # The catalog's own `protocol` is what makes two catalogs' rows
+                # for one class distinguishable to a reader: the question is
+                # "which of these wires", and without them both rows render as
+                # the same sentence twice.
+                [{"class": owner, "annotation": annotation, "protocol": catalog.protocol}],
                 sort_keys=True,
                 separators=(",", ":"),
             ),

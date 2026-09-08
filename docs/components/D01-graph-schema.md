@@ -409,6 +409,7 @@ column with its own evidence, never this one.
 | GraphQL root operation | `graphql` | `query` / `mutation` / `subscription` | the field name (`orders`) | the annotation catalogs, and `schema_operations` from the SDL |
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
+| RSocket route | `rsocket` | NULL | the route the handler answers (`/orders/place`), or the class-level prefix alone for a `@ConnectMapping` naming none | the Spring RSocket catalog (F2 §3.6). Verbless for STOMP's reason: an RSocket route declares no verb. It shares `@MessageMapping` with STOMP and is told apart by the build, or by a `@ConnectMapping` anywhere in the module |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |
@@ -606,15 +607,17 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed SEVEN-value set — `payload_binding`, `format_conflict`,
-`channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol` and
-`unselected_binding`** — checked by the single owning module before any row is inserted,
+`question` is a **closed EIGHT-value set — `payload_binding`, `format_conflict`,
+`channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
+`unselected_binding` and `handler_protocol`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
 unread. *This sentence said "both the renderer and the export" until F2 §3.4 added the
 last two; `open_questions.py`'s own comment had already corrected that and this paragraph
-had not caught up.* *This paragraph said "two-value set" and named the first two
+had not caught up.* *It then said SEVEN while the module enforced eight, F2 §3.6 having
+added `handler_protocol` without touching this file — the third time this count has drifted,
+which is why §3.6's review made the drift itself the finding rather than the number.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -624,7 +627,9 @@ a `payload_binding` candidate holds `payload_type`, `hops`, `seen_in` and `why` 
 matched call); a `format_conflict` candidate holds `format`, `seen_in` and `why`; a
 `channel_destination` candidate holds `channel` and `handler`; a `service_identity`
 candidate holds `class` and `reason`; an `environment_divergence` candidate holds `key`
-and `values`. Each array is sorted by the pass that writes it, so two runs produce the
+and `values`; a `handler_protocol` candidate holds `class`, `annotation` and `protocol` —
+the wire ONE framework would publish that class on, one candidate per framework in play,
+because the question is which of them serves it. Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.
 
 `evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence

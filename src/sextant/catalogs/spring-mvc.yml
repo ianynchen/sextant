@@ -1,15 +1,41 @@
 id: spring-mvc
-displayName: Spring MVC (server-rendered controllers)
+# Not "server-rendered controllers": `@Controller` is served by WebFlux too, and
+# this catalog derives a reactive controller's routes exactly as it derives a
+# servlet one's (F2 §3.7, measured — `scripts/probes/w17_webflux_controller.md`
+# section 3).
+displayName: Spring `@Controller`
 style: annotation_driven
 protocol: http
 direction: inbound
 
 detect:
-  coordinates: ["org.springframework:spring-webmvc"]
+  # BOTH web stacks, because both serve this annotation. Each ships a
+  # `RequestMappingHandlerMapping` whose bean predicate decides what it scans, and
+  # the two `isHandler` implementations are IDENTICAL — four instructions,
+  # `hasAnnotation(beanType, Controller.class)`, byte for byte at 6.1.6 and 7.0.2
+  # in both artifacts (`scripts/probes/w17_webflux_controller.md` section 1).
+  #
+  # G-38 read this list when it named only `spring-webmvc` and concluded that a
+  # WebFlux `@Controller` derives nothing. It does derive — coordinates are read
+  # for the two styles in `resolve/dependencies.py`'s `DEPENDENCY_GATED` and for
+  # any catalog setting `detect.required`, and THIS catalog is neither, so its
+  # list was inert and the prediction was made from a key with no consumer here
+  # rather than from a run. (Two `annotation_driven` catalogs DO have their
+  # coordinates read — `spring-stomp` and `spring-rsocket`, which set
+  # `detect.required` — so "annotation_driven means inert" would be the same
+  # class of wrong claim in the other direction.)
+  #
+  # But the SENTENCE was false whether or not anything read it, and
+  # `detect.required` is a key a catalog can set: one line would have turned that
+  # false sentence into G-38's bug for real, in a file whose author had every
+  # reason to think the list was already right.
+  coordinates: ["org.springframework:spring-webmvc", "org.springframework:spring-webflux"]
 
 measured:
   - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
       identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/w17_webflux_controller.md }
 
 requires: [annotation_args, type_annotations]
 

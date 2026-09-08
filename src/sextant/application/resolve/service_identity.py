@@ -27,6 +27,9 @@ handler at all, which does not carry the flagged CLASS `open_questions.py`'s
 own vocabulary for `service_identity` asks for (candidates: "the class symbol
 and the reason") — only the matching walk itself still has that."""
 
+import json
+from typing import Any
+
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.engines import (
@@ -91,4 +94,38 @@ def record_service_identity_gaps(workspace: Workspace, catalogs: list[Catalog]) 
         if catalog.style in _GAP_ENGINES
         for row in _GAP_ENGINES[catalog.style](workspace, catalog)
     ]
-    record_open_questions(workspace, rows)
+    record_open_questions(workspace, _merged(rows))
+
+
+def _merged(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per question IDENTITY, with the candidates of every catalog that
+    asked it (F2 §3.6 review, finding 3).
+
+    An `open_questions` row is identified by `(protocol, method, path, question)`
+    — `domain/enrichment.py`'s `open_question_identity`, which is what both
+    verdict validation and document assembly key on. Two catalogs asking
+    `handler_protocol` about one class produce that identity twice, and the
+    result was two byte-identical lines in the rendered document plus a verdict
+    that anchors under whichever came first and leaves the other standing
+    unanswered forever.
+
+    Merging is the honest shape rather than dropping the second: the question
+    really is one question — *which of these wires does this class serve* — and
+    the answer needs every candidate in front of the reader, so the candidate
+    lists are unioned and each catalog's evidence kept.
+    """
+    merged: dict[tuple[object, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("protocol"), row.get("method"), row.get("path"), row.get("question"))
+        first = merged.get(key)
+        if first is None:
+            merged[key] = dict(row)
+            continue
+        candidates = json.loads(first["candidates"]) + json.loads(row["candidates"])
+        deduped = {json.dumps(c, sort_keys=True, separators=(",", ":")): c for c in candidates}
+        first["candidates"] = json.dumps(
+            [deduped[k] for k in sorted(deduped)], sort_keys=True, separators=(",", ":")
+        )
+        if row["evidence"] not in first["evidence"]:
+            first["evidence"] = f"{first['evidence']}; and {row['evidence']}"
+    return list(merged.values())

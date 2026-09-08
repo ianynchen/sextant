@@ -1,5 +1,6 @@
 import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -6922,10 +6923,17 @@ _MESSAGE_MAPPING = "org/springframework/messaging/handler/annotation/MessageMapp
 _SPRING_CONTROLLER = "org/springframework/stereotype/Controller#"
 
 
-def _messaging_controller_facts(root: Path) -> None:
+_CONNECT_MAPPING = "org/springframework/messaging/rsocket/annotation/ConnectMapping#"
+
+
+def _messaging_controller_facts(root: Path, method_annotation: str = _MESSAGE_MAPPING) -> None:
     """A `@Controller` with one `@MessageMapping("/place")` method — the shape
     BOTH frameworks scan, with the same predicate, and which therefore says
-    nothing about which of them serves it."""
+    nothing about which of them serves it.
+
+    `method_annotation` varies for the one case where the annotation DOES say
+    which framework serves it: `@ConnectMapping` is RSocket's and STOMP ships no
+    counterpart (F2 §3.6, `detect.satisfied_by`)."""
     owner = "com/acme/orders/LiveController#"
     method = f"{owner}place(sig_p)."
     document = Document(
@@ -6963,16 +6971,21 @@ def _messaging_controller_facts(root: Path) -> None:
                 document_id="doc_ws",
                 target=method,
                 retention="runtime",
-                use=AnnotationUse(annotation=_MESSAGE_MAPPING, args={"value": ["/place"]}),
+                use=AnnotationUse(annotation=method_annotation, args={"value": ["/place"]}),
             ),
         ],
     )
 
 
-def _messaging_rows(tmp_path: Path, coordinates: tuple[str, ...]) -> set:
+def _messaging_rows(
+    tmp_path: Path,
+    coordinates: tuple[str, ...] | None,
+    method_annotation: str = _MESSAGE_MAPPING,
+) -> set:
     root = tmp_path / "facts"
-    _messaging_controller_facts(root)
-    write_fixture_module_fact_with(root, coordinates)
+    _messaging_controller_facts(root, method_annotation)
+    if coordinates is not None:
+        write_fixture_module_fact_with(root, coordinates)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(root)
     catalogs = [
@@ -7029,6 +7042,47 @@ def test_both_starters_present_derives_both_rows(tmp_path: Path):
     ) == {("websocket", "/place"), ("rsocket", "/place")}
 
 
+@pytest.mark.pins("dependencies.satisfied-by-answers-the-gate")
+def test_a_connect_mapping_derives_rsocket_whatever_the_build_says(tmp_path: Path):
+    """F2 §3.6: "`@ConnectMapping` anywhere is positive RSocket evidence
+    regardless of the build."
+
+    The build here says the OPPOSITE of the annotation — `spring-websocket`
+    declared, no RSocket coordinate anywhere — and the annotation wins, because
+    it names one framework and the build's silence names none. `@ConnectMapping`
+    lives in `messaging/rsocket/annotation`, STOMP ships no counterpart, and
+    `spring-stomp.yml` does not claim it
+    (`scripts/probes/w16_rsocket_versus_stomp.md` section 2).
+
+    Until `detect.satisfied_by` shipped this sentence was unreachable: the gate
+    answers before any matching runs, so this exact module derived NOTHING and
+    asked nothing — silent, in the one case the sentence was written for.
+    """
+    assert _messaging_rows(
+        tmp_path, ("org.springframework:spring-websocket",), _CONNECT_MAPPING
+    ) == {("rsocket", "/place")}
+
+
+@pytest.mark.pins("dependencies.satisfied-by-answers-the-gate")
+def test_a_connect_mapping_derives_rsocket_with_no_module_fact_at_all(tmp_path: Path):
+    """ "Regardless of the build" includes a build that recorded nothing — the
+    ordinary Maven case, where a starter's own transitives never reach the
+    module fact. `spring-stomp` is still skipped here, because nothing answers
+    ITS question; the point is that RSocket's is answered by evidence."""
+    assert _messaging_rows(tmp_path, None, _CONNECT_MAPPING) == {("rsocket", "/place")}
+
+
+def test_a_message_mapping_is_not_satisfied_by_an_annotation(tmp_path: Path):
+    """The paired near-miss, and the reason `detect.satisfied_by` is a DECLARED
+    list rather than "any annotation this catalog names". `@MessageMapping` is on
+    `spring-rsocket.yml`'s `mapping.annotations` exactly as `@ConnectMapping` is,
+    and it must not answer the gate: it is the annotation both frameworks share,
+    which is the whole reason the gate exists."""
+    assert _messaging_rows(tmp_path, ("org.springframework:spring-websocket",)) == {
+        ("websocket", "/place")
+    }
+
+
 def test_a_build_that_records_nothing_earns_a_question_rather_than_a_guess(tmp_path: Path):
     """§3.6's last clause: "Neither resolvable (parent-POM inheritance, a stated
     refusal that survives F1) → open question, not a guess."
@@ -7067,3 +7121,143 @@ def test_a_build_that_records_nothing_earns_a_question_rather_than_a_guess(tmp_p
     assert {q["question"] for q in questions} == {"handler_protocol"}
     assert {str(q["path"]) for q in questions} == {"com/acme/orders/LiveController#"}
     assert all(q["protocol"] is None for q in questions)
+
+
+# --- F2 §3.7 (G-38): a WebFlux `@Controller`. ---------------------------------
+_WEBFLUX_COORDINATE = "org.springframework:spring-webflux"
+_WEBMVC_COORDINATE = "org.springframework:spring-webmvc"
+
+
+def _webflux_controller_facts(root: Path) -> None:
+    """`@Controller` on the class, `@GetMapping("/orders")` on a method — the
+    plainest HTTP controller there is, and the one shape both Spring web stacks
+    serve identically."""
+    owner = "com/acme/orders/OrderController#"
+    method = f"{owner}list()."
+    document = Document(
+        document_id="doc_flux",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        root / "OrderController.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_flux", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_flux",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="Ljava/lang/String;")),
+            ),
+            AnnotationFact(
+                document_id="doc_flux",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_SPRING_CONTROLLER, args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_flux",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation=_GET_MAPPING, args={"value": ["/orders"]}),
+            ),
+        ],
+    )
+
+
+def _controller_rows(
+    tmp_path: Path, coordinates: tuple[str, ...], catalog: Catalog | None = None
+) -> set:
+    root = tmp_path / "facts"
+    _webflux_controller_facts(root)
+    write_fixture_module_fact_with(root, coordinates)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = (
+        [c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc"]
+        if catalog is None
+        else [catalog]
+    )
+    derive_endpoints(workspace, catalogs, capabilities=FIXTURE_CAPABILITIES)
+    found = {(str(row["method"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+    return found
+
+
+def test_a_controller_in_a_webflux_module_derives_its_routes(tmp_path: Path):
+    """F2 §3.7's acceptance, and the run that says G-38 predicted a bug the code
+    does not have.
+
+    G-38 read `spring-mvc.yml`'s `detect.coordinates: [spring-webmvc]` and
+    concluded a WebFlux module derives nothing. THIS catalog's coordinates are
+    read by nothing — `DEPENDENCY_GATED` holds two other styles, and it sets no
+    `detect.required` — so the gate G-38 described has never existed and the row
+    derives. (Style is not what decides it: `spring-stomp` and `spring-rsocket`
+    are `annotation_driven` too and their coordinates ARE read, because they set
+    `detect.required`.)
+
+    The coordinate list is now TRUE as well as inert: both stacks ship a
+    `RequestMappingHandlerMapping` whose bean predicate is
+    `hasAnnotation(beanType, Controller.class)`, byte for byte the same in each at
+    6.1.6 and 7.0.2 (`scripts/probes/w17_webflux_controller.md` section 1). This
+    test is what fails if someone narrows it back and sets `detect.required` —
+    the one-line change that would have made G-38's prediction true.
+    """
+    assert _controller_rows(tmp_path, (_WEBFLUX_COORDINATE,)) == {("GET", "/orders")}
+
+
+def test_the_same_controller_in_an_mvc_module_derives_the_same_routes(tmp_path: Path):
+    """The paired positive (GUIDELINES §10). Identical facts, the other stack's
+    coordinate: the two builds are not merely both non-empty, they derive the SAME
+    row, which is what "WebFlux's handler gate is byte-for-byte identical" means
+    for output rather than for bytecode."""
+    assert _controller_rows(tmp_path, (_WEBMVC_COORDINATE,)) == {("GET", "/orders")}
+
+
+def test_the_shipped_coordinate_list_names_both_web_stacks():
+    """What the widening actually pins, asserted offline against the shipped file.
+
+    The two tests above pass whatever this list says, because nothing reads it for
+    this catalog — so neither of them pins its CONTENT, and a review found the
+    design claiming they did. This one does: the list is a statement about which
+    builds serve `@Controller`, both stacks serve it (measured, byte for byte, at
+    two versions each — `scripts/probes/w17_webflux_controller.md` section 1), and
+    a list naming one of them is false whether or not anything reads it.
+    """
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    assert set(catalog.detect_coordinates) == {_WEBMVC_COORDINATE, _WEBFLUX_COORDINATE}
+
+
+def test_narrowing_the_list_and_gating_on_it_is_what_would_lose_the_webflux_rows(
+    tmp_path: Path,
+):
+    """The near-miss (GUIDELINES §10), and the one-line change it guards against.
+
+    G-38's prediction was not true of any tree that ever shipped, but it is one
+    line from being true: `detect.required` (F2 §3.6) is a key a catalog author
+    can add, and adding it to a list naming only `spring-webmvc` deletes every
+    WebFlux `@Controller` route in the estate. Both halves are needed and this
+    asserts exactly that pair — the shipped list with the gate on still derives,
+    the narrowed list with the gate on derives NOTHING.
+
+    Built by replacing the two fields on the shipped catalog rather than by
+    editing the file, so what is under test is the shipped rule with one field
+    changed, not a catalog invented here.
+    """
+    shipped = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    gated = replace(shipped, detect_required=True)
+    narrowed = replace(shipped, detect_required=True, detect_coordinates=(_WEBMVC_COORDINATE,))
+    assert _controller_rows(tmp_path / "widened", (_WEBFLUX_COORDINATE,), gated) == {
+        ("GET", "/orders")
+    }
+    assert _controller_rows(tmp_path / "narrowed", (_WEBFLUX_COORDINATE,), narrowed) == set()

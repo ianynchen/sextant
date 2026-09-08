@@ -2061,3 +2061,64 @@ conjunct, at which point the count here becomes the count the framework takes an
 question stops being filed for a module that has one real bean. §8.1 forbids inventing
 it. **Falsified by** showing the framework binds any function-shaped method regardless
 of registration, which would make the current count right and this entry wrong.
+
+### OI-61 — `detect.satisfied_by` is unmeasured beyond the one annotation that uses it
+
+**Found by** the W16 review, extended by the W17 fix round.
+
+`detect.satisfied_by` is a new catalog key with one user:
+`spring-rsocket.yml` names `@ConnectMapping`. The soundness of the key rests on a claim
+about that annotation — that exactly one framework defines it — and W16's probe measured
+that claim for `@ConnectMapping` and for nothing else. There is no audit that a value
+placed in this key is actually sole-claim: a future author who adds an annotation two
+catalogs name would silently un-gate a catalog, which is the failure `detect.required`
+exists to prevent, arriving through the door built to bypass it.
+
+**Consequence today: none.** The one shipped value is measured. The exposure is the next
+one.
+
+**Closes by** an offline audit asserting that no `detect.satisfied_by` value appears in
+more than one shipped catalog's `matches` — the same shape
+`test_catalog_measurement_coverage.py` already applies to `measured:` rows. **Falsified
+by** a framework pair that legitimately shares a sole-claim annotation, which would make
+the audit wrong rather than the key.
+
+### OI-62 — the `handler_protocol` question is filed per class, and a class may serve both wires
+
+**Found by** the W16 review's finding 3, while fixing it.
+
+Two catalogs asking `handler_protocol` about one class are now folded into one question
+carrying both wires as candidates (`resolve/service_identity.py`'s `_merged`). That is
+right for the case the fold was written for — the build settles neither framework, so
+one of the two is the answer. It is not right for a class that genuinely serves both:
+§3.6 records that case explicitly ("Both present → two rows. Both handlers scan the same
+beans; the method really does serve both. This is a correct answer, not an ambiguity"),
+and a reader answering the merged question has no way to say "both".
+
+**Consequence:** only where the build settles NEITHER framework, since a build that names
+both derives two rows and files no question at all. So the ambiguous-and-genuinely-both
+case cannot be expressed, and a reader would answer it by picking one.
+
+**Closes by** deciding whether `handler_protocol`'s answer vocabulary admits "both" —
+which is a question about the verdict schema (D01 §7), not about this fold. **Falsified
+by** showing a class serving both wires always has both coordinates recorded, which would
+make the case unreachable.
+
+### OI-63 — `displayName` is declared by every catalog and read by nothing
+
+**Found by** the W17 review (m4), while checking whether renaming `spring-mvc.yml`'s
+`displayName` had any shipped effect.
+
+`grep displayName` across `src/`, `scripts/` and `tests/` finds the loader and no
+consumer. All 57 catalogs declare one. GUIDELINES §2 — a capability with no consumer is
+half-shipped — applies to catalog keys as much as to scanner capabilities, and W17's own
+finding was a reader predicting behaviour from an unread key.
+
+**Consequence:** none to output. The cost is to readers: a name that looks like it
+reaches an export does not, so it can drift arbitrarily far from what the catalog derives
+without any gate noticing. `spring-mvc.yml`'s said "server-rendered controllers" while
+deriving reactive WebFlux routes.
+
+**Closes by** either giving it a consumer (the rendered document names catalogs by id
+today) or removing it from all 57 files and from D02. **Falsified by** finding a consumer
+this grep missed.

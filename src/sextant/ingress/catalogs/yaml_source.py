@@ -71,6 +71,7 @@ class YamlCatalogSource:
                     matches=_required(raw, "matches", path),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
+                    detect_satisfied_by=_detect_satisfied_by(raw, path),
                     detect_required=_detect_required(raw, path),
                     # D02 §2a — optional, and framework-specific: an envelope
                     # type a payload sits inside belongs to the framework that
@@ -189,6 +190,43 @@ def _detect_required(raw: dict[str, object], path: Path) -> bool:
     return required
 
 
+def _detect_satisfied_by(raw: dict[str, object], path: Path) -> tuple[str, ...]:
+    """`detect.satisfied_by` — the annotations that answer the dependency
+    question on their own (F2 §3.6, `Catalog.detect_satisfied_by`).
+
+    Refused unless the catalog also declares `required`: on an ungated catalog
+    the key would describe a bypass of a gate that is not there, which reads to
+    the next author as a rule and is not one.
+
+    Shape-checked here for `_coordinates`' reason — a fully-qualified name
+    written wrong matches nothing while looking exactly like an annotation
+    nobody wrote.
+    """
+    detect = raw.get("detect") or {}
+    if not isinstance(detect, dict):
+        return ()
+    declared = detect.get("satisfied_by")
+    if declared is None:
+        return ()
+    if not isinstance(declared, list) or not all(isinstance(v, str) and v for v in declared):
+        raise CatalogError(
+            f"loading catalog {path}: `detect.satisfied_by` must be a list of "
+            f"fully-qualified annotation names"
+        )
+    if not detect.get("required"):
+        raise CatalogError(
+            f"loading catalog {path}: `detect.satisfied_by` without `detect.required: true` "
+            f"names a bypass of a gate this catalog does not have"
+        )
+    for name in declared:
+        if "." not in name:
+            raise CatalogError(
+                f"loading catalog {path}: `detect.satisfied_by` entry {name!r} is not a "
+                f"fully-qualified annotation name"
+            )
+    return tuple(declared)
+
+
 def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
     """D02 §1's `detect.coordinates`, checked here for the reason every other
     value in this file is: it reaches a comparison against the coordinates a
@@ -197,15 +235,16 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
 
     Optional, and an absent block is an empty tuple — every catalog that
     declares `detect: {coordinates: []}` says the same thing explicitly: the
-    evidence for this framework is not a dependency. Only the two styles in
-    `resolve/dependencies.py`'s `DEPENDENCY_GATED` read the value
-    (`Catalog.detect_coordinates`), so a catalog declaring coordinates it never
-    uses is not an error; it was the state of every one of the 41 catalogs
-    shipping when this was written, and it is the state of the 51 of today's 55
-    that no gate reads. **This function is a SHAPE check, not the gate**: it refuses a
-    coordinate written in the wrong form for all 55 and compares none of them,
+    evidence for this framework is not a dependency. The value is read by the
+    two styles in `resolve/dependencies.py`'s `DEPENDENCY_GATED` and by any
+    catalog setting `detect.required`, so a catalog declaring coordinates that
+    neither applies to is not an error; it was the state of every one of the 41
+    catalogs shipping when this was written, and it is the state of 48 of
+    today's 57. **This function is a SHAPE check, not the gate**: it refuses a
+    coordinate written in the wrong form for all 57 and compares none of them,
     so citing it as the consumer of `detect.coordinates` would satisfy
-    GUIDELINES §5.3 falsely. The consumer is `dependencies.py:108-137`.
+    GUIDELINES §5.3 falsely. The consumer is `dependencies.py`'s
+    `unmet_dependency`.
     """
     detect = raw.get("detect", {})
     if not isinstance(detect, dict):

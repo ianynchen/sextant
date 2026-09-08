@@ -77,6 +77,24 @@ class Catalog:
     # the first catalogs whose framework rule is conditional on a library while
     # their style's is not.
     detect_required: bool = False
+    # The annotations that answer the dependency question on their own, in the
+    # catalog-symbol form (`a/b/C#`) the `annotations` table holds (F2 §3.6).
+    #
+    # `detect_required` exists because `@MessageMapping` names no framework. Its
+    # RSocket sibling `@ConnectMapping` does: it lives in
+    # `messaging/rsocket/annotation`, STOMP has no counterpart, and no other
+    # shipped catalog claims it — so a class carrying one is running RSocket
+    # whatever the build recorded, which §3.6 states in as many words ("positive
+    # RSocket evidence regardless of the build").
+    #
+    # Without this the claim was unreachable: the gate answers BEFORE any
+    # matching runs, so a module whose build did not name `rsocket-core` derived
+    # nothing from a `@ConnectMapping` class and asked nothing either — silent,
+    # in exactly the case the sentence was written for. Declared per catalog
+    # rather than computed as "an annotation only one catalog claims", because a
+    # rule that changes when an unrelated catalog is added is a rule nobody can
+    # read off the file that states it.
+    detect_satisfied_by: tuple[str, ...] = ()
     # D02 §2a, §2e, §2f, §2g. Default to empty so a catalog that declares none
     # of them — every catalog before Task 8, and the invented catalogs tests
     # construct by hand — still loads. **All four are read today**:
