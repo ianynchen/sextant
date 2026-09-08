@@ -133,7 +133,6 @@ public final class ClassScanner {
         private String internalName;
         private int classAccess;
         private String classSignature;
-        private boolean isRecord;
         private String nestHost;
         private final List<String> nestMembers = new ArrayList<>();
         private final java.util.TreeSet<String> unreadAttributes = new java.util.TreeSet<>();
@@ -197,23 +196,6 @@ public final class ClassScanner {
         @Override
         public void visitPermittedSubclass(String permitted) {
             permittedSubclasses.add(JsonOut.string(symbolOf(permitted + "#")));
-        }
-
-        /** JVMS 4.7.30 `Record`. ASM reports one call per component and nothing at all
-         *  for a class that is not a record, so the flag is the presence.
-         *
-         *  <p>The components themselves are not emitted as a new fact shape: a record's
-         *  components already reach the graph as its private final FIELDS, in declaration
-         *  order, and its accessors as methods. Measured on `RecordComponents`: `id` and
-         *  `tags` are both there as fields with their types. A second spelling of the
-         *  same declarations would be two vocabularies for one thing (D00 §5a's rule for
-         *  type references, applied to members). What was missing is what KIND of
-         *  construct they belong to, and that is what this fixes. */
-        @Override
-        public org.objectweb.asm.RecordComponentVisitor visitRecordComponent(
-                String name, String descriptor, String signature) {
-            isRecord = true;
-            return null;
         }
 
         /** JVMS 4.7.10 `SourceFile`: the NAME of the file this class was compiled from.
@@ -378,16 +360,18 @@ public final class ClassScanner {
             // D00 §4's closed set since it was written and had NO producer — every
             // record in the estate reported `class` — which is the "declared, never
             // read" shape §2.3's ledger exists to catch, reached from the other side.
-            // TWO signals, because the first is a count and a count can be zero.
-            // `visitRecordComponent` fires once per component, so `record Empty() {}`
-            // never fires it at all while carrying the `Record` attribute — measured,
-            // and `Class.isRecord()` says true. 16 such classes in the local
-            // dependency cache, in Hibernate and Spring Boot, and the marker record is
-            // the shape a sealed hierarchy uses most.
+            // `ACC_RECORD` is ASM reporting the `Record` attribute's PRESENCE — it is
+            // not a JVMS class access flag, it is synthesised from the attribute, which
+            // is exactly the question being asked.
             //
-            // A record's superclass is `java/lang/Record` and JLS 8.1.4 makes writing
-            // that by hand a compile-time error, so it identifies one outright.
-            if (isRecord || "java/lang/Record".equals(superName)) return "record";
+            // This was two signals before: a flag set from `visitRecordComponent`, plus
+            // a `java/lang/Record` superclass test to cover what the first missed.
+            // `visitRecordComponent` fires once per COMPONENT, so `record Empty() {}`
+            // never fired it while carrying the attribute — 16 such classes in the local
+            // dependency cache, in Hibernate and Spring Boot, and a marker record is the
+            // shape a sealed hierarchy uses most. Both approximations are gone; the
+            // ledger's own test is what surfaced that ASM states it directly.
+            if ((access & Opcodes.ACC_RECORD) != 0) return "record";
             return "class";
         }
 

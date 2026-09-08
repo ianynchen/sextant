@@ -429,6 +429,23 @@ the gap list:
 
 ### 2a. Application protocols over HTTP
 
+**What `✅ ASM` claims, and what backs it (W8).** Every attribute JVMS 4.7 defines is in
+`AttributeLedger` in exactly one of two states — read, naming the callback that reads it, or
+deliberately not read with a stated reason. **There is no third state**, and its absence is
+the point: an attribute nobody had read and an attribute nobody had thought about used to
+look identical from outside, because both simply produced no facts. Six are deliberately not
+read — `StackMapTable` (verification metadata, describes no declaration),
+`LocalVariableTypeTable` (duplicates `Signature`), the three `Module` attributes (module
+identity comes from the build's coordinates; measured, of 52 jars here carrying a descriptor
+none declares a main class), and class-level type annotations (no consumer reads a
+supertype's). Every access flag is in the same list on the same terms.
+
+`AttributeLedgerTest` is what makes it a claim rather than a sentence: it compares the ledger
+against JVMS's own list, refuses a reason that is a deferral in disguise, and resolves every
+"read" claim against the source so a renamed callback cannot leave a stale claim behind. It
+has already earned that — it caught `ACC_RECORD`, which ASM synthesises from the `Record`
+attribute and which replaced two approximations of the same question with the one signal.
+
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
 | **Java / Kotlin** | ✅ ASM | ◐ 4A 3B 4C | ◐ 2A 2B | ◐ — | ◐ — | ◐ — | ◐ 1A |
