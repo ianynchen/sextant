@@ -74,6 +74,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import ancestry_of
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
 
@@ -147,15 +148,26 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     members_by_class = _members(workspace)
     delegating = _delegating_members(workspace, supertypes)
 
+    # F3 §4.2 (W22): the CLOSURE, not the direct edge. `superclasses` carries one hop,
+    # so a class reaching `HttpServlet` through an intermediate base of its own —
+    # `class Orders extends AbstractBaseServlet extends HttpServlet` — was invisible
+    # here and derived nothing. That was a stated boundary in `docs/COVERAGE.md` rather
+    # than a guess, and it stayed one only because the hierarchy was not available;
+    # `type_hierarchy` is that hierarchy, so the boundary closes rather than being
+    # restated.
+    #
+    # It is still not a guess about the intermediate: the walk crosses only ancestors
+    # this workspace SCANNED, so a chain running through a class in a jar stops there
+    # and derives nothing, exactly as before.
+    reaches = _reaching(workspace, supertypes)
+    members_by_bare: dict[str, dict[_Selector, str]] = {}
+    for enclosing, selectors in members_by_class.items():
+        members_by_bare.setdefault(bare_descriptor(enclosing), {}).update(selectors)
+
     found: list[_ClassMatch] = []
     for row in workspace.query("superclasses"):
         implementer = str(row["symbol"])
-        if bare_descriptor(str(row["superclass"])) not in supertypes:
-            # Ordinary inheritance, or a different contract entirely. The
-            # DIRECT edge only: `superclasses` carries one hop, so a class
-            # reaching the supertype through an intermediate base of its own
-            # is invisible here — a stated boundary in `docs/COVERAGE.md`,
-            # never a guess at what the intermediate declares.
+        if bare_descriptor(implementer) not in reaches:
             continue
         addresses = addresses_by_class.get(implementer)
         if not addresses:
@@ -163,7 +175,17 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             # Either way nothing registers this class at an address, and an
             # address is what a row asserts.
             continue
-        members = members_by_class.get(implementer, {})
+        # The leaf's members AND every scanned intermediate's, because the dispatch
+        # contract is a property of the whole chain. This also stops a handler declared
+        # on the intermediate — `Base.doGet`, address on the leaf — from being invisible,
+        # which unioning only for the bypass would have left open.
+        members = dict(members_by_class.get(implementer, {}))
+        for link in reaches.get(bare_descriptor(implementer), ()):
+            # `members_by_class` is keyed by the MODULE-PREFIXED enclosing symbol while
+            # a chain link is bare, so the lookup goes through the bare-keyed view built
+            # once above rather than through a second pass over the declarations.
+            for selector, symbol in members_by_bare.get(link, {}).items():
+                members.setdefault(selector, symbol)
         handlers = tuple(
             sorted(
                 (dispatch[selector], symbol)
@@ -224,6 +246,72 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             continue
         found.append(_ClassMatch(addresses=addresses, handlers=handlers))
     return found
+
+
+def _reaching(workspace: Workspace, supertypes: tuple[str, ...]) -> dict[str, list[str]]:
+    """Every scanned type that reaches one of `supertypes` through any number of
+    SCANNED superclasses (F3 §4.2).
+
+    Reads `dispatch.ancestry_of` — the index `type_hierarchy` is built FROM — rather
+    than walking `superclasses` again here, which would be a second answer to a question
+    D01 says is answered once. *This said it reads the TABLE, which it does not and must
+    not: the table is written by `record_call_edges`, so an engine reading it would
+    derive nothing whenever that pass had not run first, and an empty table is
+    indistinguishable from a genuine no-match.*
+
+    Only `extends` edges: this style's contract is a dispatch an abstract CLASS
+    performs (`HttpServlet.service` reading the request method), and an interface
+    declares no such body. An unscanned link stops the chain, because what the
+    intermediate declares is then genuinely unknown.
+    """
+    # `dispatch._ancestry`, not the `type_hierarchy` TABLE. One implementation of the
+    # walk either way — but the table is written by `record_call_edges`, and an engine
+    # reading it would derive NOTHING whenever that pass had not run first. In the
+    # pipeline it always has; in a harness calling `derive_endpoints` alone it has not,
+    # and the failure is silent: an empty table and an empty result look identical.
+    # Reading the index the table is built FROM removes the ordering dependency
+    # without duplicating the rule.
+    ancestors, _scanned = ancestry_of(workspace)
+    parents: dict[str, list[str]] = {
+        child: [ancestor for ancestor, kind, _ in edges if kind == "extends"]
+        for child, edges in ancestors.items()
+    }
+    # The chain from each class UP TO the named supertype, exclusive — every scanned
+    # link between the two. The bypass below has to see all of them: an intermediate
+    # that overrides the entry point and does NOT delegate has replaced the dispatch,
+    # and the verb table then describes nothing about the leaf. Returning only the set
+    # of matching classes hid exactly that, and it is the commonest reason anyone writes
+    # an intermediate base servlet — measured: with `AbstractBaseServlet.service`
+    # replacing the lookup, `GET /orders` was published while the container also serves
+    # PUT, which is CP-9 rows 41-43's "a wrong answer, not a partial one".
+    reaching: dict[str, list[str]] = {}
+    for child, direct in parents.items():
+        seen: set[str] = set()
+        walked: list[str] = []
+        frontier = list(direct)
+        while frontier:
+            current = frontier.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            if current in supertypes:
+                reaching[child] = walked
+                break
+            walked.append(current)
+            # A chain through a class this workspace never read STOPS here, and it does
+            # so structurally rather than by a test: `parents` is built from the
+            # `superclass` facts of DECLARED symbols, so a type we did not scan has no
+            # entry and contributes no next link. Measured across both corpora — 62 and
+            # 40 types with parent edges, none of them unscanned.
+            #
+            # An explicit `if current in scanned` stood here and was DEAD: removing it
+            # changed no test and no corpus count, because the condition can never be
+            # false for a node that has edges. It read as the safety property while
+            # being unreachable, which is worse than the structural guarantee stated
+            # plainly. The target itself must NOT be gated that way in any case —
+            # `HttpServlet` ships in the servlet API and is never scanned.
+            frontier.extend(parents.get(current, ()))
+    return reaching
 
 
 def _addresses(

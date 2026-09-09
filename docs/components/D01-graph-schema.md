@@ -82,6 +82,25 @@ list, and they are its substrate.
 > costing time on every run with no consumer (§6's own rule). The rest arrives when
 > something asks for it.
 
+**`type_hierarchy`** carries `child`, `ancestor`, `kind` (`extends`/`implements`),
+`position` and `scanned`. One row per direct supertype, in JVMS 5.4.3.3's SEARCH order —
+`position` 0 is the superclass, then each declared interface as the class file lists
+them. `scanned` says whether this workspace read the ancestor's own class file, and it is
+the column that separates a genuine third-party boundary from a body we simply did not
+open.
+
+**`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class` and
+`reason` — one row per distinct triple a CALL SITE names, not per method declared. The
+reason is always present and comes from D00 §4's `method_resolution` set. Read
+`declaring_class IS NULL` with the reason beside it: three different kinds of "no body
+here" used to be one word, and one of the three was false.
+
+> Both are computed in the pass that writes `call_edges`, from the same `Dispatch` —
+> "which method can this site run" is answered once (§3's dispatch rule), and a second
+> pass would be a second answer free to disagree. Neither is read by another table
+> today; their consumer is the exported bundle, which is what lets a reader recompute a
+> trace's terminals rather than take them on trust.
+
 **`call_edges`** carries `caller`, `ordinal` (the call site's control-flow position, which
 is what gives a walk its nesting), `invoke_kind`, `target`, `callee`, `result`,
 `resolution` and `evidence`. One row per (call site, candidate callee); a site whose

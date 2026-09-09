@@ -712,6 +712,8 @@ not carry weight that belongs to getting identity right.
 
 We have exactly one word for *"the body is not here"* and it does three jobs. For a method
 the module itself declares in a superclass, that word is **false** — 21% of one real
+*[Re-measured at W22: **15.0%** on `spring-petclinic-rest` (1939 → 1649 boundary steps),
+and 0% on `mall-admin`. The 21% names no corpus and reproduces on neither.]*
 document's boundary steps.
 
 **Two derived tables, computed in one pass, never cached:**

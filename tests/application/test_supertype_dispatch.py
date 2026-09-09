@@ -898,3 +898,97 @@ def test_a_catalog_whose_vocabulary_is_malformed_is_refused(tmp_path: Path, matc
     CP-9 row 18 proves publishes an address nothing serves."""
     with pytest.raises(CatalogError):
         _rows(tmp_path, [_class()], _catalog(matches))
+
+
+# --- F3 §4.2 (W22): the intermediate base ----------------------------------
+#
+# `class Orders extends AbstractBaseServlet`, itself extending `HttpServlet`, derived
+# NOTHING. `superclasses` carries one hop, so the chain was invisible here, and
+# `docs/COVERAGE.md` stated that as a boundary rather than guessing what the
+# intermediate declares. It stayed a boundary only because the hierarchy was not
+# available; `type_hierarchy` is that hierarchy, so it closes.
+
+INTERMEDIATE = "com/acme/AbstractBaseServlet#"
+
+
+def test_a_servlet_reaching_the_supertype_through_an_intermediate_base_derives(
+    tmp_path: Path,
+):
+    """The boundary F3 §4.2 names, closed.
+
+    `Orders extends AbstractBaseServlet extends HttpServlet`: the address and the verb
+    are on `Orders`, and the dispatch contract is two hops up. Every conjunct the direct
+    case satisfies is satisfied here — the only difference is the extra link.
+    """
+    facts = [
+        _class(superclass=INTERMEDIATE),
+        # The intermediate itself, scanned, reaching the container's own base.
+        _class(INTERMEDIATE, superclass=DISPATCH_BASE),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _identities(_rows(tmp_path, facts)) == {("GET", "/orders")}
+
+
+# No `declines` marker, deliberately. That marker enters this test in the near-miss
+# ledger, which requires a `pins` guard naming the check whose loss the test would
+# notice — and there is no such check: what makes this hold is structural (an unscanned
+# type has no parent edges), not a line anybody can disable. Claiming a guard that
+# cannot be disabled is the false-ledger-entry shape W20's review found, so the test
+# stands on its own as a statement of behaviour.
+def test_a_chain_through_an_unscanned_intermediate_still_derives_nothing(tmp_path: Path):
+    """§10's near-miss, and the half of the old boundary that must NOT close.
+
+    The intermediate is named by the subclass but its own class file was never read, so
+    what it extends — and whether it performs the container's verb dispatch at all — is
+    unknown. Deriving would guess at exactly what the original boundary refused to guess.
+
+    Identical to the positive above but for the missing `_class(INTERMEDIATE, ...)` fact.
+
+    **What makes this hold is structural, and an earlier version of the walk claimed
+    otherwise.** It carried an explicit "only continue through a SCANNED ancestor" test,
+    and this docstring credited it — but the test was dead: `parents` is built from the
+    `superclass` facts of declared symbols, so an unscanned type has no entry and offers
+    no next link regardless. Removing the test changed neither this assertion nor any
+    corpus count, which is how it was found."""
+    facts = [
+        _class(superclass=INTERMEDIATE),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.declines("jakarta-servlet")
+@pytest.mark.pins("supertype_dispatch.bypassed-by")
+def test_an_intermediate_that_replaces_the_dispatch_derives_nothing(tmp_path: Path):
+    """The false positive the closure opened, and the commonest real reason anyone
+    writes an intermediate base servlet.
+
+    `AbstractBaseServlet` overrides `service` and does its OWN routing without calling
+    `super.service`, so `HttpServlet`'s verb table never runs. CP-9 rows 41-43 measured
+    that container behaviour: GET 200, POST 200 and PUT **200** — every operation alike.
+    Publishing `GET /orders` here claims a verb and denies PUT, which the container
+    serves; that is a wrong answer, not a partial one.
+
+    Widening the match to the closure (W22) opened this, because the bypass check read
+    only the LEAF's members and an override two hops up was invisible to it. The chain's
+    members are unioned now, so the intermediate's `service` is seen and discards the
+    class exactly as a leaf's own would.
+
+    Its paired positive is
+    `test_a_servlet_reaching_the_supertype_through_an_intermediate_base_derives`: the
+    same two-hop chain with an intermediate that adds no entry-point override at all.
+    """
+    facts = [
+        _class(superclass=INTERMEDIATE),
+        _class(INTERMEDIATE, superclass=DISPATCH_BASE),
+        # The intermediate replaces the entry point and never delegates.
+        _method("service", REQUEST, RESPONSE, owner=INTERMEDIATE),
+        _method("doGet", REQUEST, RESPONSE),
+        _annotated({"urlPatterns": ["/orders"]}),
+    ]
+
+    assert _rows(tmp_path, facts) == []

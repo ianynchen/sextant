@@ -760,6 +760,48 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-ii. "The body is not here" now says WHICH kind of not-here (F3 §4.2)
+
+One word did three jobs, and that is what made it a fabrication rather than a gap. A call
+whose body the workspace had not read, a call whose owner it had never scanned, and a call
+whose method is declared on a superclass it DID scan all produced the same answer: no
+callee, `resolved`, "the call IS the terminal". The third is false — the body is in the
+workspace, one hop up.
+
+`method_resolution` states the reason for every method a call site names, from a closed
+set of four: `declared_here`, `inherited` (with the declaring class), `ancestor_not_scanned`
+and `owner_not_scanned`. `type_hierarchy` carries the ancestry it resolves over, including
+**whether each ancestor was scanned** — which is the column that separates the last two.
+
+Measured, JVMS 5.4.3.3 over the scanned closure. **Two denominators, and an earlier
+version of this table mixed them**: `method_resolution` holds one row per distinct
+(class, name, descriptor), while a reader cares how many CALL SITES change. Both are
+below, and both are read off the shipped tables rather than a script beside them.
+
+| corpus | | `declared_here` | `inherited` | `ancestor_not_scanned` | `owner_not_scanned` | `dynamic` |
+|---|---|---|---|---|---|---|
+| `spring-petclinic-rest` | methods | 341 | **38** | 0 | 234 | — |
+| | call sites | 751 | **131** | 0 | 2071 | 84 |
+| `fixtures/orders-service` | methods | 191 | 2 | **33** | 317 | — |
+| | call sites | 444 | 2 | **158** | 790 | 23 |
+
+An `invokedynamic` site gets no `method_resolution` row at all — its target names the
+bootstrap factory rather than a callee — so those sites are counted in their own column
+rather than folded into a reason. The first draft of this table folded them into
+`owner_not_scanned`, which attributed a reason to the very sites the writer declines to
+give one, and separately dropped `<init>` from `declared_here` without saying so.
+
+- **Petclinic's 131** are hand-written inherited accessors — `Owner#setId`, where `setId`
+  lives on `BaseEntity`. Every one of them used to read as a third-party boundary; every
+  one now reaches a body a reader can open.
+- **orders-service's 158** are generated code — 101 protobuf, 57 Avro — extending
+  supertypes that live in jars. They are still terminals, and that is correct; what
+  changed is that they no longer look identical to a call into a library we never heard
+  of. A reader can see the body is inherited from something unopened, and which type.
+
+**What this does not do** is resolve into a jar. An unscanned ancestor stays unscanned;
+the answer is a better-stated boundary, not a new source of bodies.
+
 ### 3a-i. A catalog row is not tied to a library version by accident (F2 §4.1)
 
 A `descriptor:` in a catalog is compared on its **parameter types only**. JLS 8.4.2
@@ -1193,7 +1235,7 @@ is, what it costs.
 | Java | Servlets — implicit `HEAD`, `OPTIONS` and `TRACE` | CP-9 rows 7-9 and 32, all three containers: where a class declares only `doGet`, `HEAD` and `OPTIONS` are **200** with `Allow: GET, HEAD, OPTIONS`, and `TRACE` is **200** too wherever the connector permits the method | `supertype_dispatch` | **Boundary — UNDER-reports up to three verbs per servlet.** The code serving them is `HttpServlet`'s own, in a container jar nothing here scans, so such a row could carry either no handler at all or `doGet`'s symbol — and the second is false, since `doGet` is *called by* the HEAD path rather than serving HEAD. The same ruling this phase made for Data REST's HEAD/OPTIONS above, deliberately: two catalogs answering one question two ways would be worse than either answer. An **explicit** `doHead`/`doOptions`/`doTrace` override IS derived. **Falsified by** an endpoint row becoming able to name a handler outside the module |
 | Java | Servlets — an explicitly overridden `doTrace` | CP-9 row 31, all three containers: over a connector configured `allowTrace="true"`, `service()` dispatches TRACE to `doTrace` and the answer is **200**. Row 13 is the same request over the DEFAULT connector: **405**, refused before dispatch | `supertype_dispatch` | ✅ **shipped** — `doTrace` is in the verb map, with the connector as a **stated dependency**, on the same terms as Actuator's `exposure.include` above. `allowTrace` is connector configuration: any deployment sets it, it lives outside the module, and a repository cannot see it — so its default is not proof the address is unserved, and §8 forbids excluding on inference. A class that overrides `doTrace` has declared a handler, and a declared handler is a code fact we report. Fix round 1 reversed the original ruling, which had read a deployment default as a code fact. **Falsified by** a container in which `service()` stops dispatching TRACE to `doTrace` at all — not by one shipping a different connector default |
 | Java | Servlets — the `javax.servlet` spelling | pre-Jakarta modules declare `javax.servlet.annotation.WebServlet` on a `javax.servlet.http.HttpServlet` subclass | `supertype_dispatch` | ✅ **shipped** (fix round 1) as `javax-servlet.yml`, a second catalog rather than an assumption: CP-9 gained a third column on Apache Tomcat 9.0.121 (Servlet 4.0) and measured all 33 rows identical to the two `jakarta` columns modulo the package name (rows 25-28 and 30). The two files are one document under a package rename, pinned as such by `test_the_two_spellings_declare_one_rule`. Every boundary in these rows applies to both. Legacy servlets are the population that uses this spelling, so a jakarta-only catalog would have under-served the estate the style exists for |
-| Java | Servlets — a class reaching `HttpServlet` through an intermediate base | `class Orders extends AbstractBaseServlet`, itself extending `HttpServlet` | `supertype_dispatch` | **Boundary — derives nothing.** `superclasses` carries the DIRECT edge only, and the style matches one hop rather than guessing what the intermediate declares. A within-module closure walk — the `@NoRepositoryBean` precedent two rows up — closes it |
+| Java | Servlets — a class reaching `HttpServlet` through an intermediate base | `class Orders extends AbstractBaseServlet`, itself extending `HttpServlet` | `supertype_dispatch` | ✅ **CLOSED** (F3 §4.2, W22). Was a boundary because `superclasses` carries the DIRECT edge only, and the style matched one hop rather than guessing what the intermediate declares — a boundary only while the hierarchy was unavailable. `type_hierarchy` is that hierarchy, and the match is now the closure. It is still not a guess: the walk crosses only ancestors this workspace SCANNED, so a chain running through a class in a jar stops there and derives nothing (the near-miss beside the positive). The TARGET is exempt from that test and must be — `HttpServlet` ships in the servlet API and is never scanned. **And the chain's members are read, not only the leaf's**: an intermediate that overrides `service` without delegating has replaced the verb table, so the class is discarded exactly as a leaf's own override would be (CP-9 rows 41-43 — the container serves PUT too, making a `GET`-only row a wrong answer rather than a partial one). That is also what lets a handler declared on the intermediate, with the address on the leaf, derive |
 | Java | Servlets — an **abstract** `@WebServlet` class | the container's `InstanceManager` cannot instantiate it, so the URL answers 500 and the declared handler never runs | `supertype_dispatch` | **Boundary — OVER-reports one row per dispatch override on such a class.** `ACC_ABSTRACT` is not among the modifiers the extractor records, so nothing in the facts tells an abstract class from a concrete one — the same fact gap as Data REST's `default` repository methods above, and closed the same way, by recording the abstract bit. Not probed: nobody deliberately annotates an abstract servlet, which is why it is stated rather than gated |
 | Java | Servlets — a class overriding `service()` and declaring **no** `doXxx` | CP-9 rows 14-15: GET **and** PUT both 200 from one `service` override, because it replaces the verb dispatch itself | `supertype_dispatch` | ✅ shipped — such a class derives **nothing**, rather than the verb set the map would have claimed. Publishing `GET` while withholding `PUT` would be a wrong answer, not a partial one |
 | Java | Servlets — a class overriding `service()` that **delegates** through `super.service(req, resp)` and declares `doGet`/`doPost` | CP-9 rows 35-40, added 2026-09-05: GET 200, POST 200, **PUT 405**, on all three containers and BOTH `service` signatures. `HttpServlet`'s own dispatch still runs, and the 405 is what says so | `supertype_dispatch` | ✅ **shipped** (`A-M2`) — it derives the verbs it declares. Before this it derived **nothing**: the CP-9 verdict was measured against the no-`doXxx` configuration above and applied to every `service()` override, so the commonest real form — a cross-cutting wrapper — lost its whole surface, address, verbs and handlers, silently |

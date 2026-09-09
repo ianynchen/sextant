@@ -185,6 +185,13 @@ goes in `ext`, never into a widened set.
 `di_container`, `dynamic_proxy`, `config_placeholder`, `unindexed_dependency`,
 `scanner_gap`
 
+**`method_resolution`** — `declared_here`, `inherited`, `ancestor_not_scanned`,
+`owner_not_scanned`, `no_declaration_found`. Why a call site's target does or does not
+reach a body (JVMS 5.4.3.3, F3 §4.2). Distinct from `unresolved_reason` above, which
+says why a TRACE stopped; this says what the method lookup itself found. One word used
+to do the first four jobs at once, and the third of them — a method declared on a
+superclass the workspace HAS scanned — was false rather than imprecise.
+
 **`construct_kind`** — `class`, `interface`, `annotation`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
 

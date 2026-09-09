@@ -228,15 +228,20 @@ GUARDS: dict[str, Guard] = {
     ),
     # --- `supertype_dispatch` ---------------------------------------------
     "supertype_dispatch.declared-supertype": Guard(
-        what="a class matches only when its DIRECT `superclass` is the descriptor the "
-        "catalog names, package included",
+        what="a class matches only when it REACHES the descriptor the catalog names "
+        "through scanned superclasses, package included",
         why="ordinary inheritance is not evidence of anything (the C-1 lesson). Comparing "
         "simple names alone would serve a `jakarta` module from the `javax` catalog and "
-        "publish it under a rule measured against the other API",
+        "publish it under a rule measured against the other API. *Said DIRECT superclass "
+        "until F3 §4.2: the one-hop test was a stated boundary — a class reaching "
+        "`HttpServlet` through an intermediate base of its own derived nothing — and it "
+        "was one only while the hierarchy was unavailable. What the guard protects is "
+        "unchanged: the comparison is on the full descriptor, and widening the WALK does "
+        "not weaken WHAT is compared*",
         edits=(
             Edit(
                 path=_SUPERTYPE_DISPATCH,
-                find='        if bare_descriptor(str(row["superclass"])) not in supertypes:',
+                find="        if bare_descriptor(implementer) not in reaches:",
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),

@@ -420,6 +420,68 @@ CREATE TABLE IF NOT EXISTS roots (
 -- Replaced WHOLE per resolve through reset_call_edges.sql +
 -- insert_call_edges.sql, both run from the one pass that writes here — the
 -- return_flows discipline. Pre-declared empty like every table above it.
+-- JVMS 5.4.3.3's two halves, computed in ONE pass and never cached (F3 §4.2).
+--
+-- **Why two tables and not one.** Storing RESOLUTIONS rather than only ancestors is
+-- required, not a convenience: a reader holding a flat ancestor list cannot tell which
+-- ancestor answered, and the answer depends on a search order the list does not carry.
+-- `type_hierarchy` says what the shape is; `method_resolution` says what the shape
+-- ANSWERED, per method actually called.
+--
+-- **5.4.3.4's maximal-specificity rule is NOT implemented**, and saying so is the point
+-- of a stated reason. Where two unrelated interfaces both declare a signature the walk
+-- takes the first in the class file's own `interfaces` order; the JVM's answer is that
+-- two maximally-specific non-abstract candidates are an `IncompatibleClassChangeError`,
+-- i.e. there is no single body to name. No corpus measured so far contains the shape.
+-- An earlier draft of this comment cited 5.4.3.4 as a REASON for the two tables, which
+-- claimed an implementation that does not exist.
+--
+-- Both are replaced whole per resolve, like `call_edges` and `return_flows`, from the
+-- same pass that writes those — the one place "which method can this site run" is
+-- answered.
+CREATE TABLE IF NOT EXISTS type_hierarchy (
+    -- The subtype, bare (D00 §5a) — the spelling `call_sites.owner` uses, so a site
+    -- joins straight to its own ancestry with no rewriting.
+    child     TEXT,
+    -- One supertype of `child`. A class contributes its superclass and every interface
+    -- it declares; an interface contributes its extended interfaces.
+    ancestor  TEXT,
+    -- `extends` or `implements`, as the class file spelled it. Kept because 5.4.3.3
+    -- searches the superclass chain BEFORE the interfaces, and a reader checking a
+    -- resolution has to be able to see which arm answered.
+    kind      TEXT,
+    -- Where this ancestor sits in the search: `0` for the direct superclass, then each
+    -- declared interface in the order the class file lists them. The JVM resolves in
+    -- this order and so does `method_resolution`, so the order is DATA rather than an
+    -- implementation detail of whichever pass happens to walk it.
+    position  INTEGER,
+    -- Whether this workspace read the ancestor's own class file. **This is the column
+    -- that separates "external boundary" from "unresolved"** — an unscanned ancestor is
+    -- why a method can be genuinely unreachable while the subtype is fully known, and
+    -- without it a reader cannot tell that case from a type we simply have not walked.
+    scanned   BOOLEAN
+);
+
+-- One row per (class, name, descriptor) a CALL SITE actually names — not per method
+-- declared, which would be the whole hierarchy's cross product for no reader's benefit.
+CREATE TABLE IF NOT EXISTS method_resolution (
+    -- The owner named at the call site, bare.
+    class            TEXT,
+    -- The method's own name and its erased JVM descriptor, verbatim from the site, so a
+    -- row can be joined back to the call that asked for it without recomposing anything.
+    name             TEXT,
+    descriptor       TEXT,
+    -- The type whose class file declares the body, bare — the answer 5.4.3.3 returns.
+    -- NULL when there is none in this workspace, and `reason` then says which kind of
+    -- none it is. A row NEVER carries both a NULL here and a reason claiming success.
+    declaring_class  TEXT,
+    -- D00 §4's `method_resolution` set: `declared_here`, `inherited`,
+    -- `ancestor_not_scanned`, `owner_not_scanned`, `no_declaration_found`. **A stated
+    -- reason, always** — the single word this table replaces meant four of them at once,
+    -- and three are things a reader would act on differently.
+    reason           TEXT
+);
+
 CREATE TABLE IF NOT EXISTS call_edges (
     -- The method containing the call site, module-prefixed exactly as
     -- `call_sites.caller` spells it (D00 §5a).

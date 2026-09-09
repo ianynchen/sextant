@@ -11,6 +11,44 @@ class Resolution(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class MethodResolution(StrEnum):
+    """Why a call site's target does or does not reach a body (F3 §4.2, JVMS 5.4.3.3).
+
+    **One word did three jobs and that is what made it a fabrication.** A call whose
+    body the workspace had not read, a call whose owner it had never scanned, and a
+    call whose method is declared on a superclass it DID scan all produced the same
+    answer: no callee, `resolved`, "the call IS the terminal". The third is false —
+    the body is in the workspace, one hop up — 131 call sites in `spring-petclinic-rest`,
+    whose rendered document goes from 1939 boundary steps to 1649, **15.0%**. (F3 §4.2
+    states 21%; it names no corpus and reproduces on none — `mall-admin` does not move at
+    all. §5.4 wants the corpus beside the number, which is why this one carries it.)
+
+    The set is closed and each value states a different thing a reader can act on:
+
+    * `declared_here` — the owner itself declares the method. The ordinary case.
+    * `inherited` — a SCANNED ancestor declares it; `method_resolution.declaring_class`
+      names which. A reader can follow the call.
+    * `ancestor_not_scanned` — the owner was scanned, neither it nor any scanned
+      ancestor declares the method, and it has at least one ancestor the workspace did
+      not read. We know MORE than "external": we know the body is inherited from
+      something we did not open, and which type that is.
+    * `owner_not_scanned` — the owner is not in this workspace at all. The genuine
+      third-party boundary, and the honest terminal.
+    * `no_declaration_found` — the owner was scanned, every ancestor reachable from it
+      was scanned too, and none of them declares the method. Rare, and it is NOT the
+      same claim as `owner_not_scanned`: the first draft returned that word here, for an
+      owner the code had just proven IS in the workspace, so the row said "third-party
+      boundary" about a type we had read. A set with no member for "we looked everywhere
+      we could and found nothing" invites exactly that reuse.
+    """
+
+    DECLARED_HERE = "declared_here"
+    INHERITED = "inherited"
+    ANCESTOR_NOT_SCANNED = "ancestor_not_scanned"
+    OWNER_NOT_SCANNED = "owner_not_scanned"
+    NO_DECLARATION_FOUND = "no_declaration_found"
+
+
 class Evidence(StrEnum):
     COMPILER = "compiler"
     SYNTAX = "syntax"

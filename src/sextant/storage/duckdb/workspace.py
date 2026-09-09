@@ -540,6 +540,11 @@ _NAMED_QUERIES = {
     # because that order is the answer: it is the control-flow position the
     # statements were written in, and it is what gives a walk over these rows
     # its nesting.
+    # F3 §4.2's two resolution tables. Ordered by their own search order rather than
+    # alphabetically: `position` is what decides which ancestor answered, so a reader
+    # sorting these rows any other way is reading them wrong.
+    "type_hierarchy": "SELECT * FROM type_hierarchy ORDER BY child, position, ancestor",
+    "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "call_edges": """
         SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence
         FROM call_edges ORDER BY caller, ordinal, target, callee
@@ -728,6 +733,12 @@ _EXPORT_QUERIES = {
     # value. There is nowhere in it for an address, a config value or a string
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
+    # F3 §4.2. Both carry only symbols, a closed-set value and an integer — no address,
+    # config value or bytecode string — so redaction has nothing to reach here, the same
+    # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
+    # in the schema and absent from the export is a test failure.
+    "type_hierarchy": ("SELECT * FROM type_hierarchy ORDER BY child, position, ancestor"),
+    "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
     # Worth carrying rather than recomputable: without it a consumer sees the
     # tagged copies in `documents` and cannot tell which one the derived rows
@@ -822,6 +833,10 @@ _NAMED_DERIVATIONS = {
     # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
+    "type_hierarchy_reset": "reset_type_hierarchy.sql",
+    "type_hierarchy_insert": "insert_type_hierarchy.sql",
+    "method_resolution_reset": "reset_method_resolution.sql",
+    "method_resolution_insert": "insert_method_resolution.sql",
 }
 
 

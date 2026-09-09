@@ -65,6 +65,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from sextant.application.ports.workspace import Workspace
+from sextant.domain.closed_sets import MethodResolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 # D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
@@ -75,6 +76,8 @@ VIRTUAL_DISPATCH = frozenset({"virtual", "interface"})
 # so every reader has to decide what to do with it and none of them can take
 # the target at face value — see the module docstring.
 DYNAMIC = "dynamic"
+# Names that are never inherited, so an ancestor walk for one is always wrong (JLS 8.8).
+_NOT_INHERITED = frozenset({"<init>", "<clinit>"})
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,96 @@ class Dispatch:
     bodies: dict[str, list[str]]
     declared: set[str]
     subtypes: dict[str, list[str]]
+    # F3 §4.2. `ancestors` maps a bare type to its direct supertypes in JVMS 5.4.3.3's
+    # SEARCH ORDER — superclass first, then each declared interface — each carrying the
+    # kind and whether this workspace read it. `scanned` is every type whose own class
+    # file was read, which is what separates "external boundary" from "unresolved".
+    ancestors: dict[str, list[tuple[str, str, bool]]]
+    scanned: set[str]
+
+    def resolve(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str]:
+        """Which type declares the method a site names, and — always — why (JVMS
+        5.4.3.3).
+
+        **The defect this replaces.** The old rule asked whether the OWNER declared the
+        method and answered `[]` otherwise, which is the same answer a genuinely
+        third-party call gets. For a method the module declares one hop up, that is
+        false: the body is in the workspace. It is 131 call sites in
+        `spring-petclinic-rest`, and `Owner#setId` — `setId` on `BaseEntity` — is the
+        whole shape.
+
+        **The order is the specification, and a breadth-first walk is not it.** 5.4.3.3
+        searches the class, then the ENTIRE superclass chain, and only then the
+        superinterfaces. A frontier seeded with every direct supertype at once answers
+        from a depth-1 interface while a depth-2 superclass holds the body — measured on
+        `A extends B implements I`, `B extends C`, both `C` and `I` declaring the
+        method: it returned `I`, where the JVM runs `C`'s. Worse, `candidates` then
+        found no body under `I` and returned empty, which is this item's own defect
+        recreated one level deeper, with `reason` claiming `inherited` beside a
+        declaring class that declares nothing.
+
+        The two arms are therefore walked separately and in order.
+        """
+        if method_descriptor(owner, name, descriptor) in self.declared:
+            return owner, MethodResolution.DECLARED_HERE
+        if owner not in self.scanned:
+            # Never read this type at all. The genuine third-party boundary: the call IS
+            # the terminal, and nothing further is knowable from this workspace.
+            return None, MethodResolution.OWNER_NOT_SCANNED
+        if name in _NOT_INHERITED:
+            # A constructor is not inherited (JLS 8.8), so walking ancestors for one
+            # could only ever produce a wrong answer. No corpus has yet contained a call
+            # that would, which is why this is stated rather than discovered later.
+            return None, MethodResolution.NO_DECLARATION_FOUND
+
+        unscanned = False
+        # Step 2: the superclass chain, to exhaustion, before any interface.
+        chain: list[str] = []
+        current: str | None = owner
+        seen: set[str] = set()
+        while current is not None and current not in seen:
+            seen.add(current)
+            chain.append(current)
+            parent = next(
+                (a for a, kind, _ in self.ancestors.get(current, ()) if kind == "extends"),
+                None,
+            )
+            if parent is None:
+                break
+            if parent not in self.scanned:
+                unscanned = True
+                break
+            if method_descriptor(parent, name, descriptor) in self.declared:
+                return parent, MethodResolution.INHERITED
+            current = parent
+
+        # Step 3: the superinterfaces of the class and of every superclass on that
+        # chain, breadth-first — which is the right shape HERE, because interfaces form
+        # a lattice rather than a chain and the JVM has no total order over them either.
+        frontier = [
+            ancestor
+            for link in chain
+            for ancestor, kind, _ in self.ancestors.get(link, ())
+            if kind == "implements"
+        ]
+        visited: set[str] = set()
+        while frontier:
+            interface = frontier.pop(0)
+            if interface in visited:
+                continue
+            visited.add(interface)
+            if interface not in self.scanned:
+                unscanned = True
+                continue
+            if method_descriptor(interface, name, descriptor) in self.declared:
+                return interface, MethodResolution.INHERITED
+            frontier.extend(a for a, _kind, _ in self.ancestors.get(interface, ()))
+
+        if unscanned:
+            # We know MORE than "external": the body is inherited from something we did
+            # not open, and `type_hierarchy` names which type that is.
+            return None, MethodResolution.ANCESTOR_NOT_SCANNED
+        return None, MethodResolution.NO_DECLARATION_FOUND
 
     def candidates(self, site: dict[str, object]) -> list[str]:
         """Every method `site` can run and whose body this workspace read, as
@@ -107,10 +200,14 @@ class Dispatch:
         method nobody calls. Callers handle that form themselves.
         """
         name, descriptor = str(site["name"]), str(site["descriptor"])
-        declared = method_descriptor(str(site["owner"]), name, descriptor)
-        if declared not in self.declared:
+        owner = bare_descriptor(str(site["owner"]))
+        # The DECLARING type, not the named one (F3 §4.2). `Owner#setId` names `Owner`
+        # and is declared on `BaseEntity`; asking only about the named owner returned
+        # nothing and read as a third-party boundary.
+        declaring, _reason = self.resolve(owner, name, descriptor)
+        if declaring is None:
             return []
-        found = list(self.bodies.get(declared, ()))
+        found = list(self.bodies.get(method_descriptor(declaring, name, descriptor), ()))
         if site["invoke_kind"] not in VIRTUAL_DISPATCH:
             return found
         for subtype in self.subtypes.get(bare_descriptor(str(site["owner"])), ()):
@@ -124,10 +221,13 @@ def dispatch_of(workspace: Workspace) -> Dispatch:
     """Reads the three indices once. Every one of them is a compiler fact —
     there is no framework knowledge in a call site, so nothing here gates on a
     capability or reads a catalog."""
+    ancestors, scanned = ancestry_of(workspace)
     return Dispatch(
         bodies=_bodies_by_descriptor(workspace),
         declared=_declared(workspace),
         subtypes=_subtypes(workspace),
+        ancestors=ancestors,
+        scanned=scanned,
     )
 
 
@@ -194,6 +294,44 @@ def _bodies_by_descriptor(workspace: Workspace) -> dict[str, list[str]]:
     for symbol in sorted({str(row["method"]) for row in workspace.query("method_returns")}):
         bodies[bare_descriptor(symbol)].append(symbol)
     return bodies
+
+
+def ancestry_of(workspace: Workspace) -> tuple[dict[str, list[tuple[str, str, bool]]], set[str]]:
+    """Every type's DIRECT supertypes in JVMS 5.4.3.3's search order, and the set of
+    types this workspace actually read (F3 §4.2).
+
+    `_subtypes` above walks the same two facts in the other direction — parent to child,
+    for override candidates. This walks child to parent, for resolution. Both are needed
+    and neither is the other reversed: `_subtypes` is transitive and sorted for a
+    deterministic candidate list, while this is DIRECT and ordered by the search the JVM
+    performs, because the first declaration found is the answer and the order decides
+    which that is.
+
+    **Order is the whole point.** 5.4.3.3 searches the class, then its superclass chain,
+    then its superinterfaces. A dictionary of parents with no order would resolve a
+    method declared both on a superclass and on an interface to whichever the iteration
+    happened to reach, and that is a coin toss published as a resolution.
+
+    `scanned` holds every type with a class file here. An ancestor absent from it is why
+    a method can be genuinely unreachable while its subtype is fully known — the
+    `ancestor_not_scanned` answer, which the single old word could not express.
+    """
+    scanned = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
+    direct: dict[str, list[tuple[str, str, bool]]] = defaultdict(list)
+    # The superclass first: position 0 in the search, and the arm the JVM exhausts
+    # before it looks at any interface.
+    for row in workspace.query("superclasses"):
+        child = bare_descriptor(str(row["symbol"]))
+        parent = bare_descriptor(str(row["superclass"]))
+        direct[child].append((parent, "extends", parent in scanned))
+    # Then the declared interfaces, in the order the class file lists them — which is
+    # the order `interfaces` preserves, so nothing is sorted here.
+    for row in workspace.query("implementations"):
+        child = bare_descriptor(str(row["symbol"]))
+        for parent in json.loads(str(row["interfaces"])):
+            bare = bare_descriptor(str(parent))
+            direct[child].append((bare, "implements", bare in scanned))
+    return dict(direct), scanned
 
 
 def _subtypes(workspace: Workspace) -> dict[str, list[str]]:

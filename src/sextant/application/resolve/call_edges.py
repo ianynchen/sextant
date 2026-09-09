@@ -80,7 +80,7 @@ visited set in `resolve/dispatch.py`. Bounded traversal OVER these rows is
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.domain.closed_sets import Evidence, Resolution
-from sextant.domain.symbols import method_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 
 def record_call_edges(workspace: Workspace) -> None:
@@ -94,11 +94,76 @@ def record_call_edges(workspace: Workspace) -> None:
     """
     workspace.derive("call_edges_reset")
     dispatch = dispatch_of(workspace)
+    sites = list(workspace.query("call_sites"))
     rows: list[dict[str, object]] = []
-    for site in workspace.query("call_sites"):
+    for site in sites:
         rows.extend(_rows_for(site, dispatch))
     if rows:
         workspace.derive("call_edges_insert", rows=rows)
+    # F3 §4.2's two tables, written from the SAME pass and the same `Dispatch` — "which
+    # method can this site run" is answered once (this module's own docstring), and a
+    # second pass would be a second answer that could disagree with the edges above.
+    _record_hierarchy(workspace, dispatch)
+    _record_resolution(workspace, dispatch, sites)
+
+
+def _record_hierarchy(workspace: Workspace, dispatch: Dispatch) -> None:
+    """`type_hierarchy` — every type's direct supertypes in the JVM's search order."""
+    workspace.derive("type_hierarchy_reset")
+    rows = [
+        {
+            "child": child,
+            "ancestor": ancestor,
+            "kind": kind,
+            "position": position,
+            "scanned": scanned,
+        }
+        for child, parents in sorted(dispatch.ancestors.items())
+        for position, (ancestor, kind, scanned) in enumerate(parents)
+    ]
+    if rows:
+        workspace.derive("type_hierarchy_insert", rows=rows)
+
+
+def _record_resolution(
+    workspace: Workspace, dispatch: Dispatch, sites: list[dict[str, object]]
+) -> None:
+    """`method_resolution` — one row per distinct (class, name, descriptor) a call site
+    names, with the declaring type and always a reason.
+
+    Distinct rather than per site: the same method called nine times resolves the same
+    way nine times, and nine identical rows would say nothing a reader could use. The
+    per-site view is `call_edges`, which already has one row per site.
+    """
+    workspace.derive("method_resolution_reset")
+    asked: dict[tuple[str, str, str], tuple[str | None, str]] = {}
+    # A `dynamic` site's target names the bootstrap factory rather than a callee, so
+    # resolving it would look up a method nobody calls — the same reason
+    # `Dispatch.candidates` declines to answer for one. Filtered in the comprehension
+    # rather than with a second `== DYNAMIC` statement, because `guard_check.py` anchors
+    # `call_edges.a-lambda-site-names-the-body-not-the-bootstrap` on that exact line and
+    # a second copy makes the anchor ambiguous — it would disable one of the two and
+    # report the guard as still held.
+    for site in (candidate for candidate in sites if str(candidate["invoke_kind"]) != DYNAMIC):
+        key = (
+            bare_descriptor(str(site["owner"])),
+            str(site["name"]),
+            str(site["descriptor"]),
+        )
+        if key not in asked:
+            asked[key] = dispatch.resolve(*key)
+    rows = [
+        {
+            "class": owner,
+            "name": name,
+            "descriptor": descriptor,
+            "declaring_class": declaring,
+            "reason": reason,
+        }
+        for (owner, name, descriptor), (declaring, reason) in sorted(asked.items())
+    ]
+    if rows:
+        workspace.derive("method_resolution_insert", rows=rows)
 
 
 def _rows_for(site: dict[str, object], dispatch: Dispatch) -> list[dict[str, object]]:

@@ -30,8 +30,20 @@ here would restate those documents rather than add anything.
   before any matching, so a `@ConnectMapping` class in a module whose build named no
   RSocket coordinate derived nothing and asked nothing (W16 review).
 
+### Added
+
+- **`type_hierarchy` and `method_resolution`** (F3 §4.2, W22) — JVMS 5.4.3.3 over the
+  scanned closure, computed in one pass and never cached. A call to a method declared on a
+  scanned superclass now reaches its body instead of reading as a third-party boundary:
+  **131 call sites in `spring-petclinic-rest`**. And "the body is not here" now says which
+  kind of not-here, from a closed set of four reasons — 158 calls in the fixture are
+  generated code inheriting from library supertypes, which used to be indistinguishable
+  from a call into a library we never scanned.
+
 ### Fixed
 
+- **A servlet reaching `HttpServlet` through an intermediate base derived nothing** — a
+  stated boundary that existed only while the hierarchy was unavailable (W22).
 - **Every Spring Kafka 2.x producer derived nothing** (F2 §4.1). Catalog descriptors were
   compared verbatim, return type included, which made every row version-dependent by
   accident — `spring-kafka-template` declares the 3.x `CompletableFuture` return and a 2.x
