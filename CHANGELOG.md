@@ -14,6 +14,30 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A per-direction format split stopped being hidden** (F5 §6.1, W27). A merged row
+  carried one `format` column for two directions, and the ladder's rung order decided what
+  it said — a media type carried across from the outbound twin answering at rung 2 before
+  the consumer's own configured deserializer was reached. Measured on this repo's own
+  fixture, which publishes JSON to `order-events`/`order-audit`/`order-returns` and
+  consumes **protobuf** from them: all three merged rows read `json`. Each direction is
+  its own row now and answers off its own evidence, so the disagreement is on the page.
+  The COVERAGE caveat that stated this ("a reader must not read a merged row's `format` as
+  a statement about both directions") retires with it.
+- **A wire identity served AND called is two rows and a question** (F5 §6.1, W27). It was
+  one row, `direction: both`, keeping the handler and carrying the caller and its address
+  onto it — which asserts that the thing called IS the thing served, a claim about the far
+  end of a call that a module's own bytecode cannot show. The merge keyed on
+  `(protocol, method, path)` because `peer` is not part of endpoint identity (RC-5), so a
+  path this module serves collided with the same path anywhere in the world. Measured on
+  the fixture: of six merged rows, the SOAP one carried `peer: ${soap.billing.uri}` — the
+  module's own served operation and a call to the BILLING service published as one
+  endpoint, because they share a payload QName — and `POST /v1/orders` merged the module's
+  own handler with a call to `orders-loop`. The other four are genuine
+  self-publish/self-consume. The rows now stand apart (141 endpoints became 147) and
+  `resolve/self_exchange.py` files a `self_exchange` question naming each side and its
+  address, because both readings are real and the evidence does not separate them.
+  `Direction.BOTH` stays in D00 §4 for the linking tier; no pass here produces it.
+
 - **A payload type whose wire contract is in its accessors, not its fields** (F4 §5.2,
   W26). `Page<T>` and `Slice<T>` are interfaces, so they declare no fields, and shape
   expansion read fields only — the most common paginated Spring response expanded to a
@@ -70,6 +94,13 @@ here would restate those documents rather than add anything.
   kind of not-here, from a closed set of four reasons — 158 calls in the fixture are
   generated code inheriting from library supertypes, which used to be indistinguishable
   from a call into a library we never scanned.
+
+### Removed
+
+- **The known gap `merged_endpoints_keep_only_the_handlers_contract`** (W27), retired by
+  name rather than narrowed: it said a path the module both exposes and calls keeps only
+  the handler's declared contract, discarding the client's where the two differ. There is
+  no merge to discard it any more — each row keeps its own, so nothing takes its place.
 
 ### Fixed
 

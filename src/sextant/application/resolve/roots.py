@@ -24,9 +24,13 @@ free the day it gains a producer.
 - **Inbound endpoints.** Every `endpoints` row the module EXPOSES and that
   names a handler. `direction <> outbound` rather than `= inbound`, the
   `resolved_peers` precedent: a `both` row is a path the module both exposes
-  and calls (D02 §3's merge), so it is as much a root as a purely inbound one
-  and an equality test would silently drop it. An outbound row carries no
-  handler at all, so it could not be a root even if the test admitted it.
+  and calls, so it is as much a root as a purely inbound one and an equality
+  test would silently drop it. **No pass writes one today** — W27 (F5 §6.1)
+  deleted the merge that did, and a module serving and calling one identity now
+  keeps two rows with a `self_exchange` question beside them — so the inequality
+  guards the linking tier's row rather than one of this tier's. An outbound row
+  carries no handler at all, so it could not be a root even if the test admitted
+  it.
 - **Scheduled work.** Every `scheduled_work` row's handler. A method the
   framework calls on a clock starts work, contains business logic, and gets a
   trace for the same reason an endpoint handler does — the user's own ruling,

@@ -41,7 +41,6 @@ KNOWN_GAPS = [
     "maven_profile_and_transitive_resolution_not_implemented",
     "catalog_module_matching_not_implemented",
     "module_classification_evidence_incomplete",
-    "merged_endpoints_keep_only_the_handlers_contract",
     "shape_rules_unscoped_to_the_producing_catalog",
     "reactive_flow_not_traced",
     "payload_parsed_beyond_horizon",
@@ -64,9 +63,12 @@ def write_metadata(
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
-    # A `both` row (D02 §3) is a wire identity this module both exposes and
-    # calls, so it counts on both sides — bucketing on direction alone would
-    # drop it from whichever side is not its literal `direction` value.
+    # A `both` row is a wire identity this module both exposes and calls, so it counts
+    # on both sides — bucketing on direction alone would drop it from whichever side is
+    # not its literal `direction` value. **No pass produces one today** (F5 §6.1, W27):
+    # a module that serves and calls one identity keeps two rows and
+    # `resolve/self_exchange.py` files the question. The arm stays because `both` stays
+    # in D00 §4 for the linking tier, which is where the claim can be justified.
     inbound: dict[str, int] = {}
     outbound: dict[str, int] = {}
     for endpoint in report.endpoints:

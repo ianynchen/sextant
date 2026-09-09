@@ -194,9 +194,11 @@ needs it.
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
 
-**A `both` row keeps both `handler` and `caller`.** A wire identity a module both exposes and
-calls merges into one endpoint row rather than two — `handler` names the server method,
-`caller` names the client method, and both are populated. An outbound-only row carries
+**`both` is reserved for the linking tier, and no pass here produces it** (F5 §6.1, W27).
+A wire identity a module both exposes and calls stays TWO rows; the shape of a `both` row is
+still defined — `handler` names the server method, `caller` names the client method, and both
+are populated — because the tier that can justify the claim will write one. An outbound-only
+row carries
 `caller` with `handler` NULL, mirroring an inbound-only row's NULL `caller`. `peer` is the
 outbound target hint — a declared service name, a literal authority, or **a whole address
 expression where an operation-carrying protocol leaves nothing for the address to be split
@@ -212,17 +214,23 @@ authority half to take, and two deployments behind one host are two peers. `reso
 substitutes such an expression per environment exactly as it does for any other, because it
 reads a placeholder out of `peer` and does not care what shape the rest of the string is.
 
-**A merged `both` row is the ordinary outcome where a module serves and calls one
-operation.** The fixture's `{http://orders.example.com/ws}placeOrderRequest` is derived
-twice — once from the handler's own `@PayloadRoot`, once from the payload type the client
-hands to a template call — and the two meet because both engines compose the same QName
-string from two different annotations. The handler's row survives with the caller and the
-caller's `peer` carried onto it, per [D02](D02-catalog-schema.md) §3. One consequence is
-worth stating because a real fixture shows it: **`peer` is not part of wire identity**, so
-two calls to one operation at two different addresses are one endpoint row carrying one
-address — the first derived, in the order the call sites were read. Recording both would
-mean putting the address into the identity of a protocol whose identity is the operation,
-which is the aggregation the rest of this section refuses.
+**Serving and calling one identity is a QUESTION, and it used to be a merge.** The
+fixture's `{http://orders.example.com/ws}placeOrderRequest` is derived twice — once from the
+handler's own `@PayloadRoot`, once from the payload type the client hands to a template call
+— and the two compose the same QName from two different annotations. They were merged into
+one row on that basis, and the merged row carried `peer: ${soap.billing.uri}`: the module's
+own served operation and a call to the BILLING service, published as one endpoint. They share
+a QName because they share a payload TYPE, which is not identity.
+
+The reason the merge could not tell is stated right here and is why it had to go: **`peer` is
+not part of wire identity** (RC-5). So a path this module serves collided with the same path
+anywhere in the world, and `POST /v1/orders` merged the module's own handler with a call to
+`orders-loop`. Both rows now stand and `resolve/self_exchange.py` files a `self_exchange`
+question naming each side and its address, because both readings are real: a service that
+publishes to a topic and reads it back genuinely is one identity in both directions, and a
+client calling another service's copy of a shared path genuinely is two. Curation or the
+linking tier decides; a pass that decided here would be guessing at the far end of a call,
+which is the one thing a module's own bytecode cannot show.
 
 **`endpoints.catalog_id` is provenance, not identity.** It names the catalog whose rules
 produced the row, so a catalog describing an endpoint's request/response contract can
@@ -232,11 +240,11 @@ hash below never includes it, and a refactor of the catalog files themselves mus
 orphan an endpoint — and it is never compared across services: it is a local fact about
 which catalog derived this graph's own row, not a cross-service correlation key.
 
-**The merge keeps only the handler's request and response payload descriptors.** Where the
-module both exposes a path and calls it through a client with its own declared contract, the
-two declarations can differ — the handler's survives on the `both` row and the client's is
-discarded. This is a named gap (`merged_endpoints_keep_only_the_handlers_contract`), not a
-silent loss.
+**Each side keeps its own request and response payload descriptors** (W27). Where the module
+both exposes a path and calls it through a client with its own declared contract, the two
+declarations can differ — and both are now recorded, one per row, because there is no merge
+to discard either. The gap this closes was named
+`merged_endpoints_keep_only_the_handlers_contract`.
 
 **Declared shapes land in these same two tables**, loaded from `declared_shape` facts with
 `evidence: declared`, their field types already in the wire-type vocabulary
@@ -739,8 +747,9 @@ table nobody walked.
 
 **Written by `application/resolve/roots.py`** from two tables the catalog-driven half has
 already finished with: every `endpoints` row the module EXPOSES and names a handler for
-(`direction <> outbound`, the `resolved_peers` test rather than `= inbound`, so a merged
-`both` row keeps its trace), and every `scheduled_work` row's handler.
+(`direction <> outbound`, the `resolved_peers` test rather than `= inbound`, so a `both`
+row from the linking tier would keep its trace — no pass here writes one since W27), and
+every `scheduled_work` row's handler.
 [D00](D00-fact-schema.md) §4's third member, `entry_point`, has no producer — which
 signature starts a program is a LANGUAGE rule and [ARCHITECTURE](../ARCHITECTURE.md) §10
 keeps those out of the resolver, so its producer is a catalog nobody has written

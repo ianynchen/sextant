@@ -380,13 +380,15 @@ same columns, same resolution — and the difference is what a reader needs: the
 real, and the place to go and look is the library's source, not this module's. Three rules
 make the marking honest rather than decorative:
 
-- **It keys on the SURVIVING evidence — the handler wherever there is one, the caller only
-  where there is not.** A merged `both` row keeps the handler's own declaration
-  ([D02](D02-catalog-schema.md) §3), so a path this module HANDLES stays unmarked even when
-  the client calling it came out of a jar; marking it would attribute this module's own
-  endpoint to a library.
-- **One attribution per wire identity.** A `both` row is listed in both tables, and the same
-  finding stated twice reads as two findings.
+- **It keys on the handler wherever there is one, the caller only where there is not.**
+  So a path this module HANDLES stays unmarked even when the client calling it came out of
+  a jar; marking it would attribute this module's own endpoint to a library. *This rule
+  was written for the merged `both` row that kept the handler's own declaration; since
+  W27 (F5 §6.1) nothing merges the two directions, and the rule now simply reads whichever
+  of the two columns the row carries.*
+- **One attribution per wire identity.** A `both` row — which the linking tier may write,
+  and no pass here does — is listed in both tables, and the same finding stated twice
+  reads as two findings.
 - **A row naming neither handler nor caller is left unmarked** rather than guessed at.
 
 The coordinate itself comes back through the document a symbol was declared in — an

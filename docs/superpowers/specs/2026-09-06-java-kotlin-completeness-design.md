@@ -864,7 +864,12 @@ Never by path and protocol alone.
    documented-but-unimplemented routing-ambiguity detector.
 4. **Self-publish / self-consume is real** — a service publishes to a topic and reads it
    back. Record **both** rows and file an open question. Never merge. Curation or the linking
-   tier decides.
+   tier decides. *Built in W27 as the `self_exchange` question kind, and it covers every
+   protocol rather than messaging alone: the fixture's six merged rows were four genuine
+   self-publish pairs AND two fabrications — a SOAP operation merged with a call to
+   `${soap.billing.uri}`, and `POST /v1/orders` merged with a call to `orders-loop`. The
+   question names each side and the address it reaches, because the address is what
+   separates the two readings and is the column the merge never compared.*
 
 ### 6.2 Request metadata, on every outbound protocol
 

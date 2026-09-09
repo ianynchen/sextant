@@ -44,21 +44,16 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- the wire outright, `narrowed` where only a framework default or the
     -- payload's own type suggested it, `unresolved` where nothing did.
     -- As the ladder writes them, `format` is NULL exactly when
-    -- `format_resolution` is `unresolved`. **One statement breaks that pair
-    -- on purpose**: merge_endpoints.sql keeps the surviving row's format
-    -- while taking the WEAKER of the two halves' markers, so a merged row
-    -- may read (`protobuf`, `unresolved`) — "this is the format one
-    -- direction declared, and this identity as a whole is not settled",
-    -- which is the honest reading of one wire whose two halves were not
-    -- equally observable. A reader must therefore treat
-    -- `format_resolution` as the authority on trust and `format` as an
-    -- answer that may still be worth showing beside it. **That branch has
-    -- no live surface today** (merge_endpoints.sql's own header): the merge
-    -- is the last statement of `derive_endpoints` and the ladder is the last
-    -- pass of a resolve, so both columns are still NULL when the merge runs
-    -- and the ladder answers every row afterwards — the pair holds on every
-    -- live row, and the exception becomes reachable only if a later phase
-    -- stamps a format before the merge.
+    -- `format_resolution` is `unresolved`, and **nothing breaks that pair
+    -- today**. One statement used to: `merge_endpoints.sql` kept the
+    -- surviving row's format while taking the WEAKER of the two halves'
+    -- markers, so a merged row could read (`protobuf`, `unresolved`) — and
+    -- that statement is gone with the merge (F5 §6.1, W27), because folding
+    -- two directions into one row is a claim about the far end of a call.
+    -- A reader should still treat `format_resolution` as the authority on
+    -- trust and `format` as an answer worth showing beside it: that is what
+    -- the two columns mean, whether or not any writer currently separates
+    -- them.
     format            TEXT,
     format_resolution TEXT
 );

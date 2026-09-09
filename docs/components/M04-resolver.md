@@ -142,8 +142,9 @@ types are shapes until endpoints are found — but an endpoint is not complete u
 shapes are attached.
 
 **5a. Find the boundaries.** Catalog engines run in a fixed order: inbound, then outbound,
-then reclassification. Inbound precedes outbound so that a path a module both exposes and
-calls merges into one endpoint with direction `both` rather than appearing twice. Each
+then reclassification. A path a module both exposes and calls keeps TWO rows (F5 §6.1,
+W27) — merging them asserted that the thing called is the thing served — and a
+`self_exchange` question names each side and its address so a reader can settle it. Each
 endpoint records its protocol, wire identity, handler and/or caller, and the **type
 references** of its request and response — not yet their contents.
 

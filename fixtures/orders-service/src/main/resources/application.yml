@@ -83,22 +83,31 @@ spring:
   # differently, so each half of that split is observable in one live run:
   #
   #   * the PRODUCER class is in both `values` and `format_from`. It stamps
-  #     `produces: application/json` on every outbound kafka row, and the
-  #     merge then carries that onto the `both` rows it survives into (2F
-  #     checkpoint falsification F-4 — the ONLY place that carry is
-  #     observable live, since the stamp itself matches direction exactly).
-  #     Every one of those rows is then answered by rung 2 before rung 3 is
-  #     consulted at all: the precedence pin.
+  #     `produces: application/json` on every outbound kafka row, which rung
+  #     2 then answers off — the precedence pin, since rung 3 could equally
+  #     have answered those rows and does not get to.
   #   * the CONSUMER class is a schema-registry deserializer with no MIME
   #     string anyone registered, so it is in `format_from` only. It stamps
-  #     NO media, which leaves `consumes` NULL on every inbound-only kafka
-  #     row — and that is what makes rung 3 reachable at all, since a class
-  #     with a MIME would have been answered a rung earlier.
+  #     NO media, which leaves `consumes` NULL on every inbound kafka row —
+  #     and that is what makes rung 3 reachable at all, since a class with a
+  #     MIME would have been answered a rung earlier.
   #
-  # It has to be THIS way round. Swapping the two puts the schema-registry
-  # class on the producer key, where stamping nothing leaves `produces` NULL
-  # table-wide: the F-4 merge carry then has nothing to carry and stops being
-  # observable, while rung 3 gains nothing it does not get here.
+  # It has to be THIS way round: swapping them puts the schema-registry class
+  # on the producer key, where stamping nothing leaves `produces` NULL
+  # table-wide and the rung-2-beats-rung-3 precedence has nothing to
+  # demonstrate, while rung 3 gains nothing it does not get here.
+  #
+  # **The asymmetry is now visible in the output, and it was not** (W27, F5
+  # §6.1). This module publishes JSON to `order-events`/`order-audit`/
+  # `order-returns` and consumes protobuf from them. While a wire identity
+  # served AND called collapsed into one `both` row, the merge carried the
+  # producer's `application/json` onto it and rung 2 answered `json` before
+  # the consumer's own configured deserializer was ever consulted — one
+  # confident answer for two halves that disagree. The rows stand apart now,
+  # so the outbound half says `json`, the inbound half says `protobuf`, and
+  # the `self_exchange` question sits beside them. *This comment used to cite
+  # that carry as "2F checkpoint falsification F-4 — the ONLY place that
+  # carry is observable live"; the carry no longer exists.*
   #
   # The class name is configuration data. Nothing in this fixture depends on
   # the Confluent artifacts, and nothing needs to.

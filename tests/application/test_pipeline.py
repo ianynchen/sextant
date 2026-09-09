@@ -849,7 +849,14 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # wire contract is in its ACCESSORS — an interface has no fields at all — and the
     # three paged ones are the boundary beside it, returning an envelope whose jar this
     # fixture names in no `extract_libraries`.
-    assert len(report.endpoints) == 128
+    #
+    # W27 makes it 134, and every one of the six is a row that ALREADY EXISTED and was
+    # being folded away (F5 §6.1). A wire identity the module both serves and calls used
+    # to collapse into one `direction: both` row; two of these six were fabrications —
+    # a SOAP operation merged with a call to `${soap.billing.uri}`, and `POST /v1/orders`
+    # merged with a call to `orders-loop` — and the other four are genuine
+    # self-publish/self-consume. Nothing new is derived; six deletions stopped happening.
+    assert len(report.endpoints) == 134
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -912,9 +919,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         "OrdersApiController#find(sig_95a78dff)."
     )
 
-    directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
-    assert directions[("POST", "/billing/invoices")] == "outbound"
-    assert directions[("POST", "/v1/orders")] == "both"  # the self-call merged
+    directions: dict[tuple, set[str]] = {}
+    for endpoint in report.endpoints:
+        directions.setdefault((endpoint["method"], endpoint["path"]), set()).add(
+            str(endpoint["direction"])
+        )
+    assert directions[("POST", "/billing/invoices")] == {"outbound"}
+    # Two rows, not one `both` row (W27, F5 §6.1): the module serves `POST /v1/orders`
+    # and `OrdersLoopClient` calls that path at `orders-loop`. The merge compared
+    # `(protocol, method, path)` and could not see the different host, because `peer` is
+    # not part of endpoint identity (RC-5).
+    assert directions[("POST", "/v1/orders")] == {"inbound", "outbound"}
     peers = {e["path"]: e["peer"] for e in report.endpoints if e["direction"] != "inbound"}
     assert peers["/billing/invoices"] == "billing"
     assert peers["/v1/inventory/levels"] is None  # base URL is builder code
@@ -1366,8 +1381,18 @@ def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_re
 # different protocol.
 
 
-def _soap_row(report: ResolveReport, path: str) -> dict:
-    [row] = [e for e in report.endpoints if e["protocol"] == "soap" and e["path"] == path]
+def _soap_row(report: ResolveReport, path: str, direction: str = "inbound") -> dict:
+    """One SOAP row by identity AND direction.
+
+    The direction became necessary with W27 (F5 §6.1): a QName the module both serves and
+    calls is two rows now, where the merge used to leave one. Naming the side is what
+    these tests mean anyway — every one of them is about a served operation.
+    """
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "soap" and e["path"] == path and e["direction"] == direction
+    ]
     return row
 
 
@@ -1397,14 +1422,13 @@ def test_a_payload_root_derives_its_qname_identity_from_two_attributes_of_one_an
     row = _soap_row(report, "{http://orders.example.com/ws}placeOrderRequest")
 
     assert row["method"] is None
-    # 2I Task 5: `both`, not `inbound` — `BillingSoapClient` calls the very
-    # operation this endpoint serves (its payload type's `@XmlRootElement`
-    # states the same QName), so D02 §3's merge folded the outbound row into
-    # this one. Everything this test is ABOUT is untouched by that: the merge
-    # keeps the handler's own row, its handler, its contracts and its
-    # `catalog_id`, and changes only the direction and the carried
-    # caller/peer.
-    assert row["direction"] == "both"
+    # `inbound`, and it read `both` until W27 (F5 §6.1). `BillingSoapClient` calls an
+    # operation whose payload type's `@XmlRootElement` states this same QName, and the
+    # two rows were merged on that basis — publishing the module's own served operation
+    # and a call to `${soap.billing.uri}` as ONE endpoint. They share a QName because
+    # they share a payload TYPE, which is not identity. The call is still recorded, as
+    # its own outbound row, with a `self_exchange` question naming both sides.
+    assert row["direction"] == "inbound"
     assert row["handler"].endswith("OrderSoapEndpoint#placeOrder(sig_fd19bfc7).")
     assert row["resolution"] == "resolved"
     assert row["evidence"] == "compiler"
@@ -1641,10 +1665,18 @@ def test_nothing_but_the_two_sse_routes_moves(
         # reachable through. One row, and the only movement in this whole map.
         # 62 since W26: the four `/v1/paged/*` routes — one payload described from its
         # accessors, three left open because their envelope's jar is not in reach.
-        "http": 62,
+        # 63 since W27: `POST /v1/orders` is two rows, not one. The module serves it and
+        # `OrdersLoopClient` calls it at `orders-loop` — a different host, which the
+        # merge could not see because `peer` is not part of endpoint identity (RC-5).
+        "http": 63,
         "jms": 8,
-        "kafka": 22,
-        "pubsub": 6,
+        # three topics the module both publishes to and consumes — `order-events`,
+        # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
+        # row. Self-publish/self-consume is real, and so is a client calling somebody else's
+        # copy of an address; `self_exchange` asks rather than deciding
+        "kafka": 25,
+        # `order-notifications`, published and subscribed here, is two rows since W27
+        "pubsub": 7,
         "sqs": 7,
         # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
         # pass for the same reason the graphql and messaging buckets are —
@@ -1654,11 +1686,14 @@ def test_nothing_but_the_two_sse_routes_moves(
         # adds nothing to `graphql` above: this fixture loads no
         # `declared_shape` facts at all (comment above `len(report.endpoints)
         # == 122`).
-        "soap": 5,
+        # `{http://orders.example.com/ws}placeOrderRequest` is two rows since W27 — the served
+        # operation, and `BillingSoapClient`'s call to `${soap.billing.uri}`. They share a QName
+        # because they share a payload TYPE, which is not identity
+        "soap": 6,
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 128
+    assert sum(counts.values()) == len(report.endpoints) == 134
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -1778,8 +1813,23 @@ def test_a_streams_per_event_payload_unwraps_through_the_sse_envelope(
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
 
 
-def _messaging_rows(report: ResolveReport, protocol: str, path: str) -> list[dict]:
-    return [e for e in report.endpoints if e["protocol"] == protocol and e["path"] == path]
+def _messaging_rows(
+    report: ResolveReport, protocol: str, path: str, direction: str | None = None
+) -> list[dict]:
+    """Rows on one messaging address, optionally on one side of it.
+
+    The side became sayable with W27 (F5 §6.1): a topic a module publishes to AND
+    consumes is two rows now, where the merge used to leave one `both` row. That is the
+    self-publish/self-consume case, and it is real — which is why these rows stand and a
+    `self_exchange` question asks about them rather than a pass deciding.
+    """
+    return [
+        e
+        for e in report.endpoints
+        if e["protocol"] == protocol
+        and e["path"] == path
+        and (direction is None or e["direction"] == direction)
+    ]
 
 
 def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
@@ -1793,8 +1843,8 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
     bare parameter `sole_unannotated` would otherwise have matched too, had
     it not been excluded)."""
     _, report = resolved_fixture
-    [events] = _messaging_rows(report, "kafka", "order-events")
-    [audit] = _messaging_rows(report, "kafka", "order-audit")
+    [events] = _messaging_rows(report, "kafka", "order-events", "inbound")
+    [audit] = _messaging_rows(report, "kafka", "order-audit", "inbound")
 
     assert events["handler"] == audit["handler"]
     assert events["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
@@ -2066,26 +2116,36 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
 # --- Task 11: the producer catalogs, end to end, on real bytecode ---
 
 
-def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row(
+def test_kafka_templates_two_send_arities_dedup_into_one_outbound_row(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
     """`kafkaTemplate.send("order-events", event)` (arity 2) and
-    `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both
-    target the same topic: the two `methods` rows' own dedup key
-    (`protocol, direction, verb or "", path`) collapses them to one derived
-    outbound row before merging ever runs. That one row then merges with
-    Task 10's own `order-events` INBOUND row (`OrderEventsListener#onEvent`)
-    into `direction: both` — `merge_endpoints.sql` keeps the handler's own
-    request shape (`OrderEvent`, from `onEvent`'s signature), not whatever
-    the single_call engine derived off `event`'s own pass-through capture,
-    and gains the caller from whichever of the two send calls sorts first."""
-    _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-events")
+    `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both target the same
+    topic: the two `methods` rows' own dedup key (`protocol, direction, verb or "",
+    path`) collapses them to ONE outbound row. That dedup is within one direction and is
+    untouched by W27 — it is the "collapse only within one caller" half of F5 §6.1, which
+    was already true.
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
-    assert row["caller"].endswith("EventProducers#send(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    What W27 changed is what happens next. This row used to be folded into Task 10's own
+    `order-events` INBOUND row (`OrderEventsListener#onEvent`) as `direction: both`. It is
+    not: the module publishing to a topic it also consumes is self-publish/self-consume,
+    which is REAL — and so is a client calling another service's copy of a shared address,
+    which is why a pass cannot decide between them. Both rows stand, each keeping its own
+    contract, and `self_exchange` asks the question.
+    """
+    _, report = resolved_fixture
+    [inbound] = _messaging_rows(report, "kafka", "order-events", "inbound")
+    [outbound] = _messaging_rows(report, "kafka", "order-events", "outbound")
+
+    assert inbound["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert inbound["caller"] is None
+    assert outbound["caller"].endswith("EventProducers#send(sig_b2a754d9).")
+    assert outbound["handler"] is None
+    # The handler's own request shape, off `onEvent`'s signature — no longer "the shape
+    # the merge kept", just the shape its own row always had.
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
 
 
 def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
@@ -2094,15 +2154,16 @@ def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
     """`kafkaTemplate.send(new ProducerRecord<>("order-audit", event))`: the
     `record_wrappers` one-hop reads the topic and payload off the
     `ProducerRecord`'s own constructor call, not off `send`'s single
-    argument (the record itself). `order-audit` also merges with Task 10's
-    `onEvent` row (the SAME handler, its second `@KafkaListener` topic) —
-    both, handler + caller, on the merged row."""
+    argument (the record itself). `order-audit` is also consumed here — it is `onEvent`'s
+    second `@KafkaListener` topic, the SAME handler — so the module publishes to a topic
+    it reads back. That is two rows since W27 (F5 §6.1), not one `both` row, with a
+    `self_exchange` question naming both sides."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-audit")
+    [inbound] = _messaging_rows(report, "kafka", "order-audit", "inbound")
+    [outbound] = _messaging_rows(report, "kafka", "order-audit", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
-    assert row["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
+    assert inbound["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert outbound["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
 
 
 def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(
@@ -2142,21 +2203,26 @@ def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
     (`spring-kafka-replying.yml`), `matches.owner` being single-valued and
     `ReplyingKafkaTemplate` a different owner type from `KafkaTemplate`. No
     overload exposes the reply type at the call site, so this catalog
-    declares no `response_arg` at all; merged with Task 10's own
-    `order-returns` inbound row (`onReturn`), the surviving row keeps the
-    handler's own contract (`OrderEvent` request, `ReceiptView` response —
-    `onReturn`'s RETURN type, never the reply the `@SendTo` row already
-    covers), plus the new caller from this task."""
+    declares no `response_arg` at all. `order-returns` is also consumed here (Task 10's
+    `onReturn`), so the module sends to a topic it reads back — two rows since W27 (F5
+    §6.1), each keeping its own contract, with a `self_exchange` question naming both.
+    The handler's row carries `OrderEvent` request and `ReceiptView` response —
+    `onReturn`'s RETURN type, never the reply the `@SendTo` row already covers."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-returns")
+    [inbound] = _messaging_rows(report, "kafka", "order-returns", "inbound")
+    [outbound] = _messaging_rows(report, "kafka", "order-returns", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
-    assert row["caller"].endswith("EventProducers#sendReturn(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
-    assert json.loads(row["response_shape"])["shape_id"] == (
+    assert inbound["handler"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
+    assert outbound["caller"].endswith("EventProducers#sendReturn(sig_b2a754d9).")
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
+    assert json.loads(inbound["response_shape"])["shape_id"] == (
         "com/acme/orders/contracts/ReceiptView#"
     )
+    # The catalog declares no `response_arg`, so the CALLING side states no reply type —
+    # which used to be invisible, the merge having kept the handler's answer for both.
+    assert outbound["response_shape"] is None
 
 
 def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
@@ -2328,9 +2394,10 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
     override inside an otherwise-outbound catalog. Both
     `pubSubTemplate.publish("order-notifications", event)` and
     `NotificationsSubscriber#subscribe`'s `subscribeAndConvert(...)` target
-    the same topic, so they merge into ONE `both` row — the only Task 11
-    merge where BOTH sides are new in this same task (every other merge
-    target already existed as a Task 10 inbound row). The typed subscribe's
+    the same topic. They used to fold into ONE `both` row; since W27 (F5 §6.1) they are
+    two, because a module publishing to a subscription it also consumes is real and so is
+    a client calling somebody else's copy of one address — and the evidence does not
+    separate them, so `self_exchange` asks. The typed subscribe's
     own payload capture is its trailing `OrderEvent.class` literal, read at
     `body_arg` (review round 1, finding 1: an earlier draft read it into
     `response_arg` instead, which put the SUBSCRIBER'S received payload in
@@ -2340,14 +2407,16 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
     `spring-kafka.yml`/`spring-jms.yml`/`spring-sqs.yml`'s own inbound rows,
     never `response_shape`, on the surviving inbound-owned row."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "pubsub", "order-notifications")
+    [inbound] = _messaging_rows(report, "pubsub", "order-notifications", "inbound")
+    [outbound] = _messaging_rows(report, "pubsub", "order-notifications", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
-    assert row["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
-    assert row["resolution"] == "resolved"
-    assert row["response_shape"] is None
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    assert inbound["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
+    assert outbound["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
+    assert inbound["resolution"] == "resolved"
+    assert inbound["response_shape"] is None
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
 
 
 def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present(
@@ -2369,19 +2438,27 @@ def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_ca
 
     Kept as a pin after 2E-prep's `catalog_id` collapse (`_owns` now reads
     `endpoint["catalog_id"] == catalog.id`, no direction reasoning at all,
-    `_owned_directions` deleted): the merged `both` row keeps the inbound
-    side's `catalog_id`, which with only `spring-pubsub.yml` loaded is this
-    same catalog, so ownership stays trivially true and `OrderEvent` keeps a
-    real `shapes` row behind it — proving the collapse didn't quietly
-    reintroduce the masked-by-luck gap."""
+    `_owned_directions` deleted): with only `spring-pubsub.yml` loaded, the row is this
+    same catalog's, so ownership stays trivially true and `OrderEvent` keeps a real
+    `shapes` row behind it — proving the collapse didn't quietly reintroduce the
+    masked-by-luck gap.
+
+    *The row read `direction: both` until W27 (F5 §6.1). The INBOUND row is the one this
+    test is about — the per-row `direction: inbound` override inside an otherwise-outbound
+    catalog is the whole subject — and it is now that row directly rather than a merged
+    one carrying the override's side.*"""
     catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-pubsub")
     workspace, report = _resolved_fixture(tmp_path, catalogs=_Catalogs([catalog]))
-    [row] = [e for e in report.endpoints if e["path"] == "order-notifications"]
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["path"] == "order-notifications" and e["direction"] == "inbound"
+    ]
     shape_id = json.loads(row["request_shape"])["shape_id"]
     shapes = {s["shape_id"] for s in workspace.query("shapes")}
     workspace.close()
 
-    assert row["direction"] == "both"
+    assert row["direction"] == "inbound"
     assert shape_id in shapes
 
 
@@ -3012,7 +3089,11 @@ def test_the_format_ladder_answers_every_live_row(
     # fixture loads no `declared_shape` facts (comment above `len(report.
     # endpoints) == 122`), so its one row never reaches this table; pinned
     # instead in `tests/e2e/test_vertical_slice.py`.
-    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 5
+    # 6 since W27 (F5 §6.1): `{...}placeOrderRequest` is two rows — the operation this
+    # module serves, and `BillingSoapClient`'s call to `${soap.billing.uri}`, which the
+    # merge published as one endpoint because they compose the same QName off the same
+    # payload type.
+    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 6
 
     # Rung 2 — every HTTP route that declares a media type at all, in either
     # of the two ways a route can. THREE declare it on a mapping ANNOTATION;
@@ -3062,6 +3143,18 @@ def test_the_format_ladder_answers_every_live_row(
         ("kafka", "inbound", None, "order-escalations"),
         ("kafka", "inbound", None, "order-polymorphic"),
         ("kafka", "inbound", None, "raw-.*"),
+        # The three W27 added, and they are the item's own point made twice over. This
+        # fixture configures a JSON producer and a PROTOBUF consumer deliberately, and
+        # these three topics are the ones it both publishes to and consumes. As merged
+        # `both` rows they answered `json` at rung 2, off a `produces` the merge had
+        # carried across from the outbound twin it deleted — so the consumer's configured
+        # protobuf deserializer, which is a direct statement about the INBOUND side, was
+        # never consulted. Each row now answers off its own evidence: the producer
+        # declares JSON, the consumer reads protobuf, and the disagreement is visible
+        # instead of laundered into one confident wrong answer.
+        ("kafka", "inbound", None, "order-audit"),
+        ("kafka", "inbound", None, "order-events"),
+        ("kafka", "inbound", None, "order-returns"),
         ("kafka", "inbound", None, "raw-t1"),
         ("kafka", "inbound", None, "raw-t2"),
         ("kafka", "inbound", None, "stream-orders"),
@@ -3069,17 +3162,20 @@ def test_the_format_ladder_answers_every_live_row(
         # channel is knowable even where its address is not.
         ("kafka", "inbound", None, None),
     }
-    # 12 rows, not 10 keys: `order-polymorphic` and the NULL-path identity
-    # each carry two rows that differ only in their handler and payload.
-    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 12
-    # Every other kafka row is rung 2's, off the producer stamp — including
-    # the three merged `both` rows, whose `produces` exists only because the
-    # merge carried it off the twin it deleted.
+    # 15 rows, not 12 keys: `order-polymorphic` and the NULL-path identity each carry two
+    # rows that differ only in their handler and payload. 12 became 15 with W27 (F5 §6.1)
+    # — the inbound halves of the three self-published topics, which used to be merged
+    # rows answering `json` off the producer's stamp.
+    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 15
+    # Every other kafka row is rung 2's, off the producer stamp.
     assert {
         answer for key, answer in answers.items() if key[0] == "kafka" and key not in protobuf
     } == {("json", "resolved")}
+    # The OUTBOUND halves of the three self-published topics, which do carry the
+    # producer's `application/json` because it was stamped on their own rows rather than
+    # carried onto somebody else's.
     assert {
-        answers[("kafka", "both", None, path)]
+        answers[("kafka", "outbound", None, path)]
         for path in ("order-audit", "order-events", "order-returns")
     } == {("json", "resolved")}
 
@@ -3118,7 +3214,9 @@ def test_the_format_ladder_answers_every_live_row(
     # reach the same rung, whether or not their payload TYPE could be expanded — which
     # is the point: the format ladder answers off the declared type, and three of these
     # four have a type nothing here can open.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 56
+    # + 1 (W27): `POST /v1/orders` is two rows, and the outbound half is a json-bodied
+    # http row reaching the same rung its inbound twin does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 57
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
@@ -3131,13 +3229,25 @@ def test_the_format_ladder_answers_every_live_row(
     # Their `accept`/`contentType` predicates are readable now, so rung 2
     # answers them — a row leaving rung 6 for a DECLARATION is the ladder
     # working, and the only three rows in the fixture that could move.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
+    # + 1 (W27): the SOAP call to `${soap.billing.uri}` is its own row now. It was
+    # merged into the served operation's, and the merge took the WEAKER of the two
+    # format markers — so the served row read `unresolved` on the strength of its
+    # caller's silence. Both rows are `unresolved` here for their own reasons, which is
+    # one more row and one less laundering.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 29
 
-    # No rung saw two answers for one row anywhere in this fixture, so the
-    # ledger holds no `format_conflict` at all — every row in it is the
-    # parse binding's own (2G design §6's other question kind).
+    # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
+    # no `format_conflict` at all.
+    #
+    # `self_exchange` joins it with W27 (F5 §6.1) — the six identities this module both
+    # serves and calls, which used to be merged away. Three of them are the kafka topics
+    # above, and they are worth reading together: the producer declares JSON and the
+    # consumer is configured for protobuf, so the question a reader now gets ("are these
+    # the same endpoint?") sits beside two rows that visibly disagree about the wire.
+    # The merged row had one format and no question.
     assert {str(row["question"]) for row in workspace.query("open_questions")} == {
-        "payload_binding"
+        "payload_binding",
+        "self_exchange",
     }
 
 

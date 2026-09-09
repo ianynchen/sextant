@@ -378,14 +378,17 @@ def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
     assert [(r["method"], r["path"]) for r in rows] == [(None, "order-events")]
 
 
-def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
-    """D02D Task 3's core invariant: a NULL-verb wire identity must dedup and
-    merge exactly like every HTTP identity does. Plain SQL equality treats
-    `NULL = NULL` as unknown, so before the fix: re-deriving the same
-    NULL-method inbound row twice would double it, deriving the same
-    NULL-method outbound row twice via `call_endpoints` would double it too,
-    and `merge_endpoints.sql`'s join from outbound back to inbound would
-    never find its NULL-method twin to fold into `both`."""
+def test_null_method_rows_dedup_on_the_same_identity(tmp_path: Path):
+    """D02D Task 3's core invariant: a NULL-verb wire identity must dedup exactly like
+    every HTTP identity does, WITHIN its own direction. Plain SQL equality treats
+    `NULL = NULL` as unknown, so before the fix re-deriving the same NULL-method inbound
+    row twice would double it, and deriving the same NULL-method outbound row twice via
+    `call_endpoints` would double it too.
+
+    *It also covered `merge_endpoints.sql`'s join from outbound back to inbound finding
+    its NULL-method twin. There is no such join since W27 (F5 §6.1): the two directions
+    are never folded together, and the topic below — a module publishing to a topic it
+    also consumes — is the self-publish case `test_self_exchange.py` now asks about.*"""
     _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
@@ -421,12 +424,12 @@ def test_null_method_rows_dedup_and_merge_on_the_same_identity(tmp_path: Path):
     for _ in range(2):
         workspace.derive("call_endpoints", rows=[outbound_row])
 
-    workspace.derive("endpoints_merge")
     rows = workspace.query("endpoints")
     workspace.close()
 
-    assert [(r["direction"], r["method"], r["path"]) for r in rows] == [
-        ("both", None, "order-events"),
+    assert sorted((str(r["direction"]), r["method"], str(r["path"])) for r in rows) == [
+        ("inbound", None, "order-events"),
+        ("outbound", None, "order-events"),
     ]
 
 
@@ -471,11 +474,16 @@ def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
     }
 
 
-def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
-    """2E-prep spec §1a: `merge_endpoints.sql` UPDATEs the inbound row in
-    place and only DELETEs the outbound one, so a `both` row keeps the
-    INBOUND side's `catalog_id` even though the outbound side was derived by
-    a different catalog."""
+def test_each_direction_keeps_the_catalog_id_that_derived_it(tmp_path: Path):
+    """`catalog_id` is provenance, not identity (D01 §3): it names the catalog whose
+    rules produced THIS row.
+
+    This used to be a statement about the merge — `merge_endpoints.sql` updated the
+    inbound row in place and deleted the outbound one, so the surviving `both` row kept
+    the inbound side's id and the outbound catalog's provenance was gone with its row.
+    Since W27 (F5 §6.1) neither row is deleted, so each keeps the id of the catalog that
+    actually derived it, which is what the column has always claimed to mean.
+    """
     _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
@@ -503,11 +511,13 @@ def test_merge_keeps_the_inbound_rows_catalog_id(tmp_path: Path):
         "catalog_id": "cat-out",
     }
     workspace.derive("call_endpoints", rows=[outbound_row])
-    workspace.derive("endpoints_merge")
     rows = workspace.query("endpoints")
     workspace.close()
 
-    assert [(r["direction"], r["catalog_id"]) for r in rows] == [("both", "cat-in")]
+    assert sorted((str(r["direction"]), str(r["catalog_id"])) for r in rows) == [
+        ("inbound", "cat-in"),
+        ("outbound", "cat-out"),
+    ]
 
 
 def test_the_endpoints_ordering_breaks_a_full_tie_on_caller(tmp_path: Path):

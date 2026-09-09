@@ -2285,7 +2285,7 @@ is always `compiler`.
 
 **Ordering (§3): NOT in the runs-last group.** A scheduled declaration is a fact of the
 declaring class, not an enrichment of a row another engine minted — and its table is
-untouched by `endpoints_reset` and by the merge, so it could not participate in either.
+untouched by `endpoints_reset`, so it could not participate in it.
 
 **These rows are deliberately not roots, and the omission is SCOPED rather than permanent.**
 [D00](D00-fact-schema.md) §4 documents a `root_kind` set whose members include `scheduled`,
@@ -2375,12 +2375,10 @@ long-poll. It changes protocol, never direction, and it never creates an endpoin
 
 **Execution amendment (Phase 2H): it is not an engine in the §3 runs-last group, and it
 does not "run last with `config_join`".** That sentence predates resolve passes. It ships
-as a post-merge resolve pass (`resolve/protocol_hint.py`, the 2G `format.py` precedent),
-and the pipeline order is: engines including their merge → `parse_binding` →
-**`protocol_hint`** → the format ladder. Both sides of that position are the pass's own
-contract. AFTER the merge, because every row must exist and a merged `both` row must
-already BE one row, so it reclassifies wholesale — one identity in, one identity out.
-BEFORE the ladder, because rung 1 reads `protocol` directly, so a row answered before it
+as a resolve pass (`resolve/protocol_hint.py`, the 2G `format.py` precedent), and the
+pipeline order is: engines → `parse_binding` → **`protocol_hint`** → `self_exchange` → the
+format ladder. Both sides of that position are the pass's own contract. AFTER the engines,
+because every row must exist before one can be reclassified. BEFORE the ladder, because rung 1 reads `protocol` directly, so a row answered before it
 was reclassified would carry the format of a protocol it no longer has. It stays
 catalog-declared: the vocabulary below is the whole of what it knows.
 
@@ -2393,9 +2391,9 @@ protocol_hint:
 ```
 
 **Three promises, and they are the whole contract.** (1) It changes `protocol`, never
-`direction` — direction is resolved at match time (§2c) and the inbound/outbound merge has
-already run, so a pass that moved direction afterwards would silently corrupt a `both` row
-the merge had already built. (2) It never creates or deletes an endpoint; the row count is
+`direction` — direction is resolved at match time (§2c), and a pass that moved it here
+would move a row out from under the question `self_exchange` is about to ask, which reads
+both directions on one identity (F5 §6.1). (2) It never creates or deletes an endpoint; the row count is
 identical before and after. (3) It only ever moves a row of the SOURCE protocol its own
 catalog declares — the block is scoped by the catalog's own `protocol` field, so an HTTP
 catalog can only reclassify HTTP rows and the graphql, websocket and messaging rows no
@@ -2410,14 +2408,14 @@ no media at all and still be a stream.
   is deliberately narrower than the format ladder's rung 2, which folds both media columns
   into one answer. `format` describes one wire and both columns describe it; a PROTOCOL
   hint is the narrower claim *this channel IS an event stream*, and only `produces` can
-  evidence it. On an inbound row it is what the route streams back; carried onto a merged
-  `both` row from the outbound twin the merge deleted, it is what a caller expects to
-  receive — evidence either way. `consumes`, on ANY row, means "this accepts event-stream
-  REQUEST BODIES", and a channel is not named after what it eats. Reading `consumes` on a
-  client-side row was tempting and is refused anyway: after the merge the column's
-  PROVENANCE is gone (the merge coalesces, keeping the surviving inbound row's own value
-  first), so a `both` row's `consumes` may be either half's and nothing on the row says
-  which. One column, one meaning.
+  evidence it. On an inbound row it is what the route streams back; on an outbound
+  one it is what a caller expects to receive — evidence either way. `consumes`, on ANY
+  row, means "this accepts event-stream REQUEST BODIES", and a channel is not named after
+  what it eats. Reading `consumes` on a client-side row (where it is what the client
+  RECEIVES) is refused for that reason alone since W27 deleted the merge: the ambiguity
+  that used to make it unreadable — a merged row's `consumes` being either half's, with
+  nothing saying which — is gone, and the rule stays because one column with one meaning
+  is worth more than the outbound case it gives up, which no shipped catalog produces.
 - **`hint_returns` matches a marker type appearing ANYWHERE in the handler's return
   type** — the outer symbol, or any symbol reachable through nested type arguments, to any
   depth. Both halves of that rule are load-bearing because the two real shapes sit at
@@ -2830,9 +2828,9 @@ declared class — what MIME type it implies, and what is actually on the wire �
 key sets deliberately differ**. A schema-registry serializer has no MIME string anyone
 registered, so it appears in `format_from` and not in `values`: it stamps no media and
 answers rung 3 instead, which is the more honest of the two answers. The reverse also
-holds. A merged `both` row is covered by rules for **either** direction — it is one
-identity the module both exposes and calls — and where the two halves' configured classes
-mean different formats, that is a real disagreement about one wire, recorded as a
+holds. Where a module both exposes and calls one identity the two rows stand apart (F5
+§6.1, W27), each covered by the rules for its own direction — and where their configured
+classes mean different formats, that is a real disagreement about one wire, recorded as a
 `format_conflict` rather than resolved.
 
 **`parse_calls` — read by the payload-binding pass, not by the ladder.** It says which
@@ -3326,10 +3324,16 @@ method's return value — reaches no rung and is a named gap, not a guess.
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
 then outbound, then the styles that ENRICH what those produced — `config_join` and
-`schema_operations`. Inbound precedes outbound so that a path a module both
-exposes and calls merges into one endpoint with direction `both` rather than appearing
-twice. The enriching styles come after both, whatever direction their own catalog file
-declares, because a stamp cannot reach a row that does not exist yet.
+`schema_operations`. **Inbound no longer precedes outbound to make them merge** (F5 §6.1,
+W27): a path a module both exposes and calls now keeps two rows, and
+`resolve/self_exchange.py` files a `self_exchange` question naming each side and its
+address. Merging asserted that the thing called IS the thing served, which is a claim about
+the far end of a call; it keyed on `(protocol, method, path)` and `peer` is not part of
+endpoint identity (RC-5), so the fixture's call to `${soap.billing.uri}` was published as
+the module's own served operation. The order between the two directions is now merely the
+order they were written. The enriching styles still come after both, whatever direction
+their own catalog file declares, because a stamp cannot reach a row that does not exist
+yet.
 
 `schema_operations` is in that group for the same reason twice over: it stamps a declared
 response shape onto rows other engines minted, and its OWN rows meet §5's insert-if-absent
@@ -3466,7 +3470,8 @@ and be read straight back out of the same workspace.
   both Java and Kotlin.
 - **No ordering requests.**
 - **No conditional logic across catalogs.** Two catalogs may both match; both produce
-  endpoints, and duplicates merge on wire identity.
+  endpoints, and duplicates on one identity IN ONE DIRECTION dedup. The two directions are
+  never folded together (F5 §6.1).
 
 ---
 

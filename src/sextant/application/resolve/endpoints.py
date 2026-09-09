@@ -139,13 +139,20 @@ def derive_endpoints(
             skipped.append(SkippedCatalog(catalog.id, (unmet,)))
             continue
         engine(workspace, catalog)
-    # Once per resolve, after every catalog: a wire identity present in both
-    # directions collapses to one row, direction `both` (D02 §3).
-    # F4 §5.2 (W24): a dependency's rows go before the merge folds them together with
-    # this module's own. After it, a sibling serving an address this module CALLS would
-    # take the module's outbound row with it — see the statement's own header.
+    # Once per resolve, after every catalog. F4 §5.2 (W24): a sibling module's own
+    # rows are this module's to drop, never to publish.
+    #
+    # **A wire identity present in BOTH directions is no longer collapsed into one row**
+    # (F5 §6.1, W27). It was, and the merged row asserted an identity nothing had
+    # observed: measured on this repo's fixture, the `both` row for
+    # `{http://orders.example.com/ws}placeOrderRequest` carried `peer:
+    # ${soap.billing.uri}` — the module's own served operation and a call to the BILLING
+    # service, published as one endpoint — and `POST /v1/orders` merged the module's own
+    # handler with a call to `orders-loop`. The merge keyed on
+    # `(protocol, method, path)` and `peer` is not part of endpoint identity (RC-5), so
+    # a path this module serves collided with the same path anywhere else in the world.
+    # The two rows now stand, and `record_self_exchange` asks the question instead.
     workspace.derive("borrowed_endpoints_drop")
-    workspace.derive("endpoints_merge")
     return skipped
 
 

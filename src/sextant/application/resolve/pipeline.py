@@ -12,6 +12,7 @@ from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
+from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
@@ -128,6 +129,12 @@ def resolve(
     # row answered before it was reclassified would carry the format of a
     # protocol it no longer has.
     apply_protocol_hints(workspace, declared)
+    # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
+    # question-filing passes: `protocol` is part of the identity this question names,
+    # and that pass reclassifies it on rows other engines minted. Filed above this line,
+    # a question would name a wire the endpoint no longer speaks — the same defect the
+    # roots pass was moved down to fix. Above the reset it would simply be erased.
+    record_self_exchange(workspace)
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns
     # and `scheduled_work.handler`, and every one of those is final only here.

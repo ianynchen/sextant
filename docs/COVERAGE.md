@@ -353,7 +353,8 @@ module today produces:
   configuration), and its request and response payload descriptors; `shapes`/`shape_fields`
   holding every reachable payload field by field — wire name, wire type and format, `required`,
   `nullable`, trust fields — with known types mapped and expansion stopping visibly at unknown
-  ones. A path the module both exposes and calls is one endpoint, direction `both`. Since
+  ones. A path the module both exposes and calls is TWO endpoints with a `self_exchange`
+  question naming both sides (F5 §6.1, W27); `both` is reserved for the linking tier. Since
   Phase 2I the same table also holds SOAP operations — `@PayloadRoot`/`@SoapAction`,
   `@WebService`/`@WebMethod` in both spellings, `WebServiceTemplate` calls and generated
   client stubs, plus every operation a `.wsdl` declares — verblessly, at their QName.
@@ -422,10 +423,10 @@ than silently absent:
 | Anything declared inside a dependency jar nobody named | a jar's own bytecode is scanned only where `.sextant.yml` opts it in, per library; the dependency tree is never walked, because scanning everything reachable publishes every framework's annotated types as this module's endpoints ([D04](components/D04-config-and-exclusion.md) §2a) | opt-in, per library |
 | The response payload of a SOAP operation read from a WSDL | operations are marked from their INPUT elements only, so a schema-first row's response is honestly NULL rather than joined to a guessed output message (§5.3) | the phase that reads the output side |
 
-Two honesty caveats also ride every output: a merged `both` endpoint keeps only the
-handler's declared contract (`merged_endpoints_keep_only_the_handlers_contract`), and —
-even though endpoint request/response contracts are scoped to the catalog that produced
-them — a payload type reachable from several catalogs is still expanded once, under
+One honesty caveat also rides every output — there were two until W27 retired
+`merged_endpoints_keep_only_the_handlers_contract`, which closed when the merge that
+discarded the client's contract was deleted. Even though endpoint request/response
+contracts are scoped to the catalog that produced them, a payload type reachable from several catalogs is still expanded once, under
 whichever catalog's rules reach it first, not necessarily the ones that produced the
 endpoint referencing it (`shape_rules_unscoped_to_the_producing_catalog`). The shipped
 catalogs do not declare identical rules, so a wrapper type one of them unwraps and
@@ -799,6 +800,45 @@ that is why the module fact carries `sibling_coordinates` and the guardrail keys
 documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
 discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
+
+### 3a-v. Serving and calling one identity is a question, not one row (F5 §6.1)
+
+A wire identity a module both exposed and called used to collapse into a single row with
+`direction: both`, keeping the handler and carrying the caller and its address onto it.
+That asserts the thing called IS the thing served — a claim about the far end of a call,
+which is the one thing a module's own bytecode cannot show. And the merge keyed on
+`(protocol, method, path)` alone, because **`peer` is not part of endpoint identity**
+(RC-5), so a path this module serves collided with the same path anywhere in the world.
+
+**Measured on the orders-service fixture: six merged rows, two of them wrong.**
+
+| Merged row | What the single row said | What is actually there |
+|---|---|---|
+| `{http://orders.example.com/ws}placeOrderRequest` | one endpoint, `peer: ${soap.billing.uri}` | the module SERVES this operation, and separately CALLS the billing service; they share a QName because they share a payload type, which is not identity |
+| `POST /v1/orders` | one endpoint, `peer: orders-loop` | served here; called at `orders-loop`, which is somewhere else |
+| `order-events`, `order-audit`, `order-returns`, `order-notifications` | one endpoint, no peer | genuinely self-publish/self-consume — the case that made the merge look right |
+
+The six rows became twelve (141 endpoints to 147), and `resolve/self_exchange.py` files a
+`self_exchange` open question naming each side and the address it reaches.
+
+**It is asked rather than answered because both readings are real and the evidence does not
+separate them.** A service that publishes to a topic and reads it back genuinely is one
+identity in both directions; a client calling another service's copy of a path this module
+also serves genuinely is two. Curation or the linking tier — where a schema match or a
+person can justify the claim — decides. `Direction.BOTH` stays in D00 §4 for that tier and
+**no pass here produces it**.
+
+**One gap retired by name** (spec ruling I3):
+`merged_endpoints_keep_only_the_handlers_contract` said a path the module both exposes and
+calls keeps only the handler's declared contract, discarding the client's where the two
+differ. There is no merge to discard it any more — each row keeps its own — so the gap is
+gone rather than narrowed, and nothing takes its place.
+
+**The other half of F5 §6.1 was already true**, which measuring first is what showed:
+"outbound is never merged — one row per (caller, target), collapse only within one caller"
+is what `derive_endpoints.sql`'s `unioned` already does. Its `GROUP BY ALL` includes
+`caller` and `peer`, so two callers reaching one path have always been two rows, and no
+other pass merges outbound rows.
 
 ### 3a-iv. A payload whose contract is in its accessors, not its fields (F4 §5.2)
 
@@ -1192,14 +1232,19 @@ coverage:
   module that uses a JSON converter through code alone — no annotation from its package
   family anywhere — reads `unresolved` where the converter is in fact on the classpath.
   Presence evidence, honestly narrow.
-- **A merged `both` row carries ONE format column, and it can hide a per-direction split.**
-  Wire identity is one row; format is one column on it. Where a module both consumes and
-  produces one destination with different serializers configured per direction, the ladder's
-  rung order decides what that single column says — and a higher rung answering first (a
-  media type carried through the merge, say) settles it before the serializer rung is ever
-  consulted, so the other direction's configured format never appears. That is the rung
-  order working as specified, not a defect, but a reader must not read a merged row's
-  `format` as a statement about both directions.
+- **~~A merged `both` row carries ONE format column, and it can hide a per-direction
+  split.~~ Retired by W27** (F5 §6.1). This caveat said that where a module both consumes
+  and produces one destination with different serializers configured per direction, the
+  ladder's rung order decides what the single column says — a media type carried through
+  the merge settling it before the serializer rung is consulted — and that a reader must
+  not read a merged row's `format` as a statement about both directions. It was not a
+  hypothetical: this repo's own fixture publishes JSON to `order-events`/`order-audit`/
+  `order-returns` and consumes **protobuf** from them, and the merged rows all read
+  `json`, because the producer's `application/json` was carried onto the inbound half and
+  answered at rung 2 before the consumer's configured deserializer was reached. There is
+  no merged row now — each direction is its own row and answers off its own evidence, so
+  the outbound halves read `json`, the inbound halves read `protobuf`, and the
+  disagreement is on the page instead of behind one confident answer.
 - **A source-origin declared shape is a fact, and stays one until something references
   it.** A `.avsc` the build never compiles produces its shape keyed by the schema's own full
   name; an endpoint payload is keyed by the generated class it travels as. Nothing joins the
@@ -2577,7 +2622,7 @@ producer; the third does not, and this is where a reader meets that.
 
 | Root kind | Produced from | State |
 |---|---|---|
-| `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a merged `both` row keeps its trace | ✅ shipped. 77 handler-bearing rows are 77 root rows and 66 roots on the orders-service fixture: a root is a place a walk starts, not an address, and the row carries the address so a reader can find the walk by the URL they know |
+| `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a `both` row from the linking tier would keep its trace; no pass here writes one since W27 | ✅ shipped. 77 handler-bearing rows are 77 root rows and 66 roots on the orders-service fixture: a root is a place a walk starts, not an address, and the row carries the address so a reader can find the walk by the URL they know |
 | `scheduled` | every `scheduled_work` handler | ✅ shipped. The user's own ruling — a scheduled job still contains business logic — and the reason `I1` was promoted out of paperwork |
 | `entry_point` | nothing | **Boundary — the member exists and no producer writes it.** Which signature starts a program is a rule of a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the language-blind half: the descriptor a runtime looks for belongs in a catalog exactly as a framework's annotation does, and no catalog declares one. Matching on a method's NAME alone would derive a root for any method that happens to be called that. **Falsified by** a module whose only starting point is a `main` producing no trace at all. **Closes with** a catalog declaring the entry-point signature — `docs/open-issues.md` OI-22 |
 

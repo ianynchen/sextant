@@ -597,8 +597,15 @@ def test_messaging_gap_retires_and_both_lists_rotate_together():
     assert "sequence_diagrams_pending_call_graph" not in KNOWN_GAPS
     assert "call_graph_not_implemented" not in KNOWN_GAPS
     assert not any("await the call graph" in gap for gap in _GAPS if "Reactive" not in gap)
-    assert len(KNOWN_GAPS) == 17
-    assert len(_GAPS) == 17
+    # Seventeen became sixteen with W27 (F5 §6.1), a retirement with nothing taking its
+    # place: `merged_endpoints_keep_only_the_handlers_contract` said a path the module
+    # both exposes and calls keeps only the handler's declared contract. There is no
+    # merge to discard the client's any more — the two rows stand and each keeps its
+    # own — so the gap is gone rather than narrowed.
+    assert "merged_endpoints_keep_only_the_handlers_contract" not in KNOWN_GAPS
+    assert not any("keeps only the handler" in gap for gap in _GAPS)
+    assert len(KNOWN_GAPS) == 16
+    assert len(_GAPS) == 16
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 

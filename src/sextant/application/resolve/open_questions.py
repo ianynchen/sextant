@@ -77,6 +77,24 @@ QUESTIONS = (
     # subscriber back is ordinary code whose caller may well start it, and answering
     # "no boundary" would swap a fabrication for a silent false negative.
     "registration_activation",
+    # F5 §6.1 (W27). One wire identity this module both SERVES and CALLS. Candidates:
+    # the served side's handler, and each calling side's caller with the address it
+    # reaches.
+    #
+    # It replaces a merge, not a silence. These two rows used to collapse into one
+    # `direction: both` row, which asserts that the thing served and the thing called
+    # are the same endpoint — a claim about the far end of a call, which is the one
+    # thing a module's own bytecode cannot show. The merge keyed on
+    # `(protocol, method, path)`, and `peer` is not part of endpoint identity (RC-5), so
+    # the fixture's `${soap.billing.uri}` call collided with the module's own served
+    # operation on a shared payload QName.
+    #
+    # It is asked rather than answered because BOTH answers are real and the evidence
+    # does not separate them: a service that publishes to a topic and consumes it back
+    # genuinely is one identity in both directions, while a client calling another
+    # service's copy of a path this module also serves genuinely is two. Curation or the
+    # linking tier decides; a pass that decided here would be guessing at the far end.
+    "self_exchange",
 )
 
 

@@ -214,24 +214,46 @@ def test_an_outbound_row_contributes_no_root(
     assert callers & {str(row["handler"]) for row in roots} == set()
 
 
-def test_a_both_row_is_still_a_root_because_the_module_serves_it(
+def test_no_pass_writes_a_both_row_any_more(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
-    roots: list[dict[str, object]],
 ):
-    """The half of the direction rule that would break under `= inbound`. A
-    `both` row is one wire identity the module exposes AND calls (D02 §3's
-    merge); it keeps the server's handler, so the module really does serve it
-    and a trace really does start there. Testing `<> outbound` rather than
-    `= inbound` is what keeps those six rows from silently losing their
-    traces."""
+    """F5 §6.1 (W27). Six of this fixture's rows used to merge into `direction: both`, and
+    the merge that made them is gone: a wire identity the module both serves and calls is
+    two rows now, with a `self_exchange` question beside them.
+
+    Stated here, out loud, for the reason `test_no_root_is_recorded_for_a_kind_nothing_
+    produces` states its own: `Direction.BOTH` stays in D00 §4 for the linking tier, so a
+    reader of the enum cannot tell from it that nothing at this tier writes one."""
     workspace, _ = resolved_fixture
-    merged = {
-        str(row["handler"])
-        for row in workspace.query("endpoints")
-        if row["direction"] == "both" and row["handler"] is not None
-    }
-    assert merged, "positive control: the fixture merged no row into `both`"
-    assert merged <= {str(row["handler"]) for row in roots}
+
+    assert [row for row in workspace.query("endpoints") if row["direction"] == "both"] == []
+
+
+def test_a_both_row_is_still_a_root_because_the_module_serves_it(tmp_path: Path):
+    """The half of the direction rule that would break under `= inbound`, kept alive
+    against a hand-built row now that no pass writes one.
+
+    A `both` row is one wire identity the module exposes AND calls; it names the server's
+    handler, so the module really does serve it and a trace really does start there.
+    Testing `<> outbound` rather than `= inbound` is what will keep the linking tier's
+    rows — the only ones that can justify the claim — from silently losing their traces
+    the day that tier lands. Built here rather than measured off the fixture because the
+    test above is what says the fixture has none.
+    """
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    handler = _MODULE + "com/acme/orders/OrderController#create(sig_00000000)."
+    workspace._connection.execute(
+        "INSERT INTO endpoints (protocol, direction, method, path, handler, caller) "
+        "VALUES ('http', 'both', 'POST', '/v1/orders', ?, 'com/acme/Client#call().')",
+        [handler],
+    )
+    record_roots(workspace)
+    rows = workspace.query("roots")
+    workspace.close()
+
+    assert [(str(row["handler"]), str(row["root_kind"]), str(row["path"])) for row in rows] == [
+        (handler, str(RootKind.INBOUND_ENDPOINT), "/v1/orders")
+    ]
 
 
 def test_no_root_is_recorded_for_a_kind_nothing_produces(roots: list[dict[str, object]]):

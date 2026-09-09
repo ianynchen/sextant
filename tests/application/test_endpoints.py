@@ -3786,17 +3786,31 @@ def _two_direction_workspace(tmp_path: Path):
     return workspace
 
 
-def test_a_path_the_module_both_exposes_and_calls_is_one_endpoint_with_both(tmp_path):
-    """D02 §3: inbound runs first so the merged row keeps the server's handler
-    and gains the client's caller — appearing twice would make every consumer
-    re-implement the merge."""
+def test_a_path_the_module_both_exposes_and_calls_stays_two_endpoints(tmp_path):
+    """F5 §6.1 (W27). This used to be one row with `direction: both`, keeping the
+    server's handler and gaining the client's caller.
+
+    That row asserted the thing called IS the thing served — a claim about the far end of
+    a call, which a module's own bytecode cannot show — and it was reached by comparing
+    `(protocol, method, path)` alone, because `peer` is not part of endpoint identity
+    (RC-5). So a path this module serves collided with the same path anywhere in the
+    world. Measured on the shipped fixture, two of six merged rows were exactly that: a
+    SOAP operation merged with a call to `${soap.billing.uri}`, and `POST /v1/orders`
+    merged with a call to `orders-loop`.
+
+    The two rows now stand, each keeping its own side, and `resolve/self_exchange.py`
+    files the question (`test_self_exchange.py`). `Direction.BOTH` stays in D00 §4 for
+    the linking tier, where a schema match or a person can justify the claim.
+    """
     workspace = _two_direction_workspace(tmp_path)
     rows = [e for e in workspace.query("endpoints") if e["path"] == "/v1/orders"]
-    assert len(rows) == 1
-    [merged] = rows
-    assert merged["direction"] == "both"
-    assert merged["handler"] is not None and merged["caller"] is not None
     workspace.close()
+
+    assert sorted(str(row["direction"]) for row in rows) == ["inbound", "outbound"]
+    [inbound] = [row for row in rows if row["direction"] == "inbound"]
+    [outbound] = [row for row in rows if row["direction"] == "outbound"]
+    assert inbound["handler"] is not None and inbound["caller"] is None
+    assert outbound["caller"] is not None and outbound["handler"] is None
 
 
 def _legacy_facts(root: Path) -> None:

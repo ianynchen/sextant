@@ -138,11 +138,6 @@ _GAPS = [
         "weighed against the rest of the evidence."
     ),
     (
-        "A path the module both exposes and calls keeps only the handler's "
-        "declared contract: where the client's declaration differs, that "
-        "difference is not recorded."
-    ),
-    (
         "Endpoint request and response contracts are scoped to the catalog "
         "that produced them. Shape expansion itself is not: a payload type "
         "reachable from several catalogs is still expanded once, under "
@@ -705,10 +700,10 @@ def _format(endpoint: dict[str, object]) -> str:
     document carries no separate trust column. So `resolved` is the only
     marker that ever prints unhedged; every other non-NULL marker hedges,
     including `narrowed` and a value schema-valid but off today's live
-    surface like `partial`, and including the `merge_endpoints.sql` exception
-    where a merged row keeps a non-NULL format beside the WEAKER of its two
-    halves' markers (schema.sql's own note) — a merged row may read
-    `(protobuf, unresolved)`. Printing that plain would make an
+    surface like `partial`. It also covered the case where a row carries a
+    non-NULL format beside an `unresolved` marker — which `merge_endpoints.sql`
+    produced by taking the weaker of two halves' markers until W27 deleted it
+    (F5 §6.1), and which nothing writes today. Printing that plain would make an
     unresolved-trust value typographically identical to a resolved one,
     which is exactly what "an assumed format must never look observed" (2G
     design §5) forbids (task 8 review round 1)."""
@@ -845,6 +840,23 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # The wire leads, because the candidates render joined on one line and it
         # is the only part that differs between them.
         return f"`{candidate['protocol']}` — {candidate['class']} carries {candidate['annotation']}"
+    if question == "self_exchange":
+        # F5 §6.1 (W27): one side of a wire identity this module both serves and calls,
+        # filed by `resolve/self_exchange.py` and verified against that writer's own
+        # `candidates` line.
+        #
+        # The ADDRESS is what makes a candidate answerable, and it is the whole reason
+        # these rows stopped being merged: the fixture's SOAP pair shares a payload
+        # QName while the call goes to `${soap.billing.uri}`, and a reader cannot see
+        # that in a sentence that names only the symbols. A called side with no resolved
+        # address says so rather than reading as one that reaches nowhere.
+        # A schema-first row names no method at all — its operation is declared by a
+        # `.wsdl` or a `.proto` — so the symbol may legitimately be absent on either
+        # side, and saying so beats a sentence that trails off.
+        symbol = candidate["symbol"] or "no method here"
+        if candidate["side"] == "served":
+            return f"served here by {symbol}"
+        return f"called by {symbol} at {candidate.get('peer') or 'no resolved address'}"
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

@@ -621,9 +621,11 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # through — 88 + 1 = 89, for a 136-endpoint total (6 + 89 + 41 = 136).
     # OI-48: +1 inbound http — `POST /v1/orders/scoped` — 89 + 1 = 90, for a
     # 137-endpoint total (6 + 90 + 41 = 137).
-    # W26: +4 inbound http — the four `/v1/paged/*` routes — 90 + 4 = 94, for a
-    # 141-endpoint total (6 + 94 + 41 = 141).
-    assert rows == [("both", 6), ("inbound", 94), ("outbound", 41)]
+    # W27 (F5 §6.1): the six `both` rows are gone, and each is two rows again — 94 + 6
+    # inbound is 100, 41 + 6 outbound is 47, for a 147-endpoint total. Nothing new is
+    # derived here; six deletions stopped happening, and two of the six were joining a
+    # served operation to a call at a different address.
+    assert rows == [("inbound", 100), ("outbound", 47)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -659,9 +661,14 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
             for row in workspace.query("endpoints")
             if row["path"] is not None and str(row["path"]).startswith("parsed-")
         }
+        # This test is about the PARSE binding's questions. `self_exchange` (W27, F5
+        # §6.1) files six of its own against this fixture — the identities it both
+        # serves and calls — and they are pinned in `test_self_exchange.py` and in the
+        # rendered-document test below rather than here.
         questions = [
             (str(row["path"]), str(row["question"]), json.loads(str(row["candidates"])))
             for row in workspace.query("open_questions")
+            if str(row["question"]) == "payload_binding"
         ]
     finally:
         workspace.close()
@@ -947,8 +954,13 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
+        # Keyed on the DIRECTION as well as the path since W27 (F5 §6.1):
+        # `{...}placeOrderRequest` is two rows — the operation this module serves, and
+        # `BillingSoapClient`'s call to `${soap.billing.uri}` — where the merge used to
+        # leave one. Keyed on the path alone, whichever row came second would silently
+        # replace the other.
         soap = {
-            str(row["path"]): row
+            (str(row["path"]), str(row["direction"])): row
             for row in workspace.query("endpoints")
             if row["protocol"] == "soap"
         }
@@ -964,18 +976,22 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     # task's one schema-first row, and — since Task 6 — the one operation that
     # reaches the graph from a jar rather than from a source file.
     assert set(soap) == {
-        "{http://orders.example.com/ws}placeOrderRequest",
-        "{http://orders.example.com/ws}quoteOrderRequest",
-        "http://orders.example.com/action/cancelOrder",
-        "{http://billing.example.com/ws}chargeOrder",
-        "{http://billing.example.com/ws}refund",
-        "{http://billing.example.com/ws}stubCharge",
-        "{http://soap.orders.example.com/}legacyCharge",
+        ("{http://orders.example.com/ws}placeOrderRequest", "inbound"),
+        # W27: the call `BillingSoapClient#place` makes to `${soap.billing.uri}`. It was
+        # merged into the served row above on the strength of a shared QName — which the
+        # two compose from the same payload TYPE, not from a shared identity.
+        ("{http://orders.example.com/ws}placeOrderRequest", "outbound"),
+        ("{http://orders.example.com/ws}quoteOrderRequest", "inbound"),
+        ("http://orders.example.com/action/cancelOrder", "inbound"),
+        ("{http://billing.example.com/ws}chargeOrder", "inbound"),
+        ("{http://billing.example.com/ws}refund", "inbound"),
+        ("{http://billing.example.com/ws}stubCharge", "outbound"),
+        ("{http://soap.orders.example.com/}legacyCharge", "inbound"),
     }
-    schema_first = [path for path, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
-    assert schema_first == ["{http://orders.example.com/ws}quoteOrderRequest"]
+    schema_first = [key for key, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
+    assert schema_first == [("{http://orders.example.com/ws}quoteOrderRequest", "inbound")]
 
-    quote = soap["{http://orders.example.com/ws}quoteOrderRequest"]
+    quote = soap[("{http://orders.example.com/ws}quoteOrderRequest", "inbound")]
     assert (quote["method"], quote["direction"]) == (None, "inbound")
     assert (quote["evidence"], quote["resolution"]) == ("declared", "resolved")
     assert quote["handler"] is None and quote["caller"] is None
@@ -988,13 +1004,18 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     }
     assert quote["response_shape"] is None
     # None of the request shape's own FIELDS derives a row of its own.
-    assert not {"sku", "count", "status", "cancelledAt"} & set(soap)
+    assert not {"sku", "count", "status", "cancelledAt"} & {path for path, _ in soap}
 
     # The annotated identity kept the annotation's row — the handler symbol
     # is the thing only that side knows.
-    place = soap["{http://orders.example.com/ws}placeOrderRequest"]
+    place = soap[("{http://orders.example.com/ws}placeOrderRequest", "inbound")]
     assert place["catalog_id"] == "spring-ws"
     assert place["handler"] is not None
+    # And the call keeps its own provenance, which the merge discarded with the row it
+    # deleted: `catalog_id` names the catalog whose rules produced THIS row (D01 §3).
+    called = soap[("{http://orders.example.com/ws}placeOrderRequest", "outbound")]
+    assert called["catalog_id"] == "spring-ws-template"
+    assert called["caller"] is not None and called["handler"] is None
 
     # The shape `request_shape` self-references, expanded from the schema's
     # own field declarations (2I Task 3) — pinned once more here as the live
@@ -1007,7 +1028,7 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     ]
 
 
-def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its_address(
+def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_its_address(
     tmp_path: Path,
 ):
     """2I Task 5 (`spring-ws-template.yml`), live and whole through the real
@@ -1031,9 +1052,14 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
       expression. It lands in `peer` whole — a SOAP address is not the wire
       identity here, and half of an expression is not an address — where the
       per-environment join resolves it to a real URL per profile.
-    * THE MERGE. The module both serves and calls that operation, so D02 §3's
-      merge fires: one row, `direction: both`, the handler's own row surviving
-      with the caller and peer carried onto it and the outbound twin deleted.
+    * THE TWO ROWS, and this claim used to read "THE MERGE". The module serves that
+      QName and also calls it, and the two used to fold into one `direction: both` row
+      carrying `peer: ${soap.billing.uri}` — the module's own served operation and a call
+      to the BILLING service, published as one endpoint. They compose the same QName from
+      the same payload TYPE, which is not identity, and the merge could not tell because
+      `peer` is not part of endpoint identity (RC-5). Since W27 (F5 §6.1) both rows stand,
+      each keeping its own handler-or-caller, contract and `catalog_id`, and
+      `resolve/self_exchange.py` files the question a reader answers.
     * `jakarta-jws-client.yml` derives nothing FROM THIS MODULE'S OWN CODE,
       which is what `declared_on` is for: every `@WebService` written in this
       fixture is a CLASS, so the stub catalog claims none of them and no
@@ -1089,8 +1115,7 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     stubbed = [row for row in soap if row["catalog_id"] == "jakarta-jws-client"]
     assert [row["path"] for row in stubbed] == ["{http://billing.example.com/ws}stubCharge"]
     assert all("com.example/orders-soap-client" in str(row["caller"]) for row in stubbed)
-    # Exactly one soap row written IN THIS MODULE carries a caller, and it is
-    # the merged one.
+    # Exactly one soap row written IN THIS MODULE carries a caller.
     called = [
         row
         for row in soap
@@ -1099,15 +1124,23 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     assert len(called) == 1
     [place] = called
     assert place["path"] == "{http://orders.example.com/ws}placeOrderRequest"
-    assert place["direction"] == "both"
+    assert place["direction"] == "outbound"
     assert place["method"] is None
     assert place["resolution"] == "resolved"
-    # The handler survives the merge and the caller is carried onto it.
-    assert str(place["handler"]).endswith(
-        "com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7)."
-    )
     assert str(place["caller"]).endswith(
         "com/example/orders/soap/BillingSoapClient#place(sig_b5d0d855)."
+    )
+    assert place["handler"] is None
+    # The served operation is its own row, and the two are asked about rather than
+    # joined (W27, F5 §6.1).
+    [served] = [
+        row
+        for row in soap
+        if row["path"] == "{http://orders.example.com/ws}placeOrderRequest"
+        and row["direction"] == "inbound"
+    ]
+    assert str(served["handler"]).endswith(
+        "com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7)."
     )
     # `peer` is the expression whole, never split: `${soap.billing.uri}` has
     # no authority half to take.
@@ -1278,10 +1311,14 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     bundle = Path(result.output.strip())
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert "open_questions" in manifest["contents"]["tables"]
+    # Two `payload_binding` questions and, since W27 (F5 §6.1), six `self_exchange` ones
+    # — the identities this module both serves and calls, which used to be merged into a
+    # single row that asked nothing.
     rows = duckdb.sql(
-        f"SELECT count(*) FROM read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
-    ).fetchone()
-    assert rows == (2,)
+        "SELECT question, count(*) FROM read_parquet("
+        f"'{bundle / 'graph' / 'open_questions.parquet'}') GROUP BY 1 ORDER BY 1"
+    ).fetchall()
+    assert rows == [("payload_binding", 2), ("self_exchange", 6)]
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
