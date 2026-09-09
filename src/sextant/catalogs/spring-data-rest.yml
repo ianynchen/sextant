@@ -164,3 +164,96 @@ matches:
 # out. So are the `HEAD`/`OPTIONS` verbs Data REST also serves on every route
 # and the `/{basePath}/search` index route itself — §2b's table names neither,
 # and this catalog derives exactly that table.
+
+# D02's declared SLICE (F2 §3.8, G-45). Measured
+# (`scripts/probes/w19b_type_and_annotation_surface.md` §2): Spring Data ships 28
+# repository contracts across twelve artifacts and this roster names SIX. *The first
+# run said 24 across seven, because the artifact list was hand-picked from the gap
+# analysis's own sentence — so a store module nobody had thought of was not merely
+# uncounted, the probe's "this is a LOWER BOUND" warning could not fire for it either.*
+#
+# **Scope of every "derives nothing" below: a MODULE-LOCAL fact stream**, which is the
+# ordinary case and the one the counts above describe. `derived_resource`'s `_reach`
+# walks `_interface_declarations`, which projects interfaces out of
+# `selected_documents` — so a parent contract declared in a jar is simply not there and
+# the hop fails. A repo that declares `extract_libraries` for a Spring Data artifact
+# puts that jar's classes into the scan, and then the hop may be crossed for the
+# contracts whose parents this roster DOES name (`CassandraRepository`,
+# `ElasticsearchRepository` and `Neo4jRepository` all extend named ones). Whether
+# library symbols reach `selected_documents` in practice is NOT measured here; it is
+# named so a reader knows the boundary of the claim rather than reading it as absolute.
+#
+# **The roster is the whole rule, which is what makes this worse than an ordinary
+# gap.** A `derived_resource` match has no other evidence — a repository interface
+# mentions no HTTP anywhere — so a contract missing from the roster does not degrade a
+# row, it removes the row entirely. Every Mongo, R2DBC, Cassandra, Elasticsearch and
+# Neo4j repository in the estate derives nothing, and so does every reactive, coroutine
+# and RxJava3 one, including the ones declared in `spring-data-commons` beside the
+# contracts this roster does name.
+slice:
+  outside:
+    - owner: org.springframework.data:spring-data-commons
+      type_names: [ReactiveCrudRepository, ReactiveSortingRepository,
+                   CoroutineCrudRepository, CoroutineSortingRepository,
+                   RxJava3CrudRepository, RxJava3SortingRepository]
+      why: >
+        The reactive, coroutine and RxJava3 contracts, shipped in the SAME artifact as
+        `CrudRepository` and `ListCrudRepository` which this roster does name. Each
+        declares the same CRUD operations over a different return type, so the rule
+        that derives routes from the named ones applies unchanged — this is a roster
+        entry and a measurement of the operation names, not new engine work.
+    - owner: org.springframework.data:spring-data-commons
+      type_names: [RevisionRepository]
+      why: >
+        Spring Data Envers' revision-history contract. It declares `findRevisions` and
+        `findLastChangeRevision` rather than CRUD, so unlike the entries above it is
+        NOT a roster line plus a rerun: what routes Data REST exposes for it has never
+        been measured. Outside until it is.
+    - owner: org.springframework.data:spring-data-mongodb
+      type_names: [MongoRepository, ReactiveMongoRepository]
+      why: >
+        A boundary this catalog does NOT model, and the largest single instance: a
+        Mongo repository is an ordinary Spring Data REST resource and derives nothing.
+        Measured at 4.2.5, and the two reach DIFFERENT parents: `MongoRepository`
+        extends `ListCrudRepository` and `ListPagingAndSortingRepository`, which this
+        roster names; `ReactiveMongoRepository` extends `ReactiveCrudRepository` and
+        `ReactiveSortingRepository`, which it does not. Either way the parent is
+        reached through a jar hop the fact stream does not cross, so naming the parent
+        is not enough — the roster has to name these.
+    - owner: org.springframework.data:spring-data-r2dbc
+      type_names: [R2dbcRepository]
+      why: >
+        Same shape as the Mongo pair: a store module's own contract, reaching the
+        shared ones through a jar this analysis does not open. It extends
+        `ReactiveCrudRepository` and `ReactiveSortingRepository`, neither of which the
+        roster names either.
+    - owner: org.springframework.data:spring-data-keyvalue
+      type_names: [KeyValueRepository]
+      why: >
+        The base contract for Redis `@RedisHash` repositories, which Spring Data REST
+        exposes. It was missing from the first version of this slice because the
+        enumeration's artifact list was hand-picked and never asked for it — so it was
+        absent from the table AND from the lower-bound warning that exists to stop a
+        short list reading as an absence of gaps.
+    - owner: org.springframework.data:spring-data-ldap
+      type_names: [LdapRepository]
+      why: >
+        Same shape, and found by the same widening.
+    - owner: org.springframework.data:spring-data-couchbase
+      type_names: [CouchbaseRepository, ReactiveCouchbaseRepository]
+      why: >
+        Same shape, and found by the same widening.
+    - owner: org.springframework.data:spring-data-cassandra
+      type_names: [CassandraRepository, ReactiveCassandraRepository, MapIdCassandraRepository]
+      why: >
+        Same shape. `MapIdCassandraRepository` is a third contract the gap analysis did
+        not name — it turned up in the enumeration, which is what enumerating is for.
+    - owner: org.springframework.data:spring-data-elasticsearch
+      type_names: [ElasticsearchRepository, ReactiveElasticsearchRepository,
+                   CoroutineElasticsearchRepository]
+      why: >
+        Same shape, and three rather than the one the gap analysis named.
+    - owner: org.springframework.data:spring-data-neo4j
+      type_names: [Neo4jRepository, ReactiveNeo4jRepository]
+      why: >
+        Same shape.

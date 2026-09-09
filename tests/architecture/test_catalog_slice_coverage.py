@@ -50,6 +50,11 @@ PROBE = REPO / "scripts" / "probes" / "w19_catalog_surface.md"
 # the columns below are being read positionally against something else. The same
 # discipline `test_catalog_descriptors.py` applies to CP-10's table.
 _HEADER = "| catalog | owner | method | addressed by |"
+# The second enumeration's table (`w19b_type_and_annotation_surface.md`), for the three
+# slices that are not questions about methods on an owner type: which channel-declaring
+# ANNOTATIONS a catalog claims, and which repository CONTRACTS its roster names.
+_NAMES_HEADER = "| catalog | kind | container | name |"
+_NAMES_PROBE = REPO / "scripts" / "probes" / "w19b_type_and_annotation_surface.md"
 _BACKTICKED = re.compile(r"^`(.*)`$")
 
 
@@ -77,6 +82,32 @@ def enumerated() -> set[tuple[str, str, str]]:
             continue
         rows.add((cells[0], cells[1], cells[2]))
     assert rows, f"{PROBE.relative_to(REPO)}'s slice table parsed to no rows"
+    return rows | _enumerated_names()
+
+
+def _enumerated_names() -> set[tuple[str, str, str]]:
+    """`(catalog, container, name)` for every unread annotation or repository contract.
+
+    The `container` is the package or the artifact rather than an owner type, because
+    that is what a slice entry for these kinds names — `spring-data-rest`'s roster gap
+    is spread across seven artifacts and belongs to none of them individually."""
+    lines = _NAMES_PROBE.read_text(encoding="utf-8").splitlines()
+    start = next((i for i, line in enumerate(lines) if line.strip() == _NAMES_HEADER), None)
+    assert start is not None, (
+        f"{_NAMES_PROBE.relative_to(REPO)} carries no table with the header its harness "
+        f"generates:\n  {_NAMES_HEADER}\nRe-run "
+        f"scripts/probes/w19b_type_and_annotation_surface/run.sh and paste its fourth "
+        f"table in verbatim."
+    )
+    rows: set[tuple[str, str, str]] = set()
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
+        cells = [_cell(cell) for cell in line.split("|")[1:-1]]
+        if len(cells) != 4:
+            continue
+        rows.add((cells[0], cells[2], cells[3]))
+    assert rows, f"{_NAMES_PROBE.relative_to(REPO)}'s table parsed to no rows"
     return rows
 
 
@@ -86,8 +117,9 @@ def declared() -> set[tuple[str, str, str]]:
     rows: set[tuple[str, str, str]] = set()
     for catalog in YamlCatalogSource(CATALOGS).load():
         for entry in catalog.slice_outside:
-            for method in entry["method_names"]:  # type: ignore[union-attr]
-                rows.add((catalog.id, str(entry["owner"]), str(method)))
+            for kind in ("method_names", "annotation_names", "type_names"):
+                for name in entry.get(kind) or ():  # type: ignore[union-attr]
+                    rows.add((catalog.id, str(entry["owner"]), str(name)))
     return rows
 
 

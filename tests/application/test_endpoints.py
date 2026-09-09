@@ -7276,19 +7276,41 @@ def test_narrowing_the_list_and_gating_on_it_is_what_would_lose_the_webflux_rows
         ),
         pytest.param(
             "slice:\n  outside:\n    - {owner: a.B, why: because}\n",
-            "declares no method_names",
-            id="no methods named",
+            "must declare exactly one of",
+            id="no kind of name given",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n"
+            "    - {owner: a.B, method_names: [x], annotation_names: [y], why: because}\n",
+            "must declare exactly one of",
+            id="two kinds of name given",
         ),
         pytest.param(
             "slice:\n  outside:\n    - {owner: a.B, method_names: x, why: because}\n",
             "must be a list of names",
             id="methods not a list",
         ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, annotation_names: [1], why: because}\n",
+            "`annotation_names` must be a list of names",
+            id="annotations not names",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, type_names: x, why: because}\n",
+            "`type_names` must be a list of names",
+            id="types not a list",
+        ),
     ],
 )
 def test_a_slice_that_states_nothing_is_refused(tmp_path: Path, block: str, expected: str):
-    """Each refusal in `_slice_outside`, exercised — the review that added this
-    file found all four unreached (§10).
+    """Each refusal in `_slice_outside`, exercised — the review that added this file
+    found all four unreached, and the review of the NEXT change found the two rules
+    that replaced them unreached as well (§10, twice).
+
+    The "exactly one of" rule is the one that needs both arms. Zero kinds means the
+    entry names nothing and is unverifiable; two kinds means the audit cannot tell
+    which enumeration to check it against — a method, an annotation and a repository
+    contract are measured by different probes.
 
     The `why` is the one worth spelling out. A slice entry without it records that
     a method is unread and not WHY, and "this is not a boundary" and "this is a

@@ -228,10 +228,14 @@ def _detect_satisfied_by(raw: dict[str, object], path: Path) -> tuple[str, ...]:
     return tuple(declared)
 
 
+_SLICE_KINDS = ("method_names", "annotation_names", "type_names")
+
+
 def _slice_outside(raw: dict[str, object], path: Path) -> tuple[dict[str, object], ...]:
     """D02's `slice.outside` (F2 §3.8), shape-checked here like every other value.
 
-    Every entry must name an `owner`, a non-empty `method_names` list and a `why`.
+    Every entry names an `owner`, a `why`, and exactly ONE of `method_names`,
+    `annotation_names` or `type_names`.
 
     **`method_names`, not `methods`, and the name is load-bearing.**
     `tests/architecture/test_catalog_descriptor_coverage.py` walks every catalog for
@@ -260,17 +264,25 @@ def _slice_outside(raw: dict[str, object], path: Path) -> tuple[dict[str, object
     for entry in outside:
         if not isinstance(entry, dict):
             raise CatalogError(f"loading catalog {path}: each `slice.outside` entry is a mapping")
-        missing = [key for key in ("owner", "method_names", "why") if not entry.get(key)]
+        missing = [key for key in ("owner", "why") if not entry.get(key)]
         if missing:
             raise CatalogError(
                 f"loading catalog {path}: `slice.outside` entry for "
                 f"{entry.get('owner', '(no owner)')!r} declares no {', '.join(missing)}"
             )
-        if not isinstance(entry["method_names"], list) or not all(
-            isinstance(m, str) and m for m in entry["method_names"]
-        ):
+        kinds = [key for key in _SLICE_KINDS if entry.get(key)]
+        if len(kinds) != 1:
             raise CatalogError(
-                f"loading catalog {path}: `slice.outside` `method_names` must be a list of names"
+                f"loading catalog {path}: `slice.outside` entry for {entry['owner']!r} must "
+                f"declare exactly one of {', '.join(_SLICE_KINDS)} — it declares "
+                f"{len(kinds)}. A method, an annotation and a type are checked against "
+                f"different enumerations, so an entry naming none is unverifiable and one "
+                f"naming two is ambiguous"
+            )
+        names = entry[kinds[0]]
+        if not isinstance(names, list) or not all(isinstance(m, str) and m for m in names):
+            raise CatalogError(
+                f"loading catalog {path}: `slice.outside` `{kinds[0]}` must be a list of names"
             )
     return tuple(outside)
 

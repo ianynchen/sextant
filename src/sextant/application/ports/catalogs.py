@@ -107,7 +107,14 @@ class Catalog:
     # here. A framework release that adds one fails that audit until somebody
     # decides which side of the line it is on.
     #
-    # Each entry is `{owner, method_names, why}`. `why` is required and load-bearing:
+    # Each entry is `{owner, why}` plus exactly one of `method_names`,
+    # `annotation_names` or `type_names` — because three of the six slices §3.8 names
+    # are not questions about methods at all. `spring-integration`'s is about which
+    # channel-declaring ANNOTATIONS the catalog claims (2 of the 10 the framework
+    # ships), and `spring-data-rest`'s is about which repository CONTRACTS its roster
+    # names (6 of 24 across seven artifacts). One key per kind rather than one
+    # overloaded list, so the audit can check each against the enumeration that
+    # measured it. `why` is required and load-bearing:
     # "not modelled" and "not a boundary" are different claims, and a reader
     # deciding whether this catalog covers their code needs to know which.
     slice_outside: tuple[dict[str, object], ...] = ()

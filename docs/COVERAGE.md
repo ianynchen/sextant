@@ -799,11 +799,49 @@ individually in its catalog's `slice.outside` with the reason it is outside
 - **The JMS, AMQP and SQS templates model the send half only.** Every `receive`, every
   request/reply form, and — for SQS — every asynchronous and batch send, derives nothing.
 
+**Three more slices are declared, and they are not about methods** — so they are
+enumerated separately (`scripts/probes/w19b_type_and_annotation_surface.md`):
+
+| catalog | surface | reads |
+|---|---|---|
+| `spring-integration` | channel-declaring annotations (spring-integration-core 6.2.4) | **2 of 13** |
+| `spring-data-rest` | repository contracts across 12 Spring Data artifacts | **6 of 28** |
+
+- **`spring-integration`'s cost is bounded**: it mints no endpoint rows, it files
+  `channel_destination` questions, so nine unread annotations under-report a QUESTION
+  list rather than producing nine wrong rows. Two further gaps are recorded rather than
+  closed: `@InboundChannelAdapter("orders")` — the shorthand, whose `value()` is an
+  `@AliasFor` of `channel` — filed no question at all until this change added the second
+  row, and both annotations this catalog reads are `@Repeatable` while `config_join` has
+  no container vocabulary, so a repeated one still drops (`OI-66`). `@BridgeFrom` and `@BridgeTo` carry their
+  channel in a bare `value()`, which the enumeration's attribute-name test cannot see —
+  declared in the slice anyway, and emitted into the table so the audit holds them.
+- **`spring-data-rest`'s roster IS the whole rule.** A `derived_resource` match has no
+  other evidence, so a contract missing from the roster removes the row entirely rather
+  than degrading it. Every Mongo, R2DBC, Cassandra, Elasticsearch and Neo4j repository
+  derives nothing, and so does every reactive, coroutine and RxJava3 one — including
+  those declared in `spring-data-commons` beside the contracts the roster does name.
+  *Scoped to a module-local fact stream: a repo declaring `extract_libraries` for one
+  of these artifacts may cross the jar hop for the contracts whose parents the roster
+  does name. Not measured — named so the claim is not read as absolute.*
+- **`netflix-dgs` is a stated boundary, not a slice** (`OI-67`). A fetcher declared on
+  a superclass METHOD registers on every subclass bean and we do not see it — measured
+  from DGS's own registration code, which calls
+  `ReflectionUtils.getUniqueDeclaredMethods`, whose `doWithMethods` walks
+  `getSuperclass()` and `getInterfaces()`. *All five DGS annotations are also
+  `@Inherited`, three more than the gap analysis recorded — and that bit is INERT on
+  four of them, because `@Inherited` has no effect on anything but a class and these
+  declare `@Target(METHOD)`. The mechanism first written here was that one, and it does
+  not exist; the fix is a superclass method walk, not `@Inherited` resolution.* The
+  catalog reads every NAME, so there is nothing to put in `slice.outside`.
+
 This table is not maintained by hand: `tests/architecture/test_catalog_slice_coverage.py`
 fails if the enumeration lists an addressable method no slice accounts for, and fails the
 other way if a slice names a method the enumeration no longer lists. It holds the catalogs
-to the last measurement — re-reading a new release's bytecode means re-running
-`scripts/probes/w19_catalog_surface/run.sh`, which `scripts/check.sh` does not do.
+to the last measurement — re-reading a new release's bytecode means re-running BOTH
+enumerations, `scripts/probes/w19_catalog_surface/run.sh` for the method surfaces and
+`scripts/probes/w19b_type_and_annotation_surface/run.sh` for the annotation and
+repository ones, neither of which `scripts/check.sh` does.
 
 ### What this does not tell you
 

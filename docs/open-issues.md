@@ -2180,3 +2180,59 @@ version anyone measures against.
 when the expected call is absent — so that re-running the probe against a new version is
 what answers the question. **Falsified by** showing the two rows would still be correct
 with the start moved, which they would not be.
+
+### OI-66 — `config_join` has no container vocabulary, so a repeated channel annotation drops
+
+**Found by** the W19b review, while declaring `spring-integration`'s slice.
+
+Measured at spring-integration-core 6.2.4: `@ServiceActivator` and
+`@InboundChannelAdapter` — **both annotations `spring-integration.yml` reads** — are
+`@Repeatable`, with containers `@ServiceActivators` and `@InboundChannelAdapters`. So
+are `@Router`, `@Splitter`, `@Transformer`, `@Filter`, `@Aggregator`, `@BridgeFrom` and
+`@BridgeTo`. Two `@ServiceActivator` annotations on one method compile to a single
+`@ServiceActivators` container, and the individual annotations are not present on the
+method at all.
+
+`config_join` has no `container` word. `annotation_driven` does — `spring-jms`,
+`spring-rabbit`, `spring-scheduling`, `spring-kafka` and `spring-pulsar` all declare one
+— but `grep container src/sextant/application/resolve/engines/config_join.py` finds
+nothing.
+
+**Consequence:** a method carrying two of the same channel annotation contributes NO
+`channel_destination` questions rather than two. This is the half of G-47 that reads
+"and no containers", and W19b closed the other half (the annotation roster) without it.
+
+**Closes by** giving `config_join` the same `container` conjunct `annotation_driven`
+already has, and declaring it on the two rows this catalog reads. **Falsified by**
+measuring that Spring Integration also writes the individual annotations alongside the
+container, which would make today's read complete.
+
+### OI-67 — a DGS fetcher declared on a superclass method registers, and we do not see it
+
+**Found by** the W19b review, which falsified the mechanism first recorded for it.
+
+Measured at graphql-dgs 8.7.1 and spring-core 6.1.6:
+`DgsSchemaProvider$Companion$DgsBean` calls
+`ReflectionUtils.getUniqueDeclaredMethods(clazz, USER_DECLARED_METHODS)`, and
+`ReflectionUtils.doWithMethods` calls `Class.getSuperclass()` and
+`Class.getInterfaces()`. So DGS enumerates the whole hierarchy's methods when it
+registers fetchers. This analysis reads annotations where they are WRITTEN, so a
+codebase with an abstract base fetcher and ten thin subclasses derives one fetcher's
+worth of rows instead of ten, with nothing saying a row is missing. It is `OI-37`'s
+shape in a third framework.
+
+**The mechanism the gap analysis recorded is not this one, and does not work.** G-41
+says `@DgsData` and `@DgsQuery` are `@Inherited`. They are — all five DGS annotations
+are, which is three more than recorded — but `java.lang.annotation.Inherited` "has no
+effect if the annotated type is used to annotate anything other than a class", and it
+inherits from superclasses, never through methods. `@DgsData`, `@DgsQuery`,
+`@DgsMutation` and `@DgsSubscription` all declare `@Target(METHOD)`, so on four of the
+five that bit is inert. An earlier draft of `netflix-dgs.yml` reproduced the false
+mechanism as though it had been measured.
+
+**This changes the fix.** Resolving `@Inherited` through `type_hierarchy` — the
+remediation that draft named — closes nothing here. What is needed is a superclass
+METHOD walk: the annotations sit on methods the subclass does not declare at all.
+
+**Closes by** that walk, over `type_hierarchy` (W22). **Falsified by** a DGS codebase
+with no inheritance among its fetchers, for which today's rows are already complete.

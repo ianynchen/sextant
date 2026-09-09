@@ -99,3 +99,80 @@ matches:
             arg: outputChannel, direction: outbound }
         - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
             arg: channel, direction: outbound }
+        # `@InboundChannelAdapter("orders")` — the SHORTHAND, and the form most code
+        # uses. Measured at 6.2.4: `value()` and `channel()` are `@AliasFor` each
+        # other, so only the one the author typed reaches the class file, and reading
+        # `channel` alone meant the shorthand filed NO question at all. This is
+        # `A-M8`'s `@SqsListener(queueNames)` defect one framework over, in the same
+        # shape COVERAGE already records as fixed there. Two rows rather than alias
+        # resolution, because `resolve/effective_annotations.py` states that explicit
+        # cross-name aliasing is out of scope; Spring refuses a conflicting pair, so
+        # at most one of these two is ever present.
+        - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
+            arg: value, direction: outbound }
+
+# D02's declared SLICE (F2 §3.8, G-47). Measured
+# (`scripts/probes/w19b_type_and_annotation_surface.md` §1): Spring Integration ships
+# ELEVEN annotations that declare a channel in a named attribute, and this catalog
+# reads TWO. Two more carry their channel in a bare `value()`, so thirteen in all.
+#
+# **The cost is bounded, and saying so is part of being honest about it.** This catalog
+# mints no endpoint rows — it files `channel_destination` questions — so eight unread
+# annotations are an under-reported QUESTION list, not eight wrong rows. That is why
+# G-47's severity is capped and why this is a declared slice rather than a defect.
+# **G-47's other half is NOT closed here, and is stated rather than left implied.**
+# The gap analysis says this catalog reads "2 of ~12 channel-declaring annotations AND
+# NO CONTAINERS". Measured at 6.2.4: `@ServiceActivator` and `@InboundChannelAdapter` —
+# both annotations this catalog DOES read — are `@Repeatable`, with containers
+# `@ServiceActivators` and `@InboundChannelAdapters`. Two `@ServiceActivator`s on one
+# method compile to the container, and `config_join` has no `container` word at all
+# (`annotation_driven` has one; five catalogs use it), so BOTH channels drop.
+# Recorded as `OI-66` rather than fixed: it is engine vocabulary, not a catalog line.
+slice:
+  outside:
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Aggregator, Filter, Splitter, Transformer]
+      why: >
+        Endpoint annotations this catalog does NOT read, each declaring `inputChannel`
+        and `outputChannel` (and `discardChannel` for `@Aggregator` and `@Filter`) —
+        the same attributes `@ServiceActivator` carries and this catalog already reads.
+        A module wiring its integration flow through these has those channels absent
+        from its question list, so a reader sees fewer unanswered destinations than
+        the module really has.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Gateway, MessagingGateway]
+      why: >
+        The gateway pair, which name a request AND a reply channel
+        (`requestChannel`/`replyChannel`, and `defaultRequestChannel`/
+        `defaultReplyChannel`). Unread, and they are the shape most likely to matter:
+        a messaging gateway is the boundary between an application's own interface and
+        the flow behind it, so it is exactly where a reader looks for a destination.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Router]
+      why: >
+        Declares `inputChannel`, `defaultOutputChannel` AND `channelMappings` — NOT
+        `outputChannel`, which is why it is its own entry rather than grouped with the
+        endpoint annotations above. `channelMappings` is the interesting one: it holds
+        a routing table of channel names, so one unread annotation hides several
+        destinations rather than one.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Poller]
+      why: >
+        Declares `errorChannel`, and it is the annotation an eight-name attribute list
+        missed entirely — it appeared only once the enumeration measured "any attribute
+        the framework named for a channel" instead. A poller's error channel is a real
+        destination that messages reach.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Publisher]
+      why: >
+        Declares the channel a method's return value is published to, in a `channel`
+        attribute — the same attribute name `@InboundChannelAdapter` uses and this
+        catalog reads. Unread.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [BridgeFrom, BridgeTo]
+      why: >
+        Both name a channel, and both carry it in a bare `value()` rather than in an
+        attribute the framework named for a channel — so the enumeration's
+        attribute-name test cannot see them and reports ten where the real count is
+        twelve. Declared here so the two the measurement cannot reach are still on the
+        record, which is the whole reason a slice is written down.
