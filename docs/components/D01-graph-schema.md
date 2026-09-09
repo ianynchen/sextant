@@ -193,6 +193,7 @@ needs it.
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
+| `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence |
 
 **`both` is reserved for the linking tier, and no pass here produces it** (F5 §6.1, W27).
 A wire identity a module both exposes and calls stays TWO rows; the shape of a `both` row is
@@ -231,6 +232,21 @@ publishes to a topic and reads it back genuinely is one identity in both directi
 client calling another service's copy of a shared path genuinely is two. Curation or the
 linking tier decides; a pass that decided here would be guessing at the far end of a call,
 which is the one thing a module's own bytecode cannot show.
+
+**`endpoint_metadata` carries the `caller`, and `endpoints` does not carry the metadata**
+(F5 §6.2, W29). Two calls to one path with different headers are two calls, so the entry
+names which one it came from — without that column the table would state one call's headers
+about another's, which is the identity defect W27 removed from `endpoints` reintroduced one
+table over. It is a side table rather than columns because the count is unbounded and each
+entry needs its own trust pair: a header whose value could not be read is visibly
+unresolved, and *sends a header we could not read* is a different claim from *sends no
+header*.
+
+**Its `value` is redacted at the ORIGIN, alone among value columns.** Every other one is
+masked at export, because analysis reads it — substituting `REDACTED` into an address would
+publish a fabricated peer. Nothing reads a metadata value, so the masked string is the only
+one ever written down and there is no export query to add. The rows are a SET: two values
+under one name are two rows and their written order is not preserved.
 
 **`endpoints.catalog_id` is provenance, not identity.** It names the catalog whose rules
 produced the row, so a catalog describing an endpoint's request/response contract can

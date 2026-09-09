@@ -31,6 +31,7 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.redaction import REDACTED
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -2721,6 +2722,283 @@ def _call(
         result=result,
         arguments=arguments or [],
     )
+
+
+_COLLECTING_MATCHES = {
+    **_WEBCLIENT_MATCHES,
+    "steps": [
+        *_WEBCLIENT_MATCHES["steps"],
+        {"method": "header", "collects": {"kind": "header", "name": "arg0", "value": "arg1"}},
+    ],
+}
+
+
+def _headed_chain(caller: str, headers: list[tuple[str, list]]) -> list:
+    """A WebClient-shaped chain carrying `headers`, each as the varargs pair the real API
+    produces: `header(String name, String... values)` compiles the values to an ARRAY, so
+    a call site's second argument is an array construction and never a bare string."""
+    facts = [_call(caller, WEBCLIENT, "get", 0, receiver=3, result=4)]
+    facts.append(
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        )
+    )
+    link = 10
+    for index, (name, values) in enumerate(headers):
+        facts.append(
+            _call(
+                caller,
+                URI_SPEC,
+                "header",
+                2 + index,
+                receiver=link,
+                result=link + 1,
+                arguments=[
+                    CallArgument(kind="string", value=name),
+                    CallArgument(kind="array", elements=values),
+                ],
+            )
+        )
+        link += 1
+    facts.append(_call(caller, URI_SPEC, "retrieve", 90, receiver=link, result=link + 1))
+    return facts
+
+
+def _entries(workspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("endpoint_metadata")]
+
+
+def test_every_repeated_collecting_step_contributes_its_own_entry(tmp_path: Path):
+    """The positive half (§10), and the reason `collects` exists at all rather than
+    another `captures` key.
+
+    A capture is LAST-WINS (D02 §4) — a repeated step overwrites its own earlier value.
+    Applied to headers that would keep the third of three and say nothing about the other
+    two, which is not a smaller answer but a wrong one: the request carries all three.
+    """
+    caller = "com/acme/http/Client#tagged()."
+    facts = _headed_chain(
+        caller,
+        [
+            ("X-Tenant", [CallArgument(kind="string", value="acme")]),
+            ("X-Region", [CallArgument(kind="string", value="eu")]),
+            ("X-Trace", [CallArgument(kind="parameter", value=0)]),
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_COLLECTING_MATCHES))
+    entries = _entries(workspace)
+    workspace.close()
+
+    # Sorted, because the table is a SET of entries and the query orders it for
+    # determinism (NFR-1) rather than preserving chain order. Asserting the chain's own
+    # order here would be asserting the sort.
+    assert [(e["name"], e["value"], e["resolution"]) for e in entries] == [
+        ("X-Region", "eu", "resolved"),
+        ("X-Tenant", "acme", "resolved"),
+        # Present and unreadable, which is a different answer from absent — the
+        # distinction the per-entry trust columns exist for.
+        ("X-Trace", None, "unresolved"),
+    ]
+    assert {e["kind"] for e in entries} == {"header"}
+    assert {e["path"] for e in entries} == {"/orders"}
+    assert {e["caller"] for e in entries} == {caller}
+
+
+def test_a_varargs_position_contributes_one_entry_per_value(tmp_path: Path):
+    """`header(String, String...)` is varargs, so the value position holds an ARRAY and
+    `header("Accept", "a", "b")` sends two values under one name.
+
+    One entry per element rather than one joined entry, because that is the wire. Reading
+    the array itself resolves to no literal, which is what the first version of this did:
+    every header came out `unresolved`, including the ones written as literals in plain
+    sight.
+    """
+    caller = "com/acme/http/Client#accepts()."
+    facts = _headed_chain(
+        caller,
+        [
+            (
+                "Accept",
+                [
+                    CallArgument(kind="string", value="application/json"),
+                    CallArgument(kind="string", value="application/xml"),
+                ],
+            )
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_COLLECTING_MATCHES))
+    entries = _entries(workspace)
+    workspace.close()
+
+    assert sorted((e["name"], e["value"]) for e in entries) == [
+        ("Accept", "application/json"),
+        ("Accept", "application/xml"),
+    ]
+
+
+def test_a_credential_named_entry_is_masked_where_it_is_read(tmp_path: Path):
+    """F5 §6.2: redacted at the ORIGIN, not at export.
+
+    Nothing in this system reads a metadata value — no pass substitutes one into an
+    address the way `resolved_config.value` is substituted into a peer — so the masked
+    string is the only one ever written down. There is no export query to add and nothing
+    to forget, and a compiled-in `Authorization: Bearer …` is realistic.
+
+    `X-Tenant` beside it is the control: the redactor keys on the entry's NAME, so an
+    ordinary header is untouched and a masked table is not simply an empty one.
+    """
+    caller = "com/acme/http/Client#authorised()."
+    facts = _headed_chain(
+        caller,
+        [
+            ("Authorization", [CallArgument(kind="string", value="Bearer sk-live-abcdef")]),
+            ("X-Tenant", [CallArgument(kind="string", value="acme")]),
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_COLLECTING_MATCHES))
+    entries = {e["name"]: e["value"] for e in _entries(workspace)}
+    workspace.close()
+
+    assert entries["Authorization"] == REDACTED
+    assert "Bearer" not in str(entries["Authorization"])
+    assert entries["X-Tenant"] == "acme"
+
+
+_LAMBDA_MATCHES = {
+    **_COLLECTING_MATCHES,
+    "steps": [
+        *_COLLECTING_MATCHES["steps"],
+        {"method": "path", "owner": "com.acme.http.UriBuilder", "captures": {"url": "arg0"}},
+        {
+            "method": "queryParam",
+            "owner": "com.acme.http.UriBuilder",
+            "collects": {"kind": "query", "name": "arg0", "value": "arg1"},
+        },
+    ],
+}
+
+URI_BUILDER = "com/acme/http/UriBuilder#"
+
+
+def test_a_url_built_inside_a_uri_lambda_is_read(tmp_path: Path):
+    """`OI-73`. `uri(b -> b.path("/orders").queryParam("q", term).build())` is the
+    idiomatic way to build a URL with query parameters, and the whole address used to go
+    unread: the row derived with `path` NULL and `resolution: unresolved`.
+
+    That is not a small loss. The address IS the row's identity — DR-5 matches on the wire
+    contract — so a pathless outbound row links to nothing and tells a reader only that
+    this method calls out over HTTP.
+
+    **Reading it is reading, not guessing**, which is the objection the earlier behaviour
+    was written against: the lambda is one argument of one call, the fact stream names the
+    synthetic method it compiled to, and that method's own call sites are a chain. Nothing
+    here reaches for a literal it cannot attribute.
+    """
+    # Module-prefixed callers and a BARE lambda symbol, which is what the extractor
+    # actually writes (D00 §5a: a call argument never repeats the module coordinates).
+    # The two spellings are why the lookup is by bare descriptor — keyed on the raw
+    # strings it misses every time, silently, which is what a first version did.
+    caller = _MODULE + "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        # The lambda's own body, recorded under its own synthetic method exactly as the
+        # extractor writes it — module-prefixed, like every other caller.
+        _call(
+            _MODULE + body,
+            URI_BUILDER,
+            "path",
+            0,
+            receiver=None,
+            result=40,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _call(
+            _MODULE + body,
+            URI_BUILDER,
+            "queryParam",
+            1,
+            receiver=40,
+            result=41,
+            arguments=[
+                CallArgument(kind="string", value="status"),
+                CallArgument(kind="array", elements=[CallArgument(kind="string", value="OPEN")]),
+            ],
+        ),
+        _call(_MODULE + body, URI_BUILDER, "build", 2, receiver=41, result=42),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_LAMBDA_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    entries = _entries(workspace)
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["resolution"]) == ("/orders", "resolved")
+    assert [(e["kind"], e["name"], e["value"]) for e in entries] == [("query", "status", "OPEN")]
+
+
+def test_a_lambda_body_the_catalog_declares_no_step_for_folds_nothing(tmp_path: Path):
+    """The near-miss (§10). The same chain under a catalog declaring no `UriBuilder`
+    steps derives the pathless row it always did — so what comes back from a lambda is
+    what the catalog named, never everything the body happened to call."""
+    caller = "com/acme/http/Client#search()."
+    body = "com/acme/http/Client#lambda$search$0()."
+    facts = [
+        _call(caller, WEBCLIENT, "get", 0, receiver=3, result=4),
+        _call(
+            caller,
+            URI_SPEC,
+            "uri",
+            1,
+            receiver=4,
+            result=10,
+            arguments=[CallArgument(kind="lambda", source=6, symbol=body)],
+        ),
+        _call(caller, URI_SPEC, "retrieve", 2, receiver=10, result=13),
+        _call(
+            body,
+            URI_BUILDER,
+            "path",
+            0,
+            receiver=None,
+            result=40,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_COLLECTING_MATCHES))
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["resolution"] == "unresolved"
+
+
+def test_a_chain_with_no_collecting_step_writes_no_entry(tmp_path: Path):
+    """The near-miss (§10). The same chain under the catalog that declares no `collects`
+    contributes nothing — so the table's rows come from the declaration, not from every
+    call that happens to take two string arguments."""
+    caller = "com/acme/http/Client#tagged()."
+    facts = _headed_chain(caller, [("X-Tenant", [CallArgument(kind="string", value="acme")])])
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_WEBCLIENT_MATCHES))
+    entries = _entries(workspace)
+    workspace.close()
+
+    assert entries == []
 
 
 def test_a_webclient_shaped_chain_derives_get_with_url_and_bodytomono_response(

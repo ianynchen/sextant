@@ -457,7 +457,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "websocket": 3,
     }
     assert metadata["endpoints"]["outbound"] == {
-        "http": 23,
+        # 25 since W29: `InventoryWebClient#tagged`, whose three headers are the fixture's
+        # `endpoint_metadata` rows, and `#searched`, whose url is built inside a
+        # `uri(Function)` lambda and therefore derives with `path` NULL and
+        # `resolution: unresolved` — the call recorded, its address honestly unread
+        # (`OI-73`).
+        "http": 25,
         "jms": 3,
         "kafka": 10,
         "pubsub": 4,
@@ -627,8 +632,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # inbound is 100, 41 + 6 outbound is 47, for a 147-endpoint total. Nothing new is
     # derived here; six deletions stopped happening, and two of the six were joining a
     # served operation to a call at a different address.
-    # W28: +3 inbound — 100 + 3 = 103, for a 150-endpoint total.
-    assert rows == [("inbound", 103), ("outbound", 47)]
+    # W28: +3 inbound — 100 + 3 = 103. W29: +2 outbound — 47 + 2 = 49, for a
+    # 152-endpoint total.
+    assert rows == [("inbound", 103), ("outbound", 49)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(

@@ -91,6 +91,12 @@ def resolve(
     # shared reader in `resolve/dispatch.py` that each builds for itself), so
     # this order is the order they were written and nothing depends on it.
     record_call_edges(workspace)
+    # F5 §6.2 (W29): emptied once, here, ahead of every engine that writes it — the
+    # `open_questions`/`resolved_config` discipline. More than one catalog contributes
+    # entries, so a reset owned by an engine would erase whichever ran first, and a
+    # resolve whose calls carry no metadata leaves an empty table rather than the previous
+    # run's rows.
+    workspace.derive("endpoint_metadata_reset")
     skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints

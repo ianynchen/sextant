@@ -59,6 +59,31 @@ matches:
     # OkHttp's own `Request$Builder`.
     - { method: baseUrl,    owner: org.springframework.web.reactive.function.client.WebClient$Builder, captures: { base: arg0 } }
     - { method: uri,        captures: { url: arg0 } }
+    # F5 §6.2 (W29). `collects`, not `captures`, and the difference is the whole reason
+    # the key exists: a capture is LAST-WINS, so a chain calling `.header(...)` three
+    # times would keep the third and silently claim it was the only one. A collecting
+    # step accumulates instead.
+    #
+    # Read off `WebClient$RequestHeadersSpec` in spring-webflux 6.1.6, whose
+    # header-setting methods are `header(String, String...)` and
+    # `headers(Consumer<HttpHeaders>)`. Only the first is declared: the second takes a
+    # LAMBDA that mutates a headers object, and what it puts there is a body this engine
+    # does not walk into. Declaring it would name an entry with no readable name and no
+    # readable value, which is not an unresolved entry — it is no entry at all.
+    - { method: header,     collects: { kind: header, name: arg0, value: arg1 } }
+    # `OI-73`. `uri(Function)` hands a `UriBuilder` to a lambda, and the URL — path AND
+    # query parameters — is built inside that lambda's own synthetic method. Before this
+    # the chain derived a row with `path` NULL: the call recorded and its whole address
+    # unread, which is the identity DR-5 links on. These two steps are matched inside the
+    # lambda body, walked as its own chain (`_fold_lambda_captures`).
+    #
+    # Owner-declared, unlike the steps above, because these names are generic: `path` and
+    # `queryParam` would otherwise match any builder in any chain this catalog roots.
+    - { method: path,       owner: org.springframework.web.util.UriBuilder,
+        captures: { url: arg0 } }
+    - { method: queryParam, owner: org.springframework.web.util.UriBuilder,
+        collects: { kind: query, name: arg0, value: arg1 } }
+
     - { method: bodyValue,  captures: { body: arg0 } }
     - { method: body,       captures: { body: arg0 } }
     - { method: bodyToMono, captures: { response: arg0 } }

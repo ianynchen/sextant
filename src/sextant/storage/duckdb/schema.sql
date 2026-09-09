@@ -444,6 +444,53 @@ CREATE TABLE IF NOT EXISTS roots (
 -- Both are replaced whole per resolve, like `call_edges` and `return_flows`, from the
 -- same pass that writes those — the one place "which method can this site run" is
 -- answered.
+-- F5 §6.2 (W29). What an outbound call carries BESIDE its address and payload: an HTTP
+-- header or query parameter, a Kafka record header or partition key, an AMQP routing key,
+-- a JMS property, an SQS message attribute, a Pub/Sub attribute. It is what makes an
+-- outbound row identifiable — two calls to one path with different headers are two calls.
+--
+-- **A side table, not columns on `endpoints`**, for the reason `scheduled_work` is its own
+-- table: the count is unbounded and per-entry. One row per entry, each carrying its OWN
+-- resolution and evidence, so a header whose value could not be read is visibly
+-- unresolved rather than absent — which is the difference between "this call sends no
+-- Authorization header" and "it sends one we could not read".
+CREATE TABLE IF NOT EXISTS endpoint_metadata (
+    -- The endpoint this belongs to, by the columns that identify one (D01 §3). Carried
+    -- rather than joined on a surrogate key, the `open_questions` reasoning: a foreign
+    -- key into a table rebuilt every resolve names nothing outside this run.
+    protocol   TEXT,
+    direction  TEXT,
+    method     TEXT,
+    path       TEXT,
+    -- The caller, so two callers reaching one address keep their own metadata. Without
+    -- it the table would state one call's headers about another's — the identity defect
+    -- W27 removed from `endpoints`, reintroduced one table over.
+    caller     TEXT,
+    -- Which KIND of thing this is, as the catalog declared it: `header`, `query`, `key`,
+    -- `routing_key`, `property`, `attribute`. Not a closed set in D00 — the vocabulary is
+    -- per protocol and the catalog names it, exactly as `semantics` on a wrapper is.
+    kind       TEXT,
+    -- The entry's own name, verbatim: `Authorization`, `X-Tenant`, a partition key's
+    -- absent name (NULL — a Kafka key has no name, only a value).
+    --
+    -- **These rows are a SET, and the order two values under one name were written in is
+    -- not preserved.** `header("Accept", "a", "b")` becomes two rows and the query sorts
+    -- them, for the determinism every other query here keeps (NFR-1). The loss is real
+    -- and small: HTTP orders repeated values, and nothing downstream reads one. An
+    -- `ordinal` column would preserve it and is not here because no consumer asked.
+    name       TEXT,
+    -- **Redacted at the ORIGIN, never at export** (F5 §6.2). Nothing in this system reads
+    -- a metadata value — no pass substitutes one into an address the way `resolved_config`
+    -- is substituted — so the redacted value is the only one ever written down and there
+    -- is no export query to add and nothing to forget. A compiled-in
+    -- `Authorization: Bearer …` literal is realistic and the bundle is the trust boundary.
+    value      TEXT,
+    -- D00 §4's sets. `unresolved` where the entry's presence is known and its value is
+    -- not — a header built from a variable, a value read from configuration.
+    resolution TEXT,
+    evidence   TEXT
+);
+
 CREATE TABLE IF NOT EXISTS type_hierarchy (
     -- The subtype, bare (D00 §5a) — the spelling `call_sites.owner` uses, so a site
     -- joins straight to its own ancestry with no rewriting.

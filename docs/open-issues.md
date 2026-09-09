@@ -2397,3 +2397,162 @@ shape from DuckDB's own parse, so the comparison it would need exists.
 
 **Falsified by** a schema change that removes or retypes a column, which would make this a
 live defect rather than a stated limit.
+
+### OI-71 — a module's own `redact:` additions do not widen metadata masking
+
+**Found by** building W29 (F5 §6.2).
+
+`endpoint_metadata.value` is redacted at the ORIGIN — where the value is read, in
+`resolve/engines/fluent._metadata_row` — because nothing in this system consumes a
+metadata value, so the masked string is the only one ever written down. That much works:
+the fixture's compiled-in `Authorization: Bearer sk-live-fixture-secret` reaches the table
+as `«redacted»`.
+
+**It masks by the BUILT-IN rule set only.** A module's `.sextant.yml` `redact.key_patterns`
+additions reach the export's redactor through the composition root (`api.py::_redactor_for`),
+and no redactor reaches a resolve engine at all — `resolve()` takes none, and the engine
+protocol is `Callable[[Workspace, Catalog], None]` for all thirteen engines.
+
+**Consequence:** a repository that adds a pattern of its own for a header name gets no
+masking from it. The built-ins already cover the credential names —`authorization`,
+`token`, `secret`, `apikey`, `credential`, `password`, `passphrase`, `privatekey` — which
+the design calls "exactly this table's shape", so the gap is narrow. It is still an
+under-mask, which is the dangerous direction.
+
+**Closes by** threading the redactor from the composition root into `resolve` and on to
+the engines. That widens all thirteen engine signatures for one engine's need, which is
+why it was not done inside W29; the alternative is an engine-context object, which is a
+larger change to a seam nothing else is asking to change.
+
+**Falsified by** a repository whose `redact:` section names a header rather than a config
+key — at which point the under-mask is live rather than theoretical.
+
+### OI-72 — `payload_ctor_arg: last` reads a Kafka record's HEADERS as its payload
+
+**Found by** W29's measurement of `ProducerRecord`'s constructor family.
+
+`spring-kafka-template.yml` declares
+`{ type: org.apache.kafka.clients.producer.ProducerRecord, channel_ctor_arg: 0,
+payload_ctor_arg: last }`, and `last` means the constructor's own final argument
+(`single_call._record_arguments`). Read from kafka-clients' own bytecode, that type has
+**five public constructors**:
+
+| Constructor | Value index | `last` |
+|---|---|---|
+| `(String, K, V)` | 2 | ✅ 2 |
+| `(String, Integer, K, V)` | 3 | ✅ 3 |
+| `(String, Integer, Long, K, V)` | 4 | ✅ 4 |
+| `(String, Integer, K, V, Iterable<Header>)` | 3 | ❌ 4 — the headers |
+| `(String, Integer, Long, K, V, Iterable<Header>)` | 4 | ❌ 5 — the headers |
+
+**Consequence:** a producer that attaches record headers — ordinary Kafka — has its
+`Iterable<Header>` published as the request payload TYPE. That is a fabricated contract,
+not a missing one, and DR-5 gates linking on payload compatibility, so it reaches other
+services' graphs.
+
+**No live instance.** The fixture uses only the 2- and 3-argument forms, and no corpus
+here has a Kafka producer at all. It is reachable by ordinary code, which is why it is
+recorded at this severity rather than as a curiosity.
+
+**Arity cannot fix it, and that is the interesting part:** `(String, Integer, K, V,
+Iterable<Header>)` and `(String, Integer, Long, K, V)` are BOTH arity 5 with the value at
+different indices. Only the erased descriptor separates them.
+
+**Closes by** letting a `record_wrappers` entry declare its positions per DESCRIPTOR, the
+same discipline the `methods` rows already keep — "each row declares its own erased JVM
+descriptor, so each overload reaches its own row" (`spring-kafka-template.yml`'s own note,
+descriptor sweep R3). The engine reads the linked `<init>` call site, which carries its
+descriptor, so the join exists.
+
+**Falsified by** measuring that `last` is correct for every constructor a real corpus uses
+— which would make this a latent rather than an actual over-report, not a non-issue.
+
+### OI-73 — a WebClient URL built in a `uri(Function)` lambda is never read · **CLOSED, W29**
+
+**Found by** W29's query-parameter measurement, and **it is pre-existing** — the fixture
+has carried the case since the fluent engine shipped, with a comment stating it.
+
+`webClient.get().uri(b -> b.path("/v2/inventory/search").queryParam("q", term).build())`
+derives an endpoint row with `path` NULL and `resolution: unresolved`. Nothing false is
+published: the call is recorded and its address is honestly unread. What is lost is the
+address itself, and with it every query parameter.
+
+**Why it is not a smaller gap than it looks.** The address IS the row's identity. A
+pathless outbound row cannot link (DR-5 matches on the wire contract) and tells a reader
+only "this method calls out over HTTP". And `uri(Function)` is the idiomatic way to add a
+query parameter in WebClient — a service that uses them loses those addresses, not just
+their parameters.
+
+**Measured frequency: zero.** All three `uri(...)` calls across the six repositories in
+`examples/` pass a string literal; none passes a lambda. That bounds what can be claimed
+about how often it bites, not whether it is real.
+
+**Why it is unread, and why the current answer is the honest one.** Chain reconstruction
+is within-method (D00 §5) and a lambda body is its own synthetic method, so the builder
+chain is not the client chain — the two are joined by the lambda being an ARGUMENT, not by
+a receiver link the walk follows. The engine follows one hop from a captured argument and
+stops rather than reaching into the body for a literal it cannot attribute.
+
+**Closes by** following the `lambda`-kind argument to its synthetic method and walking the
+builder chain there as a chain of its own, folding its `path`/`queryParam` captures back
+into the calling chain. `resolve/engines/fluent.py` already reaches one hop into a lambda
+for a different capture (`lambda$reserveAfterLevels$0` derives a row of its own today), so
+the fact stream supports it; what is missing is folding the inner chain's captures OUT to
+the caller rather than deriving a second row.
+
+**Falsified by** measuring that a corpus's WebClient calls resolve their addresses without
+this — which would mean the lambda form is rarer in practice than its idiomatic status
+suggests.
+
+**CLOSED in W29, the same session that opened it.** It was first recorded and deferred,
+which was wrong twice over: the fixture derives two such rows, so it had live instances in
+our own output and was Major by the standing rule, and the rule says a Major is fixed the
+moment it is identified rather than filed.
+
+`resolve/engines/fluent._fold_lambda_captures` follows a `lambda`-kind captured argument to
+the synthetic method it names, walks that method's own call sites as a chain of its own,
+and folds back what the catalog declared steps for. `spring-webclient.yml` now declares
+`UriBuilder.path` and `UriBuilder.queryParam`, owner-gated because both names are generic.
+Measured on the fixture: `InventoryWebClient#search` went from `path` NULL to
+`/v2/inventory/search`, and its `q` parameter is recorded present-and-unresolved;
+`#lookup` records `region = eu` resolved beside `sku` unresolved.
+
+Chain reconstruction stays within-method (D00 §5): the lambda body is walked as its own
+chain and only its captures return, one hop, never spliced.
+
+### OI-74 — a `single_call` destination built inside a lambda argument is never read · **SCHEDULED as W57 (Wave 12)**
+
+**Found by** closing `OI-73`, by asking whether that defect class had siblings.
+
+`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derives an outbound
+SQS row with **no destination** — `path` NULL, `resolution: unresolved`. The queue name is
+a string literal in the lambda's own synthetic method, and the fact stream records it
+there, keyed by the symbol the `lambda`-kind argument names.
+
+**It is the same defect as `OI-73`, in a different engine.** That one was in `fluent` and
+cost a WebClient call its whole URL; this is in `single_call` and costs an SQS send its
+whole queue. Both were written down as deliberate — the fixture's own comment here says
+"an honest unresolved row, not a fabricated `shipments-lambda` path" — and the framing is
+the same mistake: the lambda is ONE argument of ONE call, the fact stream names the method
+it compiled to, and reading that method's call sites is reading rather than guessing.
+
+**Live instance:** one, in this repository's own fixture output, on every run.
+`EventProducers#sendShipmentViaBuilder`.
+
+**Consequence:** the address IS the row's identity. DR-5 matches on the wire contract, so a
+destination-less outbound row links to nothing and tells a reader only that this method
+sends to SQS. `SqsTemplate.send(Consumer<SqsSendOptions>)` is the SDK's own fluent
+overload, not an exotic shape.
+
+**Closes by** the mechanism `OI-73` already built one engine over: follow a `lambda`-kind
+argument to the synthetic method it names, walk that method's own call sites, and read the
+catalog-declared positions there. `fluent._fold_lambda_captures` is the working precedent,
+including the detail that costs a cycle if missed — `call_sites.caller` carries the module
+coordinates and a call argument's `symbol` does not, so the lookup is by bare descriptor.
+
+`single_call` reads its positions off one call site rather than walking a chain, so the
+shape of the fix differs: it needs a declared way to say "this argument is a builder
+lambda, and the destination is at `queue(arg0)` inside it".
+
+**Falsified by** measuring that the consumer-builder overloads are rare in practice — which
+would lower its priority, not make it correct.

@@ -38,6 +38,45 @@ public class InventoryWebClient {
                 .bodyToMono(OrderView.class);
     }
 
+    // `OI-73`, and the half `search` below does not reach: TWO query parameters, one of
+    // them a LITERAL. `search` passes only a method parameter, so every entry it
+    // contributes is `unresolved` and a rule that never read a value would look correct.
+    //
+    // Its own path, deliberately: an outbound fluent row dedups on
+    // (protocol, direction, verb, path), so a second chain on `/v2/inventory/search`
+    // would collapse into `search`'s row and take its entries with it.
+    public Mono<OrderView> lookup(String sku) {
+        return webClient.get()
+                .uri(builder -> builder.path("/v2/inventory/lookup")
+                        .queryParam("sku", sku)
+                        .queryParam("region", "eu")
+                        .build())
+                .retrieve()
+                .bodyToMono(OrderView.class);
+    }
+
+    // W29 (F5 §6.2). What an outbound call carries BESIDE its address and payload.
+    //
+    // THREE headers on one chain, because a capture is last-wins and would keep only the
+    // third: `.header(...)` is repeatable and the wire carries all of them.
+    //
+    // `Authorization` is here to be REDACTED. Its value is a literal in bytecode, which
+    // is realistic — and nothing in this system reads a metadata value, so the masked
+    // string is the only one ever written down rather than being masked later at export.
+    //
+    // `X-Trace-Id` takes a VARIABLE, so its value cannot be read: the entry is present
+    // and `unresolved`, which is a different and more useful answer than absent. That
+    // distinction is what the per-entry trust columns exist for.
+    public Mono<OrderView> tagged(String traceId) {
+        return webClient.get()
+                .uri("/v2/inventory/tagged")
+                .header("Authorization", "Bearer sk-live-fixture-secret")
+                .header("X-Tenant", "acme")
+                .header("X-Trace-Id", traceId)
+                .retrieve()
+                .bodyToMono(OrderView.class);
+    }
+
     // bodyToFlux: response_is: array in the catalog, same class-literal
     // response otherwise — a collection wire shape with no List<> generic
     // anywhere in the call.

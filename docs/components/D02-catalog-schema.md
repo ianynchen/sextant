@@ -693,8 +693,10 @@ mapping:
 - **`path_fallback` says what the declared name is when every `path_from` alias is
   absent.** Today's one word is `construct_name` — the annotated construct's own name —
   and it is a closed vocabulary rather than a boolean, so a second source is a new word
-  here and an unrecognised one is refused. It exists because **an annotation's declared
-  default is not written into the class file**: Spring GraphQL, DGS and MicroProfile all
+  here and an unrecognised one is refused. It exists because **an omitted attribute is not written into the annotation USE**
+  — the declared default lives on the annotation TYPE (JVMS 4.7.22 `AnnotationDefault`,
+  readable since W4) and never on the use that left it out, so a use reads NULL there:
+  Spring GraphQL, DGS and MicroProfile all
   declare their field attribute `default ""` and all three mean "the method's name", so
   an absent attribute read as an empty string published a `resolved` endpoint addressing
   nothing — `path_from`'s own "wrong output rather than a missing one" failure reached by
@@ -811,9 +813,10 @@ mapping:
   framework itself withdraws.** A closed SHAPE — exactly those two keys, anything else
   refused — rather than a closed vocabulary, because *which* attribute withdraws a
   declaration and at *which* value is the framework's convention. **An absent attribute is
-  never the withdrawing value**: a declared default is not written into the class file, so
-  the attribute reads NULL wherever it was left alone, and only a value actually written
-  out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
+  never the withdrawing value**: an omitted attribute is not written into the annotation
+  USE — the declared default lives on the annotation TYPE (JVMS 4.7.22, readable since
+  W4) — so the attribute reads NULL wherever it was left alone, and only a value actually
+  written out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
   back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
   either side guessing at the other's type.
 
@@ -1221,8 +1224,30 @@ matches:
     - { method: body,       captures: { body: arg0 } }
     - { method: bodyToMono, captures: { response: arg0 } }
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
+    - { method: header,     collects: { kind: header, name: arg0, value: arg1 } }
   terminal: [retrieve, exchange]
 ```
+
+**`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
+is the whole reason it is a second key rather than a spelling of the first. A capture is
+LAST-WINS — a repeated step overwrites its own earlier value — which is right for a url and
+wrong for a header: a chain calling `.header(...)` three times would keep the third and say
+nothing about the other two, and that is not a smaller answer but a false one. A collecting
+step contributes one `endpoint_metadata` entry per visit instead.
+
+Its `kind` is the catalog's own word for what the entry IS — `header`, `query`, `key` — so a
+reader is never left inferring it from the name; `name` is optional, because a partition key
+and a routing key have a value and no name at all, and writing one in would invent a label
+the wire does not carry. **A varargs position contributes one entry per value**:
+`header(String name, String... values)` is what the API declares, the scanner models the
+call's second argument as an array, and `header("Accept", "a", "b")` sends two values under
+one name. Reading the array itself resolves to no literal — which is what a first
+implementation did, recording every header as `unresolved` including the ones written as
+literals in plain sight.
+
+The value is **redacted where it is read**, not at export ([D01](D01-graph-schema.md) §3),
+and an entry whose value is not a literal is recorded present-and-`unresolved` rather than
+dropped.
 
 **`roots` replaces the single `root`** — a builder library commonly has several
 verb-carrying entry points, each seeding its own `captures`, so this is a list rather than

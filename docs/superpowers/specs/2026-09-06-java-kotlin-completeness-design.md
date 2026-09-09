@@ -893,6 +893,15 @@ There is nowhere to put any of this today, and it is what makes an outbound row 
 A side table keyed by endpoint, **each entry carrying its own resolution and evidence** — so
 a header whose value we could not resolve is visibly unresolved rather than absent.
 
+*Built in W29, and the table above is optimistic — measured, six of its seven entry kinds
+are not readable. AMQP's routing key was already delivered as the address (`address_arg_2`).
+HTTP query parameters, Kafka record headers, SQS message attributes, Pub/Sub attributes and
+JMS properties are each built as a map, a collection, or by mutation OUTSIDE the call the
+endpoint row came from, and chain reconstruction is within-method (D00 §5) — so reading them
+is flow analysis this system does not do, and each is a stated boundary in COVERAGE §3a-vii.
+Kafka's partition key is blocked by `OI-72`. What ships is HTTP headers, the table, and the
+origin-redaction, which is what the `Authorization: Bearer …` sentence below is about.*
+
 **Redacted at the origin, not at export.** Nothing in Sextant reads a header *value*, so the
 redacted value is the only one ever written down. There is no export query to add and nothing
 to forget. This matters because a compiled-in `Authorization: Bearer …` literal is realistic,

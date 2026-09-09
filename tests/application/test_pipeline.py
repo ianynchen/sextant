@@ -191,6 +191,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # them. Six repositories contained zero uses of either attribute, so nothing
         # else here exercises the discriminators it reads.
         ("GET", "/v1/routing/orders"),
+        # W29: the header-carrying WebClient chain. Its three headers are the
+        # `endpoint_metadata` rows; the route itself is an ordinary outbound row.
+        ("GET", "/v2/inventory/tagged"),
+        # `OI-73`: both of these build their URL inside a `uri(Function)` lambda, and
+        # `/v2/inventory/search` was ALREADY IN THIS FIXTURE deriving a row with `path`
+        # NULL — a real outbound call with no address, invisible in this set. The lambda
+        # body is now walked as a chain of its own, so both appear.
+        ("GET", "/v2/inventory/lookup"),
+        ("GET", "/v2/inventory/search"),
         # W26's four, and they are two different answers on purpose.
         # `/v1/paged/totals` returns `OrderTotals`, an interface: no fields at all, so
         # its wire contract is its bean accessors, and the shape carries real fields.
@@ -864,7 +873,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # merged with a call to `orders-loop` — and the other four are genuine
     # self-publish/self-consume. Nothing new is derived; six deletions stopped happening.
     # W28 makes it 137: `RoutingConditionsController`'s three handlers on one address.
-    assert len(report.endpoints) == 137
+    # W29 makes it 139: two WebClient chains — one carrying headers, one whose url is
+    # built in a lambda and stays honestly pathless (`OI-73`).
+    assert len(report.endpoints) == 139
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -950,18 +961,25 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # URL, unlike every `channel_arg` destination elsewhere in this file.
     assert peers["/123456789012/raw-queue"] == "sqs.us-east-1.amazonaws.com"
 
-    # The `uri(uriBuilder -> …)` chain: the engine only follows one hop off
-    # the lambda argument, so the row still derives (a call was made) but
-    # honestly as unresolved, path NULL — never a guess at the literal
-    # inside the builder lambda.
+    # The `uri(uriBuilder -> …)` chain, and this assertion used to read the other way
+    # round (`OI-73`, closed in W29): the row derived with `path` NULL and
+    # `resolution: unresolved` — a real outbound call with no address at all.
+    #
+    # That was not a small loss. The address IS the row's identity, DR-5 matches on the
+    # wire contract, and `uri(Function)` is the idiomatic way to build a URL with query
+    # parameters — so the shape cost every such call its address. The comment here called
+    # it "never a guess at the literal inside the builder lambda", and that framing was
+    # the mistake: the lambda is ONE argument of ONE call, the fact stream names the
+    # synthetic method it compiled to, and reading that method's own call sites is
+    # reading rather than guessing.
     [search_row] = [
         e
         for e in report.endpoints
         if e["caller"] and e["caller"].endswith("InventoryWebClient#search(sig_e02a4703).")
     ]
     assert search_row["method"] == "GET"
-    assert search_row["path"] is None
-    assert search_row["resolution"] == "unresolved"
+    assert search_row["path"] == "/v2/inventory/search"
+    assert search_row["resolution"] == "resolved"
 
     # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in
     # its own synthetic method — the dataflow pass has to scan the
@@ -1678,7 +1696,11 @@ def test_nothing_but_the_two_sse_routes_moves(
         # merge could not see because `peer` is not part of endpoint identity (RC-5).
         # 66 since W28: three handlers on `/v1/routing/orders`, separated by conditions
         # Spring compares and this table does not carry.
-        "http": 66,
+        # 68 since W29: `/v2/inventory/tagged` (the header-carrying chain) and
+        # `searched`, whose url is built inside a `uri(Function)` lambda — that one
+        # derives a row with `path` NULL and `resolution: unresolved`, which is the whole
+        # of `OI-73`: the call is recorded and its address is honestly unread.
+        "http": 68,
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -1703,7 +1725,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 137
+    assert sum(counts.values()) == len(report.endpoints) == 139
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3228,7 +3250,9 @@ def test_the_format_ladder_answers_every_live_row(
     # http row reaching the same rung its inbound twin does.
     # + 3 (W28): the three `/v1/routing/orders` handlers, json-bodied http rows reaching
     # the same rung every other one does.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 60
+    # + 2 (W29): the two new WebClient chains, which reach the same rung whether or not
+    # their address resolved — the ladder answers off the declared payload type.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 62
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

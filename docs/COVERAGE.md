@@ -801,6 +801,63 @@ documents against 161. Most of that is `derive_endpoints` doing work the guardra
 discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
+### 3a-vii. What an outbound call carries besides its address (F5 §6.2)
+
+`endpoint_metadata` is a side table, one row per entry, each carrying **its own resolution
+and evidence**. Measured on the fixture's `GET /v2/inventory/tagged`:
+
+| kind | name | value | resolution |
+|---|---|---|---|
+| header | `Authorization` | `«redacted»` | resolved |
+| header | `X-Tenant` | `acme` | resolved |
+| header | `X-Trace-Id` | — | unresolved |
+
+The third row is the point. *This call sends an `X-Trace-Id` header whose value we could
+not read* is a materially different statement from *this call sends no such header*, and a
+table recording only readable values could not tell them apart.
+
+**Redacted at the origin.** The first row's value is a literal `Bearer` token in bytecode.
+Nothing in this system reads a metadata value — no pass substitutes one into an address
+the way `resolved_config.value` is substituted into a peer — so the masked string is the
+only one ever written down, there is no export query to add and nothing to forget. (The
+masking uses the BUILT-IN patterns only; a module's own `redact:` additions do not reach a
+resolve engine — `OI-71`.)
+
+**`collects` is a new kind of catalog capture, and the difference is load-bearing.** Every
+existing capture is LAST-WINS: a repeated step overwrites its own earlier value. Applied
+to headers that keeps the third of three and says nothing about the other two — not a
+smaller answer but a wrong one. A collecting step accumulates instead. A varargs position
+contributes one entry per value, because `header(String, String…)` is what the API
+declares and `header("Accept", "a", "b")` sends two values.
+
+#### What is NOT recorded, and why — measured, not assumed
+
+The design's table names six protocols. Four of the seven metadata kinds in it are not
+readable here, and one was already delivered:
+
+| Protocol | Entry | Status |
+|---|---|---|
+| HTTP | headers | ✅ read |
+| HTTP | query parameters | ✅ read, and **so is the URL they are built with** (`OI-73`, closed here). `uri(Function)` hands a `UriBuilder` to a lambda, and the whole address used to go unread — the row derived with `path` NULL, which costs the row its identity, since DR-5 matches on the wire contract. The lambda's own synthetic method is now walked as a chain of its own and its declared captures folded back: `InventoryWebClient#search` went from `path` NULL to `/v2/inventory/search` |
+| AMQP | routing key | ✅ **already delivered before this**, as part of the address: `spring-rabbit-template.yml` reads it at `address_arg_2`, and AMQP's wire identity IS the exchange and routing key together |
+| Kafka | partition key | ❌ blocked by `OI-72` — `ProducerRecord`'s value sits at a different index per overload, and two different 5-arity constructors disagree, so only the descriptor can say which |
+| Kafka | record headers | ❌ an `Iterable<Header>` built outside the call |
+| SQS | message attributes | ❌ a whole `Map<String, MessageAttributeValue>`, built outside the call |
+| Pub/Sub | attributes | ❌ `PubsubMessage.Builder.putAttributes(k, v)` is per-entry and in a chain, but that is the MESSAGE's chain, joined to the publish by argument rather than by receiver — a join the walk does not follow |
+| JMS | properties | ❌ `setStringProperty(k, v)` mutates a message object; there is no chain from the send call to it |
+
+The four remaining ❌ share one cause: **the entries are built as a map, a collection, or
+by mutation, outside the call the row was derived from**. Reading them is flow analysis
+this system deliberately does not do, so the answer is a stated boundary rather than a
+guess.
+
+**The query-parameter row was one of them until it was measured properly.** It was first
+recorded as unreadable for the same reason — the builder chain is not the client chain —
+and that was true of the mechanism and wrong as a conclusion: the lambda is one argument
+of one call, the fact stream names the synthetic method it compiled to, and reading that
+method's own call sites is reading rather than guessing. What it cost was not the
+parameters but the ADDRESS, on every WebClient call that builds a URL the idiomatic way.
+
 ### 3a-vi. Two handlers a framework would refuse to register (F5 §6.1)
 
 D01 has said since it was written that two handlers declaring one wire contract "is a

@@ -14,6 +14,19 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A WebClient URL built inside a `uri(Function)` lambda went unread** (`OI-73`, W29).
+  `uri(b -> b.path("/orders").queryParam("q", term).build())` is the idiomatic way to build
+  a URL with query parameters, and the row derived with `path` NULL and
+  `resolution: unresolved` — the call recorded and its whole address lost. That address is
+  the row's identity: DR-5 matches on the wire contract, so a pathless outbound row links
+  to nothing and tells a reader only that this method calls out over HTTP. The lambda's own
+  synthetic method is now walked as a chain of its own and its declared captures folded
+  back, one hop, never spliced — chain reconstruction stays within-method (D00 §5).
+  Measured on the fixture: `InventoryWebClient#search` went from `path` NULL to
+  `/v2/inventory/search`. Reading it is reading rather than guessing, which was the
+  objection the earlier behaviour was written against: the lambda is one argument of one
+  call and the fact stream names the method it compiled to.
+
 - **A per-direction format split stopped being hidden** (F5 §6.1, W27). A merged row
   carried one `format` column for two directions, and the ladder's rung order decided what
   it said — a media type carried across from the outbound twin answering at rung 2 before
@@ -23,6 +36,24 @@ here would restate those documents rather than add anything.
   its own row now and answers off its own evidence, so the disagreement is on the page.
   The COVERAGE caveat that stated this ("a reader must not read a merged row's `format` as
   a statement about both directions") retires with it.
+- **An outbound call's headers are recorded, each with its own trust columns** (F5 §6.2,
+  W29). `endpoint_metadata` is a side table, one row per entry. Measured on the fixture's
+  `GET /v2/inventory/tagged`: `Authorization` = `«redacted»`, `X-Tenant` = `acme`, and
+  `X-Trace-Id` **present and unresolved** — which is the row the table exists for, because
+  "sends a header we could not read" is not "sends no header".
+  **Redacted at the origin**: nothing here reads a metadata value, so the masked string is
+  the only one ever written and there is no export query to add. `collects` is a new
+  catalog capture kind, distinct from `captures` because every existing capture is
+  last-wins — on three headers that keeps the third and says nothing about the other two.
+  A varargs position contributes one entry per value, since `header(String, String…)` is
+  what the API declares.
+  **Query parameters are read too, and with them the URL** — see the Fixed entry below.
+  AMQP's routing key was already delivered as part of the address. Kafka record headers,
+  SQS attributes, Pub/Sub attributes and JMS properties remain unread and share one cause
+  (COVERAGE §3a-vii): they are built as a map, a collection, or by mutation OUTSIDE the
+  call the row came from, which is flow analysis this system deliberately does not do.
+  Kafka's partition key is blocked by `OI-72`.
+
 - **Two handlers a framework would refuse to register are reported** (F5 §6.1, W28).
   D01 has said since it was written that two handlers declaring one wire contract is a
   routing-ambiguity finding, and nothing detected one —

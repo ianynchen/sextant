@@ -597,6 +597,17 @@ _NAMED_QUERIES = {
         ORDER BY symbol
     """,
     "type_hierarchy": "SELECT * FROM type_hierarchy ORDER BY child, position, ancestor",
+    # F5 §6.2 (W29). Ordered on the whole row because nothing shorter is total: one call
+    # may carry several headers, and two callers may reach one address with different ones
+    # — so the endpoint columns alone tie, and `kind, name` ties for a repeated header
+    # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
+    "endpoint_metadata": """
+        SELECT protocol, direction, method, path, caller, kind, name, value,
+               resolution, evidence
+        FROM endpoint_metadata
+        ORDER BY protocol, direction, method, path, caller, kind, name, value,
+                 resolution, evidence
+    """,
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "call_edges": """
         SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence
@@ -791,6 +802,12 @@ _EXPORT_QUERIES = {
     # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
     # in the schema and absent from the export is a test failure.
     "type_hierarchy": ("SELECT * FROM type_hierarchy ORDER BY child, position, ancestor"),
+    # F5 §6.2 (W29): exported WHOLE and unmasked here, which is the one place that reads
+    # differently from every other value column in this map. `value` was already redacted
+    # by the pass that wrote it — nothing in this system reads a metadata value, so there
+    # is no analysis to break by masking early and no second chance to forget. A mask
+    # applied here as well would be the redactor run twice over its own output.
+    "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
     # Worth carrying rather than recomputable: without it a consumer sees the
@@ -893,6 +910,8 @@ _NAMED_DERIVATIONS = {
     "type_hierarchy_insert": "insert_type_hierarchy.sql",
     "method_resolution_reset": "reset_method_resolution.sql",
     "method_resolution_insert": "insert_method_resolution.sql",
+    "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
+    "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
 }
 
 
