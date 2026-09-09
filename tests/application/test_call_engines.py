@@ -1090,7 +1090,7 @@ _BODY_THEN_CALLBACK = "(Ljava/lang/Object;Lcom/acme/messaging/Callback;)V"
 
 
 def test_a_row_declaring_a_descriptor_matches_only_the_overload_it_names(tmp_path: Path):
-    """The positive half: `descriptor` is compared verbatim against the call
+    """The positive half: `descriptor`'s parameter portion is compared against the call
     site's own `target.descriptor` (`storage/duckdb/schema.sql:243`, read at
     `single_call.py:208`), so the row fires for the overload it names and the
     address it reads is that overload's own address argument."""
@@ -7869,3 +7869,60 @@ def _last_parameter(descriptor: str) -> str:
         index = arguments.index(";", index) + 1 if arguments[index] == "L" else index + 1
         positions.append(arguments[start:index])
     return positions[-1] if positions else ""
+
+
+# --- F2 §4.1: identity is name plus PARAMETER types (JLS 8.4.2) --------------
+#
+# The descriptor sweep over-corrected — from arity, past parameter types, to the whole
+# descriptor string — and made every row version-dependent by accident. A library that
+# changes a return type changes NOTHING in its callers' source and the descriptor
+# entirely, so every Spring Kafka 2.x producer derived nothing: this catalog's ten
+# `send`/`sendDefault` rows declare `CompletableFuture`, the 3.x return, and 2.x
+# returns `ListenableFuture`.
+
+_KAFKA_TEMPLATE = "org/springframework/kafka/core/KafkaTemplate#"
+_SEND_PARAMETERS = "(Ljava/lang/String;Ljava/lang/Object;)"
+
+
+# No `pins` and no `declines` marker, and both were wrong here. `pins` names a guard
+# this test must DISCRIMINATE — `scripts/guard_check.py` disables the named line and
+# requires the test to fail — but these calls match their row in the loop above and
+# return before reaching the claimed-arity fallthrough, so disabling it changes nothing
+# and the tool reported NOT DISCRIMINATING. `declines` claims the catalog refuses
+# near-miss input; this test asserts a row IS derived, and the ledger reads the marker
+# statically without checking the body, so it was a false entry the mechanism could not
+# detect. The paired positive `test_the_declared_overload_of_a_claimed_arity_still_derives`
+# carries neither, for the same reason.
+@pytest.mark.parametrize(
+    ("label", "returns"),
+    [
+        pytest.param("2.x", "Lorg/springframework/util/concurrent/ListenableFuture;", id="2.x"),
+        pytest.param("3.x", "Ljava/util/concurrent/CompletableFuture;", id="3.x"),
+    ],
+)
+def test_a_call_differing_only_in_return_type_still_matches(
+    tmp_path: Path, label: str, returns: str
+):
+    """Both Spring Kafka majors derive the same row from the same source.
+
+    The catalog declares the 3.x descriptor. Under a verbatim comparison the 2.x call
+    matched nothing — and because ANY row declaring a descriptor claims that arity, it
+    fell through to no row at all rather than to a looser sibling. A whole major
+    version of the most widely deployed Kafka client derived silence.
+    """
+    arguments = [
+        CallArgument(kind="string", value="orders-topic"),
+        CallArgument(kind="parameter", value=1),
+    ]
+    workspace = _resolve_shipped(
+        tmp_path,
+        [_call_to(_KAFKA_TEMPLATE, "send", _SEND_PARAMETERS + returns, arguments)],
+        "spring-kafka-template",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [str(row["path"]) for row in rows] == ["orders-topic"], (
+        f"the Spring Kafka {label} call must derive its topic; the return type is not "
+        f"part of method identity (JLS 8.4.2)"
+    )

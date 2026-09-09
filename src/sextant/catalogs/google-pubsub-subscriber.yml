@@ -11,7 +11,7 @@ requires: [call_site, string_constants, implemented_interfaces]
 
 measured:
   - { artifact: com.google.cloud:google-cloud-pubsub, versions: ["1.127.3"],
-      identity: reported, by: scripts/probes/w20_subscriber_activation.md }
+      identity: reported, by: scripts/probes/oi64_subscriber_activation.md }
 
 matches:
   # D02 §2's `interface_implementation` style's own worked example, shipped
@@ -32,7 +32,7 @@ matches:
     # execute-terminal". It did need one. `newBuilder(...).build()` is
     # CONSTRUCTION: `Subscriber` extends `AbstractApiService` and delivers nothing
     # until `startAsync()` runs (google-cloud-pubsub 1.127.3, measured by
-    # `scripts/probes/w20_subscriber_activation/`). Without this conjunct a
+    # `scripts/probes/oi64_subscriber_activation/`). Without this conjunct a
     # subscriber built and never started derived a live inbound endpoint — and our
     # own fixture built two, started neither, and had both published as endpoints
     # the suite asserted were correct.

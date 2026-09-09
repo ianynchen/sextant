@@ -47,7 +47,7 @@ from sextant.application.resolve.shapes.rooting import (
 )
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of, parameter_types
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -508,9 +508,12 @@ def _matching_method(
     (D02 §2's `arity`) and, where any candidate row declares one, the target's
     own JVM `descriptor` — first match wins. A row without `arity` matches
     every overload, which is what kept the 2C catalogs parsing unchanged when
-    the key arrived. *No shipped catalog relies on that any more: all 75
-    `matches.methods` rows across the 55 shipped catalogs declare both `arity`
-    and `descriptor` — counted 2026-09-05, and
+    the key arrived. *No shipped catalog relies on that any more: every
+    `matches.methods` row declares both `arity` and `descriptor` — 96 declared
+    descriptors across the 14 catalogs that declare any, recounted by F2 §4.1's own
+    collision sweep (this said "75 rows across the 55 shipped catalogs", which was
+    stale in the count and wrong in the denominator: descriptors have never appeared
+    in more than a quarter of the catalogs), and
     `tests/architecture/test_catalog_descriptor_coverage.py` is the ratchet that
     keeps it so. This sentence claimed the opposite until the 2O documentation
     sweep (`A-Mi13`). The ratchet reaches this grammar only; the other
@@ -536,16 +539,34 @@ def _matching_method(
     used to derive an `unresolved` row — which is §8's honest direction and a
     `docs/COVERAGE.md` boundary, not a silent miss.
 
-    `descriptor` is compared verbatim against the call's own
+    `descriptor`'s PARAMETER PORTION is compared against the call's own
     `target.descriptor` (`storage/duckdb/schema.sql:243`), which is the ERASED
     JVM descriptor: it discriminates the declared parameter types of an
     overload, never the payload's own type (`_IdentityFacts` below reads the
-    caller's signature for that, and says why)."""
+    caller's signature for that, and says why). *This said "compared verbatim"
+    until F2 §4.1 — the return type is in the descriptor and is NOT part of
+    method identity (JLS 8.4.2), and comparing it tied every row to a library
+    version by accident.*"""
     candidates = [
         row for row in rows if row["name"] == name and row.get("arity") in (None, len(arguments))
     ]
+    # PARAMETER TYPES only, not the whole descriptor (F2 §4.1, JLS 8.4.2). A method is
+    # identified by its name and parameter types; the return type is in the JVM
+    # descriptor and is not part of the signature. Comparing whole descriptors made
+    # every row version-dependent by accident — a library changing a return type changes
+    # nothing in its callers' source and the descriptor entirely, which is why every
+    # Spring Kafka 2.x producer derived NOTHING: ten rows here declare
+    # `CompletableFuture`, the 3.x return, and 2.x returns `ListenableFuture`.
+    #
+    # Measured before the change, over all 96 declared descriptors in the 14 catalogs
+    # that declare any: dropping the return type creates **zero** collisions — no two
+    # rows share a catalog, owner, name and parameter list while differing only in what
+    # they return. A covariant-return bridge does put two such methods in one class
+    # file, but call sites are disambiguated by OWNER, which is already part of this
+    # match, and both are semantically one method because the bridge delegates.
+    wanted = parameter_types(str(descriptor)) if descriptor is not None else None
     for row in candidates:
-        if _DESCRIPTOR in row and row[_DESCRIPTOR] == descriptor:
+        if _DESCRIPTOR in row and parameter_types(str(row[_DESCRIPTOR])) == wanted:
             return row
     if any(_DESCRIPTOR in row for row in candidates):
         return None
@@ -645,7 +666,13 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"can answer for half of one (D02 §2's single_call style)"
                 )
         if _DESCRIPTOR in row and not (
-            isinstance(row[_DESCRIPTOR], str) and row[_DESCRIPTOR].startswith("(")
+            isinstance(row[_DESCRIPTOR], str)
+            and row[_DESCRIPTOR].startswith("(")
+            # `)` as well as `(` since F2 §4.1: the match now PARSES the parameter
+            # portion out, so a value with no `)` raises where it used to merely fail
+            # to match — and it would raise from `domain/symbols.py`, naming neither
+            # the catalog nor the row. A load-time refusal names both.
+            and ")" in row[_DESCRIPTOR]
         ):
             # Checked rather than trusted, because the failure is INVISIBLE:
             # a `descriptor` that no call site can ever equal claims its arity
@@ -663,7 +690,7 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{row['name']}` declares "
                 f"`{_DESCRIPTOR}: {row[_DESCRIPTOR]!r}`, which is not a method "
-                f"descriptor — it is compared verbatim against a call site's own "
+                f"descriptor — its parameter portion is compared against a call site's own "
                 f"`target.descriptor`, so it must be spelled the way the extractor "
                 f"records one, opening with `(` (D02 §2's single_call style)"
             )

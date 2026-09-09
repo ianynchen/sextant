@@ -237,6 +237,24 @@ def type_descriptor(dotted: str) -> str:
     return dotted.replace(".", "/") + "#" + _ARRAY_SUFFIX * depth
 
 
+def parameter_types(descriptor: str) -> str:
+    """A JVM method descriptor's parameter list, `(` and `)` included, with the return
+    type dropped — the part that is method IDENTITY.
+
+    JLS 8.4.2 identifies a method by its name and its parameter types; the return type
+    is in the JVM descriptor and is not part of the signature. A catalog comparing whole
+    descriptors was therefore version-dependent by accident: a library that changes a
+    return type changes nothing in its callers' source, and the descriptor entirely.
+    Ten `spring-kafka-template` rows declare `send`/`sendDefault` returning
+    `CompletableFuture`, which is Spring Kafka 3.x — the same call in a 2.x module
+    returns `ListenableFuture` and matched nothing at all (F2 §4.1).
+
+    Lives here because it is symbol-grammar parsing, which happens in this module and
+    nowhere else (`test_symbol_grammar_confinement`).
+    """
+    return descriptor[: descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1]
+
+
 def returned_type(descriptor: str) -> str | None:
     """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
     returns a primitive, `void` or an array.

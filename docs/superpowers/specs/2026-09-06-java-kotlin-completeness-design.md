@@ -694,7 +694,7 @@ risks before this was decided:
 
 | Question | Measured answer |
 |---|---|
-| Collisions after stripping the return type | 75 declared descriptors across all 55 catalogs → **zero** ambiguity. 12 carry `CompletableFuture` — those are the rows that die on Kafka 2.x. |
+| Collisions after stripping the return type | 75 declared descriptors across all 55 catalogs → **zero** ambiguity. 12 carry `CompletableFuture` — those are the rows that die on Kafka 2.x. *Re-measured at implementation (W20): **96** descriptors, in the **14** catalogs that declare any — the 55 was the catalog total, not the denominator, and descriptors have never appeared in more than a quarter of them — and **16** carry `CompletableFuture` (10 `spring-kafka-template`, 6 `spring-pubsub`). The finding that decided the change is unchanged: still **zero** collisions, now held by `tests/architecture/test_catalog_descriptor_identity.py`.* |
 | What consumes the declared descriptor | Compared verbatim in **one** place (`single_call.py:528`) plus a load-time validator. `dispatch.py` and `call_edges.py` use the **call site's** descriptor from facts, never the catalog's. Nothing reads the return portion. |
 | Bridge methods | A covariant return does put two same-name, same-parameter methods in one class file — but call sites are disambiguated by **owner** (`Derived.get:()Ljava/lang/String;` vs `Base.get:()Ljava/lang/Object;`), and owner is already in the match. Using the return value is unaffected: `result` ids, `return_flows` and traces read the fact stream, not the catalog match. |
 

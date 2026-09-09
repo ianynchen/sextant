@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from sextant.domain.symbols import (
     Symbol,
     bare_descriptor,
@@ -7,6 +9,8 @@ from sextant.domain.symbols import (
     member_name,
     method_descriptor,
     owner_of,
+    parameter_types,
+    returned_type,
     simple_name,
     type_descriptor,
     without_type_marker,
@@ -123,3 +127,64 @@ def test_method_descriptor_of_a_scanned_owner_carries_no_module_coordinates():
     spellings of one identity and match nothing."""
     composed = method_descriptor("com/acme/OrderService#", "save", "()V")
     assert bare_descriptor(composed) == composed
+
+
+# --- F2 §4.1 / `OI-64`: the two descriptor readers ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "expected"),
+    [
+        pytest.param("()V", "()", id="no parameters"),
+        pytest.param("(Ljava/lang/String;)V", "(Ljava/lang/String;)", id="one object"),
+        pytest.param("([Ljava/lang/String;I)V", "([Ljava/lang/String;I)", id="array and primitive"),
+        pytest.param(
+            "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+            "(Ljava/lang/String;Ljava/lang/Object;)",
+            id="the Spring Kafka 3.x send",
+        ),
+        pytest.param(
+            "(Ljava/lang/String;Ljava/lang/Object;)Lorg/springframework/util/concurrent/ListenableFuture;",
+            "(Ljava/lang/String;Ljava/lang/Object;)",
+            id="the Spring Kafka 2.x send",
+        ),
+    ],
+)
+def test_parameter_types_keeps_the_parameters_and_drops_the_return(descriptor: str, expected: str):
+    """JLS 8.4.2: name plus parameter types is method identity.
+
+    The last two cases are the point of the function — the same source-level call
+    across two Spring Kafka majors, whose descriptors differ ONLY in what they return,
+    reduced to the same identity."""
+    assert parameter_types(descriptor) == expected
+
+
+def test_parameter_types_refuses_a_descriptor_with_no_parameter_list():
+    """A value that is not a descriptor raises rather than answering.
+
+    It is unreachable from real facts — the extractor writes what the class file holds —
+    but it IS reachable from a hand-written catalog, which is why
+    `single_call._validate_methods` refuses such a row at load, where the message can
+    name the catalog and the row. This asserts the boundary the loader is protecting."""
+    with pytest.raises(ValueError):
+        parameter_types("no parentheses here")
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "expected"),
+    [
+        pytest.param("()V", None, id="void returns nothing"),
+        pytest.param("(I)I", None, id="a primitive is not an object"),
+        pytest.param("()[Ljava/lang/String;", None, id="an array answers None"),
+        pytest.param(
+            "()Lcom/google/cloud/pubsub/v1/Subscriber;",
+            "com/google/cloud/pubsub/v1/Subscriber#",
+            id="an object becomes a type descriptor",
+        ),
+    ],
+)
+def test_returned_type_answers_only_for_an_object_return(descriptor: str, expected):
+    """`OI-64`'s reader. `None` is an answer rather than a gap: a method returning
+    `void`, a primitive or an array cannot be handing a constructed object back to its
+    caller, which is the only question anyone asks this."""
+    assert returned_type(descriptor) == expected

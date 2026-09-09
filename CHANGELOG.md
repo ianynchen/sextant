@@ -32,6 +32,12 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **Every Spring Kafka 2.x producer derived nothing** (F2 §4.1). Catalog descriptors were
+  compared verbatim, return type included, which made every row version-dependent by
+  accident — `spring-kafka-template` declares the 3.x `CompletableFuture` return and a 2.x
+  module's identical `send` returns `ListenableFuture`, matching no row and falling through
+  to none. Matching is now on parameter types only, which is what JLS 8.4.2 calls method
+  identity. Measured across all 96 declared descriptors: zero become ambiguous.
 - **A `Subscriber` built and never started was published as a live inbound endpoint**
   (`OI-64`). Construction subscribes to nothing — `Subscriber` delivers no message until
   `startAsync()` runs — and our own acceptance fixture built two, started neither, and

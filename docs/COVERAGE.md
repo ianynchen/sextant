@@ -760,6 +760,35 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-i. A catalog row is not tied to a library version by accident (F2 §4.1)
+
+A `descriptor:` in a catalog is compared on its **parameter types only**. JLS 8.4.2
+identifies a method by its name and parameter types; the return type is in the JVM
+descriptor and is not part of the signature.
+
+**This was a real, whole-major-version hole.** Comparing whole descriptors made every
+row version-dependent by accident: a library that changes a return type changes nothing
+in its callers' source and the descriptor entirely. `spring-kafka-template`'s ten
+`send`/`sendDefault` rows declare `CompletableFuture`, which is Spring Kafka **3.x** —
+the identical call in a 2.x module returns `ListenableFuture`, matched no row, and
+because any row declaring a descriptor CLAIMS that arity, it fell through to nothing at
+all rather than to a looser sibling. Every Spring Kafka 2.x producer derived silence.
+Sixteen rows across two catalogs carried a `CompletableFuture` return and were exposed
+the same way.
+
+Measured before the change and held by
+`tests/architecture/test_catalog_descriptor_identity.py` after it: across all 96
+declared descriptors, no two rows share a catalog, owner, name and parameter list while
+differing only in what they return, so dropping the return type introduces **zero**
+ambiguity. A covariant-return bridge does put two such methods in one class file, but
+call sites are disambiguated by owner — already part of the match — and the bridge
+delegates, so both are semantically one method.
+
+**What this does NOT do** is make a rule version-independent. A method that exists in
+3.x and not in 2.x is still absent; that is what each catalog's `measured:` block and
+the resolved dependency versions state, and it must not be asked to carry weight that
+belongs to getting identity right.
+
 ### 3b. What each catalog does NOT read — the declared slices
 
 `3a` says which versions a catalog's rules were measured against. It does not say how
@@ -2179,7 +2208,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | `@PulsarReader`'s `startMessageId` and `schemaType` | the position a reader starts from, and the schema family it decodes with | `annotation` | **Boundary — neither is read.** `startMessageId` is a start POSITION rather than an address and names no destination; `schemaType` is the same enum-valued attribute already stated for `@PulsarListener` two rows above, and no `format_from` rule is declared for it. Both are stated rather than silent because CP-17 rows 1c/1d enumerate them |
 | Java | `RabbitTemplate.convertAndSend(exchange, routingKey, message)` | the wire identity is the exchange+routing-key PAIR, rendered `exchange/routingKey`; the two-argument overload targets the default exchange and is the routing key alone | `registration_call` | ✅ **shipped** (2O Task 7), via `single_call`'s new `address_arg_2` |
 | Java | `RabbitTemplate` / `JmsTemplate` — every form no row declares: `send(…)` (four arities), `convertSendAndReceive(…)`, every `convertAndSend` carrying a `CorrelationData`, Rabbit's `MessagePostProcessor` forms, and JMS's `(Object, MessagePostProcessor)` and `(Destination, Object, MessagePostProcessor)` | pre-converted `Message`, request/reply, and the correlation / post-processor forms | `registration_call` | **Boundary — derives NOTHING, and this is silence rather than an `unresolved` row.** Once any row for a name+arity declares a `descriptor` that arity is claimed, so an undeclared sibling falls through to no row at all — deliberately, because falling through to a descriptor-less row is the fabrication the key exists to stop. **Narrowed by the descriptor sweep (R5)**: `JmsTemplate.convertAndSend(Destination, Object)` was in this row by accident — it can never fabricate a destination, since its argument 0 is an instance rather than a string constant — and has its own row again; `convertAndSend(String, Object, MessagePostProcessor)` was never declared at any arity and now is, which is recall this row never admitted losing. **Falsified by** a module that publishes only through the forms still listed: its AMQP/JMS surface is absent from the export entirely. Closes by declaring a row per overload, one descriptor each |
-| Java | `RabbitTemplate` / `JmsTemplate` — overloads that COLLIDE on arity | **arity 2 is exposed as well as arity 3**, on both classes (javap -s, spring-rabbit 3.1.4 / spring-jms 6.1.6): Rabbit arity 2 is `(String, Object)` and `(Object, MessagePostProcessor)`, arity 3 is four overloads; JMS arity 2 is `(String, Object)`, `(Destination, Object)` and `(Object, MessagePostProcessor)` | `registration_call` | ✅ **CLOSED** (2O Task 7 fix round). Was a live fabrication in both shipped catalogs — a `MessagePostProcessor` overload published its message PAYLOAD as the wire destination at `resolved`/`compiler`. Each address-carrying row now declares its own erased JVM `descriptor`, matched verbatim against the call's `target.descriptor` (`storage/duckdb/schema.sql:243`). **The residual boundary is the under-report in the row above** |
+| Java | `RabbitTemplate` / `JmsTemplate` — overloads that COLLIDE on arity | **arity 2 is exposed as well as arity 3**, on both classes (javap -s, spring-rabbit 3.1.4 / spring-jms 6.1.6): Rabbit arity 2 is `(String, Object)` and `(Object, MessagePostProcessor)`, arity 3 is four overloads; JMS arity 2 is `(String, Object)`, `(Destination, Object)` and `(Object, MessagePostProcessor)` | `registration_call` | ✅ **CLOSED** (2O Task 7 fix round). Was a live fabrication in both shipped catalogs — a `MessagePostProcessor` overload published its message PAYLOAD as the wire destination at `resolved`/`compiler`. Each address-carrying row now declares its own erased JVM `descriptor`, whose PARAMETER portion is matched against the call's `target.descriptor` (`storage/duckdb/schema.sql:243`) — verbatim until F2 §4.1, which dropped the return type because it is not part of method identity (§3a-i). **The residual boundary is the under-report in the row above** |
 | Java | EVERY `single_call` client catalog — a call made through an INTERFACE or supertype rather than the concrete class | a call site records the **compile-time qualifying type** javac emitted, so `SqsOperations.send(...)`, `AmqpTemplate.convertAndSend(...)`, `JmsOperations`, `KafkaOperations`, `RestOperations`, `WebServiceOperations`, `PubSubOperations`, `org.apache.kafka.clients.consumer.Consumer` and `jakarta.jms.QueueSession`/`TopicSession` each record THEIR own owner | `registration_call` | ✅ **CLOSED for seven of them** (W9/W10). `matches.owner` accepts a LIST of names, and `JmsOperations`, `AmqpTemplate`, `SqsOperations`, `RestOperations`, `KafkaOperations` and Kafka's own `Consumer` and `Producer` are declared beside their concrete classes — each checked against the library's own bytecode by `scripts/probes/cp10_catalog_descriptors.md`, which asks its question of every alternate separately because an interface declaring a SUBSET of the class's methods would match some call sites and miss the rest. All 53 alternate rows come back `declared`. The highest-risk case was `spring-sqs-template.yml`, whose `SqsTemplate.newSyncTemplate(...)` **returns `SqsOperations`** (javap -p -s, spring-cloud-aws-sqs 3.1.1), so the idiomatic construction missed entirely. **The residual boundary is `WebServiceOperations`, `PubSubOperations` and `jakarta.jms.QueueSession`/`TopicSession`**, which are named here and are not declared as alternates: nothing measured them, and an unmeasured alternate is the one thing the list form must not carry. **Falsified by** a module holding one of those three by its interface: that part of its surface is still absent from the export. Closes by measuring each and adding it, which is now a catalog edit rather than engine work |
 | Go | `rabbitmq/amqp091-go` (was `streadway/amqp`) `ch.Publish(exchange, key, …)` | — | `registration_call` | A |
 | TS | `amqplib` `ch.publish(exchange, key, …)`, `ch.consume(queue, cb)` | — | `registration_call` | A |

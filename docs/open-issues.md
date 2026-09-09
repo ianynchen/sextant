@@ -2178,7 +2178,7 @@ started by Spring and that this was "a measured rule". Nobody had measured it.
 `Subscriber` implements no Spring lifecycle interface anywhere in its hierarchy —
 `AbstractApiService` implements `ApiService` and nothing else — and spring-cloud-gcp-pubsub
 5.1.2 ships no `BeanPostProcessor` that would start one
-(`scripts/probes/w20_subscriber_activation.md`). Spring does not start arbitrary beans.
+(`scripts/probes/oi64_subscriber_activation.md`). Spring does not start arbitrary beans.
 A `@Bean` returning a `Subscriber` is the same unstarted object as any other, and §8.6's
 example is corrected in place. **Falsified by** measuring that
 `Subscriber.newBuilder(...)` itself begins delivery, which the probe's section 2 answers

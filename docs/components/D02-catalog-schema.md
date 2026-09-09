@@ -125,7 +125,7 @@ FOLLOW its registration before the registration is a boundary at all. Each step 
 `google-pubsub-subscriber.yml` is why it exists. It derived a live inbound endpoint from
 `Subscriber.newBuilder(subscription, receiver).build()` — construction, which subscribes
 to nothing: `Subscriber` is an ordinary start/stop service and delivers no message until
-`startAsync()` runs (measured, `scripts/probes/w20_subscriber_activation.md`). Our own
+`startAsync()` runs (measured, `scripts/probes/oi64_subscriber_activation.md`). Our own
 acceptance fixture built two subscribers, started neither, and had both published as
 endpoints the test suite asserted were correct.
 
@@ -1061,10 +1061,21 @@ per arity instead.
 `convertAndSend(String routingKey, Object message)` from `convertAndSend(Object message,
 MessagePostProcessor after)` — same name, same owner, same count — and where a row reads an
 ADDRESS out of a position, matching the wrong one publishes a message payload as a wire
-destination. The value is the overload's erased JVM method descriptor, compared verbatim
-against the call site's own `target.descriptor`
-([D00](D00-fact-schema.md) §5); `javap -s` prints it. It is validated at load to open with
-`(`, because a descriptor no call can equal fails INVISIBLY.
+destination. The value is the overload's erased JVM method descriptor, and its
+**PARAMETER portion** is compared against the call site's own `target.descriptor`
+([D00](D00-fact-schema.md) §5); `javap -s` prints it.
+
+*The whole string was compared until F2 §4.1.* JLS 8.4.2 identifies a method by its name
+and parameter types — the return type is in the descriptor and is not part of the
+signature — so comparing it tied every row to a library version by accident: a library
+that changes a return type changes nothing in its callers' source and the descriptor
+entirely, and every Spring Kafka 2.x producer derived nothing against rows declaring the
+3.x `CompletableFuture`. **What this means for an author:** a row whose declared RETURN
+type is wrong now still matches, so it is no longer a silent-failure shape; a row whose
+declared PARAMETERS are wrong still is, and that is what the paragraph below is about.
+
+It is validated at load to open with `(` and to contain `)`, because a descriptor no call
+can equal fails INVISIBLY.
 
 **Declaring one on any row CLAIMS that (name, arity) for every row.** A call at a claimed
 arity whose descriptor matches no row derives **nothing** — it does not fall through to a
