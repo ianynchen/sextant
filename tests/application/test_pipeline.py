@@ -2576,13 +2576,13 @@ def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_han
 ):
     """`google-pubsub-subscriber.yml`, D02 §2's `interface_implementation`
     style's own worked example against the real fixture:
-    `RawPubSubSubscribers#withNamedReceiver`'s
+    `RawPubSubSubscribers#startNamedReceiver`'s
     `Subscriber.newBuilder(ProjectSubscriptionName.of(project,
     "raw-notify"), new RawPubSubReceiver())` resolves the `instance`
     receiver to `RawPubSubReceiver#receiveMessage` (its class's own
     declared `interfaces` includes `MessageReceiver`, D00 §5a's
     `implemented_interfaces` capability — direct implementers only);
-    `withLambdaReceiver`'s own `Subscriber.newBuilder(...,
+    `startLambdaReceiver`'s own `Subscriber.newBuilder(...,
     (MessageReceiver) (m, c) -> c.ack())` resolves the `lambda` receiver to
     its own synthetic method symbol. Both channels read through
     the SAME `channel_via` form (`ProjectSubscriptionName.of`'s own
@@ -2607,7 +2607,7 @@ def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_han
 
     assert lambda_row["direction"] == "inbound"
     assert lambda_row["caller"] is None
-    assert "lambda$withLambdaReceiver$" in lambda_row["handler"]
+    assert "lambda$startLambdaReceiver$" in lambda_row["handler"]
     assert lambda_row["resolution"] == "resolved"
     assert lambda_row["request_shape"] is None
 

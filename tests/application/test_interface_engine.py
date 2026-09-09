@@ -17,7 +17,7 @@ call's own channel argument (arg 0) arrives `unresolved` — never `instance`
 `channel_via` follows regardless. The receiver argument (arg 1) arrives
 `instance` (symbol the bare `RawPubSubReceiver#` descriptor, `NEW`-produced)
 for the named receiver, and `lambda` (symbol the synthetic body method,
-`RawPubSubSubscribers#lambda$withLambdaReceiver$0(...).`) for the lambda
+`RawPubSubSubscribers#lambda$buildsAndDiscards$0(...).`) for the lambda
 receiver — confirming both real registrations named in the task brief.
 CHECKPOINT FACT, also pinned by the probe: a class symbol fact's own
 `interfaces` entries are module-prefixed exactly like the class's own
@@ -555,7 +555,7 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     hand-built facts — the checkpoint this task's brief requires: compiles
     and scans `fixtures/orders-service` once, then runs an invented catalog
     (this style ships no shipped catalog yet — that is a later task) against
-    the real `RawPubSubSubscribers#withNamedReceiver`/`withLambdaReceiver`
+    the real `RawPubSubSubscribers#startNamedReceiver`/`startLambdaReceiver`
     registrations. Confirms both real receiver-argument shapes named in the
     task brief resolve exactly as the hand-built (a)/(b) cases above assert.
     """
@@ -614,7 +614,11 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     declared_symbols = {str(row["symbol"]) for row in workspace.query("method_symbols")}
     workspace.close()
 
-    assert set(endpoints) == {"raw-notify", "raw-notify-lambda"}
+    # THREE subscriptions in the fixture since `OI-64`, and all three derive here
+    # because this catalog declares no `started_by`. That default is the assertion:
+    # a framework whose registration call IS the subscription must keep deriving from
+    # the registration alone, and adding the conjunct must not have changed it.
+    assert set(endpoints) == {"raw-notify", "raw-notify-factory", "raw-notify-lambda"}
     named = endpoints["raw-notify"]
     assert named["resolution"] == "resolved"
     assert named["handler"] is not None
@@ -623,7 +627,7 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     lambda_row = endpoints["raw-notify-lambda"]
     assert lambda_row["resolution"] == "resolved"
     assert lambda_row["handler"] is not None
-    assert "lambda$withLambdaReceiver" in lambda_row["handler"]
+    assert "lambda$startLambdaReceiver" in lambda_row["handler"]
 
     # The whole point of FIX 1 (final review): a `handler` names a method
     # symbol some scanned document actually declared. Before the fix BOTH of
@@ -803,3 +807,120 @@ def test_a_scanned_interfaces_own_parameter_types_name_which_overload_it_is(tmp_
     workspace.close()
 
     assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
+
+
+# --- `OI-64`: construction is not subscription -----------------------------
+#
+# `Subscriber.newBuilder(...).build()` delivers nothing until `startAsync()` runs, and
+# `google-pubsub-subscriber.yml` used to derive a live inbound endpoint from the
+# construction alone. Our own fixture built two subscribers, started NEITHER, and had
+# both published as endpoints these tests asserted were correct — the suite protected
+# the fabrication, which is why nothing noticed it for three phases.
+#
+# The fixture now models all three shapes and each gets a different answer. They are
+# asserted together, from one resolve, because what matters is that the three are
+# DISTINGUISHED: a rule that derived all three, or silenced all three, would satisfy
+# any one of these assertions taken alone.
+
+
+def _resolved_raw_pubsub(tmp_path: Path) -> tuple[DuckDbWorkspace, list]:
+    """Compile and scan the real fixture, then resolve the SHIPPED catalog over it.
+
+    The shipped catalog, not an invented one: `started_by` lives in that file, and a
+    test that reproduced it here would pass while the shipped catalog said something
+    else — which is how the fabrication survived. The workspace is handed back open."""
+    import subprocess
+
+    from sextant.application.ports.scanner import ScanRequest
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.ingress.extract.jvm.scanner import AsmScanner
+    from sextant.resources import extractor_jar
+
+    repo = Path(__file__).parents[2]
+    fixture = repo / "fixtures" / "orders-service"
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    facts = tmp_path / "facts"
+    AsmScanner(extractor_jar()).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=fixture / "target" / "classes",
+            out_dir=facts,
+        )
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    catalog = next(
+        c
+        for c in YamlCatalogSource(repo / "src" / "sextant" / "catalogs").load()
+        if c.id == "google-pubsub-subscriber"
+    )
+    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    assert [s.catalog_id for s in skipped] == [], (
+        "the shipped catalog must RUN here; a skip would make every assertion below "
+        "pass for the wrong reason"
+    )
+    return workspace, skipped
+
+
+def test_only_started_subscribers_derive_rows(tmp_path: Path):
+    """The positive arm, and it covers BOTH receiver shapes.
+
+    `startNamedReceiver` and `startLambdaReceiver` each build and start in one method,
+    so the whole §8.6 chain is present. `withNamedReceiver` builds and hands back
+    without starting, and derives nothing."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"raw-notify", "raw-notify-lambda"}, (
+        "only the started subscribers are boundaries; `raw-notify-factory` is returned "
+        "without being started"
+    )
+
+
+def test_a_builder_setter_between_construction_and_build_still_derives(tmp_path: Path):
+    """The regression this walk was rewritten for.
+
+    `startLambdaReceiver` puts `setParallelPullCount(2)` between `newBuilder` and
+    `build` — the spelling Google's own documentation uses. An earlier version required
+    each declared step to be the IMMEDIATELY next call on the value, so this ordinary
+    shape matched nothing and derived nothing: one over-report traded for a silent
+    false negative on the commonest real spelling of the thing being modelled. The
+    assertion is that an intervening call changes no answer."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert "raw-notify-lambda" in paths
+
+
+def test_a_returned_subscriber_asks_rather_than_deriving_or_vanishing(tmp_path: Path):
+    """The middle arm, and the reason an unstarted subscriber asks rather than vanishing.
+
+    `withNamedReceiver` is an ordinary factory: it builds a subscriber and hands it
+    back, and its caller may well start it. Chain reconstruction is within-method only
+    (D00 §5), so we cannot join the two. Answering "no boundary" would trade the
+    fabricated row for a silent false negative, which §8 forbids just as firmly.
+
+    **There is no third, "provably dead" answer, and an earlier version claimed one.**
+    It called a construction inert when no later CALL mentioned the value — but a
+    subscriber assigned to a FIELD leaves the method through `putfield`, which is not a
+    call site and so not a fact this walk can see. Measured: a `buildsIntoField` shape
+    derived nothing and asked nothing while another method started it. "No call
+    mentions this value" is inference, and §8 permits exclusion only on proof."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    questions = [
+        row
+        for row in workspace.query("open_questions")
+        if str(row["question"]) == "registration_activation"
+    ]
+    workspace.close()
+
+    assert len(questions) == 1
+    assert str(questions[0]["path"]) == "raw-notify-factory"
+    assert "startAsync" in str(questions[0]["candidates"])

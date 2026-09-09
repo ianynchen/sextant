@@ -68,6 +68,15 @@ QUESTIONS = (
     # answering it wrongly reaches other people's graphs while a wrong name does
     # not.
     "handler_protocol",
+    # `OI-64`. A registration whose framework requires a later ACTIVATION call —
+    # `Subscriber.newBuilder(...).build()` needs `startAsync()` before any message
+    # arrives — where nothing in the building method activates it AND the built object
+    # is returned. The construction alone used to derive a live inbound endpoint, so
+    # this kind replaces a fabricated row. It is asked rather than answered because
+    # chain reconstruction is within-method only (D00 §5): a factory handing a
+    # subscriber back is ordinary code whose caller may well start it, and answering
+    # "no boundary" would swap a fabrication for a silent false negative.
+    "registration_activation",
 )
 
 

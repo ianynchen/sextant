@@ -95,7 +95,6 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 _NOT_MEASURED_YET: dict[str, str] = {
     "aws-sqs-sdk": "no probe opens the AWS SDK v2 `SqsClient` jar",
     "google-pubsub-publisher": "CP-10 measured `google-pubsub-client`'s descriptor only",
-    "google-pubsub-subscriber": "CP-10 measured `google-pubsub-client`'s descriptor only",
     "graphql-schema": "a schema-file rule; no framework jar has been read for it",
     "grpc-java": "CP-3/CP-8 ship a fixture and coordinates but measure fact shapes, not a jar",
     "grpc-net-devh": "no probe opens `net.devh:grpc-server-spring-boot-starter`",

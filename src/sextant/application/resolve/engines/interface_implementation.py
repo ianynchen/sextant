@@ -9,7 +9,10 @@ lambda, that instance's own declared `interfaces` (D00 §5a's
 `implemented_interfaces` capability). **The registration is the evidence**:
 a class that implements the declared interface but is never handed to a
 matching registration call derives nothing, exactly as D02 states — this
-style needs no execute-terminal (fluent's `terminal`/`terminal_via_argument`)
+style needed no execute-terminal (fluent's `terminal`/`terminal_via_argument`) —
+*wrong, and `registration.started_by` is the correction: construction subscribes
+to nothing, so a registration whose framework requires a later activation call is
+not a boundary until that call is reached (`OI-64`)*
 because binding a receiver to a subscription already IS the intent a built,
 unlogged HTTP request is not.
 
@@ -23,6 +26,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     _arg_at,
@@ -30,9 +34,17 @@ from sextant.application.resolve.shapes.arguments import (
     linked_channels,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
-from sextant.domain.symbols import bare_descriptor, method_name
+from sextant.domain.symbols import (
+    bare_descriptor,
+    method_name,
+)
 
 _REQUIRED_MATCHES = ("interface", "handler_method", "registration")
+
+# The question a registration files when nothing in its own method activates it and
+# the built object leaves the method (`OI-64`). Named for what is UNKNOWN, like every
+# other kind in the closed set: not "this is dead", but "we cannot tell from here".
+_REGISTRATION_ACTIVATION = "registration_activation"
 _REQUIRED_REGISTRATION = ("owner", "method", "channel_arg", "receiver_arg")
 
 
@@ -76,7 +88,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
 
+    started_by = _started_by_steps(registration)
     rows: list[dict[str, Any]] = []
+    unresolved: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups (D02 §2's
     # unresolved-is-an-answer): two registrations whose channels nobody could
     # read carry nothing to compare, so each stays its own row — the key is
@@ -115,6 +129,47 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             destinations = linked_channels(channel_argument, facts, forms)
         else:
             destinations = [literal]
+        # The activation conjunct, before the handler is resolved: an unstarted
+        # registration is not a boundary, and resolving its handler would only make a
+        # row we must not mint look better founded. It runs AFTER the destination
+        # ladder because the question it may file names the channel.
+        if started_by and _activation_of(site, by_caller.get(caller, []), started_by) != "started":
+            unresolved.append(
+                {
+                    "protocol": catalog.protocol,
+                    "method": None,
+                    # The channel as this site resolved it, `channel_via` included — the
+                    # fixture reaches its subscription through
+                    # `ProjectSubscriptionName.of`, so reading the literal
+                    # argument here would file every question against a
+                    # null path and make them indistinguishable.
+                    "path": next(
+                        (path for _, path, _ in destinations if path is not None),
+                        None,
+                    ),
+                    "question": _REGISTRATION_ACTIVATION,
+                    "candidates": json.dumps(
+                        [
+                            {
+                                "registration": f"{site['owner']}{site['name']}",
+                                "enclosing": caller,
+                                "activated_by": " then ".join(
+                                    f"{s['owner']}.{s['method']}" for s in started_by
+                                ),
+                            }
+                        ],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "evidence": (
+                        "constructed, but nothing in this method completes the "
+                        "activation chain — and a value that leaves the method by a "
+                        "field store is invisible here, so this is 'we cannot tell' "
+                        "rather than 'it is never started'"
+                    ),
+                }
+            )
+            continue
         receiver_argument = _arg_at(arguments, receiver_arg)
         handler = _handler_of(
             receiver_argument,
@@ -151,6 +206,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             )
 
     workspace.derive("call_endpoints", rows=rows)
+    # Filed after the rows, so a registration that both derives and asks cannot have
+    # its question written and its row lost to a later failure.
+    record_open_questions(workspace, unresolved)
 
 
 def _handler_of(
@@ -299,11 +357,17 @@ class _Declarations:
 
     parameters: dict[str, tuple[str, ...]]
     by_type: dict[str, list[tuple[str, tuple[str, ...]]]]
+    # The RETURN type's symbol per method, for `registration.started_by`: a method
+    # that returns the type it just built is handing it to a caller this walk cannot
+    # follow, which is the difference between "not a boundary" and "cannot tell from
+    # here" (`_activation_of`). Absent where a method declares no signature.
+    returns: dict[str, str]
 
 
 def _declarations(workspace: Workspace) -> _Declarations:
     parameters: dict[str, tuple[str, ...]] = {}
     by_type: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    returns: dict[str, str] = {}
     for row in workspace.query("method_declarations"):
         symbol = str(row["symbol"])
         # `or {}` on BOTH sides: the column may be SQL NULL, and it may
@@ -328,11 +392,14 @@ def _declarations(workspace: Workspace) -> _Declarations:
             for parameter in signature.get("parameters") or []
         )
         parameters[symbol] = types
+        returned = (signature.get("returns") or {}).get("symbol")
+        if returned:
+            returns[symbol] = str(returned)
         enclosing = row["enclosing"]
         if enclosing is not None:
             name = method_name(bare_descriptor(symbol))
             by_type.setdefault(bare_descriptor(str(enclosing)), []).append((name, types))
-    return _Declarations(parameters=parameters, by_type=by_type)
+    return _Declarations(parameters=parameters, by_type=by_type, returns=returns)
 
 
 def _method_symbols(workspace: Workspace) -> dict[str, str]:
@@ -416,6 +483,106 @@ def _channel_via_entries(registration: dict[str, Any]) -> list[Any]:
     if via is None:
         return []
     return via if isinstance(via, list) else [via]
+
+
+def _started_by_steps(registration: dict[str, Any]) -> list[dict[str, str]]:
+    """`registration.started_by` — the calls that must FOLLOW a registration before it
+    is a live boundary (D02 §2, GUIDELINES §8.6).
+
+    **Why this key exists.** `Subscriber.newBuilder(subscription, receiver).build()` is
+    CONSTRUCTION, and construction subscribes to nothing: messages arrive only once
+    something calls `startAsync()`. Without this conjunct the catalog derived a live
+    inbound endpoint from the construction alone — and our own acceptance fixture built
+    two subscribers, started neither, and had both published as endpoints the test suite
+    asserted were correct (`OI-64`).
+
+    Each step is `{owner, method}`, applied in order, each linked to the previous by
+    receiver-to-result within one method (D00 §5). Absent, the style behaves exactly as
+    before: the registration alone is the evidence, which is right for a framework whose
+    registration call IS the subscription.
+    """
+    declared = registration.get("started_by")
+    if declared is None:
+        return []
+    if not isinstance(declared, list) or not declared:
+        raise CatalogError("`registration.started_by` must be a non-empty list of steps")
+    for step in declared:
+        if not isinstance(step, dict) or not step.get("owner") or not step.get("method"):
+            raise CatalogError(
+                "each `registration.started_by` step names an `owner` and a `method`"
+            )
+    return declared
+
+
+def _activation_of(
+    site: dict[str, Any],
+    caller_sites: list[dict[str, Any]],
+    steps: list[dict[str, str]],
+) -> str:
+    """`started` when this registration's activation chain completes here, `unknown`
+    otherwise.
+
+    Follows the value the registration produced, forward through this method, looking
+    for each declared step in order and skipping any number of intervening calls — a
+    builder's configuration methods each return the builder again, so
+    `newBuilder(sub, receiver).setParallelPullCount(2).build().startAsync()` is the
+    ordinary spelling and the step being sought is arbitrarily far along. Every path is
+    explored, not the first: `b.build(); b.build().startAsync();` starts the SECOND
+    one, and a walk that committed to the first found nothing.
+
+    **There are two answers, not three, and the third one was wrong.** An earlier
+    version also returned `inert` — "built and dropped, provably not a boundary" —
+    whenever no later CALL referred to the value. That is not proof. A subscriber
+    assigned to a field leaves the method through `putfield`, which is not a call site
+    and therefore not a fact this walk can see; `Shapes.buildsIntoField` was measured
+    deriving nothing and asking nothing while `startsTheField` started it two methods
+    away. GUIDELINES §8 permits exclusion only on proof, and "no call mentions this
+    value" is inference — it cannot tell a discarded value from one the bytecode stored
+    somewhere we do not read.
+
+    So anything that is not demonstrably started is `unknown`, and the caller files a
+    question. The cost is a question for the rare subscriber that really is built and
+    thrown away; the alternative is silence for the common one that is stored in a
+    field, and silence is the failure this whole change exists to remove.
+    """
+    if _completes(site.get("result"), caller_sites, steps):
+        return "started"
+    return "unknown"
+
+
+def _completes(
+    value: object, caller_sites: list[dict[str, Any]], steps: list[dict[str, str]]
+) -> bool:
+    """Whether some forward path from `value` matches every remaining step in order.
+
+    Recursive over the steps and breadth-first over the value chain, because a value
+    may be the receiver of several calls and only one of them leads anywhere: taking
+    the first match is what made `b.build(); b.build().startAsync();` read as unstarted.
+    """
+    if not steps:
+        return True
+    # `catalog_symbols`, not `type_descriptor`: every other owner in this file accepts
+    # a scalar OR a list (§3.1), and a `started_by` step that could not would be the one
+    # key in the schema where naming a second spelling is impossible.
+    owners = catalog_symbols(steps[0]["owner"], "registration.started_by[].owner")
+    seen: set[Any] = set()
+    frontier: list[object] = [value]
+    while frontier:
+        current = frontier.pop(0)
+        if current is None or current in seen:
+            continue
+        seen.add(current)
+        for other in caller_sites:
+            if other.get("receiver") != current:
+                continue
+            if (
+                str(other["owner"]) in owners
+                and str(other["name"]) == steps[0]["method"]
+                and _completes(other.get("result"), caller_sites, steps[1:])
+            ):
+                return True
+            frontier.append(other.get("result"))
+    return False
 
 
 def _channel_via_forms(registration: dict[str, Any]) -> list[dict[str, Any]]:

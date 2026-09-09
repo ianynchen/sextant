@@ -607,9 +607,9 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed EIGHT-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed NINE-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
-`unselected_binding` and `handler_protocol`** — checked by the single owning module before any row is inserted,
+`unselected_binding`, `handler_protocol` and `registration_activation`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -617,7 +617,10 @@ unread. *This sentence said "both the renderer and the export" until F2 §3.4 ad
 last two; `open_questions.py`'s own comment had already corrected that and this paragraph
 had not caught up.* *It then said SEVEN while the module enforced eight, F2 §3.6 having
 added `handler_protocol` without touching this file — the third time this count has drifted,
-which is why §3.6's review made the drift itself the finding rather than the number.* *This paragraph said "two-value set" and named the first two
+which is why §3.6's review made the drift itself the finding rather than the number.*
+*`registration_activation` (`OI-64`) is the ninth, and it was added to this sentence in the
+same change that added it to the module — the drift above is why that is now the habit
+rather than an afterthought.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -627,7 +630,9 @@ a `payload_binding` candidate holds `payload_type`, `hops`, `seen_in` and `why` 
 matched call); a `format_conflict` candidate holds `format`, `seen_in` and `why`; a
 `channel_destination` candidate holds `channel` and `handler`; a `service_identity`
 candidate holds `class` and `reason`; an `environment_divergence` candidate holds `key`
-and `values`; a `handler_protocol` candidate holds `class`, `annotation` and `protocol` —
+and `values`; a `registration_activation` candidate holds `registration`, `enclosing` and `activated_by`
+— the construction call, the method that returns it without starting it, and the chain
+the framework requires before anything is delivered; a `handler_protocol` candidate holds `class`, `annotation` and `protocol` —
 the wire ONE framework would publish that class on, one candidate per framework in play,
 because the question is which of them serves it. Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.

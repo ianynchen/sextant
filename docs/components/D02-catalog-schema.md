@@ -116,6 +116,33 @@ list — naming the file and the key. Where a widened value reaches a consumer, 
 PLURAL (`owners`, `handler_fqns`): the rename is what makes a consumer still comparing with
 `==` fail loudly instead of comparing a string against a tuple and matching nothing.
 
+### 1b-i. `registration.started_by` — construction is not subscription (`OI-64`)
+
+An `interface_implementation` catalog may declare an ordered chain of calls that must
+FOLLOW its registration before the registration is a boundary at all. Each step is
+`{owner, method}`, linked to the previous by receiver-to-result within one method.
+
+`google-pubsub-subscriber.yml` is why it exists. It derived a live inbound endpoint from
+`Subscriber.newBuilder(subscription, receiver).build()` — construction, which subscribes
+to nothing: `Subscriber` is an ordinary start/stop service and delivers no message until
+`startAsync()` runs (measured, `scripts/probes/w20_subscriber_activation.md`). Our own
+acceptance fixture built two subscribers, started neither, and had both published as
+endpoints the test suite asserted were correct.
+
+**Absent, the style is unchanged**: the registration alone is the evidence, which is
+right for a framework whose registration call IS the subscription. The key is opt-in
+per catalog because that is a property of the framework, not of the style.
+
+**Three outcomes, not two**, because chain reconstruction is within-method only (D00 §5):
+
+- the chain completes in the same method → a row;
+- it does not, and the built object is the method's RETURN type → a
+  `registration_activation` open question. A factory that builds and hands back is
+  ordinary code whose caller may start it, and answering "no boundary" would trade a
+  fabricated row for a silent false negative;
+- it does not, and nothing leaves the method → silence. Nobody can start it, so it is
+  provably not a boundary (GUIDELINES §8: here the absence genuinely is unambiguous).
+
 ### 1c. `slice` — what a catalog does not read (F2 §3.8)
 
 **Catalog presence used to mean completeness, and it never was.** `spring-jms-template`
@@ -1508,7 +1535,11 @@ interface is not, on its own, an endpoint. This is the failure mode this style e
 prevent: a phantom endpoint conjured from a class's shape alone, with no call anywhere in
 the scanned code that ever wires it to a channel.
 
-**This style needs no execute-terminal.** `fluent`'s `terminal`/`terminal_via_argument`
+**This style needed no execute-terminal — and that was wrong; see §1b-i.**
+A registration whose framework requires a later ACTIVATION call is not a boundary
+until that call is reached, which `registration.started_by` now declares (`OI-64`).
+What follows is why the ARGUMENT-passing shape still needs no terminal of its own.
+`fluent`'s `terminal`/`terminal_via_argument`
 (§2, above) exists because a *built* HTTP request is not yet a *sent* one — a
 `Request.Builder` built and logged, never executed, made no call. Binding a receiver to a
 subscription has no such gap: the registration call itself IS the intent, in a way a built

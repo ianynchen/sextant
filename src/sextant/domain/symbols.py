@@ -131,6 +131,11 @@ def method_name(descriptor: str) -> str:
 # second `#` literal.
 _ARGUMENTS_OPEN = "("
 _ARGUMENTS_CLOSE = ")."
+# The JVM DESCRIPTOR's own close paren, which is NOT `_ARGUMENTS_CLOSE`. Two grammars
+# meet in this module: a SCIP symbol closes its argument list `).`, a descriptor closes
+# it `)`. Substituting one for the other here raised `ValueError: substring not found`
+# on every descriptor in the tree — 177 test errors from one character.
+_DESCRIPTOR_ARGUMENTS_CLOSE = ")"
 # The `sig_` prefix and the four bytes of digest behind it, exactly as
 # `ClassScanner.disambiguatorOf` writes them. Four bytes is eight hex
 # characters; both halves are pinned against a real scan
@@ -230,6 +235,24 @@ def type_descriptor(dotted: str) -> str:
         dotted = dotted[: -len(_ARRAY_SUFFIX)]
         depth += 1
     return dotted.replace(".", "/") + "#" + _ARRAY_SUFFIX * depth
+
+
+def returned_type(descriptor: str) -> str | None:
+    """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
+    returns a primitive, `void` or an array.
+
+    Lives here rather than beside its one caller because it is symbol-grammar parsing,
+    and this module is the only place that happens (`test_symbol_grammar_confinement`).
+    `None` for the non-object cases is an answer, not a gap: a method returning `void`
+    or an `int` cannot be handing a constructed object back to its caller, which is the
+    only question anyone asks this. Arrays answer `None` for the same reason — nothing
+    in the tree needs an array's element type here, and inventing one would be a
+    grammar rule with no consumer.
+    """
+    returned = descriptor[descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1 :]
+    if not returned.startswith("L"):
+        return None
+    return returned[1:].removesuffix(";") + _TYPE_MARKER
 
 
 def package_path(dotted: str) -> str:

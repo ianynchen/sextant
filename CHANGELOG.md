@@ -32,6 +32,13 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A `Subscriber` built and never started was published as a live inbound endpoint**
+  (`OI-64`). Construction subscribes to nothing — `Subscriber` delivers no message until
+  `startAsync()` runs — and our own acceptance fixture built two, started neither, and
+  had both published as endpoints the test suite asserted were correct. Catalogs may now
+  declare `registration.started_by`; a registration that is returned rather than started
+  files a `registration_activation` question instead of deriving, and one that is built
+  and dropped derives nothing.
 - **Nine of `PubSubTemplate`'s ten consuming methods were unread**, so every pull-based
   Pub/Sub consumer derived nothing at all — the same output a module consuming no
   Pub/Sub produces (W18).

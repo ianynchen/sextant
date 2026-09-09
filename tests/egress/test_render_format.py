@@ -755,3 +755,48 @@ def test_a_handler_protocol_question_renders_one_line_per_candidate_wire():
         f"`rsocket` — com/acme/orders/LiveController# carries {annotation}; "
         f"`websocket` — com/acme/orders/LiveController# carries {annotation}"
     ) in text
+
+
+def test_a_registration_activation_question_names_the_method_that_returns_it():
+    """`OI-64`'s kind, with its arm test in the same change — the two waves before
+    this one each shipped a renderer arm nothing exercised, and the whole suite passed
+    with the arm disabled while a wrong key would `KeyError` on the first real module
+    to file one.
+
+    The sentence must name the ENCLOSING METHOD, because that is where a reader has to
+    look. The question is not "is this subscription real" but "does anyone call what
+    this method returns, and start it" — without the method there is nothing to open.
+    """
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    enclosing = "com/acme/orders/messaging/raw/RawPubSubSubscribers#withNamedReceiver()."
+    open_questions = [
+        {
+            "protocol": "pubsub",
+            "method": None,
+            "path": "raw-notify-factory",
+            "question": "registration_activation",
+            "candidates": json.dumps(
+                [
+                    {
+                        "registration": "com/google/cloud/pubsub/v1/Subscriber#newBuilder",
+                        "enclosing": enclosing,
+                        "activated_by": (
+                            "com.google.cloud.pubsub.v1.Subscriber$Builder.build then "
+                            "com.google.cloud.pubsub.v1.Subscriber.startAsync"
+                        ),
+                    }
+                ]
+            ),
+            "evidence": "constructed, but nothing in this method completes the chain",
+        }
+    ]
+
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+
+    assert (
+        "- `pubsub raw-notify-factory` — registration_activation: "
+        f"com/google/cloud/pubsub/v1/Subscriber#newBuilder in {enclosing} is returned, "
+        "not activated — nothing here calls "
+        "com.google.cloud.pubsub.v1.Subscriber$Builder.build then "
+        "com.google.cloud.pubsub.v1.Subscriber.startAsync"
+    ) in text

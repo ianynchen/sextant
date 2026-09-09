@@ -2123,7 +2123,7 @@ deriving reactive WebFlux routes.
 today) or removing it from all 57 files and from D02. **Falsified by** finding a consumer
 this grep missed.
 
-### OI-64 — a `Subscriber` built and never started derives a live inbound endpoint
+### OI-64 — a `Subscriber` built and never started derives a live inbound endpoint · **CLOSED**
 
 **Found by** W18, while implementing F2 §3.9's other half.
 
@@ -2140,17 +2140,49 @@ outright — "the registration is the evidence, so this style needs no
 execute-terminal". The over-report is real; the mechanism recorded for it is not, and
 W18 declined to fix a conjunct that is not there.
 
-**Consequence:** any module that builds a `Subscriber` without starting it publishes
-an inbound `pubsub` endpoint that receives nothing. Unlike the pull-side gap W18
-closed, this one over-reports rather than under-reports, so it is visible to a reader
-as a claim rather than as silence.
+**Consequence, and it is not hypothetical — MEASURED after this entry was first
+written, which is what it should have opened with.** Our OWN acceptance fixture is an
+instance. `fixtures/orders-service/.../raw/RawPubSubSubscribers.java` builds two
+`Subscriber`s — `raw-notify` and `raw-notify-lambda` — and starts NEITHER: there is no
+`startAsync()` call anywhere in the fixture, and both are plain methods rather than
+`@Bean` methods, so no framework rule starts them either. Both are published today as
+live inbound `pubsub` endpoints, and `tests/application/test_interface_engine.py`
+asserts that they are. **The suite pins the fabrication as correct behaviour**, which
+is why nothing has flagged it.
 
-**Closes by** giving `interface_implementation` a terminal conjunct — the style has no
-way to require one today, while `fluent`/`single_call` catalogs have used `terminal`
-since 2E — and then declaring `startAsync` on this catalog, with the `@Bean`-returning
-case as the measured framework-rule link §8.6 describes. **Falsified by** measuring
-that `Subscriber.newBuilder(...)` itself begins delivery, which would make the current
-rule right.
+That makes this an over-report rather than an under-report, and this project ranks
+those the other way round from most: ARCHITECTURE's "the failure mode is fabrication,
+not imprecision", and GUIDELINES §8's *unresolved is an answer, invention is not*. A
+missing row is silence; these two rows are a claim that a wire exists. And `protocol`
+is the column DR-5 links on, so a fabricated inbound `pubsub` endpoint can merge into
+another consumer's graph — the same shape as W16's wrong-protocol RSocket rows.
+
+**Severity: this is a Major, and the first draft of this entry did not say so because
+it treated the defect as possible rather than checking whether it had already
+happened.** That is §8.1 — measure, never predict — applied to our own output instead
+of to a framework.
+
+**CLOSED.** `registration.started_by` (D02 §1b-i) declares the calls that must follow a
+registration before it is a boundary; `google-pubsub-subscriber.yml` declares
+`Subscriber$Builder.build` then `Subscriber.startAsync`. Because chain reconstruction is
+within-method only, there are three outcomes rather than two: started here → a row;
+returned to a caller → a `registration_activation` question, since a factory's caller may
+start it and answering "no boundary" would swap the fabrication for a silent false
+negative; built and dropped → silence, because nothing can start it. The fixture now
+models all three and a test pins each, every one verified to fail with the conjunct
+removed.
+
+**The `@Bean` half of the planned fix was DROPPED, because it was measured and is false.**
+This entry, and GUIDELINES §8.6, both said a `@Bean` method returning a `Subscriber` is
+started by Spring and that this was "a measured rule". Nobody had measured it.
+`Subscriber` implements no Spring lifecycle interface anywhere in its hierarchy —
+`AbstractApiService` implements `ApiService` and nothing else — and spring-cloud-gcp-pubsub
+5.1.2 ships no `BeanPostProcessor` that would start one
+(`scripts/probes/w20_subscriber_activation.md`). Spring does not start arbitrary beans.
+A `@Bean` returning a `Subscriber` is the same unstarted object as any other, and §8.6's
+example is corrected in place. **Falsified by** measuring that
+`Subscriber.newBuilder(...)` itself begins delivery, which the probe's section 2 answers
+directly: it does not.
 
 ### OI-65 — nothing detects a release that moves `Subscriber.startAsync` out of the template
 

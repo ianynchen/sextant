@@ -816,6 +816,20 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # `resolve/engines/config_join.py`'s `gaps`, and verified against that
         # writer's own `candidates` line.
         return f"{candidate['candidate']} (set `{candidate['selected_by']}` to choose)"
+    if question == "registration_activation":
+        # `OI-64`: a registration whose framework needs a later ACTIVATION call,
+        # built and handed back rather than started here. Filed by
+        # `resolve/engines/interface_implementation.py`, and verified against that
+        # writer's own `candidates` line.
+        #
+        # The sentence names the enclosing method because that is where a reader has
+        # to look: the question is not "is this subscription real" but "does anyone
+        # call the thing this method returns, and start it". Without the method there
+        # is nothing to open.
+        return (
+            f"{candidate['registration']} in {candidate['enclosing']} is returned, not "
+            f"activated — nothing here calls {candidate['activated_by']}"
+        )
     if question == "handler_protocol":
         # F2 §3.6: the class, the annotation two frameworks share, and the wire
         # ONE of them would publish it on — filed by
