@@ -14,6 +14,20 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A generic envelope's parameterisations are distinct contracts** (F4 §5.2, W25).
+  `mall-admin`'s 160 endpoints all carried one response shape id; they now carry **58**,
+  and `CommonResult<UmsAdmin>`'s `data` field points at `UmsAdmin` where it held an
+  unbound `T`. DR-5 gates stitching on payload equality, so one id standing for 59
+  payloads asserted that two services exchange the same thing when they do not. A shape
+  now records the `origin_tier` of the class file declaring it — **89 of mall-admin's 107
+  shapes come from across the module edge** — and a payload type nothing could open names
+  the lever that would open it rather than only stating that it is missing.
+- **A module reads its declared reactor siblings' types** (F4 §5.2, W24). `CommonResult<T>`
+  is compiled in `mall-common`, so 160 of `mall-admin`'s 160 endpoints carried an envelope
+  with **zero fields**; all of them now carry `code`, `message` and `data`. Siblings are
+  resolved from the DECLARED dependency list, transitively — walking the whole reactor put
+  two modules `mall-admin` does not depend on into its workspace, deriving 246 endpoints
+  against its own 160 and rendering a neighbour's cron task in its document.
 - **A catalog now declares what it does NOT read.** `slice.outside` names, method by
   method with a reason, the part of its framework's surface a catalog leaves out
   ([D02](docs/components/D02-catalog-schema.md) §1c, W19). Catalog presence used to
@@ -42,6 +56,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A dependency's controllers, schemas and error advice were published as this module's**
+  (W24) — reachable since 2I by anyone using `extract_libraries`, and by every reactor
+  module once siblings were scanned. A dependency's rows are dropped before the endpoint
+  merge: after it, a dependency serving an address this module CALLS took the module's own
+  outbound row with it, silently. `schema_operations` filters its own roots, since it mints
+  rows carrying neither handler nor caller.
+- **A type variable could be published as a shape id** (W25). A raw `CommonResult`'s `data`
+  is declared `T` and bound to nothing; rooting it collides every unrelated `T` in a
+  codebase onto one shape. It roots none now, and its owner is reported OPEN rather than
+  claiming a complete description of a payload nobody stated.
 - **A servlet reaching `HttpServlet` through an intermediate base derived nothing** — a
   stated boundary that existed only while the hierarchy was unavailable (W22).
 - **Every Spring Kafka 2.x producer derived nothing** (F2 §4.1). Catalog descriptors were
