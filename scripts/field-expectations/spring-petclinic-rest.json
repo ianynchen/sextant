@@ -56,5 +56,6 @@
       "TRACE /"
     ],
     "outbound": []
-  }
+  },
+  "resolvable_superclass_calls": 131
 }

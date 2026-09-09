@@ -172,7 +172,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
     # SUBpackage of a scoped package, which inherits no scope from its parent.
     # Both fields must come out nullable, and both were coming out not-null.
-    assert metadata["coverage"]["documents"] == 123
+    # + 3: W21's `com/acme/orders/model/` — `BaseEntity`, `Customer` and
+    # `CustomerRegistry`, giving the always-on corpus the superclass-call shape it
+    # scored ZERO of, so Wave 3's resolution work has somewhere to fail.
+    assert metadata["coverage"]["documents"] == 126
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

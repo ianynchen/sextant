@@ -358,7 +358,8 @@ time, and it is why this consolidation exists.
 2. **The suite is corpus-blind.** 2,346 tests, 82 guards at 0 survived, byte-stable, contracts
    clean — and it notices neither of the analysis's two hardest Criticals. `orders-service`
    and `mall-admin` both score **0** for the superclass-call shape; `spring-petclinic-rest`
-   scores **96**. Adding that corpus (W21) is part of the fix, not an extra.
+   scores **96** — *re-measured at W21: **131***. Adding that corpus (W21) is part of the
+   fix, not an extra.
 3. **The response side of every contract is empty on real code.** mall-admin: 160 of 160
    endpoints carry a response shape, **one** distinct shape, **zero** fields. DR-5 gates
    linking on payload compatibility, so stitching could not have worked there at all.

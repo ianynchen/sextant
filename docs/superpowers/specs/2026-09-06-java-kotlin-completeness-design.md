@@ -148,7 +148,8 @@ projects, not on tests.** *"You've been building shit with perfectly fine test c
 measurement in this analysis proves the point: 2,346 tests, 82 guards at 0 survived,
 byte-stable, contracts clean — and the suite notices **neither** of the two hardest Criticals,
 because `orders-service` and `mall-admin` both score 0 on the superclass-call shape while
-`spring-petclinic-rest` scores 96.
+`spring-petclinic-rest` scores 96. *Measured at W21: **131** — see §4.2; the 96 dropped
+every subclass that declares no method of its own. The 0s hold.*
 
 **The machinery already exists and needs nothing new.** `scripts/field_check.py` validates
 Sextant's output against real upstream repositories at pinned commits, handling per-repo build
@@ -216,7 +217,9 @@ against known-good behaviour rather than against whatever happened to be there.
 - **Selection happens when the work is done**, not now. Naming repositories from memory is
   how the six corrected claims in this document got written.
 - **It runs after every wave, not only at the end.** Petclinic is the argument: it scores 96
-  on a shape our other corpora score 0 on, and that was learned by looking. Discovering twelve
+  on a shape our other corpora score 0 on, and that was learned by looking. *W21 re-measured
+  it at **131**, and the point survives its own correction: the number was learned by
+  looking, and looking more carefully moved it 27%.* Discovering twelve
   projects' worth of defects after 54 items is the same mistake at a larger scale.
 - **A pin freezes behaviour, so a defect visible in a pin is fixed before the pin is
   refreshed.** Recording twelve projects against current output would make twelve projects'
@@ -729,7 +732,22 @@ Six stated COVERAGE boundaries depend on `type_hierarchy`, and G-48 is the same 
 costing `return_flows` its inherited accessors.
 
 **Corpus:** add `spring-petclinic-rest`. Measured: it scores **96** instances of the
-superclass-call shape; `fixtures/orders-service` and `mall-admin` both score **0**. The
+superclass-call shape; `fixtures/orders-service` and `mall-admin` both score **0**.
+*Re-measured at implementation (W21) by walking the scanned ancestor closure and
+matching name AND descriptor (JVMS 5.4.3.3), which is what the sentence above describes:
+**petclinic scores 131**, not 96. `orders-service` and `mall-admin` both score **0**, as
+stated. The 96 came from a rule that dropped any subclass declaring no method of its own
+— `PetType` and `Specialty` inherit everything and declare only a constructor, and 35 of
+the corpus's calls land on them — so the payoff was understated by 27%.*
+
+*Two approximations were tried first and both were wrong, in opposite directions, which
+is why the number is now computed the way the definition reads. Testing the ancestor by
+NAME rather than by name-and-descriptor reported `mall-admin` at 5: its `SmsCouponParam`
+extends `SmsCoupon`, which lives in another module and is not scanned, and `getId`/`setId`
+matched two unrelated classes that happen to declare those names. That "correction" was
+the error; §4.2's original 0 was right. §8.1's language rule applies to our own
+measurements too — a name alone is weaker than name-plus-arity, which that section
+already forbids.* The
 current suite passes — 2,346 tests, 82 guards, byte-stable, contracts clean — and notices
 neither of this foundation's Criticals. That is corpus blindness, and adding the corpus is
 part of the fix, not an extra.

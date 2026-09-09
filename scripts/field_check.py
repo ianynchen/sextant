@@ -35,6 +35,12 @@ the repository root (`mall-admin.json` is the first to need any of them):
 Checks, per expectation:
 
 - **Endpoint counts** — `metadata.json`'s own `endpoints` object, compared whole.
+- **`resolvable_superclass_calls`**, where the pin declares one (F3 §4.2, W21) — how many
+  calls the upstream makes onto a method declared on an ancestor it also scans. A property
+  of the upstream's SOURCE rather than of Sextant's output, checked because it is the
+  number that made adding `spring-petclinic-rest` worth doing: a drop means the shape has
+  left the corpus and the resolution work is measured against nothing, a rise means
+  upstream drift the pinned commit was supposed to prevent.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -354,6 +360,38 @@ def _check_one(name: str) -> list[str]:
         problems.append(
             f"outbound routes: expected {expectation['routes']['outbound']!r}, got {outbound!r}"
         )
+
+    # F3 §4.2 (W21). OPTIONAL, because it is a property of the upstream's own source
+    # rather than of Sextant's output, and only the pin that motivated Wave 3 records
+    # one. It is checked here because it is the number that made the corpus worth
+    # adding: `spring-petclinic-rest` makes 131 calls whose OWNER it scans, naming a
+    # method that owner does not declare but a scanned ancestor does. The always-on
+    # fixture scored ZERO of them before W21, which is why the suite could pass while
+    # neither of Wave 3's Criticals had anywhere to appear.
+    #
+    # It re-scans the module rather than reading the workspace `analyze` just wrote,
+    # which is a real cost and a real caveat: a pin using `.sextant.yml` ignore rules or
+    # multi-release selection would count documents the pipeline excludes. No pinned
+    # corpus does today — `spring-petclinic-rest` ships no `.sextant.yml` — and this
+    # note is the condition under which that stops being true.
+    #
+    # A DROP here means the shape has left the corpus and the resolution work is being
+    # measured against nothing; a RISE means upstream drift the pinned commit was
+    # supposed to prevent. Either is worth stopping for.
+    expected_shape = expectation.get("resolvable_superclass_calls")
+    if expected_shape is not None:
+        # Imported HERE, not at module scope. `_sextant_bin` exists so this script
+        # shells out to the venv rather than importing the package, and the Usage line
+        # says `python scripts/field_check.py` — a top-level `import sextant` would kill
+        # that invocation outside the venv, for a check only one pin asks for.
+        from corpus_shapes import resolvable_superclass_calls
+
+        counted = len(resolvable_superclass_calls(module / "target" / "classes"))
+        if counted != expected_shape:
+            problems.append(
+                f"resolvable superclass calls: expected {expected_shape}, got {counted} "
+                f"— this is the shape F3 §4.2's resolution work is measured against"
+            )
 
     html_text = (module / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
     if not _zero_pre_outside_code_blocks(html_text):

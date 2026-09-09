@@ -48,6 +48,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
+        # W21's `com/acme/orders/model/` — the superclass-call shape the always-on
+        # corpus scored zero of (`tests/e2e/test_corpus_shapes.py`).
+        "BaseEntity.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
         "BillingClients.jsonl",
@@ -64,8 +67,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
+        "CustomerRegistry.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
@@ -187,7 +192,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # about fields) plus its `ApiScopedDetail`, and `springscoped/nested`, a
     # SUBpackage of a scoped package, which inherits no scope from its parent.
     # Both fields must come out nullable, and both were coming out not-null.
-    assert report.documents == 110
+    # 113 since W21:  give the always-on
+    # corpus the superclass-call shape it scored zero of.
+    assert report.documents == 113
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -213,6 +220,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
+        # W21's `com/acme/orders/model/` — the superclass-call shape the always-on
+        # corpus scored zero of (`tests/e2e/test_corpus_shapes.py`).
+        "BaseEntity.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
         "BillingClients.jsonl",
@@ -229,8 +239,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
+        "CustomerRegistry.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",

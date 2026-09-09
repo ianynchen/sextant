@@ -1347,7 +1347,11 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
     # SUBpackage of a scoped package, which inherits no scope from its parent.
     # Both fields must come out nullable, and both were coming out not-null.
-    assert (None, 122) in origins
+    # + 3: W21's `com/acme/orders/model/` — `BaseEntity`, `Customer` and
+    # `CustomerRegistry`, which give the always-on corpus the superclass-call shape it
+    # scored ZERO of. `spring-petclinic-rest` makes 96 such calls and this fixture made
+    # none, so the suite could pass while Wave 3's resolution work had nowhere to fail.
+    assert (None, 125) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"
