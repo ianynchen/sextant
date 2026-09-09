@@ -861,7 +861,13 @@ Never by path and protocol alone.
    where a schema match or human curation can justify it.
 3. **Inbound is asymmetric and knowable.** Duplicates there are a **conflict to report**
    (DR-6 — Spring refuses an ambiguous mapping), not a row to drop. This builds the
-   documented-but-unimplemented routing-ambiguity detector.
+   documented-but-unimplemented routing-ambiguity detector. *Built in W28 as the
+   `routing_conflict` question, and "not a row to drop" was already true. The word
+   "duplicates" needed narrowing: two handlers on one address is ORDINARY wherever the
+   framework dispatches on something else — `@KafkaHandler` on payload type, which this
+   repo's fixture has — so the rule is catalog data and only Spring MVC's two catalogs
+   declare it. Measured across four corpora first: zero genuine conflicts, which is why
+   the detector's design is mostly about what it must NOT report.*
 4. **Self-publish / self-consume is real** — a service publishes to a topic and reads it
    back. Record **both** rows and file an open question. Never merge. Curation or the linking
    tier decides. *Built in W27 as the `self_exchange` question kind, and it covers every

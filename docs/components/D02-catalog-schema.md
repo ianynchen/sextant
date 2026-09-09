@@ -1120,6 +1120,25 @@ answered. This same ladder — literal first, linked call as fallback — is wha
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too.
 
+**`mapping.duplicate: conflict` says the framework REFUSES two handlers on one address**
+(F5 §6.1, W28), and its absence — which is every catalog but `spring-web` and `spring-mvc` —
+says several handlers there is ordinary. `@KafkaListener` on a class with `@KafkaHandler` on
+its methods dispatches by PAYLOAD TYPE, so a topic served by two methods is correct and
+reporting it would be a rule mirrored onto a set it does not describe. Spring MVC is the
+other case: `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping` throws
+`IllegalStateException` at startup, so the application does not run.
+
+Two more keys ride with it, and both exist to keep the finding honest rather than to produce
+one. **`discriminators` names the conditions `RequestMappingInfo.equals` compares that are
+not already columns on the endpoint row** — `params` and `headers`. Class-level and
+method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
+to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
+conflict with each other while neither conflicts with a method outside it. **`custom_condition`
+names the framework's handler-mapping type**, whose subclasses may register a condition that
+is code rather than an attribute: a module declaring one is left alone entirely, because a
+conflict named against a service that starts perfectly well is a claim and a missing finding
+is not (NFR-2).
+
 **A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
 topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly
 as `method_arg`'s own unresolved case does; resolved verbless rows dedup on `(protocol,

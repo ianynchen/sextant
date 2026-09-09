@@ -23,6 +23,23 @@ here would restate those documents rather than add anything.
   its own row now and answers off its own evidence, so the disagreement is on the page.
   The COVERAGE caveat that stated this ("a reader must not read a merged row's `format` as
   a statement about both directions") retires with it.
+- **Two handlers a framework would refuse to register are reported** (F5 §6.1, W28).
+  D01 has said since it was written that two handlers declaring one wire contract is a
+  routing-ambiguity finding, and nothing detected one —
+  `docs/documented-not-implemented.md` row 9 recorded exactly that, and now closes.
+  `resolve/routing_conflicts.py` files a `routing_conflict` question naming both handlers.
+  **It is catalog data, not a rule**: two rows on one address is ordinary wherever the
+  framework dispatches on something else, and this repo's own fixture has such a pair —
+  `@KafkaHandler` dispatches by payload type on `order-polymorphic`. Only `spring-web` and
+  `spring-mvc` declare `mapping.duplicate: conflict`, because only their annotations reach
+  `RequestMappingHandlerMapping`, whose `validateMethodMapping` throws at startup. The
+  comparison mirrors `RequestMappingInfo.equals` read from spring-webmvc 6.1.6 bytecode:
+  six of its seven conditions are readable, with `params`/`headers` unioned across class
+  and method levels as `ParamsRequestCondition.combine` does, and the seventh — a custom
+  `RequestCondition`, which is code — silences the module rather than being guessed at.
+  Measured across four corpora before building: **zero genuine conflicts** and zero uses
+  of `params=` or `headers=`, so the fixture gained the case nothing else had.
+
 - **A wire identity served AND called is two rows and a question** (F5 §6.1, W27). It was
   one row, `direction: both`, keeping the handler and carrying the caller and its address
   onto it — which asserts that the thing called IS the thing served, a claim about the far

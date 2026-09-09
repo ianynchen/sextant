@@ -103,7 +103,12 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # fields at all — and the three paged ones are the boundary beside it: `Page` and
     # `Slice` live in a jar this fixture names in no `extract_libraries`, so their shapes
     # stay open with zero fields and the types are reported as ones nothing could expand.
-    assert metadata["endpoints"]["inbound"]["http"] == 48
+    # + 3 (W28): `RoutingConditionsController`'s three handlers on one path and verb,
+    # separated by `params` and by `headers`. Spring registers all three — they are
+    # different mappings — and they are here because six repositories contained no use of
+    # either attribute, so nothing else exercises the discriminators the conflict
+    # detector reads.
+    assert metadata["endpoints"]["inbound"]["http"] == 51
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -183,7 +188,8 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # + 2 (W26): `contracts/OrderTotals`, the fieldless interface whose accessors carry
     # its wire contract, and the `PayloadShapeController` that returns it beside the
     # three paged responses no jar here can expand.
-    assert metadata["coverage"]["documents"] == 128
+    # + 1 (W28): `RoutingConditionsController`.
+    assert metadata["coverage"]["documents"] == 129
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

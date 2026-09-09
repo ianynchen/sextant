@@ -147,6 +147,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
+        "RoutingConditionsController.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
         "SecondSplitter.jsonl",
@@ -198,7 +199,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # corpus the superclass-call shape it scored zero of.
     # 115 since W26: `contracts/OrderTotals`, a fieldless interface whose wire contract
     # is in its accessors, and the `PayloadShapeController` that returns it.
-    assert report.documents == 115
+    # 116 since W28: `RoutingConditionsController`, three handlers on one path and verb
+    # separated by `params` and `headers` — the case no corpus here had.
+    assert report.documents == 116
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -323,6 +326,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
+        "RoutingConditionsController.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
         "SecondSplitter.jsonl",

@@ -396,13 +396,19 @@ from the handler symbol: a refactor that moves the handler must not orphan the c
 proposals and links that reference the endpoint, because the wire contract they were about
 did not change. Editing the path *is* a new endpoint, correctly. Two handlers declaring
 the same wire contract collide into one identity — and that collision is a routing-ambiguity
-finding, which per-handler identity would have hidden. Environment expressions hash as
+finding, which per-handler identity would have hidden. **Built in W28** (F5 §6.1) as the
+`routing_conflict` question, and only where the deriving catalog says the framework refuses
+it: two handlers on one address is ordinary wherever the framework dispatches on something
+else, such as `@KafkaHandler` on payload type. Environment expressions hash as
 expressions: `${orders.topic}` is the same endpoint in every environment.
 
 **Direction is not a hash input.** An earlier draft hashed *(module, protocol, direction,
-wire identity)*, but [D02](D02-catalog-schema.md) §3's inbound/outbound merge makes direction
-mutable: a path a module only exposed can gain a client and become `both` without its wire
-contract changing at all. Mutable state does not belong in identity, by the same argument
+wire identity)*, and the reason it must not is that direction was mutable: D02 §3's
+inbound/outbound merge could turn a path a module only exposed into a `both` row when it
+gained a client, without its wire contract changing at all. *That merge is gone (W27), so
+the mutation no longer happens here — but the argument stands on its own and direction stays
+out: the linking tier writes `both`, and an identity that changed when a peer was discovered
+would orphan every curation about it.* Mutable state does not belong in identity, by the same argument
 this paragraph already makes for the handler symbol — a refactor, or here a new call site,
 must not orphan the curations, proposals and links built against the endpoint, because the
 wire contract they were about did not change.

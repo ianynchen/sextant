@@ -39,6 +39,28 @@ matches:
     consumes_from: [consumes]
     produces_from: [produces]
     method_from: method
+    # F5 §6.1 (W28). Spring does not choose between two identical mappings — it throws
+    # `IllegalStateException` at startup, so the application does not run.
+    # `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping` keys its
+    # registry on the mapping object and refuses a second, different handler under an
+    # equal one (spring-webmvc 6.1.6 bytecode, read directly).
+    #
+    # Declared here and NOT in the messaging catalogs, which is the whole point of it
+    # being catalog data: `@KafkaHandler` dispatches by payload type, so several handlers
+    # on one topic is ordinary there and reporting it would be a rule mirrored onto a set
+    # it does not describe.
+    duplicate: conflict
+    # The two conditions `RequestMappingInfo.equals` compares that are NOT already
+    # columns on the endpoint row. Class-level and method-level values UNION
+    # (`ParamsRequestCondition.combine` adds one expression set to the other), so two
+    # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
+    # other and not with a method outside it.
+    discriminators: [params, headers]
+    # The seventh condition, and the one no class file states: a custom `RequestCondition`
+    # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
+    # module declaring one is left alone entirely rather than told about a conflict it
+    # does not have.
+    custom_condition: org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org.springframework.web.bind.annotation.RequestMapping
     annotations:

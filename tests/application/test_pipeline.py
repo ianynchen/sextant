@@ -184,6 +184,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
         # BEFORE this task's own inheritance walk has anything to resolve.
         ("POST", "/v1/orders/scoped"),
+        # W28: three handlers on ONE path and verb, which Spring registers because
+        # `params`/`headers` separate them — `RequestMappingInfo.equals` compares seven
+        # conditions and these are two of them. They are one route in this set and three
+        # rows in the table, and the routing-conflict detector reports nothing about
+        # them. Six repositories contained zero uses of either attribute, so nothing
+        # else here exercises the discriminators it reads.
+        ("GET", "/v1/routing/orders"),
         # W26's four, and they are two different answers on purpose.
         # `/v1/paged/totals` returns `OrderTotals`, an interface: no fields at all, so
         # its wire contract is its bean accessors, and the shape carries real fields.
@@ -856,7 +863,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # a SOAP operation merged with a call to `${soap.billing.uri}`, and `POST /v1/orders`
     # merged with a call to `orders-loop` — and the other four are genuine
     # self-publish/self-consume. Nothing new is derived; six deletions stopped happening.
-    assert len(report.endpoints) == 134
+    # W28 makes it 137: `RoutingConditionsController`'s three handlers on one address.
+    assert len(report.endpoints) == 137
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1668,7 +1676,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 63 since W27: `POST /v1/orders` is two rows, not one. The module serves it and
         # `OrdersLoopClient` calls it at `orders-loop` — a different host, which the
         # merge could not see because `peer` is not part of endpoint identity (RC-5).
-        "http": 63,
+        # 66 since W28: three handlers on `/v1/routing/orders`, separated by conditions
+        # Spring compares and this table does not carry.
+        "http": 66,
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -1693,7 +1703,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 134
+    assert sum(counts.values()) == len(report.endpoints) == 137
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3216,7 +3226,9 @@ def test_the_format_ladder_answers_every_live_row(
     # four have a type nothing here can open.
     # + 1 (W27): `POST /v1/orders` is two rows, and the outbound half is a json-bodied
     # http row reaching the same rung its inbound twin does.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 57
+    # + 3 (W28): the three `/v1/routing/orders` handlers, json-bodied http rows reaching
+    # the same rung every other one does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 60
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

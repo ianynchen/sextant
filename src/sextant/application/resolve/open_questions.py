@@ -95,6 +95,18 @@ QUESTIONS = (
     # service's copy of a path this module also serves genuinely is two. Curation or the
     # linking tier decides; a pass that decided here would be guessing at the far end.
     "self_exchange",
+    # F5 §6.1 (W28). Two handlers claiming one address, where the catalog that derived
+    # them says the framework REFUSES that — Spring MVC throws `IllegalStateException` at
+    # startup rather than choosing, so the application does not run. Candidates: the
+    # handlers.
+    #
+    # A question rather than a silent drop, and rather than a finding of its own: it is
+    # `format_conflict`'s shape one table over — a disagreement in the analysed code that
+    # a person resolves, not something a pass could answer. It is catalog-declared
+    # (`mapping.duplicate: conflict`) because several handlers on one address is ORDINARY
+    # elsewhere: `@KafkaHandler` dispatches by payload type, and this repo's own fixture
+    # has such a pair.
+    "routing_conflict",
 )
 
 

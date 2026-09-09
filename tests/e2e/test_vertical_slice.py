@@ -445,7 +445,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 48 since W26: the four `/v1/paged/*` routes — `/totals`, whose payload is an
         # interface described from its bean accessors, and three paged ones whose
         # envelope lives in a jar this fixture opts into scanning nowhere.
-        "http": 48,
+        # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
+        # verb, which Spring registers because `params`/`headers` separate them.
+        "http": 51,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -625,7 +627,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # inbound is 100, 41 + 6 outbound is 47, for a 147-endpoint total. Nothing new is
     # derived here; six deletions stopped happening, and two of the six were joining a
     # served operation to a call at a different address.
-    assert rows == [("inbound", 100), ("outbound", 47)]
+    # W28: +3 inbound — 100 + 3 = 103, for a 150-endpoint total.
+    assert rows == [("inbound", 103), ("outbound", 47)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1396,7 +1399,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # + 2: W26's `contracts/OrderTotals` and `PayloadShapeController` — a payload type
     # with no fields at all, and the controller that returns it beside three paged
     # responses whose envelope nothing here can expand.
-    assert (None, 127) in origins
+    # + 1: W28's `RoutingConditionsController`.
+    assert (None, 128) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

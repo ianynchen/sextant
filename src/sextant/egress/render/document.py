@@ -857,6 +857,12 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         if candidate["side"] == "served":
             return f"served here by {symbol}"
         return f"called by {symbol} at {candidate.get('peer') or 'no resolved address'}"
+    if question == "routing_conflict":
+        # F5 §6.1 (W28): one handler claiming an address another handler also claims,
+        # filed by `resolve/routing_conflicts.py` and verified against that writer's own
+        # `candidates` line. The candidates render joined on one line, and the handler is
+        # the only thing that differs between them.
+        return f"{candidate['handler']}"
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

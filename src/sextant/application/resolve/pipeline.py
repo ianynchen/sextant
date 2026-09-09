@@ -12,6 +12,7 @@ from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
+from sextant.application.resolve.routing_conflicts import record_routing_conflicts
 from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
@@ -135,6 +136,9 @@ def resolve(
     # a question would name a wire the endpoint no longer speaks — the same defect the
     # roots pass was moved down to fix. Above the reset it would simply be erased.
     record_self_exchange(workspace)
+    # F5 §6.1 (W28), and below `apply_protocol_hints` for the same reason: `protocol` is
+    # part of the identity two handlers would be claiming, and that pass moves it.
+    record_routing_conflicts(workspace, list(declared))
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns
     # and `scheduled_work.handler`, and every one of those is final only here.

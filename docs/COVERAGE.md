@@ -801,6 +801,45 @@ documents against 161. Most of that is `derive_endpoints` doing work the guardra
 discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
+### 3a-vi. Two handlers a framework would refuse to register (F5 §6.1)
+
+D01 has said since it was written that two handlers declaring one wire contract "is a
+routing-ambiguity finding". Nothing detected one — `docs/documented-not-implemented.md`
+row 9 recorded exactly that — and W28 builds it.
+
+**The reason it is catalog data and not a rule.** Two rows on one address is ORDINARY in
+most frameworks, and this repo's own fixture has such a pair: `@KafkaListener` on a class
+with `@KafkaHandler` on its methods dispatches by PAYLOAD TYPE, so `order-polymorphic` is
+served by `ClassLevelListener#onDefault` and `#onEvent` together and Spring Kafka is
+perfectly happy. A global "duplicates are conflicts" rule would open with a false finding
+against correct code — the defect class W13, W14 and six of W19's probe findings all
+share. So only `spring-web` and `spring-mvc` declare `mapping.duplicate: conflict`, and
+they do because only their annotations reach `RequestMappingHandlerMapping`, whose
+`validateMethodMapping` throws `IllegalStateException` at startup rather than choosing.
+
+**What is compared, read from Spring's own bytecode.** `RequestMappingInfo.equals`
+(spring-webmvc 6.1.6) compares **seven** conditions: patterns, methods, params, headers,
+consumes, produces, and a custom condition. Six are readable here — four are already
+columns on the endpoint row, and `params`/`headers` are attributes of the mapping
+annotation, named by the catalog as `discriminators` and UNIONED across the class and
+method levels because `ParamsRequestCondition.combine` adds one expression set to the
+other.
+
+**The seventh is a stated boundary that silences the module rather than guessing.** A
+custom `RequestCondition` arrives through a `RequestMappingHandlerMapping` subclass and is
+code, not an attribute, so two mappings separated only by one are indistinguishable from a
+genuine conflict. A module registering such a subclass gets no conflict reported at all: a
+finding named against a service that starts perfectly well is a claim, and a missing
+finding is not.
+
+**Measured base rate, taken before a line was written:** across the orders-service fixture
+and `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app` — **zero genuine
+conflicts**, and **zero uses of `params=` or `headers=` anywhere**. The discriminators
+exist to keep a future finding honest, not to explain one already there. The fixture's own
+`RoutingConditionsController` now carries the case nothing else in six repositories did:
+three handlers on one path and verb, separated by `params` and by `headers`, which Spring
+registers and this reports nothing about.
+
 ### 3a-v. Serving and calling one identity is a question, not one row (F5 §6.1)
 
 A wire identity a module both exposed and called used to collapse into a single row with
