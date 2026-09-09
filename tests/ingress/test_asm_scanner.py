@@ -126,12 +126,14 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
+        "OrderTotals.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
@@ -194,7 +196,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # Both fields must come out nullable, and both were coming out not-null.
     # 113 since W21:  give the always-on
     # corpus the superclass-call shape it scored zero of.
-    assert report.documents == 113
+    # 115 since W26: `contracts/OrderTotals`, a fieldless interface whose wire contract
+    # is in its accessors, and the `PayloadShapeController` that returns it.
+    assert report.documents == 115
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -298,12 +302,14 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderStompController.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
+        "OrderTotals.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",

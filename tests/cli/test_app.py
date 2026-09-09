@@ -98,7 +98,12 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # + 1 (OI-48): `POST /v1/orders/scoped`. `ScopedRequest` was referenced by
     # nothing, so no endpoint rooted it and the package-scope nullability rule was
     # never exercised in the pipeline — only in a hand-built unit test.
-    assert metadata["endpoints"]["inbound"]["http"] == 44
+    # + 4 (W26): `/v1/paged/totals`, `/orders`, `/slice` and `/wrapped`. `totals` is a
+    # payload type whose wire contract is in its ACCESSORS — an interface, so it has no
+    # fields at all — and the three paged ones are the boundary beside it: `Page` and
+    # `Slice` live in a jar this fixture names in no `extract_libraries`, so their shapes
+    # stay open with zero fields and the types are reported as ones nothing could expand.
+    assert metadata["endpoints"]["inbound"]["http"] == 48
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -175,7 +180,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # + 3: W21's `com/acme/orders/model/` — `BaseEntity`, `Customer` and
     # `CustomerRegistry`, giving the always-on corpus the superclass-call shape it
     # scored ZERO of, so Wave 3's resolution work has somewhere to fail.
-    assert metadata["coverage"]["documents"] == 126
+    # + 2 (W26): `contracts/OrderTotals`, the fieldless interface whose accessors carry
+    # its wire contract, and the `PayloadShapeController` that returns it beside the
+    # three paged responses no jar here can expand.
+    assert metadata["coverage"]["documents"] == 128
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

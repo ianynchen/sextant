@@ -37,6 +37,7 @@ from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import (
     config_fact_target,
     discard_library_facts,
+    discard_scanned_facts,
     library_fact_root,
     read_fact_tree,
     schema_fact_target,
@@ -223,6 +224,14 @@ def analyze(
     # rewrite. Stated because it is load-bearing and free to satisfy, not
     # because it is enforced.
     discard_library_facts(fact_root)
+    # And the module's OWN classes, for the same reason one line up: a class that was
+    # deleted, renamed, or moved to another package overwrites nothing, so its facts
+    # would stay in the workspace and keep deriving rows for source that is not there.
+    # Measured in this repo's own fixture — a renamed `Shapes` class went on publishing
+    # two inbound Pub/Sub endpoints, 143 against a fresh workspace's 141 on identical
+    # source. BEFORE the scan, for the reason above and for one more: after it, this
+    # would delete what the scan had just written.
+    discard_scanned_facts(fact_root, module.output_dirs[0])
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,

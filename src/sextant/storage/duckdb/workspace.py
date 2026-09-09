@@ -298,6 +298,31 @@ _NAMED_QUERIES = {
         SELECT symbol, enclosing, signature, modifiers FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
     """,
+    # F4 §5.2 (W26). The same method rows as `method_declarations` above PLUS
+    # `visibility`, for shape expansion's bean-accessor fallback: a payload type whose
+    # fields yield no wire contract is described from its public accessors instead, and
+    # "public" is the half neither existing query carries beside a signature.
+    # `method_declarations` has the signature and no visibility; `method_visibility` has
+    # the visibility and no signature. Joining the two in Python would make the accessor
+    # set depend on two queries agreeing about which rows exist, which is a second place
+    # for the answer to be wrong. Widening `method_declarations` itself would change what
+    # its existing readers select, the reason `declared_symbols_with_documents` was added
+    # beside `declared_symbols` rather than replacing it.
+    # Narrowed here rather than in Python because these three are the ACCESSOR's own
+    # definition, not one shape model's opinion: a `serialization.accessors` entry
+    # constrains the method NAME and optionally its return's wire type, so it can narrow
+    # this set further but can never make a private, parameterised or `void` method an
+    # accessor. Pushing them down is what keeps the pass from parsing the `signature`
+    # JSON of every method in the workspace — on `mall-admin` that is tens of thousands
+    # of rows, and this runs once per catalog.
+    "accessor_declarations": """
+        SELECT symbol, enclosing, signature, modifiers, visibility FROM symbols
+        WHERE construct_kind = 'method'
+          AND visibility = 'public'
+          AND json_type(signature -> 'returns') NOT IN ('NULL')
+          AND coalesce(json_array_length(signature -> 'parameters'), 0) = 0
+        ORDER BY symbol
+    """,
     # Every declared constructor's own enclosing type and signature JSON —
     # the field ladder's rung 2 (2F design §4). A `field_write` fact names
     # the parameter INDEX a field was assigned from and nothing else, and a
@@ -879,7 +904,55 @@ class DuckDbWorkspace:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = duckdb.connect(str(path))
-        self._connection.execute((_SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
+        schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
+        self._connection.execute(schema)
+        self._add_columns_the_schema_has_gained(schema)
+
+    def _add_columns_the_schema_has_gained(self, schema: str) -> None:
+        """Adds any column `schema.sql` declares that an EXISTING workspace file does
+        not have.
+
+        `schema.sql` is all `CREATE TABLE IF NOT EXISTS`, which does exactly nothing to
+        a table that already exists — so every column added to it since a workspace file
+        was written is missing from that file, and the first statement to select it dies
+        with `Binder Error: Table "shapes" does not have a column with name
+        "origin_tier"`. That is not a hypothetical: re-running `analyze` over the
+        fixture's own `.sextant` directory did it, and the message names a column rather
+        than the thing a reader can act on.
+
+        **Adding is the whole migration, and it is enough because these tables are
+        derived.** Everything but `raw_facts` is rebuilt from the facts on each
+        `analyze`, and `raw_facts` itself is emptied and reloaded — so a column that
+        arrives empty here is filled by the run that added it. Nothing is dropped or
+        retyped: a column the schema no longer declares is left alone rather than
+        deleted, because deleting data to satisfy a shape is the destructive direction
+        and no shipped change has needed it.
+
+        The expected shape comes from DuckDB's own parse of the same text, in a throwaway
+        in-memory database, rather than from a regex over the DDL or a list maintained
+        beside it — the two ways this could disagree with `schema.sql` while looking
+        right.
+        """
+        reference = duckdb.connect(":memory:")
+        try:
+            reference.execute(schema)
+            expected = reference.execute(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'main' ORDER BY table_name, ordinal_position"
+            ).fetchall()
+        finally:
+            reference.close()
+        held = {
+            (str(table), str(column))
+            for table, column in self._connection.execute(
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        for table, column, data_type in expected:
+            if (str(table), str(column)) in held:
+                continue
+            self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {data_type}")
 
     def load_facts(self, fact_root: Path) -> int:
         """One bulk statement over the whole tree. Per-row insertion is a

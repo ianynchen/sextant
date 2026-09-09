@@ -43,6 +43,22 @@ serialization:
     - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
   ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
   default_strategy: as_declared
+  # D02 §2f, W26. Which zero-argument methods name a property, for the types whose
+  # wire contract is not in their fields. An INTERFACE has no fields at all, so
+  # `Page<T>` and `Slice<T>` — the most common paginated Spring response — expanded to
+  # a zero-field shape however far the payload type was reached.
+  #
+  # Both entries and the `boolean` constraint are read off jackson-databind 2.22.1's
+  # own `DefaultAccessorNamingStrategy`, not from its documentation:
+  # `findNameForIsGetter` returns no name unless `_booleanType(method.getType())` holds
+  # (the `isGettersNonBoolean` option that lifts it is off by default), while
+  # `findNameForRegularGetter` puts no constraint on the return type at all. A rule
+  # mirrored from what the prefixes LOOK like would have published `isFirst`'s sibling
+  # `hasNext()` and `nextPageable()` as wire fields — neither is a bean accessor, and
+  # neither appears in the JSON Spring actually sends.
+  accessors:
+    - { prefix: get }
+    - { prefix: is, wire_type: boolean }
 
 # D02 §2e. Several of these coexist in one codebase — a module compiled over a
 # decade carries the JetBrains annotations in old code, Spring's in

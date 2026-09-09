@@ -3079,7 +3079,38 @@ serialization:
   ignore:
     - com.fasterxml.jackson.annotation.JsonIgnore
   default_strategy: as_declared      # as_declared | snake_case | kebab_case | upper_camel
+  accessors:                         # optional; which methods name a property
+    - { prefix: get }
+    - { prefix: is, wire_type: boolean }
 ```
+
+**`accessors` is read only where a type's fields describe nothing.** Fields come first
+and keep every shape that already had one; the accessors answer the types whose wire
+contract is not in their fields at all. An **interface** is the whole case: it declares
+no fields, so `Page<T>` and `Slice<T>` — the most common paginated Spring response —
+expanded to a zero-field shape however well the type was reached.
+
+**A prefix may constrain the return's `wire_type`.** `is` names a property only on a
+boolean, which is jackson-databind's own `findNameForIsGetter`; without the constraint
+`isoCode(): String` becomes a field called `oCode`. The name is then Jackson's
+`legacyManglePropertyName`: a bare `get()` names nothing, and the leading run of capitals
+is lowercased whole before the remainder is appended (`getURL` → `url`, `getURLValue` →
+`urlvalue`).
+
+**Only public, non-static, non-synthetic, zero-argument methods with a return.** Each
+clause drops something a looser rule would publish as a wire field — `hasNext()`,
+`nextPageable()`, a private accessor, a bridge method javac generated.
+
+**Accessors are collected across the scanned ancestry**, in JVMS 5.4.3.3's order, with
+the first declaration of a property name winning. `Page` declares only `getTotalPages`
+and `getTotalElements`; `getContent()` — the accessor the payload travels in — is on
+`Slice`. Reading only the named type would publish a paged response whose metadata is
+present and whose content is missing.
+
+**Substitution is by variable name across that ancestry**, so `Page<T> extends Slice<T>`
+binds `getContent(): List<T>` to the argument `Page` was given. A hierarchy that renames
+the variable leaves the field holding an unbound one, which names no type: the field is
+undescribed and the shape stays open, which is the answer it had before this existed.
 
 **`default_strategy` is a declaration, not an observation.** A module may configure a strategy
 globally, in which case the value the catalog states is a default that configuration overrides

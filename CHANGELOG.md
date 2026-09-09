@@ -14,6 +14,23 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A payload type whose wire contract is in its accessors, not its fields** (F4 §5.2,
+  W26). `Page<T>` and `Slice<T>` are interfaces, so they declare no fields, and shape
+  expansion read fields only — the most common paginated Spring response expanded to a
+  **zero-field** shape however well the type was reached, naming spring-data-commons in
+  `extract_libraries` included. The shape model now declares which methods name a
+  property ([D02](docs/components/D02-catalog-schema.md) §2f) and expansion reads them
+  where a type's fields describe nothing, across the scanned ancestry, with the same
+  substitution W25 gives fields. Measured on the fixture with the jar in reach:
+  `Page<OrderView>` goes from an open shape with **0 fields to a closed one with 11**,
+  `content` an **array of `OrderView`** — the payload type reaching the reader at last.
+  The rule is read from jackson-databind's own bytecode rather than its documentation:
+  `is` names a property only on a boolean, a bare `get()` names nothing, and the leading
+  run of capitals is lowercased whole, so `getURLValue` is `urlvalue`. G-66 recorded this
+  gap with the **wrong cause** — "declared as wrappers nowhere" — and the remedy that
+  implies is a fabrication: a `wrappers` entry means the type vanishes on the wire, which
+  is true of `ResponseEntity` (already declared by 40 catalogs) and false of `Page`.
+
 - **A generic envelope's parameterisations are distinct contracts** (F4 §5.2, W25).
   `mall-admin`'s 160 endpoints all carried one response shape id; they now carry **58**,
   and `CommonResult<UmsAdmin>`'s `data` field points at `UmsAdmin` where it held an
@@ -56,16 +73,45 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
-- **A dependency's controllers, schemas and error advice were published as this module's**
-  (W24) — reachable since 2I by anyone using `extract_libraries`, and by every reactor
-  module once siblings were scanned. A dependency's rows are dropped before the endpoint
-  merge: after it, a dependency serving an address this module CALLS took the module's own
-  outbound row with it, silently. `schema_operations` filters its own roots, since it mints
-  rows carrying neither handler nor caller.
+- **A reactor sibling's controllers, schemas and error advice were published as this
+  module's** (W24), once siblings were scanned for their types. A sibling's rows are
+  dropped before the endpoint merge: after it, a sibling serving an address this module
+  CALLS took the module's own outbound row with it, silently. `schema_operations` filters
+  its own roots, since it mints rows carrying neither handler nor caller. **A jar named in
+  `extract_libraries` is deliberately untouched** — keying the guardrail on the origin
+  tier, which both kinds share, deleted a SOAP operation the vertical-slice test asserts
+  an opted-in library contributes, and that surface is what a person asked for. A sibling
+  is scanned because it is on the classpath and nobody was asked; consent is the
+  difference, and it is not readable from the tier.
 - **A type variable could be published as a shape id** (W25). A raw `CommonResult`'s `data`
   is declared `T` and bound to nothing; rooting it collides every unrelated `T` in a
   codebase onto one shape. It roots none now, and its owner is reported OPEN rather than
   claiming a complete description of a payload nobody stated.
+- **A deleted or renamed class kept publishing its endpoints** (W26). A fact file is
+  written whole and never appended to, so a class that is re-scanned overwrites itself —
+  but one that was deleted, renamed, or moved to another package overwrites NOTHING, and
+  its facts stayed in the workspace deriving rows for source that is not there.
+  `discard_library_facts` had this reasoning for an opted-out library since W24; the
+  module's own classes had no equivalent. Measured in this repo's own fixture: a renamed
+  `Shapes` class went on publishing **two inbound Pub/Sub endpoints**, so the fixture's
+  own workspace answered **143** where a fresh one answered 141 on identical source. The
+  retraction is keyed on the document's own `origin_entry` — the classes directory the
+  scan read — rather than on a list of the subtrees other writers own, so the next
+  subtree somebody adds is not deleted by an omission here.
+- **A workspace written by an earlier build crashed instead of migrating** (W26).
+  `schema.sql` is all `CREATE TABLE IF NOT EXISTS`, which does nothing to a table that
+  already exists, so every column added to it since a workspace file was written was
+  missing from that file and the first statement selecting one died with
+  `Binder Error: Table "shapes" does not have a column with name "origin_tier"`. Columns
+  the schema has gained are now added on open. Adding is the whole migration and it is
+  enough, because every table but `raw_facts` is rebuilt from the facts on each
+  `analyze` and `raw_facts` is emptied and reloaded — nothing is dropped or retyped.
+- **A shape holding a collection of an unbound type variable claimed to be complete**
+  (W25, found in W26). The guard that marks an owner OPEN read the field's own
+  `wire_type`, so a raw type's `List<T>` came out `array` holding an undescribed `object`
+  and its owner was reported CLOSED — a complete description of a payload whose element
+  type is unnamed. It now follows the element chain. An over-claim is the direction NFR-2
+  rates worst, and this one hid itself: `open` is what puts a shape in the gap report.
 - **A servlet reaching `HttpServlet` through an intermediate base derived nothing** — a
   stated boundary that existed only while the hierarchy was unavailable (W22).
 - **Every Spring Kafka 2.x producer derived nothing** (F2 §4.1). Catalog descriptors were

@@ -2361,3 +2361,39 @@ distinguishable, and `origin` must not become a path (D00 §2).
 
 **Falsified by** measuring that Gradle multi-project builds put their shared types on the
 compile classpath in a form the existing `extract_libraries` path already reaches.
+
+### OI-70 — the workspace migrates ADDED columns and nothing else
+
+**Found by** the W26 review, after a stale `.sextant/workspace.duckdb` crashed 65 tests
+with `Binder Error: Table "shapes" does not have a column with name "origin_tier"`.
+
+`schema.sql` is all `CREATE TABLE IF NOT EXISTS`, so it does nothing to a table that
+already exists. W26 added a migration that opens a workspace, compares its columns against
+DuckDB's own parse of the current `schema.sql`, and `ALTER TABLE ... ADD COLUMN`s whatever
+is missing. That covers the case that has actually occurred — every schema change so far
+has added columns — and it is safe because every table but `raw_facts` is rebuilt from the
+facts on each `analyze`.
+
+**What it does not cover**, in the order it would bite:
+
+1. **A column whose TYPE changed.** The old column stays, the new statement writing it may
+   or may not fail, and if the types are assignment-compatible it silently keeps whichever
+   representation the old workspace used.
+2. **A column the schema no longer declares.** Left in place deliberately — deleting data
+   to satisfy a shape is the destructive direction — but a `SELECT *` reader sees a column
+   the schema does not describe.
+3. **A table renamed or split.** The old table survives with its rows, and
+   `schema_objects()` reports it, so the export ratchet sees an object with no query.
+
+**Consequence today: none observed.** No shipped change has done any of the three, which
+is exactly why the additive rule is enough and why this is recorded rather than built.
+
+**Closes by** stamping the workspace with a fingerprint of `schema.sql` and, where it
+differs in any way the additive rule cannot express, refusing with a sentence that says
+what to do — re-run `sextant module analyze` — rather than by guessing at a migration. The
+workspace is a derived cache: rebuilding it is always correct and always available, so the
+honest failure is cheap. `_add_columns_the_schema_has_gained` already computes the expected
+shape from DuckDB's own parse, so the comparison it would need exists.
+
+**Falsified by** a schema change that removes or retypes a column, which would make this a
+live defect rather than a stated limit.

@@ -442,7 +442,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # this moves with `tests/cli/test_app.py`'s own count.
         # 44 since OI-48: `POST /v1/orders/scoped`, which roots the package-scope
         # nullability case the fixture previously declared and never reached.
-        "http": 44,
+        # 48 since W26: the four `/v1/paged/*` routes — `/totals`, whose payload is an
+        # interface described from its bean accessors, and three paged ones whose
+        # envelope lives in a jar this fixture opts into scanning nowhere.
+        "http": 48,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -618,7 +621,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # through — 88 + 1 = 89, for a 136-endpoint total (6 + 89 + 41 = 136).
     # OI-48: +1 inbound http — `POST /v1/orders/scoped` — 89 + 1 = 90, for a
     # 137-endpoint total (6 + 90 + 41 = 137).
-    assert rows == [("both", 6), ("inbound", 90), ("outbound", 41)]
+    # W26: +4 inbound http — the four `/v1/paged/*` routes — 90 + 4 = 94, for a
+    # 141-endpoint total (6 + 94 + 41 = 141).
+    assert rows == [("both", 6), ("inbound", 94), ("outbound", 41)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1351,7 +1356,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # `CustomerRegistry`, which give the always-on corpus the superclass-call shape it
     # scored ZERO of. `spring-petclinic-rest` makes 96 such calls and this fixture made
     # none, so the suite could pass while Wave 3's resolution work had nowhere to fail.
-    assert (None, 125) in origins
+    # + 2: W26's `contracts/OrderTotals` and `PayloadShapeController` — a payload type
+    # with no fields at all, and the controller that returns it beside three paged
+    # responses whose envelope nothing here can expand.
+    assert (None, 127) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

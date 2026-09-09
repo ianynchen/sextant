@@ -786,13 +786,73 @@ neither a handler nor a caller and there is nothing downstream to key on. Error 
 gated on the HANDLER's tier, so a dependency's `@ControllerAdvice` on this module's
 handlers survives while its advice on its own does not.
 
-**This also closes a latent hole in `extract_libraries`**, which has opted library jars
-into the workspace since 2I with no such filter.
+**`extract_libraries` is deliberately NOT covered, and it took a failing test to see
+why.** An earlier version of the guardrail keyed on the origin tier, which both kinds of
+library share, and it deleted the SOAP operation `test_vertical_slice.py` asserts an
+opted-in library contributes. That is not a hole being closed: [D04](components/D04-config-and-exclusion.md)
+§2a defines that file as "scan this dependency's own bytecode as well as mine", so the
+surface is what the person asked for. A sibling is scanned because it is on the classpath
+and nobody was asked. **Consent is the difference**, it is not readable from the tier, and
+that is why the module fact carries `sibling_coordinates` and the guardrail keys on those.
 
 **What it costs, measured:** `mall-admin` analyses in 67s against roughly 6s, 648
 documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
 discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
+
+### 3a-iv. A payload whose contract is in its accessors, not its fields (F4 §5.2)
+
+`Page<T>` and `Slice<T>` are **interfaces**. An interface declares no fields, and shape
+expansion read fields only — so the most common paginated Spring response expanded to a
+shape with **zero fields however well the type was reached**. Naming spring-data-commons
+in `extract_libraries` changed nothing: the class file was read, `origin_tier` came out
+`dependency`, and the shape was still empty. G-66 recorded this and **stated the wrong
+cause** — "declared as wrappers nowhere" — which is the correction worth keeping, because
+the remedy it implies is a fabrication. A `wrappers` entry means *this type vanishes on
+the wire*. That is true of `ResponseEntity` and false of `Page`: Spring sends
+`{content: [...], totalElements: ...}`, and spring-data-commons 3.5 added `PagedModel<T>`
+— `{content: List<T>, metadata}` — precisely so that envelope would serialise stably.
+Rooting through `Page` would publish `OrderView` as the response body, a contract no
+handler produces, trading a visible under-report for an invisible over-report.
+
+What these types actually share is that their wire contract lives in **bean accessors**.
+The shape model now declares which methods name a property (D02 §2f), and expansion reads
+them **where a type's fields describe nothing** — fields keep every shape that already had
+one, so nothing that worked before changed.
+
+**Measured, on the fixture with the jar in reach:** `Page<OrderView>` went from an open
+shape with 0 fields to a closed one with **11**, `content` an **array of `OrderView`** —
+the payload type reaching the reader at last — beside `totalElements`, `totalPages`,
+`number`, `size`, `numberOfElements`, `pageable`, `sort`, `first`, `last`, `empty`. That
+is the JSON Spring sends, field for field. `Pageable` and `Sort` expanded in turn, by the
+same rule.
+
+**The rule is Jackson's, read from Jackson's bytecode** rather than from its
+documentation: `is` names a property only on a boolean (`findNameForIsGetter`), a bare
+`get()` names nothing, and the leading run of capitals is lowercased whole before the
+remainder is appended (`legacyManglePropertyName`, so `getURLValue` → `urlvalue`).
+Accessors are collected across the **scanned ancestry** in JVMS 5.4.3.3's order —
+`getContent()` is on `Slice`, not on `Page`, so a rule reading only the named type would
+publish page metadata with the content missing.
+
+**Boundaries, both stated rather than hidden.** A type this workspace never read gains no
+accessors, exactly as it gains no fields: the fixture names spring-data-commons in no
+`extract_libraries`, so its own `Page<OrderView>` response stays open with zero fields and
+`Page` is still reported as a type nothing could expand. And substitution is by variable
+NAME across the ancestry, so a hierarchy that renames its type variable leaves the
+inherited field holding an unbound one — undescribed, shape open, which is the answer it
+had before this existed.
+
+**What it costs, measured:** nothing on a corpus that does not need it. The accessor map
+is read on the first ask rather than on construction, and `derive_shapes` runs once per
+catalog — so building it eagerly scanned every method symbol and walked the whole type
+graph forty-odd times to answer nothing. On `mall-admin`, whose payload types all carry
+fields, that was **15s of a 90s resolve**; lazily it is 74.7s against a 75.8s baseline
+measured with the rule removed outright, which is inside the run-to-run noise.
+
+**HATEOAS is covered by the same rule and measured by nothing.** `EntityModel`,
+`CollectionModel` and `PagedModel` appear in **zero files across all six corpora**, so no
+claim is made about them here.
 
 ### 3a-ii. "The body is not here" now says WHICH kind of not-here (F3 §4.2)
 

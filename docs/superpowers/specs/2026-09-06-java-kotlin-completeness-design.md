@@ -810,8 +810,20 @@ output is on disk; `extract_libraries` is already an opt-in `.sextant.yml` key.
 **Build the sibling-reading once.** Shapes, `type_hierarchy` (F3) and traces all want the
 same reach. Three implementations of "look next door" is the wrong outcome.
 
-Also covers `Page` / `Slice` / `ResponseEntity` / HATEOAS envelopes (G-66), several of which
-are declared nowhere today.
+Also covers `Page` / `Slice` / `ResponseEntity` / HATEOAS envelopes (G-66) — **but not the
+way this row first said.** Measured in W26: `ResponseEntity` is a declared wrapper in 40
+catalogs and already works, and `Page`/`Slice`/HATEOAS are not wrappers at all. A `wrappers`
+entry means the type *vanishes* on the wire; `Page` does not, and declaring it as one would
+publish the element type as the response body — a contract no handler produces. What these
+types have in common is that their wire contract lives in **accessors**, not fields: they are
+interfaces, and expansion read fields only. So the mechanism is a `serialization.accessors`
+rule in the shape model (D02 §2f), read where a type's fields describe nothing, collected
+across the scanned ancestry, with the same substitution as fields.
+
+**HATEOAS is covered by the same rule and measured by nothing.** `EntityModel`,
+`CollectionModel` and `PagedModel` appear in no corpus here — zero files across all six —
+so no row claims them. The rule is generic and does not name them; whether it describes them
+correctly is unmeasured until a corpus carries one.
 
 ### 5.3 Acceptance for F4
 
@@ -822,6 +834,10 @@ are declared nowhere today.
 - An expanded shape carries `origin_tier`.
 - A type reachable through neither a sibling nor `extract_libraries` produces a stated
   boundary naming `extract_libraries`, not an empty shape.
+- A payload type with no fields — an interface — carries the wire contract its bean
+  accessors describe, its own and its scanned ancestors', with the type arguments
+  substituted. Measured on the fixture with spring-data-commons in reach:
+  `Page<OrderView>` carries 11 fields and its `content` is an array of `OrderView`.
 
 ---
 

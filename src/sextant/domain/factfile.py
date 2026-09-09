@@ -143,6 +143,59 @@ def discard_library_facts(fact_root: Path, coordinate: str | None = None) -> Non
     shutil.rmtree(target, ignore_errors=True)
 
 
+def discard_scanned_facts(fact_root: Path, classes_dir: Path) -> None:
+    """Remove every fact file a PREVIOUS scan of `origin_entry` left behind.
+
+    `discard_library_facts` above, generalised to the module's own classes, and for its
+    own stated reason: *a fact file is written whole and never appended to, so a document
+    that is re-scanned overwrites itself — one that is no longer scanned overwrites
+    NOTHING.* A class that was deleted, renamed, or moved to another package is exactly
+    that case, and without this its facts stay in the workspace and keep deriving rows
+    for source that is not there.
+
+    **Measured, in this repo's own fixture:** `Shapes.jsonl` survived the class being
+    renamed and went on contributing two inbound Pub/Sub endpoints — 143 endpoints from
+    the fixture's own `.sextant` workspace against 141 from a fresh one, on identical
+    source. Two runs of one command over one input disagreeing is NFR-1; publishing a
+    boundary for a class that does not exist is worse than that, and it is silent.
+
+    **Keyed on the document's own `origin_entry`, not on a list of the directories other
+    writers own.** The scanner stamps each document with the classes directory it read
+    (the extractor's `--classes`), so this retracts exactly what a scan of that directory
+    wrote and cannot reach a config or schema document written from a `src` root,
+    whatever subtree a later phase adds. A rule spelled "delete everything except `lib`,
+    `config` and `schema`" would delete the next subtree somebody adds without one line
+    of this file changing.
+
+    Compared as RESOLVED paths, so a workspace first written through a relative path and
+    re-analysed through an absolute one still retracts. Where a stale value resolves to
+    something else the file is left alone: failing to retract repeats the behaviour this
+    replaces, while deleting a fact file this scan does not own loses a document nothing
+    will rewrite.
+
+    Only the document record is read — the first line, which is what makes a fact file
+    self-describing (D00 §7) — so this costs one line per file rather than a parse of
+    every fact in the tree.
+    """
+    if not fact_root.exists():
+        return
+    target = classes_dir.resolve()
+    for path in sorted(fact_root.rglob("*.jsonl")):
+        try:
+            with path.open(encoding="utf-8") as handle:
+                first = handle.readline()
+            record = json.loads(first)
+        except (OSError, json.JSONDecodeError):
+            # Unreadable or not JSONL: not something a scan of this entry wrote, and
+            # deleting a file nothing here can identify is the destructive guess.
+            continue
+        entry = record.get("origin_entry")
+        if not isinstance(entry, str):
+            continue
+        if entry == str(classes_dir) or Path(entry).resolve() == target:
+            path.unlink(missing_ok=True)
+
+
 def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [_line(document)] + [_line(fact) for fact in facts]

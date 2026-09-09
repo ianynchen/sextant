@@ -184,6 +184,19 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
         # BEFORE this task's own inheritance walk has anything to resolve.
         ("POST", "/v1/orders/scoped"),
+        # W26's four, and they are two different answers on purpose.
+        # `/v1/paged/totals` returns `OrderTotals`, an interface: no fields at all, so
+        # its wire contract is its bean accessors, and the shape carries real fields.
+        # The three below return `Page`/`Slice`, which live in a jar this fixture names
+        # in no `extract_libraries` — so their shapes stay open with zero fields and the
+        # types are reported as ones nothing could expand. Reading a type's accessors
+        # needs its class file exactly as reading its fields does, and pinning both
+        # halves here is what keeps the first from being mistaken for a rule that
+        # describes types the workspace never read.
+        ("GET", "/v1/paged/orders"),
+        ("GET", "/v1/paged/slice"),
+        ("GET", "/v1/paged/totals"),
+        ("GET", "/v1/paged/wrapped"),
         # `/api/orders/{id}`: the COVARIANT case, and it derives now (OI-47).
         # `OrdersApiController#find` returns `DetailedOrderResult`, so its
         # descriptor differs from the interface's `find` and it misses the
@@ -831,7 +844,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # was referenced by NOTHING, so no endpoint rooted it, so the package-scope
     # nullability rule ran only in a hand-built unit test and never in the
     # pipeline. The fixture could not see the thing it was built to demonstrate.
-    assert len(report.endpoints) == 124
+    #
+    # W26 makes it 128: the four `/v1/paged/*` routes. `/totals` is a payload type whose
+    # wire contract is in its ACCESSORS — an interface has no fields at all — and the
+    # three paged ones are the boundary beside it, returning an envelope whose jar this
+    # fixture names in no `extract_libraries`.
+    assert len(report.endpoints) == 128
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1621,7 +1639,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 58 since OI-48 added `POST /v1/orders/scoped`; 57, not 56, since OI-47: `GET /api/orders/{id}` is the covariant
         # inherited mapping this pass used to lose with the bridge it was
         # reachable through. One row, and the only movement in this whole map.
-        "http": 58,
+        # 62 since W26: the four `/v1/paged/*` routes — one payload described from its
+        # accessors, three left open because their envelope's jar is not in reach.
+        "http": 62,
         "jms": 8,
         "kafka": 22,
         "pubsub": 6,
@@ -1638,7 +1658,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 124
+    assert sum(counts.values()) == len(report.endpoints) == 128
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3094,7 +3114,11 @@ def test_the_format_ladder_answers_every_live_row(
     # + 1 (OI-47): `GET /api/orders/{id}`, the recovered covariant mapping,
     # which is a json-bodied http row like any other and reaches the same rung.
     # + 1 (OI-48): `POST /v1/orders/scoped`, likewise.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 52
+    # + 4 (W26): the four `/v1/paged/*` routes. All four are json-bodied http rows and
+    # reach the same rung, whether or not their payload TYPE could be expanded — which
+    # is the point: the format ladder answers off the declared type, and three of these
+    # four have a type nothing here can open.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 56
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
