@@ -277,3 +277,76 @@ config_model:
   # reason): a winning value starting with one of these names a config-server
   # import, not a value this pass can ever resolve from files alone.
   remote_prefixes: ["configserver:", "optional:configserver:"]
+
+# D02 §2j (F7 §8.2, W30). What a call REACHES, where the call is a terminal — D00 §4's
+# `terminal_kind`, which that schema declared and nothing produced for two phases. Its own
+# note said why, and the note was right: "a data-access call is `persistence` only to
+# something that knows the callee is one". This is that knowledge.
+#
+# **On this file for the reason `config_model` is** — the family's base catalog carries
+# what is true across the family. A terminals-only file cannot be a catalog (`style` and
+# `matches` are required and it declares no boundary), and every catalog is loaded
+# regardless of gating, so these rules reach every module.
+#
+# **Three routes, because three frameworks answer differently**, and each was measured on a
+# real repository before it was written. NONE is a name match: `*Mapper` and `*Repository`
+# are naming conventions, and §8.1 forbids a rule weaker than the one the framework applies.
+terminals:
+  # By OWNER — the call lands on the library type itself.
+  #
+  # `EntityManager` is 82 of `spring-petclinic-rest`'s 101 classifiable terminals; the
+  # `java.sql` pair is 19 there and 13 on `mall-admin`. `RedisTemplate` is 79 on
+  # `mall-admin` and is the one rule here whose `target` is not a database — which is what
+  # the sub-field is for, and what makes "does this hit a cache or a database" answerable.
+  - { owner: jakarta.persistence.EntityManager,   kind: persistence, target: database }
+  - { owner: javax.persistence.EntityManager,     kind: persistence, target: database }
+  - { owner: java.sql.Connection,                 kind: persistence, target: database }
+  - { owner: java.sql.Statement,                  kind: persistence, target: database }
+  - { owner: java.sql.PreparedStatement,          kind: persistence, target: database }
+  # `ResultSet` is 17 of `spring-petclinic-rest`'s `java.sql` terminals and the other
+  # three above are ZERO there — reading a row back is where the JDBC calls actually are.
+  #
+  # **`java.sql.Date` is deliberately absent**, and it is the near-miss this list has to
+  # get right: it is 2 terminals in that same corpus, it lives in the same package, and it
+  # is a VALUE — a date that happens to be JDBC's spelling of one. Classifying it as
+  # persistence would say a call reaches a database because of the package its argument
+  # type came from. The package is not the evidence; the API is.
+  - { owner: java.sql.ResultSet,                  kind: persistence, target: database }
+  - { owner: org.springframework.jdbc.core.JdbcTemplate,        kind: persistence, target: database }
+  - { owner: org.springframework.data.redis.core.RedisTemplate, kind: persistence, target: cache }
+  - { owner: org.springframework.data.redis.core.StringRedisTemplate, kind: persistence, target: cache }
+  # By SUPERTYPE — the owner implements a declared type, read from `type_hierarchy` (W21).
+  #
+  # `jhipster-sample-app`'s repositories are its OWN interfaces and carry no annotation at
+  # all; the class file says they implement `JpaRepository`, which is 73 of its 75
+  # classifiable terminals.
+  #
+  # **Every level a user extends is named, and naming only the base `Repository` reached
+  # NOTHING** — measured: it classified 2 of the 75. The closure is transitive over
+  # `type_hierarchy`, and that table holds only what this workspace SCANNED:
+  # `JpaRepository` comes back with `scanned: false` and has no rows of its own, so the
+  # walk stops there and never sees what it extends. Transitivity still earns its keep for
+  # a user-defined intermediate — jhipster's `OperationRepositoryWithBagRelationships` is
+  # scanned and is reached through it — but the framework's own hierarchy is invisible.
+  # A catalog author must name the level a user actually writes.
+  - { supertype: [org.springframework.data.repository.Repository,
+                  org.springframework.data.repository.CrudRepository,
+                  org.springframework.data.repository.ListCrudRepository,
+                  org.springframework.data.repository.PagingAndSortingRepository,
+                  org.springframework.data.repository.ListPagingAndSortingRepository,
+                  org.springframework.data.repository.reactive.ReactiveCrudRepository,
+                  org.springframework.data.jpa.repository.JpaRepository,
+                  org.springframework.data.mongodb.repository.MongoRepository,
+                  org.springframework.data.elasticsearch.repository.ElasticsearchRepository],
+      kind: persistence, target: database }
+  # By SCANNED PACKAGE — an annotation names packages and every type inside them qualifies.
+  #
+  # `mall-admin`'s mappers carry NO annotation. `@MapperScan({"com.macro.mall.mapper",
+  # "com.macro.mall.dao"})` on a config class is how MyBatis registers them, and that
+  # annotation is in the fact stream with its package list — 175 terminals. Reading the
+  # scan is reading the framework's own answer; matching `*Mapper` would be guessing at it,
+  # and would also claim every unrelated type whose name happens to end that way.
+  - { scanned_by: org.mybatis.spring.annotation.MapperScan, packages_from: value,
+      kind: persistence, target: database }
+  - { scanned_by: tk.mybatis.spring.annotation.MapperScan,  packages_from: value,
+      kind: persistence, target: database }

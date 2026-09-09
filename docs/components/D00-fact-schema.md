@@ -232,19 +232,31 @@ exactly as the other two do the day something writes one.
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`
 
-> **SPECIFIED HERE, NOT YET USED — nothing produces a `terminal_kind`,** and 2Q's traversal
-> deliberately does not. This set CLASSIFIES what a call reaches, and three of its members
-> — `persistence`, `async_handoff`, and `outbound_call` in [D01](D01-graph-schema.md)'s
-> sense of a matched outbound endpoint — need framework knowledge no pass has applied at a
-> call site: a data-access call is `persistence` only to something that knows the callee is
-> one. What the traversal reports instead is why the WALK stopped, which is a different
-> question answered entirely from what the walk did, under a vocabulary of its own
-> (`domain/closed_sets.TraceStop`, [D01](D01-graph-schema.md) §3's Traces). Publishing a
-> guess under this set's name would be a classification a reader takes as measured. §5.3's
-> second corollary.
+> **PRODUCED SINCE W30** (F7 §8.2), on `call_edges`. This note said "nothing produces a
+> `terminal_kind`" for two phases and gave the right reason: the set CLASSIFIES what a call
+> reaches, and `persistence` in particular "is `persistence` only to something that knows
+> the callee is one". That framework knowledge is now catalog data
+> ([D02](D02-catalog-schema.md) §2j) — an owner type, a supertype the owner implements, or
+> the packages a scan annotation registers — so the classification is READ rather than
+> guessed, which is what §5.3's second corollary asked for.
+>
+> **NULL and `unresolved` are different answers.** NULL means the edge is not a terminal at
+> all: its callee's body was read and the walk expanded it. `unresolved` means this IS a
+> terminal, it was examined, and no catalog claimed it — which on the measured corpora is
+> ~95% of them, almost all `StringBuilder`, `Object` and `List`.
+>
+> **Still not `TraceStop`.** That vocabulary (`domain/closed_sets.TraceStop`,
+> [D01](D01-graph-schema.md) §3's Traces) answers why the WALK stopped and is decided
+> entirely from what the walk did. One edge carries both and they say different things:
+> `boundary` because this workspace read no body, `persistence` because a catalog knows
+> what the callee is. `returns`, `ends_silently`, `throws`, `async_handoff` and `cycle` have
+> no producer yet — no shipped catalog declares a rule that mints one.
 
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
-splitting it later is a rendering choice rather than a re-index.
+splitting it later is a rendering choice rather than a re-index. Measured on `mall-admin`:
+199 `database` terminals and 41 `cache` ones, the second being `RedisTemplate` — which is
+the distinction the sub-field exists to make, and the question "does this call hit a
+database or a cache" could not be asked without it.
 
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
 `websocket`, `sse`, `amqp`, `pulsar`, `rsocket`. `message` is

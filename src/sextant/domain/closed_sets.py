@@ -235,6 +235,47 @@ class Anchor(StrEnum):
     END_OF_DOCUMENT = "end-of-document"
 
 
+class TerminalKind(StrEnum):
+    """What a call REACHES, where the call is a terminal (D00 §4, F7 §8.2, W30).
+
+    **D00 declared this set and nothing produced one for the whole of Phase 2**, and its
+    own note said why: three members need framework knowledge no pass had applied at a
+    call site, because "a data-access call is `persistence` only to something that knows
+    the callee is one". That knowledge is now catalog data (D02 §2j) — an owner type, a
+    supertype, or the packages a scan annotation names — so the classification is read
+    rather than guessed.
+
+    **Not `TraceStop`**, which answers why the WALK stopped and is decided entirely from
+    what the walk did. One edge carries both and they say different things: `boundary`
+    because this workspace read no body, and `persistence` because the catalog knows what
+    the callee is. Before this, a JDK call and a MyBatis mapper call read alike.
+
+    `unresolved` is the honest member: a terminal the catalogs could not classify. It is
+    not the same as NULL, which means the edge is not a terminal at all.
+    """
+
+    OUTBOUND_CALL = "outbound_call"
+    RETURNS = "returns"
+    ENDS_SILENTLY = "ends_silently"
+    PERSISTENCE = "persistence"
+    THROWS = "throws"
+    UNRESOLVED = "unresolved"
+    ASYNC_HANDOFF = "async_handoff"
+    CYCLE = "cycle"
+
+
+class TargetKind(StrEnum):
+    """`persistence`'s own sub-field (D00 §4): what kind of store the call reaches.
+
+    A sub-field rather than three members of `TerminalKind`, so that splitting the kind
+    later is a rendering choice rather than a re-index — D00's own wording, kept.
+    """
+
+    DATABASE = "database"
+    CACHE = "cache"
+    FILE = "file"
+
+
 class TraceStop(StrEnum):
     """Why a walk did not expand a step (2Q `G4`, D01 §3's Traces).
 

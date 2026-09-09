@@ -443,6 +443,13 @@ GOLDEN_TRACES = [
                 result=3,
                 resolution=Resolution.RESOLVED,
                 stop=TraceStop.BOUNDARY,
+                # W30. A terminal always carries a kind, and this one is the case the
+                # feature exists for: the renderer used to say a JDK call and a mapper
+                # call "both read `boundary`… the distinction is the reader's to make".
+                # Both columns are set here so the golden shows what a reader sees rather
+                # than a state the pipeline cannot produce.
+                terminal_kind="persistence",
+                target_kind="database",
             ),
             Step(
                 depth=2,
@@ -476,6 +483,10 @@ GOLDEN_TRACES = [
                 result=12,
                 resolution=Resolution.RESOLVED,
                 stop=TraceStop.BOUNDARY,
+                # The control beside the mapper above: an ordinary library call, examined
+                # and claimed by no catalog. `unresolved` says exactly that, and it is
+                # what ~95% of real terminals read.
+                terminal_kind="unresolved",
             ),
         ),
         response=((0, '{"kind":"unresolved","source":12}'),),

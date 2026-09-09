@@ -116,6 +116,17 @@ class Step:
     resolution: Resolution
     stop: TraceStop | None
     returns: tuple[tuple[int, str], ...] = ()
+    # D00 §4's `terminal_kind`, and `persistence`'s own `target_kind` (F7 §8.2, W30) —
+    # what the call REACHES, carried on the row that already says the walk stopped.
+    #
+    # The two answer different questions and a step carries both: `stop: boundary` says
+    # this workspace read no body, `terminal_kind: persistence` says a catalog knows the
+    # callee is a store. Before this, a JDK call and a MyBatis mapper call read alike and
+    # the renderer said so — "the distinction is the reader's to make".
+    #
+    # None where the edge is not a terminal at all.
+    terminal_kind: str | None = None
+    target_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,8 @@ def _walk(
                 result=None if row["result"] is None else int(str(row["result"])),
                 resolution=Resolution(str(row["resolution"])),
                 stop=stop,
+                terminal_kind=None if row["terminal_kind"] is None else str(row["terminal_kind"]),
+                target_kind=None if row["target_kind"] is None else str(row["target_kind"]),
                 returns=tuple(
                     index.returns.get(
                         (method, int(str(row["ordinal"])), callee or ""),

@@ -1375,6 +1375,9 @@ _TRACE_STEP_HEADERS = (
     "Value",
     "Returns",
     "Stop",
+    # F7 §8.2 (W30). What the call REACHES, beside why the walk stopped — the two answer
+    # different questions and a step carries both.
+    "Reaches",
 )
 
 # What a reader has to know before the first table, in the machine's own
@@ -1407,9 +1410,12 @@ _TRACE_PREAMBLE = (
         "`Stop` says why a step was not expanded. `boundary` means this workspace read "
         "no body for the callee: a third-party library, the JDK, a MyBatis mapper and a "
         "SIBLING BUILD MODULE all read alike there, because each is a body that is not "
-        "here. Nothing below classifies which — `terminal_kind` has no producer, and "
-        "the `Call` column carries the full descriptor the compiler wrote so the "
-        "distinction is the reader's to make."
+        "here. **`Reaches` is the other half of that question** (W30) — what the call "
+        "reaches rather than why the walk stopped — so a data-access call now says "
+        "`persistence (database)` or `persistence (cache)` where a JDK call says "
+        "`unresolved`. `unresolved` means the terminal was examined and no catalog "
+        "claimed it, which on real repositories is most of them; the `Call` column still "
+        "carries the full descriptor the compiler wrote."
     ),
     (
         "`revisited` means the callee was expanded ELSEWHERE in this same trace and its "
@@ -1561,6 +1567,25 @@ def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
     return MachineDetail(tuple(entries))
 
 
+def _reaches_cell(step: Step) -> str:
+    """What one step's call REACHES (D00 §4's `terminal_kind`, F7 §8.2, W30).
+
+    `persistence (database)` where the sub-field says which store, `persistence` alone
+    where a rule named a kind and no target. A step that is not a terminal shows nothing —
+    the walk expanded it, so there is nothing to reach — and one no catalog claimed shows
+    `unresolved`, which says it was examined.
+
+    Composed here rather than derived here: both values arrive on the row (D01 §3), and
+    inventing the classification in the renderer would be derivation hiding in
+    presentation, which the import-linter contract forbids.
+    """
+    if step.terminal_kind is None:
+        return _NONE_RECORDED
+    if step.target_kind is None:
+        return step.terminal_kind
+    return f"{step.terminal_kind} ({step.target_kind})"
+
+
 def _trace_step_table(trace: Trace, redactor: Redactor) -> MachineTable:
     """Every step of one trace, one row each, in the walk's order — never a
     filtered or collapsed subset. A step the renderer dropped would be a call
@@ -1575,6 +1600,7 @@ def _trace_step_table(trace: Trace, redactor: Redactor) -> MachineTable:
             _text(_NONE_RECORDED if step.result is None else str(step.result)),
             _text(_returns_cell(step.returns, redactor)),
             _text(_NONE_RECORDED if step.stop is None else str(step.stop)),
+            _text(_reaches_cell(step)),
         )
         for step in trace.steps
     )

@@ -87,6 +87,11 @@ class YamlCatalogSource:
                     nullability=shape.get("nullability", {}),
                     serialization=shape.get("serialization", {}),
                     known_types=shape.get("known_types", []),
+                    # D02 §2j (W30): a top-level, optional block. Not part of the
+                    # shape model — it describes what a CALLEE is, never how a payload
+                    # serialises, so a catalog naming a `shape_model` still declares its
+                    # own terminals.
+                    terminals=raw.get("terminals", []),
                     # D02 §2i — optional, one per framework family.
                     config_model=raw.get("config_model", {}),
                     # 2G design §7 — optional format vocabulary, carried

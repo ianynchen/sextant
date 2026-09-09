@@ -77,27 +77,41 @@ visited set in `resolve/dispatch.py`. Bounded traversal OVER these rows is
 `application/query/trace.py`'s, and is where a cycle costs something.
 """
 
+from collections.abc import Sequence
+
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
+from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 
-def record_call_edges(workspace: Workspace) -> None:
+def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) -> None:
     """Derives `call_edges` — one row per (call site, candidate callee) — and
     replaces the table whole.
 
-    Runs unconditionally and reads no catalog: every input is a compiler fact,
-    so there is no framework knowledge to gate on and nothing to skip. A module
-    whose facts carry no call site leaves an empty table rather than a stale
-    one, the `resolve_config` discipline.
+    Every EDGE is a compiler fact, so the graph itself gates on no framework knowledge and
+    a module whose facts carry no call site leaves an empty table rather than a stale one
+    (the `resolve_config` discipline).
+
+    `catalogs` is read for one thing only: D00 §4's `terminal_kind` (F7 §8.2, W30), which
+    classifies what a terminal REACHES. That is the one question here a compiler fact
+    cannot answer — "a data-access call is `persistence` only to something that knows the
+    callee is one" (D00's own note, which is why the set had no producer for two phases).
+    Defaulted to none so a caller that wants the graph alone still gets it, and every
+    terminal then reads `unresolved`, which is what it read before this existed.
     """
     workspace.derive("call_edges_reset")
     dispatch = dispatch_of(workspace)
     sites = list(workspace.query("call_sites"))
+    # Built once, outside the loop: two of its three routes are workspace-wide questions,
+    # and asking them per site would repeat two queries for each of mall-admin's 24,591
+    # edges.
+    rules = TerminalRules(workspace, list(catalogs))
     rows: list[dict[str, object]] = []
     for site in sites:
-        rows.extend(_rows_for(site, dispatch))
+        rows.extend(_rows_for(site, dispatch, rules))
     if rows:
         workspace.derive("call_edges_insert", rows=rows)
     # F3 §4.2's two tables, written from the SAME pass and the same `Dispatch` — "which
@@ -166,7 +180,9 @@ def _record_resolution(
         workspace.derive("method_resolution_insert", rows=rows)
 
 
-def _rows_for(site: dict[str, object], dispatch: Dispatch) -> list[dict[str, object]]:
+def _rows_for(
+    site: dict[str, object], dispatch: Dispatch, rules: TerminalRules | None = None
+) -> list[dict[str, object]]:
     """One call site's rows, in candidate order (NFR-1).
 
     Every site produces at least one row except a `dynamic` one naming no
@@ -197,6 +213,10 @@ def _rows_for(site: dict[str, object], dispatch: Dispatch) -> list[dict[str, obj
             "result": None if site["result"] is None else int(str(site["result"])),
             "resolution": str(resolution),
             "evidence": str(Evidence.COMPILER),
+            # F7 §8.2 (W30). Classified here, with the row, because this is where it is
+            # already known whether a body was read — a later UPDATE would have to
+            # rediscover which rows are terminals.
+            **classify(rules, target, callee),
         }
         for callee in reached
     ]

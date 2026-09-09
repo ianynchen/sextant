@@ -577,7 +577,26 @@ CREATE TABLE IF NOT EXISTS call_edges (
     resolution  TEXT,
     -- D00 §4's evidence set. Always `compiler`: the call site, the descriptors
     -- and the hierarchy are what the compiler wrote into the class files.
-    evidence    TEXT
+    evidence    TEXT,
+    -- D00 §4's `terminal_kind` (F7 §8.2, W30), and **NULL means this edge is not a
+    -- terminal at all** — the walk expanded it, so there is nothing to classify. A
+    -- terminal that could not be classified carries `unresolved`, which is a different
+    -- answer: we looked at what the call reaches and could not say.
+    --
+    -- It classifies the CALLEE, which is why it needed framework knowledge and why D00
+    -- carried it with no producer for so long: a data-access call is `persistence` only
+    -- to something that knows the callee is one. That knowledge is catalog data
+    -- ([D02](D02-catalog-schema.md) §2j), never a name heuristic — `*Mapper` is a naming
+    -- convention and `@MapperScan`'s own package list is the framework's own answer.
+    --
+    -- Distinct from `TraceStop`, which says why the WALK stopped and is decided entirely
+    -- from what the walk did. One edge can carry both: `boundary` because no body was
+    -- read here, and `persistence` because the catalog knows what the callee is.
+    terminal_kind TEXT,
+    -- `persistence`'s own sub-field: `database`, `cache`, `file`. NULL for every other
+    -- kind and for a `persistence` row whose catalog rule named none, so that splitting
+    -- the kind later is a rendering choice rather than a re-index (D00 §4).
+    target_kind   TEXT
 );
 
 CREATE OR REPLACE VIEW documents AS

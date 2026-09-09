@@ -610,7 +610,8 @@ _NAMED_QUERIES = {
     """,
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "call_edges": """
-        SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence
+        SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence,
+               terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
     """,
     # A cheap read of what `analyze` already loaded — for `render`, which

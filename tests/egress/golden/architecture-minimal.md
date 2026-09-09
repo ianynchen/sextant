@@ -55,7 +55,7 @@ Media reads `consumes → produces`; `—` means none recorded.
 - `Reached by` is the wire address a request arrives at, spelled exactly as the inbound endpoint table above spells it, so a trace can be found by the URL a reader knows. A handler serving several addresses is ONE trace listing all of them — the walk is the same walk whichever address invoked it — and `no wire address` is a root nothing on the wire reaches, a scheduled job above all. That is an absence, not an unread value; `(unresolved)` is how this document says a half of an address was not read.
 - A trace is REACHABILITY, never execution: every step is a call the compiler recorded, branches are not distinguished, and two `return` statements are two possible answers rather than the one that runs. No path below is asserted to have happened.
 - Steps are in the walk's own depth-first order, and `Depth` counts edges from the root — so a step's caller is named on its own row rather than left to be inferred from indentation.
-- `Stop` says why a step was not expanded. `boundary` means this workspace read no body for the callee: a third-party library, the JDK, a MyBatis mapper and a SIBLING BUILD MODULE all read alike there, because each is a body that is not here. Nothing below classifies which — `terminal_kind` has no producer, and the `Call` column carries the full descriptor the compiler wrote so the distinction is the reader's to make.
+- `Stop` says why a step was not expanded. `boundary` means this workspace read no body for the callee: a third-party library, the JDK, a MyBatis mapper and a SIBLING BUILD MODULE all read alike there, because each is a body that is not here. **`Reaches` is the other half of that question** (W30) — what the call reaches rather than why the walk stopped — so a data-access call now says `persistence (database)` or `persistence (cache)` where a JDK call says `unresolved`. `unresolved` means the terminal was examined and no catalog claimed it, which on real repositories is most of them; the `Call` column still carries the full descriptor the compiler wrote.
 - `revisited` means the callee was expanded ELSEWHERE in this same trace and its own calls are shown at that first appearance: a method is expanded once per trace, not once per route to it, so a path through one of these tables is not always followable to a terminal. `cycle` means the callee is already on the path from the root. `depth_limit` means the walk's safety bound stopped it, and the `Complete` column answers that without a reader scanning for it.
 - `Value` is the value id the call site produced and `Returns` what the callee hands back — both LOCAL to the method on that row, so an id in a step's `Returns` is a value inside the callee and matches its own rows, never the caller's. `Response` is what the root method itself returns.
 - `Detail` says whether this trace's steps and diagram are drawn below. Every trace is drawn, every trace is listed with its depth and its step count, and the sentence under the table says how many were drawn. A trace is never drawn in part: half a trace is the under-report this section exists not to be.
@@ -70,13 +70,13 @@ Every trace is rendered in full below: 2 of 2, 5 steps.
 - `com/example/golden/Api#list().` — inbound_endpoint, reached by `GET /orders; GET /v1/orders`
   - Steps:
 
-    | Depth | Caller | Call | Dispatch | Resolution | Value | Returns | Stop |
-    |---|---|---|---|---|---|---|---|
-    | 1 | `Api#list` | `com/example/golden/OrderService#list().` → `com/example/golden/OrderServiceImpl#list().` | interface | resolved | 7 | unresolved value 3 | — |
-    | 2 | `OrderServiceImpl#list` | `com/example/golden/OrderMapper#selectAll().` | interface | resolved | 3 | — | boundary |
-    | 2 | `OrderServiceImpl#list` | `com/example/golden/OrderServiceImpl#lambda$list$0().` | dynamic | resolved | — | — | — |
-    | 3 | `OrderServiceImpl#lambda$list$0` | `com/example/golden/OrderService#list().` → `com/example/golden/OrderServiceImpl#list().` | interface | resolved | — | — | revisited |
-    | 1 | `Api#list` | `com/example/common/api/CommonResult#success().` | static | resolved | 12 | — | boundary |
+    | Depth | Caller | Call | Dispatch | Resolution | Value | Returns | Stop | Reaches |
+    |---|---|---|---|---|---|---|---|---|
+    | 1 | `Api#list` | `com/example/golden/OrderService#list().` → `com/example/golden/OrderServiceImpl#list().` | interface | resolved | 7 | unresolved value 3 | — | — |
+    | 2 | `OrderServiceImpl#list` | `com/example/golden/OrderMapper#selectAll().` | interface | resolved | 3 | — | boundary | persistence (database) |
+    | 2 | `OrderServiceImpl#list` | `com/example/golden/OrderServiceImpl#lambda$list$0().` | dynamic | resolved | — | — | — | — |
+    | 3 | `OrderServiceImpl#lambda$list$0` | `com/example/golden/OrderService#list().` → `com/example/golden/OrderServiceImpl#list().` | interface | resolved | — | — | revisited | — |
+    | 1 | `Api#list` | `com/example/common/api/CommonResult#success().` | static | resolved | 12 | — | boundary | unresolved |
   - Response: unresolved value 12
 
 ```mermaid

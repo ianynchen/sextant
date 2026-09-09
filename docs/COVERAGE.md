@@ -801,6 +801,55 @@ documents against 161. Most of that is `derive_endpoints` doing work the guardra
 discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
+### 3b-i. A terminal says what it reaches, not just that it is one (F7 §8.2)
+
+[D00](components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the fact
+schema has existed and **nothing produced one for two phases**. The note it carried gave
+the right reason — *a data-access call is `persistence` only to something that knows the
+callee is one* — and the renderer said what that cost a reader, in as many words: "a JDK
+call and a MyBatis mapper call both read `boundary`… the distinction is the reader's to
+make."
+
+That knowledge is catalog data now (D02 §2j), and the classification is read.
+
+| Corpus | terminals | classified | breakdown |
+|---|---|---|---|
+| `mall-admin` | 5,352 | **240** (4%) | 199 `database`, 41 `cache` |
+| `spring-petclinic-rest` | 2,074 | **102** (5%) | 102 `database` |
+| `jhipster-sample-app` | 1,141 | **70** (6%) | 70 `database` |
+
+**The remaining ~95% is the point, not a shortfall.** It is `StringBuilder`, `Object`,
+`List`, `Iterator` — ordinary library calls, and they read `unresolved`, which says *this is
+a terminal we examined and could not classify*. NULL means something else entirely: the
+edge is not a terminal at all, because its callee's body was read.
+
+**Three routes, one per framework, and none of them a name match.** `*Mapper` and
+`*Repository` would have been the easy rules and both are naming conventions:
+
+- `mall-admin`'s MyBatis mappers carry **no annotation at all**. `@MapperScan({"com.macro.
+  mall.mapper", "com.macro.mall.dao"})` on a config class is how MyBatis registers them,
+  and that annotation is in the fact stream with its package list.
+- `jhipster-sample-app`'s repositories are its own interfaces, also unannotated; the class
+  file says they implement `JpaRepository`.
+- `spring-petclinic-rest` reaches its store through `EntityManager` and `ResultSet`
+  directly.
+
+**Two things this cost to get right, both found by measuring rather than reasoning.**
+Naming Spring Data's base `Repository` classified **2 of jhipster's 75**: the supertype walk
+reads `type_hierarchy`, which holds only what this workspace SCANNED, and `JpaRepository`
+comes back `scanned: false` with no rows of its own — so a catalog must name the level a
+user actually extends. And the first version read `type_hierarchy` before that table was
+written, since the same pass writes both and writes the edges first; it reads the facts the
+table is built from instead.
+
+**`java.sql.Date` is deliberately unclassified**, beside `java.sql.ResultSet` which is not.
+Both are in the same package and both are terminals in `spring-petclinic-rest`. One is an
+API that reaches a store and one is a date. The package is not the evidence.
+
+**Five of the eight members still have no producer** — `returns`, `ends_silently`, `throws`,
+`async_handoff` and `cycle` — because no shipped catalog declares a rule that mints one.
+`outbound_call` is not minted either: an outbound endpoint is already its own row.
+
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)
 
 `endpoint_metadata` is a side table, one row per entry, each carrying **its own resolution

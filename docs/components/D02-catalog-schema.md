@@ -3204,6 +3204,58 @@ what looks "simple".
 
 ---
 
+## 2j. What a call reaches — `terminals`
+
+**A top-level, optional block** (F7 §8.2, W30). It answers [D00](D00-fact-schema.md) §4's
+`terminal_kind` for a call whose callee's body this workspace did not read, and it exists
+because that set had no producer for two phases for a reason D00 states plainly: *a
+data-access call is `persistence` only to something that knows the callee is one.* This is
+where that knowledge is written down.
+
+```yaml
+terminals:
+  - { owner: jakarta.persistence.EntityManager, kind: persistence, target: database }
+  - { supertype: [org.springframework.data.jpa.repository.JpaRepository],
+      kind: persistence, target: database }
+  - { scanned_by: org.mybatis.spring.annotation.MapperScan, packages_from: value,
+      kind: persistence, target: database }
+```
+
+`kind` is a member of D00's `terminal_kind` set; `target` is `persistence`'s own sub-field
+(`database`, `cache`, `file`) and is omitted for every other kind. Each rule names exactly
+one of three ways to recognise the callee, and **each exists because a real framework needs
+it** — measured on three repositories before any of them was written:
+
+- **`owner`** — the call lands on the library type itself. `EntityManager` is 82 of
+  `spring-petclinic-rest`'s terminals; `RedisTemplate` is 41 of `mall-admin`'s and is the
+  rule whose `target` is `cache` rather than `database`.
+- **`supertype`** — the owner implements a declared type, read from `type_hierarchy`
+  ([D01](D01-graph-schema.md) §3, W21). `jhipster-sample-app`'s repositories are its own
+  interfaces carrying no annotation at all; the class file says they implement
+  `JpaRepository`. **The match is transitive but stops at the first unscanned type**, so a
+  catalog must name the level a USER extends: naming only Spring Data's base `Repository`
+  classified 2 of that corpus's 75, because `JpaRepository` comes back `scanned: false` and
+  has no rows of its own.
+- **`scanned_by`** — an annotation names PACKAGES and every type inside them qualifies.
+  `mall-admin`'s MyBatis mappers carry no annotation; `@MapperScan({"com.macro.mall.
+  mapper"})` on a config class is how MyBatis registers them, and that is 199 terminals.
+  `packages_from` names the attribute holding the list and defaults to `value`. A package
+  matches its own subpackages and never a sibling whose name merely shares a prefix.
+
+**None of the three is a name match, deliberately.** `*Mapper` and `*Repository` are naming
+conventions and §8.1 forbids a rule weaker than the one the framework applies: matching by
+name would claim every unrelated type ending that way, and miss every one named otherwise.
+
+**Routes are tried owner, then supertype, then scanned package** — most specific first, so
+a catalog can name one type out of a scanned package and have that win.
+
+**Where it lives.** On the family's base catalog, the rule `config_model` already follows:
+a terminals-only file cannot be a catalog (`style` and `matches` are required and it
+declares no boundary), and every catalog is loaded regardless of gating, so the rules reach
+every module.
+
+---
+
 ## 2h. Type carriers and call wrappers
 
 Two more argument-resolution declarations, both read through the `instance` argument kind

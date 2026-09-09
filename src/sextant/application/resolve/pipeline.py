@@ -90,7 +90,10 @@ def resolve(
     # gates on no capability. The two are independent (disjoint tables, one
     # shared reader in `resolve/dispatch.py` that each builds for itself), so
     # this order is the order they were written and nothing depends on it.
-    record_call_edges(workspace)
+    # `declared` for D00 §4's `terminal_kind` alone (F7 §8.2, W30): the edges themselves
+    # are compiler facts, and only the classification of what a terminal REACHES needs a
+    # catalog to have said what the callee is.
+    record_call_edges(workspace, declared)
     # F5 §6.2 (W29): emptied once, here, ahead of every engine that writes it — the
     # `open_questions`/`resolved_config` discipline. More than one catalog contributes
     # entries, so a reset owned by an engine would erase whichever ran first, and a

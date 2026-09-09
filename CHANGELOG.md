@@ -36,6 +36,23 @@ here would restate those documents rather than add anything.
   its own row now and answers off its own evidence, so the disagreement is on the page.
   The COVERAGE caveat that stated this ("a reader must not read a merged row's `format` as
   a statement about both directions") retires with it.
+- **A terminal says what it reaches, not just that it is one** (F7 §8.2, W30).
+  [D00](docs/components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the
+  fact schema has existed and **nothing produced one for two phases** — the note it carried
+  gave the right reason, *a data-access call is `persistence` only to something that knows
+  the callee is one*, and the renderer said what that cost: "a JDK call and a MyBatis mapper
+  call both read `boundary`… the distinction is the reader's to make." That knowledge is
+  catalog data now (`terminals`, D02 §2j) and the classification is read, on `call_edges`
+  and in the trace tables' new `Reaches` column, with `persistence`'s own `target_kind`
+  answering database-or-cache. Measured: **240 of `mall-admin`'s 5,352 terminals** (199
+  database, 41 cache), 102 of `spring-petclinic-rest`'s, 70 of `jhipster-sample-app`'s.
+  The remaining ~95% is `StringBuilder`, `Object` and `List`, and reads `unresolved` —
+  which says the terminal was examined, where NULL says the edge is not a terminal at all.
+  **Three routes and none of them a name match**: an owner type, a supertype read from
+  `type_hierarchy`, or the packages a scan annotation registers. `mall-admin`'s mappers
+  carry no annotation at all — `@MapperScan`'s own package list is how MyBatis finds them —
+  and matching `*Mapper` would have claimed every unrelated type ending that way.
+
 - **An outbound call's headers are recorded, each with its own trust columns** (F5 §6.2,
   W29). `endpoint_metadata` is a side table, one row per entry. Measured on the fixture's
   `GET /v2/inventory/tagged`: `Authorization` = `«redacted»`, `X-Tenant` = `acme`, and

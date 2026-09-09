@@ -131,6 +131,14 @@ class Catalog:
     nullability: dict[str, Any] = field(default_factory=dict)
     serialization: dict[str, Any] = field(default_factory=dict)
     known_types: list[dict[str, Any]] = field(default_factory=list)
+    # D02 §2j (F7 §8.2, W30): what a call REACHES, where the call is a terminal. Each
+    # entry names a `kind` from D00 §4's `terminal_kind` set and one of three ways to
+    # recognise the callee — an `owner` type, a `supertype` it implements, or the
+    # `scanned_by` annotation whose package list registers it. It is the framework
+    # knowledge D00 named as the missing piece: a data-access call is `persistence` only
+    # to something that knows the callee is one. Every catalog declaring none contributes
+    # none, which is every catalog that describes a wire rather than a store.
+    terminals: list[dict[str, Any]] = field(default_factory=list)
     # D02 §2i: a new top-level, optional block, one per framework family —
     # the family's base catalog carries it (Spring's ships on spring-web.yml).
     # `resolve/config.py`'s pass 2 collects every catalog's own non-empty
