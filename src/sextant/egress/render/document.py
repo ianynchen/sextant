@@ -1189,8 +1189,20 @@ def assemble_module_document(
     # is the gap between "this shape is the contract" and "this shape is as
     # much of the contract as anyone could see", and only the name says which
     # catalog entry would close it (FR-17).
+    # F4 §5.2 (W25): the LEVER, not only the gap. A payload type nothing could open
+    # used to render as a bare statement of absence, which tells a reader that something
+    # is missing and nothing about how to get it — and the two ways to get it are both
+    # things only they can do. A type compiled in a reactor sibling arrives once that
+    # sibling is built; one compiled in a third-party jar arrives once `extract_libraries`
+    # names it. Neither is something this analysis can do on the reader's behalf, which
+    # is exactly why naming them is the whole value of the line (§8.1 rule 3).
     gap_items += [
-        _runs(f"Not expanded, so the shapes referring to it are open: `{symbol}`.")
+        _runs(
+            f"Not expanded, so the shapes referring to it are open: `{symbol}`. "
+            "Its fields arrive when the module that compiles it is built alongside this "
+            "one, or — for a type from a dependency outside the build — when "
+            "`extract_libraries` names that dependency in `.sextant.yml`."
+        )
         for symbol in report.unexpanded_types
     ]
     # Named one by one for the same reason again: a library this module asked

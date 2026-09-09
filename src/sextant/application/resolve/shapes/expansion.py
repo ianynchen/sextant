@@ -14,7 +14,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
-from sextant.domain.symbols import bare_descriptor, owner_of
+from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,8 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     scope_prefixes = _scope_prefixes(workspace, rules)
     declared = _declared_fields(workspace)
     descriptors = _declared_shapes(workspace)
+    parameters = _type_parameters(workspace)
+    tiers = _origin_tiers(workspace)
     enums = _enum_symbols(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
@@ -60,18 +62,28 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         # cached hash codes — not the wire contract the schema states, so
         # `declared.get(shape_id, [])` is never consulted once a descriptor
         # is found here.
-        descriptor = descriptors.get(shape_id)
+        # F4 §5.2 (W25). A parameterised id names a type plus its bound arguments, and
+        # everything the workspace holds is keyed on the type ALONE — its fields, its
+        # declared shape, its formal parameters. So the base is what is looked up, and
+        # the binding is applied to the fields that come back.
+        base, arguments = bindings_of(shape_id)
+        substitution = _substitution(parameters.get(base, []), arguments)
+        descriptor = descriptors.get(base)
         if descriptor is not None:
             rows = _declared_rows_of(descriptor, referenced)
         else:
-            rows = _rows_of(
-                workspace, rules, scope_prefixes, declared.get(shape_id, []), enums, referenced
-            )
+            fields_of_base = declared.get(base, [])
+            if substitution:
+                fields_of_base = [
+                    {**field, "returns": _substituted(field.get("returns"), substitution)}
+                    for field in fields_of_base
+                ]
+            rows = _rows_of(workspace, rules, scope_prefixes, fields_of_base, enums, referenced)
         pending.extend(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
-        expandable = descriptor is not None or shape_id in declared
+        expandable = descriptor is not None or base in declared
         if not expandable:
             unexpanded.append(shape_id)
         shapes.append(
@@ -82,8 +94,20 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 # its own stopped, not because something further down did.
                 # A referenced type closes the field either way it can be
                 # expanded — bytecode fields or a declared shape's own.
+                # F4 §5.2 (W25): where the declaring class file was read from. A
+                # contract whose fields came from a neighbour's compiled output reads
+                # exactly like one from this module unless the row says so.
+                "origin_tier": tiers.get(base),
                 "open": not expandable
-                or any(held not in declared and held not in descriptors for held in referenced),
+                or any(held not in declared and held not in descriptors for held in referenced)
+                # F4 §5.2 (W25). A field holding an UNBOUND type variable — a raw
+                # `CommonResult`'s `data`, declared `T` and bound to nothing — gets no
+                # shape id, because a variable's name means something only inside the
+                # declaration that introduced it. The field is therefore undescribed,
+                # and a shape with an undescribed field is OPEN. Without this the raw
+                # envelope reported `open: false` while saying nothing about its own
+                # payload, which is a stronger claim than the evidence supports.
+                or any(_holds_an_undescribed_object(row) for row in rows),
             }
         )
         fields.extend(
@@ -115,6 +139,77 @@ class _Rules:
     # Scope annotation symbol -> the `nullable` value it implies for
     # everything the symbol it was found on claims (`_scope_prefixes`).
     scope_annotations: dict[str, bool]
+
+
+def _origin_tiers(workspace: Workspace) -> dict[str, str]:
+    """Where each declared type's class file was read from, by bare symbol (W25)."""
+    tiers = {
+        str(row["document_id"]): str(row["origin_tier"]) for row in workspace.query("documents")
+    }
+    return {
+        bare_descriptor(str(row["symbol"])): tiers[str(row["document_id"])]
+        for row in workspace.query("declared_symbols_with_documents")
+        if str(row["document_id"]) in tiers
+    }
+
+
+def _type_parameters(workspace: Workspace) -> dict[str, list[str]]:
+    """The formal type parameter NAMES each generic type declares, in declaration
+    order, keyed by bare symbol (F4 §5.2, W25).
+
+    Order is the binding: a reference's `arguments` are positional, so
+    `CommonResult<UmsAdmin>` binds the first declared name to `UmsAdmin`. Only TYPE
+    declarations are kept — a generic METHOD declares its own parameters under the same
+    key, and binding a class's argument to a method's variable of the same name would
+    substitute across two unrelated scopes.
+    """
+    found: dict[str, list[str]] = {}
+    for row in workspace.query("type_parameters"):
+        symbol = bare_descriptor(str(row["symbol"]))
+        if "(" in symbol:
+            continue
+        declared = json.loads(str(row["type_parameters"]))
+        found[symbol] = [str(entry["name"]) for entry in declared if entry.get("name")]
+    return found
+
+
+def _substitution(names: list[str], arguments: list[str]) -> dict[str, str]:
+    """`{variable name: bound shape id}`, positionally.
+
+    A reference carrying fewer arguments than the declaration has parameters — a raw
+    type — binds nothing rather than binding what it can: a partial binding would leave
+    some fields substituted and others holding a variable, which reads as a real type to
+    everything downstream.
+    """
+    if not names or len(names) != len(arguments):
+        return {}
+    return dict(zip(names, arguments, strict=True))
+
+
+def _substituted(returns: object, substitution: dict[str, str]) -> object:
+    """One field's declared type with its variables replaced by what they are bound to.
+
+    Recursive, because a variable can appear nested — `List<T>` inside `Page<T>`. The
+    replacement carries the bound id in `symbol`; the wire attributes come from the
+    variable's own reference, which is what the field's serialiser sees.
+    """
+    if not isinstance(returns, dict):
+        return returns
+    symbol = str(returns.get("symbol", ""))
+    bound = substitution.get(symbol)
+    replaced = dict(returns)
+    if bound is not None:
+        base, _ = bindings_of(bound)
+        replaced["symbol"] = base
+        replaced["arguments"] = returns.get("arguments") or []
+        # `object` is what a bound type reference is; the variable's own `wire_type`
+        # was already `object` for a class-bounded parameter, and this keeps a bound
+        # scalar honest rather than asserting a wire mapping nobody measured.
+        return replaced
+    replaced["arguments"] = [
+        _substituted(argument, substitution) for argument in (returns.get("arguments") or [])
+    ]
+    return replaced
 
 
 def _rules_of(catalog: Catalog) -> _Rules:
@@ -423,9 +518,92 @@ def _described(
         if reference["arguments"]:
             described["item"] = _described(rules, reference["arguments"][-1], enums, referenced)
     elif described["wire_type"] == "object":
-        described["shape_id"] = reference["symbol"]
-        referenced.append(reference["symbol"])
+        # F4 §5.2 (W25). The id carries the BOUND ARGUMENTS where the reference has
+        # any, so `CommonResult<UmsAdmin>` and `CommonResult<List<UmsRole>>` are two
+        # shapes rather than one envelope standing for both. Identity is the point:
+        # DR-5 gates stitching on payload equality, and one id for every
+        # parameterisation says two services exchange the same payload when they do
+        # not. Measured on `mall-admin`: 59 distinct parameterisations collapsed onto
+        # one id.
+        #
+        # A reference with NO arguments keeps the bare symbol, unchanged — 100 of
+        # `mall-admin`'s 160 handlers return raw `CommonResult`, which states no
+        # payload type, and inventing one would be the fabrication §8 forbids.
+        if not names_a_type(str(reference["symbol"])):
+            # An UNBOUND type variable. `CommonResult`'s `data` is declared `T`, and a
+            # raw `CommonResult` binds nothing — so this field holds a variable, not a
+            # type. Rooting it would publish `shape_id: "T"`, and every unrelated `T`
+            # in the module collides onto that one id: one shape claiming to describe
+            # several unrelated payloads, which is this module's own stated rule
+            # (`_body_reference`, §8.1 rule 2). The field keeps its wire type and gets
+            # no shape, which marks its owner OPEN — the honest answer, and visible.
+            #
+            # Newly reachable with W24/W25: before the module edge was crossed, a raw
+            # `CommonResult` had no fields at all, so nothing here could hold a variable.
+            return described
+        described["shape_id"] = parameterised_id(reference)
+        referenced.append(described["shape_id"])
     return described
+
+
+def parameterised_id(reference: dict[str, Any]) -> str:
+    """A shape id carrying the reference's own bound arguments (F4 §5.2).
+
+    `com/x/CommonResult#<com/x/UmsAdmin#>`, nested for a nested argument. No spaces,
+    deliberately: `bare_descriptor` splits a symbol on its last space to drop module
+    coordinates, and an id containing one would be silently truncated wherever that
+    helper is applied to a shape id.
+
+    A type VARIABLE argument contributes its own name — an unbound `CommonResult<T>`
+    is a distinct thing from `CommonResult`, and the 10 such handlers on `mall-admin`
+    should not silently join either group.
+    """
+    arguments = reference.get("arguments") or []
+    symbol = str(reference["symbol"])
+    if not arguments:
+        return symbol
+    return symbol + "<" + ",".join(parameterised_id(argument) for argument in arguments) + ">"
+
+
+def bindings_of(shape_id: str) -> tuple[str, list[str]]:
+    """A parameterised id split back into its base symbol and its arguments.
+
+    The inverse of `parameterised_id`, and it has to be a parse rather than a lookup
+    because the id is what travels: a `shapes` row, an endpoint's payload column and an
+    exported bundle carry the id and nothing beside it."""
+    if not shape_id.endswith(">") or "<" not in shape_id:
+        return shape_id, []
+    base, _, rest = shape_id.partition("<")
+    inner = rest[:-1]
+    arguments: list[str] = []
+    depth = 0
+    current = ""
+    for character in inner:
+        if character == "<":
+            depth += 1
+        elif character == ">":
+            depth -= 1
+        if character == "," and depth == 0:
+            arguments.append(current)
+            current = ""
+            continue
+        current += character
+    if current:
+        arguments.append(current)
+    return base, arguments
+
+
+def _holds_an_undescribed_object(row: dict[str, Any]) -> bool:
+    """Whether a field row holds an object this expansion could not name.
+
+    An `object` field normally carries a `shape_id` pointing at the shape holding its
+    fields. One that does not is a field whose type we have no name for — today, an
+    unbound type variable — and its owner cannot claim to be a closed description.
+    """
+    # `_item_of` returns the descriptor itself for an object that HAS a `shape_id`, so
+    # a described object always carries an item. An `object` row with none is precisely
+    # the case where nothing could be named.
+    return row.get("wire_type") == "object" and row.get("item") is None
 
 
 def _item_of(described: dict[str, Any]) -> str | None:

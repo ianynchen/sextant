@@ -130,7 +130,7 @@ Elides: Reachability, not execution: an arrow is a call the compiler recorded, n
 - A bytes-only channel whose payload is parsed further than one delegation hop from its handler is not bound: the parse is found and listed as an open question instead, because a flow followed further than it was observed is an assumption, not a fact.
 - A bytes-only channel whose payload reaches two different parses binds neither: two answers about one wire is a question for a reader, and picking the one that sorts first would publish a coin toss as a contract.
 - Not read, so nothing above accounts for it: `com/example/golden/Newer.class: metadata unreadable`.
-- Not expanded, so the shapes referring to it are open: `com/example/golden/Opaque#`.
+- Not expanded, so the shapes referring to it are open: `com/example/golden/Opaque#`. Its fields arrive when the module that compiles it is built alongside this one, or — for a type from a dependency outside the build — when `extract_libraries` names that dependency in `.sextant.yml`.
 - Not resolved, so nothing above accounts for it: library `com.example:absent` — no archive resolved the coordinate.
 
 ## Catalogs skipped

@@ -222,13 +222,33 @@ in the data. petclinic's 96 instances resolve.
 
 ## Wave 4 — F4: the module edge
 
-The largest single visible improvement in the plan. Measured today on mall-admin: 160 of 160
-endpoints carry a response shape, **one** distinct shape, **zero** fields.
+The largest single visible improvement in the plan. Measured before Wave 4 on mall-admin:
+160 of 160 endpoints carry a response shape, **one** distinct shape, **zero** fields.
+
+*Re-measured after W24 (2026-09-09), because the wave's headline claim is now wrong in
+both directions and the next reader should not have to find that out:*
+
+- **"100% of mall's response contracts go from empty to real" is ACHIEVED**, and the
+  measurement that defined the problem is the one that says so: the complaint was one
+  distinct shape with **zero fields**, and all 160 now carry real fields — `code`,
+  `message`, `data`. That half landed with W24, reading `mall-common`.
+- **Of those 160, 57 additionally carry a resolved payload type** and 100 do not, because
+  `mall-admin`'s own source declares **100 bare `CommonResult`** against 60 parameterised
+  — counted in the source, not inferred. A raw `CommonResult` states no payload type;
+  recording its `data` as an undescribed field on an OPEN shape is the correct answer,
+  not a shortfall. Inventing a type the code does not declare would be the fabrication
+  §8 forbids.
+- Response shape ids went **1 → 58** across the 160 endpoints. The distinct-parameterisation
+  count in the source is **59** across 174 declaring methods, of which 10 are
+  `CommonResult<T>` — an unbound variable, which roots no shape (§8.1 rule 2).
+- *An earlier revision of this note called the 100% claim "not achievable". That was
+  wrong: it read "real" as "carries a payload type", where the wave measured it as
+  "carries fields". Both halves are worth stating, which is why both are above.*
 
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
 | **W24** ✅ | Read a sibling module's **types** — once, shared by shapes, `type_hierarchy` and traces. Sibling detection already exists (the Maven `<modules>` walk, Gradle settings) and the compiled output is on disk. Plus any declared `extract_libraries`. Never arbitrary third-party jars. Guardrail: read types, never derive rows | §5.2 | W5, W22 | (foundation — W25 and W26 cash it in). **The set is the DECLARED dependencies, transitively, not the reactor**: walking `<modules>` put two modules `mall-admin` does not depend on into its workspace — 246 endpoints against its own 160, and a neighbour's cron task in its document. Siblings ship as library roots with their own POM coordinates, so no new tier and no extractor change: a sibling you depend on IS a dependency, built from source. The guardrail runs BEFORE the endpoint merge (after it, a dependency serving an address this module calls took the module's own outbound row with it) and `schema_operations` filters its own roots (it mints rows with neither handler nor caller). It closes the same latent hole in `extract_libraries`. **Gradle not implemented (`OI-69`); analyse costs 67s against ~6s (`OI-68`)** |
-| **W25** | Full generic substitution across the module edge; `origin_tier` on an expanded shape; a **stated boundary naming `extract_libraries`** where a type is unreachable, replacing today's silent empty shape | §5.2 | W24 | `CommonResult<OmsOrderDetail>` and `CommonResult<Integer>` become distinct shapes with fields. DR-5's payload conjunct becomes satisfiable, so stitching becomes possible on a standard multi-module Spring layout |
+| **W25** ✅ | Full generic substitution across the module edge; `origin_tier` on an expanded shape; a **stated boundary naming `extract_libraries`** where a type is unreachable, replacing today's silent empty shape | §5.2 | W24 | `CommonResult<OmsOrderDetail>` and `CommonResult<Integer>` become distinct shapes with fields. DR-5's payload conjunct becomes satisfiable, so stitching becomes possible on a standard multi-module Spring layout. **Scope, measured:** the ENVELOPE's fields landed with W24, so all 160 endpoints already carried a described contract; W25 distinguishes the parameterisations and substitutes the variable, taking response shape ids from **1 to 58**. The 57 bound shapes close; the 100 raw ones stay OPEN with an undescribed `data`, which is what a handler returning raw `CommonResult` actually states |
 | **W26** | `Page` / `Slice` / `ResponseEntity` / HATEOAS envelopes, several declared nowhere today | §5.2 | W25 | paged and wrapped responses carry their real payload type |
 
 **Wave 4 acceptance:** mall-admin's 160 endpoints carry more than one distinct response shape,

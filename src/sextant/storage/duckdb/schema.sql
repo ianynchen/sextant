@@ -71,7 +71,17 @@ CREATE TABLE IF NOT EXISTS endpoints (
 CREATE TABLE IF NOT EXISTS shapes (
     shape_id     TEXT,
     content_hash TEXT,
-    open         BOOLEAN
+    open         BOOLEAN,
+    -- Where the class file declaring this shape was read from (D00 §2's `origin_tier`),
+    -- F4 §5.2 (W25). `module_output` for the module's own types; `dependency` for a type
+    -- reached across the module edge — a reactor sibling or an opted-in library.
+    --
+    -- Carried because crossing that edge is what makes most shapes describable at all,
+    -- and a reader deciding how much to trust a contract has to be able to see that its
+    -- fields came from a neighbour's compiled output rather than from the module in
+    -- front of them. NULL where the shape was never expanded, which is the same row
+    -- `open` is already true on.
+    origin_tier  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS shape_fields (

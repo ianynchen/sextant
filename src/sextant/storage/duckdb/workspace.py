@@ -552,6 +552,25 @@ _NAMED_QUERIES = {
     # F3 §4.2's two resolution tables. Ordered by their own search order rather than
     # alphabetically: `position` is what decides which ancestor answered, so a reader
     # sorting these rows any other way is reading them wrong.
+    # F4 §5.2 (W25). The formal type parameters a generic declaration introduces, in
+    # DECLARATION ORDER — which is what binds them to a reference's own `arguments`:
+    # `CommonResult<T>` seen as `CommonResult<UmsAdmin>` binds `T` to `UmsAdmin` by
+    # position, and a list that lost its order would bind the wrong one silently.
+    # Emitted only where a declaration HAS parameters (`ClassScanner`'s "nothing
+    # generic, nothing captured" rule), so an absent row means a non-generic type.
+    # A declared symbol with the document that declared it, so a consumer can ask where
+    # a type came from (W25's `shapes.origin_tier`). `declared_symbols` answers the
+    # symbol alone, and widening it would change what every existing reader gets.
+    "declared_symbols_with_documents": ("SELECT symbol, document_id FROM symbols ORDER BY symbol"),
+    "type_parameters": """
+        SELECT payload ->> 'symbol'         AS symbol,
+               payload ->  'type_parameters' AS type_parameters
+        FROM raw_facts
+        WHERE kind = 'symbol'
+          AND json_type(payload -> 'type_parameters') NOT IN ('NULL')
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     "type_hierarchy": "SELECT * FROM type_hierarchy ORDER BY child, position, ancestor",
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "call_edges": """
