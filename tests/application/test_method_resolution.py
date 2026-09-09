@@ -12,9 +12,11 @@ unscanned link mid-chain), and a test that can only assert what today's corpus h
 to hold is a test that stops working the moment the corpus changes.
 """
 
+from pathlib import Path
+
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.domain.closed_sets import MethodResolution
-from sextant.domain.symbols import method_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 VOID = "()V"
 
@@ -149,4 +151,69 @@ def test_a_constructor_is_never_resolved_to_an_ancestors():
     assert dispatch.resolve("p/A#", "<init>", VOID) == (
         None,
         MethodResolution.NO_DECLARATION_FOUND,
+    )
+
+
+# --- W23 / G-48: `return_flows` and the inherited accessor -------------------
+
+
+def test_a_value_returned_from_an_inherited_getter_links_to_its_declaring_class(
+    tmp_path: Path,
+):
+    """W23's whole deliverable, on real compiled bytecode.
+
+    G-48: "the same defect as G-1 costs `return_flows` its in-module accessor links …
+    every one of the 28 is an accessor inherited from `BaseEntity`/`Person`/
+    `NamedEntity` — precisely the values a reader follows to see what a response is
+    built from." The gap analysis ruled it **CORRECT (rides G-1)**, meaning fixing
+    resolution fixes this, and measurement agrees: `spring-petclinic-rest` gained 78
+    `return_flows` rows arising from inherited accessors the moment W22 landed, with no
+    change to `return_flow.py` at all.
+
+    That is exactly why this test exists. An item delivered as a side effect of another
+    is an item with nothing holding it: `record_return_flows` reads `dispatch_of`, and a
+    later change narrowing resolution would take these links away silently, in a file
+    whose own tests all still pass. `CustomerRegistry#identify` returns
+    `customer.getId()`, where `getId` is declared on `BaseEntity` and called through
+    `Customer`.
+    """
+    import subprocess
+
+    from sextant.application.ports.scanner import ScanRequest
+    from sextant.application.resolve.return_flow import record_return_flows
+    from sextant.ingress.extract.jvm.scanner import AsmScanner
+    from sextant.resources import extractor_jar
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    fixture = Path(__file__).parents[2] / "fixtures" / "orders-service"
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    facts = tmp_path / "facts"
+    AsmScanner(extractor_jar()).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=fixture / "target" / "classes",
+            out_dir=facts,
+        )
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+
+    linked = {
+        (bare_descriptor(str(row["caller"])), bare_descriptor(str(row["callee"])))
+        for row in workspace.query("return_flows")
+        if row["callee"] is not None
+    }
+    workspace.close()
+
+    assert ("com/acme/orders/model/CustomerRegistry#identify().", "") not in linked
+    assert any(
+        caller.startswith("com/acme/orders/model/CustomerRegistry#identify")
+        and callee.startswith("com/acme/orders/model/BaseEntity#getId")
+        for caller, callee in linked
+    ), (
+        "a getter declared on a scanned superclass must link to its declaring class; "
+        "before W22 this call reached no body and the value chain stopped at it"
     )
