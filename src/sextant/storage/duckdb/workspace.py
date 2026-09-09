@@ -223,7 +223,16 @@ _NAMED_QUERIES = {
                payload ->> 'schema_format' AS schema_format,
                payload ->> 'role'          AS role,
                payload ->  'operation'     AS operation,
-               payload ->  'fields'        AS fields
+               payload ->  'fields'        AS fields,
+               -- F4 §5.2 (W24). `schema_operations` mints rows with NO handler and no
+               -- caller — its own docstring's "the schema names no code" — so
+               -- `drop_borrowed_endpoints.sql` has nothing on such a row to key on.
+               -- The tier is projected here instead, and that engine filters its own
+               -- roots: a dependency's `.proto` describes the DEPENDENCY's service,
+               -- and publishing its operations as this module's API is the same
+               -- fabrication by a route the delete cannot reach.
+               (SELECT d.origin_tier FROM documents d
+                 WHERE d.document_id = raw_facts.document_id) AS origin_tier
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id
     """,
@@ -831,6 +840,10 @@ _NAMED_DERIVATIONS = {
     "roots_reset": "reset_roots.sql",
     "roots_insert": "insert_roots.sql",
     # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
+    # F4 §5.2 (W24). Runs from inside `derive_endpoints`, immediately before the merge
+    # — see the statement's own header for why that ordering is load-bearing.
+    "borrowed_endpoints_drop": "drop_borrowed_endpoints.sql",
+    "borrowed_error_handlers_drop": "drop_borrowed_error_handlers.sql",
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
     "type_hierarchy_reset": "reset_type_hierarchy.sql",

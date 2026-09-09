@@ -146,6 +146,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # widens to hold it rather than gaining a second seen-set for one style.
     seen: set[tuple[str | None, str]] = set()
     for shape in workspace.query("declared_shapes"):
+        # F4 §5.2 (W24). A dependency's schema describes the DEPENDENCY's service. This
+        # style mints rows carrying no handler and no caller — the schema names no code
+        # — so `drop_borrowed_endpoints.sql` cannot reach them and the filter has to be
+        # here, at the root.
+        if str(shape["origin_tier"]) != "module_output":
+            continue
         # The format gate is what makes this catalog's declared `protocol`
         # true of the rows below: `role` is a neutral field on every declared
         # shape (D00 §5), and only the schema format this catalog names states

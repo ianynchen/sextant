@@ -129,6 +129,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 }
             )
     workspace.derive("error_handlers_insert", rows=rows)
+    # F4 §5.2 (W24): a dependency's advice on the DEPENDENCY's own handlers is its error
+    # handling, not this module's. Advice on THIS module's handlers stays — see the
+    # statement's own header for why the tier is read off the handler.
+    workspace.derive("borrowed_error_handlers_drop")
 
 
 class _Container:

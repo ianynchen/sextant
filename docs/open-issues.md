@@ -2268,3 +2268,96 @@ METHOD walk: the annotations sit on methods the subclass does not declare at all
 
 **Closes by** that walk, over `type_hierarchy` (W22). **Falsified by** a DGS codebase
 with no inheritance among its fetchers, for which today's rows are already complete.
+
+### OI-68 — analysing a reactor module now costs 10× what it did, and most of it is avoidable · **SCHEDULED as W56 (Wave 12)**
+
+**Found by** the W24 review, and confirmed on the pinned corpus.
+
+`mall-admin` analyses in **67s** with its three sibling dependencies scanned, against
+roughly 6s without them: 648 documents instead of 161. The review's own breakdown of the
+resolve half put `derive_endpoints` at 18.4s, `derive_endpoint_shapes` at 18.3s and
+`record_call_edges` at 14.6s.
+
+**Two of those three legitimately need the siblings.** Shape expansion is the whole point
+of crossing the module edge, and `call_edges`/`type_hierarchy` resolve against types
+declared next door. `derive_endpoints` does not: `drop_borrowed_endpoints.sql` deletes
+every row a dependency's document mints, so that work is done and then thrown away.
+
+**Consequence today:** slower analysis, not wrong output.
+
+**Measured per phase, same fact tree with and without the sibling subtree:**
+
+| phase | module only | with siblings | what the extra time buys |
+|---|---|---|---|
+| `derive_endpoints` | 2.1s | **15.2s** | **nothing** — 160 endpoints either way |
+| `record_call_edges` | 1.6s | **16.7s** | 2,608 → 24,591 edges, none of them traced |
+| `record_return_flows` | 0.3s | **5.8s** | 566 → 9,951 flows, same |
+| `derive_endpoint_shapes` | — | ~16.5s | the point of the item: `CommonResult<T>` gains fields |
+
+So roughly **33 of the ~61 seconds of derivation buys nothing**, and an earlier note here
+described it as "work the guardrail then discards", which is wrong and worth correcting:
+the guardrail discards NOTHING on this corpus, because the three sibling dependencies
+declare no controllers. The cost is `derive_endpoints` SEARCHING 487 documents for
+endpoints that are not there, and `call_edges`/`return_flows` building the dependencies'
+own call graphs — 22,000 edges from callers nothing will ever trace.
+
+**Closes by** honouring F4 §5.2's own wording. It says read a sibling module's **types**;
+the implementation scans a sibling module ENTIRELY. What resolution needs from a sibling
+is signatures, fields and hierarchy — `BaseEntity#getId` must exist — not its call sites
+or its method annotations. Two levers, in order of value:
+
+1. **A types-only scan for a dependency root.** The extractor already walks each class
+   deciding what to emit; skipping call sites and method-level annotations for such a
+   root would cut the fact volume (79,315 facts against 6,388) and therefore every pass
+   downstream at once, rather than one pass at a time.
+2. **Filter derivation roots to the module's own documents** at each row-minting pass,
+   which makes `drop_borrowed_endpoints.sql` a belt-and-braces check rather than the
+   mechanism, and removes `derive_endpoints`'s 13s outright.
+
+**Falsified by** measuring that a sibling's call edges are reached by a real trace — if a
+trace crosses into a dependency's body, its call graph is not waste and lever 1 would cost
+recall.
+
+Scheduled as **W56** in the plan's Wave 12, to run after v1's waves.
+
+### OI-69 — Gradle modules cross no module edge · **SCHEDULED as W55 (Wave 12)**
+
+**Found by** the W24 review.
+
+`MavenDetector` resolves reactor siblings that this module declares as dependencies;
+`GradleDetector` does not, so `ModuleModel.sibling_roots` is empty for every Gradle build
+and the empty-envelope defect F4 §5.2 describes remains for all of them. The plan row for
+W24 names "Gradle settings" as existing sibling detection, so this is a descope of half
+the item's reach rather than a shape nobody considered.
+
+**Consequence:** a Gradle multi-project build gets exactly today's behaviour — a response
+shape with no fields wherever the type is compiled in another subproject. No output is
+wrong; it is the absence W24 exists to remove, still present.
+
+**And there is no manual route to it**, which is what turned this from a deferral into a
+scheduled item. `extract_libraries` cannot name a sibling project: `gradle.py`'s
+`_library_roots` keys its lookup on classpath entries carrying both `group` and `name`,
+and an inter-project dependency has neither. The coordinate misses, pinning a version does
+not help, and the user is told the compile classpath does not resolve the dependency.
+Reaching the module edge on Gradle today means publishing the subproject to a local
+repository and depending on it by coordinate — changing the build, not using the tool.
+
+Scheduled as **W55** in the plan's Wave 12, to run after v1's waves.
+
+**Closes by** reading what the detector is ALREADY given, and it is materially easier
+than the Maven side was. `sextant-model.init.gradle` asks each project for its
+`compileClasspath` and records every entry's resolved artifact PATH; an inter-project
+dependency arrives as a `ProjectComponentIdentifier` and is marked `internal: true`
+(`gradle.py:505-521` already reads that flag, to keep such entries out of the gap list).
+So Gradle hands over the sibling set, resolved, with paths — no `<modules>` walk, no
+parent-POM resolution, no transitive closure to compute by hand, all of which the Maven
+implementation had to do. What is missing is turning those `internal` entries into
+`LibraryRoot`s and naming them in `sibling_coordinates`.
+
+The one thing Gradle does NOT hand over is a coordinate for such an entry — a
+`ProjectComponentIdentifier` carries a project path (`:mall-common`), not
+`group:artifact:version` — so `sibling_coordinates` needs a spelling that is stable and
+distinguishable, and `origin` must not become a path (D00 §2).
+
+**Falsified by** measuring that Gradle multi-project builds put their shared types on the
+compile classpath in a form the existing `extract_libraries` path already reaches.

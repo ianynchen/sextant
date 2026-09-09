@@ -305,6 +305,13 @@ class MavenDetector:
         coordinates, versions, not_resolved, declared_release = (
             MavenDetector._resolved_dependencies(path, pom, group, artifact, version)
         )
+        # F4 §5.2 (W24). Reactor siblings this module DEPENDS ON, as library roots —
+        # appended to whatever `.sextant.yml` opted into, because a sibling is a
+        # dependency in every sense that matters here: it is on the classpath, its types
+        # appear in this module's signatures, and the only difference from a resolved
+        # jar is that it was built from source next door rather than fetched.
+        siblings = MavenDetector._sibling_roots(path, pom, coordinates, versions)
+        library_roots = library_roots + siblings
         return ModuleModel(
             module_id=f"{group}:{artifact}",
             coordinates=f"{group}/{artifact}",
@@ -344,6 +351,7 @@ class MavenDetector:
             declared_release=declared_release,
             dependencies_not_resolved=not_resolved,
             library_roots=library_roots,
+            sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,
         )
 
@@ -611,6 +619,114 @@ class MavenDetector:
         managed.update(own_managed)
         declared.update(MavenDetector._declared_versions(pom))
         return properties, managed, declared, unreadable
+
+    @staticmethod
+    def _sibling_roots(
+        path: Path,
+        pom: ElementTree.Element,
+        coordinates: tuple[str, ...],
+        versions: dict[str, str],
+    ) -> tuple[LibraryRoot, ...]:
+        """The compiled output of every reactor sibling this module DEPENDS ON, and of
+        every sibling those depend on in turn (F4 §5.2, W24).
+
+        **Declared dependencies, not every module in the reactor.** The first version of
+        this walked the parent's whole `<modules>` list, and it was wrong on its face:
+        `mall-admin` declares `mall-mbg` and `mall-security`, so `mall-portal` and
+        `mall-demo` are not on its classpath at all — yet their documents entered its
+        workspace, and `mall-portal`'s `@Scheduled` cron task rendered inside
+        `mall-admin`'s own document. A type can only appear in this module's signatures
+        if the module compiles against it, so the dependency list IS the right set.
+
+        **Transitive, because the compiler is.** `CommonResult` lives in `mall-common`,
+        which `mall-admin` reaches through `mall-security` — the shape 160 of its 160
+        endpoints return. Stopping at direct dependencies would miss the type this whole
+        item exists to read. The walk keeps a visited set: a reactor is a DAG by Maven's
+        own rule, and an unbounded walk here would be a hang triggered by a build file.
+
+        Each sibling's coordinate and version come from ITS OWN POM, never from the
+        directory name — a `<module>` entry is a path and Maven does not require it to
+        match the artifactId. A sibling whose POM cannot be read, or which has no
+        compiled output, contributes nothing rather than a guess.
+        """
+        by_coordinate = MavenDetector._reactor_modules(path, pom)
+        if not by_coordinate:
+            return ()
+        found: dict[str, LibraryRoot] = {}
+        seen: set[str] = set()
+        frontier = [c for c in coordinates if c in by_coordinate]
+        while frontier:
+            coordinate = frontier.pop(0)
+            if coordinate in seen:
+                continue
+            seen.add(coordinate)
+            sibling_dir, sibling_pom = by_coordinate[coordinate]
+            classes = sibling_dir / "target" / "classes"
+            if classes.is_dir() and any(classes.rglob("*.class")):
+                # This module's own resolved version where it declared the sibling
+                # directly; otherwise the sibling's OWN POM, inherited from the parent
+                # the way Maven inherits it. A transitively-reached sibling —
+                # `mall-common`, through `mall-security` — appears in neither this
+                # module's `<dependencies>` nor its version map, and "unversioned"
+                # would then travel into every symbol that sibling declares.
+                declared_version = versions.get(coordinate) or MavenDetector._text(
+                    sibling_pom, "version", sibling_dir, inherited=True
+                )
+                found[coordinate] = LibraryRoot(
+                    coordinate=coordinate,
+                    version=declared_version or "unversioned",
+                    archive=classes,
+                )
+            # Its own declared dependencies, so a sibling reached through a sibling is
+            # reached at all.
+            for dependency in sibling_pom.findall("m:dependencies/m:dependency", _POM_NS):
+                nested = _coordinate_of(dependency)
+                if nested is not None and nested in by_coordinate:
+                    frontier.append(nested)
+        return tuple(found[key] for key in sorted(found))
+
+    @staticmethod
+    def _reactor_modules(
+        path: Path, pom: ElementTree.Element
+    ) -> dict[str, tuple[Path, ElementTree.Element]]:
+        """Every module of this module's reactor, by coordinate, with its directory and
+        its own parsed POM.
+
+        Reached through `<parent>` because `analyze` runs against ONE module's path: the
+        detector's own `<modules>` walk descends from an aggregator and so never sees
+        the siblings of the module being analysed. `_parent_pom` applies Maven's own
+        check that the POM at `<relativePath>` really declares the coordinates the
+        `<parent>` names, so an unrelated aggregator sitting at that path is refused
+        rather than read.
+        """
+        parent = pom.find("m:parent", _POM_NS)
+        if parent is None:
+            return {}
+        parent_path, parent_pom, _reason = MavenDetector._parent_pom(parent, path)
+        if parent_path is None or parent_pom is None:
+            return {}
+        modules = parent_pom.find("m:modules", _POM_NS)
+        if modules is None:
+            return {}
+        found: dict[str, tuple[Path, ElementTree.Element]] = {}
+        for module in modules.findall("m:module", _POM_NS):
+            name = (module.text or "").strip()
+            if not name:
+                continue
+            sibling = (parent_path.parent / name).resolve()
+            if sibling == path.resolve():
+                continue
+            sibling_pom = _parsed_pom(sibling / "pom.xml")
+            if sibling_pom is None:
+                continue
+            # The sibling's OWN coordinates, inherited from its parent the way Maven
+            # inherits them — never the directory name.
+            group = MavenDetector._text(sibling_pom, "groupId", sibling, inherited=True)
+            artifact = MavenDetector._text(sibling_pom, "artifactId", sibling)
+            if group is None or artifact is None:
+                continue
+            found[f"{group}:{artifact}"] = (sibling, sibling_pom)
+        return found
 
     @staticmethod
     def _parent_pom(

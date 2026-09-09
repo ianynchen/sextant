@@ -62,7 +62,13 @@ WSDL_FORMAT = "wsdl"
 GRPC_FORMAT = "protobuf"
 
 
-def _document(document_id: str = "doc_1", path: str = "schema/orders.invented") -> Document:
+def _document(
+    document_id: str = "doc_1",
+    path: str = "schema/orders.invented",
+    *,
+    origin_tier: OriginTier = OriginTier.MODULE_OUTPUT,
+    origin: str | None = None,
+) -> Document:
     return Document(
         document_id=document_id,
         relative_path=path,
@@ -73,7 +79,8 @@ def _document(document_id: str = "doc_1", path: str = "schema/orders.invented") 
         scanner_id="reader",
         content_hash="sha256:a",
         origin_entry="src/main/resources/schema",
-        origin_tier=OriginTier.MODULE_OUTPUT,
+        origin_tier=origin_tier,
+        origin=origin,
         redaction_set_hash="sha256:b",
     )
 
@@ -121,6 +128,16 @@ def _shape(
     )
 
 
+def _operation(name: str) -> OperationRecord:
+    """One gRPC operation, with the four fields the record requires."""
+    return OperationRecord(
+        input_ref=f"invented.{name}Request",
+        output_ref=f"invented.{name}Reply",
+        client_streaming=False,
+        server_streaming=False,
+    )
+
+
 def _catalog(
     operations: dict[str, str] | None = None,
     *,
@@ -146,15 +163,30 @@ def _catalog(
     )
 
 
-def _workspace(tmp_path: Path, *shapes: DeclaredShapeFact) -> DuckDbWorkspace:
+def _workspace(
+    tmp_path: Path,
+    *shapes: DeclaredShapeFact,
+    tiers: dict[str, OriginTier] | None = None,
+) -> DuckDbWorkspace:
     """A workspace holding the given declared shapes, ONE FACT FILE PER
     `document_id` — because that is what a document is: a schema split across
     two files is two documents, and a helper that flattened them into one
-    would let a test claim a multi-file schema it never built."""
+    would let a test claim a multi-file schema it never built.
+
+    `tiers` names a document's `origin_tier` where it is not the module's own output
+    (F4 §5.2, W24) — a schema compiled into a DEPENDENCY, which describes that
+    dependency's service rather than this module's."""
+    tiers = tiers or {}
     for document_id in dict.fromkeys(shape.document_id for shape in shapes):
+        tier = tiers.get(document_id, OriginTier.MODULE_OUTPUT)
         write_fact_file(
             tmp_path / "facts" / f"{document_id}.jsonl",
-            _document(document_id, f"schema/{document_id}.invented"),
+            _document(
+                document_id,
+                f"schema/{document_id}.invented",
+                origin_tier=tier,
+                origin=None if tier is OriginTier.MODULE_OUTPUT else "com.acme:orders-proto",
+            ),
             [shape for shape in shapes if shape.document_id == document_id],
         )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -1113,3 +1145,46 @@ def test_the_shipped_grpc_catalog_declares_the_style_the_protocol_and_the_fixed_
         "schema_format": "protobuf",
         "operations": {"operation": "operation"},
     }
+
+
+# --- F4 §5.2 (W24): a dependency's schema describes the DEPENDENCY's service ---
+
+
+def test_a_dependencys_schema_operations_do_not_become_this_modules_api(tmp_path: Path):
+    """The Critical the module-edge review found, pinned here rather than beside the
+    other module-edge tests, because it is THIS engine that has to answer it.
+
+    Every other style sets a handler or a caller, so `drop_borrowed_endpoints.sql`
+    reaches its rows. This one sets NEITHER — by design, since the schema names no code
+    — so that statement has nothing to key on, and a dependency's `.proto` published its
+    service as this module's API through a route the delete could not see. The filter
+    has to be at the root, and this is what holds it there.
+
+    The two shapes are identical but for the document they were declared in.
+    """
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Own/Get",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=_operation("Own"),
+        ),
+        _shape(
+            "invented.Neighbour/Get",
+            role="operation",
+            document_id="dependency",
+            schema_format=GRPC_FORMAT,
+            operation=_operation("Neighbour"),
+        ),
+        tiers={"dependency": OriginTier.DEPENDENCY},
+    )
+
+    _run(workspace, _grpc_catalog())
+    paths = {str(row["path"]) for row in _rows(workspace)}
+    workspace.close()
+
+    assert paths == {"invented.Own/Get"}, (
+        "a dependency's schema describes the dependency's service; this engine mints "
+        "rows with no handler and no caller, so the filter cannot live downstream"
+    )

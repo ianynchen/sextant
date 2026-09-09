@@ -68,6 +68,12 @@ class ModuleModel:
     # `.sextant.yml` — the opt-in is the file, so an empty tuple here is the
     # default state and not a failure.
     library_roots: tuple[LibraryRoot, ...] = ()
+    # Of `library_roots`, the ones that are REACTOR SIBLINGS this module declares as
+    # dependencies (F4 §5.2, W24) — scanned automatically rather than named by anybody.
+    # `extract_libraries` entries are the other kind and are deliberately not here: that
+    # file is a person saying "scan this dependency's own bytecode as well as mine", and
+    # what it opts into includes the dependency's own surface.
+    sibling_coordinates: tuple[str, ...] = ()
     # The `groupId:artifactId` coordinates this module's BUILD declares, as
     # the build system reports them — D00 §5's `module` fact carries them into
     # the workspace, where a catalog whose framework rule is conditional on a

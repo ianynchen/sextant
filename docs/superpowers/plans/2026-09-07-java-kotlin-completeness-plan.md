@@ -227,7 +227,7 @@ endpoints carry a response shape, **one** distinct shape, **zero** fields.
 
 | # | Item | Spec | Depends on | Delivers |
 |---|---|---|---|---|
-| **W24** | Read a sibling module's **types** — once, shared by shapes, `type_hierarchy` and traces. Sibling detection already exists (the Maven `<modules>` walk, Gradle settings) and the compiled output is on disk. Plus any declared `extract_libraries`. Never arbitrary third-party jars. Guardrail: read types, never derive rows | §5.2 | W5, W22 | (foundation — W25 and W26 cash it in; three implementations of "look next door" avoided) |
+| **W24** ✅ | Read a sibling module's **types** — once, shared by shapes, `type_hierarchy` and traces. Sibling detection already exists (the Maven `<modules>` walk, Gradle settings) and the compiled output is on disk. Plus any declared `extract_libraries`. Never arbitrary third-party jars. Guardrail: read types, never derive rows | §5.2 | W5, W22 | (foundation — W25 and W26 cash it in). **The set is the DECLARED dependencies, transitively, not the reactor**: walking `<modules>` put two modules `mall-admin` does not depend on into its workspace — 246 endpoints against its own 160, and a neighbour's cron task in its document. Siblings ship as library roots with their own POM coordinates, so no new tier and no extractor change: a sibling you depend on IS a dependency, built from source. The guardrail runs BEFORE the endpoint merge (after it, a dependency serving an address this module calls took the module's own outbound row with it) and `schema_operations` filters its own roots (it mints rows with neither handler nor caller). It closes the same latent hole in `extract_libraries`. **Gradle not implemented (`OI-69`); analyse costs 67s against ~6s (`OI-68`)** |
 | **W25** | Full generic substitution across the module edge; `origin_tier` on an expanded shape; a **stated boundary naming `extract_libraries`** where a type is unreachable, replacing today's silent empty shape | §5.2 | W24 | `CommonResult<OmsOrderDetail>` and `CommonResult<Integer>` become distinct shapes with fields. DR-5's payload conjunct becomes satisfiable, so stitching becomes possible on a standard multi-module Spring layout |
 | **W26** | `Page` / `Slice` / `ResponseEntity` / HATEOAS envelopes, several declared nowhere today | §5.2 | W25 | paged and wrapped responses carry their real payload type |
 
@@ -339,6 +339,42 @@ moves the untruth. W50 and W51 can start once their subject waves land.
 | **W52** | The RESTATE batch — 39 documentation claims that are untrue or untested, corrected as one batch. **Rule:** a sentence in the indicative describing untested behaviour is either given a test or rewritten to say what is true | §10.4 | the wave whose claim it restates | C7's *"Both must be matched"* was the template: a true-sounding sentence that stopped anyone looking |
 | **W53** | The MEASURE batch residue — G-22, G-46, G-88, G-91, G-122 and G-27. **Rule:** measurement means reading the framework's own class files at a named coordinate and version, recorded in `measured:` | §10.5 | — | *"it is just a rename"* stops being an argument |
 | **W54** | The test-debt batch: G-110's untested rows, and G-112's `_NO_DECLINING_TEST_YET` markers (**27** of 55 catalogs — the gap analysis says 25; re-counted 2026-09-07 — and it **over-states** the gap for `jakarta-websocket`). **Rule:** a row marked `supported` has a test naming it — the rule the mutation harness already enforces for guards, extended to coverage claims | §10.6 | W42 | a claim of support cannot stand with nothing that would fail if it broke |
+
+---
+
+## Wave 12 — the module edge, finished · **scheduled after v1's waves**
+
+Added 2026-09-09, from what W24 measured on the way in. Both items run after every wave
+above rather than beside W24, by decision: neither changes what any v1 item can claim,
+and both are bounded by measurements already taken.
+
+W56 is a cost, W55 is a capability, and they are separate decisions — W56 makes every
+reactor module cheaper to analyse whichever build system it uses, while W55 is the
+difference between a Gradle team reaching the module edge and not being able to.
+
+| # | Item | Spec | Depends on | Delivers |
+|---|---|---|---|---|
+| **W56** | **A dependency root is scanned for its TYPES, not scanned entirely.** F4 §5.2's own wording is "read a sibling module's **types**"; W24 implemented "scan a sibling module". Measured on `mall-admin`, same fact tree with and without the sibling subtree: `derive_endpoints` 2.1s → **15.2s** for **zero** extra rows, `record_call_edges` 1.6s → **16.7s** (2,608 → 24,591 edges, none traced), `record_return_flows` 0.3s → **5.8s** — roughly **33 of ~61 seconds of derivation buying nothing**, and the fact volume going 6,388 → 79,315. Only `derive_endpoint_shapes` (~16.5s) is doing what the module edge is crossed for. **Two levers, in value order:** (1) a types-only extraction mode for a dependency root — signatures, fields and hierarchy, no call sites and no method-level annotations — which cuts every downstream pass at once; (2) filter derivation ROOTS to the module's own documents at each row-minting pass, which removes `derive_endpoints`'s 13s outright and makes `drop_borrowed_endpoints.sql` a belt-and-braces check rather than the mechanism. **Falsified by** measuring that a real trace crosses into a dependency's body, which would make its call graph recall rather than waste | §5.2 | W24 | analysing a reactor module stops costing 10× what it did |
+| **W55** | `GradleDetector` resolves reactor siblings the way `MavenDetector` does — the `compileClasspath` entries the init script already marks `internal: true`, turned into `LibraryRoot`s and named in `sibling_coordinates`. **Design question to settle first:** a `ProjectComponentIdentifier` carries a project PATH (`:mall-common`), not `group:artifact:version`, so a stable spelling for `sibling_coordinates` has to be chosen, and `origin` must not become a path (D00 §2 — `origin` survives being read on another machine) | §5.2 | W24 | a Gradle multi-project build stops carrying empty response envelopes |
+
+**Why this is not a nice-to-have, stated once so the next reader does not have to
+re-derive it.** The two build systems do not differ by convenience here; they differ by
+whether the thing is possible at all.
+
+`extract_libraries` cannot name a sibling project. `gradle.py`'s `_library_roots` builds
+its lookup only from classpath entries carrying both `group` and `name`, and an
+inter-project dependency has neither — so the coordinate misses, pinning a version does
+not help (the candidate list is empty before the version is consulted), and the user is
+told "this module's compile classpath does not resolve this dependency". **There is no
+workaround inside Sextant**: reaching the module edge on Gradle means publishing the
+subproject to a local repository and depending on it by coordinate, which is changing the
+build rather than using the tool.
+
+And if that lookup were merely fixed, the semantics would still diverge:
+`extract_libraries` carries CONSENT — an opted-in library's own controllers and SOAP
+operations DO derive as endpoints, which `tests/e2e/test_vertical_slice.py` asserts — while
+a Maven sibling's do not. The same source layout would produce different endpoint rows
+depending on the build system, which is the shape §8.1's language rule exists to refuse.
 
 ---
 

@@ -141,6 +141,10 @@ def derive_endpoints(
         engine(workspace, catalog)
     # Once per resolve, after every catalog: a wire identity present in both
     # directions collapses to one row, direction `both` (D02 §3).
+    # F4 §5.2 (W24): a dependency's rows go before the merge folds them together with
+    # this module's own. After it, a sibling serving an address this module CALLS would
+    # take the module's outbound row with it — see the statement's own header.
+    workspace.derive("borrowed_endpoints_drop")
     workspace.derive("endpoints_merge")
     return skipped
 

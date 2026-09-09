@@ -760,6 +760,40 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-iii. A module reads its dependencies' types, and publishes none of their rows (F4 §5.2)
+
+`CommonResult<T>` is compiled in `mall-common`; every one of `mall-admin`'s controllers
+returns it. Until W24 that module's class files were never read, so **160 of 160
+endpoints carried one distinct response shape with zero fields** — the envelope, empty.
+A reactor sibling this module DECLARES as a dependency is now scanned as a library root,
+transitively (`mall-common` is reached through `mall-security`), and its three fields —
+`code`, `message`, `data` — are in the workspace. Substituting `data`'s type parameter is
+W25; W24 is what makes it possible.
+
+**The set is the declared dependencies, not the reactor.** An earlier attempt walked the
+parent POM's whole `<modules>` list, which put `mall-portal` and `mall-demo` — modules
+`mall-admin` does not depend on — into its workspace: **246 endpoints against its own
+160**, and `mall-portal`'s `@Scheduled` cron task rendered inside `mall-admin`'s own
+document. A type can only reach this module's signatures if the module compiles against
+it, so the dependency list is the right set, and reading it removed the fabrication at
+source: the same corpus now derives exactly 160 with the guardrail disabled.
+
+**The guardrail stays, because a shared `-web` or `-api` module does carry controllers.**
+A dependency's rows are dropped before the endpoint merge — after it, a dependency
+serving an address this module CALLS would take the module's own outbound row with it,
+silently. `schema_operations` filters its own roots instead, because it mints rows with
+neither a handler nor a caller and there is nothing downstream to key on. Error advice is
+gated on the HANDLER's tier, so a dependency's `@ControllerAdvice` on this module's
+handlers survives while its advice on its own does not.
+
+**This also closes a latent hole in `extract_libraries`**, which has opted library jars
+into the workspace since 2I with no such filter.
+
+**What it costs, measured:** `mall-admin` analyses in 67s against roughly 6s, 648
+documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
+discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
+roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
+
 ### 3a-ii. "The body is not here" now says WHICH kind of not-here (F3 §4.2)
 
 One word did three jobs, and that is what made it a fabrication rather than a gap. A call

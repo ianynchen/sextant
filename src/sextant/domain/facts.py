@@ -179,6 +179,19 @@ class ModuleFact(BaseModel):
     # the archive — one scan of a jar serves modules that target different
     # releases.
     declared_release: int | None = None
+    # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
+    # their coordinates, sorted. Carried on the module fact because its consumer runs at
+    # RESOLVE and there is nothing else there that can tell them apart.
+    #
+    # **Why they need telling apart from any other dependency.** A sibling is scanned
+    # AUTOMATICALLY — nobody asked for it, it is on the classpath and its types appear
+    # in this module's signatures — so publishing its controllers as this module's API
+    # would be a fabrication on the analysis's own initiative. `extract_libraries` is the
+    # opposite: a coordinate a person wrote into `.sextant.yml`, which D04 §2a defines as
+    # "scan this dependency's own bytecode as well as mine", and a shipped test asserts
+    # that an opted-in library's SOAP operation DOES reach the endpoint table. Consent is
+    # the whole difference, and it is not readable from the tier — both are `dependency`.
+    sibling_coordinates: list[str] = Field(default_factory=list)
     # The `groupId:artifactId` coordinates the module's BUILD declares (2O
     # design §2a, ruling R9), sorted. Its own field rather than `classpath`
     # above, because the two answer different questions and only this one can
