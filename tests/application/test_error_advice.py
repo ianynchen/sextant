@@ -394,6 +394,77 @@ def test_a_module_local_composed_advice_stereotype_is_followed(tmp_path: Path):
     assert [row["declared_by"] for row in rows] == [REST_CONTROLLER_ADVICE]
 
 
+MESSAGE_EXCEPTION_HANDLER = (
+    "org/springframework/messaging/handler/annotation/MessageExceptionHandler#"
+)
+CONTROLLER = "org/springframework/stereotype/Controller#"
+RESPONSE_STATUS = "org/springframework/web/bind/annotation/ResponseStatus#"
+
+
+def _stomp_advice() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-stomp-advice"
+    )
+
+
+def test_a_stomp_exception_handler_derives_a_row_with_no_status(tmp_path: Path):
+    """W47, `G-35`. §5.1 has shipped `error_handlers` for the HTTP twin since 2O and
+    STOMP's error contract was absent from §5 entirely, so a service whose messaging
+    errors ARE handled looked like one whose are not.
+
+    **`status` is NULL and that is the answer, not a missing read.** `@ResponseStatus`
+    sets an HTTP response code and a STOMP handler answers over a broker, so this catalog
+    declares no status annotation at all — the engine's `status_annotation` pair became
+    optional for exactly this case. Declaring `@ResponseStatus` here would encode a rule
+    Spring does not apply.
+
+    The container is `@Controller`, which is what
+    `SimpAnnotationMethodMessageHandler.isHandler` tests — the same predicate MVC runs."""
+    facts = [
+        _type(ADVICE),
+        _handler_method(parameters=[NOT_FOUND_EXCEPTION]),
+        _type(NOT_FOUND_EXCEPTION, superclass=RUNTIME_EXCEPTION),
+        _annotated(ADVICE, CONTROLLER),
+        _annotated(HANDLE, MESSAGE_EXCEPTION_HANDLER, {"value": NOT_FOUND_EXCEPTION}),
+        # An `@ResponseStatus` sitting right beside it, so the NULL below measures the
+        # catalog's silence rather than the fixture's.
+        _annotated(HANDLE, RESPONSE_STATUS, {"code": NOT_FOUND}),
+    ]
+    workspace = _resolve(tmp_path, facts, _stomp_advice())
+    rows = workspace.query("error_handlers")
+    workspace.close()
+
+    assert [(r["exception"], r["status"], r["declared_by"]) for r in rows] == [
+        (NOT_FOUND_EXCEPTION, None, CONTROLLER)
+    ]
+
+
+@pytest.mark.declines("spring-stomp-advice")
+@pytest.mark.pins("error_advice.container-gate")
+def test_a_stomp_handler_on_a_plain_class_derives_nothing(tmp_path: Path):
+    """§10 near-miss, the twin's own shape one framework along: every conjunct holds —
+    a real `@MessageExceptionHandler` on a method naming a real exception — and the
+    declaring class carries neither `@Controller` nor `@ControllerAdvice`.
+
+    Spring finds handler methods by first finding the CONTAINER, so this is ordinary code
+    that happens to be annotated. A row here would report an error contract the running
+    system never answers with, and would have to invent `declared_by` to do it."""
+    facts = [
+        _type(ADVICE),
+        _handler_method(parameters=[NOT_FOUND_EXCEPTION]),
+        _type(NOT_FOUND_EXCEPTION, superclass=RUNTIME_EXCEPTION),
+        _annotated(HANDLE, MESSAGE_EXCEPTION_HANDLER, {"value": NOT_FOUND_EXCEPTION}),
+    ]
+    workspace = _resolve(tmp_path, facts, _stomp_advice())
+    rows = workspace.query("error_handlers")
+    workspace.close()
+
+    assert rows == []
+
+
 # --- (b) the near-misses (§10) ---------------------------------------------
 
 

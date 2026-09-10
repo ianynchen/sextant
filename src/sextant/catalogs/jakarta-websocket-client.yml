@@ -17,10 +17,13 @@ direction: outbound
 # minting a row from it would publish an endpoint addressed at nothing, which is
 # the fabrication `derive_call_endpoints`'s own addresses-nothing gate exists to
 # stop. The URL is at `connectToServer`.
+# `jakarta.websocket-api` is NOT listed, and that is the same provenance discipline this
+# wave applied to the server catalog: measured, its 2.2.0 jar holds only
+# `jakarta/websocket/server/**`, so `WebSocketContainer` is not in it and naming it here
+# would record a coordinate that cannot carry what this file matches.
 detect:
   coordinates:
     - "jakarta.websocket:jakarta.websocket-client-api"
-    - "jakarta.websocket:jakarta.websocket-api"
     - "jakarta.websocket:jakarta.websocket-all"
 
 measured:

@@ -73,10 +73,20 @@ _REQUIRED_MATCHES = (
     _ADVICE_ANNOTATIONS,
     _CONTROLLER_ANNOTATIONS,
     _SCOPE_FROM,
-    _STATUS_ANNOTATION,
-    _STATUS_FROM,
     _EXCEPTION_ROOTS,
 )
+# `status_annotation`/`status_from` are OPTIONAL, and the two are declared together or not
+# at all — the `qualifier_from`/`format` discipline, for the same reason: half a rule states
+# a mechanism nobody can complete.
+#
+# **A protocol without a status concept declares none** (W47). `@ResponseStatus` sets an
+# HTTP response code, and a STOMP error handler answers over a broker where there is no
+# such thing — so `spring-stomp-advice.yml` names no status annotation, and every row it
+# derives records `status` NULL. Requiring the pair forced a catalog either to invent a
+# rule the framework does not apply (§8.1 rule 4: an `@ResponseStatus` on a
+# `@MessageExceptionHandler` changes nothing Spring does) or to leave the surface
+# uncatalogued. Neither is an answer, so the key became optional.
+_OPTIONAL_PAIR = (_STATUS_ANNOTATION, _STATUS_FROM)
 _LIST_MATCHES = (
     _ADVICE_ANNOTATIONS,
     _CONTROLLER_ANNOTATIONS,
@@ -182,13 +192,15 @@ class _Rules:
         handler_fqns = catalog_symbols(
             matches[_HANDLER_ANNOTATION], f"{catalog.source}: {_HANDLER_ANNOTATION}"
         )
-        status_fqns = catalog_symbols(
-            matches[_STATUS_ANNOTATION], f"{catalog.source}: {_STATUS_ANNOTATION}"
+        status_fqns = (
+            catalog_symbols(matches[_STATUS_ANNOTATION], f"{catalog.source}: {_STATUS_ANNOTATION}")
+            if _STATUS_ANNOTATION in matches
+            else ()
         )
         advice = {_catalog_symbol(fqn) for fqn in matches[_ADVICE_ANNOTATIONS]}
         controllers = {_catalog_symbol(fqn) for fqn in matches[_CONTROLLER_ANNOTATIONS]}
         scope_keys = [str(key) for key in matches[_SCOPE_FROM]]
-        status_keys = [str(key) for key in matches[_STATUS_FROM]]
+        status_keys = [str(key) for key in matches.get(_STATUS_FROM, ())]
 
         methods = {str(row["symbol"]) for row in workspace.query("method_symbols")}
         handlers = {
@@ -447,7 +459,17 @@ def _validate_matches(catalog: Catalog) -> None:
             f"{', '.join(missing)} — `error_advice` needs "
             f"{', '.join(_REQUIRED_MATCHES)} (2O design §4b)"
         )
+    declared_pair = [key for key in _OPTIONAL_PAIR if key in matches]
+    if len(declared_pair) == 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{declared_pair[0]}` is declared without "
+            f"`{next(k for k in _OPTIONAL_PAIR if k != declared_pair[0])}` — a status "
+            f"annotation with no attribute to read it from, or the reverse, is half a rule "
+            f"(2O design §4b)"
+        )
     for key in _LIST_MATCHES:
+        if key in _OPTIONAL_PAIR and key not in matches:
+            continue
         declared = matches[key]
         valid = (
             isinstance(declared, list)

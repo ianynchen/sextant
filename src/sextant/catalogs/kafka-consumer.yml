@@ -17,6 +17,12 @@ measured:
   - { artifact: org.apache.kafka:kafka-clients, versions: ["3.6.2"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
 
+# NO `array_arguments`, on the rule W46's review established: `requires` names a
+# capability without which a catalog derives NOTHING, not one whose absence costs it a
+# column. This file's `channel_via` entries read `arg: all_strings`, which goes through
+# an `array` slot's own `elements` where the call is a real varargs one — and without
+# them the row degrades to an honest `path` NULL at `unresolved` rather than vanishing.
+# Stated because the W46 sweep listed three such catalogs and this is a fourth.
 requires: [call_site, string_constants]
 
 matches:

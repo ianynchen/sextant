@@ -31,11 +31,12 @@ FIXTURE_CAPABILITIES = {
     "superclass",
     "generic_interfaces",
     "nested_annotation_args",
-    # `array_arguments` (capability 9.15): `spring-stomp-endpoint.yml` declares it for its
-    # varargs `addEndpoint(String...)` slot, and the router catalogs read a varargs media
-    # array through the same fact. Without it here the catalog is SKIPPED — and this is the
-    # subset where that is genuinely silent, because `tests/application/test_endpoints.py`
-    # discards the skip list rather than asserting on it.
+    # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+    # these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+    # it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+    # degradation into a total skip), so nothing here depends on it now. Kept because the
+    # varargs reads it feeds are real and a harness that withheld it would be measuring a
+    # scanner nobody ships.*
     "array_arguments",
 }
 

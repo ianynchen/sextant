@@ -41,8 +41,8 @@ matches:
   # splitting the literal rows would publish two address shapes for one boundary.
   # Whole URL in `path`, `peer` NULL, everywhere.
   #
-  # THE URI-VARIABLE OVERLOADS ARE NOT EXPANDED. `execute(handler, "ws://h/{id}",
-  # id)` and the `connect*` forms take trailing `Object...` uri-variables, and the
+  # THE URI-VARIABLE OVERLOADS ARE NOT EXPANDED. `execute(handler, "ws://h/{id}", id)`
+  # takes trailing `Object...` uri-variables, and the
   # template is what lands in `path` — `/{id}` verbatim, never a value substituted
   # in. That is the same answer an `@GetMapping("/orders/{id}")` row gives, and it
   # is the address the code declares rather than one call's arguments.
@@ -55,6 +55,7 @@ matches:
         channel_arg: 2,
         channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
                       { owner: java.net.URI, method: "<init>", arg: 0 }] }
+
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }

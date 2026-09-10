@@ -1,0 +1,93 @@
+id: spring-stomp-advice
+displayName: Spring STOMP error handling (@MessageExceptionHandler)
+style: error_advice
+
+# NO `protocol` AND NO `direction`, the `spring-advice.yml` reasoning verbatim: this
+# derives into `error_handlers`, which has no protocol, no address and no direction.
+# An error handler is not a boundary anyone can address — it is what happens inside
+# one that already exists.
+#
+# THE ASYMMETRY THIS CLOSES (F10 §11, `G-35`, W47). §5.1 has shipped `error_handlers`
+# for the HTTP twin since 2O and STOMP's error contract was absent from §5 entirely,
+# so a service whose messaging errors are handled looked like one whose are not.
+detect:
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
+
+measured:
+  - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # MEASURED at spring-messaging 6.1.6: `@MessageExceptionHandler` declares one
+  # attribute, `Class<? extends Throwable>[] value()` — the same shape
+  # `@ExceptionHandler` has, which is why the same engine reads both.
+  handler_annotation: org.springframework.messaging.handler.annotation.MessageExceptionHandler
+
+  # **THE ADVICE CONTAINER IS `@ControllerAdvice`, and that is measured rather than
+  # assumed from the HTTP twin.** `AbstractMethodMessageHandler` looks for a
+  # `MessagingAdviceBean`, an interface — which says nothing about annotations on its
+  # own. What supplies them is `spring-websocket`'s
+  # `WebSocketAnnotationMethodMessageHandler.initControllerAdviceCache()`, whose
+  # bytecode calls `org.springframework.web.method.ControllerAdviceBean
+  # .findAnnotatedBeans(ApplicationContext)` — the SAME class the MVC side uses — and
+  # wraps each result in its own `MessagingControllerAdviceBean`. So a STOMP error
+  # handler is found on exactly the beans `@ControllerAdvice` marks, and this is
+  # `spring-advice.yml`'s list because the framework makes it that list, not because
+  # the file was copied.
+  #
+  # `@RestControllerAdvice` is meta-annotated with `@ControllerAdvice` and named here
+  # anyway, for the reason its twin states: the composition lives in a jar this
+  # analysis does not scan.
+  advice_annotations:
+    - org.springframework.web.bind.annotation.ControllerAdvice
+    - org.springframework.web.bind.annotation.RestControllerAdvice
+
+  # The stereotype `SimpAnnotationMethodMessageHandler.isHandler` tests, which
+  # `spring-stomp.yml` records as byte-for-byte the same predicate MVC's
+  # `RequestMappingHandlerMapping.isHandler` runs — one
+  # `hasAnnotation(beanType, Controller.class)` call. `@RestController` is named
+  # because that call searches meta-annotations and `@RestController` is composed
+  # from `@Controller`, so the framework admits one; a module-local stereotype
+  # reaches the same answer through the engine's composition pre-pass.
+  controller_annotations:
+    - org.springframework.stereotype.Controller
+    - org.springframework.web.bind.annotation.RestController
+
+  # `@ControllerAdvice`'s own narrowing attributes — the same four, because it is the
+  # same annotation. `value` is deliberately absent for the reason the twin gives: it
+  # aliases `basePackages`, and reading it under its own name would record one scope
+  # twice and make two identical declarations compare unequal.
+  scope_from: [annotations, basePackages, basePackageClasses, assignableTypes]
+
+  # **NO `status_annotation`, and that is the point rather than an omission.**
+  # `@ResponseStatus` sets an HTTP response code; a STOMP error handler answers over a
+  # broker, where there is no such thing. Declaring it here would encode a rule the
+  # framework does not apply — an `@ResponseStatus` on a `@MessageExceptionHandler`
+  # changes nothing Spring does — so every row this derives records `status` NULL,
+  # which is the honest answer and not a missing read. The engine made the key
+  # optional in this same commit; before that a catalog had to invent one or leave
+  # the surface uncatalogued.
+
+  # The same four roots, and for the same reason: the JDK's hierarchy above them is
+  # never scanned, so naming `Throwable` alone would reach nothing for a module
+  # exception extending `RuntimeException`.
+  exception_roots:
+    - java.lang.Throwable
+    - java.lang.Exception
+    - java.lang.RuntimeException
+    - java.lang.Error
+
+# The envelope a STOMP handler's return may be wrapped in. `ResponseEntity` is NOT
+# named: it is an HTTP envelope, and a STOMP reply does not travel in one — an
+# envelope nobody declares is never unwrapped past, so a handler returning one would
+# record no response shape rather than a guessed payload.
+wrappers:
+  - type: java.util.Optional
+    payload_arg: 0
+    semantics: optional

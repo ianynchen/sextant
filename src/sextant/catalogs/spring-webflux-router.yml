@@ -11,10 +11,18 @@ measured:
   - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
 
-# `array_arguments` added in W46's review: the media predicates read a varargs `MediaType...` array's own `elements`, which is capability 9.15.
-# Undeclared, this catalog would derive nothing on an extractor lacking it rather
-# than being SKIPPED with a reason, which is the whole point of the gate.
-requires: [call_site, string_constants, chain_reconstruction, array_arguments]
+# **NO `array_arguments`, and that is a REVERSAL** (W46's review). This catalog reads a
+# varargs slot's own `elements`, which capability 9.15 emits, and declaring the requirement
+# looked like the honest thing — a catalog that cannot work saying so through the manifest.
+# Measured, it is not: `requires` is all-or-nothing, so the declaration turned a graceful
+# degradation into a total SKIP. On facts from an extractor that emits no `elements` the
+# slot arrives `unresolved` and this catalog derives an honest under-report — `path` NULL at
+# `unresolved`, the call recorded and its address unread — which is the answer this project
+# prefers everywhere else. The declaration traded those rows for a clearer skip message.
+#
+# The rule the reversal establishes: `requires` names a capability without which a catalog
+# derives NOTHING, not one whose absence costs it a column.
+requires: [call_site, string_constants, chain_reconstruction]
 
 # D02 §2's `combinator` style, both DSLs Spring WebFlux ships for functional
 # routing: the Java `RouterFunctions.route`/`.nest` tree and the Kotlin
@@ -112,11 +120,14 @@ matches:
         verb: OPTIONS
         path_arg: 0
       # **THE TWO-ARGUMENT `(String, handler)` FORM ONLY**, and `CoRouterFunctionDsl.GET`
-      # declares THREE — counted with `javap -p -s` at spring-webmvc 6.1.6, not from the
-      # names:
-      #   `(String, Function2)`                      the one this row reads
-      #   `(RequestPredicate, Function2)`            a predicate, NO path
-      #   `(String, RequestPredicate, Function2)`    path, predicate, handler
+      # declares FOUR — `javap -p -s` at **spring-webflux** 6.1.6, which is where this
+      # class ships; the first version of this note said three and cited spring-webmvc,
+      # where `javap` answers "class not found":
+      #   `(String, Function2)V`                     the one this row reads
+      #   `(RequestPredicate, Function2)V`           a predicate, NO path
+      #   `(String, RequestPredicate, Function2)V`   path, predicate, handler
+      #   `(String)RequestPredicate`                 a predicate FACTORY, returns rather
+      #                                              than declares
       # This grammar matches on owner and name alone — no `descriptor` key — so `path_arg:
       # 0` is read against whichever overload a caller wrote. On the second that
       # argument is a PREDICATE, not a path, and on the third the handler sits
@@ -348,8 +359,7 @@ slice:
       why: >
         The methods this catalog does not read, and what each actually is — measured with
         `javap -p`, because a first version described them from their names and got three
-        wrong. `path`, `param`/`queryParam` and `pathExtension` each declare a
-        HANDLER-taking void overload, so `path("/x") { … }` DECLARES a route rather than
+        wrong. `path`, `queryParam` and `pathExtension` each declare a HANDLER-taking void overload, so `path("/x") { … }` DECLARES a route rather than
         nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
         reason. `add` and `resource` attach or declare routes too. All six are the
         receiver-rooted shape `G-37` names, which is engine work rather than a catalog

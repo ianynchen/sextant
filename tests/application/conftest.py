@@ -120,10 +120,12 @@ def resolved_fixture(
             "string_constants",
             "chain_reconstruction",
             "implemented_interfaces",
-            # `array_arguments` (capability 9.15) gates `spring-stomp-endpoint.yml`, whose
-            # `addEndpoint(String...)` slot is a varargs ARRAY — the first catalog to
-            # declare the capability it needs, so without it the catalog is SKIPPED and
-            # every pin that depends on it measures a skip.
+            # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+            # these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+            # it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+            # degradation into a total skip), so nothing here depends on it now. Kept because the
+            # varargs reads it feeds are real and a harness that withheld it would be measuring a
+            # scanner nobody ships.*
             "array_arguments",
             "superclass",
             "generic_interfaces",

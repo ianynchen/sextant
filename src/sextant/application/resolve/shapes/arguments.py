@@ -958,7 +958,9 @@ def _reference_of(
         # what a contract needs is the TYPE, and the caller states it.
         #
         # Measured before it was written: 22 of the fixture's 25 outbound `single_call`
-        # rows carried no contract at all, across six catalogs, and the three that did all
+        # rows carried no contract at all — measured when this rung landed, and stated as a
+        # measurement rather than a standing count, because the fixture keeps gaining rows
+        # (28 by W47) and a bare number here goes stale without anything noticing, across six catalogs, and the three that did all
         # passed a `new` expression. The declared type is the same claim every shape
         # derived from a signature already makes.
         index = parameter_index(argument)

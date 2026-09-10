@@ -36,10 +36,12 @@ from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
-# `array_arguments` since W45: `spring-stomp-endpoint.yml` reads a VARARGS slot's own
-# `elements`, so it declares the capability that emits them (extractor 9.15) and would
-# otherwise be SKIPPED here rather than exercised — which is the gate working, and a
-# test that silently measured a skip instead of a derivation.
+# `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+# these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+# it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+# degradation into a total skip), so nothing here depends on it now. Kept because the
+# varargs reads it feeds are real and a harness that withheld it would be measuring a
+# scanner nobody ships.*
 CAPABILITIES = {"call_site", "string_constants", "array_arguments"}
 # The module-coordinates prefix a real symbol fact's own `symbol` carries
 # (D00 §5a) — only `single_call`'s `supertypes` lookup and the shape pass's
@@ -2678,6 +2680,77 @@ def _connect_to_server(caller: str, source: int) -> CallSiteFact:
             CallArgument(kind="unresolved", source=source),
         ],
     )
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "owner", "name", "descriptor", "arguments", "expected"),
+    [
+        pytest.param(
+            "spring-websocket-client",
+            "org/springframework/web/socket/client/WebSocketClient#",
+            "execute",
+            "(Lorg/springframework/web/socket/WebSocketHandler;Ljava/lang/String;"
+            "[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+            [
+                CallArgument(kind="instance", symbol="com/acme/ws/Handler#"),
+                CallArgument(kind="string", value="ws://feeds.example.com/raw"),
+                CallArgument(kind="array", elements=[]),
+            ],
+            "ws://feeds.example.com/raw",
+            id="WebSocketClient.execute — String url",
+        ),
+        pytest.param(
+            "spring-stomp-client",
+            _STOMP_CLIENT,
+            "connectAsync",
+            "(Ljava/lang/String;Lorg/springframework/web/socket/WebSocketHttpHeaders;"
+            "Lorg/springframework/messaging/simp/stomp/StompHeaders;"
+            "Lorg/springframework/messaging/simp/stomp/StompSessionHandler;"
+            "[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+            [
+                CallArgument(kind="string", value="ws://feeds.example.com/stomp-headers"),
+                CallArgument(kind="instance", symbol="com/acme/ws/Headers#"),
+                CallArgument(kind="instance", symbol="com/acme/ws/StompHeaders#"),
+                CallArgument(kind="instance", symbol="com/acme/ws/Handler#"),
+                CallArgument(kind="array", elements=[]),
+            ],
+            "ws://feeds.example.com/stomp-headers",
+            id="WebSocketStompClient.connectAsync — the StompHeaders shape",
+        ),
+    ],
+)
+def test_every_client_catalog_reads_the_url_its_row_declares(
+    tmp_path: Path,
+    catalog_id: str,
+    owner: str,
+    name: str,
+    descriptor: str,
+    arguments: list,
+    expected: str,
+):
+    """The PAIRED POSITIVE for the client catalogs, and W46's review is why it exists:
+    `spring-websocket-client` shipped appearing in negative assertions only, which is the
+    hazard this file's own near-miss docstring names — a near-miss passes against a catalog
+    that matches nothing at all. CP-10 pins the descriptors and nothing pinned the
+    `channel_arg` POSITIONS, so a wrong one would have shipped green.
+
+    The `StompHeaders` shape is here because it was one of four overloads that file
+    declared out of the eight `WebSocketStompClient` has: readable, and unread."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/ws/FeedClient#open().",
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=arguments,
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id(catalog_id))
+    rows = [e for e in workspace.query("endpoints") if e["caller"] is not None]
+    workspace.close()
+
+    assert [(e["peer"], e["path"], e["resolution"]) for e in rows] == [(None, expected, "resolved")]
 
 
 def test_a_websocket_client_connect_reads_the_url_one_hop_away(tmp_path: Path):

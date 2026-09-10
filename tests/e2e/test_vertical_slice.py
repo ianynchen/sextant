@@ -196,11 +196,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
     # unit tests that exist hand-build the coverage dict and cannot see the composition.
     # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
-    assert "Calls whose callee body this workspace read: 468 of 1473 (32%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1471." in document
+    assert "Calls whose callee body this workspace read: 468 of 1474 (32%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1472." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 338."
+        "inherited 2, owner_not_scanned 339."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half

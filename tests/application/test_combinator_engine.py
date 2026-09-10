@@ -43,12 +43,12 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
-# `array_arguments` since W46's review: both router catalogs read a varargs
-# `MediaType...` array's own `elements` and now DECLARE the capability that emits them
-# (9.15). Without it here they are SKIPPED, and every assertion below would be
-# measuring a skip rather than a derivation — which is what this harness reported the
-# moment the declaration landed, loudly, because `_resolve` asserts the skip list is
-# empty.
+# `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+# these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+# it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+# degradation into a total skip), so nothing here depends on it now. Kept because the
+# varargs reads it feeds are real and a harness that withheld it would be measuring a
+# scanner nobody ships.*
 CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction", "array_arguments"}
 # The module-coordinates prefix a real symbol fact's own `symbol` carries (D00
 # §5a); every call-argument symbol stays bare, exactly as the real facts emit

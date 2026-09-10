@@ -87,6 +87,28 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **STOMP's error contract is in the checklist** (F10 §11, `G-35`, W47). §5.1 has shipped
+  `error_handlers` for `@ControllerAdvice` since 2O while `@MessageExceptionHandler` was
+  absent from §5 entirely, so a service whose messaging errors ARE handled looked exactly
+  like one whose are not. `spring-stomp-advice.yml` reads it through the same
+  `error_advice` engine.
+  **The advice container is measured rather than assumed from the twin.**
+  `AbstractMethodMessageHandler` looks for a `MessagingAdviceBean`, an interface, which
+  says nothing about annotations; what supplies them is `spring-websocket`'s
+  `WebSocketAnnotationMethodMessageHandler.initControllerAdviceCache()`, whose bytecode
+  calls the SAME `org.springframework.web.method.ControllerAdviceBean.findAnnotatedBeans`
+  the MVC side calls. `@ControllerAdvice` is the container here because the framework makes
+  it one, not because the file was copied.
+  **`status_annotation` and `status_from` became OPTIONAL in the engine**, declared together
+  or not at all. `@ResponseStatus` sets an HTTP response code and a STOMP handler answers
+  over a broker, so declaring one would encode a rule Spring does not apply — every row this
+  derives records `status` NULL, and an `@ResponseStatus` written beside a
+  `@MessageExceptionHandler` is ignored exactly as the framework ignores it. Requiring the
+  pair had forced a catalog to invent that rule or leave the surface uncatalogued.
+  One more thing the fixture surfaced: this is its **first `error_handlers` row**. The HTTP
+  twin has shipped since 2O and the fixture declares no `@ExceptionHandler` anywhere, so
+  that engine was proved by unit tests over synthetic facts and never end to end.
+
 - **The WebSocket client direction exists** (F10 §11, `G-32`, W46). §5.5 held three
   inbound Java rows and ZERO outbound, with no boundary saying the direction derived
   nothing — unlike REST, SOAP and Kafka, each of which states its client side explicitly.
@@ -186,8 +208,7 @@ here would restate those documents rather than add anything.
   `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
   a class literal, a scalar and an `instance` and returned nothing for that — even though
   the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
-  now. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload,
-  and 19 do.** *Published first as "3 of 27 … `single_call`" and then as "27 across the
+  now. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload, and 19 do.** *Re-measured after W46 and W47 added rows: the fixture now has 28 such rows, 19 with a payload, and 47 across `single_call` and `fluent` with 24. The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* *Re-measured after W46 and W47 added rows: the fixture now has 28 such rows, 19 with a payload, and 47 across `single_call` and `fluent` with 24. The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* *Published first as "3 of 27 … `single_call`" and then as "27 across the
   `single_call` AND `fluent` engines" — both wrong. 27 is 25 plus the two `fluent`
   catalogs that happened to be in the list, and across BOTH engines the fixture has 44
   outbound rows with 24 payloads. One wrong label was replaced with a differently wrong
