@@ -52,6 +52,16 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **Every markdown table row has as many cells as its header** (F6 §7.3, W40). A row with
+  an extra cell looks fine in a diff and in an editor — every cell is there, on one line —
+  and looks broken only in a RENDERER, which drops what will not fit. In `COVERAGE.md` the
+  dropped cell was the STATUS, so eleven Java rows were reporting their delivery state to
+  nobody, 2O Task 9's record and `OI-1`'s among them. 19 rows across four files, plus three
+  shapes the plan row did not name: a row with no trailing pipe, a row missing a cell, and
+  two rows wrapped across source lines. A test asserts every row against its own header
+  across every markdown file the repository ships — with a counter that respects code
+  spans, since a naive one reports 1,961 malformed rows where there are none.
+
 - **Coverage reports how much was UNDERSTOOD** (FR-17 clause 3, F8 §9.5, W38). It carried
   how many files were opened and nothing about how much of the call graph was read. The
   design asked for one `GROUP BY` on `call_edges.resolution` and warned in the same breath
