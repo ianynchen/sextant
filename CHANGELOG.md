@@ -52,6 +52,18 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **Reachability is kept, and the tables carry a second ordering** (F8 §9.4, W37). The
+  trace walk already computed what each root reaches and threw it away, so "what does
+  changing this method affect" was a walk over the whole graph once per question. The
+  `reachability` table is that walk's own answer, written by the SAME function the renderer
+  calls — a second traversal with its own rules about cycles and revisits would be a second
+  opinion, and the day the two disagreed both would be defensible and one wrong. 190 rows
+  over 77 roots on the fixture, 3,892 over 160 on `mall-admin`. A root records itself at
+  depth 0, and a terminal is recorded by the TARGET the compiler wrote, since no body was
+  read to name a callee. Beside it, `call_edges_by_callee` and `roots_by_address`: DuckDB
+  over Parquet has no B-trees, so a second FILE in a second order is the index, and both are
+  views over the base tables rather than copies of them.
+
 - **The bundle says WHERE, not only what** (F8 §9.3, W35). Sextant could name every symbol
   in a repository without saying which file to open, so an agent holding the bundle still
   had to grep source it had already been told about. `index/` is six NDJSON files beside

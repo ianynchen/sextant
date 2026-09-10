@@ -406,6 +406,38 @@ CREATE TABLE IF NOT EXISTS roots (
     path      TEXT
 );
 
+-- F8 §9.4 (W37): what each root REACHES, materialised.
+--
+-- **The trace walk already computes this and throws it away.** `query/trace.py`
+-- walks every root on every render and hands the renderer a tree; nothing keeps
+-- the reachability, so "what does changing this method affect" is a walk over
+-- the whole graph per question. This is that walk's own answer, written down —
+-- and written by the same function, so the table and a rendered trace cannot
+-- disagree about what is reachable.
+--
+-- One row per (root, symbol): the walk expands a method ONCE per trace, so the
+-- depth here is the depth it was expanded at, and a method reached again by
+-- another route is the `revisited` step that carries no subtree. Recording
+-- every route instead would be the exponential tree D01 gives as its reason for
+-- not storing traces at all.
+CREATE TABLE IF NOT EXISTS reachability (
+    -- The root the walk started from — `roots.handler`, verbatim, so a reader
+    -- joins straight back to the address that reaches it.
+    root     TEXT,
+    -- A symbol the walk reached. The CALLEE where a body was read, and the
+    -- call TARGET where none was: a terminal is a thing the root reaches, and
+    -- omitting it would make a root that only calls a library look like a root
+    -- that calls nothing.
+    symbol   TEXT,
+    -- Edges from the root, so a root's own body is depth 0 and what it calls
+    -- is depth 1.
+    depth    INTEGER,
+    -- Whether the walk STOPPED here: no body was read, so this is where the
+    -- work leaves the module. `terminal_kind` on the edge says what KIND of
+    -- thing it stopped at; this says only that it did.
+    terminal BOOLEAN
+);
+
 -- 2Q `G4`: the call graph a trace walks (D01 §3's Edges). One row per (call
 -- site, candidate callee), and one row for a call site whose callee's body this
 -- workspace never read — because THAT is the terminal, and a trace that
@@ -869,3 +901,33 @@ SELECT document_id,
        (payload ->> 'from_parameter')::INTEGER AS from_parameter
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
+
+-- F8 §9.4 (W37): the two ALTERNATE ORDERINGS, which are the only index DuckDB
+-- over Parquet has.
+--
+-- There are no B-trees here. The levers are sort order and the zone maps that
+-- come with it: a row group carries the min and max of each column, so a query
+-- filtering on a column the file is SORTED by skips whole groups, and one
+-- filtering on any other column reads everything. `call_edges` ships
+-- caller-major, which makes "what does this method call" cheap and "who calls
+-- this method" a full scan — and traversal needs both directions.
+--
+-- **Views, not tables**: the rows are `call_edges`' own and `roots`' own, so a
+-- second TABLE would be a second copy that could fall out of step. What ships
+-- is a second PARQUET of the same rows in a different order, which is exactly
+-- the artifact the zone maps live in. The bundle pays one extra file per view
+-- for it, and the export ratchet requires every schema object to have an
+-- export query, so a view added here cannot quietly fail to travel.
+--
+-- The index bundle answers "who calls X" too (F8 §9.3's `callers.ndjson`), and
+-- these are not that: an NDJSON lookup serves an agent grepping a file, and a
+-- sorted parquet serves a query engine reading the dataset. Two audiences, two
+-- artifacts, one set of rows.
+CREATE OR REPLACE VIEW call_edges_by_callee AS
+SELECT * FROM call_edges ORDER BY callee, caller, ordinal, target;
+
+-- `roots` addressable by the WIRE ADDRESS rather than by the handler, which is
+-- the order the table itself ships in. A person names a route and a query
+-- engine filtering on `path` against a handler-sorted file reads every row.
+CREATE OR REPLACE VIEW roots_by_address AS
+SELECT * FROM roots ORDER BY protocol, method, path, handler, root_kind;

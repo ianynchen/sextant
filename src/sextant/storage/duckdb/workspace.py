@@ -825,6 +825,24 @@ _EXPORT_QUERIES = {
     # Ordering is the named query's, which is total where `handler` alone is
     # not: one method can be both a request target and a clock target, and one
     # handler can serve three addresses.
+    # F8 §9.4 (W37). The alternate orderings. Their masking is their base table's, applied
+    # again here rather than referenced: `roots.path` is an address, and a second file of
+    # the same rows that skipped the mask would be the leak the index bundle just had.
+    "call_edges_by_callee": (
+        "SELECT * FROM call_edges_by_callee ORDER BY callee, caller, ordinal, target"
+    ),
+    "roots_by_address": f"""
+        SELECT r.handler, r.root_kind, r.protocol, r.method,
+               coalesce(a.masked, r.path) AS path
+        FROM roots_by_address r
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
+        ORDER BY r.protocol, r.method, r.path, r.handler, r.root_kind
+    """,
+    # F8 §9.4 (W37). No masked column: every value is a symbol, an integer or a boolean.
+    # The ROOT here is a handler, not an address — `roots` carries the address, and this
+    # table joins to it on the handler rather than repeating a column the redactor would
+    # then have to reach in two places.
+    "reachability": ("SELECT * FROM reachability ORDER BY root, depth, symbol"),
     "roots": f"""
         SELECT r.handler, r.root_kind, r.protocol, r.method,
                coalesce(a.masked, r.path) AS path
@@ -940,6 +958,8 @@ _NAMED_DERIVATIONS = {
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
     "roots_insert": "insert_roots.sql",
+    # F8 §9.4 (W37): the trace walk's own reachability, kept.
+    "reachability": "insert_reachability.sql",
     # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
     # F4 §5.2 (W24). Runs from inside `derive_endpoints`, immediately before the merge
     # — see the statement's own header for why that ordering is load-bearing.

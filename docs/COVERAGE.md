@@ -761,6 +761,51 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-xiii. Reachability is kept, and the tables carry a second ordering (F8 §9.4)
+
+**The trace walk already computed this and threw it away.** `query/trace.py` walks every
+root on every render and hands the renderer a tree; nothing kept the reachability, so "what
+does changing this method affect" was a walk over the whole graph, once per question. The
+`reachability` table is that walk's own answer written down — by the SAME function, which is
+the point rather than a convenience: a second traversal with its own rules about cycles and
+revisits would be a second opinion, and the day the two disagreed the document and the table
+would both be defensible and one of them wrong.
+
+| | fixture | `mall-admin` |
+|---|---|---|
+| rows | 190 | 3,892 |
+| roots | 77 | 160 |
+| terminals | 63 | 1,308 |
+| deepest | 5 | 8 |
+
+One row per `(root, symbol)`: the walk expands a method once per trace, so the depth is the
+depth it was expanded AT, and a method reached again by another route is the `revisited`
+step that carries no subtree. Recording every ROUTE is the exponential tree D01 gives as its
+own reason for not storing traces. A root records ITSELF at depth 0, so "everything this
+root touches" is one lookup rather than a lookup plus a union with the key.
+
+A terminal is recorded by the TARGET the compiler wrote, since no body was read to name a
+callee — omitting it would make a root that only calls a library look like a root that calls
+nothing, which is the difference between "this handler does no work" and "the work leaves
+the module".
+
+**The two alternate orderings are the only index DuckDB over Parquet has.** There are no
+B-trees; the levers are sort order and the zone maps that come with it — a row group carries
+each column's min and max, so a query filtering on a column the file is SORTED by skips whole
+groups and one filtering on any other reads everything. `call_edges` ships caller-major,
+which makes "what does this method call" cheap and "who calls this method" a full scan, and
+traversal needs both. `roots` ships handler-major while a person names a route.
+
+`call_edges_by_callee` and `roots_by_address` are VIEWS, so the rows are the base tables'
+own and cannot fall out of step; what ships is a second parquet of the same rows in a
+different order, which is the artifact the zone maps live in. The bundle pays one extra file
+each — 29 KB beside 29 KB on the fixture — and `roots_by_address` masks its `path` exactly
+as `roots` does, because a second file of the same rows that skipped the mask would be the
+leak the index bundle had.
+
+**This is not `callers.ndjson`.** That answers "who calls X" for an agent grepping a file;
+these serve a query engine reading the dataset. Two audiences, two artifacts, one set of rows.
+
 ### 3a-xii. The bundle says WHERE, not only what (F8 §9.3)
 
 Sextant scanned a repository and could name every symbol in it without ever saying which

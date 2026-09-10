@@ -1660,3 +1660,57 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
             f"{table} shipped a credential in the clear"
         )
     workspace.close()
+
+
+def test_the_alternate_orderings_carry_the_same_rows_in_a_different_order(tmp_path: Path):
+    """F8 §9.4 (W37). DuckDB over Parquet has no B-trees; the levers are sort order and
+    the zone maps that come with it, so a second FILE in a second order is the index.
+
+    Views rather than tables, so the rows are the base table's own and cannot fall out of
+    step — which is exactly what this asserts: same rows, different order.
+    """
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace._connection.execute(
+        "INSERT INTO call_edges (caller, ordinal, invoke_kind, target, callee, result, "
+        "resolution, evidence) VALUES "
+        "('m a/Z#z().', 0, 'virtual', 'a/A#a().', 'm a/A#a().', NULL, 'resolved', "
+        "'compiler'), "
+        "('m a/A#a().', 0, 'virtual', 'a/Z#z().', 'm a/Z#z().', NULL, 'resolved', "
+        "'compiler')"
+    )
+
+    caller_major = [
+        row["callee"] for row in workspace.query("call_edges") if row["callee"] is not None
+    ]
+    callee_major = [
+        row["callee"]
+        for row in workspace._connection.execute(
+            "SELECT callee FROM call_edges_by_callee WHERE callee IS NOT NULL"
+        ).fetchall()
+        for row in [{"callee": row[0]}]
+    ]
+    workspace.close()
+
+    assert sorted(caller_major) == sorted(callee_major), "the rows are the same rows"
+    assert callee_major == sorted(callee_major), "and the second file is callee-sorted"
+
+
+def test_the_address_ordering_masks_its_path_like_the_table_it_reorders(tmp_path: Path):
+    """A second file of the same rows that skipped the mask would be the leak the index
+    bundle had — one bundle, two answers about one address."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    secret = "https://user:hunter2@billing.internal/pay"
+    workspace._connection.execute(
+        "INSERT INTO roots (handler, root_kind, protocol, method, path) "
+        "VALUES ('m a/A#a().', 'inbound_endpoint', 'http', 'GET', ?)",
+        [secret],
+    )
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, Redactor.from_rules())
+    workspace.close()
+
+    for name in ("roots", "roots_by_address"):
+        rows = duckdb.sql(
+            f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')"
+        ).fetchall()
+        assert not any("hunter2" in str(cell) for row in rows for cell in row), name

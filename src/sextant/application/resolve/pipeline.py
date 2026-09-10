@@ -10,6 +10,7 @@ from sextant.application.resolve.environment_divergence import record_environmen
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
+from sextant.application.resolve.reachability import record_reachability
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
@@ -180,6 +181,12 @@ def resolve(
     # still being written. Anything that BINDS a payload belongs above this
     # line and below the reset.
     resolve_format(workspace, declared)
+    # F8 §9.4 (W37), and AFTER everything: the walk reads `roots` and `call_edges`, so a
+    # reachability recorded earlier would be a walk over a graph nobody else saw —
+    # `record_roots` above writes the roots and `apply_protocol_hints` moves rows the
+    # roots were copied from. It is the walk `query/trace.py` performs for the renderer,
+    # kept rather than thrown away.
+    record_reachability(workspace)
     return ResolveReport(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),
