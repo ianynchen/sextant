@@ -1005,6 +1005,14 @@ only by reaching a terminal. Cycle and revisit refusal stay — they are correct
 **depth bound** is what must go, replaced by termination at a terminal or at a stated
 boundary.
 
+*Built in W31. The bound could not simply be deleted: while it was there the recursion could
+never exceed 64 frames, so removing it from the recursive walk would have turned a stated,
+truncated answer into a `RecursionError` on a long chain of distinct methods — the one shape
+neither cycle detection nor the `expanded` set bounds. `_walk` became an explicit stack
+first, which takes the interpreter's limit out of the failure modes; then the bound had
+nothing left to do. Measured before removing it: deepest trace 9 edges across three
+repositories against a bound of 64, never truncated.*
+
 ### 8.2 `terminal_kind` gets a producer
 
 Not a new mechanism. Two halves, both already decided:

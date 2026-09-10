@@ -800,3 +800,37 @@ def test_a_registration_activation_question_names_the_method_that_returns_it():
         "com.google.cloud.pubsub.v1.Subscriber$Builder.build then "
         "com.google.cloud.pubsub.v1.Subscriber.startAsync"
     ) in text
+
+
+def test_a_routing_conflict_question_renders_both_handlers():
+    """W28's arm, for the reason `test_a_service_identity_question_renders_the_flagged_
+    class_and_reason` exists: a missing `_candidate_line` arm was a live render-time
+    `ValueError`, and W28 added an arm with no test because the fixture files zero
+    conflicts. An arm reached by nothing is an arm nobody has run.
+
+    The verb is NULL here, which is the shape a conflict between two VERBLESS mappings
+    files — the case `_verbs_of` reports once rather than eight times — so this also pins
+    that `_wire_identity` renders such a row without inventing a verb for it.
+    """
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/orders",
+            "question": "routing_conflict",
+            "candidates": json.dumps(
+                [
+                    {"handler": "com/acme/Controller#first(sig_1)."},
+                    {"handler": "com/acme/Controller#second(sig_2)."},
+                ]
+            ),
+            "evidence": "one address, two handlers",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `any /orders` — routing_conflict: com/acme/Controller#first(sig_1).; "
+        "com/acme/Controller#second(sig_2)."
+    ) in text

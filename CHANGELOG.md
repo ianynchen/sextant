@@ -36,6 +36,22 @@ here would restate those documents rather than add anything.
   its own row now and answers off its own evidence, so the disagreement is on the page.
   The COVERAGE caveat that stated this ("a reader must not read a merged row's `format` as
   a statement about both directions") retires with it.
+- **A trace stops where the evidence stops, not at a counter** (FR-6, F7 §8.1, W31).
+  The walk carried a depth bound of 64, and FR-6 says a trace should not be bounded by
+  depth at all — a divergence `REQUIREMENTS.md` had carried an admonition about for the
+  whole of 2Q, and `OI-27` had been open on since. `_walk` is an explicit stack now, so
+  the interpreter's own recursion limit is out of the failure modes and nothing needs a
+  counter to stay finite. **Measured before removing it**: the deepest trace is **9
+  edges** across `mall-admin` (160 traces), `spring-petclinic-rest` (37) and
+  `jhipster-sample-app` (38), and no trace was ever truncated. Step order was verified
+  rather than argued — a faithful reimplementation of the recursive form produces
+  identical step sequences over all 235 roots.
+  `TraceStop.DEPTH_LIMIT`, `Trace.truncated`, the rendered `Complete` column, the
+  `trace_depth_is_bounded` known gap and one `guard_check.py` guard all retired with it.
+  Cycle and revisit refusal stay, because those are correctness rather than bounds:
+  without them the walk does not terminate, and expanding a shared subtree once per route
+  is exponential on an ordinary diamond.
+
 - **A terminal says what it reaches, not just that it is one** (F7 §8.2, W30).
   [D00](docs/components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the
   fact schema has existed and **nothing produced one for two phases** — the note it carried
@@ -46,20 +62,24 @@ here would restate those documents rather than add anything.
   and in the trace tables' new `Reaches` column, with `persistence`'s own `target_kind`
   answering database-or-cache. Measured: **240 of `mall-admin`'s 5,352 terminals** (199
   database, 41 cache), 102 of `spring-petclinic-rest`'s, 70 of `jhipster-sample-app`'s.
-  The remaining ~95% is `StringBuilder`, `Object` and `List`, and reads `unresolved` —
+  The remaining 94-96% is `StringBuilder`, `Object` and `List`, and reads `unresolved` —
   which says the terminal was examined, where NULL says the edge is not a terminal at all.
-  **Three routes and none of them a name match**: an owner type, a supertype read from
-  `type_hierarchy`, or the packages a scan annotation registers. `mall-admin`'s mappers
-  carry no annotation at all — `@MapperScan`'s own package list is how MyBatis finds them —
-  and matching `*Mapper` would have claimed every unrelated type ending that way.
+  **Three routes and none of them a name match**: an owner type, a supertype read from the
+  `superclasses`/`implementations` facts, or the packages a scan annotation registers.
+  `mall-admin`'s mappers carry no annotation at all — `@MapperScan`'s own package list is
+  how MyBatis finds them — and matching `*Mapper` would have claimed every unrelated type
+  ending that way. **Six of `TerminalKind`'s eight members have no producer** and three of
+  those are unreachable by any catalog rule (`OI-74`); `target_kind: file` has none either.
 
 - **An outbound call's headers are recorded, each with its own trust columns** (F5 §6.2,
   W29). `endpoint_metadata` is a side table, one row per entry. Measured on the fixture's
   `GET /v2/inventory/tagged`: `Authorization` = `«redacted»`, `X-Tenant` = `acme`, and
   `X-Trace-Id` **present and unresolved** — which is the row the table exists for, because
   "sends a header we could not read" is not "sends no header".
-  **Redacted at the origin**: nothing here reads a metadata value, so the masked string is
-  the only one ever written and there is no export query to add. `collects` is a new
+  **Redacted at the origin**: nothing here reads a metadata value, so masking costs no
+  analysis and this column needs no export query. It was NOT the only copy — the same
+  literal is a `call_site` fact, and shipped verbatim in `call_sites.arguments` and
+  `raw_facts.payload` until `redact_json` gained its paired name/value rule. `collects` is a new
   catalog capture kind, distinct from `captures` because every existing capture is
   last-wins — on three headers that keeps the third and says nothing about the other two.
   A varargs position contributes one entry per value, since `header(String, String…)` is
@@ -161,6 +181,12 @@ here would restate those documents rather than add anything.
   from a call into a library we never scanned.
 
 ### Removed
+
+- **`TraceStop.DEPTH_LIMIT` and `Trace.truncated`** (W31), with the depth bound they
+  reported. `trace_depth_is_bounded` retires from the known-gap list with nothing taking
+  its place, and `trace_terminals_are_unclassified_and_cross_module_stops_look_third_party`
+  narrows to `cross_module_stops_look_third_party` — W30 classified the terminals, so only
+  the sibling-module half of that sentence is still true.
 
 - **The known gap `merged_endpoints_keep_only_the_handlers_contract`** (W27), retired by
   name rather than narrowed: it said a path the module both exposes and calls keeps only

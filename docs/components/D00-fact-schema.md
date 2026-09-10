@@ -243,14 +243,18 @@ exactly as the other two do the day something writes one.
 > **NULL and `unresolved` are different answers.** NULL means the edge is not a terminal at
 > all: its callee's body was read and the walk expanded it. `unresolved` means this IS a
 > terminal, it was examined, and no catalog claimed it — which on the measured corpora is
-> ~95% of them, almost all `StringBuilder`, `Object` and `List`.
+> 94-96% of them, almost all `StringBuilder`, `Object` and `List`.
 >
 > **Still not `TraceStop`.** That vocabulary (`domain/closed_sets.TraceStop`,
 > [D01](D01-graph-schema.md) §3's Traces) answers why the WALK stopped and is decided
 > entirely from what the walk did. One edge carries both and they say different things:
 > `boundary` because this workspace read no body, `persistence` because a catalog knows
-> what the callee is. `returns`, `ends_silently`, `throws`, `async_handoff` and `cycle` have
-> no producer yet — no shipped catalog declares a rule that mints one.
+> what the callee is. **Six of the eight have no producer, for two different reasons**
+> (`OI-74`): `outbound_call`, `throws` and `async_handoff` are one catalog rule away and
+> none is declared, while `cycle`, `returns` and `ends_silently` are unreachable by any
+> rule — a cyclic edge has a non-NULL `callee` so the classification is NULL for it, and
+> the other two describe how a BODY exits while every catalog route is a predicate on the
+> callee's TYPE.
 
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index. Measured on `mall-admin`:

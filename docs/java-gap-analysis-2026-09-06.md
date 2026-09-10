@@ -293,7 +293,7 @@ that stops at an in-module body a reader can see", and `architecture.md:389` is 
 | **G-115** | Minor | batch-listener generics | A ledgered extractor candidate named twice in the roadmap (`:548`, `:577`) and once in the 2D spec appears in **no register**: not COVERAGE, not open-issues, not documented-not-implemented, not the completion plan | | **RESTATE** (file it) | A5 F-m3 |
 | **G-116** | Minor | `COVERAGE.md` §8 | "Open questions" as a section title (unresolved **research** questions) collides by name with the `open_questions` ledger rendered in every document — one name, two meanings, in the document a reader consults | | **RESTATE** | A5 F-m5 |
 | **G-117** | Minor | FR-20 clause 2 | Approximate subject naming, and listing ambiguity rather than choosing, has **no implementation and no gap row** | `grep -n "ambiguous\|approximate\|fuzzy" src/sextant/cli/app.py src/sextant/api.py` → 0 | **BUILD** or descope | A5 F-m6 |
-| **G-118** | Minor | `docs/components/M04-resolver.md:210` | Asserts a walk property the code contradicts: "**No depth bound.** … It stops at a terminal" against `DEFAULT_MAX_DEPTH = 64` (`query/trace.py:88`). `OI-27` records the FR-6 side of this; M04's own line was not corrected with it | | **RESTATE** | A5 D14 |
+| **G-118** | Minor | `docs/components/M04-resolver.md:210` | ~~Asserts a walk property the code contradicts: "**No depth bound.** … It stops at a terminal" against `DEFAULT_MAX_DEPTH = 64`~~ **CLOSED by W31, and it inverted before it closed**: the code changed to agree with M04 rather than M04 being corrected. The bound is gone, `_walk` is an explicit stack, and the document's line has been true since. `OI-27` closed with it | measured: deepest trace 9 edges across three repositories against a bound of 64, never truncated | **CLOSED (W31)** | A5 D14 |
 | **G-119** | Minor | FR-18 | The **vintage-refusal half** — refusing to link bundles of mixed vintages — has no consumer until Phase L, and **L's scope line does not name it** (it names `participants`/`links`/DR-5) | `REQUIREMENTS:298` | **RESTATE** (name it in L) | A5 §5 row 12 |
 | **G-120** | Minor | FR-16 | Curation and proposals: **no verb asserts, corrects or deletes a graph statement.** A5 recorded this as a status in its inventory and raised no finding; **filed Minor here — severity mine** (§3.1) | | **BUILD** or descope | A5 §1b |
 | **G-121** | Minor | FR-7 | Diagrams are partly delivered: 68 mermaid sequence diagrams render, but there is **no class diagram of inheritance** (contract types only) and no `alt`/`opt`/`loop`. Named at the version-bump gate as a descope candidate (`roadmap.md:630-637`). A5 recorded this as a status and raised no finding; **filed Minor here — severity mine** | | **BUILD** or descope | A5 §1b |
@@ -520,9 +520,10 @@ jars: `spring-web`/`spring-mvc`'s mapping family (6 of 6 at 6.2.15 **and** 7.0.9
 **12 of 27 engine units KEEP**, including the whole `pipeline.py` ordering (every constraint is
 a stated dependency and each holds), `roots.py`, `derived_resource`, `resolve/config.py`,
 `open_questions`, `service_identity`, `environment_divergence`, `protocol_hint`, `format`, and
-the trace walk itself — `query/trace.py`'s stop ordering (boundary → cycle → revisited →
-depth_limit) is right, each is reported, the depth bound never fired (max depth 2 of 64), and
-`truncated` is correct. **The walk is not the problem; what it is handed is.**
+the trace walk itself — `query/trace.py`'s stop ordering (boundary → cycle → revisited) is
+right and each is reported. *Written when there was a fourth, `depth_limit`; this audit
+recorded that "the depth bound never fired (max depth 2 of 64)", and W31 removed it on
+exactly that evidence measured more widely.* **The walk is not the problem; what it is handed is.**
 
 **Determinism holds, measured three ways.** `api.analyze` + `api.render` from scratch on two
 independent copies of `examples/spring-petclinic`: `architecture.md` **and**

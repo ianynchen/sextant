@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.domain.closed_sets import Direction, Protocol
+from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
 
 
 class YamlCatalogSource:
@@ -91,7 +91,7 @@ class YamlCatalogSource:
                     # shape model — it describes what a CALLEE is, never how a payload
                     # serialises, so a catalog naming a `shape_model` still declares its
                     # own terminals.
-                    terminals=raw.get("terminals", []),
+                    terminals=_terminals(raw, path),
                     # D02 §2i — optional, one per framework family.
                     config_model=raw.get("config_model", {}),
                     # 2G design §7 — optional format vocabulary, carried
@@ -367,3 +367,43 @@ def _closed(raw: dict[str, Any], key: str, values: type[StrEnum], path: Path) ->
             f"{', '.join(allowed)} — D00's closed sets are closed (NFR-5)"
         )
     return str(value)
+
+
+# The three ways one `terminals` rule may name a callee (D02 §2j). Exactly one
+# per rule: a rule naming none reaches nothing and would sit in the catalog
+# looking like a rule, and a rule naming two says two different things about
+# the same answer.
+_TERMINAL_ROUTES = ("owner", "supertype", "scanned_by")
+
+
+def _terminals(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:
+    """The `terminals` block, with every rule checked HERE (D02 §2j, W30).
+
+    `kind` and `target` are written straight into closed columns of `call_edges`
+    and out into the exported bundle, so they take the same check `protocol` and
+    `direction` take and for the reason `_closed` gives: `kind: persistance`
+    is not a new kind of terminal, it is a typo, and the file it came from is
+    the last place naming it is cheap. Unchecked, it reached the column, the
+    rendered `Reaches` cell and the bundle without a word.
+
+    The route check is the same argument one level up. A rule naming none of
+    the three matched nothing and said so nowhere; a missing `kind` raised a
+    bare `KeyError` at resolve time, with no catalog path in it.
+    """
+    declared = raw.get("terminals", [])
+    if not isinstance(declared, list):
+        raise CatalogError(f"loading catalog {path}: `terminals` must be a list of rules")
+    for rule in declared:
+        if not isinstance(rule, dict):
+            raise CatalogError(f"loading catalog {path}: each `terminals` rule must be a mapping")
+        routes = [name for name in _TERMINAL_ROUTES if name in rule]
+        if len(routes) != 1:
+            raise CatalogError(
+                f"loading catalog {path}: a `terminals` rule names "
+                f"{', '.join(routes) or 'none'} — exactly one of "
+                f"{', '.join(_TERMINAL_ROUTES)} is required (D02 §2j)"
+            )
+        _closed(rule, "kind", TerminalKind, path)
+        if "target" in rule:
+            _closed(rule, "target", TargetKind, path)
+    return list(declared)

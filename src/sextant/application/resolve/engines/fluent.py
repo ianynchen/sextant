@@ -59,7 +59,7 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.redaction import Redactor
+from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor
 
 # The capture fields whose declared value is an `argN` reference into
@@ -83,6 +83,10 @@ _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
 # own `http_method: GET` default stood at `resolved`/`compiler` — a verb no
 # evidence supports. Kept apart from `_ARGUMENT_FIELDS` rather than folded
 # into it because those five are argument positions ALWAYS, which is what
+# `_validate_captures` refuses a non-`argN` value for; a verb literal is the
+# ordinary case here and must keep loading.
+_LITERAL_OR_ARGUMENT_FIELDS = ("http_method",)
+
 # F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
 # A reserved key inside `captures` rather than a second parameter threaded through
 # `_walk`: the walk already copies `captures` per branch, which is exactly the per-branch
@@ -102,10 +106,6 @@ _COLLECTED = "\x00collected"
 # gap is the safe one only because the built-ins already cover credential-named headers;
 # a repository adding a pattern for a header name of its own gets no masking from it.
 _REDACTOR = Redactor.from_rules()
-
-# `_validate_captures` refuses a non-`argN` value for; a verb literal is the
-# ordinary case here and must keep loading.
-_LITERAL_OR_ARGUMENT_FIELDS = ("http_method",)
 
 # The two captures that are halves of one address (2F design §4's base
 # composition) — `channel`'s alternative, and what
@@ -239,7 +239,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_call_endpoints.sql's own contract — it only guards against what
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
     metadata: list[dict[str, Any]] = []
@@ -312,7 +312,7 @@ class _ChainContext:
     carrier_rules: CarrierRules
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
-    seen: set[tuple[str, str, str, str]]
+    seen: set[tuple[str, str, str, str, str | None, str | None]]
     # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
     # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
     # chain may carry any number, which is why D01 gives it a side table rather than
@@ -546,12 +546,27 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             # alone exactly as the brief requires; a verbed row's own `verb` is
             # always a non-empty string, so this is unchanged for every shipped
             # fluent catalog (okhttp/webclient/restclient), none of which is
-            # verbless. `caller` never enters the key — fluent rows carry
-            # `caller`, but outbound producer rows collapse across callers on
-            # wire identity alone, single_call's own established convention
-            # (the interface engine's handler-in-key ruling is for inbound
-            # handler rows and does not apply to an outbound fluent chain).
-            key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
+            # verbless.
+            #
+            # **`caller` and `peer` ARE in the key** (F5 §6.1 rule 1, W27 fix), and this
+            # comment used to say the opposite — "outbound producer rows collapse across
+            # callers on wire identity alone". They should not. Measured on a two-caller
+            # probe: two hosts and one path derived ONE row with the second caller gone —
+            # no row, no peer, no gap, no question. That is RC-5, comparing identity
+            # without `peer`, which W27 removed from the inbound/outbound merge and left
+            # standing here.
+            #
+            # "Collapse only within one caller, where both sides are observable" (§6.1):
+            # one method calling one target twice is still one row, because caller and
+            # peer are equal there.
+            key = (
+                context.catalog.protocol,
+                context.catalog.direction,
+                verb or "",
+                path,
+                context.caller,
+                peer,
+            )
             if key in context.seen:
                 continue
             context.seen.add(key)
@@ -590,10 +605,19 @@ def _metadata_row(
     **redacted here, where the value is read** (F5 §6.2, W29).
 
     Nothing in this system reads a metadata value — no pass substitutes one into an
-    address the way `resolved_config.value` is substituted into a peer — so the redacted
-    string is the only one ever written down, and there is no export query to add and
-    nothing to forget. A compiled-in `Authorization: Bearer …` is realistic and the bundle
-    is the trust boundary.
+    address the way `resolved_config.value` is substituted into a peer — so masking at the
+    origin costs no analysis and there is no export query to add for THIS column. A
+    compiled-in `Authorization: Bearer …` is realistic and the bundle is the trust
+    boundary.
+
+    **It is not the only place the value is written down**, and saying so here was wrong
+    until `redact_json` gained its paired rule. The same literal is a `call_site` fact,
+    and therefore also `call_sites.arguments` and `raw_facts.payload`; measured on this
+    repo's own fixture, `Bearer sk-live-fixture-secret` shipped verbatim in two
+    `graph/*.parquet` files of a bundle whose `endpoint_metadata` said `«redacted»`. The
+    mask that closes it is the export exit's, keyed on the same name by the same rule —
+    so the two agree because they ask the same redactor the same question, not because
+    this row is the only copy.
 
     The redactor keys on the entry's own NAME, which is exactly the shape it was built for
     (`redact_value(key, value)`): `BUILTIN_KEY_PATTERNS` already holds `authorization`,
@@ -615,7 +639,16 @@ def _metadata_row(
         "caller": context.caller,
         "kind": entry["kind"],
         "name": name,
-        "value": None if literal is None else _REDACTOR.redact_value(name or "", literal),
+        # A value whose NAME could not be read is masked WHOLE. The rule keys on the
+        # name, so an unread name is an unanswerable question — and `redact_value("")`
+        # answers it "not a secret", which is the one direction this module refuses to
+        # guess in: a header assembled from a constant field is exactly where a
+        # compiled-in credential hides. No live instance on the fixture or the corpora
+        # (zero rows carry a value with no name), so this closes a hole rather than
+        # changing an answer.
+        "value": None
+        if literal is None
+        else (REDACTED if name is None else _REDACTOR.redact_value(name, literal)),
         "resolution": "resolved" if literal is not None else "unresolved",
         "evidence": "compiler",
     }

@@ -604,8 +604,23 @@ def test_messaging_gap_retires_and_both_lists_rotate_together():
     # own — so the gap is gone rather than narrowed.
     assert "merged_endpoints_keep_only_the_handlers_contract" not in KNOWN_GAPS
     assert not any("keeps only the handler" in gap for gap in _GAPS)
-    assert len(KNOWN_GAPS) == 16
-    assert len(_GAPS) == 16
+    # Sixteen became fifteen with W31 (F7 §8.1), and this is a RETIREMENT with nothing
+    # taking its place: `trace_depth_is_bounded` said a trace stops at 64 edges, which
+    # FR-6 says it should not. The walk is an explicit stack now and stops where the
+    # evidence does — measured before removing it, the deepest trace across three real
+    # repositories is 9 edges and none was ever truncated.
+    assert "trace_depth_is_bounded" not in KNOWN_GAPS
+    assert not any("bounded at 64" in gap for gap in _GAPS)
+    # And one NARROWED rather than retiring: W30 classified terminals and left the key
+    # alone, so the rename lands here in W31. Terminals are classified now, so
+    # "trace terminals are unclassified" stopped being true while the sibling-module half
+    # of the same sentence did not.
+    assert "trace_terminals_are_unclassified_and_cross_module_stops_look_third_party" not in (
+        KNOWN_GAPS
+    )
+    assert "cross_module_stops_look_third_party" in KNOWN_GAPS
+    assert len(KNOWN_GAPS) == 15
+    assert len(_GAPS) == 15
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 

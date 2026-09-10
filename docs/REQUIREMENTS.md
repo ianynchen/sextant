@@ -147,13 +147,17 @@ optional branches are distinguishable from a straight sequence.
 
 Traces are not bounded by depth. A trace stops only at a terminal.
 
-> **Not met as shipped, and recorded rather than quietly reinterpreted** (2Q,
-> `docs/open-issues.md` OI-27). The walk stops at a terminal and at three other places: a
-> depth bound of 64 (a safety limit, never silent — 0 of `mall-admin`'s 160 traces reach
-> it), a `cycle`, and a method already expanded elsewhere in the same trace. Whether the
-> close is an amended requirement or changed code is a decision this document's owner
-> takes; until then the divergence is stated here, in `COVERAGE.md`, and in the rendered
-> document's own `Known gaps`.
+> **Met as of W31** (`docs/open-issues.md` OI-27, closed). This said "not met as shipped"
+> for the whole of 2Q: the walk stopped at a terminal and at three other places, one of
+> which was a depth bound of 64. The bound is gone — the walk is an explicit stack, so the
+> interpreter's own recursion limit is out of the failure modes and nothing needs a counter
+> to stay finite.
+>
+> **Two stops remain and they are not depth bounds**: a `cycle` (the callee is already on
+> the path from the root) and a `revisit` (the callee was expanded elsewhere in this same
+> trace, and its subtree is shown there). Both are correctness rather than limits — without
+> them the walk would not terminate, and expanding a shared subtree once per route is
+> exponential on an ordinary diamond. Each is stated on the step, so neither is silent.
 
 ### FR-7 — Diagrams
 

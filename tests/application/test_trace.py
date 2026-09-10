@@ -18,7 +18,7 @@ walk having to be reopened the day it does.
 import pytest
 from fixture_module import write_fixture_module_fact
 
-from sextant.application.query.trace import DEFAULT_MAX_DEPTH, trace_of, traces_of
+from sextant.application.query.trace import _Index, _walk, trace_of, traces_of
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.application.resolve.roots import Root, roots_of
@@ -134,43 +134,68 @@ def test_a_recursive_call_is_reported_as_a_cycle_and_the_walk_terminates(
     assert {step.stop for step in recursive} == {TraceStop.CYCLE}
 
 
-def test_the_depth_bound_is_reported_rather_than_applied_silently(
+def test_the_walk_is_bounded_by_the_evidence_and_not_by_a_counter(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """**A bound that fires without saying so is an under-report with nothing
-    to notice it.** Traced at a depth of one, the probe's own calls are all
-    that is walked and every expandable step says `depth_limit`; `truncated`
-    answers the same question without a caller scanning the steps."""
-    workspace, _ = resolved_fixture
-    trace = trace_of(workspace, _PROBE, max_depth=1)
-    assert trace.truncated
-    assert trace.depth == 1
-    assert TraceStop.DEPTH_LIMIT in {step.stop for step in trace.steps}
-    assert not trace_of(workspace, _PROBE).truncated
+    """FR-6 (F7 §8.1, W31): a trace stops at a terminal or a stated boundary, never at a
+    depth counter.
 
+    Three tests stood here, all about a `max_depth` bound of 64 — that it was reported
+    rather than applied silently, that a bound below one step was refused, and that it did
+    not fire on the fixture. It never fired anywhere: measured across `mall-admin`,
+    `spring-petclinic-rest` and `jhipster-sample-app`, the deepest trace is **9 edges**.
+    Its own comment called it "a safety bound, not a modelling one", there for the
+    recursion depth of the WALK rather than for anything about the code — and at 64 it did
+    that job perfectly well, since the recursion could never exceed 64 frames against an
+    interpreter limit of 1000. What it was not was a modelling answer, and FR-6 says a
+    trace should not be bounded by a counter at all.
 
-def test_a_depth_bound_below_one_step_is_refused(
-    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
-):
-    """A bound of zero would answer with an empty walk for every root, which
-    reads exactly like a module whose roots call nothing. It is refused rather
-    than served."""
-    workspace, _ = resolved_fixture
-    with pytest.raises(ValueError):
-        trace_of(workspace, _PROBE, max_depth=0)
-
-
-def test_the_default_bound_does_not_fire_on_the_fixture(
-    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
-):
-    """The bound is a SAFETY bound, not a modelling one: a bound that fired
-    routinely would be a modelling decision wearing a safety bound's clothes,
-    and every trace it cut would be an under-report. Nothing in the fixture
-    comes near it."""
+    The walk is an explicit stack now, so the interpreter's limit is out of the failure
+    modes and the bound had nothing left to do. What remains is what FR-6 asks for: every
+    step that stopped, stopped for a reason about the CODE.
+    """
     workspace, _ = resolved_fixture
     traces = traces_of(workspace)
-    assert not [trace for trace in traces if trace.truncated]
-    assert max(trace.depth for trace in traces) < DEFAULT_MAX_DEPTH
+
+    stops = {step.stop for trace in traces for step in trace.steps if step.stop is not None}
+    assert stops <= {TraceStop.BOUNDARY, TraceStop.CYCLE, TraceStop.REVISITED}
+    assert not hasattr(traces[0], "truncated"), (
+        "`truncated` answered 'did the bound cut this short' and there is no bound"
+    )
+
+
+def test_a_chain_deeper_than_any_recursion_limit_still_walks():
+    """The reason the bound could not simply be deleted.
+
+    A recursive walk carries one interpreter frame per edge, so a long chain of distinct
+    methods — which neither cycle detection nor the `expanded` set bounds — would hit
+    Python's own limit and raise. The bound prevented that by stopping at 64 first, which
+    is a stated, truncated answer; deleting the bound from the recursive form would have
+    traded that under-report for a crash. The stack removes both.
+
+    2,000 edges is comfortably past the default limit of 1,000 and walks in full here.
+    """
+    depth = 2000
+    edges = {
+        f"m{index}": [
+            {
+                "callee": f"m{index + 1}",
+                "ordinal": 0,
+                "invoke_kind": "static",
+                "target": f"m{index + 1}#call().",
+                "result": None,
+                "resolution": "resolved",
+                "terminal_kind": None,
+                "target_kind": None,
+            }
+        ]
+        for index in range(depth)
+    }
+    steps: list = []
+    _walk("m0", {"m0"}, steps, _Index(edges=edges, returns={}, responses={}))
+
+    assert len(steps) == depth
+    assert steps[-1].depth == depth
 
 
 def test_a_terminal_is_where_the_workspace_stopped_and_not_where_the_walk_did(
@@ -285,19 +310,6 @@ def test_a_callee_already_on_the_path_is_named_a_cycle(hand_built):
     assert [step.stop for step in recursive] == [TraceStop.CYCLE]
 
 
-@pytest.mark.pins("trace.a-depth-bound-reached-is-said-out-loud")
-def test_reaching_the_bound_is_a_step_that_says_so(hand_built):
-    """The near-miss for the bound. Stop reporting it and a truncated walk is
-    indistinguishable from a complete one: `truncated` answers False, the
-    deepest steps look like ordinary leaves, and every trace on a deep module
-    silently loses everything past the bound. That is the second sin with a
-    switch on it."""
-    trace = trace_of(hand_built, _ROOT, max_depth=1)
-    assert trace.truncated
-    assert TraceStop.DEPTH_LIMIT in {step.stop for step in trace.steps}
-    assert not trace_of(hand_built, _ROOT).truncated
-
-
 def test_a_method_reached_twice_is_expanded_once_and_says_so(hand_built):
     """A shared subtree is shown at its first occurrence and marked
     `revisited` at the second. Expanding it per route would copy every shared
@@ -331,4 +343,3 @@ def test_a_root_with_no_edges_traces_to_an_empty_walk(hand_built):
     )
     assert empty.steps == ()
     assert empty.depth == 0
-    assert not empty.truncated

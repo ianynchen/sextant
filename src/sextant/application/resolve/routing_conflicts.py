@@ -24,11 +24,18 @@ method is already registered under an equal one (spring-webmvc 6.1.6 bytecode). 
 mapping is a `RequestMappingInfo`, and its `equals` compares **seven** conditions:
 patterns, methods, params, headers, consumes, produces, and a custom condition.
 
-Six of the seven are readable here: the endpoint row carries the path, the verb and both
-media columns, and `params`/`headers` are attributes of the mapping annotation itself,
-named by the catalog as `discriminators`. Class-level and method-level values are UNIONED,
-because that is what `ParamsRequestCondition.combine` does — a `LinkedHashSet` of one
-side's expressions with the other's added.
+**Five and a half of the seven are readable here**, and the half is the point. The
+endpoint row carries the path and both media columns; `params`/`headers` are attributes
+of the mapping annotation, named by the catalog as `discriminators`, and class-level and
+method-level values are UNIONED because that is what `ParamsRequestCondition.combine`
+does — a `LinkedHashSet` of one side's expressions with the other's added.
+
+The methods condition is the half. What a row carries is not the DECLARED set Spring
+compares but `derive_endpoints.sql`'s expansion of it, so a verbless mapping arrives as
+eight verb rows. `_verbs_of` groups them back into the set, which recovers the comparison
+for every case but one: a mapping that names all eight verbs explicitly expands to the
+same eight rows as one that names none, and Spring holds those to be different
+conditions.
 
 **The seventh is a stated boundary.** A custom `RequestCondition` is code on a
 `RequestMappingHandlerMapping` subclass, not an attribute anywhere in the class file, so
@@ -50,6 +57,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.domain.closed_sets import Direction
 from sextant.domain.symbols import bare_descriptor, owner_of, type_descriptor
@@ -62,18 +70,33 @@ _CONFLICT = "conflict"
 
 def record_routing_conflicts(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Files one question per address two different handlers claim, where the catalog
-    that derived them says the framework refuses that."""
-    declaring = {
-        catalog.id: catalog
+    that derived them says the framework refuses that.
+
+    **One question per conflict, not one per verb.** The registration is grouped by
+    handler first and the verbs it registered under are collected into a set, because
+    that set — not any single member of it — is what Spring's own condition compares.
+    """
+    declaring = [
+        catalog
         for catalog in catalogs
         if str((catalog.matches.get("mapping") or {}).get("duplicate", "")) == _CONFLICT
-    }
+        # Hoisted out of the reporting loop, where it ran once per group though its
+        # answer is a property of the catalog and the workspace alone. A catalog
+        # silenced here also skips the annotation walk below, which is the expensive
+        # half.
+        and not _declares_a_custom_condition(workspace, catalog)
+    ]
     if not declaring:
         return
-    annotations = _annotation_args(workspace)
-    claimed: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    annotations = {
+        catalog.id: effective_annotation_uses(workspace, catalog) for catalog in declaring
+    }
+    by_id = {catalog.id: catalog for catalog in declaring}
+    # One entry per REGISTRATION — one handler's claim on one address under one set of
+    # conditions — carrying the verbs that registration was fanned out to.
+    registered: dict[tuple[Any, ...], set[str | None]] = {}
     for row in workspace.query("endpoints"):
-        catalog = declaring.get(str(row["catalog_id"]))
+        catalog = by_id.get(str(row["catalog_id"]))
         if catalog is None or str(row["direction"]) != Direction.INBOUND:
             continue
         if row["path"] is None or row["handler"] is None:
@@ -82,46 +105,79 @@ def record_routing_conflicts(workspace: Workspace, catalogs: list[Catalog]) -> N
             continue
         handler = bare_descriptor(str(row["handler"]))
         mapping = catalog.matches.get("mapping") or {}
-        # Everything the framework compares that this workspace can see. The four
-        # columns are the row's own; the discriminators come off the annotation.
-        identity = (
+        registration = (
             str(row["protocol"]),
-            None if row["method"] is None else str(row["method"]),
             str(row["path"]),
             None if row["consumes"] is None else str(row["consumes"]),
             None if row["produces"] is None else str(row["produces"]),
-            _discriminators(mapping, annotations, handler),
+            _discriminators(mapping, annotations[catalog.id], handler),
+            handler,
+            catalog.id,
         )
-        claimed.setdefault(identity, []).append({"handler": handler, "catalog": catalog})
+        registered.setdefault(registration, set()).add(
+            None if row["method"] is None else str(row["method"])
+        )
+    claimed: dict[tuple[Any, ...], list[str]] = {}
+    for registration, fanned in registered.items():
+        protocol, path, consumes, produces, discriminators, handler, _catalog_id = registration
+        # Everything the framework compares that this workspace can see, with the VERB
+        # SET in the place a single verb used to hold. See `_verbs_of` for why the set
+        # is the only faithful form.
+        identity = (protocol, _verbs_of(fanned), path, consumes, produces, discriminators)
+        claimed.setdefault(identity, []).append(handler)
     rows: list[dict[str, object]] = []
     # Sorted so two runs file the ledger in one order (NFR-1).
     for identity in sorted(claimed, key=lambda key: tuple(str(part) for part in key)):
-        holders = claimed[identity]
-        handlers = sorted({holder["handler"] for holder in holders})
+        handlers = sorted(set(claimed[identity]))
         if len(handlers) < 2:
             # One handler, however many rows it took to say so — a method carrying two
             # annotations of one address is one registration, not two.
             continue
-        catalog = holders[0]["catalog"]
-        if _declares_a_custom_condition(workspace, catalog):
-            continue
-        protocol, method, path, _consumes, _produces, _discriminators_of = identity
+        protocol, verb_tuple, path, _consumes, _produces, _discriminators_of = identity
+        verbs: tuple[str, ...] = tuple(str(verb) for verb in verb_tuple)
         rows.append(
             {
                 "protocol": protocol,
-                "method": method,
+                # The verb where the registration named exactly one, and NULL where it
+                # named none — a verbless `@RequestMapping` answers at every verb, and
+                # naming one of them here would say the conflict is narrower than it is.
+                "method": verbs[0] if len(verbs) == 1 else None,
                 "path": path,
                 "question": "routing_conflict",
                 "candidates": json.dumps([{"handler": handler} for handler in handlers]),
                 "evidence": (
                     "one address, two handlers, and every condition this workspace can "
-                    "read is equal: path, verb, consumes, produces and the catalog's own "
-                    "discriminators. A custom RequestCondition is not readable from a "
-                    "class file and no subclass registering one was found"
+                    f"read is equal: path, the verb set ({', '.join(verbs) or 'none'}), "
+                    "consumes, produces and the catalog's own discriminators. A custom "
+                    "RequestCondition is not readable from a class file and no subclass "
+                    "registering one was found"
                 ),
             }
         )
     record_open_questions(workspace, rows)
+
+
+def _verbs_of(verbs: set[str | None]) -> tuple[str, ...]:
+    """The verbs one registration answers at, as a sorted, hashable value.
+
+    **A set, because that is what Spring compares.** `RequestMethodsRequestCondition.
+    equals` compares the DECLARED method set, and an empty set is not equal to `{GET}` —
+    so `@RequestMapping("/x")` and `@GetMapping("/x")` are two different mappings, both
+    register, and a GET request resolves to the more specific one. W28 compared the
+    single fanned-out verb of an endpoint row instead: `derive_endpoints.sql` expands a
+    verbless mapping to all eight verbs, so the two collided on the GET row and the
+    detector reported an `IllegalStateException` against a module that starts. Grouping
+    the row's verbs back into the set the annotation declared is what restores the
+    framework's own comparison — and it is also why one conflict now files one question
+    rather than eight.
+
+    **The stated boundary**: a mapping that lists all eight verbs EXPLICITLY is a
+    different condition from one that lists none, and both fan out to the same eight
+    rows, so the two are indistinguishable here. That is the residual of reading a
+    condition through its expansion, and it needs a handler declaring every verb by name
+    beside a verbless one on the same address to matter.
+    """
+    return tuple(sorted(verb for verb in verbs if verb is not None))
 
 
 def _discriminators(
@@ -136,6 +192,12 @@ def _discriminators(
     let the method's value replace the class's would report a conflict between two
     methods in one `@RequestMapping(params = "v=1")` class, which Spring registers
     happily.
+
+    `annotations` is the EFFECTIVE set (`effective_annotation_uses`), so a discriminator
+    reaches this whether it was written on the use site, composed into a module-local
+    meta-annotation, folded into a repeatable container, or declared on an interface
+    method the class implements without repeating. Reading the raw `annotations` view
+    here made all three read as absent while the endpoint row still derived.
     """
     names = [str(name) for name in mapping.get("discriminators") or []]
     if not names:
@@ -169,24 +231,17 @@ def _mapping_annotations(mapping: dict[str, Any]) -> list[str]:
     return fqns
 
 
-def _annotation_args(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
-    """Every annotation use, by BARE target — the spelling a handler symbol reduces to,
-    so a method and its enclosing type are both looked up the same way."""
-    found: dict[str, list[dict[str, Any]]] = {}
-    for row in workspace.query("annotations"):
-        args = row["args"]
-        found.setdefault(bare_descriptor(str(row["target"])), []).append(
-            {
-                "annotation": bare_descriptor(str(row["annotation"])),
-                "args": {} if args is None else json.loads(str(args)),
-            }
-        )
-    return found
-
-
 def _declares_a_custom_condition(workspace: Workspace, catalog: Catalog) -> bool:
-    """Whether this module registers a mapping handler of its own, which could carry the
+    """Whether this ANALYSIS holds a mapping handler of its own, which could carry the
     one condition of Spring's seven that no class file states.
+
+    Not "this module": `implementations` and `superclasses` are filtered by
+    `selected_documents`, which includes `OriginTier.DEPENDENCY` documents. So a scanned
+    dependency subclassing `RequestMappingHandlerMapping` — Spring Data REST's
+    `BasePathAwareHandlerMapping` is one — silences the detector for the whole run. That
+    is the safe direction and it is deliberate, since such a dependency really can carry
+    a custom condition into the same registry; it is stated here because the scope is
+    wider than a reader would assume.
 
     A custom `RequestCondition` reaches a mapping through a `RequestMappingHandlerMapping`
     subclass overriding `getCustomMethodCondition`/`getCustomTypeCondition`. The condition
@@ -194,7 +249,7 @@ def _declares_a_custom_condition(workspace: Workspace, catalog: Catalog) -> bool
     conflict reported against them would be a fabrication about a service that starts
     perfectly well.
 
-    So the whole module goes quiet rather than reporting something it cannot check. That
+    So the whole analysis goes quiet rather than reporting something it cannot check. That
     is the direction NFR-2 asks for, and the cost is visible: `mapping.custom_condition`
     names the type in the catalog, so a reader can see exactly what silences this.
     """

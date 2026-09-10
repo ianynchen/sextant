@@ -16,15 +16,16 @@ Measured across `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app` 
 of this was written — and each route exists because one of them needs it:
 
 * **`owner`** — the call lands on a library type. `EntityManager` (82 terminals in
-  petclinic-rest), `RedisTemplate` (41 in mall-admin), and the SQL result-set API
-  (17 in petclinic-rest).
+  petclinic-rest, 2 in jhipster), `RedisTemplate` (41 in mall-admin), `ResultSet` (17 in
+  petclinic-rest) and `JdbcTemplate` (3 there).
 * **`supertype`** — the owner implements a declared type. jhipster's repositories are its
-  own interfaces and carry no annotation; `type_hierarchy` (W21) says they implement
-  `JpaRepository`, which is 73 of its 75 classifiable terminals.
+  own interfaces and carry no annotation; the class file says they implement
+  `JpaRepository`, which is 68 of its 70 classified terminals.
 * **`scanned_by`** — an annotation names PACKAGES and every type inside them qualifies.
   mall-admin's mappers carry **no annotation at all** — `@MapperScan({"com.macro.mall.
   mapper", "com.macro.mall.dao"})` on a config class is how MyBatis registers them, and
-  that annotation is in the fact stream with its package list. 175 terminals.
+  that annotation is in the fact stream with its package list. 199 terminals: 172 in
+  `mapper` and 27 in `dao`.
 
 **None of the three is a name match**, and that is deliberate: `*Mapper` and `*Repository`
 are naming conventions, and §8.1 forbids a rule weaker than the one the framework applies.
@@ -34,16 +35,32 @@ named otherwise.
 
 ## What it is worth, measured
 
-| Corpus | terminals | classified |
-|---|---|---|
-| `mall-admin` | 5,352 | 267 (5%) |
-| `spring-petclinic-rest` | 2,074 | 101 (5%) |
-| `jhipster-sample-app` | 1,141 | 75 (7%) |
+Re-measured whole after W30's review found five published figures disagreeing with each
+other; these are the numbers `call_edges` actually holds, and every count above is a slice
+of the same run.
 
-The remaining ~95% is `StringBuilder`, `Object`, `List`, `Iterator` — and that is the
+| Corpus | terminals | classified | by what |
+|---|---|---|---|
+| `mall-admin` | 5,352 | 240 (4%) | 199 scanned package, 41 owner |
+| `spring-petclinic-rest` | 2,074 | 102 (5%) | 102 owner |
+| `jhipster-sample-app` | 1,141 | 70 (6%) | 68 supertype, 2 owner |
+
+The remaining 94-96% is `StringBuilder`, `Object`, `List`, `Iterator` — and that is the
 point rather than a shortfall. Those are not unclassified persistence; they are ordinary
 library calls, and they carry `unresolved`, which says *this is a terminal we looked at and
 could not classify* rather than pretending they were never examined.
+
+**Two of `TerminalKind`'s eight members have a producer** — `persistence` and
+`unresolved` — because one catalog declares `terminals` and all twelve of its rules say
+`persistence`. Of `TargetKind`'s three, `database` and `cache` are produced and `file` is
+not. The six that are absent split in two, and the split is the honest part: `outbound_call`,
+`throws`, `async_handoff` and `TargetKind.FILE` are all a catalog rule away — an owner
+rule naming `ExecutorService` or `MinioClient` would mint one today — while `cycle`,
+`returns` and `ends_silently` are unreachable BY CONSTRUCTION. A cyclic edge has a
+non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
+describe how a BODY exits, and all three routes here are predicates on the callee's TYPE,
+which cannot express that. `closed_sets.py` names them at the enum and
+`docs/open-issues.md` carries `OI-74`.
 
 ## Not `TraceStop`
 
@@ -59,6 +76,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import ancestry_of
+from sextant.application.resolve.shapes.expansion import _closure_of
 from sextant.domain.closed_sets import TargetKind, TerminalKind
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -94,7 +112,7 @@ class TerminalRules:
         self._packages: list[tuple[str, tuple[str, str | None]]] = []
         if scans:
             self._packages = _scanned_packages(workspace, scans)
-        self._ancestors: dict[str, set[str]] = {}
+        self._ancestors: dict[str, list[str]] = {}
         if self._supertypes:
             self._ancestors = _ancestry(workspace)
 
@@ -200,9 +218,23 @@ def _scanned_packages(
     return sorted(set(found))
 
 
-def _ancestry(workspace: Workspace) -> dict[str, set[str]]:
-    """Every type's transitive ancestors, from the same facts `type_hierarchy` is built
-    from — NOT from that table.
+def _ancestry(workspace: Workspace) -> dict[str, list[str]]:
+    """Every type's transitive ancestors IN JVMS 5.4.3.3's search order, from the same
+    facts `type_hierarchy` is built from — NOT from that table.
+
+    **Ordered, not a set.** `of` returns the first ancestor a catalog claims, so the
+    order decides the answer wherever a type reaches two declared supertypes with
+    different answers — and iterating a `set` made that a coin toss the hash seed decided:
+    measured over six `PYTHONHASHSEED` values, one input classified `database` three times
+    and `cache` three times. Not reachable with today's catalog, where all nine Spring
+    Data bases share one answer, and reachable the first time a rule ships a different
+    `target` — which this file's own comments already anticipate. `_scanned_packages`
+    sorts for exactly this reason (NFR-1); this route was the half that did not.
+
+    The order is `_closure_of`'s, which is the order `dispatch.resolve` walks and the one
+    `ancestry_of`'s docstring calls the whole point: the superclass chain to exhaustion,
+    then the interfaces. Answering from a depth-1 interface while a depth-2 superclass
+    holds the declaration is the defect W22's review found one level down.
 
     **The table is written by the same pass that writes the edges, and written after
     them**, so reading it here returned nothing and every repository call came back
@@ -216,21 +248,9 @@ def _ancestry(workspace: Workspace) -> dict[str, set[str]]:
     That is why a catalog must name the level a user actually extends.
     """
     direct_pairs, _scanned = ancestry_of(workspace)
-    direct: dict[str, set[str]] = {}
-    for child, parents in direct_pairs.items():
-        direct.setdefault(child, set()).update(parent for parent, _kind, _is_scanned in parents)
-    closure: dict[str, set[str]] = {}
-    for child, first in direct.items():
-        seen: set[str] = set()
-        pending: list[str] = list(first)
-        while pending:
-            ancestor = pending.pop()
-            if ancestor in seen:
-                continue
-            seen.add(ancestor)
-            pending.extend(direct.get(ancestor, ()))
-        closure[child] = seen
-    return closure
+    # `[1:]` drops `child` itself, which `_closure_of` returns first: this map holds a
+    # type's ANCESTORS, and a type is not its own supertype.
+    return {child: _closure_of(child, direct_pairs)[1:] for child in direct_pairs}
 
 
 __all__ = ["TargetKind", "TerminalKind", "TerminalRules", "classify"]

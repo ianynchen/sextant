@@ -61,6 +61,15 @@ def _implements(document_id: str, owner: str, *interfaces: str) -> dict:
     return fact
 
 
+def _superclass(document_id: str, owner: str, parent: str) -> dict:
+    """`owner extends parent`, the other half of the ancestry the walk reads. Its own
+    helper rather than a flag on `_implements` because the two facts carry different
+    fields, and 5.4.3.3 treats them differently."""
+    fact = _type(document_id, owner)
+    fact["superclass"] = _MODULE + parent
+    return fact
+
+
 def _annotation(target: str, annotation: str, args: dict) -> dict:
     return AnnotationFact(
         document_id="doc",
@@ -233,12 +242,24 @@ def test_the_supertype_walk_stops_at_a_type_this_workspace_did_not_scan(tmp_path
     """The boundary that decides what a catalog must name, and it cost a measurement to
     find: naming only the framework's BASE interface classified 2 of jhipster's 75.
 
-    `type_hierarchy` holds what this workspace scanned. A framework's own interface comes
-    back with `scanned: false` and no rows of its own, so the walk stops there and never
-    sees what it extends. A catalog must therefore name the level a USER actually writes —
-    `JpaRepository`, not `Repository`.
+    The walk follows the `superclasses`/`implementations` facts, and an UNSCANNED type has
+    none of its own — so the chain ends there and never sees what that type extends. A
+    catalog must therefore name the level a USER actually writes: `JpaRepository`, not
+    `Repository`.
+
+    **Both halves in one test, because the negative alone proves nothing.** `OrderRepo`
+    reaches the declared base through an unscanned intermediate and must NOT classify;
+    `AuditRepo` reaches it through a scanned one and must. The first assertion on its own
+    passed with the entire supertype route deleted — nothing in it linked the intermediate
+    to the base either way, so it was measuring the absence of a fact, not the stop.
     """
-    facts = [_implements("doc", "com/acme/store/OrderRepository#", "com/acme/store/FrameworkRepo#")]
+    facts = [
+        # Unscanned intermediate: `FrameworkRepo` declares nothing here.
+        _implements("doc", "com/acme/store/OrderRepo#", "com/acme/store/FrameworkRepo#"),
+        # Scanned intermediate: the same shape, one fact further.
+        _implements("doc", "com/acme/store/AuditRepo#", "com/acme/store/Scanned#"),
+        _implements("doc", "com/acme/store/Scanned#", "com/acme/store/BaseRepository#"),
+    ]
     workspace = _workspace(tmp_path, facts)
     rules = TerminalRules(
         workspace,
@@ -246,11 +267,45 @@ def test_the_supertype_walk_stops_at_a_type_this_workspace_did_not_scan(tmp_path
     )
     workspace.close()
 
-    # `FrameworkRepo` is unscanned here, so nothing says it extends `BaseRepository`.
-    assert (
-        classify(rules, "com/acme/store/OrderRepository#findAll(sig_1).", None)["terminal_kind"]
-        == "unresolved"
+    assert classify(rules, "com/acme/store/OrderRepo#findAll(sig_1).", None)["terminal_kind"] == (
+        "unresolved"
     )
+    assert classify(rules, "com/acme/store/AuditRepo#findAll(sig_1).", None)["terminal_kind"] == (
+        "persistence"
+    )
+
+
+def test_two_declared_supertypes_resolve_in_the_jvm_search_order(tmp_path: Path):
+    """NFR-1, and it was a coin toss the hash seed decided.
+
+    A type reaching two declared supertypes with DIFFERENT answers used to be resolved by
+    iterating a `set`: six `PYTHONHASHSEED` values produced `database` three times and
+    `cache` three times for one input. The order is JVMS 5.4.3.3's — the superclass chain
+    to exhaustion, then the interfaces — so a superclass's answer wins over an interface's
+    however the facts were written down.
+
+    Today's catalog cannot reach it: all nine Spring Data bases carry one answer. The
+    first rule that ships a different `target` can, and this file's own comments already
+    name the candidates.
+    """
+    facts = [
+        _superclass("doc", "com/acme/store/Repo#", "com/acme/store/Cached#"),
+        _implements("doc", "com/acme/store/Repo#", "com/acme/store/Stored#"),
+    ]
+    workspace = _workspace(tmp_path, facts)
+    rules = TerminalRules(
+        workspace,
+        [
+            _catalog(
+                {"supertype": "com.acme.store.Stored", "kind": "persistence", "target": "database"},
+                {"supertype": "com.acme.store.Cached", "kind": "persistence", "target": "cache"},
+            )
+        ],
+    )
+    workspace.close()
+
+    # The SUPERCLASS, not the interface — 5.4.3.3 exhausts the class chain first.
+    assert classify(rules, "com/acme/store/Repo#get(sig_1).", None)["target_kind"] == "cache"
 
 
 def test_an_owner_rule_wins_over_a_scanned_package(tmp_path: Path):

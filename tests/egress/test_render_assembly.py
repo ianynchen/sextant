@@ -483,9 +483,13 @@ GOLDEN_TRACES = [
                 result=12,
                 resolution=Resolution.RESOLVED,
                 stop=TraceStop.BOUNDARY,
-                # The control beside the mapper above: an ordinary library call, examined
-                # and claimed by no catalog. `unresolved` says exactly that, and it is
-                # what ~95% of real terminals read.
+                # The control beside the mapper above. This one is the golden's
+                # SIBLING-MODULE terminal (see the block comment at the top of this
+                # trace), and that is the sharper point: `unresolved` says the terminal
+                # was examined and no catalog claimed it, and it says exactly the same
+                # for a third-party jar and for the JDK. `Reaches` does not separate
+                # them — the `Call` column's full descriptor does. 94-96% of real
+                # terminals read this.
                 terminal_kind="unresolved",
             ),
         ),

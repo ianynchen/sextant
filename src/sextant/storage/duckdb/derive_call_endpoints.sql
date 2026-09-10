@@ -92,10 +92,23 @@ FROM (SELECT UNNEST(
 -- else entirely — at which point the answer belongs beside `serves_urls` in
 -- `domain/paths.py`, where the protocol question already lives.
 WHERE NOT (r.resolution = 'resolved' AND r.path IS NULL AND r.peer IS NULL)
+--
+-- F5 §6.1 rule 1 (W27 fix): `caller` and `peer` are part of the comparison. Without them
+-- a second CALLER reaching one path was refused by this guard even when the engine had
+-- kept it — two callers, two hosts, one path derived one row and the second was gone with
+-- no gap row saying so. `peer` is not part of endpoint IDENTITY (RC-5) and that is exactly
+-- why it belongs here: two calls to one path at two addresses are two calls, and only
+-- the address separates them.
+--
+-- `IS NOT DISTINCT FROM` on both, like `method` above: either may be NULL, and plain
+-- equality reads NULL = NULL as unknown, which would stop the guard matching the very
+-- rows it exists to catch.
   AND NOT EXISTS (
     SELECT 1 FROM endpoints existing
     WHERE existing.protocol  = r.protocol
       AND existing.direction = r.direction
       AND existing.method IS NOT DISTINCT FROM r.method
       AND existing.path      = r.path
+      AND existing.caller IS NOT DISTINCT FROM r.caller
+      AND existing.peer   IS NOT DISTINCT FROM r.peer
 );

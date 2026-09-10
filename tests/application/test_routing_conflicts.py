@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 import pytest
-from test_shapes import _MODULE, _document, _write
+from test_shapes import _MODULE, _document, _type, _write
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
@@ -337,6 +337,100 @@ def test_a_module_declaring_a_custom_condition_is_left_alone(tmp_path: Path):
     record_routing_conflicts(
         workspace, [_catalog(duplicate="conflict", custom_condition=CUSTOM_BASE)]
     )
+    conflicts = _conflicts(workspace)
+    workspace.close()
+
+    assert conflicts == []
+
+
+# The eight verbs `derive_endpoints.sql` fans a verbless mapping out to. Written here as
+# the SQL's own output rather than re-derived, because that expansion is a separate,
+# separately-tested mechanism and what this file has to pin is what the DETECTOR makes of
+# it.
+_ALL_VERBS = ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE")
+
+
+def test_a_verbless_mapping_does_not_conflict_with_a_verb_specific_one(tmp_path: Path):
+    """The false positive W28 shipped, and the reason the identity carries a verb SET.
+
+    `RequestMethodsRequestCondition.equals` compares the DECLARED set, and an empty set is
+    not equal to `{GET}` — so `@RequestMapping("/orders")` and `@GetMapping("/orders")` are
+    two different mappings, Spring registers both, and a GET resolves to the more specific
+    one. Comparing the single fanned-out verb collided them on the GET row and named an
+    `IllegalStateException` against a module that starts perfectly well.
+
+    Live-adjacent rather than hypothetical: `spring-petclinic-rest`'s
+    `RootRestControllerV1` carries `@RequestMapping(value = "/")` and fans out to all
+    eight, so one `@GetMapping("/")` beside it opened the detector with a false finding.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [(verb, "/orders", FIRST) for verb in _ALL_VERBS] + [("GET", "/orders", SECOND)],
+        [
+            _annotation(FIRST, GET_MAPPING, {"value": ["/orders"]}),
+            _annotation(SECOND, GET_MAPPING, {"value": ["/orders"]}),
+        ],
+    )
+
+    record_routing_conflicts(workspace, [_catalog(duplicate="conflict")])
+    conflicts = _conflicts(workspace)
+    workspace.close()
+
+    assert conflicts == []
+
+
+def test_two_verbless_mappings_are_one_conflict_not_eight(tmp_path: Path):
+    """The genuine conflict between two verbless mappings IS reported — once.
+
+    One registration refused is one `IllegalStateException`, and eight questions naming
+    the same two handlers would have a reader believe there are eight problems. The verb
+    reads NULL because the registration names none: a verbless mapping answers at every
+    verb, so naming one of them would say the conflict is narrower than it is.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [(verb, "/orders", handler) for handler in (FIRST, SECOND) for verb in _ALL_VERBS],
+        [
+            _annotation(FIRST, GET_MAPPING, {"value": ["/orders"]}),
+            _annotation(SECOND, GET_MAPPING, {"value": ["/orders"]}),
+        ],
+    )
+
+    record_routing_conflicts(workspace, [_catalog(duplicate="conflict")])
+    conflicts = _conflicts(workspace)
+    workspace.close()
+
+    assert len(conflicts) == 1
+    assert conflicts[0]["method"] is None
+    assert [c["handler"] for c in json.loads(str(conflicts[0]["candidates"]))] == [FIRST, SECOND]
+
+
+def test_a_discriminator_composed_into_a_module_local_annotation_still_separates(
+    tmp_path: Path,
+):
+    """The second false positive W28 shipped: discriminators read from the RAW annotation
+    view while the endpoint row derived through the effective one.
+
+    A module-local `@ApiGet` meta-annotated `@Get(params = "v=1")` mints its endpoint row
+    through the composition pre-pass, but the annotation physically on the method is
+    `ApiGet` — which the catalog does not name, so the `params` that separates it from the
+    plain mapping beside it read as absent and the two compared equal. The fixture already
+    ships a composed mapping annotation, so only the absence of `params` in that
+    particular composition kept this green.
+    """
+    composed = "com.acme.rest.ApiGet"
+    workspace = _workspace(
+        tmp_path,
+        [("GET", "/orders", FIRST), ("GET", "/orders", SECOND)],
+        [
+            _annotation(FIRST, composed, {}),
+            _annotation(composed.replace(".", "/") + "#", GET_MAPPING, {"params": ["v=1"]}),
+            _annotation(SECOND, GET_MAPPING, {"value": ["/orders"]}),
+        ],
+        [_type("doc", composed.replace(".", "/") + "#", "annotation")],
+    )
+
+    record_routing_conflicts(workspace, [_catalog(duplicate="conflict", discriminators=["params"])])
     conflicts = _conflicts(workspace)
     workspace.close()
 

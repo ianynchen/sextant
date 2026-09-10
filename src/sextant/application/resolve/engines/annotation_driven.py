@@ -1622,3 +1622,67 @@ def _reply_row(
         "consumes": None,
         "produces": None,
     }
+
+
+def effective_annotation_uses(
+    workspace: Workspace, catalog: Catalog
+) -> dict[str, list[dict[str, Any]]]:
+    """Every annotation use one catalog's endpoint derivation actually MATCHED
+    ON, keyed by bare target — the `annotations` view widened by exactly the
+    pre-pass `derive_endpoints.sql`'s `annotations_effective` CTE reads.
+
+    A pass that asks a question ABOUT a derived endpoint row must read the same
+    annotation set the row was derived from, and W28 shipped reading the raw
+    view instead. The two differ in three ways that all point the same
+    direction — a module-local composed annotation (`@ApiGet` meta-annotated
+    `@GetMapping(params = "v=1")`), a repeatable container javac folded, and a
+    mapping declared on an interface method the class does not repeat — and in
+    each the endpoint row derives while its attributes read as absent. For a
+    conflict detector that is a finding named against code the framework starts
+    happily, which NFR-2 rates the worst outcome available.
+
+    Recomputed per catalog rather than cached, because the closure is seeded by
+    THIS catalog's own mapping fqns and there is no set that serves two: the
+    same walk `run` performs, over the same rows, through the same functions.
+    """
+    real = [
+        {
+            "target": bare_descriptor(str(row["target"])),
+            "annotation": bare_descriptor(str(row["annotation"])),
+            "args": {} if row["args"] is None else json.loads(str(row["args"])),
+        }
+        for row in workspace.query("annotations")
+    ]
+    mapping = catalog.matches.get("mapping")
+    synthetic: list[dict[str, str]] = []
+    if mapping is not None:
+        type_annotation = catalog.matches.get("type_annotation")
+        synthetic = _synthetic_annotations(
+            workspace,
+            catalog,
+            [_mapping_annotation(mapping, m) for m in mapping["annotations"]],
+            None
+            if mapping["prefix_annotation"] is None
+            else list(
+                catalog_symbols(
+                    mapping["prefix_annotation"], f"{catalog.source}: mapping.prefix_annotation"
+                )
+            ),
+            None
+            if type_annotation is None
+            else list(catalog_symbols(type_annotation, f"{catalog.source}: type_annotation")),
+        )
+    uses: dict[str, list[dict[str, Any]]] = {}
+    for row in (
+        *real,
+        *(
+            {
+                "target": bare_descriptor(str(row["target"])),
+                "annotation": bare_descriptor(str(row["annotation"])),
+                "args": json.loads(str(row["args"])),
+            }
+            for row in synthetic
+        ),
+    ):
+        uses.setdefault(str(row["target"]), []).append(row)
+    return uses

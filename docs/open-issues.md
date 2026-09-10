@@ -636,7 +636,7 @@ address that reaches NO root, because the row naming it names no handler — so
 there is nothing for an address to be carried on. The close condition is
 unchanged and remains upstream, in the chain reader.
 
-### OI-27 — FR-6 says a trace is unbounded and stops only at a terminal; three things stop it earlier
+### OI-27 — FR-6 says a trace is unbounded and stops only at a terminal; three things stop it earlier · **CLOSED, W31**
 **Minor · found 2026-09-06 by 2Q's rendered trace, verifying the walk against
 its requirement · `docs/REQUIREMENTS.md` FR-6,
 `src/sextant/application/query/trace.py::DEFAULT_MAX_DEPTH`**
@@ -680,6 +680,21 @@ to this row; it was rejected for exactly that reason. Removing the budget
 altogether raises this row's priority rather than lowers it: `DEFAULT_MAX_DEPTH`
 is the ONLY bound left anywhere on the document, which is why GUIDELINES §8.4's
 audit list names it and files it as a termination bound rather than a size one.
+
+**CLOSED in W31** (F7 §8.1). The depth bound is gone: `_walk` is an explicit stack, so the
+interpreter's own recursion limit is out of the failure modes and nothing needs a counter
+to stay finite. `TraceStop.DEPTH_LIMIT`, `Trace.truncated`, the rendered `Complete` column
+and the `trace_depth_is_bounded` known gap all retired with it.
+
+**Measured before removing it**, which is what said the bound was safe to lose: the deepest
+trace is **9 edges** across `mall-admin` (160 traces), `spring-petclinic-rest` (37) and
+`jhipster-sample-app` (38), against a bound of 64, and no trace was ever truncated.
+
+**Two of the three stops stay, and they were never the issue**: `cycle` and `revisited` are
+correctness. Without them the walk does not terminate, and expanding a shared subtree once
+per route is exponential on an ordinary diamond — which is D01's own reason for a trace
+being a walk rather than a stored table. FR-6 asks not to be bounded by DEPTH, and neither
+of these is.
 
 ### OI-29 — `analyze` over a workspace whose graph schema moved crashes instead of rebuilding
 **Major · introduced 2026-09-06 by 2Q's close, defect 1; found the same day by
@@ -2556,3 +2571,39 @@ lambda, and the destination is at `queue(arg0)` inside it".
 
 **Falsified by** measuring that the consumer-builder overloads are rare in practice — which
 would lower its priority, not make it correct.
+
+### OI-74 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
+
+**Found by** W30's review, which asked the question `RootKind`'s own docstring already
+answers for `entry_point` and this set did not answer for anything: which members are
+actually written, and why the rest are not.
+
+**What is written.** `persistence` and `unresolved`, and `database` and `cache`. One
+catalog declares a `terminals` block, all twelve of its rules say `persistence`, and the
+measured output across `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app`
+contains no other value.
+
+**The six absentees are absent for two different reasons, and conflating them was the
+finding.** The published note said only that "no shipped catalog declares a rule that mints
+one", which is true of half of them and false of the other half:
+
+| member | why it is absent |
+|---|---|
+| `outbound_call`, `throws`, `async_handoff` | one catalog rule away — an `owner` rule naming `ExecutorService` mints `async_handoff` today |
+| `TargetKind.file` | likewise: `io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are live on `mall-admin` and read `unresolved` |
+| `cycle` | unreachable BY CONSTRUCTION — a cyclic edge has a non-NULL `callee`, so `resolve/terminals.classify` returns NULL for it and always will |
+| `returns`, `ends_silently` | unreachable by any rule — they describe how a BODY exits, and all three catalog routes are predicates on the callee's TYPE |
+
+**Consequence:** none to today's output, which is why this is an open issue rather than a
+defect. It matters to a reader of `call_edges` deciding whether an absent value means the
+analysis found nothing or cannot express it, and to a catalog author wondering whether a
+rule of theirs could produce one.
+
+**Closes by** two separate acts: declaring the rules for the first four (cheap, and
+`file` has live candidates waiting), and — for the last three — a mechanism that classifies
+a BODY's exit rather than a callee's type, which is a different pass, not a different rule.
+Either half may close on its own.
+
+**Falsified by** finding that `returns`/`ends_silently` were never meant for `call_edges`
+at all, in which case the fix is to narrow the set the way `RootKind` was narrowed from six
+to three — the precedent this issue is written against.

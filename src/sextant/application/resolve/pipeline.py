@@ -145,8 +145,14 @@ def resolve(
     # a question would name a wire the endpoint no longer speaks — the same defect the
     # roots pass was moved down to fix. Above the reset it would simply be erased.
     record_self_exchange(workspace)
-    # F5 §6.1 (W28), and below `apply_protocol_hints` for the same reason: `protocol` is
-    # part of the identity two handlers would be claiming, and that pass moves it.
+    # F5 §6.1 (W28), and below `apply_protocol_hints` — but NOT for the reason above.
+    # Spring's registry knows nothing about SSE versus plain HTTP; `protocol` is in this
+    # question's identity because a detector must not compare rows two different engines
+    # minted, and it makes the detector NARROWER than the framework: an `SseEmitter`-
+    # returning `@GetMapping("/events")` is moved to `sse` and so is never compared with
+    # a plain `@GetMapping("/events")` that Spring genuinely refuses. That is an
+    # under-report, which is the direction NFR-2 asks for, and running below the pass
+    # that moves it is what keeps the identity stable within one run.
     record_routing_conflicts(workspace, list(declared))
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns

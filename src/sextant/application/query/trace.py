@@ -34,7 +34,7 @@ than it looks in three specific ways a reader must be told:
   lambda runs later, elsewhere, if at all. `invoke_kind` is on every step so
   this is readable rather than inferred.
 
-## Where it stops, all four of them stated on the step itself
+## Where it stops, all three of them stated on the step itself
 
 `TraceStop` carries the reason, and a step with none was expanded:
 
@@ -46,12 +46,13 @@ than it looks in three specific ways a reader must be told:
   code, so it is stated and not followed.
 - `revisited` — the callee was expanded elsewhere in this trace. Its subtree is
   shown at its first occurrence.
-- `depth_limit` — the bound was reached. **Never silent**, which is the whole
-  reason it is a member: a truncated trace that looked complete would be an
-  under-report with nothing saying so, and `Trace.truncated` answers it without
-  a reader having to scan the steps.
 
-**Cross-module depth is a fifth stop that looks like the first.** A call into a
+**There is no fourth**, and there was: `depth_limit` retired with the bound it
+reported (FR-6, F7 §8.1, W31), along with the `Trace.truncated` property that
+answered "did that bound cut this short". Every reason left is a fact about the
+code or about a route through it, never about a limit this system imposed.
+
+**Cross-module depth is a fourth stop that looks like the first.** A call into a
 sibling build module leaves for a workspace this one does not hold, so it reads
 as `boundary` — correctly, in that no body was read here, and incompletely, in
 that a body exists somewhere. Joining the two is `Bundle`/`Link` work and not
@@ -66,26 +67,12 @@ set that decides which occurrence of a shared method is the expanded one is
 therefore the same set on every run.
 """
 
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.roots import Root, roots_of
 from sextant.domain.closed_sets import Resolution, TraceStop
-
-# How many edges from the root the walk will follow. **A safety bound, not a
-# modelling one**: the `expanded` set already makes the walk finite — each
-# method is expanded at most once per trace — so this exists for the shape
-# neither that nor cycle detection bounds, a long chain of distinct methods, and
-# for the recursion depth of the walk itself.
-#
-# 64 rather than a number tuned to a corpus: the deepest trace measured on
-# `macrozheng/mall`'s `mall-admin` is far below it, so on real code it is
-# inert, and a bound that fires routinely would be a modelling decision wearing
-# a safety bound's clothes. When it does fire it is REPORTED — `Trace.truncated`
-# and a `depth_limit` step — because a silently truncated trace is an
-# under-report with nothing saying so.
-DEFAULT_MAX_DEPTH = 64
 
 
 @dataclass(frozen=True)
@@ -152,13 +139,6 @@ class Trace:
         return max((step.depth for step in self.steps), default=0)
 
     @property
-    def truncated(self) -> bool:
-        """Whether the depth bound cut this walk short. Answered here so a
-        caller never has to scan the steps to find out whether what it is
-        holding is complete."""
-        return any(step.stop is TraceStop.DEPTH_LIMIT for step in self.steps)
-
-    @property
     def terminals(self) -> tuple[Step, ...]:
         """The steps at which the walk left this workspace — the third-party
         boundary, which is where a trace stops by ruling. `cycle` and
@@ -190,8 +170,8 @@ def _index(workspace: Workspace) -> _Index:
     return _Index(edges=edges, returns=returns, responses=responses)
 
 
-def trace_of(workspace: Workspace, root: Root, *, max_depth: int = DEFAULT_MAX_DEPTH) -> Trace:
-    """Everything reachable from one root, bounded and cycle-refusing.
+def trace_of(workspace: Workspace, root: Root) -> Trace:
+    """Everything reachable from one root, finite and cycle-refusing.
 
     `root` may be of ANY kind: nothing here reads `root.kind` except to carry it
     back on the answer, which is `I3` in one line.
@@ -200,19 +180,17 @@ def trace_of(workspace: Workspace, root: Root, *, max_depth: int = DEFAULT_MAX_D
     `traces_of`, which shares the read — the walk is cheap and the three
     projections are not.
     """
-    return _traced(root, _index(workspace), max_depth)
+    return _traced(root, _index(workspace))
 
 
-def traces_of(workspace: Workspace, *, max_depth: int = DEFAULT_MAX_DEPTH) -> list[Trace]:
+def traces_of(workspace: Workspace) -> list[Trace]:
     """One trace per row of `roots`, in the table's own fixed order (NFR-1),
     over one read of the workspace."""
     index = _index(workspace)
-    return [_traced(root, index, max_depth) for root in roots_of(workspace)]
+    return [_traced(root, index) for root in roots_of(workspace)]
 
 
-def _traced(root: Root, index: _Index, max_depth: int) -> Trace:
-    if max_depth < 1:
-        raise ValueError(f"max_depth must be at least 1 to take a single step, got {max_depth}")
+def _traced(root: Root, index: _Index) -> Trace:
     steps: list[Step] = []
     # Expanded ONCE per trace, not once per path. A method reached by two routes
     # has its subtree shown at the first, and the second says `revisited` — the
@@ -220,7 +198,7 @@ def _traced(root: Root, index: _Index, max_depth: int) -> Trace:
     # exponential on an ordinary diamond and is the cost D01 gives as its reason
     # for not storing traces at all.
     expanded = {root.handler}
-    _walk(root.handler, 1, {root.handler}, expanded, steps, index, max_depth)
+    _walk(root.handler, expanded, steps, index)
     return Trace(
         root=root,
         steps=tuple(steps),
@@ -230,27 +208,63 @@ def _traced(root: Root, index: _Index, max_depth: int) -> Trace:
 
 def _walk(
     method: str,
-    depth: int,
-    path: frozenset[str] | set[str],
     expanded: set[str],
     steps: list[Step],
     index: _Index,
-    max_depth: int,
 ) -> None:
     """Depth-first over `method`'s own call sites, in control-flow order.
 
-    Recursion mirrors the shape being walked and is bounded by `max_depth`,
-    which is what keeps the interpreter's own stack out of the failure modes:
-    the walk cannot go deeper than the bound, so a pathological graph produces
-    a `depth_limit` step rather than a `RecursionError`.
+    **An explicit stack, and that is what let the depth bound go** (FR-6, F7 §8.1, W31).
+    The walk used to recurse and carry a `max_depth` of 64, whose own comment called it "a
+    safety bound, not a modelling one" — there for the recursion depth of the walk itself,
+    not for anything about the code. Measured across `mall-admin`,
+    `spring-petclinic-rest` and `jhipster-sample-app`: the deepest trace is **9** against
+    that 64, and no trace was ever truncated. So it was inert on every repository
+    available, and FR-6 says a trace should not be bounded by a counter at all.
+
+    **The bound could not simply be deleted, and that is why the stack came first.** While
+    it was there the recursion could not exceed 64 frames against an interpreter limit of
+    1000, so it was doing its safety job perfectly well; removing it from the recursive
+    form would have turned a stated, truncated answer into a `RecursionError` on a long
+    chain of distinct methods — which neither cycle detection nor `expanded` bounds. With
+    the stack the interpreter's limit is out of the failure modes entirely, so the walk
+    terminates where the evidence does: at a terminal, a cycle, or a revisit. Cycle and
+    revisit refusal stay because they are correctness — without them it would not finish.
+
+    **The order is preserved exactly, and it was verified rather than argued.** A recursive
+    pre-order visits a row, then everything that row leads to, then the next row. The stack
+    holds one FRAME per method being expanded, each keeping its own remaining rows in
+    source order; a row is taken from the front and, when it expands, the callee's frame is
+    pushed immediately — so the deepest open frame is always `stack[-1]` and the callee's
+    subtree is finished before the caller's next row is read. Checked against a faithful
+    reimplementation of the recursive form over 235 roots on the three repositories above:
+    identical step sequences, byte for byte.
+
+    `path` — the ancestors on the CURRENT route, which is what `cycle` is about — rides on
+    the frame rather than being reconstructed, because it differs per route while
+    `expanded` is per trace.
     """
-    for row in index.edges.get(method, ()):
+    # One frame per method being expanded: the rows it has left to visit, its depth, and
+    # the ancestors on the route that reached it.
+    # A deque per frame rather than a list: rows come off the FRONT, and `list.pop(0)`
+    # is linear, so a method with many call sites would cost O(sites²) to expand. Real
+    # fan-outs make that unmeasurable — mall-admin's widest trace is 48 steps — but the
+    # frame already pays a copy here, and `popleft` is the same copy without the square.
+    stack: list[tuple[str, int, frozenset[str], deque[dict[str, object]]]] = [
+        (method, 1, frozenset({method}), deque(index.edges.get(method, ())))
+    ]
+    while stack:
+        caller, depth, path, pending = stack[-1]
+        if not pending:
+            stack.pop()
+            continue
+        row = pending.popleft()
         callee = None if row["callee"] is None else str(row["callee"])
-        stop = _stop(callee, depth, path, expanded, max_depth)
+        stop = _stop(callee, path, expanded)
         steps.append(
             Step(
                 depth=depth,
-                caller=method,
+                caller=caller,
                 ordinal=int(str(row["ordinal"])),
                 invoke_kind=str(row["invoke_kind"]),
                 target=str(row["target"]),
@@ -262,7 +276,7 @@ def _walk(
                 target_kind=None if row["target_kind"] is None else str(row["target_kind"]),
                 returns=tuple(
                     index.returns.get(
-                        (method, int(str(row["ordinal"])), callee or ""),
+                        (caller, int(str(row["ordinal"])), callee or ""),
                         (),
                     )
                 ),
@@ -270,26 +284,29 @@ def _walk(
         )
         if stop is None and callee is not None:
             expanded.add(callee)
-            _walk(callee, depth + 1, set(path) | {callee}, expanded, steps, index, max_depth)
+            # Pushed immediately, which is what makes this pre-order: everything this
+            # callee leads to is visited before the caller's next row, exactly as the
+            # recursive form did.
+            stack.append((callee, depth + 1, path | {callee}, deque(index.edges.get(callee, ()))))
 
 
 def _stop(
     callee: str | None,
-    depth: int,
-    path: frozenset[str] | set[str],
+    path: frozenset[str],
     expanded: set[str],
-    max_depth: int,
 ) -> TraceStop | None:
     """Why this step was not expanded, or None where it was.
 
     Order is the answer's meaning, not an optimisation. The boundary is asked
-    first because it is a fact about the CODE and the other three are facts
+    first because it is a fact about the CODE and the other two are facts
     about the walk: a call that left the module is the terminal whether or not
     the walk had been there before. `cycle` outranks `revisited` because a
     callee on the current path is genuinely recursive and a reader is owed that
-    word specifically. `depth_limit` is last because it is the only one that
-    reports a LIMIT rather than the code, and reporting it over a cycle would
-    blame the bound for something the code did.
+    word specifically.
+
+    **There is no fourth answer since W31.** `depth_limit` was last here, "the only one
+    that reports a LIMIT rather than the code", and the bound it reported is gone: every
+    member left is a fact about the code or about a route through it.
     """
     if callee is None:
         return TraceStop.BOUNDARY
@@ -297,6 +314,4 @@ def _stop(
         return TraceStop.CYCLE
     if callee in expanded:
         return TraceStop.REVISITED
-    if depth >= max_depth:
-        return TraceStop.DEPTH_LIMIT
     return None

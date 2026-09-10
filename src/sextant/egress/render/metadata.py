@@ -30,9 +30,15 @@ KNOWN_GAPS = [
     # five names exactly one thing a reader can act on.
     "traces_are_reachability_not_execution",
     "structure_diagram_limited_to_contracts",
-    "trace_terminals_are_unclassified_and_cross_module_stops_look_third_party",
+    # *Renamed in W31 (spec ruling I3: a gap that NARROWS gets a narrower name).* W30
+    # narrowed the BEHAVIOUR and left this key and its sentence alone; both change here.
+    # Terminals
+    # are classified now — `Reaches` says `persistence (database)` where a JDK call says
+    # `unresolved` — so "terminals are unclassified" stopped being true. What is still
+    # true is the half W30 did not touch: a sibling build module's body exists somewhere
+    # and reads `boundary` here exactly like a third-party jar.
+    "cross_module_stops_look_third_party",
     "a_method_is_expanded_once_per_trace",
-    "trace_depth_is_bounded",
     "roots_are_declared_handlers_only",
     # *Renamed by F1 (spec ruling I3: a gap that closes retires BY NAME).*
     # Parent inheritance, `<dependencyManagement>`, imported BOMs and `${…}`

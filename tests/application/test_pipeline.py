@@ -132,6 +132,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("POST", "/v1/orders"),
         ("GET", "/v1/orders/{id}"),
         ("GET", "/v1/orders/{id}/{view}"),
+        # `SharedPathClients`: TWO callers on this one address, at two different hosts.
+        # One route here, two ROWS below — which is the point of the fixture. W27's
+        # outbound dedup keyed on wire identity alone and dropped the second caller
+        # outright, and no fixture had the shape that would have shown it.
+        ("GET", "/shared/path"),
         ("GET", "/v1/orders"),
         # The one endpoint whose request and response are both real payloads:
         # `OrderRequest` in, `ResponseEntity<OrderView>` out.
@@ -875,7 +880,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # W28 makes it 137: `RoutingConditionsController`'s three handlers on one address.
     # W29 makes it 139: two WebClient chains — one carrying headers, one whose url is
     # built in a lambda and stays honestly pathless (`OI-73`).
-    assert len(report.endpoints) == 139
+    # W27's REVIEW makes it 145, and all six are rows that were being dropped outright.
+    # The outbound dedup keyed on wire identity alone — `(protocol, direction, verb,
+    # path)` — with a `seen` set spanning every caller in the module, so a second caller
+    # on one address was `continue`d away with no row, no `peer` and no question. That is
+    # F5 §6.1 rule 1 unmet ("one row per (caller, target)"), and strictly worse than the
+    # `both` merge W27 deleted, which at least kept the caller. Two of the six are
+    # `SharedPathClients`, added to give the fixture the shape it lacked; the other four
+    # were already in the fixture and unseen — a second caller on `/v2/inventory/levels`,
+    # another on `/v2/inventory/reserve`, `EventProducers#sendKeyed`'s `order-events`,
+    # and a SOAP call to a different billing address.
+    assert len(report.endpoints) == 145
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -981,20 +996,24 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     assert search_row["path"] == "/v2/inventory/search"
     assert search_row["resolution"] == "resolved"
 
-    # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in
-    # its own synthetic method — the dataflow pass has to scan the
-    # `lambda$reserveAfterLevels$N` method, not just the enclosing method, to
-    # find it. Wire-identity dedup collapses it with `reserve()`'s own
-    # identical row (D02 §5's `derive_call_endpoints.sql` contract); the row
-    # that survives is whichever caller sorts first (`call_sites`' own
-    # `caller, ordinal` order), which is the lambda's — asserted here rather
-    # than assumed, so a resort silently changing this is caught. The numeric
-    # suffix is javac's per-class lambda counter, which different compiler
-    # versions assign in different orders, so only the stable stem is pinned.
-    [reserve_row] = [
+    # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in its own
+    # synthetic method — the dataflow pass has to scan the `lambda$reserveAfterLevels$N`
+    # method, not just the enclosing method, to find it.
+    #
+    # **Two callers, two rows** (F5 §6.1 rule 1). Until W27's review this collapsed with
+    # `reserve()`'s own identical row and the surviving one was "whichever caller sorts
+    # first" — a real caller deleted, and this comment used to say so in as many words
+    # while asserting the sort order rather than the rule. Both are genuine call sites and
+    # both stand. The numeric suffix is javac's per-class lambda counter, which different
+    # compiler versions assign in different orders, so only the stable stem is pinned.
+    reserve_rows = [
         e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
     ]
-    assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
+    assert len(reserve_rows) == 2
+    assert any("lambda$reserveAfterLevels$" in e["caller"] for e in reserve_rows)
+    # The signature hash is javac's, so only the member name is pinned — the same reason
+    # the lambda's counter above is not.
+    assert any("InventoryWebClient#reserve(sig_" in e["caller"] for e in reserve_rows)
 
     # Task 5: OrderController's two media-declaring routes fill consumes/
     # produces off their own `@GetMapping`/`@PostMapping` attributes (spec §4
@@ -1700,13 +1719,16 @@ def test_nothing_but_the_two_sse_routes_moves(
         # `searched`, whose url is built inside a `uri(Function)` lambda — that one
         # derives a row with `path` NULL and `resolution: unresolved`, which is the whole
         # of `OI-73`: the call is recorded and its address is honestly unread.
-        "http": 68,
+        # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
+        # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
+        # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
+        "http": 72,
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
         # row. Self-publish/self-consume is real, and so is a client calling somebody else's
         # copy of an address; `self_exchange` asks rather than deciding
-        "kafka": 25,
+        "kafka": 26,
         # `order-notifications`, published and subscribed here, is two rows since W27
         "pubsub": 7,
         "sqs": 7,
@@ -1721,11 +1743,11 @@ def test_nothing_but_the_two_sse_routes_moves(
         # `{http://orders.example.com/ws}placeOrderRequest` is two rows since W27 — the served
         # operation, and `BillingSoapClient`'s call to `${soap.billing.uri}`. They share a QName
         # because they share a payload TYPE, which is not identity
-        "soap": 6,
+        "soap": 7,
         "sse": 2,
         "websocket": 5,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 139
+    assert sum(counts.values()) == len(report.endpoints) == 145
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2148,26 +2170,34 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
 # --- Task 11: the producer catalogs, end to end, on real bytecode ---
 
 
-def test_kafka_templates_two_send_arities_dedup_into_one_outbound_row(
+def test_two_producers_of_one_topic_stay_two_rows_beside_its_consumer(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`kafkaTemplate.send("order-events", event)` (arity 2) and
-    `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both target the same
-    topic: the two `methods` rows' own dedup key (`protocol, direction, verb or "",
-    path`) collapses them to ONE outbound row. That dedup is within one direction and is
-    untouched by W27 — it is the "collapse only within one caller" half of F5 §6.1, which
-    was already true.
+    """`EventProducers#send` and `#sendKeyed` both publish to `order-events`, and
+    `OrderEventsListener#onEvent` consumes it: **three rows, two outbound and one
+    inbound**, and getting to three took correcting two separate merges.
 
-    What W27 changed is what happens next. This row used to be folded into Task 10's own
-    `order-events` INBOUND row (`OrderEventsListener#onEvent`) as `direction: both`. It is
-    not: the module publishing to a topic it also consumes is self-publish/self-consume,
-    which is REAL — and so is a client calling another service's copy of a shared address,
-    which is why a pass cannot decide between them. Both rows stand, each keeping its own
-    contract, and `self_exchange` asks the question.
+    This test used to be called `..._two_send_arities_dedup_into_one_outbound_row` and its
+    docstring called that dedup "the collapse only within one caller half of F5 §6.1,
+    which was already true". Both halves of that were wrong. `send` and `sendKeyed` are
+    two DIFFERENT methods — two callers — so the collapse was ACROSS callers, which rule 1
+    forbids outright, and W27's review measured it deleting a real producer here and in
+    three other places. Within one caller the dedup is real and still runs
+    (`test_call_engines.py::test_two_identical_calls_in_one_method_dedup_to_one_row`).
+
+    The inbound row stays separate for W27's own reason: a module publishing to a topic it
+    also consumes is self-publish/self-consume, which is REAL — and so is a client calling
+    another service's copy of a shared address, which is why a pass cannot decide between
+    them. `self_exchange` asks the question instead of a merge answering it.
     """
     _, report = resolved_fixture
     [inbound] = _messaging_rows(report, "kafka", "order-events", "inbound")
-    [outbound] = _messaging_rows(report, "kafka", "order-events", "outbound")
+    outbounds = _messaging_rows(report, "kafka", "order-events", "outbound")
+    assert sorted(row["caller"].split("#")[-1].split("(")[0] for row in outbounds) == [
+        "send",
+        "sendKeyed",
+    ]
+    outbound = next(row for row in outbounds if "#send(" in row["caller"])
 
     assert inbound["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
     assert inbound["caller"] is None
@@ -2993,7 +3023,9 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     # kafka metadata count. NOTHING consumes: the consumer rule resolved its
     # key, agreed across environments, and still stamped nothing, because
     # the class it named has no MIME to stamp.
-    assert len([e for e in kafka if e["produces"] == json_media]) == 10
+    # 11 since W27's review: `EventProducers#sendKeyed`'s `order-events` row, a second
+    # caller the outbound dedup had been deleting (F5 §6.1 rule 1).
+    assert len([e for e in kafka if e["produces"] == json_media]) == 11
     assert {e["consumes"] for e in kafka} == {None}
 
     # Untouched: every non-kafka row, including the HTTP rows that declare
@@ -3125,7 +3157,9 @@ def test_the_format_ladder_answers_every_live_row(
     # module serves, and `BillingSoapClient`'s call to `${soap.billing.uri}`, which the
     # merge published as one endpoint because they compose the same QName off the same
     # payload type.
-    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 6
+    # 7 since W27's review: a SOAP call to a different billing address, a second caller
+    # the outbound dedup had been deleting (F5 §6.1 rule 1).
+    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 7
 
     # Rung 2 — every HTTP route that declares a media type at all, in either
     # of the two ways a route can. THREE declare it on a mapping ANNOTATION;
@@ -3252,7 +3286,10 @@ def test_the_format_ladder_answers_every_live_row(
     # the same rung every other one does.
     # + 2 (W29): the two new WebClient chains, which reach the same rung whether or not
     # their address resolved — the ladder answers off the declared payload type.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 62
+    # + 4 (W27's review): the four http second callers the outbound dedup had been
+    # deleting. Each reaches the rung its surviving twin already reached — the ladder
+    # answers off the declared payload type, which a second caller of one address shares.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 66
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

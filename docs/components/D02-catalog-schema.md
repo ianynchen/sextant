@@ -3227,15 +3227,17 @@ one of three ways to recognise the callee, and **each exists because a real fram
 it** — measured on three repositories before any of them was written:
 
 - **`owner`** — the call lands on the library type itself. `EntityManager` is 82 of
-  `spring-petclinic-rest`'s terminals; `RedisTemplate` is 41 of `mall-admin`'s and is the
-  rule whose `target` is `cache` rather than `database`.
-- **`supertype`** — the owner implements a declared type, read from `type_hierarchy`
-  ([D01](D01-graph-schema.md) §3, W21). `jhipster-sample-app`'s repositories are its own
-  interfaces carrying no annotation at all; the class file says they implement
-  `JpaRepository`. **The match is transitive but stops at the first unscanned type**, so a
+  `spring-petclinic-rest`'s 102 classified terminals; `RedisTemplate` is 41 of
+  `mall-admin`'s 240 and is the rule whose `target` is `cache` rather than `database`.
+- **`supertype`** — the owner implements a declared type, read from the
+  `superclasses`/`implementations` FACTS in JVMS 5.4.3.3 order — **not** from the
+  `type_hierarchy` table, which the same pass writes after the edges, so reading it there
+  returned nothing at all. `jhipster-sample-app`'s repositories are its own interfaces
+  carrying no annotation; the class file says they implement `JpaRepository`, 68 of that
+  corpus's 70. **The match is transitive but stops at the first unscanned type**, so a
   catalog must name the level a USER extends: naming only Spring Data's base `Repository`
-  classified 2 of that corpus's 75, because `JpaRepository` comes back `scanned: false` and
-  has no rows of its own.
+  classified ZERO, because a framework's own interface has no facts here and the walk
+  never sees what it extends.
 - **`scanned_by`** — an annotation names PACKAGES and every type inside them qualifies.
   `mall-admin`'s MyBatis mappers carry no annotation; `@MapperScan({"com.macro.mall.
   mapper"})` on a config class is how MyBatis registers them, and that is 199 terminals.

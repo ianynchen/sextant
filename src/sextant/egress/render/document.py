@@ -90,23 +90,18 @@ _GAPS = [
     ),
     "The structure diagram covers contract types only: inheritance edges are not extracted.",
     (
-        "A trace stops where this workspace read no body, and nothing classifies "
-        "which kind of stop it is: a third-party library, the JDK, a MyBatis mapper "
-        "and a SIBLING BUILD MODULE all read `boundary`. The last of those is the "
-        "one that under-reports — a body exists somewhere, in a workspace this one "
-        "does not hold — and on a multi-module build it is where a response is "
-        "composed."
+        "A trace stops where this workspace read no body, and `Stop` says `boundary` "
+        "whether that body is a third-party library, the JDK, a data-access API or a "
+        "SIBLING BUILD MODULE. `Reaches` classifies the ones a catalog knows, so a "
+        "data-access call is no longer indistinguishable from a JDK one — but the "
+        "SIBLING MODULE is the case that under-reports and it is not separated: a body "
+        "exists somewhere, in a workspace this one does not hold, and on a multi-module "
+        "build it is where a response is composed."
     ),
     (
         "A method is expanded once per trace, not once per route to it: a second "
         "route to the same method reads `revisited` and its calls are shown at the "
         "first, so a path through a trace is not always followable to a terminal."
-    ),
-    (
-        "A trace's depth is bounded at 64 edges, which FR-6 says it should not be. "
-        "The bound is a safety limit rather than a modelling one and it is never "
-        "silent — the step says `depth_limit` and the Complete column answers — but "
-        "a module deeper than 64 loses everything past it."
     ),
     (
         "A root is a handler this module exposes or schedules. A functional route "
@@ -527,6 +522,26 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     "what is this endpoint called" in one document.
     """
     return _wire_address(endpoint["protocol"], endpoint["method"], endpoint["path"], redactor)
+
+
+# The ledger questions whose NULL verb is an ABSENCE rather than a verb the
+# analysis could not read. A `routing_conflict` between two verbless
+# `@RequestMapping`s is refused at EVERY verb, and `routing_conflicts._verbs_of`
+# files it once with no verb rather than eight times — so NULL there is how one
+# row says "all of them", and `_wire_address`'s `(unresolved)` would report a
+# verb as unread that was read perfectly well. The same distinction
+# `_VERB_OPTIONAL_PROTOCOLS` draws for a GraphQL resolver, drawn on the question
+# instead of the protocol because an `http` row is verbed for every other one.
+_ANY_VERB_QUESTIONS = frozenset({"routing_conflict"})
+
+
+def _question_identity(row: dict[str, object], redactor: Redactor) -> str:
+    """One `open_questions` row's wire identity — `_wire_identity`'s reading,
+    except for the questions above, whose absent verb renders as `any`."""
+    method = row["method"]
+    if method is None and str(row["question"]) in _ANY_VERB_QUESTIONS:
+        method = "any"
+    return _wire_address(row["protocol"], method, row["path"], redactor)
 
 
 def _wire_address(
@@ -1171,7 +1186,7 @@ def assemble_module_document(
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            item = _runs(f"`{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            item = _runs(f"`{_question_identity(row, redactor)}` — {question}: {rendered}")
             # One question, one single-item `MachineList`: a `beside-open-
             # question` verdict has to land right after THIS question and no
             # other, so the question needs its own section index to anchor
@@ -1344,15 +1359,19 @@ def _cell(value: object, render: Callable[[str], str]) -> str:
 #   every diagram's `Elides:`, and built into the diagram: there are no return
 #   arrows, because the walk records what a callee HANDS BACK and never when
 #   control comes back.
-# - **`terminal_kind` has no producer**, so nothing here classifies a
-#   terminal. A JDK call and a MyBatis mapper call both read `boundary`, and
-#   the `Call` column carries the FULL descriptor the compiler wrote so a
-#   reader can tell them apart themselves. Inventing the classification here
-#   would be derivation hiding in presentation, which the import-linter
-#   contract exists to forbid.
+# - **`Reaches` is read, not decided here** (W30). `terminal_kind` gained a
+#   producer — `resolve/terminals.py`, over catalog data — so this column
+#   renders what that pass wrote and classifies nothing itself. Inventing the
+#   classification here would be derivation hiding in presentation, which the
+#   import-linter contract exists to forbid; the note that used to stand here
+#   said `terminal_kind` had no producer at all, which stopped being true in
+#   the same commit that added this column.
 # - **Cross-module stops read as `boundary` too**, because no body was read in
 #   THIS workspace — which is the truth about what was measured and an
-#   under-report of what exists. Stated where the reader meets it.
+#   under-report of what exists. Stated where the reader meets it. `Reaches`
+#   does NOT separate them either: a sibling-module call and a third-party
+#   call both read `unresolved` unless a catalog names the type, so the `Call`
+#   column's full descriptor is still what a reader tells them apart by.
 # --------------------------------------------------------------------------
 
 _TRACE_HEADERS = (
@@ -1362,7 +1381,6 @@ _TRACE_HEADERS = (
     "Depth",
     "Steps",
     "Terminals",
-    "Complete",
     "Detail",
 )
 
@@ -1414,16 +1432,19 @@ _TRACE_PREAMBLE = (
         "reaches rather than why the walk stopped — so a data-access call now says "
         "`persistence (database)` or `persistence (cache)` where a JDK call says "
         "`unresolved`. `unresolved` means the terminal was examined and no catalog "
-        "claimed it, which on real repositories is most of them; the `Call` column still "
-        "carries the full descriptor the compiler wrote."
+        "claimed it, which on real repositories is most of them — 94-96% across the three "
+        "measured. It does NOT separate a sibling build module from a third-party "
+        "library: both read `unresolved` unless a catalog names the type, so the `Call` "
+        "column's full descriptor is still what tells them apart."
     ),
     (
         "`revisited` means the callee was expanded ELSEWHERE in this same trace and its "
         "own calls are shown at that first appearance: a method is expanded once per "
         "trace, not once per route to it, so a path through one of these tables is not "
         "always followable to a terminal. `cycle` means the callee is already on the "
-        "path from the root. `depth_limit` means the walk's safety bound stopped it, "
-        "and the `Complete` column answers that without a reader scanning for it."
+        "path from the root. There is no third reason a walk stops short of the "
+        "evidence: the depth bound retired with W31, so a trace ends where the code "
+        "does."
     ),
     (
         "`Value` is the value id the call site produced and `Returns` what the callee "
@@ -1489,7 +1510,6 @@ def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section
             _text(str(trace.depth)),
             _text(str(len(trace.steps))),
             _text(str(len(trace.terminals))),
-            _text("no — depth bound reached" if trace.truncated else "yes"),
             _text("below"),
         )
         for trace in traces
@@ -1863,11 +1883,6 @@ def _trace_elision(trace: Trace) -> str:
         parts.append(
             "Arrows whose callee is already on the path from the root — recursion, stated "
             f"and not followed: {stops[TraceStop.CYCLE]}."
-        )
-    if stops[TraceStop.DEPTH_LIMIT]:
-        parts.append(
-            "Arrows that reached the walk's depth bound, so everything past them is absent "
-            f"from this diagram: {stops[TraceStop.DEPTH_LIMIT]}."
         )
     return " ".join(parts)
 

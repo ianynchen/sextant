@@ -111,7 +111,9 @@ def test_every_step_of_the_walk_becomes_a_row():
         _step(ordinal=1),
         _step(ordinal=2, stop=TraceStop.REVISITED),
         _step(ordinal=3, stop=TraceStop.CYCLE),
-        _step(ordinal=4, stop=TraceStop.DEPTH_LIMIT),
+        # Four stop reasons, not five: `depth_limit` retired with the bound it reported
+        # (W31). An expanded step with no stop is the fourth shape and is already here.
+        _step(ordinal=4),
     )
     assert len(_step_table(trace).rows) == 5
     # `sequenceDiagram`, three lifelines (Api, Integer, Service), five arrows.
@@ -320,10 +322,12 @@ def test_an_ordinary_call_names_one_descriptor_not_the_same_one_twice():
 
 
 def test_a_boundary_step_names_the_target_the_compiler_wrote():
-    """A terminal's whole identity is its descriptor: `terminal_kind` has no
-    producer, so nothing here says whether `com/macro/mall/dao/OmsOrderDao` is
-    a database and `java/lang/Integer` is not. The package is what lets a
-    reader tell them apart, which is why this column is never shortened."""
+    """A terminal's whole identity is its descriptor, and the `Reaches` column beside it
+    does not replace that. W30 gave `terminal_kind` a producer — `com/macro/mall/dao/
+    OmsOrderDao` now reads `persistence (database)`, through `@MapperScan`'s package list —
+    but only where a catalog claims the type: `java/lang/Integer` reads `unresolved`, and
+    so does every sibling-module and third-party call no rule names. The package is what
+    lets a reader tell THOSE apart, which is why this column is never shortened."""
     trace = _trace(
         _step(target="java/lang/Integer#intValue().", callee=None, stop=TraceStop.BOUNDARY)
     )
@@ -395,14 +399,16 @@ def test_the_elision_counts_each_kind_of_stop_the_walk_recorded():
         _step(ordinal=1, callee=None, stop=TraceStop.BOUNDARY),
         _step(ordinal=2, stop=TraceStop.REVISITED),
         _step(ordinal=3, stop=TraceStop.CYCLE),
-        _step(ordinal=4, stop=TraceStop.DEPTH_LIMIT),
+        _step(ordinal=4),
     )
     elides = _diagram(trace).elides or ""
 
     assert "which the walk did not enter: 2." in elides
     assert "not repeated here: 1." in elides
     assert "stated and not followed: 1." in elides
-    assert "absent from this diagram: 1." in elides
+    # There is no fourth clause since W31: `depth_limit` was the one that counted arrows
+    # a LIMIT removed rather than the code, and the bound it reported is gone.
+    assert "absent from this diagram" not in elides
 
 
 def test_a_stop_the_walk_did_not_record_is_not_mentioned_at_all():

@@ -23,7 +23,7 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 | [COVERAGE.md](COVERAGE.md) — framework and protocol reach, gaps tiered A/B/C | delivered | [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), NFR-9 |
 | [coverage/](COVERAGE.md#9-beyond-the-jvm) — Go, Rust, Python, TypeScript, Android, iOS | delivered | REQUIREMENTS § Scope |
 | Phase 1 vertical slice — fixture repo to endpoint catalog, byte-identical | delivered | [FR-1](REQUIREMENTS.md#fr-1--module-discovery), [FR-2](REQUIREMENTS.md#fr-2--fact-extraction), [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), [FR-17](REQUIREMENTS.md#fr-17--coverage-reporting), [FR-20](REQUIREMENTS.md#fr-20--command-surface), NFR-1, NFR-5, NFR-10, NFR-11 |
-| 2Q — a rendered trace and a machine sequence diagram per root, in `architecture.md` and `architecture.html` | in-progress | [FR-6](REQUIREMENTS.md#fr-6--traces), [FR-7](REQUIREMENTS.md#fr-7--diagrams) — the walk and the rendering ship; FR-6's "not bounded by depth, stops only at a terminal" is not met (`open-issues.md` OI-27) and FR-7's diagrams draw no `alt`/`opt`/`loop`, which [D00](components/D00-fact-schema.md) §5 prices as a later `ordinal` enrichment |
+| 2Q — a rendered trace and a machine sequence diagram per root, in `architecture.md` and `architecture.html` | in-progress | [FR-6](REQUIREMENTS.md#fr-6--traces), [FR-7](REQUIREMENTS.md#fr-7--diagrams) — the walk and the rendering ship; FR-6's "not bounded by depth, stops only at a terminal" is MET as of W31 — the walk is an explicit stack, the depth bound is gone and `OI-27` is closed
 
 ## Approvals
 

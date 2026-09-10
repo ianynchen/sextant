@@ -189,7 +189,7 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # its wire contract, and the `PayloadShapeController` that returns it beside the
     # three paged responses no jar here can expand.
     # + 1 (W28): `RoutingConditionsController`.
-    assert metadata["coverage"]["documents"] == 129
+    assert metadata["coverage"]["documents"] == 130
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

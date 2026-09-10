@@ -4712,11 +4712,22 @@ def test_a_verbless_chain_derives_a_null_method_resolved_row(tmp_path: Path):
     assert endpoint["resolution"] == "resolved"
 
 
-def test_two_identical_resolved_verbless_chains_dedup_to_one_row(tmp_path: Path):
-    """Two separate chains — different callers, same wire identity — collapse
-    to one row: a verbless resolved identity dedups on `(protocol,
-    direction, path)` alone, there being no method to tell them apart by
-    (mirroring single_call's own verbless dedup rule)."""
+def test_two_callers_on_one_verbless_address_stay_two_rows(tmp_path: Path):
+    """**Two callers are two rows**, and this test asserted the opposite until W27's
+    review measured it.
+
+    F5 §6.1 rule 1 is "outbound: never merge — one row per (caller, target), collapse only
+    WITHIN one caller, where both sides are observable". The key here spanned every caller
+    in the module, so the second chain was `continue`d away: no second row, no `peer`, no
+    gap row, no question — strictly worse than the `both` merge W27 deleted, which at
+    least carried the caller onto the row that survived. Measured through the shipped
+    `spring-resttemplate` catalog at the time: two callers on `GET /shared/path` at two
+    hosts produced one row. Six rows came back across the fixture when the key gained
+    `caller` and `peer`, four of them calls to genuinely different addresses.
+
+    Dedup within ONE caller still happens, which is what the test below pins: a chain
+    reached twice by two arities is one row.
+    """
     first_caller = "com/acme/messaging/Client#publishFirst()."
     second_caller = "com/acme/messaging/Client#publishSecond()."
     facts = [
@@ -4728,9 +4739,13 @@ def test_two_identical_resolved_verbless_chains_dedup_to_one_row(tmp_path: Path)
     rows = [e for e in workspace.query("endpoints") if e["path"] == "orders.deleted"]
     workspace.close()
 
-    assert len(rows) == 1
-    assert rows[0]["method"] is None
-    assert rows[0]["resolution"] == "resolved"
+    assert len(rows) == 2
+    assert sorted(str(row["caller"]).split()[-1] for row in rows) == [
+        first_caller,
+        second_caller,
+    ]
+    assert {row["method"] for row in rows} == {None}
+    assert {row["resolution"] for row in rows} == {"resolved"}
 
 
 def test_a_verbless_unresolved_row_never_dedups_with_its_twin(tmp_path: Path):

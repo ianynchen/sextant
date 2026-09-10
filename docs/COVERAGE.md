@@ -814,11 +814,16 @@ That knowledge is catalog data now (D02 §2j), and the classification is read.
 
 | Corpus | terminals | classified | breakdown |
 |---|---|---|---|
-| `mall-admin` | 5,352 | **240** (4%) | 199 `database`, 41 `cache` |
-| `spring-petclinic-rest` | 2,074 | **102** (5%) | 102 `database` |
-| `jhipster-sample-app` | 1,141 | **70** (6%) | 70 `database` |
+| `mall-admin` | 5,352 | **240** (4%) | 199 `database` (scanned package), 41 `cache` (owner) |
+| `spring-petclinic-rest` | 2,074 | **102** (5%) | 102 `database` — 82 `EntityManager`, 17 `ResultSet`, 3 `JdbcTemplate` |
+| `jhipster-sample-app` | 1,141 | **70** (6%) | 70 `database` — 68 supertype, 2 `EntityManager` |
 
-**The remaining ~95% is the point, not a shortfall.** It is `StringBuilder`, `Object`,
+These are the numbers `call_edges` holds, re-measured whole for W30's review, which found
+five published figures disagreeing with each other across this file, the catalog, D00, D02
+and the module. Where any other document still disagrees, this table and
+`resolve/terminals.py` were corrected together from one run and the other is stale.
+
+**The remaining 94-96% is the point, not a shortfall.** It is `StringBuilder`, `Object`,
 `List`, `Iterator` — ordinary library calls, and they read `unresolved`, which says *this is
 a terminal we examined and could not classify*. NULL means something else entirely: the
 edge is not a terminal at all, because its callee's body was read.
@@ -835,20 +840,34 @@ edge is not a terminal at all, because its callee's body was read.
   directly.
 
 **Two things this cost to get right, both found by measuring rather than reasoning.**
-Naming Spring Data's base `Repository` classified **2 of jhipster's 75**: the supertype walk
-reads `type_hierarchy`, which holds only what this workspace SCANNED, and `JpaRepository`
-comes back `scanned: false` with no rows of its own — so a catalog must name the level a
-user actually extends. And the first version read `type_hierarchy` before that table was
-written, since the same pass writes both and writes the edges first; it reads the facts the
-table is built from instead.
+Naming Spring Data's base `Repository` classified **zero** of jhipster's: the supertype
+walk ends at the first UNSCANNED type, and a framework's own interface has no facts here,
+so the walk never sees what it extends — a catalog must name the level a user actually
+extends. And the first version read the `type_hierarchy` TABLE, which the same pass writes
+after the edges, so it returned nothing at all; it reads the `superclasses`/
+`implementations` facts that table is built from instead, in JVMS 5.4.3.3 order. Three
+documents and the catalog itself still credited `type_hierarchy` after that fix and have
+been corrected.
+
+**Eight of the nine declared supertypes are unmeasured.** `JpaRepository` is the only one
+any corpus reaches; the other eight are the levels Spring Data's own documentation tells a
+user to extend. That is a considered guess at the shape, recorded as one.
 
 **`java.sql.Date` is deliberately unclassified**, beside `java.sql.ResultSet` which is not.
 Both are in the same package and both are terminals in `spring-petclinic-rest`. One is an
 API that reaches a store and one is a date. The package is not the evidence.
 
-**Five of the eight members still have no producer** — `returns`, `ends_silently`, `throws`,
-`async_handoff` and `cycle` — because no shipped catalog declares a rule that mints one.
-`outbound_call` is not minted either: an outbound endpoint is already its own row.
+**Six of the eight members have no producer, and for two different reasons** (`OI-74`).
+`outbound_call`, `throws` and `async_handoff` are one catalog rule away — an `owner` rule
+naming `ExecutorService` would mint `async_handoff` today, and none is declared, so all
+twelve shipped rules say `persistence`. `cycle`, `returns` and `ends_silently` are
+unreachable BY CONSTRUCTION and no rule can change that: a cyclic edge has a non-NULL
+`callee`, so `classify` returns NULL for it, and the other two describe how a BODY exits
+while every catalog route is a predicate on the callee's TYPE.
+
+`TargetKind.file` has no producer either, and it has live candidates:
+`io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are both called on `mall-admin` and
+both read `unresolved`.
 
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)
 
@@ -979,11 +998,26 @@ calls keeps only the handler's declared contract, discarding the client's where 
 differ. There is no merge to discard it any more — each row keeps its own — so the gap is
 gone rather than narrowed, and nothing takes its place.
 
-**The other half of F5 §6.1 was already true**, which measuring first is what showed:
-"outbound is never merged — one row per (caller, target), collapse only within one caller"
-is what `derive_endpoints.sql`'s `unioned` already does. Its `GROUP BY ALL` includes
-`caller` and `peer`, so two callers reaching one path have always been two rows, and no
-other pass merges outbound rows.
+**The other half of F5 §6.1 was NOT already true, and W27 published that it was.** The
+claim rested on `derive_endpoints.sql`'s `unioned`, whose `GROUP BY ALL` does include
+`caller` and `peer` — but that is the ANNOTATION-DRIVEN path, and every outbound HTTP call
+in the estate comes from the call-site engines, which keyed on
+`(protocol, direction, verb, path)` with a `seen` set spanning the whole module.
+
+Measured: two callers, two hosts (`alpha.internal`, `bravo.internal`), one path — **one
+row**, with the second caller dropped outright. No row, no peer, no gap row, no question.
+That is RC-5 again — identity compared without `peer` — in a second location, and with a
+worse failure mode than the merge it replaced: the merge at least carried the caller onto
+the surviving row.
+
+`caller` and `peer` are in the key now, in `single_call`, in `fluent` and in
+`derive_call_endpoints.sql`'s cross-batch guard. "Collapse only within one caller, where
+both sides are observable" holds: one method calling one target twice is still one row.
+**Four rows the fixture had been losing came back** — a second caller on
+`/v2/inventory/levels` and on `/v2/inventory/reserve`, `EventProducers#sendKeyed`'s own
+`order-events` publish, and a SOAP call to a DIFFERENT billing address that had been
+collapsing into the first. `fixtures/orders-service`'s `SharedPathClients` now carries the
+shape nothing in six repositories had.
 
 ### 3a-iv. A payload whose contract is in its accessors, not its fields (F4 §5.2)
 
@@ -2806,7 +2840,7 @@ which point these become roots with no change here — `docs/open-issues.md` OI-
 | **A sibling build module.** A call into another module of the same reactor leaves for a workspace this one does not hold | included in the 1,966 above, and **indistinguishable from it** — `CommonPage#restPage` and `CommonResult#success`, the two calls that compose `/order/list`'s response, are both this | Correct in that no body was read here, incomplete in that a body exists somewhere. Joining the two is `Bundle`/`Link` work, not this walk's. **Falsified by** a service that delegates real logic to a sibling module and shows a one-hop trace |
 | **A cycle.** The callee is already on the path from the root | 1 trace, reachable only through a lambda body (`UmsMenuServiceImpl#covertMenuNode`, a recursive menu tree) | Not a gap: recursion is real code, so the walk states it and stops. Following it is the only alternative and it does not terminate |
 | **A method already expanded elsewhere in the same trace** | 40 steps | Its subtree is shown at its first occurrence. Expanding per route copies every shared subtree once per path that reaches it, which is the cost D01 gives as its reason for a trace being a walk rather than a stored table |
-| **The depth bound** | **0 of 160** — the deepest trace is 5 against a bound of 64 | A safety bound, not a modelling one, and it is never silent: the step says `depth_limit` and `Trace.truncated` answers without a reader scanning the steps |
+| ~~**The depth bound**~~ | **GONE, W31** | It never fired: the deepest trace is **9 edges** across `mall-admin` (160 traces), `spring-petclinic-rest` (37) and `jhipster-sample-app` (38), against a bound of 64. This row said 5, measured on mall-admin alone and stale. The walk is an explicit stack now, so nothing needs a counter to stay finite and FR-6's "not bounded by depth" is met (`OI-27` closed) |
 | **A `dynamic` site that creates no body** | 56 of `mall-admin`'s 74 `invokedynamic` sites | String concatenation compiles to one whose bootstrap is a compiler artifact rather than a call the program makes. An edge to it would put a platform factory into a trace at every string a method builds |
 
 **A trace is reachability, never execution**, and three consequences of that belong to a
@@ -2817,13 +2851,14 @@ runs later, elsewhere, if at all.
 
 **What "reaches a terminal" counts, and why our number differs from the roadmap's.** Every
 one of `mall-admin`'s 160 roots reaches a boundary, because a call into the JDK is a
-boundary exactly as a call into a mapper is — this walk does not CLASSIFY a terminal, and
-`terminal_kind` has no producer for that reason (D00 §4). The roadmap's "158 of 160 reach a
-real terminal (DB / cache / object store)" is a classified count, and it reproduces exactly
-when the classification is applied by hand to what the walk returns: **155 roots reach a
-mapper or DAO terminal**, three more reach an object-store client (`io/minio/MinioClient`,
-`com/aliyun/oss/OSSClient`), and the two that reach neither are `GET /admin/refreshToken`
-and `POST /aliyun/oss/callback` — the same two the roadmap names, verified in source.
+boundary exactly as a call into a mapper is — the WALK does not classify a terminal, and
+`Stop` is the only thing it decides. The roadmap's "158 of 160 reach a real terminal (DB /
+cache / object store)" is a classified count. It was reproduced by hand before W30 and the
+classification is read now (§3b-i): **155 roots reach a mapper or DAO terminal**, three
+more reach an object-store client (`io/minio/MinioClient`, `com/aliyun/oss/OSSClient` —
+still `unresolved`, since no rule names them and `TargetKind.file` has no producer,
+`OI-74`), and the two that reach neither are `GET /admin/refreshToken` and `POST
+/aliyun/oss/callback` — the same two the roadmap names, verified in source.
 
 **Values through library code** are unchanged by any of this: `stream().map(f).collect()`
 leaves for the JDK and comes back, the `collect` result is visible, per-element provenance
@@ -2834,7 +2869,8 @@ is not.
 own row, each is bracketed on the arrow in the sequence diagram, and each is counted in that
 diagram's `Elides:` line. The one that is still incomplete rather than merely stated is the
 sibling-module boundary: nothing in the rendered document distinguishes it from a
-third-party one, because nothing anywhere classifies a terminal, so the section says so in
+third-party one. `Reaches` (W30) does not close it either — both read `unresolved` unless a
+catalog names the type, and no catalog names a sibling module — so the section says so in
 prose and leaves the full descriptor in the `Call` column for a reader to judge.
 
 **What the rendered section does NOT do, measured the same way.** No step is filtered — all

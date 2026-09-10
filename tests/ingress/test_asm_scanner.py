@@ -152,6 +152,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "SeamController.jsonl",
         "SecondSplitter.jsonl",
         "SecretRepository.jsonl",
+        "SharedPathClients.jsonl",
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
@@ -201,7 +202,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # is in its accessors, and the `PayloadShapeController` that returns it.
     # 116 since W28: `RoutingConditionsController`, three handlers on one path and verb
     # separated by `params` and `headers` — the case no corpus here had.
-    assert report.documents == 116
+    # 117 since W27's review: `SharedPathClients`, two callers hitting ONE address at two
+    # hosts. The fixture had no such pair, which is why an outbound dedup that dropped the
+    # second caller outright sat here undetected.
+    assert report.documents == 117
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -331,6 +335,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "SeamController.jsonl",
         "SecondSplitter.jsonl",
         "SecretRepository.jsonl",
+        "SharedPathClients.jsonl",
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",

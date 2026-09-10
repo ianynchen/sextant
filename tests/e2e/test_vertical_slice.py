@@ -462,11 +462,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # `uri(Function)` lambda and therefore derives with `path` NULL and
         # `resolution: unresolved` — the call recorded, its address honestly unread
         # (`OI-73`).
-        "http": 25,
+        # 29 since W27's review: four second callers the outbound dedup had been
+        # deleting outright (F5 §6.1 rule 1).
+        "http": 29,
         "jms": 3,
-        "kafka": 10,
+        "kafka": 11,
         "pubsub": 4,
-        "soap": 2,
+        # 3: `BillingSoapClient#placeAt` calls a DIFFERENT host with the same payload
+        # QName, and was being dropped as a duplicate of `#place`.
+        "soap": 3,
         "sqs": 3,
         "websocket": 2,
     }
@@ -634,7 +638,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # served operation to a call at a different address.
     # W28: +3 inbound — 100 + 3 = 103. W29: +2 outbound — 47 + 2 = 49, for a
     # 152-endpoint total.
-    assert rows == [("inbound", 103), ("outbound", 49)]
+    # 55 outbound since W27's review: six second callers the dedup had been deleting
+    # (F5 §6.1 rule 1). Inbound is untouched — that key always carried the handler.
+    assert rows == [("inbound", 103), ("outbound", 55)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1124,14 +1130,24 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     stubbed = [row for row in soap if row["catalog_id"] == "jakarta-jws-client"]
     assert [row["path"] for row in stubbed] == ["{http://billing.example.com/ws}stubCharge"]
     assert all("com.example/orders-soap-client" in str(row["caller"]) for row in stubbed)
-    # Exactly one soap row written IN THIS MODULE carries a caller.
+    # TWO soap rows written in this module carry a caller, and until W27's review there
+    # was one. `BillingSoapClient` calls `marshalSendAndReceive` twice — `place()` on the
+    # template's default URI, `placeAt()` on a literal `http://billing.example.com/ws/
+    # direct` — same payload QName, DIFFERENT HOSTS. The outbound dedup keyed on wire
+    # identity without `caller` or `peer`, so `placeAt` was dropped outright: a call to
+    # another host, gone from the bundle with nothing saying so. F5 §6.1 rule 1 is one row
+    # per (caller, target), and `peer` is what makes the target of an outbound row.
     called = [
         row
         for row in soap
         if row["caller"] is not None and "com.acme/orders-service" in str(row["caller"])
     ]
-    assert len(called) == 1
-    [place] = called
+    assert len(called) == 2
+    assert sorted(str(row["peer"]) for row in called) == [
+        "${soap.billing.uri}",
+        "http://billing.example.com/ws/direct",
+    ]
+    [place] = [row for row in called if row["peer"] == "${soap.billing.uri}"]
     assert place["path"] == "{http://orders.example.com/ws}placeOrderRequest"
     assert place["direction"] == "outbound"
     assert place["method"] is None
@@ -1162,11 +1178,22 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # (`jakarta-jws-client.yml` says so in as many words), so there is no
     # expression for the join to substitute — which is a different thing from
     # an expression it substituted nothing into. It sorts first on `path`.
+    # `placeAt`'s literal peer rides along in BOTH environments unchanged, which is what
+    # a literal means: there is no expression for the join to substitute. It was invisible
+    # here until W27's review, dropped as a duplicate of `place` on wire identity alone.
+    #
+    # It sorts AFTER the resolved one though its value sorts before — `resolved_peers`
+    # orders on the raw `peer` column, where `${soap.billing.uri}` beats
+    # `http://billing.example.com/ws/direct` on the leading `$`. Written out rather than
+    # sorted here, because the ordering is the query's promise (NFR-1) and a test that
+    # re-sorted would stop checking it.
     assert peers == [
         ("default", None, None),
         ("default", "http://billing.internal.example.com/ws", None),
+        ("default", "http://billing.example.com/ws/direct", None),
         ("prod", None, None),
         ("prod", "http://billing.prod.internal.example.com/ws", None),
+        ("prod", "http://billing.example.com/ws/direct", None),
     ]
 
 
@@ -1406,7 +1433,7 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # with no fields at all, and the controller that returns it beside three paged
     # responses whose envelope nothing here can expand.
     # + 1: W28's `RoutingConditionsController`.
-    assert (None, 128) in origins
+    assert (None, 129) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

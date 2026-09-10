@@ -221,7 +221,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # unresolved-is-an-answer). The key is the identity columns, never the
     # `resolution` column — a row can be `unresolved` because some OTHER
     # declared capture failed (I1) and still dedup on the path it did read.
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
     for site in call_sites:
         if site["owner"] not in owners:
             continue
@@ -474,7 +474,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # no shipped row declares its own `direction`, so `row_direction`
             # is always `catalog.direction` there too.
             if path is not None and (verb is not None or verbless):
-                key = (catalog.protocol, row_direction, verb or "", path)
+                # F5 §6.1 rule 1 (W27 fix): `caller` and `peer` are IN the key. Without
+                # them `seen` spans the whole module, so a second caller reaching one
+                # path was dropped outright — measured on a two-caller probe, two hosts
+                # (`alpha.internal`, `bravo.internal`) and one path derived ONE row with
+                # `bravo` gone: no row, no peer, no gap, no question. That is the RC-5
+                # defect W27 removed from the inbound/outbound merge, in this engine, and
+                # with a worse failure mode — the merge at least carried the caller onto
+                # the surviving row.
+                #
+                # "Collapse only within one caller, where both sides are observable"
+                # (§6.1): one method calling one target twice is still one row, because
+                # the caller and the peer are equal there.
+                key = (catalog.protocol, row_direction, verb or "", path, caller, peer)
                 if key in seen:
                     continue
                 seen.add(key)

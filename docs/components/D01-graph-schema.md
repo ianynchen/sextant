@@ -103,8 +103,23 @@ here" used to be one word, and one of the three was false.
 
 **`call_edges`** carries `caller`, `ordinal` (the call site's control-flow position, which
 is what gives a walk its nesting), `invoke_kind`, `target`, `callee`, `result`,
-`resolution` and `evidence`. One row per (call site, candidate callee); a site whose
-dispatch narrowed to several bodies is several rows, none picked.
+`resolution`, `evidence`, and — since W30 — `terminal_kind` and `target_kind`. One row per
+(call site, candidate callee); a site whose dispatch narrowed to several bodies is several
+rows, none picked.
+
+- **`terminal_kind`/`target_kind` are [D00](D00-fact-schema.md) §4's classification of what
+  the call REACHES**, and both are NULL on a row that is not a terminal — an edge whose
+  callee's body was read is expanded by the walk, so there is nothing to classify and
+  `unresolved` there would say a terminal was examined and could not be named. A terminal
+  no catalog claims reads `unresolved`, which on the measured corpora is most of them:
+  `StringBuilder`, `Object`, `List`. See `resolve/terminals.py`.
+- **`evidence` describes the EDGE, not those two columns.** The call site, the descriptors
+  and the hierarchy are what the compiler wrote into the class files, and `compiler` says
+  so. The classification beside them is read from catalog YAML ([D02](D02-catalog-schema.md)
+  §2j) — every non-`unresolved` value in `terminal_kind` is a catalog's statement about a
+  library type, never something a class file said. One column cannot carry two provenances,
+  and the edge is the primary fact, so `evidence` stays the edge's and this is where the
+  other half is written down.
 
 - **`target` is bare and `callee` is module-prefixed, on purpose.** `target` is what the
   compiler wrote at that line — what a reader sees in the source — and `callee` is the
@@ -569,15 +584,17 @@ with no children is a method that calls nothing):
 | `boundary` | The workspace read no body for the callee — the ruled third-party boundary, where a trace stops |
 | `cycle` | The callee is already on the path from the root. Recursion is real code: it is stated, not followed |
 | `revisited` | The callee was expanded elsewhere in this trace; its subtree is shown at its first occurrence |
-| `depth_limit` | The bound was reached — **never silently**, and `Trace.truncated` answers it without a reader scanning the steps |
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the
 sense of a matched outbound endpoint — and three of its members need framework knowledge no
-pass has applied at a call site: a data-access call is `persistence` only to something that
-knows the callee is one. `terminal_kind` therefore still has no producer, and publishing a
-guess under its name would be a classification a reader takes as measured. `TraceStop`
-answers a question the walk can answer entirely from what it did.
+pass could apply at a call site on its own: a data-access call is `persistence` only to
+something that knows the callee is one. W30 supplied that knowledge as catalog data (D02
+§2j), so `terminal_kind` HAS a producer now and this paragraph's older claim that it never
+would is struck. The two still answer different questions on one row: `TraceStop` says why
+the WALK stopped, decided entirely from what the walk did, and `terminal_kind` says what
+the CALLEE is, decided entirely from what a catalog declares. A JDK call and a MyBatis
+mapper call both stop the walk at `boundary`; only one of them is `persistence`.
 
 **Reachability, never execution**, and the walk is weaker than it looks in three specific
 ways a reader must be told: branches are not distinguished (two `return` statements are two
@@ -585,12 +602,14 @@ possible answers, an `if` contributes both sides); a `narrowed` step walks every
 and picks none; and a `dynamic` step names a body created at that line rather than called
 at it.
 
-**Bounded twice, and neither bound is a modelling decision.** A method is expanded at most
-once per trace, which makes the walk finite on its own; the depth bound
-(`DEFAULT_MAX_DEPTH`, 64) covers the one shape that does not — a long chain of distinct
-methods — and the interpreter's own stack with it. Measured on `macrozheng/mall`'s
-`mall-admin`, the deepest of 160 traces is 5, so the bound is inert on real code, which is
-what a safety bound should be.
+**Finite without a bound, and it was bounded twice until W31** (F7 §8.1). A method is
+expanded at most once per trace, which makes the walk finite on its own; the one shape that
+did not cover — a long chain of distinct methods — used to be handled by a depth bound of
+64, which also kept the recursion off the interpreter's stack. The walk is an explicit
+stack now, so neither job is left: it terminates where the evidence does, which is what
+FR-6 asks for. Measured before the bound went, the deepest trace is **9 edges** across
+`mall-admin` (160 traces), `spring-petclinic-rest` (37) and `jhipster-sample-app` (38) —
+it was inert on every repository available.
 
 **Cross-module depth reads as `boundary` and is incompletely so.** A call into a sibling
 build module leaves for a workspace this one does not hold, so no body was read here —

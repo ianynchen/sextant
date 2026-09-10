@@ -252,6 +252,23 @@ class TerminalKind(StrEnum):
 
     `unresolved` is the honest member: a terminal the catalogs could not classify. It is
     not the same as NULL, which means the edge is not a terminal at all.
+
+    **Two of the eight have a producer, and that is stated rather than glossed** (§5.3,
+    GUIDELINES §2, the `RootKind` precedent above). `persistence` and `unresolved` are
+    written; the other six are not, and they are absent for two different reasons that a
+    reader has to be able to tell apart:
+
+    * `outbound_call`, `throws` and `async_handoff` are one catalog rule away. An `owner`
+      rule naming `ExecutorService` would mint an `async_handoff` today, and no shipped
+      catalog declares one — all twelve rules in `spring-web.yml` say `persistence`.
+    * `cycle`, `returns` and `ends_silently` are unreachable BY CONSTRUCTION, and no
+      catalog can change that. A cyclic edge has a non-NULL `callee`, so
+      `resolve/terminals.classify` returns NULL for it and always will; the other two
+      describe how a BODY exits, while all three catalog routes are predicates on the
+      callee's TYPE. Producing them needs a different mechanism, not a different rule.
+
+    Recorded as `OI-74`. The members stay because a reader of `call_edges` branches on the
+    value, not on which values happen to be reachable this release.
     """
 
     OUTBOUND_CALL = "outbound_call"
@@ -269,6 +286,11 @@ class TargetKind(StrEnum):
 
     A sub-field rather than three members of `TerminalKind`, so that splitting the kind
     later is a rendering choice rather than a re-index — D00's own wording, kept.
+
+    **`FILE` has no producer** (§5.3, and `TerminalKind`'s note above). It is the first of
+    the three a catalog rule could mint — `io.minio.MinioClient` and `com.aliyun.oss.
+    OSSClient` are both live on `mall-admin` and both read `unresolved` today — and none
+    is declared. `OI-74`.
     """
 
     DATABASE = "database"
@@ -291,9 +313,17 @@ class TraceStop(StrEnum):
     knowledge no pass has applied at a call site: a data-access call is
     `persistence` only to something that knows the callee is one, and nothing
     here does. Publishing a guess under that name would be a classification a
-    reader takes as measured. These four members answer a question the walk can
+    reader takes as measured. The members here answer a question the walk can
     answer entirely from what it did: it is a property of the WALK, never of the
     callee, and every one of them is decided without reading a catalog.
+
+    **Three members, and there were four.** `depth_limit` retired with the bound it
+    reported (F7 §8.1, W31): the walk is an explicit stack now and terminates where the
+    evidence does, so every member left is a fact about the code or about a route through
+    it rather than about a limit this system imposed. Measured before removing it — the
+    deepest trace is **9 edges** across `mall-admin` (160 traces), `spring-petclinic-rest`
+    (37) and `jhipster-sample-app` (38), against a bound of 64, and no trace was ever
+    truncated.
 
     A step with no stop reason was expanded. A step that was expanded and has no
     children is a method whose body this workspace read and which calls nothing
@@ -312,11 +342,6 @@ class TraceStop(StrEnum):
     # copy a shared subtree once per route that reaches it, which is the cost
     # D01 gives as the reason a trace is a walk rather than a stored table.
     REVISITED = "revisited"
-    # The walk's depth bound was reached. **The one member that reports a limit
-    # rather than the code**, and it exists so that a bound is never applied
-    # silently: a truncated trace that looked complete would be an under-report
-    # with nothing saying so.
-    DEPTH_LIMIT = "depth_limit"
 
 
 _RANKS = {Evidence.HUMAN: 90, Evidence.LLM: 10}

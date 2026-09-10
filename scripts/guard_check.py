@@ -1222,21 +1222,6 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "trace.a-depth-bound-reached-is-said-out-loud": Guard(
-        what="a step the depth bound refused carries `depth_limit`, so `Trace.truncated` "
-        "can answer whether what a caller holds is the whole walk",
-        why="a bound that fires without saying so is an under-report with nothing to notice "
-        "it. The deepest steps read as ordinary leaves, `truncated` answers False, and every "
-        "trace on a module deeper than the bound silently loses everything past it — the "
-        "same shape as a trace that stops at a lambda, with a switch on it",
-        edits=(
-            Edit(
-                path=_TRACE,
-                find="    if depth >= max_depth:\n        return TraceStop.DEPTH_LIMIT\n",
-                replace="",
-            ),
-        ),
-    ),
     # --- 2Q, the shared dispatch rule --------------------------------------
     "dispatch.callee-descriptor-is-stripped-to-bare": Guard(
         what="the method a return flow joins TO is keyed by its BARE descriptor, because "
