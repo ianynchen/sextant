@@ -101,12 +101,23 @@ here would restate those documents rather than add anything.
   `@KafkaHandler` dispatches by payload type on `order-polymorphic`. Only `spring-web` and
   `spring-mvc` declare `mapping.duplicate: conflict`, because only their annotations reach
   `RequestMappingHandlerMapping`, whose `validateMethodMapping` throws at startup. The
-  comparison mirrors `RequestMappingInfo.equals` read from spring-webmvc 6.1.6 bytecode:
-  six of its seven conditions are readable, with `params`/`headers` unioned across class
-  and method levels as `ParamsRequestCondition.combine` does, and the seventh — a custom
-  `RequestCondition`, which is code — silences the module rather than being guessed at.
-  Measured across four corpora before building: **zero genuine conflicts** and zero uses
-  of `params=` or `headers=`, so the fixture gained the case nothing else had.
+  comparison follows `RequestMappingInfo.equals` read from spring-webmvc 6.1.6 bytecode:
+  five and a half of its seven conditions are readable, with `params`/`headers` unioned
+  across class and method levels as `ParamsRequestCondition.combine` does, and the seventh
+  — a custom `RequestCondition`, which is code — silences the analysis rather than being
+  guessed at. The half is the methods condition: it reaches this pass only as
+  `derive_endpoints.sql`'s eight-verb expansion, which `_verbs_of` groups back into the
+  declared set, and a mapping naming all eight verbs explicitly stays indistinguishable
+  from one naming none. Measured across four corpora before building: **zero genuine
+  conflicts** and zero uses of `params=` or `headers=`, so the fixture gained the case
+  nothing else had.
+
+  Two false positives followed in review and are fixed: the identity compared the FANNED
+  verb, so a verbless `@RequestMapping("/x")` collided with `@GetMapping("/x")` — mappings
+  Spring registers side by side — and one genuine conflict filed eight questions; and
+  discriminators were read from the raw `annotations` view while the endpoint row derived
+  through the effective one, so a composed, folded or interface-inherited `params=` read as
+  absent.
 
 - **A wire identity served AND called is two rows and a question** (F5 §6.1, W27). It was
   one row, `direction: both`, keeping the handler and carrying the caller and its address

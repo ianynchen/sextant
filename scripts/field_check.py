@@ -41,6 +41,12 @@ Checks, per expectation:
   number that made adding `spring-petclinic-rest` worth doing: a drop means the shape has
   left the corpus and the resolution work is measured against nothing, a rise means
   upstream drift the pinned commit was supposed to prevent.
+- **`terminal_kinds`**, where the pin declares one (F7 §8.2, W30) — what the shipped
+  `terminals` rules classified on this corpus, per `kind/target`, compared whole. It is
+  the ONLY check anywhere on those twelve rules: the unit tests invent their own type
+  names on purpose, so a typo in a real one is inert rather than invalid and nothing else
+  would notice. One corpus per route — `mall-admin` for scanned packages and the `cache`
+  rule, `jhipster-sample-app` for supertypes, `spring-petclinic-rest` for owners.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -268,6 +274,30 @@ def _analyze_and_render(module: Path) -> None:
         )
 
 
+def _terminal_kinds(module: Path) -> dict[str, int]:
+    """`call_edges`' classification, counted per `kind/target`, from the workspace
+    `analyze` has just written.
+
+    Reads the workspace rather than re-deriving, unlike `resolvable_superclass_calls`
+    beside it: this is a property of Sextant's OUTPUT, not of the upstream's source, so
+    the run that produced it is the thing to measure. `unresolved` is counted too — it is
+    the denominator, and a rule that stopped matching would move a classified count down
+    and this one up by the same amount, which reads very differently from a corpus that
+    simply grew.
+    """
+    import duckdb
+
+    connection = duckdb.connect(str(module / ".sextant" / "workspace.duckdb"), read_only=True)
+    try:
+        rows = connection.execute(
+            "SELECT terminal_kind, coalesce(target_kind, ''), count(*) FROM call_edges "
+            "WHERE terminal_kind IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2"
+        ).fetchall()
+    finally:
+        connection.close()
+    return {f"{kind}/{target}" if target else str(kind): int(count) for kind, target, count in rows}
+
+
 def _routes_in_section(markdown: str, heading: str) -> list[str]:
     """Every row's wire identity (the first, backtick-quoted column) under `## {heading}`,
     sorted — the section runs from that heading to the next `## `, or the document's end
@@ -360,6 +390,34 @@ def _check_one(name: str) -> list[str]:
         problems.append(
             f"outbound routes: expected {expectation['routes']['outbound']!r}, got {outbound!r}"
         )
+
+    # F7 §8.2 (W30). What the shipped `terminals` rules actually classified, as
+    # `{"<kind>/<target>": count}` plus the corpus's own total, compared whole.
+    #
+    # **This is the only thing that checks a shipped terminal rule at all**, which is
+    # what W30's review found: `grep -rn terminals tests/` reaches not one of
+    # `spring-web.yml`'s twelve rows. Every unit test invents its own annotation and its
+    # own base type, deliberately — a rule read from catalog data is only proved to be
+    # read from catalog data if the data is not the real spellings — and the cost of that
+    # is exactly this gap. A typo in `org.mybatis.spring.annotation.MapperScan` or in
+    # `org.springframework.data.jpa.repository.JpaRepository` is not INVALID, so nothing
+    # refuses it; it is simply inert, with no error, no COVERAGE row and every test green.
+    # GUIDELINES §10 names that shape: "could a change to it be WRONG without being
+    # INVALID?"
+    #
+    # Here it moves a number. `mall-admin` is the pin that covers the scanned-package
+    # route and the one `cache` rule, `jhipster-sample-app` the supertype route, and
+    # `spring-petclinic-rest` the owner route — one corpus per route, which is how the
+    # routes were chosen in the first place.
+    expected_terminals = expectation.get("terminal_kinds")
+    if expected_terminals is not None:
+        counted = _terminal_kinds(module)
+        if counted != expected_terminals:
+            problems.append(
+                f"terminal kinds: expected {expected_terminals!r}, got {counted!r} — this "
+                f"is what the shipped `terminals` rules classify, and nothing else checks "
+                f"that they name types the frameworks really declare"
+            )
 
     # F3 §4.2 (W21). OPTIONAL, because it is a property of the upstream's own source
     # rather than of Sextant's output, and only the pin that motivated Wave 3 records

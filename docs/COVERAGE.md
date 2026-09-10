@@ -761,47 +761,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
-### 3a-iii. A module reads its dependencies' types, and publishes none of their rows (F4 §5.2)
-
-`CommonResult<T>` is compiled in `mall-common`; every one of `mall-admin`'s controllers
-returns it. Until W24 that module's class files were never read, so **160 of 160
-endpoints carried one distinct response shape with zero fields** — the envelope, empty.
-A reactor sibling this module DECLARES as a dependency is now scanned as a library root,
-transitively (`mall-common` is reached through `mall-security`), and its three fields —
-`code`, `message`, `data` — are in the workspace. Substituting `data`'s type parameter is
-W25; W24 is what makes it possible.
-
-**The set is the declared dependencies, not the reactor.** An earlier attempt walked the
-parent POM's whole `<modules>` list, which put `mall-portal` and `mall-demo` — modules
-`mall-admin` does not depend on — into its workspace: **246 endpoints against its own
-160**, and `mall-portal`'s `@Scheduled` cron task rendered inside `mall-admin`'s own
-document. A type can only reach this module's signatures if the module compiles against
-it, so the dependency list is the right set, and reading it removed the fabrication at
-source: the same corpus now derives exactly 160 with the guardrail disabled.
-
-**The guardrail stays, because a shared `-web` or `-api` module does carry controllers.**
-A dependency's rows are dropped before the endpoint merge — after it, a dependency
-serving an address this module CALLS would take the module's own outbound row with it,
-silently. `schema_operations` filters its own roots instead, because it mints rows with
-neither a handler nor a caller and there is nothing downstream to key on. Error advice is
-gated on the HANDLER's tier, so a dependency's `@ControllerAdvice` on this module's
-handlers survives while its advice on its own does not.
-
-**`extract_libraries` is deliberately NOT covered, and it took a failing test to see
-why.** An earlier version of the guardrail keyed on the origin tier, which both kinds of
-library share, and it deleted the SOAP operation `test_vertical_slice.py` asserts an
-opted-in library contributes. That is not a hole being closed: [D04](components/D04-config-and-exclusion.md)
-§2a defines that file as "scan this dependency's own bytecode as well as mine", so the
-surface is what the person asked for. A sibling is scanned because it is on the classpath
-and nobody was asked. **Consent is the difference**, it is not readable from the tier, and
-that is why the module fact carries `sibling_coordinates` and the guardrail keys on those.
-
-**What it costs, measured:** `mall-admin` analyses in 67s against roughly 6s, 648
-documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
-discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
-roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
-
-### 3b-i. A terminal says what it reaches, not just that it is one (F7 §8.2)
+### 3a-viii. A terminal says what it reaches, not just that it is one (F7 §8.2)
 
 [D00](components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the fact
 schema has existed and **nothing produced one for two phases**. The note it carried gave
@@ -853,6 +813,18 @@ been corrected.
 any corpus reaches; the other eight are the levels Spring Data's own documentation tells a
 user to extend. That is a considered guess at the shape, recorded as one.
 
+**What checks the shipped rules, and what cannot.** Every unit test here invents its own
+annotation and its own base type, deliberately — a rule read from catalog data is only
+proved to be read from catalog data if the data is not the real spellings — so nothing in
+the suite touches `spring-web.yml`'s twelve rows. A typo in
+`org.mybatis.spring.annotation.MapperScan` is not INVALID, so no loader refuses it; it is
+inert, with no error and no failing test. The corpus pins carry that check instead
+(`scripts/field-expectations/*.json`, `terminal_kinds`), one corpus per route, and each was
+verified by introducing the typo: `MapperScan` moves mall-admin's 199 to zero,
+`JpaRepository` moves jhipster's 68 to zero, `RedisTemplate` moves mall-admin's 41. They are
+opt-in and network-using by nature (2M design §3), so the guard is real but not always-on —
+which is the same standing `resolvable_superclass_calls` has, and for the same reason.
+
 **`java.sql.Date` is deliberately unclassified**, beside `java.sql.ResultSet` which is not.
 Both are in the same package and both are terminals in `spring-petclinic-rest`. One is an
 API that reaches a store and one is a date. The package is not the evidence.
@@ -868,6 +840,46 @@ while every catalog route is a predicate on the callee's TYPE.
 `TargetKind.file` has no producer either, and it has live candidates:
 `io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are both called on `mall-admin` and
 both read `unresolved`.
+
+### 3a-iii. A module reads its dependencies' types, and publishes none of their rows (F4 §5.2)
+
+`CommonResult<T>` is compiled in `mall-common`; every one of `mall-admin`'s controllers
+returns it. Until W24 that module's class files were never read, so **160 of 160
+endpoints carried one distinct response shape with zero fields** — the envelope, empty.
+A reactor sibling this module DECLARES as a dependency is now scanned as a library root,
+transitively (`mall-common` is reached through `mall-security`), and its three fields —
+`code`, `message`, `data` — are in the workspace. Substituting `data`'s type parameter is
+W25; W24 is what makes it possible.
+
+**The set is the declared dependencies, not the reactor.** An earlier attempt walked the
+parent POM's whole `<modules>` list, which put `mall-portal` and `mall-demo` — modules
+`mall-admin` does not depend on — into its workspace: **246 endpoints against its own
+160**, and `mall-portal`'s `@Scheduled` cron task rendered inside `mall-admin`'s own
+document. A type can only reach this module's signatures if the module compiles against
+it, so the dependency list is the right set, and reading it removed the fabrication at
+source: the same corpus now derives exactly 160 with the guardrail disabled.
+
+**The guardrail stays, because a shared `-web` or `-api` module does carry controllers.**
+A dependency's rows are dropped before the endpoint merge — after it, a dependency
+serving an address this module CALLS would take the module's own outbound row with it,
+silently. `schema_operations` filters its own roots instead, because it mints rows with
+neither a handler nor a caller and there is nothing downstream to key on. Error advice is
+gated on the HANDLER's tier, so a dependency's `@ControllerAdvice` on this module's
+handlers survives while its advice on its own does not.
+
+**`extract_libraries` is deliberately NOT covered, and it took a failing test to see
+why.** An earlier version of the guardrail keyed on the origin tier, which both kinds of
+library share, and it deleted the SOAP operation `test_vertical_slice.py` asserts an
+opted-in library contributes. That is not a hole being closed: [D04](components/D04-config-and-exclusion.md)
+§2a defines that file as "scan this dependency's own bytecode as well as mine", so the
+surface is what the person asked for. A sibling is scanned because it is on the classpath
+and nobody was asked. **Consent is the difference**, it is not readable from the tier, and
+that is why the module fact carries `sibling_coordinates` and the guardrail keys on those.
+
+**What it costs, measured:** `mall-admin` analyses in 67s against roughly 6s, 648
+documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
+discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
+roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)
 
@@ -944,18 +956,31 @@ they do because only their annotations reach `RequestMappingHandlerMapping`, who
 
 **What is compared, read from Spring's own bytecode.** `RequestMappingInfo.equals`
 (spring-webmvc 6.1.6) compares **seven** conditions: patterns, methods, params, headers,
-consumes, produces, and a custom condition. Six are readable here — four are already
-columns on the endpoint row, and `params`/`headers` are attributes of the mapping
-annotation, named by the catalog as `discriminators` and UNIONED across the class and
-method levels because `ParamsRequestCondition.combine` adds one expression set to the
-other.
+consumes, produces, and a custom condition. **Five and a half are readable here.** Three
+are already columns on the endpoint row; `params`/`headers` are attributes of the mapping
+annotation, named by the catalog as `discriminators`, read from the EFFECTIVE annotation
+set so a composed, folded or interface-inherited one is not missed, and UNIONED across the
+class and method levels because `ParamsRequestCondition.combine` adds one expression set
+to the other.
 
-**The seventh is a stated boundary that silences the module rather than guessing.** A
+**The half is the methods condition**, and it cost a false positive to find.
+`RequestMethodsRequestCondition.equals` compares the DECLARED set, and an empty set is not
+equal to `{GET}` — so `@RequestMapping("/x")` and `@GetMapping("/x")` are two mappings,
+both register, and a GET resolves to the more specific one. What reaches this pass is
+`derive_endpoints.sql`'s eight-verb EXPANSION of that set, and comparing a single expanded
+verb collided them and named an `IllegalStateException` against a module that starts.
+`_verbs_of` groups the rows back into the set, which recovers the comparison for every
+case but one: a mapping listing all eight verbs explicitly expands to the same eight rows
+as one listing none, and Spring holds those to be different.
+
+**The seventh is a stated boundary that silences the analysis rather than guessing.** A
 custom `RequestCondition` arrives through a `RequestMappingHandlerMapping` subclass and is
 code, not an attribute, so two mappings separated only by one are indistinguishable from a
-genuine conflict. A module registering such a subclass gets no conflict reported at all: a
-finding named against a service that starts perfectly well is a claim, and a missing
-finding is not.
+genuine conflict. Any such subclass anywhere in the analysis — including in a scanned
+DEPENDENCY — silences the detector entirely: a finding named against a service that starts
+perfectly well is a claim, and a missing finding is not. It reaches only what was scanned,
+so a module extending a framework subclass that lives in an unscanned jar is NOT silenced,
+which is the one over-report this boundary leaves and needs dependency scanning to close.
 
 **Measured base rate, taken before a line was written:** across the orders-service fixture
 and `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app` — **zero genuine
@@ -2854,7 +2879,7 @@ one of `mall-admin`'s 160 roots reaches a boundary, because a call into the JDK 
 boundary exactly as a call into a mapper is — the WALK does not classify a terminal, and
 `Stop` is the only thing it decides. The roadmap's "158 of 160 reach a real terminal (DB /
 cache / object store)" is a classified count. It was reproduced by hand before W30 and the
-classification is read now (§3b-i): **155 roots reach a mapper or DAO terminal**, three
+classification is read now (§3a-viii): **155 roots reach a mapper or DAO terminal**, three
 more reach an object-store client (`io/minio/MinioClient`, `com/aliyun/oss/OSSClient` —
 still `unresolved`, since no rule names them and `TargetKind.file` has no producer,
 `OI-74`), and the two that reach neither are `GET /admin/refreshToken` and `POST

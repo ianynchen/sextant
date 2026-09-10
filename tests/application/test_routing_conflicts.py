@@ -435,3 +435,87 @@ def test_a_discriminator_composed_into_a_module_local_annotation_still_separates
     workspace.close()
 
     assert conflicts == []
+
+
+def _subclass(symbol: str, parent: str) -> dict:
+    """One `X extends Y` symbol fact, both spelled as bare descriptors."""
+    return {
+        "kind": "symbol",
+        "document_id": "doc",
+        "symbol": _MODULE + symbol,
+        "construct_kind": "class",
+        "enclosing": None,
+        "superclass": parent,
+        "visibility": "public",
+        "line_start": 0,
+        "line_end": 0,
+    }
+
+
+def test_a_custom_condition_two_levels_up_still_silences_the_detector(tmp_path: Path):
+    """A multi-level chain is silenced, through its own intermediate.
+
+    Spring Data REST ships exactly this: `RepositoryRestHandlerMapping` extends
+    `BasePathAwareHandlerMapping` extends `RequestMappingHandlerMapping`. W28's review
+    read the direct-edge test as missing it and proposed a transitive walk; measured, the
+    two are the same question — a closure contains the base only if some direct edge
+    points at it — and the middle link is what silences here.
+
+    The near-miss below is where the boundary really stops.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [("GET", "/orders", FIRST), ("GET", "/orders", SECOND)],
+        [
+            _annotation(FIRST, GET_MAPPING, {"value": ["/orders"]}),
+            _annotation(SECOND, GET_MAPPING, {"value": ["/orders"]}),
+        ],
+        supertypes=[
+            _subclass("com/acme/orders/Middle#", CUSTOM_BASE.replace(".", "/") + "#"),
+            _subclass("com/acme/orders/Mine#", _MODULE + "com/acme/orders/Middle#"),
+        ],
+    )
+
+    record_routing_conflicts(
+        workspace, [_catalog(duplicate="conflict", custom_condition=CUSTOM_BASE)]
+    )
+    conflicts = _conflicts(workspace)
+    workspace.close()
+
+    assert conflicts == []
+
+
+def test_a_custom_condition_reached_through_an_UNSCANNED_intermediate_is_not_silenced(
+    tmp_path: Path,
+):
+    """The boundary's real edge, and an over-report this analysis cannot close.
+
+    A module's own class extending a framework subclass that lives in an UNSCANNED jar
+    has no fact saying what that intermediate extends, so nothing here can know the base
+    is above it and the conflict IS reported. Same stop `resolve/terminals.py` documents
+    for its supertype route, and closing it needs dependency scanning rather than a
+    longer walk (W28 review, measured while checking whether transitivity would help —
+    it does not).
+
+    Asserted rather than left implicit because it is an over-report, the direction NFR-2
+    rates worst: a reader meeting a `routing_conflict` on such a module is being told
+    about a service that may well start.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [("GET", "/orders", FIRST), ("GET", "/orders", SECOND)],
+        [
+            _annotation(FIRST, GET_MAPPING, {"value": ["/orders"]}),
+            _annotation(SECOND, GET_MAPPING, {"value": ["/orders"]}),
+        ],
+        # `Middle` has no fact of its own — it is the unscanned jar's class.
+        supertypes=[_subclass("com/acme/orders/Mine#", _MODULE + "com/acme/orders/Middle#")],
+    )
+
+    record_routing_conflicts(
+        workspace, [_catalog(duplicate="conflict", custom_condition=CUSTOM_BASE)]
+    )
+    conflicts = _conflicts(workspace)
+    workspace.close()
+
+    assert len(conflicts) == 1

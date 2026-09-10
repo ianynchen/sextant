@@ -10,7 +10,7 @@ invented repository base — for the reason every engine test in this directory 
 read from catalog data is only proved to be read from catalog data if the data is not the
 real spellings. `kind` and `target` are the exception, being written into closed columns.
 The shipped catalogs' live answers are measured on three corpora and recorded in
-COVERAGE §3b-i.
+COVERAGE §3a-viii.
 
 ## The two rules a name match would have broken
 
@@ -22,9 +22,10 @@ a name rule and pass under the framework's own.
 
 from pathlib import Path
 
+import pytest
 from test_shapes import _MODULE, _document, _type, _write
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.facts import AnnotationFact, AnnotationUse
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -238,6 +239,38 @@ def test_a_supertype_is_matched_through_a_scanned_intermediate(tmp_path: Path):
     }
 
 
+def test_a_supertype_rule_may_name_several_bases(tmp_path: Path):
+    """The LIST form of `supertype:` (§3.1), which is the form `spring-web.yml` actually
+    ships — all nine Spring Data bases in one rule — and which no test reached (W30
+    review). Only `JpaRepository` is ever hit on the corpora, so the other eight are
+    unmeasured; that the list form is READ at all is what this pins.
+    """
+    facts = [
+        _implements("doc", "com/acme/store/Mongo#", "com/acme/store/MongoBase#"),
+        _implements("doc", "com/acme/store/Jpa#", "com/acme/store/BaseRepository#"),
+    ]
+    workspace = _workspace(tmp_path, facts)
+    rules = TerminalRules(
+        workspace,
+        [
+            _catalog(
+                {
+                    "supertype": [BASE_REPO, "com.acme.store.MongoBase"],
+                    "kind": "persistence",
+                    "target": "database",
+                }
+            )
+        ],
+    )
+    workspace.close()
+
+    for owner in ("Mongo", "Jpa"):
+        assert classify(rules, f"com/acme/store/{owner}#find(sig_1).", None) == {
+            "terminal_kind": "persistence",
+            "target_kind": "database",
+        }
+
+
 def test_the_supertype_walk_stops_at_a_type_this_workspace_did_not_scan(tmp_path: Path):
     """The boundary that decides what a catalog must name, and it cost a measurement to
     find: naming only the framework's BASE interface classified 2 of jhipster's 75.
@@ -356,3 +389,77 @@ def test_the_rules_read_a_json_shaped_annotation_argument(tmp_path: Path):
     assert classify(rules, "com/acme/solo/Mapper#get(sig_1).", None)["terminal_kind"] == (
         "persistence"
     )
+
+
+# ---------------------------------------------------------------------------
+# What the CATALOG LOADER refuses (D02 §2j) — the half `classify` cannot check,
+# because by the time a rule reaches this module it has already been believed.
+# ---------------------------------------------------------------------------
+
+
+def _catalog_file(tmp_path: Path, terminals: str) -> Path:
+    """One minimal loadable catalog with the `terminals` block under test."""
+    path = tmp_path / "invented.yml"
+    path.write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
+        "matches: {}\n" + terminals,
+        encoding="utf-8",
+    )
+    return path
+
+
+def _load(tmp_path: Path, terminals: str) -> list:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+
+    _catalog_file(tmp_path, terminals)
+    return YamlCatalogSource(tmp_path).load()
+
+
+def test_a_terminal_kind_outside_the_closed_set_is_refused_at_load(tmp_path: Path):
+    """`kind` and `target` are written straight into closed columns of `call_edges` and
+    out into the exported bundle, so they take the check `protocol` and `direction` take.
+
+    Unchecked, `kind: persistance` reached the column, the rendered `Reaches` cell and
+    the bundle with no error anywhere — the catalog file being the last place naming it
+    is cheap (W30 review).
+    """
+    with pytest.raises(CatalogError, match="persistance"):
+        _load(tmp_path, "terminals:\n  - {owner: a.B, kind: persistance}\n")
+
+    with pytest.raises(CatalogError, match="databse"):
+        _load(tmp_path, "terminals:\n  - {owner: a.B, kind: persistence, target: databse}\n")
+
+
+def test_a_terminal_rule_naming_no_route_or_two_is_refused_at_load(tmp_path: Path):
+    """Exactly one of `owner`, `supertype`, `scanned_by` (D02 §2j).
+
+    A rule naming NONE matched nothing and said so nowhere; a rule naming two says two
+    different things about one answer. A missing `kind` used to raise a bare `KeyError`
+    at resolve time with no catalog path in the message.
+    """
+    with pytest.raises(CatalogError, match="none"):
+        _load(tmp_path, "terminals:\n  - {kind: persistence}\n")
+
+    with pytest.raises(CatalogError, match="owner, supertype"):
+        _load(tmp_path, "terminals:\n  - {owner: a.B, supertype: c.D, kind: persistence}\n")
+
+    with pytest.raises(CatalogError, match="kind"):
+        _load(tmp_path, "terminals:\n  - {owner: a.B}\n")
+
+
+def test_the_shipped_rules_load_and_every_one_is_persistence(tmp_path: Path):
+    """The shipped block, read off the file — and the measured claim that only two of
+    `TerminalKind`'s eight members have a producer (`OI-74`) rests on this.
+
+    What the twelve rules NAME is not checkable offline; a typo in
+    `org.mybatis.spring.annotation.MapperScan` is inert rather than invalid, and the
+    corpus pins' `terminal_kinds` are what catch it (COVERAGE §3a-viii).
+    """
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    rules = [rule for c in YamlCatalogSource(catalogs_dir()).load() for rule in c.terminals]
+
+    assert len(rules) == 12
+    assert {str(rule["kind"]) for rule in rules} == {"persistence"}
+    assert {str(rule.get("target")) for rule in rules} == {"database", "cache"}

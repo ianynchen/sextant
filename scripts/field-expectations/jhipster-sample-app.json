@@ -8,6 +8,10 @@
     },
     "outbound": {}
   },
+  "terminal_kinds": {
+    "persistence/database": 70,
+    "unresolved": 1071
+  },
   "routes": {
     "inbound": [
       "DELETE /api/admin/users/{login}",

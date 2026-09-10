@@ -8,6 +8,10 @@
     },
     "outbound": {}
   },
+  "terminal_kinds": {
+    "persistence/database": 102,
+    "unresolved": 1972
+  },
   "routes": {
     "inbound": [
       "DELETE /",

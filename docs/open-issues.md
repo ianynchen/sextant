@@ -2413,6 +2413,14 @@ shape from DuckDB's own parse, so the comparison it would need exists.
 **Falsified by** a schema change that removes or retypes a column, which would make this a
 live defect rather than a stated limit.
 
+**It runs on EVERY workspace open, not only when a migration is needed** (W26 review): a
+throwaway in-memory DuckDB, a full `schema.sql` parse and two `information_schema` queries,
+per `DuckDbWorkspace(...)`. Cheap and unconditional. A cheap guard would be to compare a
+hash of `schema.sql` against one stored in the workspace and skip the whole thing when they
+agree, which is the shape the eventual versioned migration wants anyway — recorded here
+rather than done, because the cost is small and the guard is only worth writing once, with
+the mechanism that replaces this.
+
 ### OI-71 — a module's own `redact:` additions do not widen metadata masking
 
 **Found by** building W29 (F5 §6.2).

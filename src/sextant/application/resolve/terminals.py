@@ -77,7 +77,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import ancestry_of
 from sextant.application.resolve.shapes.expansion import _closure_of
-from sextant.domain.closed_sets import TargetKind, TerminalKind
+from sextant.domain.closed_sets import TerminalKind
 from sextant.domain.symbols import (
     bare_descriptor,
     owner_of,
@@ -173,12 +173,15 @@ def _symbols(declared: object) -> tuple[str, ...]:
     describes for every other catalog site.
     """
     if isinstance(declared, str):
-        names: list[str] = [declared]
-    elif isinstance(declared, list):
-        names = [str(name) for name in declared]
-    else:
-        return ()
-    return tuple(type_descriptor(name) for name in names)
+        return (type_descriptor(declared),)
+    if isinstance(declared, list):
+        # Each entry passed through UNCONVERTED. `type_descriptor` refuses a non-string
+        # on purpose — `str(['a.B'])` is a perfectly well-formed conversion of nonsense,
+        # producing a descriptor that matches no fact and says nothing — and the first
+        # version mapped `str` over the list before calling it, which meant that guard
+        # could never fire on this path (W30 review).
+        return tuple(type_descriptor(name) for name in declared)
+    return ()
 
 
 def _scanned_packages(
@@ -251,6 +254,3 @@ def _ancestry(workspace: Workspace) -> dict[str, list[str]]:
     # `[1:]` drops `child` itself, which `_closure_of` returns first: this map holds a
     # type's ANCESTORS, and a type is not its own supertype.
     return {child: _closure_of(child, direct_pairs)[1:] for child in direct_pairs}
-
-
-__all__ = ["TargetKind", "TerminalKind", "TerminalRules", "classify"]

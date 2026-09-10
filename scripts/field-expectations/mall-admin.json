@@ -11,6 +11,11 @@
     },
     "outbound": {}
   },
+  "terminal_kinds": {
+    "persistence/cache": 41,
+    "persistence/database": 199,
+    "unresolved": 5112
+  },
   "routes": {
     "inbound": [
       "GET /admin/info",

@@ -238,7 +238,8 @@ def _declares_a_custom_condition(workspace: Workspace, catalog: Catalog) -> bool
     Not "this module": `implementations` and `superclasses` are filtered by
     `selected_documents`, which includes `OriginTier.DEPENDENCY` documents. So a scanned
     dependency subclassing `RequestMappingHandlerMapping` — Spring Data REST's
-    `BasePathAwareHandlerMapping` is one — silences the detector for the whole run. That
+    `BasePathAwareHandlerMapping` is one, and `RepositoryRestHandlerMapping` is a second
+    level above it — silences the detector for the whole run. That
     is the safe direction and it is deliberate, since such a dependency really can carry
     a custom condition into the same registry; it is stated here because the scope is
     wider than a reader would assume.
@@ -257,9 +258,31 @@ def _declares_a_custom_condition(workspace: Workspace, catalog: Catalog) -> bool
     if base is None:
         return False
     wanted = type_descriptor(str(base))
-    return any(
+    # The interface arm is generality over catalog data, not a live path: both shipped
+    # catalogs name a CLASS, so `interfaces` never contains it and this cannot return
+    # true today (W28 review). Kept because `custom_condition` is a catalog field and a
+    # framework registering its extension point as an interface is an ordinary thing to
+    # ship; it costs one scan per declaring catalog, hoisted out of the group loop.
+    if any(
         wanted in json.loads(str(row["interfaces"] or "[]"))
         for row in workspace.query("implementations")
-    ) or any(
+    ):
+        return True
+    # A DIRECT edge, and a transitive walk would be exactly as strong — measured, after
+    # W28's review proposed one. The two are the same question: a closure contains
+    # `wanted` only if some direct edge points at it, so "any scanned type extends the
+    # base" and "any scanned type's ancestry reaches the base" cannot disagree. A
+    # multi-level chain is already silenced through its own intermediate —
+    # `RepositoryRestHandlerMapping extends BasePathAwareHandlerMapping extends` the base
+    # silences on the middle link.
+    #
+    # **The real boundary is what was SCANNED, and neither form crosses it.** A module
+    # whose own class extends a framework subclass that lives in an unscanned jar is NOT
+    # silenced: the intermediate has no facts here, so nothing says what it extends.
+    # Measured — that shape reports the conflict. It is the same stop
+    # `resolve/terminals.py` documents for its supertype route, and closing it needs
+    # dependency scanning, not a longer walk. `mapping.custom_condition` naming the base
+    # is what a reader can see; this paragraph is what they cannot.
+    return any(
         bare_descriptor(str(row["superclass"])) == wanted for row in workspace.query("superclasses")
     )

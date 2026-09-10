@@ -1133,7 +1133,10 @@ other case: `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping`
 
 Two more keys ride with it, and both exist to keep the finding honest rather than to produce
 one. **`discriminators` names the conditions `RequestMappingInfo.equals` compares that are
-not already columns on the endpoint row** — `params` and `headers`. Class-level and
+not already columns on the endpoint row** — `params` and `headers`. They are read from the
+EFFECTIVE annotation set, the same one the endpoint row derived through, so a discriminator
+composed into a module-local meta-annotation, folded into a repeatable container, or
+declared on an interface method the class implements is not read as absent. Class-level and
 method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
 to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
 conflict with each other while neither conflicts with a method outside it. **`custom_condition`
