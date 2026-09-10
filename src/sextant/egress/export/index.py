@@ -127,7 +127,7 @@ def write_index(
         (_CALLERS, _caller_records(call_edges, lookup)),
         (_IMPLEMENTORS, _implementor_records(implementations, lookup)),
         (_ANNOTATED, _annotated_records(annotations, lookup)),
-        (_SHAPE_CARRIERS, _shape_carrier_records(endpoints, redactor)),
+        (_SHAPE_CARRIERS, _shape_carrier_records(endpoints, lookup, redactor)),
         (_ADDRESSES, _address_records(roots, lookup, redactor)),
         (_FILES, _file_records(located, lookup, annotations)),
         (_IMPACT, _impact_records(shapes, shape_fields, endpoints, lookup, redactor)),
@@ -245,15 +245,46 @@ def _beside_a_sibling(
     does not resolve, and says so with a null.
 
     **The module root is SEARCHED for, not computed from the classes directory**, because
-    how deep that sits is the build tool's business: one writes `target/classes` and another
-    one build tool writes two levels down and another four. Walking up from the classes
-    directory and asking "does this ancestor hold the file under one of the source roots"
-    answers for both without either being named here — and the file's own existence is
-    what stops the walk, so an ancestor that merely looks plausible is never taken.
+    how deep that sits is the build tool's business: one writes its classes two directories
+    below the module root and another four. Walking up and asking "does this ancestor hold the file under one of the
+    source roots" answers for both without either being named here.
+
+    **The walk is bounded three ways**, and it had none of them: an entry that is not a
+    classes DIRECTORY is skipped, a relative one is skipped, and the walk stops at this
+    module's parent. Unbounded it climbed to `/` on every export of the fixture, and any
+    ancestor holding a file with the same package path would have been published as the
+    source — a path to the WRONG file, which is worse than a null, and one escaping the
+    checkout at that.
     """
     if origin_entry is None:
         return None
-    for ancestor in Path(str(origin_entry)).resolve().parents:
+    entry = Path(str(origin_entry))
+    # **A CLASSES DIRECTORY, never an archive.** A document extracted from a jar has its
+    # jar's path here, and that library's sources are not in this repository at all — so
+    # there is nothing to walk towards and everything to walk into. Asking whether the
+    # entry is a directory tests the thing itself; `origin` does not, because a reactor
+    # SIBLING carries a coordinate too (`com.macro.mall:mall-mbg`) and is exactly the case
+    # this function exists for. Without this the fixture's own opted-in jar was walked on
+    # every export — from `~/.m2/repository` up through the home directory to `/`, testing
+    # `<ancestor>/<source root>/<package path>` at each — and any unrelated file sharing
+    # that package path would have been published as this symbol's source.
+    if not entry.is_dir():
+        return None
+    # **Absolute only.** A RELATIVE `origin_entry` is anchored on the directory `analyze`
+    # ran in, which the bundle does not record — resolving it here would anchor it on the
+    # EXPORTING process's directory instead, and two exports from two directories would
+    # place the same symbol differently (NFR-1). It is also never needed: a relative entry
+    # is this run's own module, which the first branch above already placed.
+    if not entry.is_absolute():
+        return None
+    # Bounded by the reactor rather than by the filesystem. A sibling module sits beside
+    # this one, so its root is under this module's PARENT; the walk stops there rather
+    # than continuing to `/`, where an ancestor holding a same-package file would be taken
+    # on nothing but the coincidence of the package name.
+    boundary = module_root.resolve().parent
+    for ancestor in entry.resolve().parents:
+        if not ancestor.is_relative_to(boundary):
+            break
         for root in source_roots:
             candidate = ancestor / root / relative_path
             if not candidate.is_file():
@@ -344,7 +375,9 @@ def _annotated_records(
 
 
 def _shape_carrier_records(
-    endpoints: Sequence[dict[str, object]], redactor: Redactor
+    endpoints: Sequence[dict[str, object]],
+    lookup: dict[str, dict[str, Any]],
+    redactor: Redactor,
 ) -> list[dict[str, Any]]:
     """Index 2d: which endpoints CARRY this shape, and on which side.
 
@@ -370,8 +403,14 @@ def _shape_carrier_records(
                     # The exit's mask, the same one `graph/endpoints.parquet` applies to
                     # this column: an address can carry credentials in front of it.
                     "path": _address(endpoint["path"], redactor),
+                    # PLACED, like every other index's answer. This file shipped the two
+                    # symbols bare, which made it the one index whose hit was not a
+                    # complete answer — a reader had to look the handler up in
+                    # `symbols.ndjson` to do anything with it.
                     "handler": endpoint["handler"],
+                    "handler_at": _at_or_none(lookup, endpoint["handler"]),
                     "caller": endpoint["caller"],
+                    "caller_at": _at_or_none(lookup, endpoint["caller"]),
                 }
             )
     return [
@@ -415,6 +454,13 @@ def _address_records(
         ),
         key=lambda record: json.dumps(record, sort_keys=True),
     )
+
+
+def _at_or_none(lookup: dict[str, dict[str, Any]], symbol: object) -> dict[str, Any] | None:
+    """`_at` for a column that may be NULL. An endpoint carries a handler OR a caller, so
+    one of the two is absent on every row and a location for it would be an answer to a
+    question nobody asked."""
+    return None if symbol is None else _at(lookup, str(symbol))
 
 
 def _address(value: object, redactor: Redactor) -> str | None:

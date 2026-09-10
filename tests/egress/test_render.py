@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -1104,3 +1105,61 @@ def test_metadata_writes_both_dependency_keys_even_when_nothing_was_recorded(tmp
 
     assert written["module"]["dependencies"] == {}
     assert written["dependencies_not_resolved"] == []
+
+
+def test_metadata_records_where_the_sources_live_so_the_index_can_open_one(tmp_path: Path):
+    """F8 §9.3 (W35). The whole basis of placement, and it had no test at all: replacing
+    the field with `[]` left 1,840 tests green while every `file` in every index quietly
+    became null.
+
+    A `document`'s `relative_path` is a package path, openable against nothing on its own;
+    these are what it is relative TO. Recorded at analyze time because `export` reads what
+    `analyze` left and never re-detects (M08), so a root the detector found then has to be
+    written down then or it is gone.
+
+    RELATIVE and POSIX-spelled, because a bundle travels: an absolute path names a
+    directory that exists on exactly one computer.
+    """
+    module = dataclasses.replace(
+        MODULE,
+        source_roots=(
+            Path("fixtures/orders-service/src/main/kotlin"),
+            Path("fixtures/orders-service/src/main/java"),
+        ),
+    )
+
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    # Sorted (NFR-1), relative to the module root, forward slashes.
+    assert written["module"]["source_roots"] == ["src/main/java", "src/main/kotlin"]
+
+
+def test_a_module_declaring_no_source_root_records_an_empty_list(tmp_path: Path):
+    """`[]`, never an absent key — the `render`/`index` precedent one file over. An absent
+    key would make "this build declares none" indistinguishable from "this metadata
+    predates the field", and the index would read both as "place nothing"."""
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["source_roots"] == []
+
+
+def test_a_source_root_outside_the_module_is_dropped_rather_than_made_absolute(
+    tmp_path: Path,
+):
+    """The one way a declared root is lost, stated rather than left to be discovered.
+
+    A build may point a source root outside the module — a generated tree beside it, a
+    shared directory — and there is no relative spelling of that which a bundle can carry
+    portably. It is dropped, so the index simply does not place what lives there.
+    """
+    module = dataclasses.replace(
+        MODULE,
+        source_roots=(Path("fixtures/orders-service/src/main/java"), Path("/elsewhere/src")),
+    )
+
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["source_roots"] == ["src/main/java"]

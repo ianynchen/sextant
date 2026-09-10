@@ -827,13 +827,20 @@ because how deep it sits is the build tool's business (`target/classes` against
 | `spring-petclinic-rest` | 635 / 1,209 (52%) |
 | `orders-service` (fixture) | 456 / 1,087 (41%) |
 
-**Every unplaced symbol has one cause: generated code.** `AuditEvent.java` (Avro),
-`OwnerMapperImpl.java` (MapStruct), `AbstractAuditingEntity_.java` (JPA metamodel) — all
-written into `target/generated-sources/` at build time, which is not a declared source
-root. The files exist and could be reached by teaching the exporter each build tool's
-generated-source layout; that is deliberately NOT done here, because a generated file is
-regenerated and an agent sent there to make a change would edit something the next build
-overwrites. The record says `file: null`, and this is the reason.
+**Unplaced symbols have two causes, and generated code is 1,285 of the 1,287.**
+`AuditEvent.java` (Avro), `OwnerMapperImpl.java` (MapStruct),
+`AbstractAuditingEntity_.java` (JPA metamodel) — all written into `target/generated-sources/`
+at build time, which is not a declared source root. The files exist and could be reached by
+teaching the exporter each build tool's generated-source layout; that is deliberately NOT
+done, because a generated file is regenerated and an agent sent there to make a change
+would edit what the next build overwrites.
+
+**The other two are a LIBRARY's**, and their reason is different and permanent:
+`com/example/billing/BillingPort#` and its `charge` method come from the fixture's own
+`extract_libraries` opt-in, read out of a jar. A library's sources are not in this
+repository at all — there is nothing to teach the exporter about, and nothing to reach. The
+record says `file: null` for both causes, and the distinction is here rather than in the
+record because a consumer's action is the same either way: do not go looking.
 
 **The index is an EXIT, so it masks.** It reads the same rows `graph/` does, and an
 address published unmasked here would be the same bytes the parquet beside it takes trouble
@@ -916,7 +923,7 @@ was complete. Found while starting W33, which asks what a contract type extends.
 is the parent's DECLARED count; one field of each parent is a static `serialVersionUID`,
 which reaches no wire, so the merged contracts are 46, 49, 20 and 14.) That is the over-claim NFR-2 rates worst, and
 DR-5 links services on exactly this comparison — two services agreeing on a 2-field
-contract that is really 47 fields is a match made on almost nothing.
+contract that is really 46 fields is a match made on almost nothing.
 
 **The accessor half is why it lived this long.** `_rows_of` falls back to accessors only
 where the field pass produced NOTHING, and W26 gave that fallback an ancestry walk — so a

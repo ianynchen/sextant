@@ -20,6 +20,7 @@ from sextant.domain.facts import (
     SymbolFact,
 )
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
+from sextant.egress.export.index import write_index
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1472,6 +1473,13 @@ def test_no_exported_table_ships_a_credential_another_one_masks(tmp_path: Path):
     Asserted over EVERY exported table rather than the two that were wrong, so
     a table added later cannot reintroduce it quietly: this is the ratchet's
     shape applied to redaction.
+
+    **And over every DIRECTORY of the bundle**, which it was not. It globbed
+    `graph/` and `facts/`, so when W35 added `index/` — a third projection over
+    the same rows — its two path-carrying files shipped an address `graph/`
+    masked, in the same bundle, and this test stayed green. A ratchet keyed on
+    the two directories that existed when it was written is a ratchet that stops
+    the day a third arrives.
     """
     facts = tmp_path / "facts"
     facts.mkdir(parents=True, exist_ok=True)
@@ -1508,21 +1516,58 @@ def test_no_exported_table_ships_a_credential_another_one_masks(tmp_path: Path):
     )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
+    # The same credential in an ADDRESS column, because the sweep has to reach every shape
+    # a secret travels in and not only the argument grammar: `endpoints.path` and
+    # `roots.path` are masked in `graph/` and are what the index's two path-carrying files
+    # are built from.
+    workspace._connection.execute(
+        "INSERT INTO endpoints (protocol, direction, method, path, handler, catalog_id) "
+        "VALUES ('http', 'inbound', 'GET', ?, 'mod com/acme/A#go(sig_1).', 'c')",
+        [secret],
+    )
+    workspace._connection.execute(
+        "INSERT INTO roots (handler, root_kind, protocol, method, path) "
+        "VALUES ('mod com/acme/A#go(sig_1).', 'inbound_endpoint', 'http', 'GET', ?)",
+        [secret],
+    )
     bundle = tmp_path / "bundle"
     exported = workspace.export_tables(bundle, Redactor.from_rules())
     workspace.export_facts(bundle, Redactor.from_rules())
 
+    # The index is a third projection over the same rows, so it ships here too and is
+    # swept with everything else — see `write_index` for why it takes the same redactor.
+    index_files = write_index(
+        bundle,
+        symbols=workspace.query("located_symbols"),
+        documents=workspace.query("located_documents"),
+        call_edges=workspace.query("call_edges"),
+        implementations=workspace.query("implementations"),
+        annotations=workspace.query("annotations"),
+        endpoints=workspace.query("endpoints"),
+        roots=workspace.query("roots"),
+        shapes=workspace.query("shapes"),
+        shape_fields=workspace.query("shape_fields"),
+        source_roots=[],
+        module_root=tmp_path,
+        redactor=Redactor.from_rules(),
+    )
+
     leaked = []
-    for parquet in sorted((bundle / "graph").glob("*.parquet")):
-        rows = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
-        if any("hunter2" in str(cell) for row in rows for cell in row):
-            leaked.append(parquet.name)
-    for parquet in sorted((bundle / "facts").glob("*.parquet")):
-        rows = duckdb.sql(f"SELECT * FROM read_parquet('{parquet}')").fetchall()
-        if any("hunter2" in str(cell) for row in rows for cell in row):
-            leaked.append(f"facts/{parquet.name}")
+    # EVERY file in the bundle, whatever directory it landed in and whatever format it is
+    # in — the point being that the sweep must not have to be taught about a new one.
+    for shipped in sorted(bundle.rglob("*")):
+        if not shipped.is_file():
+            continue
+        name = str(shipped.relative_to(bundle))
+        if shipped.suffix == ".parquet":
+            rows = duckdb.sql(f"SELECT * FROM read_parquet('{shipped}')").fetchall()
+            if any("hunter2" in str(cell) for row in rows for cell in row):
+                leaked.append(name)
+        elif "hunter2" in shipped.read_text(encoding="utf-8", errors="replace"):
+            leaked.append(name)
 
     assert exported, "nothing was exported, so this proves nothing"
+    assert index_files, "no index was written, so this proves nothing about it"
     assert leaked == [], f"a credential left in the clear in: {leaked}"
     # The workspace keeps it verbatim — the analyst's own disk is not the
     # trust boundary, the bundle is.

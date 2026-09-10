@@ -12,6 +12,8 @@ COVERAGE §3a-xii.
 import json
 from pathlib import Path
 
+import pytest
+
 from sextant.domain.redaction import Redactor
 from sextant.egress.export.index import write_index
 
@@ -146,6 +148,9 @@ def test_a_sibling_modules_symbol_is_placed_through_its_own_root(tmp_path: Path)
         "src/main/java/com/acme/Api.java",
     )
     _tree(tmp_path / "mall-common", "src/main/java/com/acme/Common.java")
+    # The classes DIRECTORY has to exist: that is what tells a reactor sibling from a jar,
+    # and a jar's own path is where an unbounded walk goes wrong.
+    (tmp_path / "mall-common" / "target" / "classes").mkdir(parents=True)
     index = _write(
         root,
         symbols=[_symbol(_MODULE + "com/acme/Common#get().", document_id="sibling")],
@@ -168,6 +173,7 @@ def test_no_index_record_carries_an_absolute_path(tmp_path: Path):
     `origin_entry` — is absolute."""
     root = _tree(tmp_path / "mod", "src/main/java/com/acme/Api.java")
     _tree(tmp_path / "other", "src/main/java/com/acme/Other.java")
+    (tmp_path / "other" / "target" / "classes").mkdir(parents=True)
     index = _write(
         root,
         symbols=[
@@ -583,3 +589,182 @@ def test_change_impact_masks_the_addresses_it_carries(tmp_path: Path):
     [record] = index["impact"]
     assert record["endpoints"][0]["path"] == "https://billing.example.com/charge"
     assert "s3cr3t" not in json.dumps(index)
+
+
+def test_a_jar_document_is_not_walked_towards_a_file_that_merely_shares_its_package(
+    tmp_path: Path,
+):
+    """A LIBRARY's sources are not in this repository, so there is nothing to walk towards
+    and everything to walk into.
+
+    Measured on this repo's own fixture: the opted-in `orders-soap-client` jar was walked
+    on every export — from `~/.m2/repository` up through the home directory to `/`,
+    testing `<ancestor>/<source root>/<package path>` at each — and it returned null only
+    because no such directory happened to exist there. Here one does, holding an unrelated
+    file with the same package path, which is the publication that is worse than a null.
+
+    The test is jar-vs-DIRECTORY rather than `origin`, because a reactor sibling carries a
+    coordinate too and is exactly the case the walk exists for.
+    """
+    root = _tree(tmp_path / "repo" / "mod", "src/main/java/com/acme/Api.java")
+    # The jar sits INSIDE the reactor and an unrelated file with the same package path
+    # sits beside it, so the boundary check cannot be what saves this: only the
+    # jar-versus-directory test can.
+    _tree(tmp_path / "repo" / "libs", "src/main/java/com/acme/Vendor.java")
+    jar = tmp_path / "repo" / "libs" / "target" / "lib-1.0.0.jar"
+    jar.parent.mkdir(parents=True, exist_ok=True)
+    jar.write_bytes(b"PK\x03\x04")
+    index = _write(
+        root,
+        symbols=[_symbol(_MODULE + "com/acme/Vendor#get().", document_id="lib")],
+        documents=[
+            {
+                "document_id": "lib",
+                "relative_path": "com/acme/Vendor.java",
+                "origin_entry": str(jar),
+            }
+        ],
+    )
+
+    assert index["symbols"][0]["file"] is None
+
+
+def test_placement_does_not_depend_on_the_directory_the_export_runs_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """NFR-1. A RELATIVE `origin_entry` is anchored on the directory `analyze` ran in,
+    which the bundle does not record — resolving it at export would anchor it on the
+    EXPORTING process's directory instead, and two exports from two directories would
+    place the same symbol differently.
+
+    It is never needed either: a relative entry is this run's own module, which the source
+    roots already place. Three of the four measured corpora record relative entries for
+    every one of their own documents, so this is the ordinary shape and not an edge.
+    """
+    root = _tree(tmp_path / "mod", "src/main/java/com/acme/Api.java")
+    _tree(tmp_path / "elsewhere", "src/main/java/com/acme/Ghost.java")
+    (tmp_path / "elsewhere" / "target" / "classes").mkdir(parents=True)
+    documents = [
+        {
+            "document_id": "ghost",
+            "relative_path": "com/acme/Ghost.java",
+            # Relative, as `analyze` records it when run with a relative path.
+            "origin_entry": "elsewhere/target/classes",
+        }
+    ]
+    # Run from the directory that WOULD make it resolve — inside the reactor bound, with
+    # the file really there. Everything is in place except a reason to believe the path.
+    monkeypatch.chdir(tmp_path)
+    index = _write(
+        root,
+        symbols=[_symbol(_MODULE + "com/acme/Ghost#go().", document_id="ghost")],
+        documents=documents,
+    )
+
+    assert index["symbols"][0]["file"] is None, (
+        "a relative entry names a directory only the ANALYZING process knew"
+    )
+
+
+def test_the_walk_stops_at_this_modules_parent(tmp_path: Path):
+    """Bounded by the reactor, not by the filesystem. A sibling sits beside this module, so
+    its root is under this module's PARENT; anything further up is an ancestor holding a
+    same-package file by coincidence, and taking it publishes the wrong source."""
+    root = _tree(tmp_path / "repo" / "mod", "src/main/java/com/acme/Api.java")
+    # Two levels above the module's parent — outside the reactor.
+    _tree(tmp_path, "src/main/java/com/acme/Far.java")
+    classes = tmp_path / "repo" / "far" / "deeper" / "target" / "classes"
+    classes.mkdir(parents=True)
+    index = _write(
+        root,
+        symbols=[_symbol(_MODULE + "com/acme/Far#go().", document_id="far")],
+        documents=[
+            {
+                "document_id": "far",
+                "relative_path": "com/acme/Far.java",
+                "origin_entry": str(classes),
+            }
+        ],
+    )
+
+    assert index["symbols"][0]["file"] is None
+
+
+def test_a_shape_carrier_hit_is_a_complete_answer(tmp_path: Path):
+    """Every record self-describing, which this file was the one exception to: it shipped
+    the handler and caller as bare symbols, so a hit handed back a name the reader then had
+    to look up in `symbols.ndjson` before it could do anything."""
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    index = _write(
+        root,
+        symbols=[_symbol(_LIST)],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/orders",
+                "handler": _LIST,
+                "caller": None,
+                "request_shape": json.dumps({"shape_id": "com/acme/Order#"}),
+                "response_shape": None,
+            }
+        ],
+    )
+
+    [carried] = index["shape_carriers"][0]["request"]
+    assert carried["handler_at"]["file"] == "src/main/java/com/acme/Api.java"
+    assert carried["handler_at"]["line"] == 41
+    # A row carries a handler OR a caller, so the absent one is null rather than an
+    # all-null location answering a question nobody asked.
+    assert carried["caller_at"] is None
+
+
+def test_every_index_file_is_written_in_a_stable_order(tmp_path: Path):
+    """NFR-1, and the byte-identity test above cannot see this.
+
+    That one calls `write_index` twice in ONE process with the same input lists, so an
+    index built by iterating a `set` comes out identical both times and every missing
+    `sorted()` survives it. Three of the eight indexes group into sets. Here the inputs are
+    SHUFFLED between the two runs, which is what a different scan order — or a different
+    hash seed — really looks like.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    callers = [
+        {"caller": _MODULE + f"com/acme/C{n}#go().", "callee": _MODULE + "com/acme/T#t()."}
+        for n in range(12)
+    ]
+    interfaces = [
+        {"symbol": _MODULE + f"com/acme/I{n}#", "interfaces": json.dumps(["com/acme/Face#"])}
+        for n in range(12)
+    ]
+    annotations = [
+        {"target": _MODULE + f"com/acme/A{n}#", "annotation": "org/x/Ann#"} for n in range(12)
+    ]
+    documents = [{"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}]
+
+    def run(where: str, order: int) -> dict[str, str]:
+        write_index(
+            root / where,
+            symbols=[_symbol(_LIST)],
+            documents=documents,
+            call_edges=callers[::order],
+            implementations=interfaces[::order],
+            annotations=annotations[::order],
+            endpoints=[],
+            roots=[],
+            shapes=[],
+            shape_fields=[],
+            source_roots=["src/main/java"],
+            module_root=root,
+            redactor=Redactor.from_rules(),
+        )
+        return {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted((root / where / "index").iterdir())
+        }
+
+    assert run("forwards", 1) == run("backwards", -1)

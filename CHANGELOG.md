@@ -64,10 +64,11 @@ here would restate those documents rather than add anything.
   `line: null` rather than borrowing its first method's. **Placement was the work.** Joining
   the module's `source_roots` placed 157 of `mall-admin`'s 648 documents; a reactor sibling's
   sources live under the SIBLING's root, and resolving through `origin_entry` took it to
-  25,521 of 25,521, 24,093 through a sibling. Never an absolute path — a bundle travels. Every
-  unplaced symbol left on every corpus is generated code under `target/generated-sources/`,
-  deliberately left null: an agent sent to edit a generated file edits what the next build
-  overwrites. **The index masks like every other exit** — it reads the same rows `graph/`
+  25,521 of 25,521, 24,093 through a sibling. Never an absolute path — a bundle travels. Unplaced
+  symbols have two causes: generated code under `target/generated-sources/` (1,285 of
+  1,287), deliberately left null because an agent sent to edit a generated file edits what
+  the next build overwrites, and a LIBRARY's own classes read out of a jar (2), whose
+  sources are not in the repository at all. **The index masks like every other exit** — it reads the same rows `graph/`
   does, and an address published unmasked here would be the bytes the parquet beside it
   takes trouble to strip. **Two more files assemble what the others leave joined** (W36):
   `files.ndjson`, per file, so an agent decides not to open one — the cheapest win, since
@@ -94,13 +95,14 @@ here would restate those documents rather than add anything.
   with `open: false` where the merged contract is 46 — its scanned parent declares 45, one
   of them a static `serialVersionUID` that reaches no wire; `PmsProductParam` published 7
   of 49, `jhipster-sample-app`'s `ManagedUserVM` 1 of 14.
-  DR-5 links services on this comparison, so a 2-field contract that is really 47 fields
+  DR-5 links services on this comparison, so a 2-field contract that is really 46 fields
   is a match made on almost nothing. **The accessor half hid it**: the fallback to
   accessors runs only where the field pass found NOTHING, and W26 gave that fallback an
   ancestry walk — so a payload with no field of its own came out right and only one with
   SOME field of its own was wrong. The fixture had the first shape; `DetailedOrderResult`
   now carries a field of its own so the always-on gate has the second. The field pass
-  walks the scanned ancestry in JVMS 5.4.3.3 order, first declaration of a name winning:
+  walks the scanned ancestry in the order `_closure_of` uses — the superclass chain
+  before interfaces — first declaration of a name winning:
   **153 wire fields recovered on mall-admin, 17 on jhipster**. An unscanned SUPERCLASS now
   opens its subtype — fields nobody can see are fields nobody can claim to have described,
   a rule that fires on ZERO shapes across all four corpora and is recorded as such —

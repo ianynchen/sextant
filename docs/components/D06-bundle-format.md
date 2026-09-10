@@ -31,6 +31,7 @@ instead of joining it anyway.
   facts/**/*.parquet        one partition per source file
   graph/*.parquet           the derived tables of D01
   render/                   architecture.md, architecture.html — present only when render ran
+  index/*.ndjson            the lookup projection of F8 §9.3 — always written
 ```
 
 > **Amendment (2026-09-02, Phase 2K design §6b — approved, delivered).** `render/` is new:
@@ -46,6 +47,29 @@ instead of joining it anyway.
 > `.sextant-enrichment.json`, still never travels** — §7's rule is unchanged, and this
 > subsection does not relax it: what ships is the already-assembled, already-redacted
 > DOCUMENT an overlay produced, never the program artifact that produced it.
+
+> **Amendment (F8 §9.3, W35/W36 — delivered).** `index/` is the bundle's THIRD projection,
+> and it is a projection rather than data: eight NDJSON files derived at export from the
+> tables already in `graph/`, so nothing in it is a claim the dataset does not already make.
+> What it adds is the JOIN a consumer would otherwise perform — symbol to document to source
+> root, and the reverse direction of edges the tables store one way round — and a
+> `file:line` a reader can open.
+>
+> `symbols`, `callers`, `implementors`, `annotated`, `shape_carriers` and `addresses` each
+> answer one question; `files` and `impact` assemble several. **NDJSON, ruled in §9.3**,
+> because a grep hit returns one complete self-describing record, which is what matters when
+> an agent opens the file cold with no schema and no engine — a Parquet table is not
+> greppable and a DuckDB file must be learned before it answers anything.
+>
+> **It is an EXIT, so it masks** (D04 §1): the address-bearing fields take the same
+> redactor `graph/`'s own address columns take, and a bundle whose index disagreed with its
+> tables about one address would be two answers in one directory.
+>
+> **The accepted cost, stated in the design:** the index cannot be joined against the tables
+> in DuckDB. Its job is to reach a `file:line` fast; after that the consumer opens the file,
+> or queries the tables by the exact symbol the index handed back — which is why every
+> record carries the symbol verbatim. Unlike `render/`, it is written on every export, so
+> `contents.index` is never empty for a bundle this version produced.
 
 **Parquet here, JSONL in the workspace.** In the workspace, facts are one small file per
 source file, and a columnar footer would cost more than the data. In a bundle the same
@@ -163,6 +187,11 @@ workspace `export` was run against before `render` ever produced anything, `["ar
 `tables`/`facts_files` are — never absent merely because nothing shipped under it — so a
 consumer checking whether a rendered document travelled reads one field rather than probing
 the bundle's own directory listing.
+
+**`contents.index` names what shipped under `index/`** (F8 §9.3), by the same rule and for
+the same reason. It differs from `render` in one way worth stating: the index is written on
+every export, so `[]` means a bundle produced before the index existed rather than a step
+somebody skipped.
 
 **`documents` carries `origin`** — the coordinate of the library a document was extracted
 from ([D00](D00-fact-schema.md) §2), NULL for the module's own output. Opting a library in
@@ -428,6 +457,8 @@ All three resolved for 2B:
   the archive question waits until publishing exists.
 - `--what graph` is **deferred**. Facts are what make a bundle re-derivable, so a 2B export
   always carries both (§2).
-- The full-text index does not travel, because none exists yet to travel.
+- The full-text index does not travel, because none exists yet to travel. (M09's, that is
+  — the LOOKUP index of F8 §9.3 does travel, as `index/*.ndjson`; the two are different
+  things and this line is about the one that still does not exist.)
 
 None remain open for this phase.
