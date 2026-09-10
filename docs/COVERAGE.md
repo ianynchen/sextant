@@ -166,6 +166,25 @@ This section is what stands behind them: what a run actually produces today, wha
 `✅ ASM` in the Scanner column claims, what the messaging table leaves out, and how the
 cells are generated.
 
+**What the `Java / Kotlin` row does and does not claim** (W42). Both matrices carry ONE row
+for the two languages, and `coverage_matrix.py` aliases `Kotlin` to it — so a checklist row
+spelled `Java` counts into a cell labelled for both. Measured: §5.1 to §5.12 hold **176 rows
+whose first cell is `Java` and 0 whose first cell is `Kotlin`**, so every cell in that row is
+carried entirely by Java rows.
+
+That is not a false claim, and saying why is the point. These catalogs match on FULLY
+QUALIFIED annotation and type names in compiled bytecode, and Kotlin compiles to the same
+class files — a Kotlin `@RestController` carries the same `@RequestMapping` descriptor a Java
+one does, which is Q2's "same bytecode level" ruling. The fixture proves the mechanism rather
+than the parity: `KotlinOrderRoutes.kt` derives three routes through the reactive functional
+catalog, and they are indistinguishable in the export from the Java ones beside them.
+
+**What the shared row cannot show is where Kotlin DIVERGES**, and §5.13 is where those live —
+`suspend fun`, extension functions, `$default` synthetics, `DefaultImpls`, each `unsupported`
+with the class-file shape that makes it so. A reader who takes the merged row as "Kotlin is
+at parity" is right about the protocol axis and wrong about the language axis, which is
+exactly why the checklist gained a language axis in W41.
+
 ### What ships today
 
 **Two cells, now with contracts and an outbound direction.** Java and Kotlin, REST inbound,
@@ -3242,16 +3261,21 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 Not a protocol, and not a library: a thing the COMPILER emits that a reader of the class
 file has to recognise. **Almost nothing in this section is measured against real Kotlin**: the six corpora under
 `examples/` contain **zero `.kt` files** between them, and the fixture contains exactly TWO —
-`KotlinOrder.kt`, a data class, and `KotlinOrderRoutes.kt`, a reactive `coRouter`. So TWO
-rows below have a live instance and the rest are read from the class-file format and from
-`extractor-jvm`'s own tests: property nullability, from the data class — and **`suspend
-fun`**, because `KotlinOrderRoutes.kt` declares `suspend fun listOrders(request:
-ServerRequest)` and uses it as the handler of `GET /kt/orders`. The scanned facts publish
-that method's trailing `$completion` parameter typed `kotlin/coroutines/Continuation#`,
-which is exactly the synthetic the row below says nothing recognises — so its under-report
-is live rather than hypothetical. *This paragraph first said the fixture had no `.kt` files
-at all, and then that only the nullability row was exercised. Both were wrong, and the
-second was wrong in the direction that makes an under-report look theoretical.* That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
+`KotlinOrder.kt`, a data class, and `KotlinOrderRoutes.kt`, a reactive `coRouter`.
+
+**Exactly ONE row below has a live instance, and it is a boundary rather than a capability.**
+`KotlinOrderRoutes.kt` declares `suspend fun listOrders(request: ServerRequest)` and uses it
+as the handler of `GET /kt/orders`; the scanned facts publish its trailing `$completion`
+parameter typed `kotlin/coroutines/Continuation#` and an erased `java/lang/Object#` return —
+which is exactly what the `suspend fun` row says nothing recognises, so that under-report is
+live and not hypothetical. **Property nullability is NOT exercised**: `KotlinOrder` is
+declared and used by nothing, so it reaches no wire boundary, expands to no shape, and
+contributes none of the 54 `shape_fields` the fixture derives. The capability is real and
+`extractor-jvm`'s own tests prove it; no row in this estate consumes it.
+
+*Three attempts at this paragraph: it first said the fixture had no `.kt` files at all, then
+that only nullability was exercised, then that nullability and `suspend fun` both were. Each
+was measured less carefully than the last correction claimed.* That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
 Kotlin rows out of 176** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
 has been asserting a parity nobody measured.
 
@@ -3349,6 +3373,54 @@ appeared in no checklist anywhere, so a reader had no way to learn that.
 
 ---
 
+### 5.21 Out of scope for v1 (Q3)
+
+Q3 ruled that v1 builds **the five asymmetries only** — the missing half of a surface we
+already claim — and that everything else is a stated boundary. These are the four the gap
+analysis named, each `unsupported` with what it would take, so a reader meets them here
+rather than inferring them from silence.
+
+| Surface | What it is | Committed at | Support |
+|---|---|---|---|
+| **Spring Cloud Gateway** | Routes declared in a `RouteLocator` builder chain or in `spring.cloud.gateway.routes` configuration | `G-30`, and the design calls it *"the largest single hole"* | **unsupported.** Both halves are shapes this analysis has vocabulary for — a builder chain is `fluent`'s, a configuration list is `config_join`'s — and neither is catalogued. A gateway module publishes no routes at all, which for a gateway is its whole reason to exist |
+| **Kafka Streams** | `StreamsBuilder.stream(...)`/`.to(...)` topologies | `G-31` | **unsupported.** The topics are string literals at builder calls, so the shape is `fluent`'s; what is missing is the catalog and a measurement of which builder methods address a topic |
+| **Programmatic Jakarta WebSocket registration** | `ServerEndpointConfig.Builder.create(Class, "/path")` rather than `@ServerEndpoint` | `G-34` | **unsupported.** `jakarta-websocket.yml` reads the annotation only. The programmatic path is a `single_call` on a builder, and W46 read the CLIENT direction of this same library without touching it |
+| **`@DgsEntityFetcher`** | Netflix DGS federation entity resolution | `G-40` | **unsupported.** `dgs-graphql.yml` reads `@DgsQuery`/`@DgsMutation`/`@DgsData`; the federation annotation names an entity type rather than a schema field, which is a different identity this catalog has no rule for |
+
+### 5.22 Class-file attributes deliberately not read (F1)
+
+Every attribute JVMS 4.7 defines is in `AttributeLedger` in exactly one of two states — read,
+naming the callback that reads it, or deliberately not read with a stated reason. **There is
+no third state**, and `AttributeLedgerTest` compares the ledger against JVMS's own list and
+refuses a reason that is a deferral in disguise. §2c has the whole argument; this is the
+residue, enumerated so it carries a support level like everything else.
+
+| Attribute | Why it is not read | Support |
+|---|---|---|
+| `StackMapTable` | Verification metadata. It describes no declaration — it tells the verifier what the operand stack looks like at each branch target | **unsupported, and ruled rather than deferred.** Nothing a boundary could be derived from |
+| `LocalVariableTypeTable` | Duplicates `Signature` | **unsupported, measured.** It adds a local's generic signature where the plain `LocalVariableTable` has the erased one — and the NAMES W6 wants are in the plain table, while generic parameter types already come from `Signature` (W5). Reading it would duplicate what is read |
+| `Module` | Module identity comes from the build's coordinates | **unsupported.** `module-info.class` is suppressed whole |
+| `ModulePackages` | The same | **unsupported** |
+| `ModuleMainClass` | The same, and it has no visitor to be read from once `module-info.class` is suppressed | **unsupported.** Measured over 1,672 cached jars: 383 carry a module descriptor and 6 of those declare a main class |
+
+### 5.23 Declared slices (Q4)
+
+Q4 ruled that a catalog may cover part of its framework **where the slice is declared** — in
+the catalog and here — with what falls outside it. Presence stops meaning completeness. The
+cost is a per-catalog enumeration pass, and `scripts/probes/w19_catalog_surface/run.sh` is
+what pays it: it reads each owner's declared methods out of the jar and cross-references the
+catalog AS LOADED, so a release adding an addressable method fails a test rather than quietly
+widening the distance between what a catalog claims and what it reads.
+
+| Slice | Catalog | What is outside | Support |
+|---|---|---|---|
+| `G-44` | `spring-jms-template`, `spring-rabbit-template`, `spring-sqs-template`, `spring-pubsub` | The SEND half only is read. `JmsTemplate`'s four `receive*` families are a real inbound wire and the largest part of the gap | **partially supported**, declared |
+| `G-37` | `spring-webflux-router`, `spring-mvc-router` | `RouterFunctions$Builder` entirely — 0 of 20 on each side. `route()`'s builder DSL has been the reference documentation's recommended Java shape since Spring 5.2 | **partially supported**, declared |
+| `G-43` | `aws-sqs-sdk` | `SqsAsyncClient`, the batch forms, and the entire inbound direction including `receiveMessage` | **partially supported**, declared |
+| `G-45` | `spring-data-rest` | JPA repositories only | **partially supported**, declared |
+| `G-47` | `spring-integration` | 2 of roughly 12 channel annotations | **partially supported**, declared |
+| `G-41` | `dgs-graphql` | `@DgsData` is `@Inherited`, and the inherited case is not walked | **partially supported**, declared |
+| — | `spring-stomp-template` | 11 of `SimpMessagingTemplate`'s 14 methods, one of them addressing-shaped | **partially supported** (W43), declared |
 ---
 
 ## 6. Not on the protocol axis — platform boundaries

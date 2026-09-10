@@ -87,6 +87,29 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **Everything the design names now carries a support level, and a test says so**
+  (F6 §7.4/§7.5, W42). W41 built the axes and homed twelve items; this is the rest of the
+  sets §7.4 lists. Three new sections: **§5.21** Q3's four out-of-scope surfaces — Spring
+  Cloud Gateway, Kafka Streams, programmatic Jakarta WebSocket registration,
+  `@DgsEntityFetcher` — each `unsupported` with what it would take; **§5.22** the five
+  class-file attributes F1 deliberately does not read, with the measurement behind each;
+  **§5.23** Q4's declared slices, with what falls outside each.
+  The acceptance clause is now mechanical: every item the design names must appear on a ROW
+  that also carries one of the three levels, because a row naming an item and stating no
+  level reads as coverage while committing to nothing. Verified against both failure modes.
+  **The Kotlin parity claim, finally measured.** §5.1–§5.12 hold **176 rows spelled `Java`
+  and 0 spelled `Kotlin`** while `coverage_matrix.py` aliases Kotlin into the same matrix
+  row — the design calls that "a parity nobody checked". Checked: it is honest for the
+  PROTOCOL axis, because these catalogs match fully qualified names in compiled bytecode and
+  Kotlin compiles to the same class files, which the fixture's three `coRouter` routes
+  demonstrate live. What the merged row cannot show is where Kotlin DIVERGES, and that is
+  what §5.13 is for.
+  One correction that took three attempts: **exactly one Kotlin row has a live instance** —
+  `suspend fun`, whose `$completion` parameter and erased `java/lang/Object` return are
+  published for `GET /kt/orders`. Property nullability is NOT exercised: `KotlinOrder` is
+  declared, used by nothing, reaches no wire boundary, and contributes none of the fixture's
+  54 shape fields. The capability is real and no row in this estate consumes it.
+
 - **STOMP's error contract is in the checklist** (F10 §11, `G-35`, W47). §5.1 has shipped
   `error_handlers` for `@ControllerAdvice` since 2O while `@MessageExceptionHandler` was
   absent from §5 entirely, so a service whose messaging errors ARE handled looked exactly

@@ -48,6 +48,12 @@ NON_PROTOCOL = {
     "Question ledger",
     "Rendered document",
     "Query and findings",
+    # W42's enumerations. Not protocol rows and not language rows — each is a set the
+    # design named that had to carry a support level: Q3's out-of-scope surfaces, F1's
+    # deliberately-not-read attributes, and Q4's declared slices.
+    "Out of scope for v1 (Q3)",
+    "Class-file attributes deliberately not read (F1)",
+    "Declared slices (Q4)",
 }
 
 # Row label in section 5 -> matrix rows it feeds.
