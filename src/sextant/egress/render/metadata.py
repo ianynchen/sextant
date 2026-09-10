@@ -104,6 +104,27 @@ def write_metadata(
             # (NFR-1); the key is always present, empty where nothing was
             # recorded, so it never reads as "no dependencies" by omission.
             "dependencies": dict(module.dependency_versions),
+            # F8 §9.3 (W35). Where this module's sources live, RELATIVE TO ITS
+            # ROOT — whatever directories the build declares as source.
+            #
+            # A `document`'s `relative_path` is a package path
+            # (`com/macro/mall/OmsOrderController.<ext>`), which is relative to
+            # one of these and openable against nothing on its own. The index
+            # joins the two, and it is recorded here because `export` reads
+            # what `analyze` left and never re-detects (M08) — so a root the
+            # detector found at analyze time has to be written down then or it
+            # is gone.
+            #
+            # Relative and POSIX-spelled, so a bundle moved to another machine
+            # still resolves: an absolute path names a directory that exists on
+            # exactly one computer, which is not what a portable bundle can
+            # carry. Sorted for NFR-1, and empty for a module whose build
+            # declares none rather than defaulted to a convention nobody read.
+            "source_roots": sorted(
+                root.relative_to(module.root).as_posix()
+                for root in module.source_roots
+                if root.is_relative_to(module.root)
+            ),
         },
         "provenance": {
             "commit": commit,

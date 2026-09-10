@@ -613,6 +613,14 @@ SELECT document_id,
        -- bundle would be laundered into module-observed evidence exactly where
        -- it travels furthest from the person who made it.
        payload ->> 'origin'          AS origin,
+       -- WHERE this document's class file was read from — the classes directory
+       -- itself, not the library coordinate above (D00 §2). Projected for the
+       -- index (F8 §9.3, W35): a SIBLING module's sources are under that
+       -- sibling's own root, and `origin_entry` is the only thing that says
+       -- which sibling. Without it an index built from one module's source
+       -- roots placed 157 of `mall-admin`'s 648 documents — every one of its
+       -- own and none of the four reactor siblings it scans.
+       payload ->> 'origin_entry'    AS origin_entry,
        (payload ->> 'partial')::BOOLEAN AS partial,
        -- JEP 238 (W3): which copy of an overlaid class this document holds, and
        -- the name the JVM knows that class by. Projected so `selected_documents`
@@ -742,7 +750,21 @@ SELECT rowid                        AS seq,
        -- other construct, and on a fact from a scanner that does not report
        -- them, so each reader supplies its own default rather than this view
        -- inventing one for constructs the modifier means nothing for.
-       payload ->  'modifiers'      AS modifiers
+       payload ->  'modifiers'      AS modifiers,
+       -- JVMS 4.7.12 `LineNumberTable`, read by F1 and until W35 reachable only
+       -- by parsing a payload. The extent of the CODE, not of the declaration:
+       -- the first line is the body's first statement, so annotations and the
+       -- signature sit above it.
+       --
+       -- **0 means the class file states none, which for a TYPE or a FIELD is
+       -- always.** Neither carries a `LineNumberTable` — only a method body
+       -- does — so `line_start = 0` on a class is not a gap in the scan, and
+       -- subtracting to guess a declaration line would be a claim about
+       -- formatting. Measured on `mall-admin`: 20,961 of 22,059 methods and
+       -- 818 of 818 constructors carry one; every one of 509 classes, 132
+       -- interfaces and 2,000 fields reads 0.
+       coalesce((payload ->> 'line_start')::INTEGER, 0) AS line_start,
+       coalesce((payload ->> 'line_end')::INTEGER, 0)   AS line_end
 FROM raw_facts WHERE kind = 'symbol'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

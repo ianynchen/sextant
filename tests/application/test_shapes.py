@@ -2149,7 +2149,8 @@ def test_the_derivation_names_no_language():
 # field pass produced NOTHING, and W26 gave that fallback an ancestry walk — so a
 # type with no fields of its own (this repo's `DetailedOrderResult`) came out
 # right through the accessors, and only a type with SOME fields of its own was
-# wrong. The fixture had the first shape and not the second.
+# wrong. The fixture had the first shape and not the second, and its
+# `DetailedOrderResult` now publishes 1 own field plus 2 inherited.
 # ---------------------------------------------------------------------------
 
 _PARENT = _MODULE + "com/acme/orders/Base#"
@@ -2302,4 +2303,59 @@ def test_an_unscanned_INTERFACE_does_not_open_its_implementor(tmp_path: Path):
     )
     workspace.close()
 
+    assert open_flag is False
+
+
+def test_a_schema_described_type_is_not_opened_by_its_generated_superclass(tmp_path: Path):
+    """The exclusion that keeps the unscanned-superclass rule off the four shapes it
+    would otherwise reach, and nothing pinned it (W33 review).
+
+    A type owning a `declared_shape` takes its contract from the SCHEMA and never from its
+    class file (the never-a-blend rule, D01 §3), so what its generated class happens to
+    extend says nothing about the payload. Every protobuf message extends the runtime's
+    unscanned base, and without this guard all four of the fixture's proto shapes flip to
+    `open: true` — after which W33's diagram draws four arrows to that base and an
+    `<<open>>` node above it, the exact outcome both waves say they measured and rejected.
+    """
+    facts = tmp_path / "facts"
+    described = _type("doc", "com/acme/orders/Message#")
+    described["superclass"] = _MODULE + "runtime/GeneratedMessage#"
+    _write(
+        facts / "doc.jsonl",
+        _document("doc", "Message.java"),
+        [
+            described,
+            DeclaredShapeFact(
+                document_id="doc",
+                symbol="com/acme/orders/Message#",
+                schema_name="acme.Message",
+                schema_format="protobuf",
+                origin="compiled",
+                evidence="compiler",
+                fields=[
+                    DeclaredFieldFact(
+                        name="id",
+                        wire_name="id",
+                        field_number=1,
+                        wire_type="string",
+                        required=True,
+                        nullable=False,
+                    )
+                ],
+            ).model_dump(mode="json"),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _CATALOG, ["com/acme/orders/Message#"])
+    open_flag = next(
+        bool(row["open"])
+        for row in workspace.query("shapes")
+        if str(row["shape_id"]) == "com/acme/orders/Message#"
+    )
+    names = [f["wire_name"] for f in shape_fields_of(workspace, "com/acme/orders/Message#")]
+    workspace.close()
+
+    assert names == ["id"], "the schema describes it, and the class file is not consulted"
     assert open_flag is False

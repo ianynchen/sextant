@@ -136,6 +136,7 @@ from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import RedactionError, Redactor
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.egress.export.index import write_index
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import (
     AssembledDocument,
@@ -1359,6 +1360,22 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
     try:
         tables = workspace.export_tables(bundle, redactor)
         facts_files = workspace.export_facts(bundle, redactor)
+        # F8 §9.3 (W35). A third projection beside `graph/` and `render/`: the same rows,
+        # joined to a file and a line, in the shape a machine reader greps. Derived from
+        # the tables inside the same open workspace, so the index and the dataset it
+        # indexes can never be two different runs.
+        index_files = write_index(
+            bundle,
+            symbols=workspace.query("located_symbols"),
+            documents=workspace.query("located_documents"),
+            call_edges=workspace.query("call_edges"),
+            implementations=workspace.query("implementations"),
+            annotations=workspace.query("annotations"),
+            endpoints=workspace.query("endpoints"),
+            roots=workspace.query("roots"),
+            source_roots=[str(root) for root in metadata["module"].get("source_roots", [])],
+            module_root=path,
+        )
     finally:
         workspace.close()
 
@@ -1384,6 +1401,7 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
         tables=tables,
         facts_files=facts_files,
         render=shipped_render,
+        index=index_files,
     )
     return ExportResult(bundle=bundle)
 

@@ -52,6 +52,11 @@ Checks, per expectation:
   because they are two claims: only the second can appear in the document. Pinned because
   W32's plan row claimed this shape never occurred on real code and it occurs 34 times on
   `spring-petclinic-rest`.
+- **`contracts`**, where the pin declares one (F4 §5.2, F7 §8.4) — shape fields, open
+  shapes and inheritance arrows. The inherited-field fix recovered 153 fields on
+  `mall-admin` and 17 on `jhipster-sample-app`, and the class diagram draws one arrow on
+  each corpus that has any; those figures appear in four documents and nothing re-checked
+  them.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -279,6 +284,43 @@ def _analyze_and_render(module: Path) -> None:
         )
 
 
+def _contracts(module: Path) -> dict[str, int]:
+    """`{"shape_fields": N, "open_shapes": M, "inheritance_edges": K}` from the workspace
+    `analyze` has just written.
+
+    `inheritance_edges` runs the renderer's OWN projection rather than counting hierarchy
+    rows, because which ancestors earn an arrow is the whole of what F7 §8.4 decided — a
+    count of `type_hierarchy` would stay green while the rule that filters it rotted.
+    """
+    import duckdb
+
+    from sextant.egress.render.document import _contract_nodes
+
+    connection = duckdb.connect(str(module / ".sextant" / "workspace.duckdb"), read_only=True)
+    try:
+        fields = connection.execute("SELECT count(*) FROM shape_fields").fetchone()
+        opened = connection.execute("SELECT count(*) FROM shapes WHERE open").fetchone()
+        shapes = [
+            {"shape_id": row[0], "open": row[1]}
+            for row in connection.execute("SELECT shape_id, open FROM shapes ORDER BY 1").fetchall()
+        ]
+        hierarchy = [
+            {"child": row[0], "ancestor": row[1], "kind": row[2], "scanned": row[3]}
+            for row in connection.execute(
+                "SELECT child, ancestor, kind, scanned FROM type_hierarchy "
+                "ORDER BY child, position, ancestor"
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+    _nodes, edges = _contract_nodes(shapes, (), hierarchy)
+    return {
+        "shape_fields": int(str(fields[0])) if fields else 0,
+        "open_shapes": int(str(opened[0])) if opened else 0,
+        "inheritance_edges": sum(1 for edge in edges if edge.kind != "holds"),
+    }
+
+
 def _narrowed_sites(module: Path) -> dict[str, int]:
     """`{"in_graph": N, "reached_by_a_trace": M}` — call sites whose dispatch narrowed to
     several bodies, and how many of them a walk reaches.
@@ -476,6 +518,23 @@ def _check_one(name: str) -> list[str]:
                 f"narrowed sites: expected {expected_narrowed!r}, got {counted!r} — this "
                 f"is the shape F7 §8.3's `alt` blocks are drawn for, and the last time it "
                 f"went unpinned a plan row claimed it never occurred"
+            )
+
+    # F4 §5.2 / F7 §8.4. What the wire contracts and the contract diagram came out as:
+    # how many shape fields, how many shapes still open, and how many inheritance arrows.
+    #
+    # **Pinned because the headline numbers of two waves were not.** The inherited-field
+    # fix recovered 153 wire fields here and 17 on `jhipster-sample-app`, and W33 draws one
+    # inheritance arrow on each corpus that has any — three figures across four documents
+    # with nothing re-checking them, which is the state W32's review called out and which
+    # `terminal_kinds` exists to prevent.
+    expected_contracts = expectation.get("contracts")
+    if expected_contracts is not None:
+        counted = _contracts(module)
+        if counted != expected_contracts:
+            problems.append(
+                f"contracts: expected {expected_contracts!r}, got {counted!r} — these are "
+                f"the wire-contract and inheritance-diagram figures four documents quote"
             )
 
     # F3 §4.2 (W21). OPTIONAL, because it is a property of the upstream's own source

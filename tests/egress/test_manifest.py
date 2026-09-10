@@ -45,6 +45,10 @@ def test_the_manifest_carries_provenance_coverage_and_contents(tmp_path: Path):
         "facts_files": 4,
         # No render/ shipped — `[]`, never an absent key (2K Task 8 review).
         "render": [],
+        # Nor index/ (F8 §9.3, W35), and for the same reason: a consumer reads this list
+        # to know what it can load without opening a directory, so an absent key would
+        # make "nothing shipped" indistinguishable from "this manifest predates the key".
+        "index": [],
     }
     # Carried from metadata.json's own field (2F Task 9), never re-derived —
     # `write_metadata` is the one place `resolved_config`'s distinct

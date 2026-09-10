@@ -347,20 +347,45 @@ class _Fields:
     **A payload class extending another published only its OWN fields, and said the
     description was CLOSED.** Measured on `mall-admin`: `dto/OmsOrderDetail extends
     model/OmsOrder` published two fields (`orderItemList`, `historyList`) with
-    `open: false`, while the parent declares 45 more — `id`, `orderSn`, `totalAmount` —
-    every one of them serialised in the real response. `PmsProductParam` published 7 of
-    50, `SmsCouponParam` 2 of 21; `jhipster-sample-app`'s `ManagedUserVM` published 1 of
-    15; this repo's own fixture had `DetailedOrderResult` at 2 of 4. A wire contract
-    missing most of the payload, published as complete, is the over-claim NFR-2 rates
-    worst, and DR-5 links services on exactly this comparison.
+    `open: false`, and the merged contract is **46** — the parent declares 45, of which
+    `serialVersionUID` is static and reaches no wire. So 2 of 46, and likewise
+    `PmsProductParam` 7 of 49 and `SmsCouponParam` 2 of 20; `jhipster-sample-app`'s
+    `ManagedUserVM` published 1 of 14. *(An earlier version of this note said 47, 50, 21
+    and 15 — the parents' DECLARED counts, one static field each above what serialises.)*
+
+    This repo's own fixture `DetailedOrderResult` published **1 of 3**: it declares
+    `detail` and inherits `orderId` and `status`. *(It was described here as "2 of 4",
+    which is not a state it was ever in — before `detail` was added it declared nothing at
+    all and came out right through the accessor fallback, which is exactly why the fixture
+    could not see this defect.)*
+
+    A wire contract missing most of the payload, published as complete, is the over-claim
+    NFR-2 rates worst, and DR-5 links services on exactly this comparison.
 
     It is the same walk `_Accessors` already did for the accessor half, and the two
     halves disagreeing about whether inheritance counts was the whole defect: W26 gave
     accessors an ancestry and left fields without one.
 
     First declaration of a field NAME wins, so a subtype shadowing an ancestor's field
-    takes precedence, and the walk order is JVMS 5.4.3.3's — the superclass chain before
+    takes precedence, and the walk order is `_closure_of`'s — the superclass chain before
     interfaces — so which declaration that is never depends on iteration order (NFR-1).
+
+    **That order is JVMS 5.4.3.3's, which is METHOD resolution**; field resolution is
+    5.4.3.2 and searches superinterfaces BEFORE the superclass. Reusing the method walk is
+    correct here anyway, and not by luck: an interface's own fields are implicitly static,
+    `_rows_of` drops every static field, so no interface can contribute a field for the
+    two orders to disagree about. Shared with the accessor half rather than written twice,
+    which is worth more than matching a search order neither can observe. *(This note said
+    5.4.3.3 as though it were the field rule.)*
+
+    **The PUBLICATION order is child-first, and a serializer's is not.** Jackson collects a
+    superclass's fields before the subtype's, so the JSON on the wire reads `orderId,
+    status, detail` where this publishes `detail, orderId, status`. `shape_fields.ordinal`
+    is declaration order within the closure and never a claim about the order of keys in a
+    document — no consumer reads it as one, and `content_hash` is over the row SET — so it
+    is a difference from the framework rather than a divergence from it. Matching would
+    mean the accessor half diverging from the field half, or changing with it, for an
+    ordering nothing on the wire depends on.
     """
 
     workspace: Workspace
@@ -400,8 +425,18 @@ class _Fields:
         interface's own fields are constants, which `_rows_of` drops as `static` — so
         implementing a MARKER interface says nothing about the payload. Counting it opened
         30 of `mall-admin`'s 107 shapes for one such interface with no members at all,
-        which is an under-claim in the other direction and buries the four real
-        unscanned-base cases.
+        which is an under-claim in the other direction.
+
+        **This rule opens ZERO shapes on every corpus measured**, and that is recorded
+        rather than implied. Across `mall-admin`, `jhipster-sample-app`,
+        `spring-petclinic-rest` and the fixture, four shapes reach an unscanned superclass
+        and all four are the fixture's protobuf messages, which the `descriptor is None`
+        guard at the call site then excludes. So it is a rule shipped against a shape no
+        corpus has — a payload extending a vendor jar's base class — declared and pinned
+        rather than deferred, the same standing `<|..` has in the class diagram.
+        *(An earlier version of this note claimed it kept "the four real unscanned-base
+        cases" from being buried. Those four are `mall-admin`'s newly-open shapes, which
+        are open because they hold an unscanned DATE type — nothing to do with this rule.)*
         """
         _own, ancestry = self._declared()
         return any(

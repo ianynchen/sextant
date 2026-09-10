@@ -20,6 +20,11 @@
     "in_graph": 0,
     "reached_by_a_trace": 0
   },
+  "contracts": {
+    "shape_fields": 629,
+    "open_shapes": 35,
+    "inheritance_edges": 1
+  },
   "routes": {
     "inbound": [
       "GET /admin/info",

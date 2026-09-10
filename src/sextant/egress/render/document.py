@@ -2193,8 +2193,9 @@ def _contract_nodes(
         # A parameterised shape id names a type plus its bound arguments; the hierarchy is
         # keyed on the type alone, exactly as the field and accessor passes key it.
         for ancestor, kind, scanned in ancestors.get(_unparameterised(shape_id), ()):
-            if scanned and ancestor in described:
-                edges.append(ClassEdge(shape_id, ancestor, kind))
+            drawn_as = _described_as(ancestor, shape_id, described)
+            if scanned and drawn_as is not None:
+                edges.append(ClassEdge(shape_id, drawn_as, kind))
             elif not scanned and kind == "extends" and bool(shape["open"]):
                 edges.append(ClassEdge(shape_id, ancestor, kind))
                 if ancestor not in described and ancestor not in opened:
@@ -2204,6 +2205,31 @@ def _contract_nodes(
     # known about one.
     nodes.extend(ClassNode(ancestor, (), True) for ancestor in opened)
     return nodes, edges
+
+
+def _described_as(ancestor: str, child: str, described: set[str]) -> str | None:
+    """Which shape id in the diagram IS this ancestor, or None where none is.
+
+    The hierarchy names a TYPE (`a/Slice#`) and a shape id names a type plus its bound
+    arguments (`a/Slice#<a/OrderView#>`), so a plain membership test misses every
+    parameterised contract — and `Page<T>`/`Slice<T>` is precisely the case W33 cites as
+    the reason its `<|..` rule ships at all. Measured against the shipped projection before
+    this: `Page#<OrderView#> implements Slice#` drew zero edges with both shapes described.
+
+    **The child's own binding is preferred**, because a generic type that extends another
+    usually passes its parameter straight through — `Page<T> extends Slice<T>` — so
+    `Page#<OrderView#>`'s ancestor is `Slice#<OrderView#>` and not some other `Slice`.
+    Where that exact binding is not described, the BARE ancestor is used if it is; where
+    the ancestor is described only under bindings that are not the child's, there is no
+    edge, because the erased hierarchy fact does not say which of them this child extends
+    and drawing a guess would be a claim about the source.
+    """
+    if ancestor in described:
+        return ancestor
+    arguments = child[len(_unparameterised(child)) :]
+    if arguments and (bound := ancestor + arguments) in described:
+        return bound
+    return None
 
 
 def _unparameterised(shape_id: str) -> str:

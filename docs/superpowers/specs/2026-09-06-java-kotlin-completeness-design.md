@@ -1152,6 +1152,20 @@ So Sextant can say **what** exists and not **where**. An index that cannot produ
 `file:line` saves no grep at all, and the whole of §9.3 depends on F1 reading
 `LineNumberTable` and `SourceFile`.
 
+*Half of this is DONE and half of it is not a gap at all — re-measured before W35, because
+it is that wave's premise.* **Line numbers are real where the class file records them**:
+`LineNumberTable` is read, and on mall-admin 21,779 of 25,521 symbol facts carry a
+`line_start` — 20,961 of 22,059 methods and every one of 818 constructors. What still reads
+0 is **types and fields, and that is correct**: a class file states no declaration line for
+either, and the extractor's own note says inventing one by subtracting would be a guess
+about formatting. So an index places a METHOD exactly, and can only derive a type's position
+from its members'.
+
+*The PATH half stands.* `documents.relative_path` is `com/macro/mall/….java` — relative to a
+source root, not to the module — so it is still not openable as written. The detector already
+records `source_roots`, so this is a join the index must perform rather than a fact anyone
+has to go and read.
+
 ### 9.3 The index bundle (Q8b)
 
 Reframed by the user away from *"ten named queries"*: **an index bundle plus a handful of

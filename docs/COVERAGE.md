@@ -761,6 +761,73 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-xii. The bundle says WHERE, not only what (F8 §9.3)
+
+Sextant scanned a repository and could name every symbol in it without ever saying which
+file to open. An agent holding the bundle still had to grep source it had already been told
+about. `index/` is the third projection beside `graph/` and `render/`: six NDJSON files an
+agent loads once and greps, each record self-describing so a grep HIT is a complete answer.
+
+| File | Answers |
+|---|---|
+| `symbols.ndjson` | symbol → file, line range, kind, enclosing |
+| `callers.ndjson` | who CALLS this — resolved, not text |
+| `implementors.ndjson` | who implements this interface |
+| `annotated.ndjson` | which declarations carry this annotation |
+| `shape_carriers.ndjson` | which endpoints carry this shape, request side and response side apart |
+| `addresses.ndjson` | `GET /order/list` → root → handler → `file:line` |
+
+`addresses` is the one that makes the rest reachable: **a person names a route, not a
+symbol**, and every other index needs a symbol to begin. Measured live on the fixture,
+`GET /v1/orders/{id}` returns `src/main/java/com/acme/orders/OrderController.java:40`,
+which opens on `return service.find(id);` with the `@GetMapping` two lines above — the
+extent of the CODE, which is what `LineNumberTable` records.
+
+**What §9.2 said and what is true now.** The design's keystone finding was "every line
+number in the estate is 0". Half of that is fixed and half was never a gap:
+
+| | measured |
+|---|---|
+| methods with a line | 20,961 of 22,059 on `mall-admin` |
+| constructors | 818 of 818 |
+| types and fields | **0, and correctly so** — a class file carries no `LineNumberTable` for either, and subtracting to guess a declaration line would be a claim about formatting |
+
+So a type's record says `line: null` rather than borrowing its first method's line, which is
+where that METHOD is.
+
+**Placement, and the one thing that moved it.** A `relative_path` is a package path,
+openable against nothing; `metadata.json` now carries the module's `source_roots` so the
+index can join them. That alone placed **157 of `mall-admin`'s 648 documents** — every one
+of its own and not a single symbol of the four reactor siblings it scans, 1,428 of 25,521.
+A sibling's sources are under the SIBLING's root, and `origin_entry` is the only thing that
+names it; the module root above the classes directory is SEARCHED for rather than computed,
+because how deep it sits is the build tool's business (`target/classes` against
+`build/classes/java/main`).
+
+| Corpus | symbols placed |
+|---|---|
+| `mall-admin` | **25,521 / 25,521 (100%)**, 24,093 of them through a sibling |
+| `jhipster-sample-app` | 775 / 857 (90%) |
+| `spring-petclinic-rest` | 635 / 1,209 (52%) |
+| `orders-service` (fixture) | 456 / 1,087 (41%) |
+
+**Every unplaced symbol has one cause: generated code.** `AuditEvent.java` (Avro),
+`OwnerMapperImpl.java` (MapStruct), `AbstractAuditingEntity_.java` (JPA metamodel) — all
+written into `target/generated-sources/` at build time, which is not a declared source
+root. The files exist and could be reached by teaching the exporter each build tool's
+generated-source layout; that is deliberately NOT done here, because a generated file is
+regenerated and an agent sent there to make a change would edit something the next build
+overwrites. The record says `file: null`, and this is the reason.
+
+**Never an absolute path.** A bundle travels; an absolute path names a directory on one
+computer. A sibling comes back as `../mall-common/src/main/java/…`, and anything that will
+not reduce to a relative path is dropped rather than published.
+
+**The accepted cost, from the design:** the index cannot be joined against the tables in
+DuckDB. Its job is to reach a `file:line` fast; after that the consumer opens the file or
+queries the tables by the exact symbol the index handed back, which is why every record
+carries the symbol verbatim.
+
 ### 3a-xi. The contract diagram draws inheritance (F7 §8.4)
 
 FR-7 commits to class diagrams, and the emitter drew exactly one arrow — `-->`, the
@@ -786,8 +853,16 @@ What that draws, measured: **one arrow each** on the three corpora that have any
 (`mall-admin`), `AdminUserDTO <|-- ManagedUserVM` (`jhipster-sample-app`) — and none on
 `spring-petclinic-rest`, whose payloads inherit nothing.
 
-**`<|..` has no live instance and is shipped anyway.** No corpus has a payload implementing
-an interface that is itself a payload. `Page<T>`/`Slice<T>` is exactly that shape and W26
+**Two of the five rows have no live instance, and both are shipped anyway.** The
+`<<open>>` ancestor node is the second: measured across all four corpora, zero are drawn —
+which follows from the shape rule beside it, since after the inherited-fields fix only a
+schema-described type can be closed AND have an unscanned superclass, and those are exactly
+what the third row excludes. It is a rule against a shape no corpus has, a payload
+extending a vendor jar's base class, and its absence is recorded here rather than left for
+a reader to infer from a diagram that never draws one.
+
+**`<|..` is the first.** No corpus has a payload implementing an interface that is itself a
+payload. `Page<T>`/`Slice<T>` is exactly that shape and W26
 made such an interface expandable, so the rule is declared and pinned rather than deferred
 until something ships it — and its absence is recorded here rather than left for a reader
 to infer from a diagram that never draws one.
@@ -812,7 +887,9 @@ was complete. Found while starting W33, which asks what a contract type extends.
 
 `OmsOrderDetail` is the response of a real endpoint. It published `orderItemList` and
 `historyList` and claimed a complete description, while the JSON on the wire also carries
-`id`, `orderSn`, `totalAmount` and 42 more. That is the over-claim NFR-2 rates worst, and
+`id`, `orderSn`, `totalAmount` and 41 more — **46 fields, not 2**. (The "declares" column
+is the parent's DECLARED count; one field of each parent is a static `serialVersionUID`,
+which reaches no wire, so the merged contracts are 46, 49, 20 and 14.) That is the over-claim NFR-2 rates worst, and
 DR-5 links services on exactly this comparison — two services agreeing on a 2-field
 contract that is really 47 fields is a match made on almost nothing.
 
@@ -829,7 +906,12 @@ redeclares. Recovered **153 wire fields on `mall-admin`** and 17 on `jhipster-sa
 
 **An unscanned SUPERCLASS now opens its subtype**, which is F7 §8.4's `<<open>>` applied to
 the shape rather than only to the diagram: fields we cannot see are fields we cannot claim
-to have described. Two exclusions keep that from becoming a flood:
+to have described. **It opens ZERO shapes on every corpus measured** — four shapes reach an
+unscanned superclass and all four are the fixture's protobuf messages, which the second
+exclusion below then removes — so it is a rule shipped against a shape no corpus has, a
+payload extending a vendor jar's base class. Declared and pinned rather than deferred, and
+its absence recorded here, which is the standing `<|..` has in the class diagram. Two
+exclusions keep it from becoming a flood:
 
 - **An unscanned INTERFACE does not.** An interface's own fields are constants, dropped as
   `static`, so implementing a marker interface says nothing about the payload. Counting it

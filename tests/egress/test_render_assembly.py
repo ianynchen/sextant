@@ -1223,3 +1223,57 @@ def test_a_parameterised_shape_finds_its_own_types_ancestors():
     )
 
     assert [(e.source, e.target) for e in edges] == [("a/CommonResult#<a/OrderView#>", "a/Base#")]
+
+
+def test_a_scanned_ancestor_that_is_not_a_contract_gets_no_arrow(tmp_path: Path):
+    """The row of the rule that nothing pinned (W33 review), and it is the one with the
+    live consequence: without it `mall-admin` gains three arrows and the fixture four
+    dotted ones to generated builder interfaces.
+
+    `dto/OmsOrderDetail extends model/OmsOrder` is the case. The parent's 45 fields are
+    already IN the child's own list — the field pass walks the ancestry — so the contract
+    on the diagram is complete and an arrow would point at a box with nothing in it. JSON
+    has no inheritance; the flattening is what the wire carries, and this diagram draws the
+    wire.
+    """
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Child#")],
+        (),
+        [_hierarchy("a/Child#", "a/Parent#", "extends", True)],
+    )
+
+    assert edges == []
+
+
+def test_a_parameterised_contract_ancestor_is_found_under_its_binding(tmp_path: Path):
+    """`Page<T>`/`Slice<T>` — the case the `<|..` rule is shipped FOR, and which it could
+    not draw (W33 review).
+
+    The hierarchy names a TYPE (`a/Slice#`) while a shape id names a type plus its bound
+    arguments (`a/Slice#<a/OrderView#>`), so a plain membership test missed every
+    parameterised contract ancestor. The child's own binding is preferred, because a
+    generic type that extends another usually passes its parameter straight through.
+    """
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#<a/OrderView#>"), _shape("a/Page#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert [(e.source, e.target, e.kind) for e in edges] == [
+        ("a/Page#<a/OrderView#>", "a/Slice#<a/OrderView#>", "implements")
+    ]
+
+
+def test_an_ancestor_described_only_under_another_binding_is_not_guessed(tmp_path: Path):
+    """The near-miss for the rule above. Where `Slice` is described only as
+    `Slice#<Other#>`, the erased hierarchy fact does not say whether THIS child extends
+    that binding — so there is no edge, rather than an arrow asserting a relationship
+    between two payloads that may carry different types."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#<a/Other#>"), _shape("a/Page#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert edges == []

@@ -606,6 +606,27 @@ _NAMED_QUERIES = {
     # a type came from (W25's `shapes.origin_tier`). `declared_symbols` answers the
     # symbol alone, and widening it would change what every existing reader gets.
     "declared_symbols_with_documents": ("SELECT symbol, document_id FROM symbols ORDER BY symbol"),
+    # F8 §9.3 (W35). Everything the index needs to PLACE a symbol, in one query: the
+    # symbol, the document that declared it, its kind and enclosing type, and the line
+    # extent `LineNumberTable` gave it.
+    #
+    # Its own query rather than widening `declared_symbols_with_documents`, whose two
+    # readers want exactly two columns — the reason `declared_symbols_with_documents` was
+    # added beside `declared_symbols` rather than replacing it.
+    #
+    # `line_start`/`line_end` are 0 where the class file states none, which for a TYPE or a
+    # FIELD is always: neither carries a `LineNumberTable`. The index turns that 0 into a
+    # NULL, because "the class file does not say" and "line zero" are different things.
+    # F8 §9.3 (W35). Every document's path AND where its class file was read from, which
+    # is what lets the index reach a SIBLING module's sources: the sibling's own root is
+    # the parent of its `target/classes`, and nothing else in the workspace names it.
+    "located_documents": """
+        SELECT document_id, relative_path, origin_entry FROM documents ORDER BY document_id
+    """,
+    "located_symbols": """
+        SELECT symbol, document_id, construct_kind, enclosing, line_start, line_end
+        FROM symbols ORDER BY symbol
+    """,
     "type_parameters": """
         SELECT payload ->> 'symbol'         AS symbol,
                payload ->  'type_parameters' AS type_parameters

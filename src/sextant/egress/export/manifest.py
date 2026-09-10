@@ -22,6 +22,7 @@ def write_manifest(
     tables: list[str],
     facts_files: int,
     render: Sequence[str] = (),
+    index: Sequence[str] = (),
 ) -> None:
     provenance = dict(cast(dict[str, object], metadata.get("provenance", {})))
     # `producer` carries exactly what analyze's provenance recorded, plus
@@ -74,6 +75,13 @@ def write_manifest(
             # other `contents` field already follows: this function writes
             # what it is told, not what it goes and looks for on disk.
             "render": list(render),
+            # F8 §9.3 (W35). The index files that actually shipped under
+            # `index/`, named by the caller for the same reason `render` is:
+            # this function writes what it is told rather than looking on
+            # disk. A consumer reads this list to know what it can load
+            # WITHOUT opening a directory — which is the point of an index it
+            # is meant to load once and grep.
+            "index": list(index),
         },
         "gaps": metadata.get("gaps", []),
         "uncovered": metadata.get("uncovered", []),

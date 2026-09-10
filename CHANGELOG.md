@@ -52,6 +52,23 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **The bundle says WHERE, not only what** (F8 §9.3, W35). Sextant could name every symbol
+  in a repository without saying which file to open, so an agent holding the bundle still
+  had to grep source it had already been told about. `index/` is six NDJSON files beside
+  `graph/` and `render/` — symbols, callers, implementors, annotated declarations, shape
+  carriers, and addresses — each record self-describing, so a grep hit is a complete answer.
+  `GET /v1/orders/{id}` returns `src/main/java/com/acme/orders/OrderController.java:40`.
+  **The design's keystone finding, "every line number in the estate is 0", is half fixed and
+  half never a gap**: methods and constructors carry real lines, while types and fields carry
+  none and correctly so — a class file has no `LineNumberTable` for either — so a type reads
+  `line: null` rather than borrowing its first method's. **Placement was the work.** Joining
+  the module's `source_roots` placed 157 of `mall-admin`'s 648 documents; a reactor sibling's
+  sources live under the SIBLING's root, and resolving through `origin_entry` took it to
+  25,521 of 25,521, 24,093 through a sibling. Never an absolute path — a bundle travels. Every
+  unplaced symbol left on every corpus is generated code under `target/generated-sources/`,
+  deliberately left null: an agent sent to edit a generated file edits what the next build
+  overwrites.
+
 - **The contract class diagram draws inheritance** (F7 §8.4, W33). The emitter knew one
   arrow — `-->`, the association a field makes — and two more say what a type IS: `<|--`
   extends, `<|..` implements. The work was deciding which ancestors earn one.
@@ -68,8 +85,9 @@ here would restate those documents rather than add anything.
 - **A payload publishes the fields it INHERITS** (F4 §5.2). A payload class extending
   another published only its OWN fields and claimed the description was complete.
   `mall-admin`'s `dto/OmsOrderDetail` — a real endpoint's response — published two fields
-  with `open: false` while its scanned parent declares 45 more that are all on the wire;
-  `PmsProductParam` published 7 of 50, `jhipster-sample-app`'s `ManagedUserVM` 1 of 15.
+  with `open: false` where the merged contract is 46 — its scanned parent declares 45, one
+  of them a static `serialVersionUID` that reaches no wire; `PmsProductParam` published 7
+  of 49, `jhipster-sample-app`'s `ManagedUserVM` 1 of 14.
   DR-5 links services on this comparison, so a 2-field contract that is really 47 fields
   is a match made on almost nothing. **The accessor half hid it**: the fallback to
   accessors runs only where the field pass found NOTHING, and W26 gave that fallback an
@@ -78,8 +96,9 @@ here would restate those documents rather than add anything.
   now carries a field of its own so the always-on gate has the second. The field pass
   walks the scanned ancestry in JVMS 5.4.3.3 order, first declaration of a name winning:
   **153 wire fields recovered on mall-admin, 17 on jhipster**. An unscanned SUPERCLASS now
-  opens its subtype — fields nobody can see are fields nobody can claim to have described
-  — while an unscanned INTERFACE does not (its fields are constants, so a marker interface
+  opens its subtype — fields nobody can see are fields nobody can claim to have described,
+  a rule that fires on ZERO shapes across all four corpora and is recorded as such —
+  while an unscanned INTERFACE does not (its fields are constants, so a marker interface
   says nothing, and counting it opened 30 of mall-admin's shapes for one), and neither does
   a type whose contract comes from a schema rather than its class file.
 
