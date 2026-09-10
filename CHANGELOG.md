@@ -87,6 +87,34 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **Four requirements that were never ours, and four that were never written down**
+  (F9 §10.2/§10.3, W51). FR-11 … FR-14 — drift, refactor, design, performance risk — read as
+  things Sextant REPORTS. They are things a consumer DERIVES from what Sextant reports, ruled
+  by the user: *"Sextant can only provide the ammo, but won't be pulling the trigger."* They
+  are usage scenarios now, each naming the capability it waits on, so a reader can tell "not
+  built" from "not ours". The refactor guard travels with them and stays, because it is about
+  what Sextant may SAY: a symbol is reported unreachable only where NO unresolved call site
+  exists in the scope searched, and two thirds of a typical graph ends at a boundary.
+  In their place, FR-21 … FR-24 — the boundary vocabulary, the derivation diff, the
+  observability map and library embedding — fold in as real requirements with traceability
+  rows and their measured state: three unimplemented, one partial (`sextant.api` ships
+  analyze/render/enrich/export; `query` and `diff` do not). They were stated in a tracked
+  document and cited as requirements without being in this one, which is the same defect in
+  the other direction — a commitment nobody could look up.
+  **20 FR either way**, so the count is unchanged and the SET is not; PROJECT.md says that
+  rather than leaving it looking untouched.
+  Two more requirements described things that were never built. **FR-16** read *"a person may
+  assert, correct, or delete a statement in the graph"* — a curation tier this project has
+  ruled into phase L, so the text described something we now know we will never build; it
+  describes a curation FILE that adds links and never edits a fact. **FR-20 clause 2**'s
+  ambiguity rule governed a surface that does not exist, and is restated to say what does:
+  approximate lookup happens against the INDEX that W35/W36 shipped, and commands take exact
+  identifiers.
+  And the two documents that asserted the resolver computes findings stop: `M04-resolver.md`
+  said *"Findings are computed here rather than in the renderer"* and nothing in `src/`
+  computes any; `D01` listed a `findings` table and carried an open design question about
+  whether it should be one table or several. There is no such table and none is planned.
+
 - **PROJECT.md is the delivery authority again, and a test keeps it one** (F9 §10.1, W50).
   Every one of its seventeen component rows read `planned` — including D04, D06, M02, M07 and
   M08, which had shipped for phases. That is C11's finding entire: the file stopped being
@@ -123,11 +151,13 @@ here would restate those documents rather than add anything.
   Kotlin compiles to the same class files, which the fixture's three `coRouter` routes
   demonstrate live. What the merged row cannot show is where Kotlin DIVERGES, and that is
   what §5.13 is for.
-  One correction that took three attempts: **exactly one Kotlin row has a live instance** —
-  `suspend fun`, whose `$completion` parameter and erased `java/lang/Object` return are
-  published for `GET /kt/orders`. Property nullability is NOT exercised: `KotlinOrder` is
-  declared, used by nothing, reaches no wire boundary, and contributes none of the fixture's
-  54 shape fields. The capability is real and no row in this estate consumes it.
+  **Liveness is stated per ROW, not summarised** — four preamble summaries were each wrong,
+  the last of them claiming exactly one live instance. Measured: `suspend fun` is live;
+  property nullability fires on this fixture (`KotlinOrder#id` false, `#note` true) and
+  reaches no shape, so it is read and consumed by nothing; `$default` is live via
+  `copy$default`; lambda bodies handle four endpoints; nested classes number 594; and
+  `DefaultImpls` is genuinely absent. A count that must be re-derived whenever the fixture
+  gains a class does not belong in a preamble.
 
 - **STOMP's error contract is in the checklist** (F10 §11, `G-35`, W47). §5.1 has shipped
   `error_handlers` for `@ControllerAdvice` since 2O while `@MessageExceptionHandler` was

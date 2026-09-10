@@ -630,7 +630,7 @@ build module leaves for a workspace this one does not hold, so no body was read 
 correct — while a body exists somewhere. Joining the two is `Bundle`/`Link` work, not this
 walk's; `docs/COVERAGE.md` §7 carries the measurement.
 
-One table is materialised, because findings need its numbers without walking everything:
+One table is materialised, because a consumer computing the refactor or performance-risk scenario needs its numbers without walking everything:
 
 | Table | Holds |
 |---|---|
@@ -677,7 +677,7 @@ query time** fails with a message naming it, never a shorter answer.
 
 | Table | Holds |
 |---|---|
-| `findings` | Kind, subject, severity, evidence sites |
+| ~~`findings`~~ | **Never built, and no longer planned as a table Sextant writes** (W51). Kind, subject, severity, evidence sites — for FR-11 … FR-14, which are usage scenarios rather than requirements: Sextant publishes the rows a consumer derives them from, and the judgement is the consumer's |
 | `open_questions` | The endpoint's wire identity, the question kind, the candidate answers, the evidence trail |
 
 `open_questions` is not an error log. It is output: a recorded disagreement a person should
@@ -990,5 +990,5 @@ The same stamp travels in the bundle ([D06](D06-bundle-format.md)) so that
 | Decision | Blocks |
 |---|---|
 | Whether `trace_steps` stores nesting as a path or as parent references | M07's sequence emitter |
-| Whether `findings` is one table with a kind column or one table per family | M04 |
+| ~~Whether `findings` is one table with a kind column or one table per family~~ — **moot, W51**: there is no `findings` table and none is planned | M04 |
 | Whether the full-text index lives in the workspace only, or also in a bundle | M08 |

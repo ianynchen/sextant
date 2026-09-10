@@ -214,42 +214,6 @@ agent.
 *The query surface answers structural questions only. Sextant never produces prose about
 what code is for.*
 
-### FR-11 — Drift detection
-
-Where a module contains both a declared contract and an implementation of the same
-contract, Sextant records both and reports any disagreement between them.
-
-Authority is determined by the build: an artifact the build consumes produces facts; an
-artifact it does not consume is documentation and produces none, but is still compared.
-
-Where a generated artifact embeds the schema it was generated from, that embedded schema
-is the one compared.
-
-### FR-12 — Refactor findings
-
-Sextant reports structural problems: dependency cycles between modules or packages,
-symbols with disproportionate coupling, and violations of a declared layering.
-
-*A symbol is reported as unreachable only where no unresolved call site exists within the
-scope searched. Where one does, the finding is withheld and the unresolved site reported
-instead.*
-
-### FR-13 — Design findings
-
-Sextant reports information supporting the division of a system into services: coupling
-between candidate boundaries, shapes crossing more than one boundary, and the contracts
-each boundary would carry.
-
-### FR-14 — Structural performance risk
-
-Sextant reports shapes in the code that are usually costly: the number of remote hops an
-endpoint makes, the number of distinct services it involves, an endpoint reached more
-than once within a single trace, a persistence or remote call inside a loop, and a
-blocking call on an asynchronous path.
-
-*Sextant reports structure, never cost. It does not measure, estimate, or rank by
-latency, throughput, or resource use.*
-
 ### FR-15 — Overlays
 
 Sextant accepts overlays: statements about the graph that did not come from reading
@@ -264,11 +228,22 @@ and the graph disagree, the disagreement is recorded as an open question.
 
 ### FR-16 — Curation and proposals
 
-A person may assert, correct, or delete a statement in the graph. A curated statement
-outranks every other source and is presented to consumers as proven.
+A person may add a curation **file** that supplies links and context the analysis cannot
+derive — a claim about the world, never an edit to a fact. A curated statement is presented
+to consumers as a distinct, higher-trust source beside the derived one, and the derived fact
+it accompanies is never overwritten, corrected or deleted.
 
-Where Sextant finds a candidate it will not act on alone, it writes a proposal in the
-form a curation takes, so that accepting it requires review rather than transcription.
+Where Sextant finds a candidate it will not act on alone, it writes a proposal in the form a
+curation takes, so that accepting it requires review rather than transcription.
+
+> **Amendment (W51).** The shipped text read *"A person may assert, correct, or delete a
+> statement in the graph. A curated statement outranks every other source and is presented to
+> consumers as proven."* That describes something this project has now ruled it will never
+> build: F11's curation tier moved to phase L with M06, and the design says a format whose
+> only consumer does not exist would ship a schema, an evidence tier and a no-mutation test
+> with nothing that reads any of them. Correcting a false requirement is the work; the
+> **wording** is what stays in v1, and this is it. What ships today is neither half — see
+> `docs/COVERAGE.md` §5.18, where both this and FR-15 clause 3 are recorded `unsupported`.
 
 ### FR-17 — Coverage reporting
 
@@ -318,9 +293,107 @@ reaches storage.
 
 ### FR-20 — Command surface
 
-Every command takes the form *noun, verb, subject, options*. Subjects may be named
-approximately; where a name is ambiguous Sextant lists the matches and stops rather than
-choosing. Every result carries an exact identifier that can be given back to Sextant.
+Every command takes the form *noun, verb, subject, options*. Every result carries an exact
+identifier that can be given back to Sextant, and every command takes one.
+
+**Approximate lookup happens against the INDEX, not in the command surface.** A person who
+knows a route or part of a name greps `<bundle>/index/` — `symbols.ndjson`, `addresses.ndjson`
+and the six beside them — and gets back the exact identifier a command then takes. That is
+where the matching belongs: the index is the artifact built for it, and a command that
+resolved names itself would need a second matching rule nobody could see.
+
+> **Amendment (W51).** The shipped clause read *"Subjects may be named approximately; where a
+> name is ambiguous Sextant lists the matches and stops rather than choosing."* No command
+> resolves a subject approximately, so the ambiguity rule governed nothing — it is recorded
+> `unsupported` in `docs/COVERAGE.md` §5.20. The restatement is not a retreat: the capability
+> a reader wanted is real and shipped in W35/W36, one layer out.
+
+### FR-21 — Boundary vocabulary
+
+Sextant defines a **closed, versioned boundary vocabulary** over its derived tables — the
+granularity at which architecture is compared and exported. Each kind names what it is
+derived from and what identifies it, so two analyses can be compared kind by kind rather than
+row by row.
+
+*State: unimplemented. The `dependency` kind derives from edges and dispatch, which did not
+exist when `docs/meridian-integration.md` was written and do now (F8) — so the thing that
+would have blocked it is gone.*
+
+### FR-22 — Derivation diff
+
+Given two analyses of the **same module** — workspace or bundle, any mix — Sextant reports
+the typed change-set in the boundary vocabulary: per kind, entries `added | removed |
+changed`, with `from`/`to` attribute values on `changed`, each entry carrying evidence
+pointers to the symbols and documents that ground it.
+
+*State: unimplemented. This is what the drift scenario waits on.*
+
+### FR-23 — Observability map
+
+For any analysis, Sextant answers **per boundary kind, and per attribute where they differ:
+`observable | partial | not-observable`** — derived from the manifest's gaps, the skipped
+catalogs, the uncovered files, and the shipped coverage cells for the module's languages and
+frameworks.
+
+*State: unimplemented. Every input it needs is already published — `manifest.json` carries
+the gaps and the skipped catalogs with their reasons, `coverage` carries the uncovered files,
+and `docs/COVERAGE.md` carries the cells — so this is an assembly rather than a measurement.*
+
+### FR-24 — Library embedding
+
+Analyze, query, export and diff are callable **in-process from Python**: the CLI is a thin
+wrapper over the same operations. No subprocess, no global state, no environment reads — the
+caller supplies configuration as an object. The enrichment step's language-model port stays a
+port, so an embedding caller supplies its own.
+
+*State: **partial**. `sextant.api` ships `analyze`, `render`, `enrich` and `export` as
+in-process operations and the CLI is already a wrapper over them; `query` and `diff` are
+absent, and `diff` is FR-22.*
+
+> **Where these came from (W51).** `docs/meridian-integration.md` states them and is tracked
+> verbatim; they were cited as requirements without being in this file, which is the same
+> defect in the other direction from FR-11 … FR-14 — a commitment nobody could look up.
+> They are requirements: each is a thing Sextant must DO, not a thing a consumer derives.
+
+---
+
+## Traceability — FR-21 … FR-24
+
+| Requirement | Component | State |
+|---|---|---|
+| FR-21 boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) | unimplemented |
+| FR-22 derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) | unimplemented |
+| FR-23 observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) | unimplemented |
+| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — analyze/render/enrich/export ship; query and diff do not |
+
+---
+
+## Usage scenarios
+
+**These are not requirements of Sextant. They are things Sextant ENABLES** — ruled by the
+user, and consistent with the whole design: Sextant observes, and judgement belongs to
+enrichment, curation or a downstream tool. *"Sextant can only provide the ammo, but won't be
+pulling the trigger."*
+
+They were written as FR-11 … FR-14 and read as things Sextant **reports**; they are things a
+consumer **derives** from what Sextant reports. Each names the capability it waits on, so a
+reader can tell "not built" from "not ours".
+
+| | Scenario | Depends on |
+|---|---|---|
+| Drift | A design is generated, something implements it, Sextant derives the architecture from the **built** code, and the two are compared | FR-22's derivation diff |
+| Refactor | The user reads the architecture plus `call_edges` — dependency cycles, disproportionate coupling, layering violations | `call_edges` exported (shipped, F8) |
+| Design | Coupling between candidate boundaries, shapes crossing more than one — needs stitching between services | phase L |
+| Performance risk | Remote hops per endpoint, an endpoint reached twice in one trace, a call inside a loop — needs cross-module call hops | phase L, plus traces |
+
+**The guard that travelled with the refactor scenario is worth keeping**, because it is about
+what Sextant may say rather than what a consumer does with it: a symbol is reported
+unreachable only where NO unresolved call site exists in the scope searched. Two thirds of a
+typical graph ends at a boundary, so that guard withholds most such findings on most modules
+— which is why the scenario is a consumer's judgement and not a row we publish.
+
+*`M04-resolver.md` and `D01` asserted that the resolver computes these and that a `findings`
+table is produced. Neither is true and neither ever was; both now say so.*
 
 ---
 
@@ -463,10 +536,7 @@ Component designs live in [components/](components/README.md).
 | FR-8 | System linking | [M06](components/M06-stitcher.md), [M05](components/M05-sync.md) |
 | FR-9 | Blast radius | [M09](components/M09-query.md) |
 | FR-10 | Query surface | [M09](components/M09-query.md), [D01](components/D01-graph-schema.md) |
-| FR-11 | Drift detection | [M03](components/M03-scanner.md), [M04](components/M04-resolver.md) |
-| FR-12 | Refactor findings | [M04](components/M04-resolver.md) |
-| FR-13 | Design findings | [M04](components/M04-resolver.md) |
-| FR-14 | Structural performance risk | [M04](components/M04-resolver.md) |
+| ~~FR-11 … FR-14~~ | **Usage scenarios, not requirements** (W51) — see the section above; these four rows named [M04](components/M04-resolver.md) as satisfying them, and it computes none of them | — |
 | FR-15 | Overlays | [M01](components/M01-overlay.md), [D03](components/D03-overlay-schema.md) |
 | FR-16 | Curation and proposals | [M01](components/M01-overlay.md), [M06](components/M06-stitcher.md) |
 | FR-17 | Coverage reporting | [M02](components/M02-detector.md), [M03](components/M03-scanner.md), [M04](components/M04-resolver.md) |

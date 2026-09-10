@@ -626,7 +626,7 @@ one component:
 
 | Decision | Blocks | Tracked in |
 |---|---|---|
-| Which clustering algorithm proposes components | [FR-13](REQUIREMENTS.md#fr-13--design-findings) and the overlay skill | [M04](components/M04-resolver.md) |
+| Which clustering algorithm proposes components | the design *scenario* ([REQUIREMENTS.md](REQUIREMENTS.md#usage-scenarios), formerly FR-13) and the overlay skill — **not a Sextant requirement**, so the question is a consumer's (W51) | [M04](components/M04-resolver.md) |
 | The field-list residue of [D00](components/D00-fact-schema.md) — §5a settled the structure; what remains lands with the validated models | NFR-10's schema-as-code | [D00](components/D00-fact-schema.md) |
 | Repository initialisation under version control | `GUIDELINES.md` §11 | [PROJECT.md](PROJECT.md) |
 

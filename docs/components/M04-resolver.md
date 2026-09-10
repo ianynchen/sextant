@@ -212,9 +212,12 @@ that added this sentence found three.
 branching. It stops at a terminal — and `cycle` is a terminal detected during the walk, a
 correctness requirement rather than a limit.
 
-Findings are computed here rather than in the renderer, so [M09](M09-query.md) can serve
-them too. Refactor findings, design findings, and structural performance risk — hop counts,
-services involved, an endpoint reached twice in one trace, a persistence call inside a loop.
+**No findings are computed here, and none ever were** (W51). This paragraph read *"Findings
+are computed here rather than in the renderer, so M09 can serve them too — refactor findings,
+design findings, and structural performance risk"*, and nothing in `src/` computes any of
+them. They were FR-11 … FR-14, and the user has ruled they are not requirements of Sextant at
+all: they are things a consumer DERIVES from what Sextant reports. `REQUIREMENTS.md` states
+them as usage scenarios now, each naming what it waits on.
 
 **A symbol is reported unreachable only where no `unresolved` call site exists in the scope
 searched.** Otherwise the finding is withheld and the unresolved site reported instead. A

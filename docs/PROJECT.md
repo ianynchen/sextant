@@ -14,6 +14,7 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 |---|---|---|
 | [CONTEXT.md](../CONTEXT.md) — ubiquitous language | delivered | `GUIDELINES.md` §5 |
 | [REQUIREMENTS.md](REQUIREMENTS.md) — 20 FR, 11 NFR | delivered | `GUIDELINES.md` §5 |
+| …and the SET changed in W51 while the count did not: FR-11 … FR-14 left as usage scenarios, FR-21 … FR-24 folded in as real requirements | delivered | `GUIDELINES.md` §5 |
 | [ARCHITECTURE.md](ARCHITECTURE.md) — structure and DR-1 … DR-5 | delivered | `GUIDELINES.md` §5, §5.2 |
 | [components/](components/README.md) — 7 data definitions, 10 modules | delivered | `GUIDELINES.md` §5.1 |
 | Requirement-to-component traceability | delivered | NFR-6 |
