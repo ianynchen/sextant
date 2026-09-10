@@ -610,6 +610,17 @@ _NAMED_QUERIES = {
         FROM roots
         ORDER BY handler, root_kind, protocol, method, path
     """,
+    # F8 §9.4's reachability (W37). The pass that WRITES this table has no need to read it
+    # back, so it shipped with an export query and no named one — which meant nothing
+    # in-process could see it and every check on its content had to open the parquet.
+    # Ordered `root, depth, symbol` rather than the pass's own `root, symbol`: depth is
+    # what a reader slices on ("what does this handler call directly"), and it is total
+    # with `symbol` behind it because one (root, symbol) is one row by construction.
+    "reachability": """
+        SELECT root, symbol, depth, terminal
+        FROM reachability
+        ORDER BY root, depth, symbol
+    """,
     # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
     # dispatch narrowed to two bodies is two rows — so `target` and `callee`
     # close it; `callee` is last because it is the column those two rows differ
@@ -648,6 +659,14 @@ _NAMED_QUERIES = {
     # the parent of its `target/classes`, and nothing else in the workspace names it.
     "located_documents": """
         SELECT document_id, relative_path, origin_entry FROM documents ORDER BY document_id
+    """,
+    # F8 §9.3 (W36 review). The annotation view WITH its document, which is what places an
+    # annotation whose target is not a symbol: a package declaration
+    # (`…/package-info#`) has no symbol row of its own, so `NullMarked` — a scope rule
+    # covering every type in the package — came out of the index with `file: null`.
+    "located_annotations": """
+        SELECT target, annotation, document_id FROM annotations
+        ORDER BY target, annotation, document_id
     """,
     "located_symbols": """
         SELECT symbol, document_id, construct_kind, enclosing, line_start, line_end
@@ -733,7 +752,7 @@ _REDACTED_PAYLOADS = "redacted_payloads"
 # always the same string, and a join across them would silently miss.
 _REDACTED_ENTRY_VALUES = "redacted_entry_values"
 
-# One query per table and view IN THE SCHEMA — all eighteen, with no exclusion
+# One query per table and view IN THE SCHEMA — all of them, with no exclusion
 # class. The ratchet runs the direction that catches the defect: an object in
 # `schema.sql` with no query here is a TEST FAILURE
 # (`tests/storage/test_workspace.py`), not a quiet omission.
@@ -868,7 +887,7 @@ _EXPORT_QUERIES = {
     # The ROOT here is a handler, not an address — `roots` carries the address, and this
     # table joins to it on the handler rather than repeating a column the redactor would
     # then have to reach in two places.
-    "reachability": ("SELECT * FROM reachability ORDER BY root, depth, symbol"),
+    "reachability": _NAMED_QUERIES["reachability"],
     "roots": f"""
         SELECT r.handler, r.root_kind, r.protocol, r.method,
                coalesce(a.masked, r.path) AS path
@@ -984,7 +1003,10 @@ _NAMED_DERIVATIONS = {
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
     "roots_insert": "insert_roots.sql",
-    # F8 §9.4 (W37): the trace walk's own reachability, kept.
+    # F8 §9.4 (W37): the trace walk's own reachability, kept. Reset BESIDE the insert —
+    # this was the one insert in this map without one, and a second `analyze` over a
+    # workspace doubled every row.
+    "reachability_reset": "reset_reachability.sql",
     "reachability": "insert_reachability.sql",
     # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
     # F4 §5.2 (W24). Runs from inside `derive_endpoints`, immediately before the merge

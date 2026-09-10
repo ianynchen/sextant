@@ -118,7 +118,7 @@ def write_index(
     symbol to document to source root — and the reverse direction of edges the tables store
     one way round.
     """
-    located, lookup = _locations(symbols, documents, source_roots, module_root)
+    located, lookup, paths = _locations(symbols, documents, source_roots, module_root)
     index = bundle / "index"
     index.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
@@ -126,10 +126,10 @@ def write_index(
         (_SYMBOLS, _symbol_records(located)),
         (_CALLERS, _caller_records(call_edges, lookup)),
         (_IMPLEMENTORS, _implementor_records(implementations, lookup)),
-        (_ANNOTATED, _annotated_records(annotations, lookup)),
+        (_ANNOTATED, _annotated_records(annotations, lookup, paths)),
         (_SHAPE_CARRIERS, _shape_carrier_records(endpoints, lookup, redactor)),
         (_ADDRESSES, _address_records(roots, lookup, redactor)),
-        (_FILES, _file_records(located, lookup, annotations)),
+        (_FILES, _file_records(located, lookup, annotations, paths)),
         (_IMPACT, _impact_records(shapes, shape_fields, endpoints, lookup, redactor)),
     ):
         (index / name).write_text(
@@ -145,14 +145,19 @@ def _locations(
     documents: Sequence[dict[str, object]],
     source_roots: Sequence[str],
     module_root: Path,
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    """Every symbol's `{file, line, line_end, kind, enclosing}`, twice over: the LISTING
-    keyed on each symbol exactly once, and the LOOKUP keyed on both spellings of it.
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, str | None]]:
+    """Every symbol's `{file, line, line_end, kind, enclosing}` twice over — the LISTING
+    keyed on each symbol exactly once and the LOOKUP keyed on both spellings — plus each
+    DOCUMENT's own resolved path.
 
     Built once and shared by every index below, because each of them answers with a
     location and re-deriving it per index is where two indexes come to disagree.
 
-    Two maps rather than one because they are two jobs. `symbols.ndjson` is a listing and
+    The document paths are the third, because a file is a thing in its own right: a
+    `package-info` declares no symbol at all and still opens, still carries the package's
+    nullness rule, and still deserves a digest record saying an agent can skip it.
+
+    Two symbol maps rather than one because they are two jobs. `symbols.ndjson` is a listing and
     must hold each symbol once; every other index performs a LOOKUP, and the key it holds
     may be either spelling — a symbol carries its module coordinates (D00 §5a) and a SHAPE
     ID does not, so `impact`'s `com/acme/orders/OrderCommand#` matched nothing against a
@@ -183,17 +188,17 @@ def _locations(
             "kind": str(symbol["construct_kind"]),
             "enclosing": symbol["enclosing"],
         }
-        # **Both spellings**, because two grammars meet here: a symbol carries its module
-        # coordinates (D00 §5a) and a SHAPE ID does not. Keyed only on the whole symbol,
-        # `impact`'s `com/acme/orders/OrderCommand#` matched nothing and every contract in
-        # the index reported itself undeclared. The two can never collide — a bare
-        # descriptor has no coordinates by definition — so one map serves both callers.
+        # The LISTING: one entry per symbol, under its whole spelling. The both-spellings
+        # map is built from this one below — aliasing here instead emitted every symbol
+        # twice in `symbols.ndjson`, which is why these are two maps and not one.
         found[whole] = location
-    # The two can never collide — a bare descriptor has no coordinates by definition.
+    # The LOOKUP: the same locations under both spellings. They can never collide — a bare
+    # descriptor has no module coordinates by definition — so one extra map covers every
+    # caller that holds either.
     lookup = dict(found)
     for whole, location in found.items():
         lookup.setdefault(bare_descriptor(whole), location)
-    return found, lookup
+    return found, lookup, paths
 
 
 def _openable(
@@ -355,7 +360,9 @@ def _implementor_records(
 
 
 def _annotated_records(
-    annotations: Sequence[dict[str, object]], located: dict[str, dict[str, Any]]
+    annotations: Sequence[dict[str, object]],
+    located: dict[str, dict[str, Any]],
+    paths: dict[str, str | None],
 ) -> list[dict[str, Any]]:
     """Index 2c: which declarations carry this annotation.
 
@@ -363,15 +370,35 @@ def _annotated_records(
     location index knows about it rather than assuming a class.
     """
     reverse: dict[str, set[str]] = {}
+    by_target: dict[str, dict[str, object]] = {}
     for row in annotations:
         reverse.setdefault(str(row["annotation"]), set()).add(str(row["target"]))
+        by_target.setdefault(str(row["target"]), row)
     return [
         {
             "annotation": annotation,
-            "on": [{"symbol": target, **_at(located, target)} for target in sorted(targets)],
+            "on": [
+                {"symbol": target, **_placed(located, paths, by_target[target], target)}
+                for target in sorted(targets)
+            ],
         }
         for annotation, targets in sorted(reverse.items())
     ]
+
+
+def _placed(
+    located: dict[str, dict[str, Any]],
+    paths: dict[str, str | None],
+    row: dict[str, object],
+    target: str,
+) -> dict[str, Any]:
+    """One annotation target's location, falling back to its DOCUMENT's file where the
+    target is not a symbol — see `_annotation_file`. The line stays null: a document knows
+    which file, never where in it."""
+    location = _at(located, target)
+    if location["file"] is None:
+        location["file"] = paths.get(str(row.get("document_id")))
+    return location
 
 
 def _shape_carrier_records(
@@ -477,6 +504,7 @@ def _file_records(
     located: dict[str, dict[str, Any]],
     lookup: dict[str, dict[str, Any]],
     annotations: Sequence[dict[str, object]],
+    paths: dict[str, str | None],
 ) -> list[dict[str, Any]]:
     """Index 4: per FILE — what it declares, and which annotations appear in it.
 
@@ -490,29 +518,62 @@ def _file_records(
     lists rather than the symbols themselves: `symbols.ndjson` already carries every symbol
     with its own location, and repeating them here would double the index to say a second
     time what one grep already answers.
+
+    **Built from the DOCUMENTS, not from the placed symbols.** The first version iterated
+    symbols, which made the real criterion "declares nothing" rather than "cannot be
+    placed" — so every `package-info` file was dropped: 3 in the fixture, 14 in
+    `jhipster-sample-app`, 4 in `spring-petclinic-rest`, each opening perfectly well and
+    each carrying the package-scope nullness rule that governs every type beside it. A
+    digest is a fact about a FILE, and a file that declares nothing is exactly the file an
+    agent most wants to be told it can skip.
     """
     annotated: dict[str, set[str]] = {}
     for row in annotations:
-        location = lookup.get(str(row["target"]))
-        if location is None or location["file"] is None:
+        path = _annotation_file(row, lookup, paths)
+        if path is None:
             continue
-        annotated.setdefault(str(location["file"]), set()).add(str(row["annotation"]))
-    files: dict[str, dict[str, Any]] = {}
+        annotated.setdefault(path, set()).add(str(row["annotation"]))
+    files: dict[str, dict[str, Any]] = {
+        str(path): {"file": str(path), "declares": {}, "symbols": 0, "annotations": []}
+        for path in paths.values()
+        if path is not None
+    }
     for symbol, location in located.items():
         path = location["file"]
         if path is None:
             continue
-        entry = files.setdefault(
-            str(path), {"file": str(path), "declares": {}, "symbols": 0, "annotations": []}
-        )
+        entry = files[str(path)]
         entry["symbols"] += 1
         kind = str(location["kind"])
         entry["declares"][kind] = int(entry["declares"].get(kind, 0)) + 1
         del symbol
     for path, entry in files.items():
+        # Sorted for the reader of this dict IN PROCESS; no test can tell the difference,
+        # because the writer below serialises every record with `sort_keys=True` and that
+        # fixes the key order in the bytes whatever this does. Kept rather than removed so
+        # the structure says what it means, and recorded here so nobody adds a test for it
+        # and concludes the ordering is checked.
         entry["declares"] = dict(sorted(entry["declares"].items()))
         entry["annotations"] = sorted(annotated.get(path, ()))
     return [files[path] for path in sorted(files)]
+
+
+def _annotation_file(
+    row: dict[str, object],
+    lookup: dict[str, dict[str, Any]],
+    paths: dict[str, str | None],
+) -> str | None:
+    """Which file carries one annotation use — the target's own, or the DOCUMENT's where
+    the target is not a symbol.
+
+    A package declaration (`…/package-info#`) has no symbol row, so `NullMarked` — the
+    scope rule that governs every type in the package — placed nowhere. The document
+    always knows, and for a declaration annotation the two answers are the same file.
+    """
+    location = lookup.get(str(row["target"]))
+    if location is not None and location["file"] is not None:
+        return str(location["file"])
+    return paths.get(str(row.get("document_id")))
 
 
 def _impact_records(
@@ -589,8 +650,9 @@ def _impact_records(
 
 def _unparameterised_id(shape_id: str) -> str:
     """A shape id with its bound arguments dropped, which is the symbol a declaration
-    lives at. Kept here rather than imported from the renderer: `egress/render` and
-    `egress/export` are siblings and neither may import the other."""
+    lives at. Four characters rather than a shared helper: `egress/render`'s own copy
+    answers a different question — which shape id in a diagram IS this ancestor — and the
+    seam these two files really share, `domain/symbols`, has no shape-id grammar in it."""
     return shape_id.split("<", 1)[0]
 
 

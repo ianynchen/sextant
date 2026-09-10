@@ -3838,3 +3838,29 @@ def test_config_documents_with_colliding_basenames_both_survive_to_the_workspace
         "application.yml",
     }
     assert {e["key_raw"] for e in entries} == {"server.port", "server.host"}
+
+
+def test_the_reachability_table_is_written_by_the_pipeline(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """F8 §9.4 (W37). Every test of the pass calls `record_reachability` DIRECTLY, so
+    deleting the call from `resolve()` left the whole suite green — 2,631 passed, the exact
+    number the commit quoted as its gate — while the table would be empty in every real
+    bundle (W37 review).
+
+    A pass nothing runs is a pass that does not exist, and no unit test of it can say
+    otherwise. This asserts the pipeline runs it, over the real fixture.
+    """
+    workspace, _report = resolved_fixture
+    rows = workspace._connection.execute(
+        "SELECT root, symbol, depth, terminal FROM reachability"
+    ).fetchall()
+
+    assert rows, "the pipeline did not write the reachability table"
+    # Every root the walk starts at records ITSELF at depth 0, so the table covers the
+    # whole root set rather than whichever roots happened to call something.
+    roots = {row["handler"] for row in workspace.query("roots")}
+    assert {row[0] for row in rows} == roots
+    assert {row[0] for row in rows if row[2] == 0} == roots
+    # And the walk really walked: some root reaches something other than itself.
+    assert any(row[2] > 0 for row in rows)

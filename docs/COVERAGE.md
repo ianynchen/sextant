@@ -817,11 +817,18 @@ would both be defensible and one of them wrong.
 | terminals | 63 | 1,308 |
 | deepest | 5 | 8 |
 
-One row per `(root, symbol)`: the walk expands a method once per trace, so the depth is the
-depth it was expanded AT, and a method reached again by another route is the `revisited`
-step that carries no subtree. Recording every ROUTE is the exponential tree D01 gives as its
-own reason for not storing traces. A root records ITSELF at depth 0, so "everything this
-root touches" is one lookup rather than a lookup plus a union with the key.
+One row per `(root, symbol)`, carrying the SHALLOWEST depth any route to it reached. The
+walk expands a method once per trace but still emits a step for every route to it — only
+the subtree is elided — so every distance is seen and the least of them is the distance
+from the root. **The first version recorded the depth the depth-first walk happened to see
+first, which is not the shortest**: 51 rows on `mall-admin` came out deeper than the truth,
+26 of them symbols the root calls DIRECTLY and filed at depth 2 or more, so a consumer
+filtering `depth = 1` for "what does this handler call directly" missed every one. The
+fixture had no instance of it, which is why the tests passed. Recording every ROUTE instead
+is the shape D01 rejects when it declines to store traces at all — per-endpoint duplication
+(D01 §3), not branching, which D01 is explicit a single trace does not suffer. A root
+records ITSELF at depth 0, so "everything this root touches" is one lookup rather than a
+lookup plus a union with the key.
 
 A terminal is recorded by the TARGET the compiler wrote, since no body was read to name a
 callee — omitting it would make a root that only calls a library look like a root that calls
@@ -838,9 +845,16 @@ traversal needs both. `roots` ships handler-major while a person names a route.
 `call_edges_by_callee` and `roots_by_address` are VIEWS, so the rows are the base tables'
 own and cannot fall out of step; what ships is a second parquet of the same rows in a
 different order, which is the artifact the zone maps live in. The bundle pays one extra file
-each — 29 KB beside 29 KB on the fixture — and `roots_by_address` masks its `path` exactly
-as `roots` does, because a second file of the same rows that skipped the mask would be the
-leak the index bundle had.
+each — 29 KB beside 29 KB for `call_edges` on the fixture, 4 KB beside 4 KB for `roots` —
+and `roots_by_address` masks its `path` exactly as `roots` does, because a second file of
+the same rows that skipped the mask would be the leak the index bundle had.
+
+**The zone-map skipping buys nothing at today's sizes**, and saying otherwise would be
+claiming a benefit that does not exist. DuckDB writes one row group per 122,880 rows and
+`mall-admin`'s `call_edges` is 24,591, so every exported parquet is a SINGLE group: measured,
+the two files' min/max statistics are identical and a point lookup on `callee` costs the
+same against either. What the second file gives today is a second ORDER; the skipping begins
+at roughly five times the largest corpus here.
 
 **This is not `callers.ndjson`.** That answers "who calls X" for an agent grepping a file;
 these serve a query engine reading the dataset. Two audiences, two artifacts, one set of rows.
@@ -849,7 +863,7 @@ these serve a query engine reading the dataset. Two audiences, two artifacts, on
 
 Sextant scanned a repository and could name every symbol in it without ever saying which
 file to open. An agent holding the bundle still had to grep source it had already been told
-about. `index/` is the third projection beside `graph/` and `render/`: six NDJSON files an
+about. `index/` is the third projection beside `graph/` and `render/`: eight NDJSON files an
 agent loads once and greps, each record self-describing so a grep HIT is a complete answer.
 
 | File | Answers |

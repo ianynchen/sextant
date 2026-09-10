@@ -81,9 +81,18 @@ here would restate those documents rather than add anything.
   opinion, and the day the two disagreed both would be defensible and one wrong. 190 rows
   over 77 roots on the fixture, 3,892 over 160 on `mall-admin`. A root records itself at
   depth 0, and a terminal is recorded by the TARGET the compiler wrote, since no body was
-  read to name a callee. Beside it, `call_edges_by_callee` and `roots_by_address`: DuckDB
-  over Parquet has no B-trees, so a second FILE in a second order is the index, and both are
-  views over the base tables rather than copies of them.
+  read to name a callee. `depth` is the SHALLOWEST route, not the first one a depth-first
+  walk happens to see: recording the first put 51 rows on `mall-admin` deeper than the
+  truth, 26 of them symbols the root calls directly and filed at depth 2 or more, so a
+  consumer asking `depth = 1` for "what does this handler call directly" missed every one.
+  The table is cleared before it is written, as `roots` is — without that a second
+  `analyze` over one workspace doubled every row and the duplicates shipped. Beside it,
+  `call_edges_by_callee` and `roots_by_address`: DuckDB over Parquet has no B-trees, so a
+  second FILE in a second order is the index, and both are views over the base tables
+  rather than copies of them. **The zone-map skipping that ordering enables is inoperative
+  at today's sizes and the docs say so rather than implying a benefit**: DuckDB writes one
+  row group per 122,880 rows and the largest exported table is 24,591, so every parquet is
+  a single group with nothing to skip. What the second file gives today is a second order.
 
 - **The bundle says WHERE, not only what** (F8 §9.3, W35). Sextant could name every symbol
   in a repository without saying which file to open, so an agent holding the bundle still
@@ -103,7 +112,7 @@ here would restate those documents rather than add anything.
   the next build overwrites, and a LIBRARY's own classes read out of a jar (2), whose
   sources are not in the repository at all. **The index masks like every other exit** — it reads the same rows `graph/`
   does, and an address published unmasked here would be the bytes the parquet beside it
-  takes trouble to strip. **Two more files assemble what the others leave joined** (W36):
+  takes trouble to strip. **Two more files assemble the join the others leave to a consumer** (W36):
   `files.ndjson`, per file, so an agent decides not to open one — the cheapest win, since
   most of what an assistant spends goes on files opened and discarded — and `impact.ndjson`,
   one record per contract, because nobody says "change `OrderView#totalAmount`" but

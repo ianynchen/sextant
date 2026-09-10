@@ -907,10 +907,17 @@ FROM raw_facts WHERE kind = 'field_write'
 --
 -- There are no B-trees here. The levers are sort order and the zone maps that
 -- come with it: a row group carries the min and max of each column, so a query
--- filtering on a column the file is SORTED by skips whole groups, and one
--- filtering on any other column reads everything. `call_edges` ships
--- caller-major, which makes "what does this method call" cheap and "who calls
--- this method" a full scan — and traversal needs both directions.
+-- filtering on a column the file is SORTED by can skip whole groups. `call_edges`
+-- ships caller-major, and traversal needs both directions.
+--
+-- **The skipping buys nothing at today's sizes, and that is stated rather than
+-- implied.** DuckDB writes one row group per 122,880 rows; `mall-admin`'s
+-- `call_edges` is 24,591, so every parquet the export writes is a SINGLE group
+-- and there is nothing to skip — measured, the min/max statistics are identical
+-- between the two files because each group spans all rows, and a point lookup on
+-- `callee` costs the same against either. What the second file gives today is a
+-- second ORDER, which a reader scanning it or a tool merging it can use; the
+-- group skipping begins at roughly five times the largest corpus here.
 --
 -- **Views, not tables**: the rows are `call_edges`' own and `roots`' own, so a
 -- second TABLE would be a second copy that could fall out of step. What ships

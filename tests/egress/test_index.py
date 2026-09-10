@@ -10,6 +10,9 @@ COVERAGE §3a-xii.
 """
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -478,8 +481,8 @@ def test_the_file_digest_says_what_a_file_holds_without_opening_it(tmp_path: Pat
             {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
         ],
         annotations=[
-            {"target": _API, "annotation": "org/x/RestController#"},
-            {"target": _LIST, "annotation": "org/x/GetMapping#"},
+            {"target": _API, "annotation": "org/x/RestController#", "document_id": "doc"},
+            {"target": _LIST, "annotation": "org/x/GetMapping#", "document_id": "doc"},
         ],
     )
 
@@ -563,6 +566,58 @@ def test_change_impact_assembles_the_join_a_consumer_would_otherwise_make(tmp_pa
     # one is a list it has to make six more requests about.
     assert record["reached_from"][0]["file"] == "src/main/java/com/acme/Api.java"
     assert record["reached_from"][0]["line"] == 41
+
+
+def test_a_parameterised_shape_is_declared_where_its_type_is(tmp_path: Path):
+    """`CommonResult<OrderView>` is a USE of two declarations, not a third one.
+
+    The record keeps the parameterised id — that is the thing on the wire — but places it
+    at the type, because that is the file a change is made in. Without the trim the
+    declaration lookup misses and a generic wrapper, which is every one of `mall-admin`'s
+    result envelopes, reports itself undeclared.
+
+    And a `caller` of NULL is an inbound endpoint nothing in this module calls; it is
+    dropped rather than written as a `None` symbol with no location.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    parameterised = "com/acme/CommonResult#<com/acme/OrderView#>"
+    index = _write(
+        root,
+        symbols=[
+            _symbol(
+                _MODULE + "com/acme/CommonResult#",
+                kind="class",
+                enclosing=None,
+                line_start=0,
+                line_end=0,
+            ),
+            _symbol(_LIST),
+        ],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+        shapes=[{"shape_id": parameterised, "open": False}],
+        shape_fields=[],
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "GET",
+                "path": "/orders",
+                "handler": _LIST,
+                "caller": None,
+                "request_shape": None,
+                "response_shape": json.dumps({"shape_id": parameterised}),
+            }
+        ],
+    )
+
+    [record] = index["impact"]
+    assert record["shape_id"] == parameterised
+    assert record["declared_at"]["file"] == "src/main/java/com/acme/Api.java"
+    # The handler alone. A NULL caller is not a symbol, and a record listing it would send
+    # a reader to look up nothing.
+    assert [reached["symbol"] for reached in record["reached_from"]] == [_LIST]
 
 
 def test_change_impact_masks_the_addresses_it_carries(tmp_path: Path):
@@ -727,37 +782,109 @@ def test_every_index_file_is_written_in_a_stable_order(tmp_path: Path):
     """NFR-1, and the byte-identity test above cannot see this.
 
     That one calls `write_index` twice in ONE process with the same input lists, so an
-    index built by iterating a `set` comes out identical both times and every missing
-    `sorted()` survives it. Three of the eight indexes group into sets. Here the inputs are
-    SHUFFLED between the two runs, which is what a different scan order — or a different
-    hash seed — really looks like.
+    index built by iterating a `set` or a dict comes out identical both times and every
+    missing `sorted()` survives it. Here the inputs are SHUFFLED between the two runs,
+    which is what a different scan order — or a different hash seed — really looks like.
+
+    **Every input, not the three that group into sets.** The first version shuffled
+    `call_edges`, `implementations` and `annotations` only, which left nine orderings with
+    nothing watching them: the symbol listing, the annotation grouping, both shape-carrier
+    sides, the three inside a file digest and the three inside a change-impact record.
+    Measured by removing each `sorted()` in turn — nine of eighteen survived the suite.
     """
-    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    root = _tree(
+        tmp_path,
+        *(f"src/main/java/com/acme/F{n}.java" for n in range(12)),
+    )
+    documents = [
+        {"document_id": f"doc{n}", "relative_path": f"com/acme/F{n}.java", "origin_entry": None}
+        for n in range(12)
+    ]
+    # Two symbols per document and two KINDS, so the `declares` map inside a digest has
+    # something to order and the digest list itself has twelve files to order.
+    symbols = [
+        _symbol(_MODULE + f"com/acme/C{n}#", document_id=f"doc{n}", kind="class", enclosing=None)
+        for n in range(12)
+    ] + [_symbol(_MODULE + f"com/acme/C{n}#go().", document_id=f"doc{n}") for n in range(12)]
+    # Three callees and three interfaces, not one each: a reverse index with a single key
+    # has no order to get wrong, and both of these grouping sorts survived a shuffle for
+    # exactly that reason.
     callers = [
-        {"caller": _MODULE + f"com/acme/C{n}#go().", "callee": _MODULE + "com/acme/T#t()."}
+        {
+            "caller": _MODULE + f"com/acme/C{n}#go().",
+            "callee": _MODULE + f"com/acme/T{n % 3}#t().",
+        }
         for n in range(12)
     ]
     interfaces = [
-        {"symbol": _MODULE + f"com/acme/I{n}#", "interfaces": json.dumps(["com/acme/Face#"])}
+        {
+            "symbol": _MODULE + f"com/acme/C{n}#",
+            "interfaces": json.dumps([f"com/acme/Face{n % 3}#"]),
+        }
         for n in range(12)
     ]
+    # Two annotations per target, so the set inside one digest's `annotations` list and the
+    # set inside one `annotated` record both have an order to get wrong.
     annotations = [
-        {"target": _MODULE + f"com/acme/A{n}#", "annotation": "org/x/Ann#"} for n in range(12)
+        {
+            "target": _MODULE + f"com/acme/C{n}#",
+            "annotation": f"org/x/Ann{n % 2}#",
+            "document_id": f"doc{n}",
+        }
+        for n in range(12)
+    ] + [
+        {
+            "target": _MODULE + f"com/acme/C{n}#",
+            "annotation": "org/x/Common#",
+            "document_id": f"doc{n}",
+        }
+        for n in range(12)
     ]
-    documents = [{"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}]
+    # Every shape on BOTH sides of a different endpoint, which is what gives the carrier
+    # index two lists per record and the impact index a list of endpoints to order.
+    shapes = [{"shape_id": f"com/acme/S{n}#", "open": False} for n in range(12)]
+    shape_fields = [
+        {"shape_id": f"com/acme/S{n}#", "wire_name": name}
+        for n in range(12)
+        for name in ("total", "id", "createdAt")
+    ]
+    endpoints = [
+        {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": method,
+            "path": f"/s{n}/{method.lower()}",
+            "handler": _MODULE + f"com/acme/C{n}#go().",
+            "caller": _MODULE + f"com/acme/C{(n + 1) % 12}#go().",
+            "request_shape": json.dumps({"shape_id": f"com/acme/S{n}#"}),
+            "response_shape": json.dumps({"shape_id": f"com/acme/S{n}#"}),
+        }
+        for n in range(12)
+        for method in ("POST", "PUT")
+    ]
+    roots = [
+        {
+            "handler": _MODULE + f"com/acme/C{n}#go().",
+            "root_kind": "http_endpoint",
+            "protocol": "http",
+            "method": "POST",
+            "path": f"/s{n}/post",
+        }
+        for n in range(12)
+    ]
 
     def run(where: str, order: int) -> dict[str, str]:
         write_index(
             root / where,
-            symbols=[_symbol(_LIST)],
-            documents=documents,
+            symbols=symbols[::order],
+            documents=documents[::order],
             call_edges=callers[::order],
             implementations=interfaces[::order],
             annotations=annotations[::order],
-            endpoints=[],
-            roots=[],
-            shapes=[],
-            shape_fields=[],
+            endpoints=endpoints[::order],
+            roots=roots[::order],
+            shapes=shapes[::order],
+            shape_fields=shape_fields[::order],
             source_roots=["src/main/java"],
             module_root=root,
             redactor=Redactor.from_rules(),
@@ -767,4 +894,201 @@ def test_every_index_file_is_written_in_a_stable_order(tmp_path: Path):
             for path in sorted((root / where / "index").iterdir())
         }
 
-    assert run("forwards", 1) == run("backwards", -1)
+    forwards, backwards = run("forwards", 1), run("backwards", -1)
+    # Named rather than asserted whole, so a file that stopped being written at all cannot
+    # pass this by being absent from both sides.
+    assert sorted(forwards) == [
+        "addresses.ndjson",
+        "annotated.ndjson",
+        "callers.ndjson",
+        "files.ndjson",
+        "impact.ndjson",
+        "implementors.ndjson",
+        "shape_carriers.ndjson",
+        "symbols.ndjson",
+    ]
+    assert forwards == backwards
+
+
+def test_the_index_is_the_same_under_a_different_hash_seed(tmp_path: Path):
+    """NFR-1 again, and the shuffle above cannot see this either.
+
+    A record assembled from a SET comes out in whatever order that set iterates, and within
+    one process that order is fixed — so shuffling the inputs changes nothing and the
+    missing `sorted()` survives. It is the interpreter's hash seed that decides it, and
+    that changes between runs on the same input, which is the case NFR-1 is about.
+    `resolve/terminals.py` found the same defect the same way, over six seeds.
+
+    Two SUBPROCESSES, because `PYTHONHASHSEED` is read once at interpreter start and
+    cannot be changed from inside one.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    program = tmp_path / "run.py"
+    program.write_text(
+        f"""
+import json, sys
+from pathlib import Path
+from sextant.domain.redaction import Redactor
+from sextant.egress.export.index import write_index
+
+root = Path({str(root)!r})
+module = {_MODULE!r}
+# Sixteen distinct symbols on one shape's endpoints, so the set that collects them has
+# enough members for its iteration order to depend on the seed.
+endpoints = [
+    {{
+        "protocol": "http",
+        "direction": "inbound",
+        "method": "POST",
+        "path": "/orders/" + str(n),
+        "handler": module + "com/acme/H" + str(n) + "#go().",
+        "caller": module + "com/acme/K" + str(n) + "#go().",
+        "request_shape": json.dumps({{"shape_id": "com/acme/Order#"}}),
+        "response_shape": None,
+    }}
+    for n in range(8)
+]
+out = Path(sys.argv[1])
+write_index(
+    out,
+    symbols=[],
+    documents=[
+        {{"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}}
+    ],
+    call_edges=[],
+    implementations=[],
+    annotations=[],
+    endpoints=endpoints,
+    roots=[],
+    shapes=[{{"shape_id": "com/acme/Order#", "open": False}}],
+    shape_fields=[],
+    source_roots=["src/main/java"],
+    module_root=root,
+    redactor=Redactor.from_rules(),
+)
+sys.stdout.write((out / "index" / "impact.ndjson").read_text(encoding="utf-8"))
+""",
+        encoding="utf-8",
+    )
+
+    def run(seed: str) -> str:
+        finished = subprocess.run(
+            [sys.executable, str(program), str(tmp_path / ("out" + seed))],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        return finished.stdout
+
+    first = run("0")
+    # The symbols really are in there, so a run that silently wrote nothing cannot pass by
+    # matching another empty one.
+    assert "com/acme/H7#go()." in first
+    for seed in ("1", "2", "3", "4", "5"):
+        assert run(seed) == first, f"index differs under PYTHONHASHSEED={seed}"
+
+
+def test_a_file_that_declares_nothing_still_gets_a_digest_record(tmp_path: Path):
+    """A digest is a fact about a FILE, and the first version built it from placed SYMBOLS
+    — which made the real criterion "declares nothing" rather than "cannot be placed".
+
+    Every `package-info` file was dropped: 3 in the fixture, 14 in `jhipster-sample-app`,
+    4 in `spring-petclinic-rest`. Each opens perfectly well and each carries the
+    package-scope nullness rule that governs every type beside it — and a file that
+    declares nothing is exactly the file an agent most wants to be told it can skip.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/package-info.java")
+    index = _write(
+        root,
+        symbols=[],
+        documents=[
+            {
+                "document_id": "pkg",
+                "relative_path": "com/acme/package-info.java",
+                "origin_entry": None,
+            }
+        ],
+        annotations=[
+            {
+                "target": _MODULE + "com/acme/package-info#",
+                "annotation": "org/x/NullMarked#",
+                "document_id": "pkg",
+            }
+        ],
+    )
+
+    [record] = index["files"]
+    assert record["file"] == "src/main/java/com/acme/package-info.java"
+    assert record["declares"] == {} and record["symbols"] == 0
+    assert record["annotations"] == ["org/x/NullMarked#"]
+
+
+def test_one_declaration_carrying_two_annotations_appears_under_both(tmp_path: Path):
+    """A type usually carries several, and the index is keyed by ANNOTATION, so the same
+    declaration is a member of several records.
+
+    The reverse map holds targets in a set, so a target repeated under one annotation is
+    one entry — and the row kept for placement is whichever came first, which is why they
+    must place identically. They do: placement reads the location index, and a target has
+    one location however many annotations name it.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    target = _MODULE + "com/acme/Api#"
+    index = _write(
+        root,
+        symbols=[_symbol(target, kind="class", enclosing=None, line_start=0, line_end=0)],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+        annotations=[
+            {"target": target, "annotation": "org/x/Service#", "document_id": "doc"},
+            {"target": target, "annotation": "org/x/Validated#", "document_id": "doc"},
+            # The same pair again, as a second scanned occurrence would arrive.
+            {"target": target, "annotation": "org/x/Service#", "document_id": "doc"},
+        ],
+    )
+
+    assert [record["annotation"] for record in index["annotated"]] == [
+        "org/x/Service#",
+        "org/x/Validated#",
+    ]
+    for record in index["annotated"]:
+        assert [on["symbol"] for on in record["on"]] == [target]
+        assert record["on"][0]["file"] == "src/main/java/com/acme/Api.java"
+    # And the file digest names both once, not the three rows that arrived.
+    [digest] = index["files"]
+    assert digest["annotations"] == ["org/x/Service#", "org/x/Validated#"]
+
+
+def test_an_annotation_whose_target_is_not_a_symbol_is_placed_by_its_document(
+    tmp_path: Path,
+):
+    """A package declaration has no symbol row, so a scope rule covering every type in the
+    package — `@NullMarked`, `@NonNullApi` — came out of the index placed nowhere.
+
+    The document always knows which file; it cannot know WHERE in it, so the line stays
+    null rather than being invented.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/package-info.java")
+    index = _write(
+        root,
+        documents=[
+            {
+                "document_id": "pkg",
+                "relative_path": "com/acme/package-info.java",
+                "origin_entry": None,
+            }
+        ],
+        annotations=[
+            {
+                "target": _MODULE + "com/acme/package-info#",
+                "annotation": "org/x/NullMarked#",
+                "document_id": "pkg",
+            }
+        ],
+    )
+
+    [record] = index["annotated"]
+    assert record["on"][0]["file"] == "src/main/java/com/acme/package-info.java"
+    assert record["on"][0]["line"] is None

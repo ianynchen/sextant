@@ -144,3 +144,61 @@ def test_two_roots_reaching_one_symbol_are_two_rows(tmp_path: Path):
     workspace.close()
 
     assert sorted(row[0] for row in rows if row[1] == _SERVICE) == sorted([_API, other])
+
+
+def test_depth_is_the_shortest_route_not_the_first_one_the_walk_saw(tmp_path: Path):
+    """The walk is depth-first, so a symbol reached down one branch BEFORE a shorter route
+    to it is read comes up deep — and `depth` is meant to be distance from the root.
+
+    Measured on `mall-admin` before this: 51 rows deeper than the true distance, and 26 of
+    them symbols the ROOT ITSELF calls, recorded at depth 2 or more. A consumer filtering
+    `depth = 1` for "what does this handler call directly" missed every one. The fixture
+    has none of them, which is why the first tests here passed.
+
+    This is that shape exactly: ordinal 0 expands into a service that calls `Helper`, and
+    ordinal 1 calls `Helper` DIRECTLY. Depth-first sees the deep one first.
+    """
+    helper = _MODULE + "com/acme/Helper#help()."
+    workspace = _workspace(
+        tmp_path,
+        [(_API, "/orders")],
+        [
+            (_API, 0, "com/acme/Service#run().", _SERVICE),
+            (_SERVICE, 0, "com/acme/Helper#help().", helper),
+            # The root's OWN direct call, at a later ordinal so the walk reaches it second.
+            (_API, 1, "com/acme/Helper#help().", helper),
+        ],
+    )
+
+    record_reachability(workspace)
+    depths = {row[1]: row[2] for row in _rows(workspace)}
+    workspace.close()
+
+    assert depths[helper] == 1, "the root calls it directly, whatever the walk saw first"
+    assert depths[_SERVICE] == 1
+
+
+def test_a_second_analyze_over_one_workspace_does_not_double_the_table(tmp_path: Path):
+    """The pass clears before it writes, which every other derived table's writer does and
+    this one did not.
+
+    `load_facts` clears `raw_facts` and every other derivation resets itself, so
+    `reachability` alone survived a re-run: 190 rows became 380 with 190 duplicated
+    `(root, symbol)` pairs, and they shipped in the exported parquet. Re-running `analyze`
+    is the ordinary act — it is what the CLI tells a reader to do when the build stamps go
+    stale — and every consumer asking what a handler reaches would have got twice the
+    answer, then three times.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [(_API, "/orders")],
+        [(_API, 0, "com/acme/Service#run().", _SERVICE)],
+    )
+
+    record_reachability(workspace)
+    record_reachability(workspace)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 2, rows
+    assert len({(row[0], row[1]) for row in rows}) == 2
