@@ -120,6 +120,11 @@ def resolved_fixture(
             "string_constants",
             "chain_reconstruction",
             "implemented_interfaces",
+            # `array_arguments` (capability 9.15) gates `spring-stomp-endpoint.yml`, whose
+            # `addEndpoint(String...)` slot is a varargs ARRAY — the first catalog to
+            # declare the capability it needs, so without it the catalog is SKIPPED and
+            # every pin that depends on it measures a skip.
+            "array_arguments",
             "superclass",
             "generic_interfaces",
             # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)

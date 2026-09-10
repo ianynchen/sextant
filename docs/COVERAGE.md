@@ -682,7 +682,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**41 of 59 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**42 of 60 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -729,6 +729,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
 | `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
+| `spring-stomp-endpoint` | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-stomp-template` | `org.springframework:spring-messaging` | 6.1.6 |
 | `spring-stomp` | `org.springframework:spring-messaging` | 6.1.6 |
 |  | `org.springframework:spring-websocket` | 6.1.6 |
@@ -777,7 +778,7 @@ breath that it looks perfect. It does. Measured:**
 | `mall-admin` | 24,591 | **100% resolved** | 19,239 (78%) |
 | `jhipster-sample-app` | 1,686 | **100% resolved** | 545 (32%) |
 | `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (32%) |
-| `orders-service` (fixture) | 1,462 | 1,460 resolved, 2 narrowed | 468 (32%) |
+| `orders-service` (fixture) | 1,465 | 1,463 resolved, 2 narrowed | 468 (32%) |
 
 Each `body READ` percentage is the instrument's own — `round`, as `document.py` prints it.
 *Petclinic's read 31% here for one release: 971/3,045 is 31.9, and truncating instead of
@@ -806,7 +807,7 @@ their own key names.
   ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
   RESOLVED`, so a third bucket is impossible by construction.
 - **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (332 of the fixture's 558 METHODS, 425 of
+  `owner_not_scanned` is a scanning decision (333 of the fixture's 559 METHODS, 425 of
   jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
   has one.
 
@@ -2531,10 +2532,12 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 |---|---|---|---|---|
 | Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for **both** spellings (W12) |
 | Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | ✅ shipped — class-level prefix composition, `@SubscribeMapping`, and `@SendTo` reply rows |
+| Java | **`StompEndpointRegistry.addEndpoint("/ws")`** — the URL a client opens | a `single_call` on the registry `WebSocketMessageBrokerConfigurer#registerStompEndpoints` is handed | `call_site` | ✅ **shipped** (W45, `G-42`). The destinations derived and **the transport endpoint they arrive on existed nowhere in the export**, so a reader could see `/orders/place` and had no way to learn a client reaches it by opening `/ws`. `spring-websocket.yml` names the RAW handler registry — a different interface, and mistaking the two for it is the gap itself. VARARGS: `addEndpoint("/a", "/b")` records ONE array argument and derives TWO rows, one per URL registered, compiled against spring-websocket 6.1.6 and read back rather than assumed. Live on the fixture: `/ws`, `/ws-alt`, `/ws-legacy` |
+| Java | Joining a connect URL to the destinations served over it | — | — | **Boundary — the two are separate rows and nothing links them.** `/ws` and `/orders/place` both read `websocket inbound`, and a reader has to know that one is a handshake URL and the other a broker destination. Linking them needs a row shape this schema does not have; the honest state is two true rows rather than one invented relation |
 | Java | Spring STOMP `SimpMessagingTemplate.convertAndSend` — the OUTBOUND half | a `single_call`, `KafkaTemplate.send`'s own shape one framework along | `call_site` | ✅ **shipped** (W43, `G-33`). Before it a service that both received and sent STOMP was published with half its messaging surface and nothing saying which half. **The descriptor could not be mirrored from its twin**: `convertAndSend` is declared on `MessageSendingOperations<D>`, `D` erases to `java.lang.Object`, and `SimpMessagingTemplate` declares no bridge — so a real call site written `convertAndSend("/topic/orders", payload)` compiles to `(Ljava/lang/Object;Ljava/lang/Object;)V`, and the `(Ljava/lang/String;Ljava/lang/Object;)V` a copy of `KafkaTemplate.send(String, V)` would have declared matches NOTHING. Compiled and read at spring-messaging 6.1.6 rather than reasoned about, and that String descriptor is the near-miss the suite pins. Six `convertAndSend` overloads, two `send`, four `convertAndSendToUser`; reads 3 of the 14 methods `SimpMessagingTemplate` declares and 3 of `SimpMessageSendingOperations`' 3, with the one unread addressable method named in the slice |
 | Java | The same, to a DEFAULT destination — `convertAndSend(payload)` | no destination argument at all; the template's configuration carries it | `call_site` | ✅ shipped — `path` NULL at `unresolved`, `KafkaTemplate.sendDefault`'s own answer. The boundary is published and its address says outright it was not resolved, rather than the call vanishing |
 | Java | `convertAndSendToUser(user, destination, payload)` | Spring's `UserDestinationMessageHandler` rewrites the destination before the broker sees it | `call_site` | **Boundary — the row ships, the address does not.** The literal at argument 1 is NOT what is published: publishing `/queue/orders` would name an address no subscriber holds, which is an OVER-report and worse than silence because it looks resolved. So these four overloads capture the payload and leave `path` NULL at `unresolved`. **Falsified by** a measurement of the handler's own composition, which is what would let them carry a destination |
-| Any | An outbound `single_call` row whose payload is a method PARAMETER | the type is stated in the CALLER's own signature and nowhere else | `call_site` | ✅ **shipped** (`OI-77`, closed in W43's own commit). Found while checking W43's new rows against their siblings: `_reference_of` read a payload type from a class literal, a scalar or an `instance`, and a `parameter` named none of them — so a payload handed straight through (`send(OrderEvent event)` calling `template.send(topic, event)`) shipped with no contract at all. Measured before and after on the fixture: **3 of 27 outbound rows carried a payload, and 21 do** — across the `single_call` and `fluent` engines both; counting `single_call` alone it is 3 of 25 and 19 of 25, because `spring-kafka-message` and `aws-sqs-sdk` are `fluent` files, across `spring-resttemplate`, `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`, `spring-kafka-message` and this file. The six that still do not are rows with no body capture at all — a `send(Message)` whose payload rides inside the message. **The DESTINATION read from a parameter is unchanged and still `unresolved`**: a destination IS its value, and a value lives in whatever called the method; a contract needs the TYPE, which is a different question |
+| Any | An outbound `single_call` row whose payload is a method PARAMETER | the type is stated in the CALLER's own signature and nowhere else | `call_site` | ✅ **shipped** (`OI-77`, closed in W43's own commit). Found while checking W43's new rows against their siblings: `_reference_of` read a payload type from a class literal, a scalar or an `instance`, and a `parameter` named none of them — so a payload handed straight through (`send(OrderEvent event)` calling `template.send(topic, event)`) shipped with no contract at all. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload, and 19 do.** *Published first as "3 of 27 … `single_call`" and then as "27 across the `single_call` AND `fluent` engines" — both wrong. 27 is 25 plus the two `fluent` catalogs that happened to be in the list, and across BOTH engines the fixture has 44 outbound rows with 24 payloads.*|
 | Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic — the path is a literal argument, not a chain | `registration_call` | ✅ shipped as a catalog, with **no live fixture surface** (below) |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
 | TS | NestJS `@WebSocketGateway()` + `@SubscribeMessage("event")` | annotation | `annotation` | A |

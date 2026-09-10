@@ -81,9 +81,25 @@ here would restate those documents rather than add anything.
   happen. The estate proved it inconsistent inside one fixture: `spring-ws-template` reads
   a parameter payload through `path_from_argument_type` and answers `resolved`, while every
   other outbound catalog answered `unresolved` for the identical fact. `_capture_resolved`
-  now asks what a capture PRODUCED rather than what kind it read. Measured: no outbound row
-  with a resolved address and a real payload still reads `unresolved` — there were eight.
+  now asks what a capture PRODUCED rather than what kind it read. Measured both ways round: **16** outbound rows had a
+  resolved address, a real payload and `unresolved`, and 0 do. *The figure first published
+  here was "eight", which was never measured — only the after-state was, and the before was
+  asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
+
+- **The URL a STOMP client actually opens is in the export** (F10 §11, `G-42`, W45). A
+  module's `@MessageMapping` destinations have derived since 2H and the transport endpoint
+  they arrive on existed nowhere, so a reader could see `/orders/place` and had no way to
+  learn that reaching it means opening `/ws`. `spring-stomp-endpoint.yml` reads
+  `StompEndpointRegistry.addEndpoint`. It is a separate file from `spring-websocket.yml`
+  rather than another owner on it, because that file names the RAW handler registry — a
+  different interface, and mistaking the two for each other is the gap itself.
+  **Varargs collapse into one argument**, compiled against spring-websocket 6.1.6 and read
+  back rather than assumed: `addEndpoint("/a", "/b")` records a single array argument and
+  derives TWO rows, one per URL registered. Live on the fixture: `/ws`, `/ws-alt`,
+  `/ws-legacy`. What is NOT modelled, and says so: nothing links a connect URL to the
+  destinations served over it — both read `websocket inbound`, and one is a handshake URL
+  while the other is a broker destination. Two true rows rather than one invented relation.
 
 - **Spring MVC functional routing derives** (F10 §11, `G-29`, W44). `spring-webflux-router`
   has read functional routing since 2E and only the REACTIVE package, so a servlet
@@ -104,8 +120,12 @@ here would restate those documents rather than add anything.
   and false: `CoRouterFunctionDsl` declares `contentType` too, two overloads. That is §8.1
   rule 1's failure, the examples in front of the author encoded as the framework's rule.
   And neither catalog declared `andOther`, which merges a whole router of a different
-  response type along `and`'s exact signature — undeclared, every route merged that way was
-  lost. Neither had a live instance in any fixture or corpus, so nothing published was
+  response type along `and`'s exact signature. *What that costs was first stated as "every
+  route merged that way was lost", which is not what happens.* Measured by driving the
+  engine both ways: undeclared, a merged router still derives at TOP LEVEL — an unclaimed
+  continuation consumes neither its receiver nor its argument — and what is lost is a
+  PREFIX, `nest(path("/p"), a.andOther(b))` coming out at `/a` and `/b` rather than `/p/a`
+  and `/p/b`, with one spurious handler-less row beside them. Neither had a live instance in any fixture or corpus, so nothing published was
   wrong; both are under-reports, and both are closed.
   The surface enumeration gained `RouterFunctions` itself on both sides: only `$Builder`
   was enumerated, so `route()`, `resource`, `resources`, `resourceLookupFunction` and
@@ -140,9 +160,12 @@ here would restate those documents rather than add anything.
   `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
   a class literal, a scalar and an `instance` and returned nothing for that — even though
   the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
-  now. Measured before and after on the fixture: **3 of the fixture's 27 outbound rows across the
-  `single_call` AND `fluent` engines carried a payload, and 21 do — 3 of 25 and 19 of 25
-  counting `single_call` alone, since `spring-kafka-message` and `aws-sqs-sdk` are `fluent`**, across six catalogs. The six that still do not have no
+  now. Measured before and after on the fixture: ****3 of the fixture's 25 outbound `single_call` rows carried a payload,
+  and 19 do.** *Published first as "3 of 27 … `single_call`" and then as "27 across the
+  `single_call` AND `fluent` engines" — both wrong. 27 is 25 plus the two `fluent`
+  catalogs that happened to be in the list, and across BOTH engines the fixture has 44
+  outbound rows with 24 payloads. One wrong label was replaced with a differently wrong
+  one; this is the set that exists.***, across six catalogs. The six that still do not have no
   body capture at all. The DESTINATION half is deliberately untouched — a destination IS
   its value and a value lives in whatever called the method, so `parameter` stays in
   `_UNREAD_KINDS` and a `channel_arg` reading one is still `unresolved`. `OI-77`, closed.

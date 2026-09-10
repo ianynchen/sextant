@@ -160,6 +160,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
         "SpringScopedDetail.jsonl",
+        "StompBrokerConfig.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
         "package-info.jsonl",
@@ -212,7 +213,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # `G-33` names and this fixture had no instance of.
     # 120 since W44: `MvcInvoiceRoutes` and `MvcRouteHandlers`, the servlet functional
     # routing surface — `G-29`, and likewise absent here before.
-    assert report.documents == 120
+    # 121 since W45: `StompBrokerConfig`, which registers the URL a STOMP client opens.
+    assert report.documents == 121
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -350,6 +352,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
         "SpringScopedDetail.jsonl",
+        "StompBrokerConfig.jsonl",
         "StrictRefiner.jsonl",
         "TraceProbe.jsonl",
         "package-info.jsonl",

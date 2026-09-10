@@ -109,6 +109,11 @@ def _resolved_fixture(
             "chain_reconstruction",
             "implemented_interfaces",
             "superclass",
+            # `array_arguments` (capability 9.15) gates `spring-stomp-endpoint.yml`, whose
+            # `addEndpoint(String...)` slot is a varargs ARRAY — the first catalog to
+            # declare the capability it needs, so without it here the catalog is SKIPPED
+            # and every pin below would be measuring a skip.
+            "array_arguments",
             # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)
             # gates `spring-scheduling.yml`'s own `scheduled_work` style —
             # granted, like the rest, because `AsmScanner` declares it.
@@ -592,6 +597,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/mvcfn/invoices"),
         ("POST", "/mvcfn/invoices"),
         ("PUT", "/mvcfn/invoices/{id}"),
+        # W45, `G-42`: the URLs a STOMP client opens. Verbless, like every other websocket
+        # row — a handshake path declares no HTTP method — and three of them from TWO
+        # calls, because `addEndpoint("/ws-alt", "/ws-legacy")` registers both.
+        (None, "/ws"),
+        (None, "/ws-alt"),
+        (None, "/ws-legacy"),
         # `board` is ALSO value-returning (`OrderView`) and declares no
         # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
         # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
@@ -910,7 +921,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # and a SOAP call to a different billing address.
     # 147 since W43: the two STOMP outbound rows that close `G-33`.
     # 150 since W44: the three `/mvcfn` servlet functional routes that close `G-29`.
-    assert len(report.endpoints) == 150
+    # 153 since W45: the three STOMP connect URLs that close `G-42`.
+    assert len(report.endpoints) == 153
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1769,9 +1781,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         "sse": 2,
         # 7 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
         # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
-        "websocket": 7,
+        # 10 since W45: the three connect URLs `addEndpoint` registers.
+        "websocket": 10,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 150
+    assert sum(counts.values()) == len(report.endpoints) == 153
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3148,8 +3161,8 @@ def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contrac
     `instance` and returned None for everything else, so the row shipped without a
     contract; the type is stated in the CALLER's own signature and was simply not read.
 
-    **Measured before and after**, on a full `module analyze` of this fixture: 3 of its 27
-    outbound `single_call` rows carried a payload, and 21 do. The six that still do not are
+    **Measured before and after**, on a full `module analyze` of this fixture: 3 of its 25
+    outbound `single_call` rows carried a payload, and 19 do. The six that still do not are
     rows with no body capture at all — a `send(Message)` whose payload is inside the
     message.
 
@@ -3463,7 +3476,10 @@ def test_the_format_ladder_answers_every_live_row(
     # handler returns a bare `ServerResponse`, so there is no declared payload type
     # for the ladder to answer off — the honest answer, and the same one every other
     # verb-only functional route gets.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 23
+    # 26 since W45: the three STOMP connect URLs. A handshake path carries no payload
+    # declaration of any kind — there is no body to type — so the ladder has nothing to
+    # answer off and says so, which is the same honest answer `/live`'s raw frame gets.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 26
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

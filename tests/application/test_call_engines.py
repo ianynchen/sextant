@@ -36,7 +36,11 @@ from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
-CAPABILITIES = {"call_site", "string_constants"}
+# `array_arguments` since W45: `spring-stomp-endpoint.yml` reads a VARARGS slot's own
+# `elements`, so it declares the capability that emits them (extractor 9.15) and would
+# otherwise be SKIPPED here rather than exercised — which is the gate working, and a
+# test that silently measured a skip instead of a derivation.
+CAPABILITIES = {"call_site", "string_constants", "array_arguments"}
 # The module-coordinates prefix a real symbol fact's own `symbol` carries
 # (D00 §5a) — only `single_call`'s `supertypes` lookup and the shape pass's
 # own `fields`/`enum_types` queries ever read it; every call-argument symbol
@@ -2620,6 +2624,105 @@ def test_an_addhandler_overload_the_registry_does_not_declare_derives_nothing(tm
         )
     ]
     workspace = _resolve(tmp_path, facts, _spring_websocket_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+_STOMP_REGISTRY = "org/springframework/web/socket/config/annotation/StompEndpointRegistry#"
+# The jar's own, recorded in `scripts/probes/cp10_catalog_descriptors.md`. ONE overload at
+# spring-websocket 6.1.6, and varargs — so a one-path and a two-path registration both
+# record exactly one argument, an `array` carrying its own `elements`. Compiled against the
+# jar and read back rather than assumed: `addEndpoint("/ws")` emits `anewarray String` then
+# `invokeinterface addEndpoint([Ljava/lang/String;)…`.
+_ADD_ENDPOINT = (
+    "([Ljava/lang/String;)"
+    "Lorg/springframework/web/socket/config/annotation/StompWebSocketEndpointRegistration;"
+)
+
+
+def _spring_stomp_endpoint_catalog() -> Catalog:
+    return next(
+        c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-stomp-endpoint"
+    )
+
+
+def _add_endpoint(caller: str, paths: list[str], descriptor: str = _ADD_ENDPOINT) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=_STOMP_REGISTRY, name="addEndpoint", descriptor=descriptor),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(
+                kind="array",
+                elements=[CallArgument(kind="string", value=path) for path in paths],
+            )
+        ],
+    )
+
+
+def test_addendpoint_derives_the_url_a_stomp_client_opens(tmp_path: Path):
+    """W45, `G-42`. A STOMP module's `@MessageMapping` destinations have derived since 2H
+    while the transport endpoint they arrive on existed nowhere in the export — so an agent
+    could see `/orders/place` and had no way to learn that a client reaches it by opening
+    `/ws`.
+
+    Two rows from ONE call, because the registration really does register two URLs: varargs
+    collapse into a single array argument, and `channels_of` answers one destination per
+    element — the same shape `addHandler`'s own multi-path call already takes."""
+    caller = "com/acme/ws/StompConfig#registerStompEndpoints()."
+    facts = [_add_endpoint(caller, ["/ws-alt", "/ws-legacy"])]
+    workspace = _resolve(tmp_path, facts, _spring_stomp_endpoint_catalog())
+    rows = [e for e in workspace.query("endpoints") if e["caller"] is None]
+    workspace.close()
+
+    assert [
+        (e["protocol"], e["direction"], e["method"], e["path"], e["resolution"]) for e in rows
+    ] == [
+        ("websocket", "inbound", None, "/ws-alt", "resolved"),
+        ("websocket", "inbound", None, "/ws-legacy", "resolved"),
+    ]
+
+
+@pytest.mark.declines("spring-stomp-endpoint")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_the_raw_handler_registry_is_not_the_stomp_endpoint_registry(tmp_path: Path):
+    """§10 near-miss, and it is the confusion this catalog exists to end.
+
+    `spring-websocket.yml` names `WebSocketHandlerRegistry.addHandler` — the RAW, non-STOMP
+    registration form — and `G-42` is that it was mistaken for the STOMP one for four
+    phases. A catalog reading the wrong registry would publish a STOMP connect URL for a
+    plain WebSocket handler, or the reverse.
+
+    **Every conjunct holds except the OWNER**, which is what makes this measure the owner
+    and nothing else: same method NAME, same descriptor, same single array argument with a
+    path in it, on `WebSocketHandlerRegistry`. That interface declares no `addEndpoint`, so
+    the input is hypothetical by construction — the same shape every `claimed-arity`
+    near-miss beside it takes, and the same claim: the owner is load-bearing, not decorative.
+
+    *A first version put the raw registry's own `addHandler` call here, which differs in the
+    name AS WELL as the owner — so swapping the catalog's owner left it passing, and it was
+    measuring the name.*"""
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller="com/acme/ws/WebSocketConfig#registerWebSocketHandlers().",
+            target=CallTarget(
+                owner=WEBSOCKET_HANDLER_REGISTRY, name="addEndpoint", descriptor=_ADD_ENDPOINT
+            ),
+            invoke_kind="interface",
+            ordinal=0,
+            receiver=1,
+            result=None,
+            arguments=[_WS_PATHS_ONE],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _spring_stomp_endpoint_catalog())
     rows = workspace.query("endpoints")
     workspace.close()
 
@@ -6038,6 +6141,32 @@ def test_an_identity_rule_beside_record_arg_is_refused_at_run_start(tmp_path: Pa
     }
     with pytest.raises(CatalogError):
         _resolve(tmp_path, [], _soapish_catalog(matches, "invented-identity-record"))
+
+
+def test_an_identity_rule_beside_body_arg_is_refused_at_run_start(tmp_path: Path):
+    """The same collision one key along, and `OI-77` is what made it reachable.
+
+    The identity rule resolves the payload from its argument's DECLARED TYPE, and the run
+    loop falls back to that whenever `body_arg` read nothing. Since a produced descriptor
+    now keeps a row `resolved`, a row declaring both would report a body capture that
+    genuinely failed as resolved — a wrong `resolution` published at `compiler` evidence,
+    which is the one thing `_validate_identity` exists to stop.
+
+    No shipped catalog declares the pair. Refusing it at load is what keeps that true
+    without asking the next author to know it."""
+    matches = {
+        "owner": "com.acme.soapish.Template",
+        "methods": [
+            {
+                "name": "send",
+                "arity": 2,
+                "body_arg": 1,
+                "path_from_argument_type": _SOAPISH_IDENTITY,
+            }
+        ],
+    }
+    with pytest.raises(CatalogError):
+        _resolve(tmp_path, [], _soapish_catalog(matches, "invented-identity-body"))
 
 
 # --- 2I Task 5, form 2: the address the client was CONFIGURED with --------

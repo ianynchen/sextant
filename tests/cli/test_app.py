@@ -196,7 +196,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # module received STOMP and sent none, so `G-33`'s asymmetry had no live instance here.
     # + 2 (W44): `mvcroutes/MvcInvoiceRoutes` and its handlers — Spring MVC functional
     # routing, `G-29`, which this fixture likewise had no instance of.
-    assert metadata["coverage"]["documents"] == 133
+    # + 1 (W45): `ws/StompBrokerConfig`, which registers the URL a STOMP client opens —
+    # `G-42`: the destinations derived and the transport endpoint did not exist.
+    assert metadata["coverage"]["documents"] == 134
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

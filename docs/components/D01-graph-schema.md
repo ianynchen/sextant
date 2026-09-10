@@ -341,8 +341,11 @@ turned on a payload column that stayed NULL either way, which made the row the o
 read failure could be recorded. A body or response capture reading a bare `parameter` now
 resolves to the type the caller's own signature declares, so it fills that column and no
 longer drops the row — `_capture_resolved` asks what a capture PRODUCED, not what kind it
-read. A capture that produced nothing still drops the row exactly as before, and an ADDRESS
-capture reading a parameter is unchanged: a destination is its VALUE, and the value lives in
+read. A capture that produced nothing still drops the row **where its argument is one of the
+kinds that names no value** — an `unresolved`, a `field`, a `concat`, or a `parameter` whose
+declared type roots to no payload at all. A `class` or `instance` argument that roots to no
+payload has never dropped a row and still does not, which is a residue of the older rule
+rather than something this change introduced. An ADDRESS capture is unchanged: a destination is its VALUE, and the value lives in
 whatever called the method. So the consequence stated above holds — an `unresolved` row's
 NULL column is still not a claim of no payload — while the converse is now also true: a row
 carrying a payload no longer calls itself unresolved on account of it.

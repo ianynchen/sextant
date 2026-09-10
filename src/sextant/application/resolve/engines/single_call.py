@@ -1081,6 +1081,20 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
             f"together with `record_arg` — the record IS the payload source, so the two "
             f"name one capture twice (D02 §2's single_call style)"
         )
+    if "body_arg" in row:
+        # The same collision as `record_arg`, and it became reachable with `OI-77`
+        # (W44's review). The identity rule resolves the payload from the argument's
+        # DECLARED TYPE, and the run loop falls back to it whenever `body_arg` read
+        # nothing — so a row declaring both would hand that fallback descriptor to
+        # `_capture_resolved` and answer `resolved` over a body capture that genuinely
+        # failed. No shipped catalog declares the pair; refusing it at load is what
+        # keeps that true, rather than a comment asking the next author to know.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` "
+            f"together with `body_arg` — the identity rule already resolves the payload "
+            f"from the argument's declared type, so the two name one capture twice and "
+            f"the row would report a failed body capture as resolved (D02 §2)"
+        )
     keys = set(rule) if isinstance(rule, dict) else set()
     valid = (
         isinstance(rule, dict)

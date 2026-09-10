@@ -84,6 +84,13 @@ matches:
         method: OPTIONS
         verb: OPTIONS
         path_arg: 0
+      # **The TWO-argument form only**, and each verb also declares a three-argument
+      # `(String, RequestPredicate, handler)` overload whose handler sits at position 2.
+      # This grammar matches on owner and name alone — no `descriptor` key — so such a
+      # call derives the right verb and path with a NULL handler and silently drops the
+      # predicate. Not in `slice.outside`, because the slice is for methods a catalog
+      # does not read and these are read: it is an OVERLOAD gap, the same engine work
+      # `route`/`nest` need. No live instance — the estate contains zero `.kt` files.
       # The Kotlin builder's own two-argument form: `GET("/x") { handler }` declares a
       # whole route in one call, so it carries both positions.
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
@@ -173,11 +180,16 @@ matches:
   # `andNest` is the SHAPED form: its second argument is a whole router to fold under its
   # own prefix, not a handler.
   #
-  # `andOther` is declared here and is NOT in the reactive twin, which is an omission
-  # there rather than a difference between the packages: both interfaces declare it, it
-  # has `and`'s exact signature — `(LRouterFunction;)LRouterFunction;` — and it merges a
-  # router whose response type differs. Undeclared, every route merged in that way is
-  # lost. Added to both files in this commit.
+  # `andOther` was missing from the reactive twin too — an omission there rather than a
+  # difference between the packages: both interfaces declare it with `and`'s exact
+  # signature, `(LRouterFunction;)LRouterFunction;`. **Undeclared, a merged router still
+  # derives at TOP LEVEL**, because an unclaimed continuation consumes neither its receiver
+  # nor its argument and both `route(...)` calls stay root candidates. What is lost is a
+  # PREFIX: under `nest(path("/p"), a.andOther(b))` the routes come out at `/a` and `/b`
+  # rather than `/p/a` and `/p/b`, with one extra handler-less `unresolved` row beside them.
+  # Measured by driving the engine with and without the declaration (W44's review — the
+  # first statement here said "every route merged that way is lost", which is not what
+  # happens).
   continuations:
     - { name: andRoute, owner: org.springframework.web.servlet.function.RouterFunction }
     - name: andNest
@@ -209,6 +221,24 @@ shape_model: json
 # functional routers on this side too.
 slice:
   outside:
+    - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+      method_names: [add, and, invoke, not, or, param, path, pathExtension, resource, resources, withAttribute]
+      why: >
+        The eleven the DSL declares that this catalog does not read. `path` nests a builder
+        under a prefix and `add`/`resource`/`resources` declare or attach routes — all four
+        are the receiver-rooted shape `G-37` names, which is engine work rather than a
+        catalog line. `and`/`or`/`not`/`invoke`/`plus` compose PREDICATES inside the DSL,
+        where the composers block reads the Java `RequestPredicate` methods instead.
+        `param` and `pathExtension` constrain a request without addressing it, and
+        `withAttribute` attaches metadata. Every one appears in the enumeration only
+        because its first parameter is a `String` or a predicate.
+    - owner: org.springframework.web.servlet.function.RouterFunctionDslKt
+      method_names: [plus]
+      why: >
+        Kotlin's `+` operator on two whole routers — `andOther`'s DSL spelling, and the same
+        under-report it was. Undeclared, a merged router still derives at top level and
+        loses any prefix it sits under. Named rather than declared because a rule no
+        fixture exercises is a rule nobody checks, and no corpus here supplies a Kotlin one.
     - owner: org.springframework.web.servlet.function.RouterFunctions
       method_names: [route]
       why: >

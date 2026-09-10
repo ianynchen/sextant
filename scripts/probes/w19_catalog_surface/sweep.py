@@ -53,7 +53,7 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 # `public` line this does not match rather than skipping it.
 _SIGNATURE = re.compile(
     r"^\s+public\s+(?:(?:static|final|abstract|synchronized|native|default)\s+)*"
-    r"(?:<[^>]+>\s+)?(.+?)\s+(\w+)\((.*)\)(?:\s+throws\s+[\w.,$ ]+)?;\s*$"
+    r"(?:<[^>]+>\s+)?(.+?)\s+([\w$]+)\((.*)\)(?:\s+throws\s+[\w.,$ ]+)?;\s*$"
 )
 # A constructor, which `javap` prints with the declaring type's own name and NO
 # return type — `public org.springframework.jms.core.JmsTemplate();`. Recognised
@@ -188,6 +188,37 @@ SURFACES = (
         "6.1.6",
         "G-37",
     ),
+    # The KOTLIN halves, added in W44's review. Both catalogs read the DSL type and its
+    # file facade, and neither was enumerated — so the three-argument verb overload and
+    # `plus` sat outside the slice AND outside the enumeration.
+    Surface(
+        "spring-mvc-router",
+        "org.springframework.web.servlet.function.RouterFunctionDsl",
+        "org.springframework:spring-webmvc",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-mvc-router",
+        "org.springframework.web.servlet.function.RouterFunctionDslKt",
+        "org.springframework:spring-webmvc",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-webflux-router",
+        "org.springframework.web.reactive.function.server.CoRouterFunctionDsl",
+        "org.springframework:spring-webflux",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-webflux-router",
+        "org.springframework.web.reactive.function.server.CoRouterFunctionDslKt",
+        "org.springframework:spring-webflux",
+        "6.1.6",
+        "G-37",
+    ),
     Surface(
         "spring-webflux-router",
         "org.springframework.web.reactive.function.server.RouterFunctions$Builder",
@@ -210,6 +241,16 @@ SURFACES = (
         "G-43",
     ),
 )
+
+# A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and
+# `f$default(...)` carries a default-argument mask. Neither is API — no author writes a
+# call to one — so counting them would inflate the denominator of every ratio this probe
+# publishes about a Kotlin DSL. Excluded by SHAPE rather than by name, because the names
+# are generated. Added when `RouterFunctionDsl` was first enumerated (W44's review): the
+# probe ABORTED on `public static void getBuilder$annotations();` rather than shrink a
+# denominator silently, which is the behaviour working.
+_KOTLIN_SYNTHETIC = re.compile(r"\$(annotations|default)$")
+
 
 # Methods every class inherits or the compiler generates, which say nothing about a
 # framework's surface. Excluded by NAME and stated here rather than filtered
@@ -333,7 +374,11 @@ def declared_methods(archive: Path, owner: str) -> list[tuple[str, str]]:
         for name, descriptor in _members(text, current):
             seen.setdefault((name, descriptor), None)
         pending.extend(_supertypes(text))
-    found = [pair for pair in seen if pair[0] not in _NOT_SURFACE]
+    found = [
+        pair
+        for pair in seen
+        if pair[0] not in _NOT_SURFACE and not _KOTLIN_SYNTHETIC.search(pair[0])
+    ]
     if not found:
         raise ProbeError(f"javap printed no public methods for {owner}")
     return found
@@ -470,7 +515,9 @@ def main() -> None:
     )
     print(
         f"Methods every class carries are excluded from both sides of every count: "
-        f"{', '.join(sorted(_NOT_SURFACE))}.\n"
+        f"{', '.join(sorted(_NOT_SURFACE))}. Kotlin's own compiler synthetics — "
+        f"`getX$annotations` and `f$default` — are excluded too: neither is API, and no "
+        f"author writes a call to one.\n"
     )
 
     versions = sorted({s.version for s in SURFACES})

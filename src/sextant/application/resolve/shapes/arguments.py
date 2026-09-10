@@ -143,9 +143,13 @@ def _capture_resolved(
     `path_from_argument_type` and answers `resolved`, while every other
     outbound catalog answered `unresolved` for the identical fact.
 
-    An ADDRESS capture is untouched and still fails on a `parameter`, because
-    a destination IS its value and no descriptor is produced for one — the
-    caller passes `resolved_to=None` there, which is the default."""
+    An ADDRESS capture is untouched — and by a different mechanism, which is worth
+    saying because the obvious guess is wrong. This function has four callers and
+    every one of them is a body or a response; no address capture ever reaches it.
+    A destination read from a parameter is `unresolved` because `url_of` and
+    `channel_of` resolve only a `kind: "string"` argument, which is a rule of their
+    own. `_UNREAD_KINDS` is consulted here and nowhere else, so it is now, in fact,
+    a set about body and response captures."""
     if not declared:
         return True
     if resolved_to is not None:
@@ -167,10 +171,12 @@ def _capture_resolved(
 # this method (2G). `parameter` joined this set the day the kind existed: it
 # is the same fact `unresolved` used to state less precisely.
 #
-# **This set is about a VALUE, and every member still belongs in it for an
-# ADDRESS capture.** A body capture reading a parameter no longer fails, and
-# that is not a change to this set — it is `_capture_resolved`'s `resolved_to`,
-# which asks what the capture produced rather than what kind it read.
+# **Read only by `_capture_resolved`, and therefore only about BODY and RESPONSE
+# captures.** An address capture never consults this set: `url_of`/`channel_of`
+# resolve a `kind: "string"` argument and nothing else, which is their own rule.
+# A body capture reading a parameter no longer fails, and that is not a change to
+# this set either — it is `_capture_resolved`'s `resolved_to`, which asks what the
+# capture PRODUCED rather than what kind it read.
 _UNREAD_KINDS = ("unresolved", "field", "parameter", "concat")
 
 

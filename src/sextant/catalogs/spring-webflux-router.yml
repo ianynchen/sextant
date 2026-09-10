@@ -273,10 +273,14 @@ matches:
       path_arg: 0
       subtree_arg: 1
     - { name: and, owner: org.springframework.web.reactive.function.server.RouterFunction }
-    # `andOther` merges a router whose response type differs, and it has `and`'s exact
-    # signature — `(LRouterFunction;)LRouterFunction;` on this same interface. Undeclared
-    # until W44, so every route merged that way was lost. No live instance here either;
-    # found by reading the interface rather than the fixture.
+    # `andOther` merges a router whose response type differs, and it merges a whole router along `and`'s exact signature —
+    # `(LRouterFunction;)LRouterFunction;` on this same interface. **Undeclared, a merged
+    # router still derives at TOP LEVEL** — an unclaimed continuation consumes neither its
+    # receiver nor its argument, so both `route(...)` calls stay root candidates. What is
+    # lost is a PREFIX: under `nest(path("/p"), a.andOther(b))` the routes come out at
+    # `/a` and `/b` instead of `/p/a` and `/p/b`, with one extra handler-less `unresolved`
+    # row beside them. Measured by driving the engine with and without the declaration.
+    # No live instance here; found by reading the interface rather than the fixture.
     - { name: andOther, owner: org.springframework.web.reactive.function.server.RouterFunction }
 
 # Harvest compatibility (Task 9 ruling): copied verbatim from spring-web.yml
@@ -322,6 +326,24 @@ shape_model: json
 # closing it is engine work and not a catalog addition.
 slice:
   outside:
+    - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+      method_names: [add, and, invoke, not, or, path, pathExtension, queryParam, resource, resources, withAttribute]
+      why: >
+        The eleven the DSL declares that this catalog does not read. `path` nests a builder
+        under a prefix and `add`/`resource`/`resources` declare or attach routes — all four
+        are the receiver-rooted shape `G-37` names, which is engine work rather than a
+        catalog line. `and`/`or`/`not`/`invoke`/`plus` compose PREDICATES inside the DSL,
+        where the composers block reads the Java `RequestPredicate` methods instead.
+        `queryParam` and `pathExtension` constrain a request without addressing it, and
+        `withAttribute` attaches metadata. Every one appears in the enumeration only
+        because its first parameter is a `String` or a predicate.
+    - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
+      method_names: [plus]
+      why: >
+        Kotlin's `+` operator on two whole routers — `andOther`'s DSL spelling, and the same
+        under-report it was. Undeclared, a merged router still derives at top level and
+        loses any prefix it sits under. Named rather than declared because a rule no
+        fixture exercises is a rule nobody checks, and no corpus here supplies a Kotlin one.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
       method_names: [route]
       why: >
