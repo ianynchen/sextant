@@ -27,22 +27,40 @@ renderer does.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).parents[2]
 
-# Every markdown file the repository ships, including the ones under `docs/superpowers`:
-# a plan or a spec whose table renders wrong misleads exactly as a component document does,
-# and the plan's own rows are where this project records what it delivered.
-_MARKDOWN = sorted(
-    path
-    for path in REPO.rglob("*.md")
-    if ".venv" not in path.parts
-    and "node_modules" not in path.parts
-    and "examples" not in path.parts
-)
+
+def _shipped() -> list[Path]:
+    """Every markdown file the repository SHIPS, asked of git rather than of the tree.
+
+    Including the ones under `docs/superpowers`: a plan or a spec whose table renders wrong
+    misleads exactly as a component document does, and the plan's own rows are where this
+    project records what it delivered.
+
+    **Asked of git, because a walk of the tree is a walk of whatever happens to be sitting
+    in it.** `rglob` collected 258 files where the repository ships 98: the other 160 were
+    copies of these same documents inside `.claude/worktrees/`, where a review agent had a
+    checkout of an older commit. That makes the subject of this test depend on whether some
+    other process is running — a scratch file with a malformed table fails the gate for a
+    document nobody ships, and the duplicates are meanwhile being checked at a revision
+    that is not this one. Excluding those directories by name would fix the instance and
+    not the class; the repository's own answer to "what do we ship" is git's.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z", "*.md"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return sorted(REPO / name for name in listed.split("\0") if name)
+
+
+_MARKDOWN = _shipped()
 
 _SEPARATOR = re.compile(r"\s*\|[\s:|-]+\|\s*")
 

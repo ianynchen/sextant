@@ -1863,10 +1863,55 @@ What we *can* derive statically is the **subject name** from the topic and the n
 strategy — which is enough to state what would have to be fetched, and is a natural place for
 a `sync` command to fill in later.
 
-## 5. The checklist, by protocol
+## 5. The checklist
 
-The work list. Each row is one library in one language: what it looks like, what shape it
-is, what it costs.
+The work list. **§5.1 to §5.12 are the PROTOCOL axis** — each row one library in one
+language: what it looks like, what shape it is, what it costs. §5.13 onwards are the other
+axes.
+
+### The axes, and why there is more than one (F6 §7.2, W41)
+
+For four phases this section had **one axis, and the axis was protocol**. That is a
+structural limit rather than an editorial one: a cross-cutting item had nowhere to be a row
+at all. A Kotlin language construct is not a protocol; neither is a payload wrapper, a
+configuration key, a trace, the bundle, the open-question ledger, the rendered document, or
+a finding about the code's shape. So each of those was committed somewhere — a requirement,
+a design document, a roadmap line — and enumerated NOWHERE, which is how twelve committed
+items came to have no support level anybody could look up. The gap analysis lists all twelve
+(`docs/java-gap-analysis-2026-09-06.md`, RC-4); every one of them is a row below.
+
+| Axis | Section | First column |
+|---|---|---|
+| Protocol | §5.1 – §5.12 | Language |
+| Language construct | §5.13 | Construct |
+| Shape and contract | §5.14 | Surface |
+| Configuration source | §5.15 | Source |
+| Trace and diagram | §5.16 | Surface |
+| Bundle and export | §5.17 | Artifact |
+| Question ledger | §5.18 | Entry |
+| Rendered document | §5.19 | Section |
+| Query and findings | §5.20 | Report |
+
+**The first column is never `Language` outside the protocol axis, and that is load-bearing
+rather than a style choice.** `scripts/coverage_matrix.py` builds §2's matrices by reading
+every `### 5.x` heading and counting rows whose first cell names a language; a non-protocol
+row starting with `Java` would be counted into a cell §2 has no column for and then dropped
+on the floor. The generator now REFUSES a §5 section it has no column for unless the section
+is declared non-protocol, so this cannot become silent.
+
+**Support levels.** Every row outside the protocol axis carries one of three, and the
+protocol axis keeps its own tier vocabulary (§2's legend) because a tier there says *when we
+will catalogue this library*, which is a different question:
+
+* **supported** — shipped, with a row or a passing test naming it.
+* **partially supported** — shipped, narrower than the thing it names; the row says what
+  falls outside.
+* **unsupported** — no producer. The row says what is committed and what it would take.
+
+**W42 completes the enumeration.** W41 builds the axes and homes the twelve items that had
+nowhere to live; the remaining sets the design names — Q2's Kotlin boundaries in full, Q3's
+four out-of-scope surfaces, Q4's six slices, and F1's `deliberately-not-read` residue —
+arrive there.
 
 ### 5.1 REST inbound
 
@@ -3141,6 +3186,107 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Python | APScheduler `@scheduler.scheduled_job("cron", …)` | `annotation` | A |
 | Swift | `BGTaskScheduler.register(forTaskWithIdentifier:)` — identifiers also declared in `Info.plist` (§6) | `registration_call` | B |
 | Any | Database access — Room `@Query`, JPA repositories, ORM models — a data boundary, not a protocol | `annotation` | B |
+
+### 5.13 Language construct
+
+Not a protocol, and not a library: a thing the COMPILER emits that a reader of the class
+file has to recognise. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
+Kotlin rows out of 170** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
+has been asserting a parity nobody measured.
+
+| Construct | What the class file holds | Committed at | Support |
+|---|---|---|---|
+| Kotlin property nullability | The compiler states it once, in the protobuf blob inside every Kotlin class's `@kotlin.Metadata` — not in any annotation a scanner could read the way JSpecify's `@Nullable` is read | Scanner capability `kotlin_metadata` (M03) | **supported** — `extractor-jvm/.../KotlinNullability.java` decodes the blob and maps each property to the nullability its declared type carries |
+| Kotlin `suspend fun` | An extra trailing `Continuation` parameter and an erased `Object` return; the declared return type is not in the descriptor | Q2's Kotlin boundaries; `REQUIREMENTS` scope line | **unsupported.** Nothing in `extractor-jvm` names `Continuation`, so a suspending handler's contract is read from the erased signature: the return shape is `Object` and the parameter list carries one member the author did not write. Closes by reading the `@Metadata` blob for the function's declared return type, which the same decoder already opens for properties |
+| Kotlin extension functions | A static method whose FIRST parameter is the receiver | Q2's Kotlin boundaries | **unsupported.** Read as an ordinary static method, so the receiver is published as a parameter. No corpus here has one on a wire boundary, so there is no live instance — that is why it is enumerated rather than fixed |
+| Kotlin `$default` synthetic methods | The compiler emits a second method carrying the default-argument mask beside every function with default parameters | Q2's Kotlin boundaries | **unsupported.** Both methods are read, so a Kotlin declaration with defaults contributes two symbols and, on a wire boundary, would contribute two rows. Closes by recognising the `$default` suffix and the mask parameter |
+| Kotlin `DefaultImpls` | An interface with a default method body compiles to a nested `DefaultImpls` class holding the body | Q2's Kotlin boundaries | **unsupported.** The nested class is read as an ordinary type, so its methods appear as symbols of a class the author never wrote. Dispatch does not join them to the interface they implement |
+| Nested and inner classes | Ordinary class files with `InnerClasses` naming their enclosure | Phase 2C | **supported** — the phase-1 skip is lifted; annotations resolve the same nested or not |
+| Lambda bodies | `invokedynamic` plus a synthetic method holding the body | Scanner capability `lambda_body` (2Q, M03 9.17) | **supported** — a call made inside a lambda is an edge from the enclosing method |
+| Formal type parameters | `Signature` (JVMS 4.7.9), which the erased descriptor discards | Scanner capability `type_parameters` (W5) | **supported** — see §5.14's substitution row for what is done with them |
+
+### 5.14 Shape and contract
+
+The payload axis. A row here is a SHAPE question — what a field is called on the wire, what
+a wrapper does to the body — and none of it is per-protocol: the same wrapper behaves the
+same way over REST and over a message broker.
+
+| Surface | What it is | Committed at | Support |
+|---|---|---|---|
+| Generic type-parameter substitution | A declaration says `CommonResult<T>` and a use says `CommonResult<OrderView>`; the fields of the use are the declaration's with `T` replaced | Implied by FR-4; one adjacent sentence at `COVERAGE.md` about Data REST only | **supported** (W26). By VARIABLE, not by position, so a declaration reusing a name in a nested scope substitutes correctly |
+| `Page<T>` / `Slice<T>` | **Interfaces**, so they declare no fields — and Spring does NOT send the element type on the wire, it sends the envelope with `content` inside | Implied by FR-4 | **supported** (W26), and measured: with the jar in reach a `Page<OrderView>` response went from an open shape with zero fields to the envelope's own. Rooting THROUGH `Page` would have published `OrderView` as the body, a contract no client receives |
+| The same, without the jar | `Page` and `Slice` live in `spring-data-commons`, not in the module | — | **partially supported.** A module that has not run `extract_libraries` leaves its own `Page<OrderView>` open with zero fields, and `Page` is reported as a type nothing could expand — stated, not silently empty |
+| HATEOAS `EntityModel` / `CollectionModel` / `PagedModel` | The same envelope shape one library along | Implied by FR-4 | **unsupported, and unmeasurable here.** These appear in **zero files across all six corpora**, so the rule that covers `Page` has never been exercised on them and claiming they work would be claiming a measurement nobody took. **Falsified by** a corpus that uses one |
+| Batch-listener generics | `@KafkaListener(batch = true)` takes `List<Foo>`, so the message shape is the ELEMENT type and not the list | `docs/roadmap.md` | **unsupported.** No catalog rule names `batch`, so a batch listener's payload is read from the declared parameter and published as a list. **Falsified by** a batch listener in an export carrying `List` as its message contract |
+
+### 5.15 Configuration source
+
+Where a value comes from, and whether a derived row may read it. The distinction that
+matters is not the file format: it is which engine is allowed to ask.
+
+| Source | What it is | Committed at | Support |
+|---|---|---|---|
+| `application.yml` / `.properties`, with profiles | Read into `config_entries` and resolved into `resolved_config`, per environment | FR-19 and D04 | **supported** — both tables ship in the bundle, and an unresolved value carries the reason it stayed unresolved rather than being dropped |
+| A derived row reading a resolved key | Two passes do it — `config_join.py` and `derived_resource.py` | D02 | **partially supported.** `annotation_driven` does NOT read `resolved_config`, which is why an Actuator module overriding `management.endpoints.web.base-path` is still published under `/actuator` (§5.1). The boundary is per-ENGINE, not per-key |
+| Redaction of a configured value | `redact_value(key, value)`, applied at the exits | FR-19's 2026-09-02 amendment | **supported** — the workspace stays verbatim and the mask happens at the rendered document, the exported bundle, and the enrichment read path |
+
+### 5.16 Trace and diagram
+
+A trace is a named query rather than a table (D01), so this axis is about what the WALK
+does and what a diagram drawn from it may assert.
+
+| Surface | What it is | Committed at | Support |
+|---|---|---|---|
+| The walk itself | Root to terminal over `call_edges`, an explicit stack | FR-6, FR-7 | **supported** — see "Where a TRACE stops" below for every reason it halts, each measured |
+| Depth bounding | — | FR-6's "not bounded by depth" | **supported** by removal (W31): the bound never fired and is gone, so nothing needs a counter to stay finite |
+| Materialised reachability | One row per (root, symbol) with the shallowest depth | F8 §9.4 | **supported** (W37) — §3a-xiii |
+| Branch distinction | Two `return` statements are two possible answers; an `if` contributes both sides | — | **unsupported, and ruled rather than missing.** A trace is reachability, never execution. Distinguishing branches would require control flow, which the scanner does not read |
+| The contract class diagram | Association, `extends` and `implements` arrows | F7 §8.4 | **partially supported** (W33): `<|..` implements has **no live instance in any corpus** and ships pinned rather than deferred, with the absence recorded |
+
+### 5.17 Bundle and export
+
+| Artifact | What it is | Committed at | Support |
+|---|---|---|---|
+| Every schema object travels | 26 of 26 tables and views, with no exclusion class | FR-18; D06 §5, ruled by the user (C10) | **supported.** For four phases the export was a hand-written list of eleven names and the seven it omitted — `raw_facts`, `call_edges`, `return_flows`, `roots`, and the views `config_entries`, `field_writes`, `method_returns` — were dropped from every bundle with nothing saying so, which made D06's own sequence-diagram row false as written. A ratchet now asserts the export's query list EQUALS the schema's object list, so the omission cannot recur |
+| The versions that produced it | `sextant_version`, `fact_schema_version`, `graph_schema_version` in `manifest.json` | FR-18 | **supported** — D06 §3 |
+| Refusing to join bundles of differing vintages | FR-18's second sentence: assembling a system from artifacts of differing vintages is *refused rather than silently joined* | FR-18 | **unsupported, and the recording half is what ships.** The manifest states every version a refusal would need; nothing reads two manifests and compares them, because v1 has no consumer that assembles a system from bundles. The row exists so the half that is missing is visible beside the half that is not |
+| The index bundle | Eight NDJSON files an agent greps | F8 §9.3 | **supported** (W35, W36) — §3a-xii |
+
+### 5.18 Question ledger
+
+| Entry | What it is | Committed at | Support |
+|---|---|---|---|
+| `open_questions` | What no programmatic pass could answer, written for the enrichment tier | D06 §5 | **supported** — the table ships in the bundle |
+| An overlay that disagrees with the graph | *"No overlay silently overrides evidence: where an overlay and the graph disagree, the disagreement is recorded as an open question"* | FR-15 clause 3 | **supported** — the disagreement becomes a ledger entry rather than a silent overwrite |
+| A proposal written in the form a curation takes | *"accepting it requires review rather than transcription"* | FR-16 | **supported** — `enrich` writes claims that are validated before they are assembled |
+
+### 5.19 Rendered document
+
+The `## Coverage` section of a rendered module document, and the reporting FR-17 commits to.
+
+| Section | What it is | Committed at | Support |
+|---|---|---|---|
+| The commit a workspace was built from | — | FR-17 clause 1 | **supported** |
+| Which source files the compiled artifacts did not account for | `{documents, partial_documents}` | FR-17 clause 2 | **supported**, and an analysis that proceeded despite uncovered sources is recorded as PARTIAL rather than silently complete |
+| The distribution of call sites across the resolution values | — | FR-17 clause 3 | **supported** (W38). Every resolution figure this project has ever quoted came from a throwaway script; these are standing. Three distributions ship and the REACH rate leads, because `resolution` alone reads 100% on two of four corpora — it says whether dispatch settled a call, and naming a target the compiler wrote is easy |
+| Every capability an extractor lacks that a catalog required | — | FR-17 clause 4 | **supported** — a catalog declares what it `requires` and the workspace says which requirement went unmet |
+| Composed on ONE path | `resolve()` and `render` must produce the same summary | — | **supported** (W38): `coverage_of(workspace)` is called by both. Composed only in the resolve pipeline, a figure reached the manifest and never the rendered document |
+
+### 5.20 Query and findings
+
+FR-11 to FR-14 commit to four REPORTS about the code's shape. None has a producer, and
+enumerating them here is the point of the axis: each was committed in `REQUIREMENTS.md` and
+appeared in no checklist anywhere, so a reader had no way to learn that.
+
+| Report | What is committed | Committed at | Support |
+|---|---|---|---|
+| Drift detection | Where a module holds both a declared contract and an implementation of it, record both and report any disagreement; authority is decided by the BUILD, and an artifact the build does not consume is documentation | FR-11 | **unsupported.** No pass compares a declared contract to an implementation. The facts a comparison needs — `shapes`, `shape_fields`, and the resources a build consumes — all ship; nothing joins them |
+| Refactor findings | Dependency cycles between modules or packages, symbols with disproportionate coupling, violations of a declared layering | FR-12 | **unsupported.** Note the requirement's own guard, which any producer must honour: a symbol is reported unreachable only where NO unresolved call site exists in the scope searched — and two thirds of the graph ends at a boundary, so that guard would withhold most findings |
+| Design findings | Coupling between candidate boundaries, shapes crossing more than one boundary, the contracts each boundary would carry | FR-13 | **unsupported.** `shapes` and `endpoints` carry what "a shape crossing more than one boundary" needs; no pass asks the question |
+| Structural performance risk | Remote hops per endpoint, distinct services involved, an endpoint reached twice in one trace, a persistence or remote call inside a loop, a blocking call on an async path | FR-14 | **unsupported**, and two of the five are further out than the other three: "inside a loop" and "on an async path" both need control flow, which the scanner does not read (`control_flow` is one of the three unshipped capabilities). The other three are queries over `reachability` and `call_edges` as they stand |
+| Approximate subject names | *"where a name is ambiguous Sextant lists the matches and stops rather than choosing"* | FR-20 | **unsupported.** No command resolves a subject approximately, so the ambiguity rule has nothing to govern — the rule is committed and the surface it governs does not exist yet |
+
+---
 
 ---
 

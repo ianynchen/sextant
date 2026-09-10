@@ -33,6 +33,23 @@ MSG_COLUMNS = [
     ("Async and internal boundaries", "Async"),
 ]
 
+# Section 5 headings that are NOT on the protocol axis (F6 §7.2, W41), so they feed no
+# matrix column and must not. Declared rather than inferred: `parse` reads every `### 5.x`
+# heading, so a section nobody wired to a column is INDISTINGUISHABLE from one whose wiring
+# was forgotten — and the failure mode of the second is silent, because `render` only emits
+# the columns it was given and drops the rest on the floor. A new protocol section now
+# fails this script until it is either given a column or declared here.
+NON_PROTOCOL = {
+    "Language construct",
+    "Shape and contract",
+    "Configuration source",
+    "Trace and diagram",
+    "Bundle and export",
+    "Question ledger",
+    "Rendered document",
+    "Query and findings",
+}
+
 # Row label in section 5 -> matrix rows it feeds.
 LANGUAGES = ["Java / Kotlin", "Go", "TypeScript", "JavaScript", "Python", "Rust", "Swift"]
 ALIASES = {
@@ -155,9 +172,29 @@ def render(counts, numbers, columns, first_col=None) -> str:
     return "\n".join(out)
 
 
+def unwired(numbers: dict[str, str]) -> list[str]:
+    """Section 5 headings that feed no matrix column and are not declared non-protocol.
+
+    The whole point of the check: `render` iterates the column lists, so a heading missing
+    from them produces no output and no error. Before this, adding `### 5.13 gRPC-Web`
+    would have left §2 silently unchanged and the matrices quietly wrong about what §5
+    holds.
+    """
+    wired = {heading for heading, _label in HTTP_COLUMNS + MSG_COLUMNS}
+    return sorted(set(numbers) - wired - NON_PROTOCOL)
+
+
 def main() -> int:
     md = DOC.read_text()
     counts, numbers = parse(md)
+    orphans = unwired(numbers)
+    if orphans:
+        print(
+            "section 5 headings with no matrix column and no NON_PROTOCOL declaration: "
+            + ", ".join(orphans),
+            file=sys.stderr,
+        )
+        return 1
     http = render(counts, numbers, HTTP_COLUMNS, first_col="Scanner")
     msg = render(counts, numbers, MSG_COLUMNS)
 

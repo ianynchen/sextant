@@ -73,6 +73,30 @@ here would restate those documents rather than add anything.
   the manifest and the rendered `## Coverage` — composed by one function on both paths,
   since `render` reads the workspace back rather than re-resolving.
 
+- **The checklist gains seven axes beside protocol, and a home for what had none**
+  (F6 §7.2, W41). COVERAGE §5 had one axis, so a cross-cutting item could not be a row at
+  all: a Kotlin language construct is not a protocol, and neither is a payload wrapper, a
+  configuration key, a trace, the bundle, the open-question ledger, the rendered document,
+  or a finding about the code's shape. Twelve items were committed in `REQUIREMENTS.md`, a
+  design document or the roadmap and enumerated NOWHERE, which is why nobody could look up
+  their support level. All twelve now have a row, each carrying one of three levels with
+  what falls outside where it is not `supported`. **Eight sections, not the seven the design
+  lists**: FR-11 to FR-14 — drift detection, refactor findings, design findings, structural
+  performance risk — fit none of the named axes and are four of the twelve, so `§5.20 Query
+  and findings` says outright that none of them has a producer, and what each would need.
+  Measured while writing them rather than assumed: `suspend fun`, extension functions,
+  `$default` synthetics and `DefaultImpls` have no mention anywhere in `extractor-jvm`,
+  while Kotlin property nullability is genuinely read from the `@Metadata` blob; HATEOAS
+  appears in zero files across all six corpora, so the rule that covers `Page` has never
+  been exercised on it and the row says so instead of claiming it works.
+  **The first column is never `Language` outside the protocol axis.**
+  `scripts/coverage_matrix.py` builds §2 by reading every `### 5.x` heading and counting
+  rows by language, so a non-protocol row spelled `Java` would be counted into a cell §2 has
+  no column for and then dropped — and a new PROTOCOL section with no column would be
+  dropped the same silent way. The generator now refuses either, and it finally has a gate:
+  `test_coverage_versions.py` had named its absence in its own opening paragraph as the
+  warning it was written against.
+
 - **Reachability is kept, and the tables carry a second ordering** (F8 §9.4, W37). The
   trace walk already computed what each root reaches and threw it away, so "what does
   changing this method affect" was a walk over the whole graph once per question. The
