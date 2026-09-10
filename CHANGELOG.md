@@ -87,6 +87,25 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **PROJECT.md is the delivery authority again, and a test keeps it one** (F9 §10.1, W50).
+  Every one of its seventeen component rows read `planned` — including D04, D06, M02, M07 and
+  M08, which had shipped for phases. That is C11's finding entire: the file stopped being
+  maintained and kept being cited as evidence, and a register that is WRONG is worse than one
+  that is absent.
+  **Re-measured rather than copied**, because the design's own evidence block had gone stale
+  in the same way: **15 tables and 11 views** where it recorded 11 tables. D01's named queries
+  are still **1 of 10** — only `trace_of` — but that number alone misleads, so the file now
+  also records that five of the nine missing questions ARE answerable today from the index
+  bundle, as NDJSON rather than as a named query: callers, implementors, impact, addresses
+  and shape carriers. 4 CLI verbs, 64 catalogs, 26 of 26 designed scanner capabilities with
+  the three unshipped ones named, and `overlay`/`sync`/`stitcher`/`state.json` absent.
+  Statuses are now 8 delivered, 5 in-progress and 4 planned, and each `in-progress` says what
+  distance remains rather than rounding in either direction.
+  The test checks the two things that can be mechanically wrong — a row claiming more than
+  the code carries, and a row understating one that shipped — and deliberately does not
+  arbitrate `delivered` against `in-progress`, which is a judgement the file states its
+  reasoning for so a reader can disagree with it.
+
 - **Everything the design names now carries a support level, and a test says so**
   (F6 §7.4/§7.5, W42). W41 built the axes and homed twelve items; this is the rest of the
   sets §7.4 lists. Three new sections: **§5.21** Q3's four out-of-scope surfaces — Spring
@@ -97,7 +116,7 @@ here would restate those documents rather than add anything.
   The acceptance clause is now mechanical: every item the design names must appear on a ROW
   that also carries one of the three levels, because a row naming an item and stating no
   level reads as coverage while committing to nothing. Verified against both failure modes.
-  **The Kotlin parity claim, finally measured.** §5.1–§5.12 hold **176 rows spelled `Java`
+  **The Kotlin parity claim, finally measured.** §5.1–§5.12 hold **186 rows spelled `Java`
   and 0 spelled `Kotlin`** while `coverage_matrix.py` aliases Kotlin into the same matrix
   row — the design calls that "a parity nobody checked". Checked: it is honest for the
   PROTOCOL axis, because these catalogs match fully qualified names in compiled bytecode and
@@ -231,7 +250,7 @@ here would restate those documents rather than add anything.
   `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
   a class literal, a scalar and an `instance` and returned nothing for that — even though
   the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
-  now. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload, and 19 do.** *Re-measured after W46 and W47 added rows: the fixture now has 28 such rows, 19 with a payload, and 47 across `single_call` and `fluent` with 24. The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* *Re-measured after W46 and W47 added rows: the fixture now has 28 such rows, 19 with a payload, and 47 across `single_call` and `fluent` with 24. The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* *Published first as "3 of 27 … `single_call`" and then as "27 across the
+  now. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload, and 19 do.** *Re-measured after W46 and W47 added rows: the fixture now has 28 such rows, 19 with a payload, and 47 across `single_call` and `fluent` with 24. The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* * The 25/19 figures are the measurement AT THE TIME the rung landed, and are labelled as that rather than silently re-scaled — three earlier attempts at this sentence each named a set that had already moved or never existed.* *Published first as "3 of 27 … `single_call`" and then as "27 across the
   `single_call` AND `fluent` engines" — both wrong. 27 is 25 plus the two `fluent`
   catalogs that happened to be in the list, and across BOTH engines the fixture has 44
   outbound rows with 24 payloads. One wrong label was replaced with a differently wrong

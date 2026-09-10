@@ -3994,14 +3994,20 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     annotation argument — so all four are gated on the module's build declaring
     the framework.
 
-    `spring-rsocket` and `spring-stomp` are the fifth and sixth, and they are
-    gated per-CATALOG rather than by style (`detect.required`). Their evidence
-    names a framework — `@MessageMapping` — but names TWO of them: it is Spring
-    RSocket's routing annotation and Spring STOMP's alike, and Spring's own
-    handlers scan for it with the same `@Controller` predicate, byte for byte
+    `spring-rsocket`, `spring-stomp` and `spring-stomp-advice` are the fifth,
+    sixth and seventh, and they are gated per-CATALOG rather than by style
+    (`detect.required`). Their evidence names a framework — `@MessageMapping`,
+    `@MessageExceptionHandler` — but names TWO of them: those are Spring RSocket's
+    annotations and Spring STOMP's alike, and Spring's own handlers scan for them
+    with the same `@Controller` predicate, byte for byte
     (`scripts/probes/w16_rsocket_versus_stomp.md`). Evidence that names two
     frameworks names neither, which is the same unanswerable shape the four above
     are in and the reason ruling R9's style list needed a per-catalog escape.
+
+    `spring-stomp-advice` joined them in W47's review: `@ControllerAdvice` is wired
+    into messaging ONLY by spring-websocket's `initControllerAdviceCache`, so on an
+    RSocket-only module an ungated catalog would publish an error contract Spring
+    never registers.
 
     This workspace has no module fact at all, which is the unanswerable case, and
     the skip carried into the manifest with its reason is exactly the visible
@@ -4026,6 +4032,7 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
         "spring-kafka-media",
         "spring-rsocket",
         "spring-stomp",
+        "spring-stomp-advice",
     ]
     assert all(
         "recorded no dependency coordinates" in entry.missing_capabilities[0] for entry in skipped

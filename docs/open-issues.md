@@ -2700,3 +2700,52 @@ not this one.
 The DESTINATION half is deliberately unchanged: `parameter` stays in `_UNREAD_KINDS`, so a
 `channel_arg` reading one still resolves to `path` NULL at `unresolved`. That ruling was
 right and is about the VALUE. This was about the TYPE.
+
+---
+
+### OI-78 — `requires:` means two different things across the estate
+
+**Found by** W47's review, while checking a rule W46's review had introduced.
+
+`requires` gates a catalog on the extractor's declared capabilities: a catalog whose
+requirement is unmet is SKIPPED with a reason rather than deriving less. D02 §1 states the
+purpose — *"`requires` is the mechanism that keeps degradation visible … Silently finding
+fewer endpoints is the failure this prevents"* — and W47 narrowed the test to a measurement:
+withhold the capability, re-resolve, and see whether the ROW COUNT changes.
+
+**By that test, thirty catalogs declare a capability they do not need.** Measured, on facts
+where every `string`-kind call argument arrives as one opaque `unresolved`:
+
+| catalog | rows with `string_constants` | without |
+|---|---|---|
+| `spring-resttemplate` | 6 | 6 |
+| `spring-kafka-template` | 5 | 5 |
+| `spring-webclient` | 12 | 12 |
+| `spring-mvc-router` | 3 | 3 |
+| `spring-stomp-endpoint` | 2 | 2 |
+
+Every row survives; what goes is the ADDRESS, to NULL at `unresolved`. That is a strictly
+worse degradation than the media column `array_arguments` was reverted for, and yet
+`string_constants` stays declared on all thirty.
+
+**So `requires` is being used for two things at once**: "this catalog cannot find its
+boundaries without X" and "this catalog reads X". Both are defensible. The first keeps a
+weak extractor from publishing a thinner estate that looks complete; the second is a
+provenance record of what a catalog consumes. What is not defensible is applying one
+reading's rule to the other reading's files, which is what a general rule stated in either
+form does — W46's review stated the narrow rule and it was false of thirty catalogs the
+moment it was written.
+
+**Not a defect with a wrong row anywhere**, which is why this is an open question rather
+than a fix: the shipped extractor declares every capability any catalog requires, so no
+catalog is skipped in practice and no estate is thinner than it should be. It matters the
+day a second extractor exists, or the day someone applies the rule literally and strips
+`string_constants` from thirty files.
+
+**Verify:** rewrite every `kind: "string"` call argument in the fixture's facts to
+`{"kind": "unresolved"}`, re-resolve with the full capability set, and compare row counts
+per catalog.
+
+**Falsified by** a ruling that `requires` is a provenance record, in which case the four
+array-reading catalogs should all declare `array_arguments` and the rule W47 measured is
+the wrong test.

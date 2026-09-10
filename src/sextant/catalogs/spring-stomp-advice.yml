@@ -10,7 +10,18 @@ style: error_advice
 # THE ASYMMETRY THIS CLOSES (F10 §11, `G-35`, W47). §5.1 has shipped `error_handlers`
 # for the HTTP twin since 2O and STOMP's error contract was absent from §5 entirely,
 # so a service whose messaging errors are handled looked like one whose are not.
+# `required: true`, the gate its inbound twin carries and for the identical reason (W47's
+# review). `@MessageExceptionHandler` is a `spring-messaging` annotation that RSocket shares,
+# and `@ControllerAdvice` is wired into messaging ONLY by `spring-websocket`'s
+# `initControllerAdviceCache` — measured: nothing in spring-messaging 6.1.6 scans that
+# annotation at all. So on an RSocket-only module, without this gate, a `@ControllerAdvice`
+# handler would be published as an error contract Spring never registers, which is the
+# over-report `error_advice`'s own container gate exists to prevent one level up.
+#
+# The starter is named beside the library for `spring-stomp.yml`'s reason: F1 does not
+# resolve transitives, so a module declaring the starter records the starter.
 detect:
+  required: true
   coordinates:
     - "org.springframework:spring-websocket"
     - "org.springframework.boot:spring-boot-starter-websocket"

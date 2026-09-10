@@ -52,6 +52,7 @@ _MUST_BE_ENUMERATED = {
     # F1 — the five attributes deliberately not read.
     "StackMapTable": "§5.22",
     "LocalVariableTypeTable": "§5.22",
+    "Module": "§5.22",
     "ModulePackages": "§5.22",
     "ModuleMainClass": "§5.22",
     # Q4 — the declared slices, by the gap each answers.
@@ -66,6 +67,30 @@ _MUST_BE_ENUMERATED = {
 # The three levels §7.2 declares. A row naming an item and no level is the state this rule
 # exists to refuse — it reads as coverage while committing to nothing.
 _LEVELS = ("**supported**", "**partially supported**", "**unsupported")
+
+# The items whose name IS a first-cell value, so a substring elsewhere in the row must not
+# satisfy them. Every F1 attribute is one; `Module` is why the distinction exists.
+_FIRST_CELL_ITEMS = frozenset(
+    {"StackMapTable", "LocalVariableTypeTable", "Module", "ModulePackages", "ModuleMainClass"}
+)
+
+
+def _names(row: str, item: str) -> bool:
+    """Whether one COVERAGE row names `item`.
+
+    An F1 attribute is matched on the whole FIRST CELL, never as a substring: `Module` is a
+    substring of `ModulePackages` and `ModuleMainClass`, so a substring search let its own
+    row be deleted while its two neighbours kept the check green. That is why `Module` was
+    missing from the required list for a commit — and why a first attempt at this fix still
+    passed, because the fallback it kept was the substring search again (W42's review).
+
+    Everything else is matched anywhere in the row, because those name a construct a cell
+    DESCRIBES — `suspend fun`, `$default`, a gap id — rather than a cell's own value.
+    """
+    if item in _FIRST_CELL_ITEMS:
+        cells = [cell.strip().strip("`*") for cell in row.split("|")]
+        return len(cells) > 1 and cells[1] == item
+    return item in row
 
 
 def _matrix():
@@ -135,9 +160,19 @@ def test_every_item_the_design_names_carries_a_support_level():
     rows = [line for line in text.splitlines() if line.startswith("|")]
     missing = []
     for item, section in sorted(_MUST_BE_ENUMERATED.items()):
-        carried = [row for row in rows if item in row and any(level in row for level in _LEVELS)]
+        # Matched on the FIRST CELL, compared whole. `Module` is a substring of
+        # `ModulePackages` and `ModuleMainClass`, so a substring search let its own row be
+        # deleted while its two neighbours kept the check green — which is why `Module` was
+        # missing from this list for a commit, and why a first attempt at this fix still
+        # passed: the fallback it kept was the substring search again (W42's review).
+        #
+        # An item that is not a first-cell value — `suspend fun`, `$default` — is matched
+        # anywhere in the row, because those name a construct a cell DESCRIBES rather than a
+        # cell's own value.
+        naming = [row for row in rows if _names(row, item)]
+        carried = [row for row in naming if any(level in row for level in _LEVELS)]
         if not carried:
-            named = any(item in row for row in rows)
+            named = bool(naming)
             missing.append(
                 f"{item} ({section}): "
                 + ("named in a row with no support level" if named else "not enumerated at all")

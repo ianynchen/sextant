@@ -38,28 +38,57 @@ Status values: `planned` · `in-progress` · `delivered` · `deferred` · `cance
 
 | Item | Status | Satisfies |
 |---|---|---|
-| [D00](components/D00-fact-schema.md) field lists frozen and expressed as validated models | planned | NFR-5, NFR-10 |
-| [D01](components/D01-graph-schema.md) tables and named queries | planned | [FR-10](REQUIREMENTS.md#fr-10--query-surface) |
-| [D02](components/D02-catalog-schema.md) catalog format and conformance harness | planned | [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), NFR-9 |
+| [D00](components/D00-fact-schema.md) field lists frozen and expressed as validated models | **delivered** | NFR-5, NFR-10 |
+| [D01](components/D01-graph-schema.md) tables and named queries | **in-progress** | [FR-10](REQUIREMENTS.md#fr-10--query-surface) |
+| [D02](components/D02-catalog-schema.md) catalog format and conformance harness | **in-progress** | [FR-3](REQUIREMENTS.md#fr-3--endpoint-catalog), NFR-9 |
 | [D03](components/D03-overlay-schema.md) overlay formats | planned | [FR-15](REQUIREMENTS.md#fr-15--overlays) |
-| [D04](components/D04-config-and-exclusion.md) configuration, exclusion, redaction | planned | [FR-19](REQUIREMENTS.md#fr-19--exclusion-and-redaction), NFR-8 |
-| [D05](components/D05-manifest-and-state.md) manifest and state | planned | [FR-8](REQUIREMENTS.md#fr-8--system-linking), [FR-17](REQUIREMENTS.md#fr-17--coverage-reporting) |
-| [D06](components/D06-bundle-format.md) bundle format | planned | [FR-18](REQUIREMENTS.md#fr-18--export) |
+| [D04](components/D04-config-and-exclusion.md) configuration, exclusion, redaction | **delivered** | [FR-19](REQUIREMENTS.md#fr-19--exclusion-and-redaction), NFR-8 |
+| [D05](components/D05-manifest-and-state.md) manifest and state | **in-progress** | [FR-8](REQUIREMENTS.md#fr-8--system-linking), [FR-17](REQUIREMENTS.md#fr-17--coverage-reporting) |
+| [D06](components/D06-bundle-format.md) bundle format | **delivered** | [FR-18](REQUIREMENTS.md#fr-18--export) |
+
+## What the statuses rest on (W50)
+
+**Every row in the two tables below read `planned` until W50**, including five that had
+shipped for phases — which is C11's finding in one sentence: this file stopped being
+maintained and kept being cited as the delivery authority. It is the authority again, and
+**where it and the roadmap disagree the STRICTER wins**, because the stale document turned
+out to be the right one.
+
+Measured on 2026-09-10, and every figure here is reproducible rather than remembered:
+
+| What | Measured | How to check |
+|---|---|---|
+| Graph schema objects | **15 tables and 11 views** | `grep -c 'CREATE TABLE' src/sextant/storage/duckdb/schema.sql` |
+| D01's named queries | **1 of 10** — `trace_of` exists; `callers_of`, `callees_of`, `implementations_of`, `uses_of`, `impact_of`, `paths_between`, `endpoint_for_address`, `who_uses_shape`, `who_reads_config` do not | `src/sextant/application/query/` |
+| …but five of those nine questions ARE answerable | from the index bundle (W35/W36), as NDJSON rather than as a named query: `callers.ndjson`, `implementors.ndjson`, `impact.ndjson`, `addresses.ndjson`, `shape_carriers.ndjson` | `<bundle>/index/` |
+| CLI verbs | **4** — `analyze`, `render`, `enrich`, `export` | `src/sextant/cli/app.py` |
+| Catalogs | **64** | `ls src/sextant/catalogs/*.yml` |
+| Scanner capabilities | **26 of 26 designed implemented**, 3 unshipped: `invokedynamic`, `constant_propagation`, `control_flow` | [M03](components/M03-scanner.md) |
+| Absent components | `overlay` (M01/D03), `sync` (M05), `stitcher` (M06), `state.json` (D05's second half) | — |
+
+**Why `in-progress` rather than `delivered` for the five that carry it.** D01 has its tables
+and one tenth of its query surface. D02 has 64 catalogs and a conformance harness, and Q4's
+declared-slice discipline says outright that a catalog need not cover its whole framework.
+D05 ships `manifest.json` and no `state.json`. M00 has four verbs of the noun-verb surface
+FR-20 describes. M03 ships 26 capabilities and names the three it does not. M04 derives every
+row this project publishes and does not answer FR-11 … FR-14, which W51 moves out of the FR
+section for that reason. Each is a real distance from done, stated rather than rounded in
+either direction.
 
 ## Modules
 
 | Item | Status | Satisfies |
 |---|---|---|
-| [M00](components/M00-cli.md) command line | planned | [FR-20](REQUIREMENTS.md#fr-20--command-surface) |
+| [M00](components/M00-cli.md) command line | **in-progress** | [FR-20](REQUIREMENTS.md#fr-20--command-surface) |
 | [M01](components/M01-overlay.md) overlay | planned | [FR-15](REQUIREMENTS.md#fr-15--overlays), [FR-16](REQUIREMENTS.md#fr-16--curation-and-proposals) |
-| [M02](components/M02-detector.md) detector | planned | [FR-1](REQUIREMENTS.md#fr-1--module-discovery) |
-| [M03](components/M03-scanner.md) scanner | planned | [FR-2](REQUIREMENTS.md#fr-2--fact-extraction) |
-| [M04](components/M04-resolver.md) resolver | planned | FR-3 … FR-6, FR-11 … FR-14 |
+| [M02](components/M02-detector.md) detector | **delivered** | [FR-1](REQUIREMENTS.md#fr-1--module-discovery) |
+| [M03](components/M03-scanner.md) scanner | **in-progress** | [FR-2](REQUIREMENTS.md#fr-2--fact-extraction) |
+| [M04](components/M04-resolver.md) resolver | **in-progress** | FR-3 … FR-6 |
 | [M05](components/M05-sync.md) sync | planned | [FR-8](REQUIREMENTS.md#fr-8--system-linking) |
 | [M06](components/M06-stitcher.md) stitcher | planned | [FR-8](REQUIREMENTS.md#fr-8--system-linking) |
-| [M07](components/M07-renderer.md) renderer | planned | [FR-7](REQUIREMENTS.md#fr-7--diagrams) |
-| [M08](components/M08-exporter.md) exporter | planned | [FR-18](REQUIREMENTS.md#fr-18--export) |
-| [M09](components/M09-query.md) query | planned | [FR-9](REQUIREMENTS.md#fr-9--blast-radius), [FR-10](REQUIREMENTS.md#fr-10--query-surface) |
+| [M07](components/M07-renderer.md) renderer | **delivered** | [FR-7](REQUIREMENTS.md#fr-7--diagrams) |
+| [M08](components/M08-exporter.md) exporter | **delivered** | [FR-18](REQUIREMENTS.md#fr-18--export) |
+| [M09](components/M09-query.md) query | **in-progress** | [FR-9](REQUIREMENTS.md#fr-9--blast-radius), [FR-10](REQUIREMENTS.md#fr-10--query-surface) |
 
 ## Deferred to a later version
 

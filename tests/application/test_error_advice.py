@@ -16,6 +16,7 @@ assertions negate exactly those.
 from pathlib import Path
 
 import pytest
+from fixture_module import write_fixture_module_fact_with
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
@@ -178,6 +179,15 @@ def _resolve(
     tmp_path: Path, facts: list[object], catalog: Catalog | None = None
 ) -> DuckDbWorkspace:
     write_fact_file(tmp_path / "facts" / "OrdersAdvice.jsonl", _document(), facts)
+    # The module fact the DEPENDENCY GATE reads. `spring-stomp-advice.yml` carries
+    # `detect.required` — RSocket shares `@MessageExceptionHandler` and only spring-websocket
+    # wires `@ControllerAdvice` into messaging — so without a build declaration it is
+    # skipped, which is the gate working and not a failure to arrange. `spring-advice.yml` is
+    # ungated and unaffected by the extra fact.
+    write_fixture_module_fact_with(
+        tmp_path / "facts",
+        ("org.springframework:spring-web", "org.springframework:spring-websocket"),
+    )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     workspace.derive("error_handlers_reset")
@@ -442,6 +452,45 @@ def test_a_stomp_exception_handler_derives_a_row_with_no_status(tmp_path: Path):
     ]
 
 
+def test_an_rsocket_only_module_derives_no_stomp_error_handler(tmp_path: Path):
+    """The DEPENDENCY GATE, and the over-report it prevents (W47's review).
+
+    `@MessageExceptionHandler` ships in `spring-messaging`, which RSocket needs too, and
+    `@ControllerAdvice` is wired into messaging ONLY by `spring-websocket`'s
+    `initControllerAdviceCache` — measured: nothing in spring-messaging 6.1.6 scans that
+    annotation. So a module carrying `spring-messaging` and NOT `spring-websocket` has
+    RSocket handlers and no STOMP ones, and a row here would publish an error contract Spring
+    never registers.
+
+    Every fact is the positive's, and only the module's build declaration differs — the same
+    shape `spring-stomp.yml`'s own RSocket gate is tested by, and the reason `detect.required`
+    exists on both files."""
+    write_fact_file(
+        tmp_path / "facts" / "OrdersAdvice.jsonl",
+        _document(),
+        [
+            _type(ADVICE),
+            _handler_method(parameters=[NOT_FOUND_EXCEPTION]),
+            _type(NOT_FOUND_EXCEPTION, superclass=RUNTIME_EXCEPTION),
+            _annotated(ADVICE, CONTROLLER),
+            _annotated(HANDLE, MESSAGE_EXCEPTION_HANDLER, {"value": NOT_FOUND_EXCEPTION}),
+        ],
+    )
+    write_fixture_module_fact_with(tmp_path / "facts", ("org.springframework:spring-messaging",))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.derive("error_handlers_reset")
+    skipped = derive_endpoints(workspace, [_stomp_advice()], capabilities=CAPABILITIES)
+    rows = workspace.query("error_handlers")
+    workspace.close()
+
+    assert rows == []
+    assert [s.catalog_id for s in skipped] == ["spring-stomp-advice"], (
+        "the catalog must be SKIPPED with a reason, not silently derive nothing — a reader "
+        "who cannot tell the two apart cannot act on either"
+    )
+
+
 @pytest.mark.declines("spring-stomp-advice")
 @pytest.mark.pins("error_advice.container-gate")
 def test_a_stomp_handler_on_a_plain_class_derives_nothing(tmp_path: Path):
@@ -599,15 +648,44 @@ def test_the_shipped_catalog_declares_no_wire_identity():
         "advice_annotations",
         "controller_annotations",
         "scope_from",
-        "status_annotation",
-        "status_from",
         "exception_roots",
     ],
 )
 def test_a_catalog_missing_a_required_match_is_refused(tmp_path: Path, dropped: str):
+    """The five keys `error_advice` cannot run without. *`status_annotation` and
+    `status_from` were in this list until W47 made them optional; they stayed for one commit
+    and still raised — through the NEW half-a-pair check rather than the required-match one,
+    so the test passed for a different reason than its name (W47's review).* Their two cases
+    are below, where they say what they now mean."""
     matches = {key: value for key, value in _shipped().matches.items() if key != dropped}
     with pytest.raises(CatalogError):
         _resolve(tmp_path, _advice_module(), _invented(matches))
+
+
+@pytest.mark.parametrize("dropped", ["status_annotation", "status_from"])
+def test_half_the_status_pair_is_refused(tmp_path: Path, dropped: str):
+    """Declared together or not at all — the `qualifier_from`/`format` discipline. A status
+    annotation with no attribute to read it from, or the reverse, states a mechanism nobody
+    can complete."""
+    matches = {key: value for key, value in _shipped().matches.items() if key != dropped}
+    with pytest.raises(CatalogError, match="half a rule"):
+        _resolve(tmp_path, _advice_module(), _invented(matches))
+
+
+def test_a_catalog_declaring_neither_half_of_the_status_pair_is_accepted(tmp_path: Path):
+    """The case W47 opened, and the one no test asserted: a protocol with no status concept
+    declares neither key and derives rows with `status` NULL. Without this, the pair could
+    silently become required again and only the shipped STOMP catalog would notice."""
+    matches = {
+        key: value
+        for key, value in _shipped().matches.items()
+        if key not in ("status_annotation", "status_from")
+    }
+    workspace = _resolve(tmp_path, _advice_module(), _invented(matches))
+    rows = workspace.query("error_handlers")
+    workspace.close()
+
+    assert rows and all(row["status"] is None for row in rows)
 
 
 def test_a_catalog_whose_list_match_is_not_a_list_of_strings_is_refused(tmp_path: Path):

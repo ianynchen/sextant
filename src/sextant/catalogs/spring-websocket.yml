@@ -15,17 +15,20 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
-# **NO `array_arguments`, and that is a REVERSAL** (W46's review). This catalog reads a
-# varargs slot's own `elements`, which capability 9.15 emits, and declaring the requirement
-# looked like the honest thing — a catalog that cannot work saying so through the manifest.
-# Measured, it is not: `requires` is all-or-nothing, so the declaration turned a graceful
-# degradation into a total SKIP. On facts from an extractor that emits no `elements` the
-# slot arrives `unresolved` and this catalog derives an honest under-report — `path` NULL at
-# `unresolved`, the call recorded and its address unread — which is the answer this project
-# prefers everywhere else. The declaration traded those rows for a clearer skip message.
+# **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
+# Withhold the capability and re-resolve on facts where every `array` argument arrives as one
+# opaque `unresolved`: this catalog's row count is UNCHANGED and only its media column goes
+# NULL. `spring-stomp-endpoint.yml` is the one that declares it, because there a two-path
+# registration collapses into one boundary and a registered URL disappears.
 #
-# The rule the reversal establishes: `requires` names a capability without which a catalog
-# derives NOTHING, not one whose absence costs it a column.
+# D02 §1's doctrine is that `requires` keeps degradation visible and that "silently finding
+# fewer endpoints is the failure this prevents" — a row present and honestly `unresolved`,
+# or a column NULL where nothing was read, is not that failure.
+#
+# *W46 declared it here and W46's review reverted it on a rule — "`requires` names a
+# capability without which a catalog derives NOTHING" — that is false of the thirty catalogs
+# declaring `string_constants`, whose rows all survive its absence with a NULL address. The
+# rule is narrowed to what the measurement supports; the wider convention is `OI-78`.*
 requires: [call_site, string_constants]
 
 # `WebSocketHandlerRegistry.addHandler(WebSocketHandler handler, String...
@@ -37,10 +40,13 @@ requires: [call_site, string_constants]
 # shape `spring-kafka-template.yml`'s `KafkaTemplate.send` reads off a call
 # rather than an annotation.
 #
-# COVERAGE boundary (Task 5): this entry has NO live fixture surface — Task 1
-# built none (2H Task 5 brief, spec ruling) — and no pom anywhere in this
-# repository depends on `spring-websocket` at all, so it is proved only by
-# unit-level tests over synthetic call facts, never by a fixture pin.
+# COVERAGE boundary (Task 5): this entry has NO live fixture surface — Task 1 built
+# none (2H Task 5 brief, spec ruling) — so it is proved only by unit-level tests over
+# synthetic call facts, never by a fixture pin. *The sentence here also said "no pom
+# anywhere in this repository depends on `spring-websocket` at all", which stopped being
+# true in W16: `fixtures/orders-service/pom.xml` declares it directly, which is what
+# lets `spring-stomp.yml`'s own `detect.required` gate pass on the fixture. The missing
+# thing is a CALL to `addHandler`, not the dependency (W47's review).*
 #
 # WHAT THE OLD COMMENT SAID HERE, AND WHY IT WAS WRONG (descriptor sweep R6).
 # It called the two-argument shape "unverified against real bytecode" and then

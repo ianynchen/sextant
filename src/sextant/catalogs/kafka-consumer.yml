@@ -22,7 +22,9 @@ measured:
 # column. This file's `channel_via` entries read `arg: all_strings`, which goes through
 # an `array` slot's own `elements` where the call is a real varargs one — and without
 # them the row degrades to an honest `path` NULL at `unresolved` rather than vanishing.
-# Stated because the W46 sweep listed three such catalogs and this is a fourth.
+# FIVE catalogs read an array's `elements`: this one, `spring-stomp-endpoint`,
+# `spring-websocket` and the two routers. Only `spring-stomp-endpoint` declares the
+# capability, because only there does a boundary disappear without it.
 requires: [call_site, string_constants]
 
 matches:

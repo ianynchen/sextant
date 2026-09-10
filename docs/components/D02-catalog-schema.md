@@ -233,6 +233,27 @@ reconstruction simply does not run against a scanner that lacks it, and
 [M04](M04-resolver.md) reports which catalogs were skipped and why. Silently finding fewer
 endpoints is the failure this prevents.
 
+**Where the line falls, measured** (W47's review). *Fewer endpoints* is the test, and it is
+not the same as *less detail on an endpoint*. Withhold a capability and re-resolve: a catalog
+whose ROW COUNT changes has lost a boundary and declares the capability; one whose rows all
+survive with a column NULL or an address `unresolved` has not, and declares nothing — a row
+present and honestly unresolved is the answer this project prefers everywhere else.
+
+`array_arguments` splits exactly there. `spring-stomp-endpoint.yml` declares it because
+`addEndpoint("/a", "/b")` collapses into ONE boundary without it and a registered URL
+disappears; `spring-mvc-router.yml`, `spring-webflux-router.yml` and `spring-websocket.yml`
+read arrays too and declare nothing, because their row counts are unchanged and only a media
+column or an address goes NULL.
+
+**The convention in practice is wider than that rule, and saying so is the honest part.**
+Thirty catalogs declare `string_constants`, and withholding it changes none of their row
+counts — every row survives with a NULL address, which is a strictly worse degradation than
+the media column the rule above declines to protect. So those thirty are recording *what this
+catalog reads* rather than *what it cannot live without*. Both readings are defensible, the
+estate holds both, and `docs/open-issues.md` `OI-78` carries the question — rather than one
+reading being applied silently to the other's files, which is how a general rule stated in
+either form gets it wrong.
+
 **Capabilities are scanner-declared or pipeline-declared.** Every capability above is
 scanner-declared — earned once, up front, by the scanner that produced a module's facts.
 `resolved_config` ([D01](D01-graph-schema.md)) is the first pipeline-declared capability:

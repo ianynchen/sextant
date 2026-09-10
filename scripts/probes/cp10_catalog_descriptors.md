@@ -31,10 +31,11 @@ other. Widening it means adding a coordinate to `ARTIFACTS` in
 `scripts/probes/cp10_catalog_descriptors/run.sh` and re-running, never assuming.
 
 Ten of the twelve are the versions a fixture pom already pins. **Two are not, and
-each says why rather than being carried silently.** `spring-websocket` is a stated
-assumption rather than a measurement: no fixture, and no pom anywhere in this
-repository, depends on it at all, so 6.1.6 was chosen to match the Spring Framework
-version the fixtures do pin, and if a WebSocket fixture is ever built at a different
+each says why rather than being carried silently.** `spring-websocket` 6.1.6 is what
+`fixtures/orders-service/pom.xml` declares directly, and has since W16 — *this paragraph
+called it "a stated assumption rather than a measurement: no fixture, and no pom anywhere in
+this repository, depends on it at all", which stopped being true then. The version is right
+and the reason given for it was not*, and if a WebSocket fixture is ever built at a different
 Spring version that row is re-measured rather than carried over. `javax.jms-api
 2.0.1` is not a choice at all: it is the last release under that coordinate, so
 there is no other version for a row to be measured at.
