@@ -1375,6 +1375,7 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
             roots=workspace.query("roots"),
             source_roots=[str(root) for root in metadata["module"].get("source_roots", [])],
             module_root=path,
+            redactor=redactor,
         )
     finally:
         workspace.close()

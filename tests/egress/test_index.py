@@ -12,6 +12,7 @@ COVERAGE §3a-xii.
 import json
 from pathlib import Path
 
+from sextant.domain.redaction import Redactor
 from sextant.egress.export.index import write_index
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -61,6 +62,7 @@ def _write(tmp_path: Path, **overrides: object) -> dict[str, list[dict]]:
         "roots": [],
         "source_roots": ["src/main/java"],
         "module_root": tmp_path,
+        "redactor": Redactor.from_rules(),
     }
     arguments.update(overrides)
     names = write_index(bundle, **arguments)  # type: ignore[arg-type]
@@ -356,6 +358,7 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
         ],
         "source_roots": ["src/main/java"],
         "module_root": root,
+        "redactor": Redactor.from_rules(),
     }
     first = write_index(
         root / "one", implementations=[], annotations=[], endpoints=[], roots=[], **arguments
@@ -369,3 +372,64 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
         assert (root / "one" / "index" / name).read_bytes() == (
             root / "two" / "index" / name
         ).read_bytes()
+
+
+def test_an_address_is_masked_on_the_way_into_the_index(tmp_path: Path):
+    """The index is an EXIT, and every exit masks (2K design §1).
+
+    It reads the same rows `graph/` does, so an address published unmasked here is the same
+    bytes the parquet beside it takes trouble to strip. Measured before this was wired: a
+    root at `https://user:hunter2@internal.example.com/orders` reached `addresses.ndjson`
+    whole while `graph/roots.parquet` held `https://internal.example.com/orders` — one
+    bundle, two answers, and the credential in the greppable one.
+    """
+    index = _write(
+        tmp_path,
+        roots=[
+            {
+                "handler": _LIST,
+                "root_kind": "inbound_endpoint",
+                "protocol": "http",
+                "method": "GET",
+                "path": "https://user:hunter2@internal.example.com/orders",
+            }
+        ],
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "POST",
+                "path": "https://svc:s3cr3t@billing.example.com/charge",
+                "handler": None,
+                "caller": _LIST,
+                "request_shape": json.dumps({"shape_id": "com/acme/Req#"}),
+                "response_shape": None,
+            }
+        ],
+    )
+
+    [address] = index["addresses"]
+    assert address["path"] == "https://internal.example.com/orders"
+    [carrier] = index["shape_carriers"]
+    assert carrier["request"][0]["path"] == "https://billing.example.com/charge"
+    # And nothing else in the bundle carries either secret.
+    assert "hunter2" not in json.dumps(index) and "s3cr3t" not in json.dumps(index)
+
+
+def test_a_null_address_stays_null_rather_than_becoming_a_string(tmp_path: Path):
+    """The near-miss for the mask. A root with no address — a scheduled job — must not come
+    back as `"None"`, which is what a redactor handed `str(None)` would produce."""
+    index = _write(
+        tmp_path,
+        roots=[
+            {
+                "handler": _LIST,
+                "root_kind": "scheduled",
+                "protocol": "",
+                "method": None,
+                "path": None,
+            }
+        ],
+    )
+
+    assert index["addresses"][0]["path"] is None

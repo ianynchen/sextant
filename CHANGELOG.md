@@ -67,7 +67,9 @@ here would restate those documents rather than add anything.
   25,521 of 25,521, 24,093 through a sibling. Never an absolute path — a bundle travels. Every
   unplaced symbol left on every corpus is generated code under `target/generated-sources/`,
   deliberately left null: an agent sent to edit a generated file edits what the next build
-  overwrites.
+  overwrites. **The index masks like every other exit** — it reads the same rows `graph/`
+  does, and an address published unmasked here would be the bytes the parquet beside it
+  takes trouble to strip.
 
 - **The contract class diagram draws inheritance** (F7 §8.4, W33). The emitter knew one
   arrow — `-->`, the association a field makes — and two more say what a type IS: `<|--`

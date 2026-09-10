@@ -819,6 +819,15 @@ generated-source layout; that is deliberately NOT done here, because a generated
 regenerated and an agent sent there to make a change would edit something the next build
 overwrites. The record says `file: null`, and this is the reason.
 
+**The index is an EXIT, so it masks.** It reads the same rows `graph/` does, and an
+address published unmasked here would be the same bytes the parquet beside it takes trouble
+to strip — measured before it was wired, a root at
+`https://user:hunter2@internal.example.com/orders` reached `addresses.ndjson` whole while
+`graph/roots.parquet` held the host alone. Only the address-bearing fields take the rule,
+because that is the only kind of value these records hold: a symbol, a file path, a line
+number and an annotation's NAME are none of them things a rule masks, and annotation
+ARGUMENTS are deliberately not in the index at all.
+
 **Never an absolute path.** A bundle travels; an absolute path names a directory on one
 computer. A sibling comes back as `../mall-common/src/main/java/…`, and anything that will
 not reduce to a relative path is dropped rather than published.

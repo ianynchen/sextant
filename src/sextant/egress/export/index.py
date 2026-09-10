@@ -34,6 +34,23 @@ A type's record therefore carries `line: null` and says so, rather than being gi
 first line of its first method — which is where its first METHOD is, not where the class is
 declared, and would read as fact.
 
+## Redaction
+
+**This is an EXIT, and every exit masks** (2K design §1: the workspace stays verbatim
+because analysis needs real values, and masking happens where data crosses the trust
+boundary — the bundle being one). The index reads the same rows `graph/` does, so an
+address it published unmasked would be the same bytes the parquet beside it takes trouble
+to strip: measured before this was wired, a root at
+`https://user:hunter2@internal.example.com/orders` reached `addresses.ndjson` whole while
+`graph/roots.parquet` held `https://internal.example.com/orders`.
+
+Only the ADDRESS-bearing fields take it — `path`, on the two files that carry one — because
+that is the only kind of value these records hold. A symbol, a file path, a line number, an
+annotation's NAME and a construct kind are none of them values a rule masks, and passing
+them through the redactor would be the redactor asked a question about the wrong grammar.
+Annotation ARGUMENTS are deliberately not in the index at all, which is why no JSON rule is
+needed here.
+
 ## What a path is
 
 `documents.relative_path` is a package path (`com/acme/orders/Api.<ext>`), relative to a
@@ -47,6 +64,8 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from sextant.domain.redaction import Redactor
 
 # One record per line, and the files are written in a fixed order with their rows sorted,
 # so two exports of one workspace are byte-identical (NFR-1).
@@ -70,6 +89,7 @@ def write_index(
     roots: Sequence[dict[str, object]],
     source_roots: Sequence[str],
     module_root: Path,
+    redactor: Redactor,
 ) -> list[str]:
     """Writes `index/*.ndjson` into `bundle` and returns the file names written.
 
@@ -88,8 +108,8 @@ def write_index(
         (_CALLERS, _caller_records(call_edges, located)),
         (_IMPLEMENTORS, _implementor_records(implementations, located)),
         (_ANNOTATED, _annotated_records(annotations, located)),
-        (_SHAPE_CARRIERS, _shape_carrier_records(endpoints)),
-        (_ADDRESSES, _address_records(roots, located)),
+        (_SHAPE_CARRIERS, _shape_carrier_records(endpoints, redactor)),
+        (_ADDRESSES, _address_records(roots, located, redactor)),
     ):
         (index / name).write_text(
             "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
@@ -283,7 +303,9 @@ def _annotated_records(
     ]
 
 
-def _shape_carrier_records(endpoints: Sequence[dict[str, object]]) -> list[dict[str, Any]]:
+def _shape_carrier_records(
+    endpoints: Sequence[dict[str, object]], redactor: Redactor
+) -> list[dict[str, Any]]:
     """Index 2d: which endpoints CARRY this shape, and on which side.
 
     Request and response are kept apart rather than folded into "mentions": "who accepts an
@@ -305,7 +327,9 @@ def _shape_carrier_records(endpoints: Sequence[dict[str, object]]) -> list[dict[
                     "protocol": endpoint["protocol"],
                     "direction": endpoint["direction"],
                     "method": endpoint["method"],
-                    "path": endpoint["path"],
+                    # The exit's mask, the same one `graph/endpoints.parquet` applies to
+                    # this column: an address can carry credentials in front of it.
+                    "path": _address(endpoint["path"], redactor),
                     "handler": endpoint["handler"],
                     "caller": endpoint["caller"],
                 }
@@ -321,7 +345,9 @@ def _shape_carrier_records(endpoints: Sequence[dict[str, object]]) -> list[dict[
 
 
 def _address_records(
-    roots: Sequence[dict[str, object]], located: dict[str, dict[str, Any]]
+    roots: Sequence[dict[str, object]],
+    located: dict[str, dict[str, Any]],
+    redactor: Redactor,
 ) -> list[dict[str, Any]]:
     """Index 3: `GET /order/list` -> root -> handler -> `file:line`.
 
@@ -339,7 +365,8 @@ def _address_records(
             {
                 "protocol": root["protocol"],
                 "method": root["method"],
-                "path": root["path"],
+                # Masked, exactly as `graph/roots.parquet`'s own column is.
+                "path": _address(root["path"], redactor),
                 "root_kind": root["root_kind"],
                 "handler": str(root["handler"]),
                 **_at(located, str(root["handler"])),
@@ -348,6 +375,16 @@ def _address_records(
         ),
         key=lambda record: json.dumps(record, sort_keys=True),
     )
+
+
+def _address(value: object, redactor: Redactor) -> str | None:
+    """One address column through the exit's redactor, NULL left as NULL.
+
+    `redact_text` rather than `redact_value`: an address is not a configuration key, and
+    what it carries when it carries anything is userinfo in front of a host — which is the
+    rule `graph/`'s own `_REDACTED_ADDRESSES` map applies to these same columns.
+    """
+    return None if value is None else redactor.redact_text(str(value))
 
 
 def _at(located: dict[str, dict[str, Any]], symbol: str) -> dict[str, Any]:
