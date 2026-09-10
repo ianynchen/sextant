@@ -52,6 +52,17 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **Coverage reports how much was UNDERSTOOD** (FR-17 clause 3, F8 §9.5, W38). It carried
+  how many files were opened and nothing about how much of the call graph was read. The
+  design asked for one `GROUP BY` on `call_edges.resolution` and warned in the same breath
+  that it looks perfect — it does: **100% `resolved` on two of the four corpora**, while two
+  thirds of the graph ends at a boundary. `resolution` says whether dispatch settled a call,
+  and naming the compiler's target is easy; reading the body is the work. So the reach rate
+  leads (78% on `mall-admin`, 31-32% on the others), the named distribution follows, and
+  `method_resolution`'s reasons say why a body was missed. All three reach `metadata.json`,
+  the manifest and the rendered `## Coverage` — composed by one function on both paths,
+  since `render` reads the workspace back rather than re-resolving.
+
 - **Reachability is kept, and the tables carry a second ordering** (F8 §9.4, W37). The
   trace walk already computed what each root reaches and threw it away, so "what does
   changing this method affect" was a walk over the whole graph once per question. The

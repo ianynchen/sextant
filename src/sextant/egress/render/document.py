@@ -1001,6 +1001,7 @@ def assemble_module_document(
         _runs(f"Partial documents: {report.coverage.get('partial_documents', 0)}"),
         _runs(f"Facts loaded: {report.facts_loaded}"),
     ]
+    coverage_items += _understanding_items(report.coverage)
     coverage_items += _config_coverage_items(resolved_config)
     coverage_items += _unresolved_derivation_items(report.endpoints)
     # Per-environment peer AUTHORITIES — one substituted address per
@@ -2044,6 +2045,45 @@ def _trace_elision(trace: Trace) -> str:
             f"and not followed: {stops[TraceStop.CYCLE]}."
         )
     return " ".join(parts)
+
+
+def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
+    """FR-17 clause 3 (F8 §9.5, W38): how much of the call graph was UNDERSTOOD, beside how
+    many files were opened.
+
+    **`reach` leads and `resolution` follows, because the second alone misleads.**
+    `resolution` says whether dispatch settled a call, and it reads 100% `resolved` on two
+    of the four measured corpora — naming the target a compiler wrote is easy, and reading
+    its BODY is the work. A reader shown only that would take a blind analysis for a
+    complete one, which is the corpus blindness this line exists to instrument.
+
+    Absent where there is no call graph at all, rather than printed as `0 of 0`: a module
+    with no edges has nothing to be understood, and a percentage of nothing reads as a
+    failure (NFR-7's "looked and found nothing" is for things that were looked FOR).
+    """
+    reach = coverage.get("reach")
+    if not isinstance(reach, dict) or not reach:
+        return []
+    read = int(reach.get("body_read", 0))
+    total = read + int(reach.get("boundary", 0))
+    if total == 0:
+        return []
+    items = [
+        _runs(
+            f"Calls whose callee body this workspace read: {read} of {total} "
+            f"({round(100 * read / total)}%). The rest end at a boundary — a library, the "
+            "platform, a sibling module — which is what was measured, not what exists."
+        )
+    ]
+    for key, unit, lead in (
+        ("resolution", "call edges", "Dispatch"),
+        ("method_resolution", "methods", "Method lookup"),
+    ):
+        distribution = coverage.get(key)
+        if isinstance(distribution, dict) and distribution:
+            counted = ", ".join(f"{name} {count}" for name, count in sorted(distribution.items()))
+            items.append(_runs(f"{lead}, by outcome ({unit}): {counted}."))
+    return items
 
 
 def _config_coverage_items(

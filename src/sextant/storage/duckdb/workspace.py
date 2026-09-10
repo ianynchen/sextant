@@ -416,6 +416,32 @@ _NAMED_QUERIES = {
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
         FROM documents
     """,
+    # FR-17 clause 3 (F8 §9.5, W38). How much was UNDERSTOOD, beside how many files were
+    # opened. Three GROUP BYs on columns that already exist, composed into `coverage` by
+    # `resolve/pipeline.py` — the vocabulary is D00's closed sets and folding rows into a
+    # summary is Python's job, not a CASE expression's.
+    "resolution_distribution": """
+        SELECT resolution AS bucket, count(*) AS edges
+        FROM call_edges GROUP BY 1 ORDER BY 1
+    """,
+    # The number the one above cannot give. `resolution` says whether DISPATCH settled a
+    # call; it reads 100% `resolved` on two of the four measured corpora, because naming a
+    # target the compiler wrote is easy and reading its BODY is the hard part. This says
+    # how often the body was there: `mall-admin` 78%, and 31-32% on the three that depend
+    # heavily on libraries nobody scanned.
+    "reach_distribution": """
+        SELECT CASE WHEN callee IS NULL THEN 'boundary' ELSE 'body_read' END AS bucket,
+               count(*) AS edges
+        FROM call_edges GROUP BY 1 ORDER BY 1
+    """,
+    # WHY a body was not reached, which is what makes the reach rate actionable: an owner
+    # in an unscanned jar is a scanning decision, `no_declaration_found` is a defect.
+    # Keyed per (class, name, descriptor) rather than per edge — that is the grain the
+    # lookup itself answers at (JVMS 5.4.3.3, F3 §4.2).
+    "method_resolution_distribution": """
+        SELECT reason AS bucket, count(*) AS methods
+        FROM method_resolution GROUP BY 1 ORDER BY 1
+    """,
     # `resolve/config.py`'s own input: every config_entry, in declaration
     # order within its document (`config_entries.seq`, D00 §5c) and its
     # document ahead of that (`document_id`) so a multi-document file's own

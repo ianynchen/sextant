@@ -42,6 +42,38 @@ class ResolveReport:
     unexpanded_types: tuple[str, ...] = ()
 
 
+def coverage_of(workspace: Workspace) -> dict[str, object]:
+    """`coverage`, plus FR-17 clause 3's distributions (F8 §9.5, W38).
+
+    **How many files we OPENED and how much we UNDERSTOOD are different numbers**, and
+    until this the report carried only the first: `{documents, partial_documents}`. Every
+    resolution figure quoted about this project came from a throwaway script written once
+    and discarded; these make them standing.
+
+    Three buckets rather than the one the design names, and the reason is the design's own
+    warning about the one. `resolution` reads **100% `resolved` on two of the four measured
+    corpora** — mall-admin 24,591 of 24,591, jhipster 1,686 of 1,686 — which looks perfect
+    and says almost nothing: naming the target a compiler wrote is easy, and reading its
+    BODY is the work. `reach` is the number that answers the question the row was added
+    for (`mall-admin` 78%, the other three 31-32%), and `method_resolution` says WHY a body
+    was missed — an owner in an unscanned jar is a scanning decision, while
+    `no_declaration_found` would be a defect.
+
+    Shipping the distribution alone would satisfy the row's letter and leave the standing
+    instrument reading 100% forever.
+    """
+    coverage = dict(workspace.query("coverage")[0])
+    for key, named, unit in (
+        ("resolution", "resolution_distribution", "edges"),
+        ("reach", "reach_distribution", "edges"),
+        ("method_resolution", "method_resolution_distribution", "methods"),
+    ):
+        # Sorted by the query, and a dict of counts rather than a list of rows: a reader
+        # asks "how many were unresolved", never "what was the third bucket".
+        coverage[key] = {str(row["bucket"]): int(str(row[unit])) for row in workspace.query(named)}
+    return coverage
+
+
 def resolve(
     workspace: Workspace,
     fact_root: Path,
@@ -191,7 +223,7 @@ def resolve(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),
         skipped_catalogs=skipped,
-        coverage=workspace.query("coverage")[0],
+        coverage=coverage_of(workspace),
         shapes=workspace.query("shapes"),
         scheduled_work=workspace.query("scheduled_work"),
         error_handlers=workspace.query("error_handlers"),

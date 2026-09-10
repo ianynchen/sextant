@@ -1714,3 +1714,40 @@ def test_the_address_ordering_masks_its_path_like_the_table_it_reorders(tmp_path
             f"SELECT * FROM read_parquet('{bundle / 'graph' / f'{name}.parquet'}')"
         ).fetchall()
         assert not any("hunter2" in str(cell) for row in rows for cell in row), name
+
+
+def test_the_coverage_distributions_group_the_columns_that_already_exist(tmp_path: Path):
+    """FR-17 clause 3 (F8 §9.5, W38). Three GROUP BYs, composed into `coverage` by
+    `resolve/pipeline.py`.
+
+    The reach bucket is the one that answers the question the wave was added for.
+    `resolution` says whether DISPATCH settled a call and reads 100% `resolved` on two of
+    the four measured corpora; `callee IS NULL` says whether the body was there, which is
+    the work. Both ship, because the first without the second is the corpus blindness the
+    design warns about and the second without the first cannot say why.
+    """
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    workspace._connection.execute(
+        "INSERT INTO call_edges (caller, ordinal, invoke_kind, target, callee, result, "
+        "resolution, evidence) VALUES "
+        "('m a/A#a().', 0, 'virtual', 'a/B#b().', 'm a/B#b().', NULL, 'resolved', "
+        "'compiler'), "
+        "('m a/A#a().', 1, 'virtual', 'x/Lib#go().', NULL, NULL, 'resolved', 'compiler'), "
+        "('m a/A#a().', 2, 'interface', 'a/I#i().', 'm a/P#i().', NULL, 'narrowed', "
+        "'compiler'), "
+        # The second candidate of that same narrowed site, so the two rules cannot
+        # agree by accident: with three edges the counts coincided and bucketing on
+        # `resolution` instead of on `callee` passed.
+        "('m a/A#a().', 2, 'interface', 'a/I#i().', 'm a/Q#i().', NULL, 'narrowed', "
+        "'compiler')"
+    )
+
+    resolution = {row["bucket"]: row["edges"] for row in workspace.query("resolution_distribution")}
+    reach = {row["bucket"]: row["edges"] for row in workspace.query("reach_distribution")}
+    workspace.close()
+
+    assert resolution == {"resolved": 2, "narrowed": 2}
+    # The same three edges, bucketed by whether a BODY was read — which is the number
+    # `resolution` cannot give: two of these are `resolved` and one of those two reached
+    # nothing.
+    assert reach == {"body_read": 3, "boundary": 1}

@@ -1163,3 +1163,44 @@ def test_a_source_root_outside_the_module_is_dropped_rather_than_made_absolute(
     written = json.loads((tmp_path / "metadata.json").read_text())
 
     assert written["module"]["source_roots"] == ["src/main/java"]
+
+
+def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_path: Path):
+    """FR-17 clause 3 (F8 §9.5, W38). `coverage` carried `{documents, partial_documents}` —
+    how many files were OPENED — and nothing about how much of the call graph was read.
+
+    **The reach rate leads and the dispatch distribution follows**, because the second
+    alone misleads: `resolution` reads 100% `resolved` on two of the four measured corpora,
+    since naming the target a compiler wrote is easy and reading its BODY is the work. A
+    reader shown only that would take a blind analysis for a complete one.
+    """
+    report = dataclasses.replace(
+        REPORT,
+        coverage={
+            "documents": 4,
+            "partial_documents": 0,
+            "reach": {"body_read": 465, "boundary": 968},
+            "resolution": {"resolved": 1431, "narrowed": 2},
+            "method_resolution": {"declared_here": 191, "owner_not_scanned": 318},
+        },
+    )
+
+    text = render_module_document(MODULE, report, "a3f91c")
+
+    assert "Calls whose callee body this workspace read: 465 of 1433 (32%)" in text
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1431." in text
+    assert "Method lookup, by outcome (methods): declared_here 191, owner_not_scanned 318." in text
+
+
+def test_a_module_with_no_call_graph_reports_no_percentage_of_nothing(tmp_path: Path):
+    """Absent, not `0 of 0`. A module with no edges has nothing to be understood, and a
+    percentage of nothing reads as a failure — NFR-7's "looked and found nothing" is for
+    things that were looked FOR."""
+    report = dataclasses.replace(
+        REPORT, coverage={"documents": 4, "partial_documents": 0, "reach": {}}
+    )
+
+    text = render_module_document(MODULE, report, "a3f91c")
+
+    assert "Calls whose callee body" not in text
+    assert "Documents analysed: 4" in text

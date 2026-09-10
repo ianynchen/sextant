@@ -761,6 +761,45 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-xiv. Coverage reports how much was UNDERSTOOD (FR-17 clause 3, F8 §9.5)
+
+`coverage` carried `{documents, partial_documents}` — how many files were OPENED — and
+nothing about how much of the call graph was read. Every resolution figure ever quoted about
+this project came from a throwaway script written once and discarded; these are standing.
+
+**The design asked for one `GROUP BY` on `call_edges.resolution`, and warned in the same
+breath that it looks perfect. It does. Measured:**
+
+| Corpus | edges | `resolution` | body READ |
+|---|---|---|---|
+| `mall-admin` | 24,591 | **100% resolved** | 19,239 (78%) |
+| `jhipster-sample-app` | 1,686 | **100% resolved** | 545 (32%) |
+| `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (31%) |
+| `orders-service` (fixture) | 1,433 | 1,431 resolved, 2 narrowed | 465 (32%) |
+
+`resolution` says whether DISPATCH settled a call — whether the compiler's target narrowed
+to one body — and naming that target is easy. Reading the body is the work, and on two
+corpora the column reads 100% while two thirds of the graph ends at a boundary. **Shipping
+that distribution alone would satisfy the design's letter and leave the standing instrument
+reading 100% forever**, which is precisely the corpus blindness §9.5 says it exists to catch.
+
+So three buckets ship, and the reach rate LEADS:
+
+- **reach** — `callee IS NULL` or not. How often a called body was actually here.
+- **dispatch** — the `resolution` distribution the design names.
+- **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
+  `owner_not_scanned` is a scanning decision (318 of the fixture's 544, 425 of jhipster's
+  675), while `no_declaration_found` would be a defect. None of the four corpora has one.
+
+All three reach `metadata.json`, the bundle manifest, and — since a person reading the
+document is who the instrument is for — the `## Coverage` section itself. `render` reads the
+workspace back rather than re-resolving, so the summary is composed on both paths by one
+function; composed only in the resolve pipeline, it reached the manifest and never the
+document.
+
+A module with no call graph prints no line at all rather than `0 of 0`: nothing was looked
+for, so nothing was missed.
+
 ### 3a-xiii. Reachability is kept, and the tables carry a second ordering (F8 §9.4)
 
 **The trace walk already computed this and threw it away.** `query/trace.py` walks every

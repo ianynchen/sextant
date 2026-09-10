@@ -127,7 +127,7 @@ from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
 from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
-from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.pipeline import ResolveReport, coverage_of
 from sextant.application.stages import enrich as enrich_stage
 from sextant.application.stages.analyze import AnalyzeResult as _StageAnalyzeResult
 from sextant.application.stages.analyze import analyze as _analyze_stage
@@ -807,7 +807,11 @@ def _reconstructed_report(
     report = ResolveReport(
         facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
         endpoints=workspace.query("endpoints"),
-        coverage=workspace.query("coverage")[0],
+        # F8 §9.5 (W38). The DISTRIBUTIONS too, not just the document counts: `render`
+        # reads the workspace back rather than re-resolving, so a summary composed only in
+        # `resolve/pipeline.py` reached `metadata.json` and never the document a person
+        # opens — which is the reader the standing instrument exists for.
+        coverage=coverage_of(workspace),
         skipped_catalogs=skipped_catalogs,
         shapes=workspace.query("shapes"),
         # Read back off the workspace, exactly as `endpoints` and `shapes` are,
