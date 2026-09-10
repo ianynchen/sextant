@@ -2132,3 +2132,174 @@ def test_the_derivation_names_no_language():
     for name in ("derive_shapes.sql", "derive_shape_fields.sql"):
         words |= set(re.findall(r"[a-z]+", (SQL_DIR / name).read_text().lower()))
     assert not {"java", "kotlin", "jvm"} & words
+
+
+# ---------------------------------------------------------------------------
+# Inherited wire fields (F4 §5.2). A payload class extending another published
+# only its OWN fields and said the description was CLOSED.
+#
+# Measured on `mall-admin`: `dto/OmsOrderDetail extends model/OmsOrder` published
+# two fields — `orderItemList`, `historyList` — with `open: false`, while the
+# parent declares 45 more (`id`, `orderSn`, `totalAmount`) and every one of them
+# is in the real response. `PmsProductParam` published 7 of 50, `SmsCouponParam`
+# 2 of 21, `jhipster-sample-app`'s `ManagedUserVM` 1 of 15. Recovering them added
+# 153 wire fields on mall-admin and 17 on jhipster.
+#
+# **The accessor half hid it.** `_rows_of` falls back to accessors only when the
+# field pass produced NOTHING, and W26 gave that fallback an ancestry walk — so a
+# type with no fields of its own (this repo's `DetailedOrderResult`) came out
+# right through the accessors, and only a type with SOME fields of its own was
+# wrong. The fixture had the first shape and not the second.
+# ---------------------------------------------------------------------------
+
+_PARENT = _MODULE + "com/acme/orders/Base#"
+# The shape id is the bare descriptor; `_PARENT`/`_CHILD` carry the module coordinates a
+# `superclass` fact is written with (D00 §5a).
+_CHILD_ID = "com/acme/orders/Derived#"
+
+
+def _inheriting_workspace(tmp_path: Path, *, scanned_parent: bool = True) -> DuckDbWorkspace:
+    """`Derived extends Base`, each declaring a field of its own."""
+    facts = tmp_path / "facts"
+    child = _type("doc", "com/acme/orders/Derived#")
+    child["superclass"] = _PARENT
+    rows = [child, _field("doc", "com/acme/orders/Derived#", "note", _string())]
+    if scanned_parent:
+        rows += [
+            _type("doc", "com/acme/orders/Base#"),
+            _field("doc", "com/acme/orders/Base#", "id", _string()),
+            _field("doc", "com/acme/orders/Base#", "total", _string()),
+        ]
+    _write(facts / "doc.jsonl", _document("doc", "Derived.java"), rows)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    return workspace
+
+
+def test_a_payload_publishes_the_fields_it_inherits(tmp_path: Path):
+    """The defect, in the shape that hid: a type with SOME fields of its own never
+    reaches the accessor fallback, so its inherited fields were invisible."""
+    workspace = _inheriting_workspace(tmp_path)
+
+    derive_shapes(workspace, _CATALOG, [_CHILD_ID])
+    names = [f["wire_name"] for f in shape_fields_of(workspace, _CHILD_ID)]
+    workspace.close()
+
+    assert set(names) == {"note", "id", "total"}
+    # Own first, then the superclass chain — JVMS 5.4.3.3's order, the same one the
+    # accessor half walks, so the two halves cannot disagree about which declaration wins.
+    assert names[0] == "note"
+
+
+def test_a_subtypes_own_field_shadows_the_one_it_inherits(tmp_path: Path):
+    """One field NAME is one wire field, however many types declare it. First
+    declaration in the closure wins, which is what shadowing is."""
+    facts = tmp_path / "facts"
+    child = _type("doc", "com/acme/orders/Derived#")
+    child["superclass"] = _PARENT
+    _write(
+        facts / "doc.jsonl",
+        _document("doc", "Derived.java"),
+        [
+            child,
+            _field("doc", "com/acme/orders/Derived#", "id", _string()),
+            _type("doc", "com/acme/orders/Base#"),
+            _field("doc", "com/acme/orders/Base#", "id", _ref("int#", "integer", "int32")),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _CATALOG, [_CHILD_ID])
+    fields = shape_fields_of(workspace, _CHILD_ID)
+    workspace.close()
+
+    assert len(fields) == 1
+    assert fields[0]["wire_type"] == "string", "the subtype's own declaration is the first"
+
+
+def test_a_type_inheriting_every_field_is_still_expandable(tmp_path: Path):
+    """`expandable` asks whether a description was PRODUCED, not whether the type
+    declared a field of its own.
+
+    A first version of this fix asked the narrower question and reported
+    `DetailedOrderResult extends OrderResult` — which declares nothing — as an
+    unexpanded type while publishing both of its inherited fields: a gap report pointing
+    at a shape the document describes in full. The same mistake `_Accessors` records for
+    accessors and `corpus_shapes.py` for resolvable calls.
+    """
+    facts = tmp_path / "facts"
+    child = _type("doc", "com/acme/orders/Derived#")
+    child["superclass"] = _PARENT
+    _write(
+        facts / "doc.jsonl",
+        _document("doc", "Derived.java"),
+        [
+            child,
+            _type("doc", "com/acme/orders/Base#"),
+            _field("doc", "com/acme/orders/Base#", "id", _string()),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    result = derive_shapes(workspace, _CATALOG, [_CHILD_ID])
+    names = [f["wire_name"] for f in shape_fields_of(workspace, _CHILD_ID)]
+    open_flag = next(
+        bool(row["open"]) for row in workspace.query("shapes") if str(row["shape_id"]) == _CHILD_ID
+    )
+    workspace.close()
+
+    assert names == ["id"]
+    assert open_flag is False
+    assert _CHILD_ID not in result.unexpanded_types
+
+
+def test_an_unscanned_SUPERCLASS_leaves_its_subtype_open(tmp_path: Path):
+    """An unscanned superclass may declare fields nobody here can see, so a subtype of
+    one is not a complete description however many fields of its own were read.
+
+    Before this, a type extending a scanned parent and one extending a vendor jar's base
+    both read `open: false` — the same claim about two very different states of
+    knowledge.
+    """
+    workspace = _inheriting_workspace(tmp_path, scanned_parent=False)
+
+    derive_shapes(workspace, _CATALOG, [_CHILD_ID])
+    names = [f["wire_name"] for f in shape_fields_of(workspace, _CHILD_ID)]
+    open_flag = next(
+        bool(row["open"]) for row in workspace.query("shapes") if str(row["shape_id"]) == _CHILD_ID
+    )
+    workspace.close()
+
+    # The field it CAN see is still published — open is about completeness, not silence.
+    assert names == ["note"]
+    assert open_flag is True
+
+
+def test_an_unscanned_INTERFACE_does_not_open_its_implementor(tmp_path: Path):
+    """The near-miss, and the difference between a useful gap report and a flood.
+
+    An interface's own fields are constants, which `_rows_of` drops as `static`, so an
+    unscanned interface can never contribute a wire field — `implements
+    java.io.Serializable` says nothing at all about the payload. Counting it opened 30 of
+    `mall-admin`'s 107 shapes for a marker interface with no members.
+    """
+    facts = tmp_path / "facts"
+    child = _type("doc", "com/acme/orders/Derived#")
+    child["interfaces"] = [_MODULE + "java/io/Serializable#"]
+    _write(
+        facts / "doc.jsonl",
+        _document("doc", "Derived.java"),
+        [child, _field("doc", "com/acme/orders/Derived#", "note", _string())],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _CATALOG, [_CHILD_ID])
+    open_flag = next(
+        bool(row["open"]) for row in workspace.query("shapes") if str(row["shape_id"]) == _CHILD_ID
+    )
+    workspace.close()
+
+    assert open_flag is False

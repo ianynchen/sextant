@@ -52,6 +52,24 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **A payload publishes the fields it INHERITS** (F4 §5.2). A payload class extending
+  another published only its OWN fields and claimed the description was complete.
+  `mall-admin`'s `dto/OmsOrderDetail` — a real endpoint's response — published two fields
+  with `open: false` while its scanned parent declares 45 more that are all on the wire;
+  `PmsProductParam` published 7 of 50, `jhipster-sample-app`'s `ManagedUserVM` 1 of 15.
+  DR-5 links services on this comparison, so a 2-field contract that is really 47 fields
+  is a match made on almost nothing. **The accessor half hid it**: the fallback to
+  accessors runs only where the field pass found NOTHING, and W26 gave that fallback an
+  ancestry walk — so a payload with no field of its own came out right and only one with
+  SOME field of its own was wrong. The fixture had the first shape; `DetailedOrderResult`
+  now carries a field of its own so the always-on gate has the second. The field pass
+  walks the scanned ancestry in JVMS 5.4.3.3 order, first declaration of a name winning:
+  **153 wire fields recovered on mall-admin, 17 on jhipster**. An unscanned SUPERCLASS now
+  opens its subtype — fields nobody can see are fields nobody can claim to have described
+  — while an unscanned INTERFACE does not (its fields are constants, so a marker interface
+  says nothing, and counting it opened 30 of mall-admin's shapes for one), and neither does
+  a type whose contract comes from a schema rather than its class file.
+
 - **A call with several possible bodies stops reading as several calls** (F7 §8.3, W32).
   A `narrowed` call site is several candidate bodies with none picked, and the walk records
   one step per candidate. Drawn flat they read as a SEQUENCE — and this was live:

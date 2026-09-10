@@ -39,7 +39,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     """
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
-    declared = _declared_fields(workspace)
+    declared = _Fields(workspace=workspace)
     accessors = _Accessors(workspace=workspace, rules=rules)
     descriptors = _declared_shapes(workspace)
     parameters = _type_parameters(workspace)
@@ -97,7 +97,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 workspace,
                 rules,
                 scope_prefixes,
-                _bound(declared.get(base, []), substitution),
+                _bound(declared.of(base), substitution),
                 enums,
                 referenced,
             )
@@ -115,7 +115,12 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
-        expandable = descriptor is not None or base in declared or from_accessors
+        # `declared.of(base)` rather than "does `base` declare a field of its own": a type
+        # that declares none and inherits all of them IS described, and asking only about
+        # its own facts reported `DetailedOrderResult extends OrderResult` unexpandable
+        # while publishing both of its inherited fields. Same shape as the mistake
+        # `_Accessors` records for accessors and `corpus_shapes.py` for resolvable calls.
+        expandable = descriptor is not None or bool(declared.of(base)) or from_accessors
         if not expandable:
             unexpanded.append(shape_id)
         shapes.append(
@@ -136,8 +141,21 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 # exactly like one from this module unless the row says so.
                 "origin_tier": tiers.get(base),
                 "open": not expandable
+                # F4 §5.2. An UNSCANNED superclass may declare fields nobody here can
+                # see, so a subtype of one is not a complete description however many
+                # fields of its own were read. Before this, a type extending a scanned
+                # parent and one extending a vendor jar's base both read `open: false`.
+                #
+                # **Only where the fields came from BYTECODE.** A type owning a
+                # `declared_shape` takes its contract from the schema and never from its
+                # class file (the never-a-blend rule, D01 §3), so whatever its GENERATED
+                # class happens to extend says nothing about the payload — every protobuf
+                # message extends the runtime's `GeneratedMessage`, which is unscanned,
+                # and counting it opened all four of the fixture's proto shapes while the
+                # `.proto` describes them completely.
+                or (descriptor is None and declared.reaches_an_unscanned_SUPERCLASS(base))
                 or any(
-                    held not in declared and held not in descriptors and not accessors.of(held)
+                    held not in descriptors and not declared.of(held) and not accessors.of(held)
                     for held in referenced
                 )
                 # F4 §5.2 (W25). A field holding an UNBOUND type variable — a raw
@@ -319,6 +337,89 @@ def _rules_of(catalog: Catalog) -> _Rules:
 # broken file, and the KeyError above names it — the same discipline
 # `_STRATEGIES` uses for serialisation strategies.
 _SCOPE_MEANINGS: dict[str, bool] = {"not_null_by_default": False}
+
+
+@dataclass
+class _Fields:
+    """Each type's wire fields — its own and its scanned ancestors' — resolved on the
+    first ask and remembered (F4 §5.2).
+
+    **A payload class extending another published only its OWN fields, and said the
+    description was CLOSED.** Measured on `mall-admin`: `dto/OmsOrderDetail extends
+    model/OmsOrder` published two fields (`orderItemList`, `historyList`) with
+    `open: false`, while the parent declares 45 more — `id`, `orderSn`, `totalAmount` —
+    every one of them serialised in the real response. `PmsProductParam` published 7 of
+    50, `SmsCouponParam` 2 of 21; `jhipster-sample-app`'s `ManagedUserVM` published 1 of
+    15; this repo's own fixture had `DetailedOrderResult` at 2 of 4. A wire contract
+    missing most of the payload, published as complete, is the over-claim NFR-2 rates
+    worst, and DR-5 links services on exactly this comparison.
+
+    It is the same walk `_Accessors` already did for the accessor half, and the two
+    halves disagreeing about whether inheritance counts was the whole defect: W26 gave
+    accessors an ancestry and left fields without one.
+
+    First declaration of a field NAME wins, so a subtype shadowing an ancestor's field
+    takes precedence, and the walk order is JVMS 5.4.3.3's — the superclass chain before
+    interfaces — so which declaration that is never depends on iteration order (NFR-1).
+    """
+
+    workspace: Workspace
+    _cache: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    _read: tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]] | None = (
+        dataclasses.field(default=None)
+    )
+
+    def of(self, base: str) -> list[dict[str, Any]]:
+        """What `base` declares on the wire, its ancestors' included."""
+        remembered = self._cache.get(base)
+        if remembered is not None:
+            return remembered
+        own, ancestry = self._declared()
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for holder in _closure_of(base, ancestry):
+            for field in own.get(holder, []):
+                if field["name"] in seen:
+                    continue
+                seen.add(field["name"])
+                rows.append(field)
+        self._cache[base] = rows
+        return rows
+
+    def reaches_an_unscanned_SUPERCLASS(self, base: str) -> bool:
+        """Whether the closure above stops at a SUPERCLASS this workspace did not scan.
+
+        An unscanned superclass may declare fields nobody here can see, so a subtype of
+        one cannot claim a complete description (F7 §8.4's `<<open>>`, applied to the
+        shape rather than only to the diagram). Before this, `PmsProductParam extends
+        PmsProduct` and `SomeDto extends VendorBase` were indistinguishable in the output:
+        both read `open: false`, one correctly and one not.
+
+        **`extends` only, and the exclusion is the difference between a useful gap report
+        and a flood.** An unscanned INTERFACE cannot contribute a wire field: an
+        interface's own fields are constants, which `_rows_of` drops as `static` — so
+        implementing a MARKER interface says nothing about the payload. Counting it opened
+        30 of `mall-admin`'s 107 shapes for one such interface with no members at all,
+        which is an under-claim in the other direction and buries the four real
+        unscanned-base cases.
+        """
+        _own, ancestry = self._declared()
+        return any(
+            kind == "extends" and not is_scanned
+            for holder in _closure_of(base, ancestry)
+            for _parent, kind, is_scanned in ancestry.get(holder, [])
+        )
+
+    def _declared(
+        self,
+    ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]]:
+        """Every field each type declares ITSELF, keyed by owner, plus the ancestry to
+        walk them through. Read once per instance."""
+        if self._read is not None:
+            return self._read
+        ancestry, _scanned = ancestry_of(self.workspace)
+        self._read = (_declared_fields(self.workspace), ancestry)
+        return self._read
 
 
 def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:

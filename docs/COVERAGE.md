@@ -761,6 +761,51 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-x. A payload publishes the fields it INHERITS (F4 §5.2)
+
+A payload class extending another published only its OWN fields, and said the description
+was complete. Found while starting W33, which asks what a contract type extends.
+
+| Shape | published | its scanned parent declares | said |
+|---|---|---|---|
+| `mall-admin` `dto/OmsOrderDetail` | 2 | 45 | `open: false` |
+| `mall-admin` `dto/PmsProductParam` | 7 | 43 | `open: false` |
+| `mall-admin` `dto/SmsCouponParam` | 2 | 19 | `open: false` |
+| `jhipster` `ManagedUserVM` | 1 | 14 | `open: false` |
+
+`OmsOrderDetail` is the response of a real endpoint. It published `orderItemList` and
+`historyList` and claimed a complete description, while the JSON on the wire also carries
+`id`, `orderSn`, `totalAmount` and 42 more. That is the over-claim NFR-2 rates worst, and
+DR-5 links services on exactly this comparison — two services agreeing on a 2-field
+contract that is really 47 fields is a match made on almost nothing.
+
+**The accessor half is why it lived this long.** `_rows_of` falls back to accessors only
+where the field pass produced NOTHING, and W26 gave that fallback an ancestry walk — so a
+payload declaring no field of its own came out right, through its getters. Only a payload
+with SOME field of its own never reached the fallback. The fixture had the first shape and
+not the second, so the always-on gate could not see it; `DetailedOrderResult` now carries a
+field of its own, which makes it the second.
+
+The field pass walks the scanned ancestry the same way the accessor pass does — JVMS
+5.4.3.3 order, first declaration of a name winning, so a subtype shadows what it
+redeclares. Recovered **153 wire fields on `mall-admin`** and 17 on `jhipster-sample-app`.
+
+**An unscanned SUPERCLASS now opens its subtype**, which is F7 §8.4's `<<open>>` applied to
+the shape rather than only to the diagram: fields we cannot see are fields we cannot claim
+to have described. Two exclusions keep that from becoming a flood:
+
+- **An unscanned INTERFACE does not.** An interface's own fields are constants, dropped as
+  `static`, so implementing a marker interface says nothing about the payload. Counting it
+  opened 30 of mall-admin's 107 shapes for one interface with no members.
+- **A type owning a `declared_shape` does not.** Its contract comes from the schema and
+  never from its class file (the never-a-blend rule, D01 §3), so what its generated class
+  extends is irrelevant — every protobuf message extends an unscanned `GeneratedMessage`,
+  and counting it opened all four of the fixture's proto shapes while the `.proto`
+  describes them completely.
+
+Net on `mall-admin`: 31 open shapes became 35, and all four newly-open ones are honest —
+their recovered parent fields hold `java.util.Date`, a type this workspace never scanned.
+
 ### 3a-ix. A call with several possible bodies stops reading as several calls (F7 §8.3)
 
 A `narrowed` call site is several candidate bodies with none picked — dispatch could not
