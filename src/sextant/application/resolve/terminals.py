@@ -60,7 +60,7 @@ rule naming `ExecutorService` or `MinioClient` would mint one today — while `c
 non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
 describe how a BODY exits, and all three routes here are predicates on the callee's TYPE,
 which cannot express that. `closed_sets.py` names them at the enum and
-`docs/open-issues.md` carries `OI-74`.
+`docs/open-issues.md` carries `OI-75`.
 
 ## Not `TraceStop`
 

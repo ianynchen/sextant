@@ -449,7 +449,7 @@ def test_a_terminal_rule_naming_no_route_or_two_is_refused_at_load(tmp_path: Pat
 
 def test_the_shipped_rules_load_and_every_one_is_persistence(tmp_path: Path):
     """The shipped block, read off the file — and the measured claim that only two of
-    `TerminalKind`'s eight members have a producer (`OI-74`) rests on this.
+    `TerminalKind`'s eight members have a producer (`OI-75`) rests on this.
 
     What the twelve rules NAME is not checkable offline; a typo in
     `org.mybatis.spring.annotation.MapperScan` is inert rather than invalid, and the

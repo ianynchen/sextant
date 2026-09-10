@@ -158,7 +158,7 @@ class Direction(StrEnum):
     The member stays because the LINKING tier is where a schema match or a human can
     justify one: `both` is a claim about two modules, made where both are visible, and a
     single module's analysis is exactly the place that cannot make it. Recorded as
-    `OI-75`; this docstring, and D00 §4's own entry, exist because W27's review found
+    `OI-76`; this docstring, and D00 §4's own entry, exist because W27's review found
     twelve citations pointing at a set definition that was nowhere.
     """
 
@@ -283,7 +283,7 @@ class TerminalKind(StrEnum):
       describe how a BODY exits, while all three catalog routes are predicates on the
       callee's TYPE. Producing them needs a different mechanism, not a different rule.
 
-    Recorded as `OI-74`. The members stay because a reader of `call_edges` branches on the
+    Recorded as `OI-75`. The members stay because a reader of `call_edges` branches on the
     value, not on which values happen to be reachable this release.
     """
 
@@ -306,7 +306,7 @@ class TargetKind(StrEnum):
     **`FILE` has no producer** (§5.3, and `TerminalKind`'s note above). It is the first of
     the three a catalog rule could mint — `io.minio.MinioClient` and `com.aliyun.oss.
     OSSClient` are both live on `mall-admin` and both read `unresolved` today — and none
-    is declared. `OI-74`.
+    is declared. `OI-75`.
     """
 
     DATABASE = "database"

@@ -121,7 +121,7 @@ here would restate those documents rather than add anything.
   `mall-admin`'s mappers carry no annotation at all — `@MapperScan`'s own package list is
   how MyBatis finds them — and matching `*Mapper` would have claimed every unrelated type
   ending that way. **Six of `TerminalKind`'s eight members have no producer** and three of
-  those are unreachable by any catalog rule (`OI-74`); `target_kind: file` has none either.
+  those are unreachable by any catalog rule (`OI-75`); `target_kind: file` has none either.
 
 - **An outbound call's headers are recorded, each with its own trust columns** (F5 §6.2,
   W29). `endpoint_metadata` is a side table, one row per entry. Measured on the fixture's

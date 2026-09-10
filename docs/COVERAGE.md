@@ -973,7 +973,7 @@ which is the same standing `resolvable_superclass_calls` has, and for the same r
 Both are in the same package and both are terminals in `spring-petclinic-rest`. One is an
 API that reaches a store and one is a date. The package is not the evidence.
 
-**Six of the eight members have no producer, and for two different reasons** (`OI-74`).
+**Six of the eight members have no producer, and for two different reasons** (`OI-75`).
 `outbound_call`, `throws` and `async_handoff` are one catalog rule away — an `owner` rule
 naming `ExecutorService` would mint `async_handoff` today, and none is declared, so all
 twelve shipped rules say `persistence`. `cycle`, `returns` and `ends_silently` are
@@ -3026,7 +3026,7 @@ cache / object store)" is a classified count. It was reproduced by hand before W
 classification is read now (§3a-viii): **155 roots reach a mapper or DAO terminal**, three
 more reach an object-store client (`io/minio/MinioClient`, `com/aliyun/oss/OSSClient` —
 still `unresolved`, since no rule names them and `TargetKind.file` has no producer,
-`OI-74`), and the two that reach neither are `GET /admin/refreshToken` and `POST
+`OI-75`), and the two that reach neither are `GET /admin/refreshToken` and `POST
 /aliyun/oss/callback` — the same two the roadmap names, verified in source.
 
 **Values through library code** are unchanged by any of this: `stream().map(f).collect()`

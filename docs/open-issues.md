@@ -2580,7 +2580,7 @@ lambda, and the destination is at `queue(arg0)` inside it".
 **Falsified by** measuring that the consumer-builder overloads are rare in practice — which
 would lower its priority, not make it correct.
 
-### OI-74 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
+### OI-75 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
 
 **Found by** W30's review, which asked the question `RootKind`'s own docstring already
 answers for `entry_point` and this set did not answer for anything: which members are
@@ -2616,7 +2616,7 @@ Either half may close on its own.
 at all, in which case the fix is to narrow the set the way `RootKind` was narrowed from six
 to three — the precedent this issue is written against.
 
-### OI-75 — `Direction.both` has no producer
+### OI-76 — `Direction.both` has no producer
 
 **Found by** W27's review, which asked the question the repo's own precedent already
 answers for `entry_point` (`OI-22`) and nobody had asked here.
