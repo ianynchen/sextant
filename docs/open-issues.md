@@ -2645,3 +2645,54 @@ been made and the linking tier is the expected answer.
 **Falsified by** a linking design that gives the joined claim its own row kind rather than
 a direction, which would leave `both` genuinely unreachable and make narrowing the set the
 right close.
+
+---
+
+### OI-77 — an outbound `single_call` payload passed as a method PARAMETER carries no contract · **CLOSED, W43**
+
+**Found by** W43, while checking that the new STOMP outbound rows behaved like their twin.
+They do — which is the point: the gap is uniform, and it is six catalogs wide.
+
+`_reference_of` (`application/resolve/shapes/arguments.py`) turns a call argument into the
+type reference `_payload_descriptor` roots at. It answers for three kinds — a `class`
+literal, a scalar literal, and an `instance` — and returns `None` for everything else. Its
+own comment enumerates what falls through as *"`unresolved`, `null`, `lambda`"*, and
+`parameter` is not in that list, which is what makes this look like an omission rather than
+a decision: the kind is simply not handled.
+
+**Measured.** On the fixture, **24 of 27 outbound `single_call` rows carry no request shape**
+— `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`,
+`spring-kafka-message` and `spring-stomp-template`. The three that do carry one all pass a
+`new` expression: `restTemplate.exchange(..., new HttpEntity<>(new OrderRequest()), ...)`
+and two `spring-ws-template` calls. `mall-admin`, `spring-petclinic-rest` and
+`jhipster-sample-app` derive **no outbound `single_call` row at all**, so every live
+instance is in the fixture.
+
+**Why it is a real loss rather than an unknowable.** The value of a parameter does live in
+whatever called the method — which is why `parameter` belongs in `_UNREAD_KINDS`, and that
+ruling is right for a `channel_arg`, where the DESTINATION is the value. A payload is a
+different question: what a contract needs is the TYPE, and the type is stated in the
+caller's own descriptor. `announce(OrderView order)` calling
+`convertAndSend(dest, order)` names `OrderView` in its own signature, and
+`declared_parameters` already indexes exactly that, keyed by the full symbol.
+
+The failure direction is honest — the row ships with a NULL contract rather than a wrong
+one — so this is an under-report, not a fabrication.
+
+**Verify:** analyse `fixtures/orders-service` and count outbound rows whose `catalog_id` is a
+`single_call` catalog and whose `request_shape` is NULL.
+
+**Falsified by** a ruling that a declared parameter type is too weak a claim to publish —
+which would have to explain why the same declared type is published everywhere else a shape
+is derived from a signature.
+
+**CLOSED in the same commit that found it.** `CallFacts` carries the caller's own declared
+parameters, and `_reference_of` answers a `parameter` argument with the `type` member of the
+one it names. Re-measured on the fixture: **3 of 27 outbound `single_call` rows carried a
+payload, and 21 do.** The six that still do not have no body capture at all — a
+`send(Message)` whose payload rides inside the message — which is a different question and
+not this one.
+
+The DESTINATION half is deliberately unchanged: `parameter` stays in `_UNREAD_KINDS`, so a
+`channel_arg` reading one still resolves to `path` NULL at `unresolved`. That ruling was
+right and is about the VALUE. This was about the TYPE.

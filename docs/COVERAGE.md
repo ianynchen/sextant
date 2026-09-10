@@ -682,7 +682,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**39 of 57 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**40 of 58 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -728,6 +728,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
 | `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
+| `spring-stomp-template` | `org.springframework:spring-messaging` | 6.1.6 |
 | `spring-stomp` | `org.springframework:spring-messaging` | 6.1.6 |
 |  | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-web` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
@@ -774,22 +775,46 @@ breath that it looks perfect. It does. Measured:**
 |---|---|---|---|
 | `mall-admin` | 24,591 | **100% resolved** | 19,239 (78%) |
 | `jhipster-sample-app` | 1,686 | **100% resolved** | 545 (32%) |
-| `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (31%) |
+| `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (32%) |
 | `orders-service` (fixture) | 1,433 | 1,431 resolved, 2 narrowed | 465 (32%) |
 
+Each `body READ` percentage is the instrument's own — `round`, as `document.py` prints it.
+*Petclinic's read 31% here for one release: 971/3,045 is 31.9, and truncating instead of
+rounding put the document a point below the tool it describes.*
+
 `resolution` says whether DISPATCH settled a call — whether the compiler's target narrowed
-to one body — and naming that target is easy. Reading the body is the work, and on two
-corpora the column reads 100% while two thirds of the graph ends at a boundary. **Shipping
+to one body — and naming that target is easy. Reading the body is the work, and on the two
+corpora whose column reads 100% the picture is not the same: `jhipster-sample-app` leaves
+**68% of its graph at a boundary** while `mall-admin` leaves **22%**, so a perfect dispatch
+score sits beside both. *That sentence read "two thirds of the graph ends at a boundary" of
+both, which is true of jhipster, petclinic and the fixture and false of `mall-admin` — one
+of the two corpora it was about.* **Shipping
 that distribution alone would satisfy the design's letter and leave the standing instrument
 reading 100% forever**, which is precisely the corpus blindness §9.5 says it exists to catch.
 
 So three buckets ship, and the reach rate LEADS:
 
-- **reach** — `callee IS NULL` or not. How often a called body was actually here.
-- **dispatch** — the `resolution` distribution the design names.
+**The three are counted at two different GRAINS, and they must not be added together.**
+Reach and dispatch are per EDGE; method lookup is per `(class, name, descriptor)` — one
+answer per method, however many call sites reach it. The document labels each one's unit
+where it prints it, and `metadata.json` and the bundle manifest carry the bare maps under
+their own key names.
+
+- **reach** — `callee IS NULL` or not. How often a called body was actually here. Per edge.
+- **dispatch** — the `resolution` distribution the design names. Per edge, and it can only
+  ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
+  RESOLVED`, so a third bucket is impossible by construction.
 - **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (318 of the fixture's 544, 425 of jhipster's
-  675), while `no_declaration_found` would be a defect. None of the four corpora has one.
+  `owner_not_scanned` is a scanning decision (320 of the fixture's 546 METHODS, 425 of
+  jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
+  has one.
+
+**FR-17 clause 3 asks for the distribution of call SITES, and what ships is per edge.** The
+two differ where dispatch narrowed: `spring-petclinic-rest`'s 68 narrowed edges are 34
+sites, because a narrowed site writes one row per candidate body. The published figures are
+labelled `call edges`, so nothing here is mislabelled — but the clause is met at a
+neighbouring grain rather than exactly, and that is worth a reader knowing before they
+quote it.
 
 All three reach `metadata.json`, the bundle manifest, and — since a person reading the
 document is who the instrument is for — the `## Coverage` section itself. `render` reads the
@@ -2500,6 +2525,10 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 |---|---|---|---|---|
 | Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for **both** spellings (W12) |
 | Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | ✅ shipped — class-level prefix composition, `@SubscribeMapping`, and `@SendTo` reply rows |
+| Java | Spring STOMP `SimpMessagingTemplate.convertAndSend` — the OUTBOUND half | a `single_call`, `KafkaTemplate.send`'s own shape one framework along | `call_site` | ✅ **shipped** (W43, `G-33`). Before it a service that both received and sent STOMP was published with half its messaging surface and nothing saying which half. **The descriptor could not be mirrored from its twin**: `convertAndSend` is declared on `MessageSendingOperations<D>`, `D` erases to `java.lang.Object`, and `SimpMessagingTemplate` declares no bridge — so a real call site written `convertAndSend("/topic/orders", payload)` compiles to `(Ljava/lang/Object;Ljava/lang/Object;)V`, and the `(Ljava/lang/String;Ljava/lang/Object;)V` a copy of `KafkaTemplate.send(String, V)` would have declared matches NOTHING. Compiled and read at spring-messaging 6.1.6 rather than reasoned about, and that String descriptor is the near-miss the suite pins. Six `convertAndSend` overloads, two `send`, four `convertAndSendToUser`; reads 3 of the 14 methods `SimpMessagingTemplate` declares and 3 of `SimpMessageSendingOperations`' 3, with the one unread addressable method named in the slice |
+| Java | The same, to a DEFAULT destination — `convertAndSend(payload)` | no destination argument at all; the template's configuration carries it | `call_site` | ✅ shipped — `path` NULL at `unresolved`, `KafkaTemplate.sendDefault`'s own answer. The boundary is published and its address says outright it was not resolved, rather than the call vanishing |
+| Java | `convertAndSendToUser(user, destination, payload)` | Spring's `UserDestinationMessageHandler` rewrites the destination before the broker sees it | `call_site` | **Boundary — the row ships, the address does not.** The literal at argument 1 is NOT what is published: publishing `/queue/orders` would name an address no subscriber holds, which is an OVER-report and worse than silence because it looks resolved. So these four overloads capture the payload and leave `path` NULL at `unresolved`. **Falsified by** a measurement of the handler's own composition, which is what would let them carry a destination |
+| Any | An outbound `single_call` row whose payload is a method PARAMETER | the type is stated in the CALLER's own signature and nowhere else | `call_site` | ✅ **shipped** (`OI-77`, closed in W43's own commit). Found while checking W43's new rows against their siblings: `_reference_of` read a payload type from a class literal, a scalar or an `instance`, and a `parameter` named none of them — so a payload handed straight through (`send(OrderEvent event)` calling `template.send(topic, event)`) shipped with no contract at all. Measured before and after on the fixture: **3 of 27 outbound `single_call` rows carried a payload, and 21 do**, across `spring-resttemplate`, `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`, `spring-kafka-message` and this file. The six that still do not are rows with no body capture at all — a `send(Message)` whose payload rides inside the message. **The DESTINATION read from a parameter is unchanged and still `unresolved`**: a destination IS its value, and a value lives in whatever called the method; a contract needs the TYPE, which is a different question |
 | Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic — the path is a literal argument, not a chain | `registration_call` | ✅ shipped as a catalog, with **no live fixture surface** (below) |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
 | TS | NestJS `@WebSocketGateway()` + `@SubscribeMessage("event")` | annotation | `annotation` | A |
@@ -3190,16 +3219,16 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 ### 5.13 Language construct
 
 Not a protocol, and not a library: a thing the COMPILER emits that a reader of the class
-file has to recognise. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
-Kotlin rows out of 170** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
+file has to recognise. **Nothing in this section is measured against a corpus**: the six under `examples/` and the fixture contain **zero `.kt` files** between them, so every Kotlin row below is read from the class-file format and from `extractor-jvm`'s own tests, never from a scanned Kotlin module. That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
+Kotlin rows out of 171** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
 has been asserting a parity nobody measured.
 
 | Construct | What the class file holds | Committed at | Support |
 |---|---|---|---|
 | Kotlin property nullability | The compiler states it once, in the protobuf blob inside every Kotlin class's `@kotlin.Metadata` — not in any annotation a scanner could read the way JSpecify's `@Nullable` is read | Scanner capability `kotlin_metadata` (M03) | **supported** — `extractor-jvm/.../KotlinNullability.java` decodes the blob and maps each property to the nullability its declared type carries |
-| Kotlin `suspend fun` | An extra trailing `Continuation` parameter and an erased `Object` return; the declared return type is not in the descriptor | Q2's Kotlin boundaries; `REQUIREMENTS` scope line | **unsupported.** Nothing in `extractor-jvm` names `Continuation`, so a suspending handler's contract is read from the erased signature: the return shape is `Object` and the parameter list carries one member the author did not write. Closes by reading the `@Metadata` blob for the function's declared return type, which the same decoder already opens for properties |
+| Kotlin `suspend fun` | An extra trailing `Continuation` parameter and an erased `Object` return | Q2's Kotlin boundaries; `REQUIREMENTS` scope line | **unsupported, and less far off than it looks.** No production code in `extractor-jvm` names `Continuation` — nothing recognises the trailing parameter as the compiler's, so a suspending handler's parameter list is published carrying one member the author did not write, and its return type reads `Object`. But the TYPES are not lost: `GenericSignatureTest` measures that kotlinc writes a FULL-LENGTH `Signature` naming both the declared parameter and `Continuation<Unit>`, and pins it — so the declared return type is already there as that `Continuation`'s own type argument. What is missing is the rule that reads it and drops the synthetic, not the fact |
 | Kotlin extension functions | A static method whose FIRST parameter is the receiver | Q2's Kotlin boundaries | **unsupported.** Read as an ordinary static method, so the receiver is published as a parameter. No corpus here has one on a wire boundary, so there is no live instance — that is why it is enumerated rather than fixed |
-| Kotlin `$default` synthetic methods | The compiler emits a second method carrying the default-argument mask beside every function with default parameters | Q2's Kotlin boundaries | **unsupported.** Both methods are read, so a Kotlin declaration with defaults contributes two symbols and, on a wire boundary, would contribute two rows. Closes by recognising the `$default` suffix and the mask parameter |
+| Kotlin `$default` synthetic methods | The compiler emits a second method carrying the default-argument mask beside every function with default parameters | Q2's Kotlin boundaries | **unsupported.** Both methods are read, so a Kotlin declaration with defaults contributes two symbols and, on a wire boundary, would contribute two rows. Unlike the suspend case the types really are gone: `GenericSignatureTest` measures that the `$default` bridge carries **no signature at all**, so every one of its parameters stays erased — the row would be published without its contract as well as twice. Closes by recognising the `$default` suffix and the mask parameter |
 | Kotlin `DefaultImpls` | An interface with a default method body compiles to a nested `DefaultImpls` class holding the body | Q2's Kotlin boundaries | **unsupported.** The nested class is read as an ordinary type, so its methods appear as symbols of a class the author never wrote. Dispatch does not join them to the interface they implement |
 | Nested and inner classes | Ordinary class files with `InnerClasses` naming their enclosure | Phase 2C | **supported** — the phase-1 skip is lifted; annotations resolve the same nested or not |
 | Lambda bodies | `invokedynamic` plus a synthetic method holding the body | Scanner capability `lambda_body` (2Q, M03 9.17) | **supported** — a call made inside a lambda is an edge from the enclosing method |
@@ -3213,11 +3242,11 @@ same way over REST and over a message broker.
 
 | Surface | What it is | Committed at | Support |
 |---|---|---|---|
-| Generic type-parameter substitution | A declaration says `CommonResult<T>` and a use says `CommonResult<OrderView>`; the fields of the use are the declaration's with `T` replaced | Implied by FR-4; one adjacent sentence at `COVERAGE.md` about Data REST only | **supported** (W26). By VARIABLE, not by position, so a declaration reusing a name in a nested scope substitutes correctly |
+| Generic type-parameter substitution | A declaration says `CommonResult<T>` and a use says `CommonResult<OrderView>`; the fields of the use are the declaration's with `T` replaced | Implied by FR-4; one adjacent sentence at `COVERAGE.md` about Data REST only | **supported** (W25), for a TYPE's own parameters. The map is built POSITIONALLY — a reference's arguments are positional, so the first declared name binds the first argument — and a reference carrying fewer arguments than the declaration has parameters binds nothing rather than binding what it can, because a partial binding reads as a real type downstream. A generic METHOD's own parameters are deliberately excluded from the map's keys: a class and a method that both declare `T` are two unrelated scopes, and substituting across them is the hazard, not the feature |
 | `Page<T>` / `Slice<T>` | **Interfaces**, so they declare no fields — and Spring does NOT send the element type on the wire, it sends the envelope with `content` inside | Implied by FR-4 | **supported** (W26), and measured: with the jar in reach a `Page<OrderView>` response went from an open shape with zero fields to the envelope's own. Rooting THROUGH `Page` would have published `OrderView` as the body, a contract no client receives |
 | The same, without the jar | `Page` and `Slice` live in `spring-data-commons`, not in the module | — | **partially supported.** A module that has not run `extract_libraries` leaves its own `Page<OrderView>` open with zero fields, and `Page` is reported as a type nothing could expand — stated, not silently empty |
 | HATEOAS `EntityModel` / `CollectionModel` / `PagedModel` | The same envelope shape one library along | Implied by FR-4 | **unsupported, and unmeasurable here.** These appear in **zero files across all six corpora**, so the rule that covers `Page` has never been exercised on them and claiming they work would be claiming a measurement nobody took. **Falsified by** a corpus that uses one |
-| Batch-listener generics | `@KafkaListener(batch = true)` takes `List<Foo>`, so the message shape is the ELEMENT type and not the list | `docs/roadmap.md` | **unsupported.** No catalog rule names `batch`, so a batch listener's payload is read from the declared parameter and published as a list. **Falsified by** a batch listener in an export carrying `List` as its message contract |
+| Batch-listener generics | `@KafkaListener(batch = true)` takes `List<Foo>`, so the message shape is the ELEMENT type and not the list | `docs/roadmap.md` | **unsupported.** No catalog rule names `batch`, so a batch listener's payload is read from the declared parameter and published as a list. **Falsified by** a batch listener whose export row carries the ELEMENT type — which is what this row says does not happen |
 
 ### 5.15 Configuration source
 
@@ -3241,7 +3270,7 @@ does and what a diagram drawn from it may assert.
 | Depth bounding | — | FR-6's "not bounded by depth" | **supported** by removal (W31): the bound never fired and is gone, so nothing needs a counter to stay finite |
 | Materialised reachability | One row per (root, symbol) with the shallowest depth | F8 §9.4 | **supported** (W37) — §3a-xiii |
 | Branch distinction | Two `return` statements are two possible answers; an `if` contributes both sides | — | **unsupported, and ruled rather than missing.** A trace is reachability, never execution. Distinguishing branches would require control flow, which the scanner does not read |
-| The contract class diagram | Association, `extends` and `implements` arrows | F7 §8.4 | **partially supported** (W33): `<|..` implements has **no live instance in any corpus** and ships pinned rather than deferred, with the absence recorded |
+| The contract class diagram | Association, `extends` and `implements` arrows | F7 §8.4 | **partially supported** (W33): `<\|..` implements has **no live instance in any corpus** and ships pinned rather than deferred, with the absence recorded |
 
 ### 5.17 Bundle and export
 
@@ -3257,8 +3286,8 @@ does and what a diagram drawn from it may assert.
 | Entry | What it is | Committed at | Support |
 |---|---|---|---|
 | `open_questions` | What no programmatic pass could answer, written for the enrichment tier | D06 §5 | **supported** — the table ships in the bundle |
-| An overlay that disagrees with the graph | *"No overlay silently overrides evidence: where an overlay and the graph disagree, the disagreement is recorded as an open question"* | FR-15 clause 3 | **supported** — the disagreement becomes a ledger entry rather than a silent overwrite |
-| A proposal written in the form a curation takes | *"accepting it requires review rather than transcription"* | FR-16 | **supported** — `enrich` writes claims that are validated before they are assembled |
+| An overlay that disagrees with the graph | *"No overlay silently overrides evidence: where an overlay and the graph disagree, the disagreement is recorded as an open question"* | FR-15 clause 3 | **unsupported.** `open_questions.py`'s `QUESTIONS` is a CLOSED set of twelve kinds — `record_open_questions` raises on anything outside it — and none of them is an overlay/graph disagreement; its four writers are the format, environment-divergence, service-identity and routing-conflict passes. The overlay FR-15 means is D03's, which has no producer at all (`PROJECT.md` lists D03 and M01's overlay as planned; the 2026-09-05 principles sweep records the whole tier as absent under `B-C2`). The only overlay in `src/` is the ENRICHMENT overlay, a different envelope — and when one of its claims disagrees with the graph, `enrich/validate.py` REFUSES the claim and render excludes it with a count, which is not a ledger entry |
+| A proposal written in the form a curation takes | *"accepting it requires review rather than transcription"* | FR-16 | **unsupported.** There is no curation form to write a proposal in — no verb asserts, corrects or deletes a statement, and the gap analysis files exactly that as `G-120`. There is no acceptance step either: `domain/enrichment.py` carries no proposal or accepted state, and `api.py` loads `.sextant-enrichment.json` and applies it at render unconditionally. `validate.py`'s check is GROUNDING — a claim naming a symbol nothing declares is never written — which is a different guarantee from review |
 
 ### 5.19 Rendered document
 
@@ -3281,7 +3310,7 @@ appeared in no checklist anywhere, so a reader had no way to learn that.
 | Report | What is committed | Committed at | Support |
 |---|---|---|---|
 | Drift detection | Where a module holds both a declared contract and an implementation of it, record both and report any disagreement; authority is decided by the BUILD, and an artifact the build does not consume is documentation | FR-11 | **unsupported.** No pass compares a declared contract to an implementation. The facts a comparison needs — `shapes`, `shape_fields`, and the resources a build consumes — all ship; nothing joins them |
-| Refactor findings | Dependency cycles between modules or packages, symbols with disproportionate coupling, violations of a declared layering | FR-12 | **unsupported.** Note the requirement's own guard, which any producer must honour: a symbol is reported unreachable only where NO unresolved call site exists in the scope searched — and two thirds of the graph ends at a boundary, so that guard would withhold most findings |
+| Refactor findings | Dependency cycles between modules or packages, symbols with disproportionate coupling, violations of a declared layering | FR-12 | **unsupported.** Note the requirement's own guard, which any producer must honour: a symbol is reported unreachable only where NO unresolved call site exists in the scope searched — and between 22% and 68% of a corpus's graph ends at a boundary, so that guard would withhold most findings on most modules |
 | Design findings | Coupling between candidate boundaries, shapes crossing more than one boundary, the contracts each boundary would carry | FR-13 | **unsupported.** `shapes` and `endpoints` carry what "a shape crossing more than one boundary" needs; no pass asks the question |
 | Structural performance risk | Remote hops per endpoint, distinct services involved, an endpoint reached twice in one trace, a persistence or remote call inside a loop, a blocking call on an async path | FR-14 | **unsupported**, and two of the five are further out than the other three: "inside a loop" and "on an async path" both need control flow, which the scanner does not read (`control_flow` is one of the three unshipped capabilities). The other three are queries over `reachability` and `call_edges` as they stand |
 | Approximate subject names | *"where a name is ambiguous Sextant lists the matches and stops rather than choosing"* | FR-20 | **unsupported.** No command resolves a subject approximately, so the ambiguity rule has nothing to govern — the rule is committed and the surface it governs does not exist yet |

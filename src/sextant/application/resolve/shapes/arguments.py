@@ -314,6 +314,13 @@ class CallFacts:
     supertypes: dict[str, dict[str, Any]]
     caller_call_sites: list[dict[str, Any]]
     referenced: list[str]
+    # The CALLER's own declared parameters, as D00 §5a type references in declaration
+    # order (`OI-77`, W43's review). A payload handed straight through — `announce(OrderView
+    # order)` calling `convertAndSend(dest, order)` — arrives as `{"kind": "parameter",
+    # "value": 0}`, which names no type of its own; the type is stated in the caller's own
+    # signature, and this is that signature. Empty where the caller is not a declaration
+    # this module scanned, which is the same silence every other unread argument gives.
+    caller_parameters: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -485,6 +492,22 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
         declared_fields=declared_fields,
         declared_parameters=declared_parameters,
     )
+
+
+def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Every declared method's and constructor's own parameter type references, keyed by
+    FULL symbol (`OI-77`).
+
+    The same two queries `field_facts` reads for its own `declared_parameters`, split out
+    because they are needed by a catalog that declares no `field_sources` block at all —
+    which `field_facts` returns `None` for, and which is most of them.
+    """
+    found: dict[str, tuple[dict[str, Any], ...]] = {}
+    for named in ("constructor_declarations", "method_declarations"):
+        for row in workspace.query(named):
+            signature = json.loads(str(row["signature"] or "{}")) or {}
+            found[str(row["symbol"])] = tuple(signature.get("parameters") or [])
+    return found
 
 
 def _field_sources(declared: Any, catalog: Catalog) -> FieldSources:
@@ -894,9 +917,31 @@ def _reference_of(
         return None if symbol is None else _bare_reference(str(symbol))
     if kind in _LITERAL_WIRE_TYPES:
         return _literal_reference(str(kind))
+    if kind == _PARAMETER_KIND:
+        # **The payload was handed straight through from the caller's own signature**
+        # (`OI-77`). The VALUE of a parameter lives in whatever called this method, which
+        # is why `parameter` belongs in `_UNREAD_KINDS` and why a `channel_arg` reading one
+        # stays `unresolved` — a destination IS its value. A payload is the other question:
+        # what a contract needs is the TYPE, and the caller states it.
+        #
+        # Measured before it was written: 24 of the fixture's 27 outbound `single_call`
+        # rows carried no contract at all, across six catalogs, and the three that did all
+        # passed a `new` expression. The declared type is the same claim every shape
+        # derived from a signature already makes.
+        index = parameter_index(argument)
+        if index is None or index >= len(workspace_types.caller_parameters):
+            return None
+        # The `type` member, not the entry. A declared parameter is `{name, annotations,
+        # erased_symbol, type, type_annotations}`; the D00 §5a reference every other rung
+        # here roots is the `type`, and handing the whole entry to `root_type` raises on
+        # the `symbol` it does not carry.
+        declared = workspace_types.caller_parameters[index].get("type")
+        return declared if isinstance(declared, dict) else None
     if kind != "instance":
-        # `unresolved`, `null`, `lambda`: none of these names a payload type
-        # at all.
+        # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
+        # type at all. A `field`'s type is knowable in the same way a parameter's is and is
+        # NOT read here — the ladder that answers a field is `field_facts`', and reaching
+        # into it from this projection would be a second opinion about the same fact.
         return None
     symbol = argument.get("symbol")
     if symbol is None:

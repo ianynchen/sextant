@@ -175,13 +175,43 @@ def render(counts, numbers, columns, first_col=None) -> str:
 def unwired(numbers: dict[str, str]) -> list[str]:
     """Section 5 headings that feed no matrix column and are not declared non-protocol.
 
-    The whole point of the check: `render` iterates the column lists, so a heading missing
-    from them produces no output and no error. Before this, adding `### 5.13 gRPC-Web`
-    would have left §2 silently unchanged and the matrices quietly wrong about what §5
-    holds.
+    Half the check: `render` iterates the column lists, so a heading missing from them
+    produces no output and no error. Before this, adding `### 5.13 gRPC-Web` would have
+    left §2 silently unchanged and the matrices quietly wrong about what §5 holds.
     """
     wired = {heading for heading, _label in HTTP_COLUMNS + MSG_COLUMNS}
     return sorted(set(numbers) - wired - NON_PROTOCOL)
+
+
+def misfiled(md: str) -> list[str]:
+    """Rows in a NON_PROTOCOL section whose first cell names a language.
+
+    The OTHER half, and the one the first version claimed and did not have. `parse` counts
+    a row by its first cell wherever that cell is in `ALIASES`, and it does that in every
+    `### 5.x` section including the non-protocol ones — so a row written `| Java | some
+    Kotlin construct | … |` under §5.13 is counted into a cell §2 has no column for, and
+    `render` drops it on the floor. Declaring the SECTION non-protocol does not stop that;
+    only looking at the row does.
+
+    Found by W41's own review, which added such a row and watched `--check` print
+    "matrices are current" while the row vanished.
+    """
+    section = None
+    found: list[str] = []
+    for number, line in enumerate(md.splitlines(), start=1):
+        heading = re.match(r"### (5\.\d+) (.+)", line)
+        if heading:
+            section = heading.group(2)
+            continue
+        if section not in NON_PROTOCOL or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or set(cells[0]) <= {"-", ":"}:
+            continue
+        language = cells[0].replace("*", "").strip()
+        if language in ALIASES:
+            found.append(f"{number}: {section} — first cell is `{language}`")
+    return found
 
 
 def main() -> int:
@@ -192,6 +222,15 @@ def main() -> int:
         print(
             "section 5 headings with no matrix column and no NON_PROTOCOL declaration: "
             + ", ".join(orphans),
+            file=sys.stderr,
+        )
+        return 1
+    stray = misfiled(md)
+    if stray:
+        print(
+            "rows in a non-protocol section whose first cell names a language — they are "
+            "counted into a matrix cell that has no column and are then dropped:\n  "
+            + "\n  ".join(stray),
             file=sys.stderr,
         )
         return 1

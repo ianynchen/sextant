@@ -6885,6 +6885,27 @@ _CLAIMED_ARITIES = [
         [CallArgument(kind="unresolved"), CallArgument(kind="unresolved")],
         id="KafkaConsumer.subscribe(Pattern, listener) — hypothetical arity-2 sibling",
     ),
+    # W43's near-miss is the mistake this catalog could have made, spelled out.
+    # `KafkaTemplate.send(String, V)` erases to a STRING destination, and mirroring
+    # it here would declare `(Ljava/lang/String;Ljava/lang/Object;)V` — which
+    # `SimpMessagingTemplate` does not have. `convertAndSend` is declared on
+    # `MessageSendingOperations<D>`, `D` erases to `Object`, and the class declares
+    # no bridge, so a real call site compiled against spring-messaging 6.1.6 emits
+    # the OBJECT descriptor for a `String` argument. Every conjunct of the shipped
+    # row holds here and only the descriptor differs, so the row that would have
+    # been copied derives nothing at all.
+    pytest.param(
+        "spring-stomp-template",
+        "org/springframework/messaging/simp/SimpMessagingTemplate#",
+        "convertAndSend",
+        "(Ljava/lang/Object;Ljava/lang/Object;)V",
+        "(Ljava/lang/String;Ljava/lang/Object;)V",
+        [
+            CallArgument(kind="string", value="/topic/orders"),
+            CallArgument(kind="class", symbol=ORDER_VIEW),
+        ],
+        id="SimpMessagingTemplate.convertAndSend — the String destination it does not declare",
+    ),
     pytest.param(
         "spring-kafka-template",
         "org/springframework/kafka/core/KafkaTemplate#",
@@ -7386,6 +7407,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("spring-pubsub")
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")
+@pytest.mark.declines("spring-stomp-template")
 @pytest.mark.declines("spring-kafka-replying")
 @pytest.mark.declines("spring-resttemplate")
 @pytest.mark.pins("single_call.claimed-arity")

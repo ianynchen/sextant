@@ -100,6 +100,8 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | **1 of 12** |
 | G-44 | `spring-sqs-template` | `SqsOperations` | — | 4 | — | — | — | **1 of 4** |
 | G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | 20 | — | **11 of 20** |
+| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | 14 | **3 of 14** |
+| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | 3 | **3 of 3** |
 | G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
 | G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | **1 of 29** |
 | G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **0 of 28** |
@@ -128,6 +130,8 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-sqs-template` | `SqsTemplate` | 11 | **7** | **0** | **0** | **7** |
 | `spring-sqs-template` | `SqsOperations` | 3 | **3** | **0** | **0** | **3** |
 | `spring-pubsub` | `PubSubTemplate` | 9 | **0** | **0** | **0** | **0** |
+| `spring-stomp-template` | `SimpMessagingTemplate` | 11 | **1** | **0** | **0** | **1** |
+| `spring-stomp-template` | `SimpMessageSendingOperations` | 0 | **0** | **0** | **0** | **0** |
 | `spring-webflux-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
 | `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | **0** | **25** | **0** | **25** |
@@ -157,6 +161,12 @@ A raw ratio overstates every gap here: most of what a template class declares is
 > by name at argument 0 (3): `receive`, `receiveMany`, `sendMany`
 
 **`spring-pubsub` / `PubSubTemplate`** — no unread method addresses a wire by either style.
+
+**`spring-stomp-template` / `SimpMessagingTemplate`**
+
+> by name at argument 0 (1): `setUserDestinationPrefix`
+
+**`spring-stomp-template` / `SimpMessageSendingOperations`** — no unread method addresses a wire by either style.
 
 **`spring-webflux-router` / `RouterFunctions$Builder`**
 
@@ -233,6 +243,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receive` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receiveMany` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `sendMany` | `argument 0` |
+| `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `setUserDestinationPrefix` | `argument 0` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `DELETE` | `argument 0` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `GET` | `argument 0` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `HEAD` | `argument 0` |
@@ -303,4 +314,3 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `startMessageMoveTask` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `tagQueue` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `untagQueue` | `request object` |
-

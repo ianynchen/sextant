@@ -55,7 +55,7 @@ def coverage_of(workspace: Workspace) -> dict[str, object]:
     corpora** — mall-admin 24,591 of 24,591, jhipster 1,686 of 1,686 — which looks perfect
     and says almost nothing: naming the target a compiler wrote is easy, and reading its
     BODY is the work. `reach` is the number that answers the question the row was added
-    for (`mall-admin` 78%, the other three 31-32%), and `method_resolution` says WHY a body
+    for (`mall-admin` 78%, the other three 32%), and `method_resolution` says WHY a body
     was missed — an owner in an unscanned jar is a scanning decision, while
     `no_declaration_found` would be a defect.
 
@@ -69,7 +69,10 @@ def coverage_of(workspace: Workspace) -> dict[str, object]:
         ("method_resolution", "method_resolution_distribution", "methods"),
     ):
         # Sorted by the query, and a dict of counts rather than a list of rows: a reader
-        # asks "how many were unresolved", never "what was the third bucket".
+        # asks "how many `owner_not_scanned`", never "what was the third bucket". The
+        # bucket names differ per distribution and each is the column's own vocabulary —
+        # `resolution` can only ever hold `resolved` or `narrowed`, because `call_edges`
+        # writes `NARROWED if len(callees) > 1 else RESOLVED` and nothing else.
         coverage[key] = {str(row["bucket"]): int(str(row[unit])) for row in workspace.query(named)}
     return coverage
 

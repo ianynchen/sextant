@@ -13,6 +13,7 @@ was given. Both halves are checked here: that the matrices are current, and that
 heading is either wired to a column or declared non-protocol.
 """
 
+import importlib.util
 import re
 import subprocess
 import sys
@@ -35,6 +36,18 @@ _AXES = {
 }
 
 
+def _matrix():
+    """`scripts/coverage_matrix.py` as a module. It lives outside the package, so it is
+    loaded by path rather than imported — the same thing `--check` runs."""
+    spec = importlib.util.spec_from_file_location(
+        "coverage_matrix", REPO / "scripts" / "coverage_matrix.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _generator(*arguments: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(REPO / "scripts" / "coverage_matrix.py"), *arguments],
@@ -54,9 +67,24 @@ def test_the_matrices_are_generated_from_the_checklist_they_summarise():
 
 def test_no_section_5_heading_feeds_nothing_without_saying_so():
     """The silent half. A protocol section with no column produces no output and no error;
-    the generator now refuses rather than dropping it."""
-    result = _generator("--check")
-    assert "no matrix column" not in result.stderr, result.stderr
+    the generator refuses rather than dropping it.
+
+    Called DIRECTLY rather than through `--check`, so this can fail on its own: `main`
+    returns on the first guard that trips, which made the CLI form fail only in company
+    with the staleness test and never for its own reason.
+    """
+    assert _matrix().unwired(_matrix().parse(DOC.read_text())[1]) == []
+
+
+def test_no_row_in_a_non_protocol_section_is_counted_as_a_language():
+    """The half W41 claimed and did not have.
+
+    A row is counted by its FIRST CELL wherever that cell names a language, in every
+    `### 5.x` section — so `| Java | … |` written under an axis section is counted into a
+    matrix cell that has no column and then dropped by `render`. Declaring the section
+    non-protocol does not stop that; only looking at the row does.
+    """
+    assert _matrix().misfiled(DOC.read_text()) == []
 
 
 def test_section_5_carries_every_axis_the_design_names():
@@ -65,8 +93,21 @@ def test_section_5_carries_every_axis_the_design_names():
     Asserted against the HEADINGS rather than against a count, so renumbering the sections
     keeps the test true and deleting an axis does not.
     """
+    text = DOC.read_text()
     headings = {
-        match.group(2).strip()
-        for match in re.finditer(r"^### (5\.\d+) (.+)$", DOC.read_text(), re.MULTILINE)
+        match.group(2).strip() for match in re.finditer(r"^### (5\.\d+) (.+)$", text, re.MULTILINE)
     }
     assert _AXES <= headings, f"missing from COVERAGE §5: {sorted(_AXES - headings)}"
+    # And each axis holds a TABLE, not only a heading. Asserted because the first version
+    # matched heading strings alone: deleting §5.18's whole table and leaving its title
+    # kept every test green, which is a section that exists and enumerates nothing.
+    rows = _matrix().parse(text)[0]
+    sections = re.split(r"^### 5\.\d+ ", text, flags=re.MULTILINE)[1:]
+    empty = [
+        section.split("\n", 1)[0].strip()
+        for section in sections
+        if section.split("\n", 1)[0].strip() in _AXES
+        and not any(line.startswith("|") for line in section.splitlines())
+    ]
+    assert empty == [], f"axis sections in COVERAGE §5 with no table: {empty}"
+    del rows

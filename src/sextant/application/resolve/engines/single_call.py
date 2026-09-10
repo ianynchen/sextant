@@ -31,6 +31,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     channel_of,
     channels_of,
+    declared_parameters_of,
     field_facts,
     linked_channels,
     parameter_index,
@@ -189,6 +190,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # design §4) — None for a catalog declaring no `field_sources` block, in
     # which case no address argument ever consults the field ladder.
     field_sources = field_facts(workspace, catalog)
+    # `OI-77`. Read once per run beside `field_sources`, and separately from it: a catalog
+    # with no `field_sources` block gets `None` above, and a payload handed through from
+    # the caller's signature has nothing to do with the field ladder.
+    caller_parameters = declared_parameters_of(workspace)
     # `arguments` is parsed once, here, rather than once per reader: the
     # `call_sites` query returns it as raw JSON text, and both the matching
     # loop below and the `call_wrappers` one-hop (over a *different* call
@@ -250,6 +255,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             supertypes=supertypes,
             caller_call_sites=by_caller.get(caller, []),
             referenced=referenced,
+            caller_parameters=caller_parameters.get(caller, ()),
         )
         if "record_arg" in method:
             # `record_arg` names an argument whose *linked constructor*

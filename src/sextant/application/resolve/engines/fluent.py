@@ -50,6 +50,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     carries_expression,
     channel_of,
+    declared_parameters_of,
     field_facts,
     linked_channels,
     split_url,
@@ -242,6 +243,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
+    caller_parameters = declared_parameters_of(workspace)
     metadata: list[dict[str, Any]] = []
     for caller, sites in by_caller.items():
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`
@@ -251,7 +253,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         by_receiver: dict[Any, list[dict[str, Any]]] = {}
         for site in sites:
             by_receiver.setdefault(site["receiver"], []).append(site)
-        facts = CallFacts(supertypes=supertypes, caller_call_sites=sites, referenced=referenced)
+        facts = CallFacts(
+            supertypes=supertypes,
+            caller_call_sites=sites,
+            referenced=referenced,
+            # `OI-77`, the same fix `single_call` takes: a body handed straight through
+            # from the caller's own signature names its type there and nowhere else.
+            caller_parameters=caller_parameters.get(caller, ()),
+        )
         context = _ChainContext(
             caller=caller,
             sites=sites,

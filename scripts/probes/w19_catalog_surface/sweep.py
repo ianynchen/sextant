@@ -142,6 +142,23 @@ SURFACES = (
         "5.1.2",
         "G-44",
     ),
+    # W43. The STOMP outbound half, enumerated for the same reason its siblings
+    # are: a template class declares far more than a catalog reads, and "shipped"
+    # must stop meaning "all of it".
+    Surface(
+        "spring-stomp-template",
+        "org.springframework.messaging.simp.SimpMessagingTemplate",
+        "org.springframework:spring-messaging",
+        "6.1.6",
+        "G-33",
+    ),
+    Surface(
+        "spring-stomp-template",
+        "org.springframework.messaging.simp.SimpMessageSendingOperations",
+        "org.springframework:spring-messaging",
+        "6.1.6",
+        "G-33",
+    ),
     Surface(
         "spring-webflux-router",
         "org.springframework.web.reactive.function.server.RouterFunctions$Builder",

@@ -574,6 +574,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # resolved row (D02 §2's `reply`, spring-kafka.yml's own precedent,
         # now serving a second protocol with zero engine change).
         (None, "/topic/order-placed"),
+        # W43, `G-33`: `OrderStompPublisher#announce`'s own
+        # `SimpMessagingTemplate.convertAndSend("/topic/order-announced", order)` — the
+        # OUTBOUND half of this module's STOMP surface, which nothing read before it. The
+        # destination resolves from the call's string literal even though the descriptor
+        # types it `Object`, because `convertAndSend` is declared on
+        # `MessageSendingOperations<D>` and `D` erases.
+        #
+        # `announceToDefault` takes no destination argument at all and shares the existing
+        # `(None, None)` tuple, exactly as `board`'s dynamic reply does — the SET gains one
+        # entry for two new rows, and the count below gains two.
+        (None, "/topic/order-announced"),
         # `board` is ALSO value-returning (`OrderView`) and declares no
         # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
         # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
@@ -890,7 +901,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # were already in the fixture and unseen — a second caller on `/v2/inventory/levels`,
     # another on `/v2/inventory/reserve`, `EventProducers#sendKeyed`'s `order-events`,
     # and a SOAP call to a different billing address.
-    assert len(report.endpoints) == 145
+    # 147 since W43: the two STOMP outbound rows that close `G-33`.
+    assert len(report.endpoints) == 147
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1745,9 +1757,11 @@ def test_nothing_but_the_two_sse_routes_moves(
         # because they share a payload TYPE, which is not identity
         "soap": 7,
         "sse": 2,
-        "websocket": 5,
+        # 7 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
+        # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
+        "websocket": 7,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 145
+    assert sum(counts.values()) == len(report.endpoints) == 147
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2254,7 +2268,10 @@ def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(
     assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendRaw(sig_086ab63d).")
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature. `resolution` above is untouched — the ADDRESS
+    # is still unresolved, which is a claim about a value and not about a type.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
@@ -2308,7 +2325,10 @@ def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
     ]
 
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature. `resolution` above is untouched — the ADDRESS
+    # is still unresolved, which is a claim about a value and not about a type.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_a_kafka_templates_message_send_derives_a_second_distinct_unresolved_row(
@@ -2374,7 +2394,10 @@ def test_a_jms_templates_destination_no_longer_merges_once_its_listener_moves_to
     assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendAuditMessage(sig_b2a754d9).")
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature. `resolution` above is untouched — the ADDRESS
+    # is still unresolved, which is a claim about a value and not about a type.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(
@@ -2412,7 +2435,10 @@ def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(
     assert row["direction"] == "outbound"
     assert row["caller"].endswith("EventProducers#sendShipment(sig_b2a754d9).")
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature. `resolution` above is untouched — the ADDRESS
+    # is still unresolved, which is a claim about a value and not about a type.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricated_path(
@@ -2645,7 +2671,10 @@ def test_the_raw_sqs_sdk_builder_chain_splits_its_absolute_queue_url_but_reads_u
     assert row["caller"].endswith("RawSqsClientSender#send(sig_a7421bf5).")
     assert row["peer"] == "sqs.us-east-1.amazonaws.com"
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`. A bare `String` body is a real contract and NULL keeps exactly one
+    # meaning, so this reads `string` rather than nothing. The queue URL above is
+    # still `unresolved`.
+    assert '"wire_type":"string"' in str(row["request_shape"])
 
 
 # --- 2E-prep Task 12: driver catalogs B — the pubsub trio +
@@ -2727,7 +2756,12 @@ def test_the_field_held_publisher_derives_two_honest_unresolved_duplicate_rows(
         assert row["path"] is None
         assert row["peer"] is None
         assert row["resolution"] == "unresolved"
-        assert row["request_shape"] is None
+        # `OI-77`. The ENVELOPE, because that is what this overload takes: the
+        # catalog captures `publish(PubsubMessage)`'s own argument, and a
+        # `PubsubMessage` is what the caller declared. The same answer an
+        # `instance` argument of that type already gave — what changed is that a
+        # parameter now reads like one.
+        assert "com/google/pubsub/v1/PubsubMessage#" in str(row["request_shape"])
 
 
 def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_handler(
@@ -2816,7 +2850,10 @@ def test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payl
     assert message_row["caller"].endswith("RawKafkaMessageSender#send(sig_b2a754d9).")
     assert message_row["catalog_id"] == "spring-kafka-message"
     assert message_row["resolution"] == "unresolved"
-    assert message_row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature. `resolution` above is untouched — the ADDRESS
+    # is still unresolved, which is a claim about a value and not about a type.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(message_row["request_shape"])
 
     assert len(template_siblings) == 1
     [template_row] = template_siblings
@@ -3071,6 +3108,70 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     }
 
 
+def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contract(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OI-77`, found while checking W43's new STOMP rows against their siblings.
+
+    A payload passed straight through — `send(OrderEvent event)` calling
+    `kafkaTemplate.send("order-events", event)` — arrives as `{"kind": "parameter"}`, which
+    names no type of its own. `_reference_of` answered for a class literal, a scalar and an
+    `instance` and returned None for everything else, so the row shipped without a
+    contract; the type is stated in the CALLER's own signature and was simply not read.
+
+    **Measured before and after**, on a full `module analyze` of this fixture: 3 of its 27
+    outbound `single_call` rows carried a payload, and 21 do. The six that still do not are
+    rows with no body capture at all — a `send(Message)` whose payload is inside the
+    message. This test's own resolve writes one row fewer than the CLI's does, so its
+    guard below is pinned to what it counts rather than to those two figures.
+
+    The value of a parameter really does live in whatever called the method, which is why
+    `parameter` belongs in `_UNREAD_KINDS` and why a DESTINATION read from one stays
+    `unresolved`. A payload is the other question: what a contract needs is the type.
+    """
+    workspace, _report = resolved_fixture
+    # Read off the WORKSPACE rather than the report: the two differ by one outbound row on
+    # this fixture, and the table is what the bundle and the document are built from.
+    written = [row for row in workspace.query("endpoints") if row["direction"] == "outbound"]
+    outbound = {(row["catalog_id"], row["path"]): row for row in written}
+
+    # The plainest instance: one field, one call, the payload straight off the parameter.
+    kafka = outbound[("spring-kafka-template", "order-events")]
+    assert "com/acme/orders/contracts/OrderEvent#" in str(kafka["request_shape"])
+    # A second catalog, a second protocol, the same shape of call — this is a class of
+    # defect and not one catalog's.
+    jms = outbound[("spring-jms-template", "audit.queue")]
+    assert "com/acme/orders/contracts/OrderEvent#" in str(jms["request_shape"])
+    # And W43's own rows, which is where it was found.
+    stomp = outbound[("spring-stomp-template", "/topic/order-announced")]
+    assert "com/acme/orders/contracts/OrderView#" in str(stomp["request_shape"])
+
+    single_call = {
+        "spring-resttemplate",
+        "spring-kafka-template",
+        "kafka-clients",
+        "spring-jms-template",
+        "spring-sqs-template",
+        "google-pubsub-client",
+        "spring-pubsub",
+        "spring-ws-template",
+        "spring-kafka-replying",
+        "spring-stomp-template",
+        "jakarta-jms",
+        "javax-jms",
+        "spring-kafka-message",
+    }
+    # Counted off the full list, not off the lookup above: two `order-events` rows share a
+    # key there and so do the path-NULL default-destination rows, and collapsing them
+    # would under-count exactly the rows this measures.
+    rows = [row for row in written if row["catalog_id"] in single_call]
+    carried = sum(1 for row in rows if row["request_shape"])
+    assert (carried, len(rows)) == (20, 26), (
+        "the outbound payload count moved — re-measure rather than re-pinning, because a "
+        "handful of rows carrying a contract was the defect and this number is what closed it"
+    )
+
+
 def test_the_format_ladder_answers_every_live_row(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
@@ -3289,7 +3390,12 @@ def test_the_format_ladder_answers_every_live_row(
     # + 4 (W27's review): the four http second callers the outbound dedup had been
     # deleting. Each reaches the rung its surviving twin already reached — the ladder
     # answers off the declared payload type, which a second caller of one address shares.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 66
+    # + 9 (`OI-77`, W43): the rung answers off the row's DECLARED PAYLOAD TYPE, and nine
+    # outbound rows had no declared payload to answer off — their body was handed through
+    # from the caller's own parameter and its type was not being read. Nothing about the
+    # ladder changed; it was being asked about rows with a NULL contract. `resolution` on
+    # those rows is untouched and still `unresolved`, which is the other column.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 75
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
@@ -3307,7 +3413,13 @@ def test_the_format_ladder_answers_every_live_row(
     # format markers — so the served row read `unresolved` on the strength of its
     # caller's silence. Both rows are `unresolved` here for their own reasons, which is
     # one more row and one less laundering.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 29
+    # 22 since `OI-77` closed (W43). NINE of these rows left this bucket in the same
+    # commit that added two to it, and both movements are the same fact: the ladder answers
+    # off a row's DECLARED PAYLOAD TYPE, and an outbound body handed through from the
+    # caller's own parameter had no declared type recorded — so eleven rows, the two new
+    # STOMP ones included, were asking the ladder about a NULL contract. The ladder was
+    # right to say `unresolved`; the missing rung was one earlier, and it is there now.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 22
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -3577,16 +3689,23 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
       `resolved`, no body declared at all (a genuine no-body call, not a
       failure), a real response descriptor.
     - `submitSettlement`'s `settlement` parameter is passed straight
-      through, never a literal or a `NEW`, so the scanner records it
-      `unresolved` (D00 §5) even though the url is a plain string — the row
-      itself is therefore `unresolved` (I1), `request_shape` stays NULL
-      (could-not-read, not no-payload), and `response_shape` — a
+      through, never a literal or a `NEW`, so the scanner records the
+      argument `unresolved` (D00 §5) even though the url is a plain string —
+      the row itself is therefore `unresolved` (I1), and `response_shape` — a
       *different*, independently resolved capture on the very same row —
       still carries its real descriptor.
     - `updateSettlement` (`put`) has the identical `settlement` failure on
       its body, and declares no `response_arg` at all: `unresolved` for the
-      same reason, `request_shape` NULL (could-not-read), `response_shape`
-      NULL for the ordinary reason (no capture ever named one).
+      same reason, `response_shape` NULL for the ordinary reason (no capture
+      ever named one).
+
+    **`request_shape` on those two rows used to be NULL as well**, and this
+    docstring called it "could-not-read, not no-payload" — which named `OI-77`
+    exactly and read it as a designed limit. It was not: the parameter's own
+    declared TYPE is in `submitSettlement`'s signature, and a contract needs
+    the type, not the value. Both now carry `OrderRequest`, while `resolution`
+    stays `unresolved` — those are two columns answering two different
+    questions, and this pair is the fixture's live proof they can disagree.
     """
     _, report = resolved_fixture
     by_route = {(e["method"], e["path"]): e for e in report.endpoints}
@@ -3603,7 +3722,9 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
 
     settlements = by_route[("POST", "/billing/settlements")]
     assert settlements["resolution"] == "unresolved"
-    assert settlements["request_shape"] is None
+    # `OI-77`: the body is the caller's own `settlement` parameter, and its type is
+    # declared there. The ADDRESS capture is still unread, which is what `resolution` says.
+    assert "com/acme/orders/contracts/OrderRequest#" in str(settlements["request_shape"])
     assert json.loads(settlements["response_shape"]) == {
         "wire_type": "object",
         "wire_format": "",
@@ -3613,7 +3734,9 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
 
     update = by_route[("PUT", "/billing/settlements/{id}")]
     assert update["resolution"] == "unresolved"
-    assert update["request_shape"] is None
+    assert "com/acme/orders/contracts/OrderRequest#" in str(update["request_shape"])
+    # Still NULL, and for the ordinary reason rather than the one above: this row declares
+    # no `response_arg` at all, so nothing ever named a response payload.
     assert update["response_shape"] is None
 
 

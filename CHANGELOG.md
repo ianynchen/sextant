@@ -60,7 +60,7 @@ here would restate those documents rather than add anything.
   shapes the plan row did not name: a row with no trailing pipe, a row missing a cell, and
   two rows wrapped across source lines. A test asserts every row against its own header
   across every markdown file the repository ships — with a counter that respects code
-  spans, since a naive one reports 1,961 malformed rows where there are none.
+  escapes: GFM splits a table row on every unescaped pipe, backticks included.
 
 - **Coverage reports how much was UNDERSTOOD** (FR-17 clause 3, F8 §9.5, W38). It carried
   how many files were opened and nothing about how much of the call graph was read. The
@@ -68,10 +68,42 @@ here would restate those documents rather than add anything.
   that it looks perfect — it does: **100% `resolved` on two of the four corpora**, while two
   thirds of the graph ends at a boundary. `resolution` says whether dispatch settled a call,
   and naming the compiler's target is easy; reading the body is the work. So the reach rate
-  leads (78% on `mall-admin`, 31-32% on the others), the named distribution follows, and
+  leads (78% on `mall-admin`, 32% on the other three), the named distribution follows, and
   `method_resolution`'s reasons say why a body was missed. All three reach `metadata.json`,
   the manifest and the rendered `## Coverage` — composed by one function on both paths,
   since `render` reads the workspace back rather than re-resolving.
+
+- **A service that sends STOMP is published sending it** (F10 §11, `G-33`, W43). The
+  inbound half — `@MessageMapping`, `@SubscribeMapping`, the `@SendTo` reply — has shipped
+  since 2H, and nothing read the outbound half at all, so a service doing both was published
+  with half its messaging surface and nothing saying which half. `spring-stomp-template.yml`
+  is that half: twelve overloads of `convertAndSend`, `send` and `convertAndSendToUser`.
+  **The descriptors could not be copied from the twin the design points at.**
+  `KafkaTemplate.send(String, V)` erases to a `String` destination, so mirroring it would
+  have declared `(Ljava/lang/String;Ljava/lang/Object;)V` here — and matched nothing:
+  `convertAndSend` is declared on `MessageSendingOperations<D>`, `D` erases to
+  `java.lang.Object`, and `SimpMessagingTemplate` declares no bridge for it, so a call site
+  written `convertAndSend("/topic/orders", payload)` compiles to two `Object` parameters.
+  Compiled against spring-messaging 6.1.6 and read out of the bytecode rather than reasoned
+  about, and that `String` descriptor is now the near-miss the suite pins — every conjunct
+  of the shipped row holds and only the descriptor differs.
+  The four `convertAndSendToUser` overloads ship with **no destination capture at all**,
+  deliberately: Spring's `UserDestinationMessageHandler` rewrites a user destination before
+  the broker sees it, so publishing the literal `/queue/orders` would name an address no
+  subscriber holds — an over-report that looks resolved, which is worse than silence. They
+  carry the payload and say `unresolved`. The default-destination overloads do the same, as
+  `KafkaTemplate.sendDefault` already does. Fixture: 55 outbound endpoints to 57.
+  **And a defect found while checking the new rows against their siblings — fixed, not
+  filed.** An outbound payload handed straight through from a parameter carried no contract
+  at all: `send(OrderEvent event)` calling `template.send(topic, event)` passes
+  `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
+  a class literal, a scalar and an `instance` and returned nothing for that — even though
+  the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
+  now. Measured before and after on the fixture: **3 of its 27 outbound `single_call` rows
+  carried a payload, and 21 do**, across six catalogs. The six that still do not have no
+  body capture at all. The DESTINATION half is deliberately untouched — a destination IS
+  its value and a value lives in whatever called the method, so `parameter` stays in
+  `_UNREAD_KINDS` and a `channel_arg` reading one is still `unresolved`. `OI-77`, closed.
 
 - **The checklist gains seven axes beside protocol, and a home for what had none**
   (F6 §7.2, W41). COVERAGE §5 had one axis, so a cross-cutting item could not be a row at

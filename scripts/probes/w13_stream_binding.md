@@ -47,7 +47,7 @@ Verbatim from `scripts/probes/w13_stream_binding/run.sh`, which runs `sweep.py`.
 
 | what decides the default function | the code |
 |---|---|
-| `normalizeFunctionDefinition` | `if (eligibleFunction.size() == 1 && !eligibleFunction.get(0).equals(functionDefinition) && !functionDefinition.contains("|") && !eligibleFunction.get(0).startsWith("&")) { functionDefinition = eligibleFunction.get(0); }` |
+| `normalizeFunctionDefinition` | `if (eligibleFunction.size() == 1 && !eligibleFunction.get(0).equals(functionDefinition) && !functionDefinition.contains("\|") && !eligibleFunction.get(0).startsWith("&")) { functionDefinition = eligibleFunction.get(0); }` |
 
 ### 2. What Sextant derives, per shape (`spring-cloud-stream.yml`)
 
@@ -120,7 +120,7 @@ questions. Not a guess, not a fabricated row, and not silence. The real fix is t
   binder then does with an unbound function is not established here.
 - **The other conjuncts around the same `if`, described precisely.** The routing-function
   exclusion is in the `.filter()` chain ABOVE the guard, not in it, so it narrows the
-  eligible set rather than the branch. `!functionDefinition.contains("|")` tests the
+  eligible set rather than the branch. `!functionDefinition.contains("\|")` tests the
   definition STRING, not a bean. `!eligibleFunction.get(0).startsWith("&")` can suppress
   the default even for a lone candidate — a FactoryBean-dereference edge — so it is not
   purely an eligibility narrowing either. None of the three changes the answer for an

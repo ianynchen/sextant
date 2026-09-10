@@ -1,0 +1,148 @@
+id: spring-stomp-template
+displayName: Spring STOMP messaging (SimpMessagingTemplate)
+style: single_call
+protocol: websocket
+direction: outbound
+
+# THE ASYMMETRY THIS CLOSES (F10 §11, G-33, W43). `spring-stomp.yml` reads the
+# INBOUND half — `@MessageMapping`, `@SubscribeMapping`, and the `@SendTo` reply —
+# and nothing read the outbound half at all, so a service that both receives and
+# sends STOMP was published with half its messaging surface and nothing saying
+# which half. `spring-kafka-template.yml` is the twin that already ships: the
+# engine and the vocabulary exist, and this is that shape applied to the simp
+# template.
+#
+# NOT GATED ON A COORDINATE, unlike its inbound sibling — which is a difference
+# in the EVIDENCE, not an inconsistency. `spring-stomp.yml` carries
+# `detect.required: true` because `@MessageMapping` is Spring RSocket's routing
+# annotation as much as STOMP's and no fact about the class separates them
+# (`scripts/probes/w16_rsocket_versus_stomp.md`). `SimpMessagingTemplate` has no
+# such twin: it is the simp broker's own template, and a call to it names the
+# framework outright — which is exactly the test `dependencies.py` applies to
+# decide that a `single_call` catalog is not dependency-gated. The coordinate
+# below is provenance, not a fence.
+detect:
+  coordinates: ["org.springframework:spring-messaging"]
+
+measured:
+  - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # The interface a codebase declares its field as, beside the class (§3.1) —
+  # `spring-kafka-template.yml`'s `KafkaTemplate` / `KafkaOperations` pair, one
+  # framework along. A field typed by the interface carries an owner the class
+  # name alone would not match.
+  #
+  # `org.springframework.messaging.core.MessageSendingOperations` is DELIBERATELY
+  # not a third owner. It is the generic super-interface `SimpMessageSendingOperations`
+  # narrows, and it is not STOMP's: a field typed by it could be any messaging
+  # template at all, so claiming it here would publish `websocket` rows for a
+  # destination this catalog has no evidence is a STOMP one — §8.1 rule 4's shape.
+  owner:
+    - org.springframework.messaging.simp.SimpMessagingTemplate
+    - org.springframework.messaging.simp.SimpMessageSendingOperations
+  # MEASURED, and the measurement is the whole reason this file could not be
+  # written by mirroring its twin. `KafkaTemplate.send(String, V)` erases to
+  # `(Ljava/lang/String;Ljava/lang/Object;)V`, so a rule copied from it would
+  # declare a `String` destination here — and match NOTHING.
+  #
+  # `convertAndSend` is declared on `MessageSendingOperations<D>`, whose type
+  # variable `D` erases to `java.lang.Object`, and `SimpMessagingTemplate`
+  # declares no bridge for it. Compiled and read rather than reasoned about: a
+  # call site written `template.convertAndSend("/topic/orders", payload)` emits
+  #
+  #     invokevirtual SimpMessagingTemplate.convertAndSend:(Ljava/lang/Object;Ljava/lang/Object;)V
+  #
+  # at spring-messaging 6.1.6 — an `Object` destination for a `String` argument,
+  # through the class AND through the interface. `convertAndSendToUser` is the
+  # opposite case: `SimpMessageSendingOperations` declares it directly, so its
+  # `String` parameters survive erasure and its descriptors carry them.
+  #
+  # THE DEFAULT-DESTINATION OVERLOADS take no destination at all — the template's
+  # configured default carries it — so they declare no `channel_arg` and derive an
+  # honest `path: NULL` at `unresolved`, exactly as `KafkaTemplate.sendDefault`
+  # does rather than vanishing.
+  methods:
+    - { name: convertAndSend, arity: 2,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 3,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 3,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 4,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 1,
+        descriptor: "(Ljava/lang/Object;)V",
+        body_arg: 0 }
+    - { name: convertAndSend, arity: 2,
+        descriptor: "(Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V",
+        body_arg: 0 }
+    # `send(Message<?>)` carries its destination in the message's own headers,
+    # which no fact here reads — `spring-kafka-template.yml`'s capture-less
+    # `send(Message)` row, and the same honest empty answer.
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/springframework/messaging/Message;)V" }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/Object;Lorg/springframework/messaging/Message;)V",
+        channel_arg: 0 }
+    # THE USER DESTINATIONS, and why none of them captures its destination
+    # argument even though the argument is right there at position 1.
+    #
+    # `convertAndSendToUser("alice", "/queue/orders", payload)` does NOT publish
+    # to `/queue/orders`. Spring's `UserDestinationMessageHandler` rewrites it to
+    # a user-scoped destination before the broker sees it, so a row publishing
+    # the literal would name an address no subscriber holds — an OVER-report of
+    # the kind §8.1 rule 4 forbids, and worse than silence because it looks
+    # resolved. What the rewrite produces is not measured here, so these rows
+    # capture the payload and leave `path` NULL at `unresolved`: the boundary is
+    # published, and its address says outright that it was not resolved.
+    # **Falsified by** a measurement of the handler's own composition, which is
+    # what would let these rows carry a destination.
+    - { name: convertAndSendToUser, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V",
+        body_arg: 2 }
+    - { name: convertAndSendToUser, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V",
+        body_arg: 2 }
+    - { name: convertAndSendToUser, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V",
+        body_arg: 2 }
+    - { name: convertAndSendToUser, arity: 5,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V",
+        body_arg: 2 }
+
+# F2 §3.8. `SimpMessagingTemplate` declares 14 methods beyond the boilerplate every
+# class carries and this catalog reads 3 of them; `SimpMessageSendingOperations`
+# declares 3 and this reads all 3. Enumerated by
+# `scripts/probes/w19_catalog_surface/run.sh`, which reads the jar's own bytecode and
+# cross-references the catalog AS LOADED — so a spring-messaging release adding an
+# addressable method fails a test rather than quietly widening the distance between
+# what this file claims and what it reads.
+slice:
+  outside:
+    - owner: org.springframework.messaging.simp.SimpMessagingTemplate
+      method_names: [setUserDestinationPrefix]
+      why: >
+        NOT a boundary. It takes a String at argument 0, which is why the enumeration
+        flags it as addressing-shaped, but the string it takes is the template's own
+        CONFIGURATION — the prefix `convertAndSendToUser` composes with — and not a
+        destination anything is sent to. A row for it would publish a setting as an
+        address.
+
+# Copied verbatim from its siblings: shape expansion is a global, insert-if-absent
+# pass keyed on the type symbol alone, so the FIRST catalog to reach a shared
+# payload type is the one that expands it — and a file whose copy disagreed would
+# make the answer depend on catalog sort order.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

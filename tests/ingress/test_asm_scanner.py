@@ -124,6 +124,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
+        "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderTotals.jsonl",
@@ -205,7 +206,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 117 since W27's review: `SharedPathClients`, two callers hitting ONE address at two
     # hosts. The fixture had no such pair, which is why an outbound dedup that dropped the
     # second caller outright sat here undetected.
-    assert report.documents == 117
+    # 118 since W43: `OrderStompPublisher`, the outbound half of the STOMP surface, which
+    # `G-33` names and this fixture had no instance of.
+    assert report.documents == 118
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -307,6 +310,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
+        "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
         "OrderTotals.jsonl",

@@ -52,6 +52,11 @@ ARTIFACTS=(
   "javax.jms|javax.jms-api|2.0.1|pom.properties|version"
   "org.apache.kafka|kafka-clients|3.6.2|kafka/kafka-version.properties|version"
   "org.springframework|spring-jms|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
+  # W43. `SimpMessagingTemplate` lives here, and `convertAndSend` is declared one
+  # level up on `MessageSendingOperations<D>` — so the harness's superclass walk is
+  # what reaches it, exactly as it does for `SqsTemplate.send`. Pinned to the version
+  # the fixture's own pom declares.
+  "org.springframework|spring-messaging|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-websocket|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.amqp|spring-rabbit|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"

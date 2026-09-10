@@ -154,8 +154,10 @@ it, never by presentation.
   "module": { "id": ":services:orders", "kind": "service", "languages": ["java", "kotlin"] },
   "provenance": { "commit": "a3f91c…", "generated_at": "…", "sextant_version": "0.4.0",
                   "scanners": [{ "id": "sextant-jvm-extractor", "libraries": ["…"] }] },
-  "coverage": { "sources": 1283, "covered": 1283, "uncovered": 0, "partial": false },
-  "resolution": { "resolved": 0.71, "narrowed": 0.22, "partial": 0.04, "unresolved": 0.03 },
+  "coverage": { "sources": 1283, "covered": 1283, "uncovered": 0, "partial": false,
+                "reach": { "body_read": 465, "boundary": 971 },
+                "resolution": { "resolved": 1434, "narrowed": 2 },
+                "method_resolution": { "declared_here": 191, "owner_not_scanned": 320 } },
   "gaps": ["call_graph_not_implemented"],
   "endpoints": { "inbound": { "http": 8, "kafka": 3, "grpc": 1 },
                  "outbound": { "http": 5, "kafka": 2 } },
@@ -165,7 +167,7 @@ it, never by presentation.
 
 Three things earn their place. **`provenance.commit`** lets a reader compare against `HEAD`
 and see for itself that the file is stale — a generated document that hides its age is
-worse than none. **`coverage` and `resolution`** say how much of this to trust.
+worse than none. **`coverage`** says how much of this to trust, and since W38 that is three distributions rather than a file count: `reach` (was the callee's body here at all), `resolution` (did dispatch settle the call) and `method_resolution` (why a lookup missed). *The block used to sit beside `coverage` as a top-level `resolution` of FRACTIONS, with `partial` and `unresolved` members; what ships is counts, nested under `coverage`, and the buckets are each column's own — `resolution` can hold only `resolved` or `narrowed`.* The first two are per EDGE and the third per `(class, name, descriptor)`, so they are not addable.
 **`gaps`** names what Sextant knowingly did not do, so a catalog that is complete-looking
 and incomplete cannot pass as complete.
 

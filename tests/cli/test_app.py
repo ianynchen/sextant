@@ -189,7 +189,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # its wire contract, and the `PayloadShapeController` that returns it beside the
     # three paged responses no jar here can expand.
     # + 1 (W28): `RoutingConditionsController`.
-    assert metadata["coverage"]["documents"] == 130
+    # + 1 (W43): `ws/OrderStompPublisher`, the outbound half of the STOMP surface — the
+    # module received STOMP and sent none, so `G-33`'s asymmetry had no live instance here.
+    assert metadata["coverage"]["documents"] == 131
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

@@ -83,9 +83,9 @@ by a hand-written owner→artifact map.
 
 | what the run read | 1.129.3 | 2.0.1 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 |
 |---|---|---|---|---|---|---|---|---|---|
-| artifacts reporting this version | google-cloud-pubsub | javax.jms-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-web, spring-websocket |
-| owner classes resolved out of them | 1 | 1 | 1 | 2 | 5 | 4 | 1 | 1 | 5 |
-| catalog descriptors checked against them | 1 | 12 | 12 | 8 | 28 | 12 | 3 | 12 | 61 |
+| artifacts reporting this version | google-cloud-pubsub | javax.jms-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-messaging, spring-web, spring-websocket |
+| owner classes resolved out of them | 1 | 1 | 1 | 2 | 5 | 4 | 1 | 1 | 7 |
+| catalog descriptors checked against them | 1 | 12 | 12 | 8 | 28 | 12 | 3 | 12 | 85 |
 | of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 | # | catalog | owner | method | arity | descriptor | artifact | version | verdict |
@@ -235,10 +235,34 @@ by a hand-written owner→artifact map.
 | 143 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
 | 144 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
 | 145 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `send` | 1 | `(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;` | `spring-cloud-aws-sqs` | 3.1.1 | declared |
-| 146 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
-| 147 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 148 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
-| 149 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 146 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 147 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 2 | `(Ljava/lang/Object;Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 148 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 3 | `(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-messaging` | 6.1.6 | declared |
+| 149 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 3 | `(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-messaging` | 6.1.6 | declared |
+| 150 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 3 | `(Ljava/lang/Object;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 151 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 3 | `(Ljava/lang/Object;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 152 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 4 | `(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 153 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 4 | `(Ljava/lang/Object;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 154 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 155 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 1 | `(Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 156 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSend` | 2 | `(Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 157 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSend` | 2 | `(Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 158 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `send` | 1 | `(Lorg/springframework/messaging/Message;)V` | `spring-messaging` | 6.1.6 | declared |
+| 159 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `send` | 1 | `(Lorg/springframework/messaging/Message;)V` | `spring-messaging` | 6.1.6 | declared |
+| 160 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `send` | 2 | `(Ljava/lang/Object;Lorg/springframework/messaging/Message;)V` | `spring-messaging` | 6.1.6 | declared |
+| 161 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `send` | 2 | `(Ljava/lang/Object;Lorg/springframework/messaging/Message;)V` | `spring-messaging` | 6.1.6 | declared |
+| 162 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSendToUser` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 163 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSendToUser` | 3 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V` | `spring-messaging` | 6.1.6 | declared |
+| 164 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSendToUser` | 4 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-messaging` | 6.1.6 | declared |
+| 165 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSendToUser` | 4 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;)V` | `spring-messaging` | 6.1.6 | declared |
+| 166 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSendToUser` | 4 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 167 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSendToUser` | 4 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 168 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `convertAndSendToUser` | 5 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 169 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessageSendingOperations` | `convertAndSendToUser` | 5 | `(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;Ljava/util/Map;Lorg/springframework/messaging/core/MessagePostProcessor;)V` | `spring-messaging` | 6.1.6 | declared |
+| 170 | `spring-websocket` | `org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry` | `addHandler` | 2 | `(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;` | `spring-websocket` | 6.1.6 | declared |
+| 171 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 172 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 173 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 
 
 ## Verdict

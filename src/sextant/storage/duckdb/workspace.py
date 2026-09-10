@@ -427,7 +427,7 @@ _NAMED_QUERIES = {
     # The number the one above cannot give. `resolution` says whether DISPATCH settled a
     # call; it reads 100% `resolved` on two of the four measured corpora, because naming a
     # target the compiler wrote is easy and reading its BODY is the hard part. This says
-    # how often the body was there: `mall-admin` 78%, and 31-32% on the three that depend
+    # how often the body was there: `mall-admin` 78%, and 32% on the three that depend
     # heavily on libraries nobody scanned.
     "reach_distribution": """
         SELECT CASE WHEN callee IS NULL THEN 'boundary' ELSE 'body_read' END AS bucket,

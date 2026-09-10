@@ -188,6 +188,45 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
         "Unresolved endpoint derivation: `spring-stomp` — caller "
         "`com/example/orders/ws/OrderStompController#board(sig_26be7569).`."
     ) in document
+    # F8 §9.5 (W38), and the half that had NO test: `coverage_of` is called on the RENDER
+    # path as well as the resolve one, because `render` reads the workspace back rather
+    # than re-resolving — so a summary composed only in `resolve/pipeline.py` reached
+    # `metadata.json` and never the document a person opens. Reverting that call to
+    # `workspace.query("coverage")[0]` passed 348 tests across `tests/api`, `tests/e2e`,
+    # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
+    # unit tests that exist hand-build the coverage dict and cannot see the composition.
+    # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
+    assert "Calls whose callee body this workspace read: 465 of 1436 (32%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1434." in document
+    assert (
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
+        "inherited 2, owner_not_scanned 320."
+    ) in document
+
+    # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
+    # its messaging surface was missing with nothing saying which half. The destination
+    # resolves from the call's own string literal even though the descriptor types it
+    # `Object` — `convertAndSend` is declared on `MessageSendingOperations<D>` and `D`
+    # erases, which is why a rule mirrored from `KafkaTemplate.send(String, V)` would
+    # have matched nothing at all.
+    # The format column reads `json (assumed)` rather than `unresolved` because `OI-77`
+    # closed in the same commit: the payload is handed through from `announce`'s own
+    # parameter, so the row now carries `OrderView` and the ladder has a declared type to
+    # answer off. The row's own `resolution` is still `unresolved` — a destination is a
+    # value and the payload is a type, which is the whole distinction.
+    assert (
+        "`websocket /topic/order-announced` | unresolved | "
+        "`com/example/orders/ws/OrderStompPublisher#announce(sig_7cebbae5).` | "
+        "json (assumed) | unresolved |"
+    ) in document
+    # The default-destination overload takes no destination argument at all, so the
+    # boundary is published with its address stated as unresolved rather than dropped —
+    # `KafkaTemplate.sendDefault`'s own answer, one framework along.
+    assert (
+        "`websocket (unresolved)` | unresolved | "
+        "`com/example/orders/ws/OrderStompPublisher#announceToDefault(sig_7cebbae5).` | "
+        "json (assumed) | unresolved |"
+    ) in document
     # 2H Task 6: an SSE row is the first VERBED, protocol-qualified row whose
     # verb is an ordinary HTTP method — `sse GET /events/stream`, not the
     # verbless `sse /events/stream` a derived-set membership would have given
@@ -472,7 +511,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # QName, and was being dropped as a duplicate of `#place`.
         "soap": 3,
         "sqs": 3,
-        "websocket": 2,
+        # 4 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
+        # calls beside the two `@SendTo`/dynamic replies `spring-stomp` already derived.
+        # Before it the module was published receiving STOMP and never sending any.
+        "websocket": 4,
     }
     # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
     # `resolved_config`'s distinct environments — the fixture's own
@@ -640,7 +682,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 152-endpoint total.
     # 55 outbound since W27's review: six second callers the dedup had been deleting
     # (F5 §6.1 rule 1). Inbound is untouched — that key always carried the handler.
-    assert rows == [("inbound", 103), ("outbound", 55)]
+    # W43: +2 outbound — 57 — the two `SimpMessagingTemplate.convertAndSend` calls
+    # that close G-33's asymmetry, for a 160-endpoint total.
+    assert rows == [("inbound", 103), ("outbound", 57)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1433,7 +1477,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # with no fields at all, and the controller that returns it beside three paged
     # responses whose envelope nothing here can expand.
     # + 1: W28's `RoutingConditionsController`.
-    assert (None, 129) in origins
+    # + 1: W43's `ws/OrderStompPublisher` — the outbound half of the STOMP surface.
+    assert (None, 130) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"
