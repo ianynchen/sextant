@@ -69,7 +69,11 @@ here would restate those documents rather than add anything.
   deliberately left null: an agent sent to edit a generated file edits what the next build
   overwrites. **The index masks like every other exit** — it reads the same rows `graph/`
   does, and an address published unmasked here would be the bytes the parquet beside it
-  takes trouble to strip.
+  takes trouble to strip. **Two more files assemble what the others leave joined** (W36):
+  `files.ndjson`, per file, so an agent decides not to open one — the cheapest win, since
+  most of what an assistant spends goes on files opened and discarded — and `impact.ndjson`,
+  one record per contract, because nobody says "change `OrderView#totalAmount`" but
+  "change `Order`", and what comes back is every place that reaches, already placed.
 
 - **The contract class diagram draws inheritance** (F7 §8.4, W33). The emitter knew one
   arrow — `-->`, the association a field makes — and two more say what a type IS: `<|--`

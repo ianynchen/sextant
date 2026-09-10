@@ -776,6 +776,22 @@ agent loads once and greps, each record self-describing so a grep HIT is a compl
 | `annotated.ndjson` | which declarations carry this annotation |
 | `shape_carriers.ndjson` | which endpoints carry this shape, request side and response side apart |
 | `addresses.ndjson` | `GET /order/list` → root → handler → `file:line` |
+| `files.ndjson` (W36) | per file: what it declares, by kind, and which annotations appear in it |
+| `impact.ndjson` (W36) | "change `Order`" → the shape, its fields, the endpoints carrying it, and the handlers and callers of those, each placed |
+
+**Six answer one question from one table; two assemble the others**, and those two exist
+because the JOIN is the work. `files` is the cheapest win in the bundle — most of what an
+assistant spends goes on files opened and discarded, so the record that lets it decide NOT
+to open one pays for itself first; it carries counts and annotation NAMES rather than the
+symbols, since `symbols.ndjson` already holds every symbol with its own location. `impact`
+is the one a person's words map onto: nobody says "change `com/acme/OrderView#totalAmount`",
+they say "change `Order`", and what comes back is every place that decision reaches, each
+entry already placed so the agent does not make six more requests to find out where.
+
+A shape id is a bare descriptor and a symbol carries module coordinates (D00 §5a), so the
+location map is keyed on BOTH spellings — looked up on the whole symbol alone, every
+contract in `impact` reported itself undeclared. The LISTING keeps one record per symbol;
+aliasing a single map emitted each of them twice.
 
 `addresses` is the one that makes the rest reachable: **a person names a route, not a
 symbol**, and every other index needs a symbol to begin. Measured live on the fixture,

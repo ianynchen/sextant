@@ -34,6 +34,19 @@ A type's record therefore carries `line: null` and says so, rather than being gi
 first line of its first method — which is where its first METHOD is, not where the class is
 declared, and would read as fact.
 
+## The six answers, and the two that assemble the others
+
+`symbols`, `callers`, `implementors`, `annotated`, `shape_carriers` and `addresses` each
+answer one question from one table. `files` and `impact` (W36) answer two that need
+several, and they exist because the JOIN is the work:
+
+* **`files`** — per file, what it declares and which annotations appear in it, so an agent
+  decides **not to open** a file. Most of what an assistant spends goes on files opened and
+  discarded, which makes this the cheapest win in the index.
+* **`impact`** — "change `Order`" → the shape, its fields, the endpoints carrying it, and
+  the handlers and callers of those, each already placed. Nobody names a field; they name a
+  type, and what they need back is every place that decision reaches.
+
 ## Redaction
 
 **This is an EXIT, and every exit masks** (2K design §1: the workspace stays verbatim
@@ -66,6 +79,7 @@ from pathlib import Path
 from typing import Any
 
 from sextant.domain.redaction import Redactor
+from sextant.domain.symbols import bare_descriptor
 
 # One record per line, and the files are written in a fixed order with their rows sorted,
 # so two exports of one workspace are byte-identical (NFR-1).
@@ -75,6 +89,9 @@ _IMPLEMENTORS = "implementors.ndjson"
 _ANNOTATED = "annotated.ndjson"
 _SHAPE_CARRIERS = "shape_carriers.ndjson"
 _ADDRESSES = "addresses.ndjson"
+# F8 §9.3 rows 4 and 5 (W36).
+_FILES = "files.ndjson"
+_IMPACT = "impact.ndjson"
 
 
 def write_index(
@@ -87,6 +104,8 @@ def write_index(
     annotations: Sequence[dict[str, object]],
     endpoints: Sequence[dict[str, object]],
     roots: Sequence[dict[str, object]],
+    shapes: Sequence[dict[str, object]],
+    shape_fields: Sequence[dict[str, object]],
     source_roots: Sequence[str],
     module_root: Path,
     redactor: Redactor,
@@ -99,17 +118,19 @@ def write_index(
     symbol to document to source root — and the reverse direction of edges the tables store
     one way round.
     """
-    located = _locations(symbols, documents, source_roots, module_root)
+    located, lookup = _locations(symbols, documents, source_roots, module_root)
     index = bundle / "index"
     index.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
     for name, records in (
         (_SYMBOLS, _symbol_records(located)),
-        (_CALLERS, _caller_records(call_edges, located)),
-        (_IMPLEMENTORS, _implementor_records(implementations, located)),
-        (_ANNOTATED, _annotated_records(annotations, located)),
+        (_CALLERS, _caller_records(call_edges, lookup)),
+        (_IMPLEMENTORS, _implementor_records(implementations, lookup)),
+        (_ANNOTATED, _annotated_records(annotations, lookup)),
         (_SHAPE_CARRIERS, _shape_carrier_records(endpoints, redactor)),
-        (_ADDRESSES, _address_records(roots, located, redactor)),
+        (_ADDRESSES, _address_records(roots, lookup, redactor)),
+        (_FILES, _file_records(located, lookup, annotations)),
+        (_IMPACT, _impact_records(shapes, shape_fields, endpoints, lookup, redactor)),
     ):
         (index / name).write_text(
             "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
@@ -124,11 +145,19 @@ def _locations(
     documents: Sequence[dict[str, object]],
     source_roots: Sequence[str],
     module_root: Path,
-) -> dict[str, dict[str, Any]]:
-    """Every symbol's `{file, line, line_end, kind, enclosing}`, keyed by symbol.
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Every symbol's `{file, line, line_end, kind, enclosing}`, twice over: the LISTING
+    keyed on each symbol exactly once, and the LOOKUP keyed on both spellings of it.
 
     Built once and shared by every index below, because each of them answers with a
     location and re-deriving it per index is where two indexes come to disagree.
+
+    Two maps rather than one because they are two jobs. `symbols.ndjson` is a listing and
+    must hold each symbol once; every other index performs a LOOKUP, and the key it holds
+    may be either spelling — a symbol carries its module coordinates (D00 §5a) and a SHAPE
+    ID does not, so `impact`'s `com/acme/orders/OrderCommand#` matched nothing against a
+    map keyed on the whole symbol and every contract reported itself undeclared. Aliasing
+    the single map instead emitted every symbol twice in the listing.
     """
     paths = {
         str(document["document_id"]): _openable(
@@ -143,7 +172,8 @@ def _locations(
     for symbol in symbols:
         start = int(str(symbol["line_start"] or 0))
         end = int(str(symbol["line_end"] or 0))
-        found[str(symbol["symbol"])] = {
+        whole = str(symbol["symbol"])
+        location = {
             "file": paths.get(str(symbol["document_id"])),
             # NULL, not 0, and not the first line of the first method: a class file states
             # no declaration line for a type or a field, so there is nothing to report and
@@ -153,7 +183,17 @@ def _locations(
             "kind": str(symbol["construct_kind"]),
             "enclosing": symbol["enclosing"],
         }
-    return found
+        # **Both spellings**, because two grammars meet here: a symbol carries its module
+        # coordinates (D00 §5a) and a SHAPE ID does not. Keyed only on the whole symbol,
+        # `impact`'s `com/acme/orders/OrderCommand#` matched nothing and every contract in
+        # the index reported itself undeclared. The two can never collide — a bare
+        # descriptor has no coordinates by definition — so one map serves both callers.
+        found[whole] = location
+    # The two can never collide — a bare descriptor has no coordinates by definition.
+    lookup = dict(found)
+    for whole, location in found.items():
+        lookup.setdefault(bare_descriptor(whole), location)
+    return found, lookup
 
 
 def _openable(
@@ -387,12 +427,136 @@ def _address(value: object, redactor: Redactor) -> str | None:
     return None if value is None else redactor.redact_text(str(value))
 
 
+def _file_records(
+    located: dict[str, dict[str, Any]],
+    lookup: dict[str, dict[str, Any]],
+    annotations: Sequence[dict[str, object]],
+) -> list[dict[str, Any]]:
+    """Index 4: per FILE — what it declares, and which annotations appear in it.
+
+    **The cheapest win, and the one an agent's budget actually goes on.** Most of what an
+    assistant spends is files opened and discarded; this is the record that lets it decide
+    NOT to open one. A file with no annotation the reader cares about and no symbol it is
+    looking for can be skipped without being read.
+
+    Keyed on the resolved path, so a file nothing could place contributes nothing — there
+    is no decision to support about a file the reader cannot open. Counts and sorted name
+    lists rather than the symbols themselves: `symbols.ndjson` already carries every symbol
+    with its own location, and repeating them here would double the index to say a second
+    time what one grep already answers.
+    """
+    annotated: dict[str, set[str]] = {}
+    for row in annotations:
+        location = lookup.get(str(row["target"]))
+        if location is None or location["file"] is None:
+            continue
+        annotated.setdefault(str(location["file"]), set()).add(str(row["annotation"]))
+    files: dict[str, dict[str, Any]] = {}
+    for symbol, location in located.items():
+        path = location["file"]
+        if path is None:
+            continue
+        entry = files.setdefault(
+            str(path), {"file": str(path), "declares": {}, "symbols": 0, "annotations": []}
+        )
+        entry["symbols"] += 1
+        kind = str(location["kind"])
+        entry["declares"][kind] = int(entry["declares"].get(kind, 0)) + 1
+        del symbol
+    for path, entry in files.items():
+        entry["declares"] = dict(sorted(entry["declares"].items()))
+        entry["annotations"] = sorted(annotated.get(path, ()))
+    return [files[path] for path in sorted(files)]
+
+
+def _impact_records(
+    shapes: Sequence[dict[str, object]],
+    shape_fields: Sequence[dict[str, object]],
+    endpoints: Sequence[dict[str, object]],
+    located: dict[str, dict[str, Any]],
+    redactor: Redactor,
+) -> list[dict[str, Any]]:
+    """Index 5: "change `Order`" — the shape, its fields, the endpoints carrying it and
+    the handlers and callers of those, as a list ready to open.
+
+    **One record per contract type, because that is the unit a person names.** Nobody says
+    "change `com/acme/OrderView#totalAmount`"; they say "change `Order`", and what they
+    need back is every place that decision reaches. Assembling it here rather than leaving
+    a consumer to join four other index files is the whole value: the join is the work, and
+    it is the same join every time.
+
+    `endpoints` carries the wire identities, already masked; `handlers` and `callers` are
+    the symbols on those rows, PLACED, because a list of symbols an agent then has to look
+    up one by one is a list it has to make six more requests about.
+    """
+    described = {str(shape["shape_id"]) for shape in shapes}
+    fields: dict[str, list[str]] = {}
+    for row in shape_fields:
+        fields.setdefault(str(row["shape_id"]), []).append(str(row["wire_name"]))
+    carried: dict[str, list[dict[str, Any]]] = {}
+    for endpoint in endpoints:
+        for side in ("request_shape", "response_shape"):
+            declared = endpoint[side]
+            if not declared:
+                continue
+            shape_id = json.loads(str(declared)).get("shape_id")
+            if not shape_id:
+                continue
+            carried.setdefault(str(shape_id), []).append(
+                {
+                    "side": side.removesuffix("_shape"),
+                    "protocol": endpoint["protocol"],
+                    "direction": endpoint["direction"],
+                    "method": endpoint["method"],
+                    "path": _address(endpoint["path"], redactor),
+                    "handler": endpoint["handler"],
+                    "caller": endpoint["caller"],
+                }
+            )
+    records: list[dict[str, Any]] = []
+    for shape_id in sorted(described):
+        # The TYPE, not the parameterised id: a shape's own declaration is where a change
+        # is made, and `CommonResult#<OrderView#>` is a use of two of them.
+        symbol = _unparameterised_id(shape_id)
+        on_the_wire = sorted(
+            carried.get(shape_id, []), key=lambda row: json.dumps(row, sort_keys=True)
+        )
+        reached = sorted(
+            {
+                str(row[which])
+                for row in on_the_wire
+                for which in ("handler", "caller")
+                if row[which] is not None
+            }
+        )
+        records.append(
+            {
+                "shape_id": shape_id,
+                "declared_at": _at(located, symbol),
+                "fields": sorted(fields.get(shape_id, ())),
+                "endpoints": on_the_wire,
+                "reached_from": [{"symbol": s, **_at(located, s)} for s in reached],
+            }
+        )
+    return records
+
+
+def _unparameterised_id(shape_id: str) -> str:
+    """A shape id with its bound arguments dropped, which is the symbol a declaration
+    lives at. Kept here rather than imported from the renderer: `egress/render` and
+    `egress/export` are siblings and neither may import the other."""
+    return shape_id.split("<", 1)[0]
+
+
 def _at(located: dict[str, dict[str, Any]], symbol: str) -> dict[str, Any]:
     """Where `symbol` is, or an all-NULL location for one this workspace never scanned.
 
     The keys are always present, so a consumer reads `record["file"]` without testing for
     it and a missing location reads as "not known" rather than as "not asked". A call into
     a third-party jar is the ordinary case: the caller is placed and the callee is not.
+
+    `_locations` keys every symbol under BOTH spellings, so a caller holding either finds
+    it — see there for why.
     """
     location = located.get(symbol)
     if location is None:

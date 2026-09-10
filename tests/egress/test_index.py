@@ -60,6 +60,8 @@ def _write(tmp_path: Path, **overrides: object) -> dict[str, list[dict]]:
         "annotations": [],
         "endpoints": [],
         "roots": [],
+        "shapes": [],
+        "shape_fields": [],
         "source_roots": ["src/main/java"],
         "module_root": tmp_path,
         "redactor": Redactor.from_rules(),
@@ -361,11 +363,25 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
         "redactor": Redactor.from_rules(),
     }
     first = write_index(
-        root / "one", implementations=[], annotations=[], endpoints=[], roots=[], **arguments
-    )  # type: ignore[arg-type]
+        root / "one",
+        implementations=[],
+        annotations=[],
+        endpoints=[],
+        roots=[],
+        shapes=[],
+        shape_fields=[],
+        **arguments,  # type: ignore[arg-type]
+    )
     second = write_index(
-        root / "two", implementations=[], annotations=[], endpoints=[], roots=[], **arguments
-    )  # type: ignore[arg-type]
+        root / "two",
+        implementations=[],
+        annotations=[],
+        endpoints=[],
+        roots=[],
+        shapes=[],
+        shape_fields=[],
+        **arguments,  # type: ignore[arg-type]
+    )
 
     assert first == second
     for name in first:
@@ -433,3 +449,137 @@ def test_a_null_address_stays_null_rather_than_becoming_a_string(tmp_path: Path)
     )
 
     assert index["addresses"][0]["path"] is None
+
+
+def test_the_file_digest_says_what_a_file_holds_without_opening_it(tmp_path: Path):
+    """Index 4, and the cheapest win in the bundle: most of what an assistant spends goes
+    on files opened and discarded, so the record that lets it decide NOT to open one pays
+    for itself first.
+
+    Counts and sorted annotation names rather than the symbols themselves — `symbols` already
+    carries every symbol with its own location, and repeating them here would double the
+    index to answer a second time what one grep already answers.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    index = _write(
+        root,
+        symbols=[
+            _symbol(_API, kind="class", enclosing=None, line_start=0, line_end=0),
+            _symbol(_LIST),
+            _symbol(_MODULE + "com/acme/Api#get().", line_start=50, line_end=52),
+        ],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+        annotations=[
+            {"target": _API, "annotation": "org/x/RestController#"},
+            {"target": _LIST, "annotation": "org/x/GetMapping#"},
+        ],
+    )
+
+    [record] = index["files"]
+    assert record["file"] == "src/main/java/com/acme/Api.java"
+    assert record["declares"] == {"class": 1, "method": 2}
+    assert record["annotations"] == ["org/x/GetMapping#", "org/x/RestController#"]
+    assert record["symbols"] == 3
+
+
+def test_a_file_nothing_could_place_is_not_a_digest_record(tmp_path: Path):
+    """There is no decision to support about a file the reader cannot open, so an
+    unplaced document contributes nothing rather than a record keyed on null — which every
+    generated class in the module would otherwise share."""
+    index = _write(
+        tmp_path,
+        symbols=[_symbol(_LIST)],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+    )
+
+    assert index["files"] == []
+
+
+def test_change_impact_assembles_the_join_a_consumer_would_otherwise_make(tmp_path: Path):
+    """Index 5. Nobody says "change `com/acme/OrderView#totalAmount`"; they say "change
+    `Order`", and what they need back is every place that decision reaches — the shape,
+    its fields, the endpoints carrying it, and the handlers and callers of those, each
+    already placed.
+
+    Assembling it here rather than leaving a consumer to join four other index files is
+    the whole value: the join is the work, and it is the same join every time.
+    """
+    root = _tree(tmp_path, "src/main/java/com/acme/Api.java")
+    index = _write(
+        root,
+        symbols=[
+            # Module-PREFIXED, as the scanner emits it, while the shape id below is bare:
+            # that mismatch is the thing the lookup has to bridge.
+            _symbol(
+                _MODULE + "com/acme/Order#",
+                kind="class",
+                enclosing=None,
+                line_start=0,
+                line_end=0,
+            ),
+            _symbol(_LIST),
+        ],
+        documents=[
+            {"document_id": "doc", "relative_path": "com/acme/Api.java", "origin_entry": None}
+        ],
+        shapes=[{"shape_id": "com/acme/Order#", "open": False}],
+        shape_fields=[
+            {"shape_id": "com/acme/Order#", "wire_name": "total"},
+            {"shape_id": "com/acme/Order#", "wire_name": "id"},
+        ],
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "inbound",
+                "method": "POST",
+                "path": "/orders",
+                "handler": _LIST,
+                "caller": None,
+                "request_shape": json.dumps({"shape_id": "com/acme/Order#"}),
+                "response_shape": None,
+            }
+        ],
+    )
+
+    [record] = index["impact"]
+    assert record["shape_id"] == "com/acme/Order#"
+    # The DECLARATION is placed, which is where the change is made. A shape id is a bare
+    # descriptor and a symbol carries module coordinates; looking up only the whole
+    # spelling reported every contract in the index undeclared.
+    assert record["declared_at"]["file"] == "src/main/java/com/acme/Api.java"
+    assert record["fields"] == ["id", "total"]
+    assert [(e["side"], e["path"]) for e in record["endpoints"]] == [("request", "/orders")]
+    # And the handler is placed too — a list of symbols an agent must then look up one by
+    # one is a list it has to make six more requests about.
+    assert record["reached_from"][0]["file"] == "src/main/java/com/acme/Api.java"
+    assert record["reached_from"][0]["line"] == 41
+
+
+def test_change_impact_masks_the_addresses_it_carries(tmp_path: Path):
+    """`impact` carries endpoint paths of its own, so it takes the exit's rule like the
+    two files that carry one already do — a mask applied in two of three places is a mask
+    a reader cannot rely on."""
+    index = _write(
+        tmp_path,
+        shapes=[{"shape_id": "com/acme/Order#", "open": False}],
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "POST",
+                "path": "https://svc:s3cr3t@billing.example.com/charge",
+                "handler": None,
+                "caller": _LIST,
+                "request_shape": json.dumps({"shape_id": "com/acme/Order#"}),
+                "response_shape": None,
+            }
+        ],
+    )
+
+    [record] = index["impact"]
+    assert record["endpoints"][0]["path"] == "https://billing.example.com/charge"
+    assert "s3cr3t" not in json.dumps(index)
