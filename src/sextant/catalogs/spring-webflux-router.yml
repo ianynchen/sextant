@@ -11,7 +11,10 @@ measured:
   - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
 
-requires: [call_site, string_constants, chain_reconstruction]
+# `array_arguments` added in W46's review: the media predicates read a varargs `MediaType...` array's own `elements`, which is capability 9.15.
+# Undeclared, this catalog would derive nothing on an extractor lacking it rather
+# than being SKIPPED with a reason, which is the whole point of the gate.
+requires: [call_site, string_constants, chain_reconstruction, array_arguments]
 
 # D02 §2's `combinator` style, both DSLs Spring WebFlux ships for functional
 # routing: the Java `RouterFunctions.route`/`.nest` tree and the Kotlin
@@ -108,6 +111,20 @@ matches:
         method: OPTIONS
         verb: OPTIONS
         path_arg: 0
+      # **THE TWO-ARGUMENT `(String, handler)` FORM ONLY**, and `CoRouterFunctionDsl.GET`
+      # declares THREE — counted with `javap -p -s` at spring-webmvc 6.1.6, not from the
+      # names:
+      #   `(String, Function2)`                      the one this row reads
+      #   `(RequestPredicate, Function2)`            a predicate, NO path
+      #   `(String, RequestPredicate, Function2)`    path, predicate, handler
+      # This grammar matches on owner and name alone — no `descriptor` key — so `path_arg:
+      # 0` is read against whichever overload a caller wrote. On the second that
+      # argument is a PREDICATE, not a path, and on the third the handler sits
+      # at position 2 while `handler_arg: 1` reads the predicate. `KotlinOrderRoutes.kt` is the one live
+      # Kotlin router here and it writes the two-argument form throughout.
+      #
+      # Not in `slice.outside`, because the slice is for methods a catalog does not read
+      # and these are read. It is an OVERLOAD gap, the same engine work `route`/`nest` need.
       # Kotlin: the builder's own two-argument form — `GET("/x") { handler
       # }`/`POST("/x") { handler }` declare a whole route in one call
       # (checkpoint (1b), the `…$1$1$1#`/`…$1$1$2#` call sites). One
@@ -329,14 +346,18 @@ slice:
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
       method_names: [add, and, invoke, not, or, path, pathExtension, queryParam, resource, resources, withAttribute]
       why: >
-        The eleven the DSL declares that this catalog does not read. `path` nests a builder
-        under a prefix and `add`/`resource`/`resources` declare or attach routes — all four
-        are the receiver-rooted shape `G-37` names, which is engine work rather than a
-        catalog line. `and`/`or`/`not`/`invoke`/`plus` compose PREDICATES inside the DSL,
-        where the composers block reads the Java `RequestPredicate` methods instead.
-        `queryParam` and `pathExtension` constrain a request without addressing it, and
-        `withAttribute` attaches metadata. Every one appears in the enumeration only
-        because its first parameter is a `String` or a predicate.
+        The methods this catalog does not read, and what each actually is — measured with
+        `javap -p`, because a first version described them from their names and got three
+        wrong. `path`, `param`/`queryParam` and `pathExtension` each declare a
+        HANDLER-taking void overload, so `path("/x") { … }` DECLARES a route rather than
+        nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
+        reason. `add` and `resource` attach or declare routes too. All six are the
+        receiver-rooted shape `G-37` names, which is engine work rather than a catalog
+        line, and routes written any of those ways derive NOTHING. `and`/`or`/`not` compose
+        predicates INSIDE the DSL, where this file's `composers` block is keyed on the Java
+        `RequestPredicate` owner and so reads none of them. `resources` serves static
+        resources and `withAttribute` attaches metadata. The enumeration admits six of
+        these by `route declaration` rather than by a `String` at argument 0.
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
       method_names: [plus]
       why: >

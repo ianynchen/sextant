@@ -15,7 +15,10 @@ measured:
   - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
 
-requires: [call_site, string_constants]
+# `array_arguments` added in W46's review: `addHandler`'s path argument is ALWAYS an array — varargs collapse into one argument — and reading its `elements` is capability 9.15.
+# Undeclared, this catalog would derive nothing on an extractor lacking it rather
+# than being SKIPPED with a reason, which is the whole point of the gate.
+requires: [call_site, string_constants, array_arguments]
 
 # `WebSocketHandlerRegistry.addHandler(WebSocketHandler handler, String...
 # paths)` — the raw, non-STOMP registration form

@@ -957,7 +957,7 @@ def _reference_of(
         # stays `unresolved` — a destination IS its value. A payload is the other question:
         # what a contract needs is the TYPE, and the caller states it.
         #
-        # Measured before it was written: 24 of the fixture's 27 outbound `single_call`
+        # Measured before it was written: 22 of the fixture's 25 outbound `single_call`
         # rows carried no contract at all, across six catalogs, and the three that did all
         # passed a `new` expression. The declared type is the same claim every shape
         # derived from a signature already makes.

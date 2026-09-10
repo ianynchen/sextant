@@ -57,6 +57,10 @@ ARTIFACTS=(
   # what reaches it, exactly as it does for `SqsTemplate.send`. Pinned to the version
   # the fixture's own pom declares.
   "org.springframework|spring-messaging|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
+  # W46. `WebSocketContainer.connectToServer` lives here, and the annotations the
+  # server catalog matches on do too — the `-api` jar at 2.2.0 holds ONLY
+  # `jakarta/websocket/server/**`, measured.
+  "jakarta.websocket|jakarta.websocket-client-api|2.2.0|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-websocket|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.amqp|spring-rabbit|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"

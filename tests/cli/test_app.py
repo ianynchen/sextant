@@ -198,7 +198,8 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # routing, `G-29`, which this fixture likewise had no instance of.
     # + 1 (W45): `ws/StompBrokerConfig`, which registers the URL a STOMP client opens —
     # `G-42`: the destinations derived and the transport endpoint did not exist.
-    assert metadata["coverage"]["documents"] == 134
+    # + 1 (W46): `ws/OrderFeedClient`, which opens one — `G-32`'s absent direction.
+    assert metadata["coverage"]["documents"] == 135
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):

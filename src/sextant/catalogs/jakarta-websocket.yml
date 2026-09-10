@@ -4,8 +4,26 @@ style: annotation_driven
 protocol: websocket
 direction: inbound
 
+# THE COORDINATE LIST NAMED THE WRONG JAR FOR MOST OF WHAT THIS FILE MATCHES
+# (`G-32`'s second half, corrected in W46). Measured by opening both archives:
+# `jakarta.websocket-api` **2.2.0 contains only `jakarta/websocket/server/**`** — ten
+# classes plus `module-info` — so `@ServerEndpoint` is there and `@OnMessage`,
+# `@OnOpen`, `@OnClose` and `@OnError` are NOT. Those ship in
+# `jakarta.websocket-client-api`, which this list did not name.
+#
+# **Nothing derived wrongly, and that is worth saying rather than leaving a reader to
+# assume a bug was live.** `annotation_driven` is not in `DEPENDENCY_GATED` and this
+# file declares no `detect.required`, so `unmet_dependency` returns `None` before the
+# coordinates are consulted: they are PROVENANCE — which coordinate indicates this
+# framework — and never a fence. The list is corrected because a provenance record
+# that omits the jar carrying four of the six annotations is wrong as a record.
 detect:
-  coordinates: ["jakarta.websocket:jakarta.websocket-api", "javax.websocket:javax.websocket-api"]
+  coordinates:
+    - "jakarta.websocket:jakarta.websocket-api"
+    - "jakarta.websocket:jakarta.websocket-client-api"
+    - "jakarta.websocket:jakarta.websocket-all"
+    - "javax.websocket:javax.websocket-api"
+    - "javax.websocket:javax.websocket-client-api"
 
 measured:
   - { artifact: jakarta.websocket:jakarta.websocket-api, versions: ["2.2.0"],

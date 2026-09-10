@@ -603,6 +603,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "/ws"),
         (None, "/ws-alt"),
         (None, "/ws-legacy"),
+        # W46, `G-32`: the three URLs this module OPENS. Verbless like every websocket
+        # row, and the whole URL is the path with `peer` NULL — one address shape across
+        # every client row, because the `channel_via` rung that reads the two jakarta ones
+        # is peerless by construction and splitting only the literal row would publish two.
+        (None, "ws://feeds.example.com/orders"),
+        (None, "ws://feeds.example.com/audit"),
+        (None, "ws://feeds.example.com/stomp"),
         # `board` is ALSO value-returning (`OrderView`) and declares no
         # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
         # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
@@ -922,7 +929,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 147 since W43: the two STOMP outbound rows that close `G-33`.
     # 150 since W44: the three `/mvcfn` servlet functional routes that close `G-29`.
     # 153 since W45: the three STOMP connect URLs that close `G-42`.
-    assert len(report.endpoints) == 153
+    # 156 since W46: the three client connects that close `G-32`.
+    assert len(report.endpoints) == 156
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1782,9 +1790,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 7 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
         # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
         # 10 since W45: the three connect URLs `addEndpoint` registers.
-        "websocket": 10,
+        # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
+        "websocket": 13,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 153
+    assert sum(counts.values()) == len(report.endpoints) == 156
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3479,7 +3488,10 @@ def test_the_format_ladder_answers_every_live_row(
     # 26 since W45: the three STOMP connect URLs. A handshake path carries no payload
     # declaration of any kind — there is no body to type — so the ladder has nothing to
     # answer off and says so, which is the same honest answer `/live`'s raw frame gets.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 26
+    # 29 since W46: the three client connects. A handshake carries no payload declaration
+    # — there is no body to type — so the ladder has nothing to answer off, the same
+    # honest answer the server-side connect URLs and `/live`'s raw frame already get.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 29
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

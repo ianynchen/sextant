@@ -1,0 +1,63 @@
+id: spring-websocket-client
+displayName: Spring WebSocket (client connect)
+style: single_call
+protocol: websocket
+direction: outbound
+
+# THE ABSENT DIRECTION, Spring's half (F10 §11, `G-32`, W46). Two client surfaces
+# ship in `spring-websocket` and neither appeared in any export: `WebSocketClient`
+# opens a raw session, and `WebSocketStompClient` opens a STOMP one — the outbound
+# twin of the `addEndpoint` URL `spring-stomp-endpoint.yml` reads on the server
+# side (W45).
+detect:
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
+
+measured:
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # The INTERFACE (§3.1): a field typed `WebSocketClient` is what a codebase
+  # declares, and `StandardWebSocketClient` is one implementation of it — matching
+  # the implementation alone would miss every field typed by the interface.
+  #
+  # ONE owner, and the STOMP client gets its own file. They were one catalog with a
+  # two-entry `owner` list for one draft, and CP-10 refused it: the probe checks
+  # every declared descriptor against every listed owner, so the file was CLAIMING
+  # `execute` on `WebSocketStompClient` and `connectAsync` on `WebSocketClient`,
+  # neither of which declares the other's method. An `owner` list is for one library
+  # reachable under more than one NAME; these are two clients.
+  owner: org.springframework.web.socket.client.WebSocketClient
+  # MEASURED at spring-websocket 6.1.6. `WebSocketClient.execute` has two forms —
+  # a STRING url at argument 1 with trailing uri-variables, and a `URI` at
+  # argument 2 behind a headers argument.
+  #
+  # `channel_arg` on every row, for the reason `jakarta-websocket-client.yml`
+  # states at length: the `channel_via` rung is peerless by construction, so
+  # splitting the literal rows would publish two address shapes for one boundary.
+  # Whole URL in `path`, `peer` NULL, everywhere.
+  #
+  # THE URI-VARIABLE OVERLOADS ARE NOT EXPANDED. `execute(handler, "ws://h/{id}",
+  # id)` and the `connect*` forms take trailing `Object...` uri-variables, and the
+  # template is what lands in `path` — `/{id}` verbatim, never a value substituted
+  # in. That is the same answer an `@GetMapping("/orders/{id}")` row gives, and it
+  # is the address the code declares rather than one call's arguments.
+  methods:
+    - { name: execute, arity: 3,
+        descriptor: "(Lorg/springframework/web/socket/WebSocketHandler;Ljava/lang/String;[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 1 }
+    - { name: execute, arity: 3,
+        descriptor: "(Lorg/springframework/web/socket/WebSocketHandler;Lorg/springframework/web/socket/WebSocketHttpHeaders;Ljava/net/URI;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 2,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

@@ -196,11 +196,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
     # unit tests that exist hand-build the coverage dict and cannot see the composition.
     # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
-    assert "Calls whose callee body this workspace read: 468 of 1465 (32%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1463." in document
+    assert "Calls whose callee body this workspace read: 468 of 1473 (32%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1471." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 333."
+        "inherited 2, owner_not_scanned 338."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -522,7 +522,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 4 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
         # calls beside the two `@SendTo`/dynamic replies `spring-stomp` already derived.
         # Before it the module was published receiving STOMP and never sending any.
-        "websocket": 4,
+        # 7 since W46: the three client connects that close `G-32`.
+        "websocket": 7,
     }
     # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
     # `resolved_config`'s distinct environments — the fixture's own
@@ -694,9 +695,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # that close G-33's asymmetry.
     # W44: +3 inbound — 106 — the three `/mvcfn` Spring MVC functional routes that close
     # G-29.
-    # W45: +3 inbound — 109 — the three STOMP connect URLs that close G-42, for a
-    # 166-endpoint total.
-    assert rows == [("inbound", 109), ("outbound", 57)]
+    # W45: +3 inbound — 109 — the three STOMP connect URLs that close G-42.
+    # W46: +3 OUTBOUND — 60 — the three client connects that close G-32, for a
+    # 169-endpoint total.
+    assert rows == [("inbound", 109), ("outbound", 60)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1492,7 +1494,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # + 1: W43's `ws/OrderStompPublisher` — the outbound half of the STOMP surface.
     # + 2: W44's `mvcroutes/` pair — Spring MVC functional routing.
     # + 1: W45's `ws/StompBrokerConfig` — the URL a STOMP client opens.
-    assert (None, 133) in origins
+    # + 1: W46's `ws/OrderFeedClient` — the client direction, which opens one.
+    assert (None, 134) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

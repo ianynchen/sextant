@@ -1,0 +1,83 @@
+id: jakarta-websocket-client
+displayName: Jakarta WebSocket (client connect)
+style: single_call
+protocol: websocket
+direction: outbound
+
+# THE ABSENT DIRECTION (F10 §11, `G-32`, W46). `jakarta-websocket.yml` reads
+# `@ServerEndpoint` and §5.5 carried THREE inbound Java rows and ZERO outbound,
+# with no boundary saying the client direction derives nothing — unlike REST,
+# SOAP and Kafka, each of which states its client side explicitly. A module that
+# opens a WebSocket had that call in no export at all.
+#
+# **`@ClientEndpoint` is not where the address is, and that is why this is a
+# `single_call` and not an annotation rule.** Measured at
+# jakarta.websocket-client-api 2.2.0: the annotation declares `subprotocols`,
+# `decoders`, `encoders` and `configurator` — and no address of any kind. A rule
+# minting a row from it would publish an endpoint addressed at nothing, which is
+# the fabrication `derive_call_endpoints`'s own addresses-nothing gate exists to
+# stop. The URL is at `connectToServer`.
+detect:
+  coordinates:
+    - "jakarta.websocket:jakarta.websocket-client-api"
+    - "jakarta.websocket:jakarta.websocket-api"
+    - "jakarta.websocket:jakarta.websocket-all"
+
+measured:
+  - { artifact: jakarta.websocket:jakarta.websocket-client-api, versions: ["2.2.0"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: jakarta.websocket.WebSocketContainer
+  # MEASURED at jakarta.websocket-client-api 2.2.0: `WebSocketContainer` declares
+  # FOUR `connectToServer` overloads and every one takes its `java.net.URI` LAST —
+  # position 1 on the two-argument forms, position 2 on the three-argument ones.
+  # The endpoint itself arrives as an `Object`, a `Class`, or an `Endpoint`, and
+  # none of those carries an address.
+  #
+  # **`channel_arg`, not `url_arg`, on every row — including the ones whose URL has
+  # a real authority.** A `ws://host/path` could be split into peer and path, and
+  # the two-rung ladder makes that a trap rather than a choice: a literal read
+  # would split, while the `channel_via` rung below returns a peerless tuple by
+  # construction (`linked_channels`: "a destination is opaque, never split"). One
+  # catalog would then publish two different address SHAPES for one boundary
+  # depending on which overload a caller reached, and a reader could not tell which
+  # rows have a peer. One shape, whole URL in `path`, `peer` NULL — the rule
+  # `spring-websocket.yml` already states for a dispatch path and D02 §3 states for
+  # messaging peers. What it costs is stated in COVERAGE rather than hidden.
+  #
+  # **The literal is one hop away, always.** Compiled against the jar and read
+  # back: `connectToServer(e, URI.create("ws://…"))` emits `ldc` then
+  # `invokestatic java/net/URI.create`, and `new URI("ws://…")` emits `ldc` then
+  # `invokespecial java/net/URI.<init>`. `channel_via` joins by owner and method
+  # NAME rather than always `<init>`, so both forms are one entry each.
+  methods:
+    - { name: connectToServer, arity: 2,
+        descriptor: "(Ljava/lang/Object;Ljava/net/URI;)Ljakarta/websocket/Session;",
+        channel_arg: 1,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+    - { name: connectToServer, arity: 2,
+        descriptor: "(Ljava/lang/Class;Ljava/net/URI;)Ljakarta/websocket/Session;",
+        channel_arg: 1,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+    - { name: connectToServer, arity: 3,
+        descriptor: "(Ljakarta/websocket/Endpoint;Ljakarta/websocket/ClientEndpointConfig;Ljava/net/URI;)Ljakarta/websocket/Session;",
+        channel_arg: 2,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+    - { name: connectToServer, arity: 3,
+        descriptor: "(Ljava/lang/Class;Ljakarta/websocket/ClientEndpointConfig;Ljava/net/URI;)Ljakarta/websocket/Session;",
+        channel_arg: 2,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

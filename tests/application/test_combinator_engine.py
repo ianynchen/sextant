@@ -43,7 +43,13 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
-CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction"}
+# `array_arguments` since W46's review: both router catalogs read a varargs
+# `MediaType...` array's own `elements` and now DECLARE the capability that emits them
+# (9.15). Without it here they are SKIPPED, and every assertion below would be
+# measuring a skip rather than a derivation — which is what this harness reported the
+# moment the declaration landed, loudly, because `_resolve` asserts the skip list is
+# empty.
+CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction", "array_arguments"}
 # The module-coordinates prefix a real symbol fact's own `symbol` carries (D00
 # §5a); every call-argument symbol stays bare, exactly as the real facts emit
 # it (`test_call_engines.py`'s own `_MODULE` precedent).
@@ -2310,6 +2316,30 @@ def test_the_mvc_router_catalog_reads_every_verb_the_servlet_package_declares(tm
 
 @pytest.mark.declines("spring-mvc-router")
 @pytest.mark.pins("derive_call_endpoints.addresses-nothing")
+def test_an_mvc_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(tmp_path: Path):
+    """§10 near-miss for the servlet twin, and it pins the guard it names.
+
+    `accept` is a real `RequestPredicates` factory on this owner too and it constrains a
+    media type rather than naming a verb — so the route it guards has no verb and no
+    address, and a row naming neither names no endpoint. `derive_call_endpoints`'s
+    addresses-nothing gate is what stops it being inserted; without that gate, N such
+    routes insert N undeduped rows at `resolved`/`compiler`, because a NULL path skips the
+    dedup key.
+
+    *This slot first held an owner-varying input carrying the reactive twin's `pins`
+    marker, which `scripts/guard_check.py` reported passing with that guard disabled — a
+    marker naming a guard the test does not pin. The owner case is measured below, without
+    a marker, because the combinator engine's owner conjunct has no guard id.*
+    """
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _mvc_java_route(0, "accept", "application/json", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
 def test_the_mvc_router_declines_a_reactive_owner_at_the_same_call_shape(tmp_path: Path):
     """§10 near-miss, and it is the one this catalog could actually get wrong.
 

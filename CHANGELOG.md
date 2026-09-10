@@ -87,6 +87,32 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **The WebSocket client direction exists** (F10 §11, `G-32`, W46). §5.5 held three
+  inbound Java rows and ZERO outbound, with no boundary saying the direction derived
+  nothing — unlike REST, SOAP and Kafka, each of which states its client side explicitly.
+  A module that opened a WebSocket had that call in no export at all.
+  **`@ClientEndpoint` is not where the address is**, which is why this is three
+  `single_call` catalogs and not an annotation rule: measured at
+  jakarta.websocket-client-api 2.2.0, the annotation declares `subprotocols`, `decoders`,
+  `encoders` and `configurator` and no address of any kind, so a rule minting a row from it
+  would publish an endpoint addressed at nothing. The URL is at `connectToServer`, one hop
+  behind `URI.create(...)` or `new URI(...)` — compiled and read back — and `channel_via`
+  joins by owner and method NAME, so one entry covers the factory and one the constructor.
+  `jakarta-websocket-client`, `spring-websocket-client` and `spring-stomp-client`. The last
+  two were ONE file with a two-entry `owner` list until CP-10 refused it: the probe checks
+  every declared descriptor against every listed owner, so the file was claiming `execute`
+  on `WebSocketStompClient` and `connectAsync` on `WebSocketClient`, neither of which
+  declares the other's method. **`peer` is NULL on every client row and the whole URL is the
+  `path`** — a deliberate choice, stated in COVERAGE: the address ladder's `channel_via`
+  rung is peerless by construction, so splitting the literal rows would publish two address
+  SHAPES for one boundary depending on which overload a caller reached.
+  And `G-32`'s second half: `jakarta-websocket.yml` named `jakarta.websocket-api`, whose
+  2.2.0 jar contains **only `jakarta/websocket/server/**`** — so `@OnMessage`, `@OnOpen`,
+  `@OnClose` and `@OnError` were in no coordinate it named. Nothing derived wrongly, because
+  `annotation_driven` is not dependency-gated and the file declares no `detect.required`, so
+  the coordinates are provenance rather than a fence; corrected because a provenance record
+  that omits the jar carrying four of the six annotations is wrong as a record.
+
 - **The URL a STOMP client actually opens is in the export** (F10 §11, `G-42`, W45). A
   module's `@MessageMapping` destinations have derived since 2H and the transport endpoint
   they arrive on existed nowhere, so a reader could see `/orders/place` and had no way to
@@ -160,12 +186,12 @@ here would restate those documents rather than add anything.
   `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
   a class literal, a scalar and an `instance` and returned nothing for that — even though
   the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
-  now. Measured before and after on the fixture: ****3 of the fixture's 25 outbound `single_call` rows carried a payload,
+  now. Measured before and after on the fixture: **3 of the fixture's 25 outbound `single_call` rows carried a payload,
   and 19 do.** *Published first as "3 of 27 … `single_call`" and then as "27 across the
   `single_call` AND `fluent` engines" — both wrong. 27 is 25 plus the two `fluent`
   catalogs that happened to be in the list, and across BOTH engines the fixture has 44
   outbound rows with 24 payloads. One wrong label was replaced with a differently wrong
-  one; this is the set that exists.***, across six catalogs. The six that still do not have no
+  one; this is the set that exists.* Across six catalogs. The six that still do not have no
   body capture at all. The DESTINATION half is deliberately untouched — a destination IS
   its value and a value lives in whatever called the method, so `parameter` stays in
   `_UNREAD_KINDS` and a `channel_arg` reading one is still `unresolved`. `OI-77`, closed.

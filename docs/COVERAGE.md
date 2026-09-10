@@ -682,7 +682,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**42 of 60 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**45 of 63 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -691,6 +691,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
 | `jakarta-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50, 11.0.24 |
+| `jakarta-websocket-client` | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
 | `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
@@ -729,6 +730,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
 | `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
+| `spring-stomp-client` | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-stomp-endpoint` | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-stomp-template` | `org.springframework:spring-messaging` | 6.1.6 |
 | `spring-stomp` | `org.springframework:spring-messaging` | 6.1.6 |
@@ -736,6 +738,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-web` | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-webclient` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
 | `spring-webflux-router` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
+| `spring-websocket-client` | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-websocket` | `org.springframework:spring-websocket` | 6.1.6 |
 | `spring-ws-template` | `org.springframework.ws:spring-ws-core` | 4.1.4 |
 
@@ -778,7 +781,7 @@ breath that it looks perfect. It does. Measured:**
 | `mall-admin` | 24,591 | **100% resolved** | 19,239 (78%) |
 | `jhipster-sample-app` | 1,686 | **100% resolved** | 545 (32%) |
 | `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (32%) |
-| `orders-service` (fixture) | 1,465 | 1,463 resolved, 2 narrowed | 468 (32%) |
+| `orders-service` (fixture) | 1,473 | 1,471 resolved, 2 narrowed | 468 (32%) |
 
 Each `body READ` percentage is the instrument's own — `round`, as `document.py` prints it.
 *Petclinic's read 31% here for one release: 971/3,045 is 31.9, and truncating instead of
@@ -807,7 +810,7 @@ their own key names.
   ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
   RESOLVED`, so a third bucket is impossible by construction.
 - **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (333 of the fixture's 559 METHODS, 425 of
+  `owner_not_scanned` is a scanning decision (338 of the fixture's 564 METHODS, 425 of
   jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
   has one.
 
@@ -2533,6 +2536,10 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 | Java | Jakarta WebSocket `jakarta.websocket.server.ServerEndpoint("/ws")` (was `javax.websocket.*` — **match both**) | annotation on the class; the value is a URI template | `annotation` | ✅ shipped for **both** spellings (W12) |
 | Java | Spring STOMP `@MessageMapping("/topic/x")`, `@SubscribeMapping` | annotation | `annotation` | ✅ shipped — class-level prefix composition, `@SubscribeMapping`, and `@SendTo` reply rows |
 | Java | **`StompEndpointRegistry.addEndpoint("/ws")`** — the URL a client opens | a `single_call` on the registry `WebSocketMessageBrokerConfigurer#registerStompEndpoints` is handed | `call_site` | ✅ **shipped** (W45, `G-42`). The destinations derived and **the transport endpoint they arrive on existed nowhere in the export**, so a reader could see `/orders/place` and had no way to learn a client reaches it by opening `/ws`. `spring-websocket.yml` names the RAW handler registry — a different interface, and mistaking the two for it is the gap itself. VARARGS: `addEndpoint("/a", "/b")` records ONE array argument and derives TWO rows, one per URL registered, compiled against spring-websocket 6.1.6 and read back rather than assumed. Live on the fixture: `/ws`, `/ws-alt`, `/ws-legacy` |
+| Java | **The WebSocket CLIENT direction** — `WebSocketContainer.connectToServer(endpoint, URI)` | a `single_call`; the URL is one hop away behind `URI.create(...)` or `new URI(...)` | `call_site` | ✅ **shipped** (W46, `G-32`). §5.5 held THREE inbound Java rows and ZERO outbound, with no boundary saying the direction derived nothing — unlike REST, SOAP and Kafka, each of which states its client side. **`@ClientEndpoint` is not where the address is**: measured at jakarta.websocket-client-api 2.2.0 it declares `subprotocols`, `decoders`, `encoders` and `configurator` and no address at all, so a rule minting a row from it would publish an endpoint addressed at nothing. All four `connectToServer` overloads take their `URI` LAST; `channel_via` joins by owner and method NAME, so one entry covers the static factory and one the constructor. Live on the fixture: `ws://feeds.example.com/orders` and `/audit` |
+| Java | **Spring's clients** — `WebSocketClient.execute`, `WebSocketStompClient.connectAsync`/`connect` | `single_call`, url a plain String except `execute`'s `URI` overload | `call_site` | ✅ **shipped** (W46). Two files, one owner each: they were ONE catalog with a two-entry `owner` list for a draft, and CP-10 refused it — the probe checks every declared descriptor against every listed owner, so the file was claiming `execute` on the STOMP client and `connectAsync` on the raw one, neither of which declares the other's method. The deprecated `ListenableFuture` `connect` pair is declared beside `connectAsync`, because a Boot 2 codebase calls it and a deprecated method is still a live boundary. Live on the fixture: `ws://feeds.example.com/stomp` |
+| Java | A client URL's **peer** | — | `call_site` | **Boundary — `peer` is NULL and the whole URL is the `path`, on every client row.** A `ws://host/path` could be split, and the two-rung address ladder makes that a trap: a literal read would split while the `channel_via` rung returns a peerless tuple by construction, so one catalog would publish two address SHAPES for one boundary depending on which overload a caller reached. One shape everywhere, the rule `spring-websocket.yml` already states for a dispatch path and D02 §3 states for messaging peers. What it costs is the service identity on an outbound row |
+| Java | `jakarta-websocket.yml`'s **coordinate list** | — | — | ✅ **corrected** (W46, `G-32`'s second half). It named `jakarta.websocket-api`, and that jar at 2.2.0 contains **only `jakarta/websocket/server/**`** — measured by opening it — so `@OnMessage`, `@OnOpen`, `@OnClose` and `@OnError` were not in any coordinate it named. **Nothing derived wrongly**: `annotation_driven` is not dependency-gated and this file declares no `detect.required`, so the coordinates are provenance and never a fence. Corrected because a provenance record omitting the jar that carries four of the six annotations is wrong as a record |
 | Java | Joining a connect URL to the destinations served over it | — | — | **Boundary — the two are separate rows and nothing links them.** `/ws` and `/orders/place` both read `websocket inbound`, and a reader has to know that one is a handshake URL and the other a broker destination. Linking them needs a row shape this schema does not have; the honest state is two true rows rather than one invented relation |
 | Java | Spring STOMP `SimpMessagingTemplate.convertAndSend` — the OUTBOUND half | a `single_call`, `KafkaTemplate.send`'s own shape one framework along | `call_site` | ✅ **shipped** (W43, `G-33`). Before it a service that both received and sent STOMP was published with half its messaging surface and nothing saying which half. **The descriptor could not be mirrored from its twin**: `convertAndSend` is declared on `MessageSendingOperations<D>`, `D` erases to `java.lang.Object`, and `SimpMessagingTemplate` declares no bridge — so a real call site written `convertAndSend("/topic/orders", payload)` compiles to `(Ljava/lang/Object;Ljava/lang/Object;)V`, and the `(Ljava/lang/String;Ljava/lang/Object;)V` a copy of `KafkaTemplate.send(String, V)` would have declared matches NOTHING. Compiled and read at spring-messaging 6.1.6 rather than reasoned about, and that String descriptor is the near-miss the suite pins. Six `convertAndSend` overloads, two `send`, four `convertAndSendToUser`; reads 3 of the 14 methods `SimpMessagingTemplate` declares and 3 of `SimpMessageSendingOperations`' 3, with the one unread addressable method named in the slice |
 | Java | The same, to a DEFAULT destination — `convertAndSend(payload)` | no destination argument at all; the template's configuration carries it | `call_site` | ✅ shipped — `path` NULL at `unresolved`, `KafkaTemplate.sendDefault`'s own answer. The boundary is published and its address says outright it was not resolved, rather than the call vanishing |
@@ -3228,7 +3235,13 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 ### 5.13 Language construct
 
 Not a protocol, and not a library: a thing the COMPILER emits that a reader of the class
-file has to recognise. **Nothing in this section is measured against a corpus**: the six under `examples/` and the fixture contain **zero `.kt` files** between them, so every Kotlin row below is read from the class-file format and from `extractor-jvm`'s own tests, never from a scanned Kotlin module. That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
+file has to recognise. **Almost nothing in this section is measured against real Kotlin**: the six corpora under
+`examples/` contain **zero `.kt` files** between them, and the fixture contains exactly TWO —
+`KotlinOrder.kt`, a data class, and `KotlinOrderRoutes.kt`, a reactive `coRouter`. So the
+nullability row below is exercised and every other Kotlin row is read from the class-file
+format and from `extractor-jvm`'s own tests, never from a scanned Kotlin module. *This
+paragraph first said the fixture had none either, which is false and would have let a reader
+take the whole axis as unexercised.* That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
 Kotlin rows out of 176** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
 has been asserting a parity nobody measured.
 

@@ -2630,6 +2630,237 @@ def test_an_addhandler_overload_the_registry_does_not_declare_derives_nothing(tm
     assert rows == []
 
 
+_WS_CONTAINER = "jakarta/websocket/WebSocketContainer#"
+_URI = "java/net/URI#"
+_STOMP_CLIENT = "org/springframework/web/socket/messaging/WebSocketStompClient#"
+# The jars' own, recorded in `scripts/probes/cp10_catalog_descriptors.md`.
+_CONNECT_TO_SERVER = "(Ljava/lang/Object;Ljava/net/URI;)Ljakarta/websocket/Session;"
+_CONNECT_ASYNC = (
+    "(Ljava/lang/String;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;"
+    "[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;"
+)
+
+
+def _catalog_by_id(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+
+
+def _uri_hop(caller: str, method: str, url: str, result: int) -> CallSiteFact:
+    """`URI.create("ws://…")` or `new URI("ws://…")` — the call that PRODUCES the URI a
+    `connectToServer` then takes. Compiled against jakarta.websocket-client-api 2.2.0 and
+    read back: both emit `ldc` then the call, and the literal is one hop from the connect.
+    """
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=_URI, name=method, descriptor="(Ljava/lang/String;)Ljava/net/URI;"),
+        invoke_kind="static",
+        ordinal=0,
+        receiver=None,
+        result=result,
+        arguments=[CallArgument(kind="string", value=url)],
+    )
+
+
+def _connect_to_server(caller: str, source: int) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner=_WS_CONTAINER, name="connectToServer", descriptor=_CONNECT_TO_SERVER
+        ),
+        invoke_kind="interface",
+        ordinal=1,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="instance", symbol="com/acme/ws/FeedEndpoint#"),
+            CallArgument(kind="unresolved", source=source),
+        ],
+    )
+
+
+def test_a_websocket_client_connect_reads_the_url_one_hop_away(tmp_path: Path):
+    """W46, `G-32`. This module served WebSocket endpoints and opened none, so §5.5 had
+    three inbound Java rows and zero outbound with nothing saying the direction derives
+    nothing.
+
+    **`@ClientEndpoint` is not where the address is** — measured, it declares
+    `subprotocols`, `decoders`, `encoders` and `configurator` and no address at all — so
+    this is a `single_call` on the connect, and the URL is one hop away behind
+    `URI.create`. `channel_via` joins by owner and method NAME, which is what lets one
+    entry cover the static factory and another the constructor."""
+    caller = "com/acme/ws/FeedClient#open()."
+    facts = [
+        _uri_hop(caller, "create", "ws://feeds.example.com/orders", 7),
+        _connect_to_server(caller, 7),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog_by_id("jakarta-websocket-client"))
+    rows = [e for e in workspace.query("endpoints") if e["caller"] is not None]
+    workspace.close()
+
+    assert [
+        (e["protocol"], e["direction"], e["peer"], e["path"], e["resolution"]) for e in rows
+    ] == [("websocket", "outbound", None, "ws://feeds.example.com/orders", "resolved")]
+
+
+def test_a_connect_whose_uri_came_from_an_undeclared_producer_reads_no_address(tmp_path: Path):
+    """§10 near-miss for the `channel_via` half. Every conjunct of the row holds — owner,
+    name, descriptor, an argument linked to a producing call carrying a string literal —
+    and only the PRODUCER differs: `URLDecoder.decode` is not `java.net.URI`.
+
+    The required answer is a row with NO address rather than nothing at all: the call was
+    made and it IS an outbound boundary, so `path` NULL at `unresolved` is the honest
+    answer and dropping the row would hide the connection. What must not happen is reading
+    a literal off a call this catalog never named.
+
+    NOT marked `declines`: that marker requires naming a guard whose loss the input would
+    notice, and `channel_via`'s owner+method join has none in `scripts/guard_check.py`.
+    Naming one it does not pin is worse than naming none — the owner near-miss below is
+    where this catalog's `declines` obligation is met."""
+    caller = "com/acme/ws/FeedClient#open()."
+    hop = CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(
+            owner="java/net/URLDecoder#",
+            name="decode",
+            descriptor="(Ljava/lang/String;)Ljava/net/URI;",
+        ),
+        invoke_kind="static",
+        ordinal=0,
+        receiver=None,
+        result=7,
+        arguments=[CallArgument(kind="string", value="ws://feeds.example.com/orders")],
+    )
+    workspace = _resolve(
+        tmp_path, [hop, _connect_to_server(caller, 7)], _catalog_by_id("jakarta-websocket-client")
+    )
+    rows = [e for e in workspace.query("endpoints") if e["caller"] is not None]
+    workspace.close()
+
+    assert [(e["path"], e["resolution"]) for e in rows] == [(None, "unresolved")]
+
+
+@pytest.mark.declines("spring-stomp-client")
+@pytest.mark.declines("spring-websocket-client")
+@pytest.mark.declines("jakarta-websocket-client")
+@pytest.mark.pins("single_call.call-site-owner")
+@pytest.mark.parametrize(
+    ("catalog_id", "owner", "name", "descriptor", "arguments"),
+    [
+        pytest.param(
+            "spring-stomp-client",
+            _STOMP_CLIENT,
+            "connectAsync",
+            _CONNECT_ASYNC,
+            [
+                CallArgument(kind="string", value="ws://feeds.example.com/stomp"),
+                CallArgument(kind="instance", symbol="com/acme/ws/Handler#"),
+                CallArgument(kind="array", elements=[]),
+            ],
+            id="WebSocketStompClient.connectAsync",
+        ),
+        pytest.param(
+            "jakarta-websocket-client",
+            _WS_CONTAINER,
+            "connectToServer",
+            _CONNECT_TO_SERVER,
+            [
+                CallArgument(kind="instance", symbol="com/acme/ws/FeedEndpoint#"),
+                CallArgument(kind="string", value="ws://feeds.example.com/orders"),
+            ],
+            id="WebSocketContainer.connectToServer",
+        ),
+        pytest.param(
+            "spring-websocket-client",
+            "org/springframework/web/socket/client/WebSocketClient#",
+            "execute",
+            "(Lorg/springframework/web/socket/WebSocketHandler;Ljava/lang/String;"
+            "[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+            [
+                CallArgument(kind="instance", symbol="com/acme/ws/Handler#"),
+                CallArgument(kind="string", value="ws://feeds.example.com/raw"),
+                CallArgument(kind="array", elements=[]),
+            ],
+            id="WebSocketClient.execute",
+        ),
+    ],
+)
+def test_a_client_connect_on_somebody_elses_type_derives_nothing(
+    tmp_path: Path,
+    catalog_id: str,
+    owner: str,
+    name: str,
+    descriptor: str,
+    arguments: list,
+):
+    """§10 near-miss for all three client catalogs, and it measures the OWNER alone.
+
+    Every other conjunct holds — the method name, the erased descriptor, the argument kinds
+    and a real URL in the position the catalog reads — and only the type the call is made
+    ON differs. `connectAsync` and `execute` are ordinary English words; without the owner
+    conjunct an application's own method of that name would publish a WebSocket boundary at
+    `resolved`/`compiler`, where nothing downstream can tell it from an observation.
+
+    Parametrised over the three because the finding is about the SET: each file names one
+    owner, and a per-catalog test passes while another file's owner list is still wrong."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/app/Service#run().",
+        target=CallTarget(owner="com/acme/app/OwnFeedClient#", name=name, descriptor=descriptor),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=arguments,
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id(catalog_id))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], f"{catalog_id} matched a call on {owner!r}'s method made on another type"
+    del owner
+
+
+def test_the_two_spring_websocket_clients_decline_each_others_calls(tmp_path: Path):
+    """§10 near-miss, and it is the mistake the split corrected.
+
+    These two shipped as ONE catalog with a two-entry `owner` list for one draft, and
+    CP-10 refused it: the probe checks every declared descriptor against every listed
+    owner, so the file claimed `execute` on `WebSocketStompClient` and `connectAsync` on
+    `WebSocketClient` — neither of which declares the other's method. Each file names one
+    owner now, and this is what holds that: a real `connectAsync` call, offered to the raw
+    client's catalog, derives nothing."""
+    caller = "com/acme/ws/StompFeed#open()."
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller=caller,
+        target=CallTarget(owner=_STOMP_CLIENT, name="connectAsync", descriptor=_CONNECT_ASYNC),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="string", value="ws://feeds.example.com/stomp"),
+            CallArgument(kind="instance", symbol="com/acme/ws/Handler#"),
+            CallArgument(kind="array", elements=[]),
+        ],
+    )
+    raw = _resolve(tmp_path / "raw", [call], _catalog_by_id("spring-websocket-client"))
+    assert raw.query("endpoints") == []
+    raw.close()
+
+    # And the STOMP client's own catalog DOES read it — the paired positive, without which
+    # the near-miss above passes against a catalog that matches nothing at all.
+    stomp = _resolve(tmp_path / "stomp", [call], _catalog_by_id("spring-stomp-client"))
+    rows = [e for e in stomp.query("endpoints") if e["caller"] is not None]
+    stomp.close()
+    assert [(e["path"], e["resolution"]) for e in rows] == [
+        ("ws://feeds.example.com/stomp", "resolved")
+    ]
+
+
 _STOMP_REGISTRY = "org/springframework/web/socket/config/annotation/StompEndpointRegistry#"
 # The jar's own, recorded in `scripts/probes/cp10_catalog_descriptors.md`. ONE overload at
 # spring-websocket 6.1.6, and varargs — so a one-path and a two-path registration both
@@ -2690,7 +2921,11 @@ def test_addendpoint_derives_the_url_a_stomp_client_opens(tmp_path: Path):
 
 
 @pytest.mark.declines("spring-stomp-endpoint")
-@pytest.mark.pins("single_call.claimed-arity")
+# The OWNER guard, not the arity one. This near-miss holds the descriptor and the name
+# fixed and varies the owner, so `single_call.call-site-owner` is the guard it exercises;
+# marked `claimed-arity` first, which `scripts/guard_check.py` reported SURVIVED — a marker
+# naming a guard a test does not pin is exactly what `test_guard_pins.py` exists to catch.
+@pytest.mark.pins("single_call.call-site-owner")
 def test_the_raw_handler_registry_is_not_the_stomp_endpoint_registry(tmp_path: Path):
     """§10 near-miss, and it is the confusion this catalog exists to end.
 

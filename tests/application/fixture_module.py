@@ -31,6 +31,12 @@ FIXTURE_CAPABILITIES = {
     "superclass",
     "generic_interfaces",
     "nested_annotation_args",
+    # `array_arguments` (capability 9.15): `spring-stomp-endpoint.yml` declares it for its
+    # varargs `addEndpoint(String...)` slot, and the router catalogs read a varargs media
+    # array through the same fact. Without it here the catalog is SKIPPED — and this is the
+    # subset where that is genuinely silent, because `tests/application/test_endpoints.py`
+    # discards the skip list rather than asserting on it.
+    "array_arguments",
 }
 
 from sextant.domain.closed_sets import OriginTier

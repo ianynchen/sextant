@@ -97,6 +97,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderEvent.jsonl",
         "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderFeedClient.jsonl",
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
@@ -214,7 +215,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 120 since W44: `MvcInvoiceRoutes` and `MvcRouteHandlers`, the servlet functional
     # routing surface — `G-29`, and likewise absent here before.
     # 121 since W45: `StompBrokerConfig`, which registers the URL a STOMP client opens.
-    assert report.documents == 121
+    # 122 since W46: `OrderFeedClient`, which OPENS one — the direction `G-32` names, and
+    # the one this fixture had no instance of at all.
+    assert report.documents == 122
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -289,6 +292,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderEvent.jsonl",
         "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderFeedClient.jsonl",
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
