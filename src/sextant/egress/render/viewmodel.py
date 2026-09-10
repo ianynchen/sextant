@@ -11,6 +11,8 @@ from sextant.domain.symbols import simple_name
 __all__ = [
     "ClassEdge",
     "ClassNode",
+    "SequenceAlternatives",
+    "SequenceBranch",
     "SequenceMessage",
     "SequenceParticipant",
     "simple_name",
@@ -70,9 +72,15 @@ class SequenceAlternatives:
     messages, each followed by its own subtree. Drawn flat they read as a SEQUENCE:
     `spring-petclinic-rest`'s `ClinicServiceImpl#saveOwner` draws `save` to the JDBC
     repository and, eight arrows later, `save` to the JPA one — two saves, apparently
-    both, when exactly one repository is active in any running application. That is the
-    over-report NFR-2 rates worst, and it is live in rendered output rather than
-    hypothetical.
+    both, when at most one repository answers any given call. That is the over-report
+    NFR-2 rates worst, and it is live in rendered output rather than hypothetical.
+
+    **At most one branch runs per invocation** — not "exactly one, always". Two in-module
+    implementations of an interface can both be live and both run at different times; this
+    repo's own `TraceProbe#describe` narrows to two splitters passed as a parameter, with
+    nothing making them exclusive. All 34 of petclinic-rest's sites happen to be
+    profile-switched repository pairs, so no rendered instance is wrong today, but the
+    block says "one of these per call", never "one of these ever".
 
     `branches` is one entry per candidate, in the walk's own order, each holding that
     candidate's own message and everything below it. The emitter draws them as mermaid's

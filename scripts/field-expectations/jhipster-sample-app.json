@@ -12,6 +12,10 @@
     "persistence/database": 70,
     "unresolved": 1071
   },
+  "narrowed_sites": {
+    "in_graph": 0,
+    "reached_by_a_trace": 0
+  },
   "routes": {
     "inbound": [
       "DELETE /api/admin/users/{login}",

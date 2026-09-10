@@ -47,6 +47,11 @@ Checks, per expectation:
   names on purpose, so a typo in a real one is inert rather than invalid and nothing else
   would notice. One corpus per route — `mall-admin` for scanned packages and the `cache`
   rule, `jhipster-sample-app` for supertypes, `spring-petclinic-rest` for owners.
+- **`narrowed_sites`**, where the pin declares one (F7 §8.3, W32) — call sites whose
+  dispatch narrowed to several bodies, as `{in_graph, reached_by_a_trace}`. Two numbers
+  because they are two claims: only the second can appear in the document. Pinned because
+  W32's plan row claimed this shape never occurred on real code and it occurs 34 times on
+  `spring-petclinic-rest`.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -274,6 +279,41 @@ def _analyze_and_render(module: Path) -> None:
         )
 
 
+def _narrowed_sites(module: Path) -> dict[str, int]:
+    """`{"in_graph": N, "reached_by_a_trace": M}` — call sites whose dispatch narrowed to
+    several bodies, and how many of them a walk reaches.
+
+    Two numbers because they are two claims and W32's own docstring welded them together:
+    34 sites are in `spring-petclinic-rest`'s `call_edges` and 31 of them are in a trace,
+    so only 31 can appear in the document. A single number would let either drift under
+    the other's name.
+    """
+    from sextant.application.query.trace import traces_of
+    from sextant.domain.closed_sets import Resolution
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    workspace = DuckDbWorkspace(module / ".sextant" / "workspace.duckdb")
+    try:
+        in_graph = {
+            (str(row["caller"]), int(str(row["ordinal"])))
+            for row in workspace.query("call_edges")
+            if str(row["resolution"]) == Resolution.NARROWED
+        }
+        reached: set[tuple[str, int]] = set()
+        for trace in traces_of(workspace):
+            counted: dict[tuple[str, int], int] = {}
+            for step in trace.steps:
+                if step.resolution != Resolution.NARROWED:
+                    continue
+                key = (step.caller, step.ordinal)
+                counted[key] = counted.get(key, 0) + 1
+                if counted[key] > 1:
+                    reached.add(key)
+    finally:
+        workspace.close()
+    return {"in_graph": len(in_graph), "reached_by_a_trace": len(reached)}
+
+
 def _terminal_kinds(module: Path) -> dict[str, int]:
     """`call_edges`' classification, counted per `kind/target`, from the workspace
     `analyze` has just written.
@@ -417,6 +457,25 @@ def _check_one(name: str) -> list[str]:
                 f"terminal kinds: expected {expected_terminals!r}, got {counted!r} — this "
                 f"is what the shipped `terminals` rules classify, and nothing else checks "
                 f"that they name types the frameworks really declare"
+            )
+
+    # F7 §8.3 (W32). How many call sites dispatch to SEVERAL bodies with none picked, and
+    # how many of them a trace actually reaches — the second being what appears in the
+    # rendered document as an `alt` block.
+    #
+    # **Pinned because the claim that was NOT pinned turned out to be wrong.** W32's plan
+    # row said this shape "has never fired on real code (four corpora, zero occurrences)";
+    # it fires 34 times on `spring-petclinic-rest`, every one a repository interface
+    # narrowing to a JDBC implementation and a JPA one, and the diagram drew them as a
+    # sequence. An unpinned corpus number in a document is a number that rots.
+    expected_narrowed = expectation.get("narrowed_sites")
+    if expected_narrowed is not None:
+        counted = _narrowed_sites(module)
+        if counted != expected_narrowed:
+            problems.append(
+                f"narrowed sites: expected {expected_narrowed!r}, got {counted!r} — this "
+                f"is the shape F7 §8.3's `alt` blocks are drawn for, and the last time it "
+                f"went unpinned a plan row claimed it never occurred"
             )
 
     # F3 §4.2 (W21). OPTIONAL, because it is a property of the upstream's own source

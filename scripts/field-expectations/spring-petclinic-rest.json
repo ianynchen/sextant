@@ -12,6 +12,10 @@
     "persistence/database": 102,
     "unresolved": 1972
   },
+  "narrowed_sites": {
+    "in_graph": 34,
+    "reached_by_a_trace": 31
+  },
   "routes": {
     "inbound": [
       "DELETE /",

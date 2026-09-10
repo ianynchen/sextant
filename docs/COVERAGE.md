@@ -820,16 +820,23 @@ occurrences)".** It was wrong, and the correction is the reason the item was wor
 
 | Corpus | narrowed edges | call sites with several candidates |
 |---|---|---|
-| `spring-petclinic-rest` | 68 | 34 |
+| `spring-petclinic-rest` | 68 | 34 (31 reached by a trace) |
 | `orders-service` (fixture) | 2 | 1 |
 | `mall-admin` | 0 | 0 |
 | `jhipster-sample-app` | 0 | 0 |
 
 Every one of petclinic-rest's 34 is a repository interface narrowing to a JDBC
 implementation and a JPA one — the shape a profile-switched application has by design.
+**31 of the 34 are reached by a trace** and therefore reach the document, drawn as 62 `alt`
+blocks across the traces that reach them, 4 of those nested inside another branch. The
+other three are in the graph and in no walk. Both numbers are pinned in the corpus
+expectations (`narrowed_sites`), because the last unpinned claim about this shape — the
+plan row's — was wrong.
 
 They now draw as mermaid's `alt`/`else`, which is the only notation it has for "one of
-these, not all of these". Each branch carries the candidate's own arrow AND everything
+these, not all of these" — meaning at most one branch PER INVOCATION, not one ever: two
+in-module implementations can both be live and both run at different times, and this repo's
+own `TraceProbe#describe` narrows to two splitters with nothing making them exclusive. Each branch carries the candidate's own arrow AND everything
 below it, which the walk being depth-first makes possible: a candidate is immediately
 followed by everything it leads to, so a branch is a contiguous range. **Nothing is
 reordered and nothing is dropped** — the same arrows, in the same order, inside a block
@@ -839,9 +846,27 @@ The caption changed with it. It read "nothing is filtered", which is true and us
 reader who has taken the arrows for a sequence; it names the number of CHOICES instead —
 per site, not per candidate, because two candidates on one site is one choice.
 
-**A single `narrowed` candidate is NOT drawn as a choice.** Dispatch can narrow to one body
-and still decline to commit, and a one-branch `alt` would tell a reader there is a choice
-where there is none.
+**What guards it, and what does not.** Six unit tests, each verified against the mutation
+it names — flat rendering, a branch losing its subtree, a lone candidate grouping,
+`_grouped`'s recursion, `_named`'s recursion, and the `(caller, ordinal)` site key — plus
+the corpus pin above. **The always-on fixture has no rendered `alt` block**: its one
+narrowed site is `TraceProbe#describe`, which nothing calls and which is therefore no
+root, so no trace reaches it. Making it reachable would move every trace, step and root
+count in the fixture pins for one end-to-end instance of behaviour six unit tests already
+discriminate, so it is stated here instead of bought.
+
+**A single `narrowed` candidate is NOT drawn as a choice**, and the guard is defensive
+rather than live. `resolve/call_edges.py` writes `NARROWED if len(callees) > 1 else
+RESOLVED`, so `narrowed` IS "two or more candidates" by definition and zero lone rows exist
+on any measured workspace — an earlier version of this paragraph said "dispatch can narrow
+to one body and still decline to commit", which is not what the word means. The projection
+keeps the guard because that invariant is another module's, not its own.
+
+**The second half of §8.3's acceptance is NOT delivered**: *"and as one arrow labelled with
+them when they are not [known]"*. There is no such state to render. A site whose candidate
+bodies could not be named is not `narrowed` at all — it is `resolved` with `callee IS
+NULL`, which the diagram already draws as one arrow marked `[boundary]`. The clause
+describes a row the graph does not produce, and no code was written for it.
 
 ### 3a-viii. A terminal says what it reaches, not just that it is one (F7 §8.2)
 

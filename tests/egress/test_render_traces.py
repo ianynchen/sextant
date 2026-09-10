@@ -16,6 +16,8 @@ Built from hand-written `Trace` values rather than from a walked workspace, the
 trace, and a compiled fixture would make that answer depend on having one.
 """
 
+import re
+
 import pytest
 
 from sextant.application.query.trace import Step, Trace
@@ -645,7 +647,9 @@ def test_a_narrowed_call_site_draws_its_candidates_as_alternatives():
 
     assert "alt JdbcRepo" in text
     assert "else JpaRepo" in text
-    assert text.count("end") == 1
+    # Counting `end` LINES, not the substring: a participant called `Backend` or
+    # `AttendeeRepo` would make a substring count wrong the day one appears.
+    assert [line.strip() for line in text.splitlines()].count("end") == 1
     # The JDBC call sits INSIDE the first branch and the JPA one inside the second —
     # nothing is reordered and nothing is dropped.
     before, after = text.split("else JpaRepo")
@@ -673,13 +677,20 @@ def test_an_ordinary_trace_says_nothing_about_alternatives():
 
     assert "alt " not in diagram.mermaid
     assert "exactly one branch" not in diagram.elides
-    assert "All 1 step of this trace are drawn, and none is dropped." in diagram.elides
+    assert "All 1 step of this trace is drawn, and none is dropped." in diagram.elides
 
 
 def test_a_single_narrowed_candidate_is_not_drawn_as_a_choice():
-    """A `narrowed` row can stand alone where dispatch found one body and could not commit
-    to it. A one-branch `alt` would tell a reader there is a choice where there is none,
-    so the block needs two candidates on one site, not merely the `narrowed` word."""
+    """A one-branch `alt` would tell a reader there is a choice where there is none, so
+    the block needs two candidates on one site and not merely the `narrowed` word.
+
+    **This input cannot come out of the producer**, and an earlier version of this
+    docstring claimed it could — "dispatch found one body and could not commit to it".
+    `resolve/call_edges.py` writes `NARROWED if len(callees) > 1 else RESOLVED`, so
+    `narrowed` IS "two or more candidates" by definition, and zero lone rows exist on any
+    of the four measured workspaces. What this pins is that the grouping does not lean on
+    an invariant enforced in a different module: it decides from what it was handed.
+    """
     diagram = _diagram(
         _trace(
             _step(
@@ -692,3 +703,104 @@ def test_a_single_narrowed_candidate_is_not_drawn_as_a_choice():
 
     assert "alt " not in diagram.mermaid
     assert "dispatch" not in diagram.elides
+
+
+def _nested_trace() -> Trace:
+    """A narrowed site INSIDE a narrowed candidate — 4 of the 62 `alt` blocks
+    `spring-petclinic-rest` renders are this, so it is a live shape, not a construction."""
+    return _trace(
+        _step(
+            target="a/Repo#save().",
+            callee="s maven c 1 a/JdbcRepo#save().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            depth=2,
+            caller="s maven c 1 a/JdbcRepo#save().",
+            ordinal=0,
+            target="a/Cache#put().",
+            callee="s maven c 1 a/RedisCache#put().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            depth=2,
+            caller="s maven c 1 a/JdbcRepo#save().",
+            ordinal=0,
+            target="a/Cache#put().",
+            callee="s maven c 1 a/LocalCache#put().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            target="a/Repo#save().",
+            callee="s maven c 1 a/JpaRepo#save().",
+            resolution=Resolution.NARROWED,
+        ),
+    )
+
+
+def test_a_narrowed_site_inside_a_candidate_is_grouped_too():
+    """The recursion in `_grouped`, which nothing pinned. Without it a nested choice draws
+    flat again — the exact defect this feature exists to fix, one level down — and four of
+    the 62 `alt` blocks `spring-petclinic-rest` renders are nested."""
+    text = _diagram(_nested_trace()).mermaid
+
+    assert text.count("alt ") == 2, "the outer site AND the inner one"
+    assert "alt RedisCache" in text and "else LocalCache" in text
+    # The inner block is INSIDE the first branch, so it is indented deeper than the outer.
+    inner = next(line for line in text.splitlines() if "alt RedisCache" in line)
+    outer = next(line for line in text.splitlines() if "alt JdbcRepo" in line)
+    assert len(inner) - len(inner.lstrip()) > len(outer) - len(outer.lstrip())
+
+
+def test_a_nested_branch_label_is_a_name_not_a_participant_id():
+    """The recursion in `_named`. Branch labels are participant IDS until that pass
+    resolves them, so a non-recursive version renders `alt a3` / `else a25` — generated
+    ids in the reader's face, which is what petclinic really produced under the mutation.
+    """
+    text = _diagram(_nested_trace()).mermaid
+
+    for line in text.splitlines():
+        if line.strip().startswith(("alt ", "else ")):
+            label = line.strip().split(" ", 1)[1]
+            assert not re.fullmatch(r"a\d+", label), f"branch label is a raw id: {label}"
+
+
+def test_two_narrowed_sites_in_one_caller_are_two_blocks():
+    """Sites are keyed on `(caller, ordinal)`, and dropping the ordinal from that key
+    merges independent choices into one.
+
+    `ClinicServiceImpl#findOwners` really has two narrowed sites at ordinals 0 and 1;
+    merged, they would draw one four-branch `alt` claiming one-of-four where the truth is
+    two separate one-of-two decisions — and the caption, which counts sites, would then
+    contradict the single block beside it.
+    """
+    trace = _trace(
+        _step(
+            ordinal=0,
+            target="a/Repo#find().",
+            callee="s maven c 1 a/JdbcRepo#find().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            ordinal=0,
+            target="a/Repo#find().",
+            callee="s maven c 1 a/JpaRepo#find().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            ordinal=1,
+            target="a/Vet#list().",
+            callee="s maven c 1 a/JdbcVet#list().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            ordinal=1,
+            target="a/Vet#list().",
+            callee="s maven c 1 a/JpaVet#list().",
+            resolution=Resolution.NARROWED,
+        ),
+    )
+    diagram = _diagram(trace)
+
+    assert diagram.mermaid.count("alt ") == 2, "two sites are two blocks, not one of four"
+    assert "2 call sites here dispatch to SEVERAL bodies" in diagram.elides

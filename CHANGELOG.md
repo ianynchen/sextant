@@ -84,9 +84,12 @@ here would restate those documents rather than add anything.
   nothing reordered, nothing dropped, verified against the vendored mermaid build in a
   live browser. The caption stopped saying "nothing is filtered", which is true and
   useless to a reader who has read the arrows as a sequence, and names the number of
-  choices instead. A SINGLE narrowed candidate is not drawn as a choice: dispatch can
-  narrow to one body and still decline to commit, and a one-branch `alt` would invent a
-  decision.
+  choices instead. A SINGLE narrowed candidate is not drawn as a choice — a
+  defensive guard rather than a live case, since `call_edges.py` writes `NARROWED if
+  len(callees) > 1 else RESOLVED` and a lone row cannot occur. §8.3's other clause, "one
+  arrow labelled with them when they are not known", has no implementation because it has
+  no state to render: a site whose bodies could not be named is `resolved` with a NULL
+  callee, already drawn as one `[boundary]` arrow.
 
 - **A terminal says what it reaches, not just that it is one** (F7 §8.2, W30).
   [D00](docs/components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the

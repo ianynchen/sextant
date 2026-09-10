@@ -1808,8 +1808,11 @@ def _grouped(
     picked, and the walk records one step per candidate followed by that candidate's whole
     subtree. Drawn flat they read as a sequence — `spring-petclinic-rest`'s
     `ClinicServiceImpl#saveOwner` draws `save` to the JDBC repository and, eight arrows
-    later, `save` to the JPA one, so the diagram says the service saves twice when exactly
-    one repository is active. 34 sites on that corpus, live in the rendered document.
+    later, `save` to the JPA one, so the diagram says the service saves twice when at most
+    one repository answers the call. 34 such sites in that corpus's `call_edges`, of which
+    **31 are reached by a trace** and therefore appear in the document — the other three
+    are in the graph and in no walk, and this sentence used to weld the two numbers
+    together.
 
     **The ranges are already contiguous, which is what makes this possible.** The walk is
     depth-first, so a candidate is immediately followed by everything it leads to and then
@@ -1858,6 +1861,15 @@ def _candidate_span(steps: list[Step], index: int) -> list[tuple[int, int]] | No
 
     A candidate's range runs to the next step at its own depth or shallower, which is
     where its subtree ends — the walk being depth-first is the whole of why that holds.
+
+    **The `depth` equality below is defensive and currently unreachable**, stated rather
+    than left as a clause a reader assumes is load-bearing: `_walk` expands a method once
+    per trace (`expanded`), so every step naming one caller comes from that caller's
+    single frame and shares its depth. Removing the check changes no output and fails no
+    test. It stays for the reason the `len(spans) > 1` guard stays — the invariant is the
+    walk's, not this function's — and it is the `caller`/`ordinal` equality that does the
+    real work, which `test_two_narrowed_sites_in_one_caller_are_two_blocks` pins against a
+    live shape.
     """
     first = steps[index]
     if first.resolution != Resolution.NARROWED:
@@ -1989,7 +2001,7 @@ def _trace_elision(trace: Trace) -> str:
         if not trace.steps
         else (
             f"All {len(trace.steps)} step{'' if len(trace.steps) == 1 else 's'} of this "
-            "trace are drawn, and none is dropped"
+            f"trace {'is' if len(trace.steps) == 1 else 'are'} drawn, and none is dropped"
             + (
                 "."
                 if not alternatives
