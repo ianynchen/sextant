@@ -87,8 +87,13 @@ def _method(
 ) -> dict:
     """One declared method fact, as `ClassScanner` emits it.
 
-    `returns=None` is a `void` method: the scanner omits the key rather than writing an
-    empty reference, which is what the workspace reads back as SQL NULL.
+    **`returns` is always written, void included** — and the first version of this helper
+    said the opposite, which made the void near-miss below assert its own fabricated
+    input (W26 review). `ClassScanner` writes the key unconditionally and `WireTypes.of`
+    maps `Type.VOID` to an empty `wire_type`, so a void method arrives as a JSON OBJECT,
+    not as SQL NULL. `_void()` is what the scanner really emits; `returns=None` is kept
+    for the one thing it does test — a signature with the key genuinely missing, which
+    `_declared`'s own `isinstance(returns, dict)` guard drops.
     """
     signature: dict = {"parameters": list(parameters)}
     if returns is not None:
@@ -105,6 +110,14 @@ def _method(
         "line_start": 0,
         "line_end": 0,
     }
+
+
+def _void() -> dict:
+    """A `void` return exactly as the scanner writes it: the key IS present, and its
+    `wire_type` is empty because `WireTypes.of` maps `Type.VOID` to "" — D00 §5b's
+    vocabulary has no member for "no payload", and projecting void as an `object` would
+    be a shape claim about a method that returns nothing."""
+    return _ref("void#", "")
 
 
 def _interface(document_id: str, owner: str, *, extends: tuple[str, ...] = ()) -> dict:
@@ -154,7 +167,14 @@ def _totals_workspace(tmp_path: Path) -> DuckDbWorkspace:
             _method("totals", TOTALS, "getSecret", _string(), visibility="private"),
             _method("totals", TOTALS, "getRegistry", _string(), static=True),
             _method("totals", TOTALS, "getBridged", _string(), synthetic=True),
-            _method("totals", TOTALS, "getNothing", None),
+            _method("totals", TOTALS, "getNothing", _void()),
+            # `java.lang.Void` reaches no wire type either — an uninstantiable
+            # placeholder whose only value is null — so a rule testing the TYPE NAME
+            # rather than the projection would publish this one.
+            _method("totals", TOTALS, "getNothingBoxed", _ref("java/lang/Void#", "")),
+            # The key genuinely absent, which is a different input from a void return
+            # and the only one the old helper was actually exercising.
+            _method("totals", TOTALS, "getUnwritten", None),
             # The mangling, which is the clause a reader is most likely to "simplify".
             _method("totals", TOTALS, "getURL", _string()),
             _method("totals", TOTALS, "getURLValue", _string()),
@@ -205,7 +225,7 @@ def test_the_leading_run_of_capitals_is_lowercased_whole(tmp_path: Path):
     assert "urlvalue" in fields and "urlValue" not in fields and "URLValue" not in fields
 
 
-def test_the_nine_near_misses_are_each_left_off_the_wire(tmp_path: Path):
+def test_the_eleven_near_misses_are_each_left_off_the_wire(tmp_path: Path):
     """The paired near-miss (§10). Each name here reaches the same pass as `currency`
     and is refused for its own reason — so a rule that widened by one clause would
     publish exactly one of them, and this names which.
@@ -214,6 +234,13 @@ def test_the_nine_near_misses_are_each_left_off_the_wire(tmp_path: Path):
     which Jackson refuses unless `isGettersNonBoolean` is enabled. Without the
     `wire_type` constraint the field would be called `oCode`, a name nothing on either
     side of the wire writes.
+
+    Nine until W26's review, and the two it gained are the ones that were never being
+    tested: `getNothing` was built with NO `returns` key, a shape the scanner does not
+    emit, so the void clause it claimed to pin was dead for real facts while real void
+    methods sailed through. `getNothingBoxed` is the near-miss for the fix itself — a
+    `java.lang.Void` return reaches no wire type either, and a guard written against the
+    type NAME would have published it.
     """
     workspace = _totals_workspace(tmp_path)
 
@@ -231,6 +258,8 @@ def test_the_nine_near_misses_are_each_left_off_the_wire(tmp_path: Path):
         ("registry", "a static accessor belongs to the type, not the payload"),
         ("bridged", "a synthetic accessor is the compiler's, not the author's"),
         ("nothing", "a void accessor returns nothing to serialise"),
+        ("nothingBoxed", "and neither does one returning java.lang.Void"),
+        ("unwritten", "a signature with no return at all describes nothing"),
     ):
         assert absent not in fields, f"{absent} must not reach the wire: {why}"
 
@@ -440,3 +469,212 @@ def test_a_type_this_workspace_never_read_gains_no_accessors(tmp_path: Path):
 
     assert RENAMED in unexpanded, "a type with no class file here is still a stated gap"
     assert still_open
+
+
+def test_a_field_whose_type_is_described_only_by_accessors_does_not_open_its_owner(
+    tmp_path: Path,
+):
+    """W26 added `and not accessors.of(held)` to the `open` computation and nothing
+    tested it — measured by mutation in the wave's review: deleting the clause left the
+    whole suite green.
+
+    A shape is OPEN when a field of its own holds a type nothing here describes. Before
+    the accessor fallback, "describes" meant bytecode fields or a declared shape, and an
+    interface had neither — so `Page`'s `pageable` field, holding an interface this pass
+    now expands in full, reported its owner open. A gap report pointing at a type that IS
+    described is a reader sent to look at nothing.
+    """
+    facts = tmp_path / "facts"
+    _write(
+        facts / "slice.jsonl",
+        _document("slice", "Slice.java"),
+        [
+            _interface("slice", SLICE),
+            _method("slice", SLICE, "getSize", _ref("int#", "integer", "int32")),
+        ],
+    )
+    _write(
+        facts / "holder.jsonl",
+        _document("holder", "Holder.java"),
+        [_type("holder", HOLDER), _field("holder", HOLDER, "slice", _ref(SLICE, "object"))],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _WITH_ACCESSORS, [HOLDER])
+    held_by_accessors = _open_of(workspace, HOLDER)
+    workspace.close()
+
+    # And the control: the SAME facts with no accessor rule leave `Slice` undescribed,
+    # so the owner is genuinely open. The difference is the whole clause.
+    workspace = DuckDbWorkspace(tmp_path / "again.duckdb")
+    workspace.load_facts(facts)
+    derive_shapes(workspace, _CATALOG, [HOLDER])
+    held_by_nothing = _open_of(workspace, HOLDER)
+    workspace.close()
+
+    assert held_by_accessors is False
+    assert held_by_nothing is True
+
+
+def test_the_superclass_chain_is_exhausted_before_any_interface(tmp_path: Path):
+    """JVMS 5.4.3.3 order, which the commit message leads with and no test reached.
+
+    A type can inherit one property name from two places at once. The JVM searches the
+    class, then the SUPERCLASS CHAIN TO EXHAUSTION, then the interfaces — so a
+    declaration two levels up the class chain beats one on a directly implemented
+    interface, and a shape that took the nearer declaration would publish a different
+    wire type for the same JSON key.
+
+    **The depth is the test.** `Child extends Base implements Named`, `Base extends
+    GrandBase`, and `getLabel` is declared on `GrandBase` (int) and on `Named` (String).
+    A naive breadth-first walk reaches `Named` at depth 1 and answers `string`; 5.4.3.3
+    reaches `GrandBase` first and answers `integer`. A first version of this test put the
+    conflict at depth 1, where both walks agree — and passed under the mutation it was
+    written to catch.
+    """
+    facts = tmp_path / "facts"
+    grand = "com/acme/orders/GrandBase#"
+    _write(
+        facts / "grand.jsonl",
+        _document("grand", "GrandBase.java"),
+        [
+            _type("grand", grand),
+            _method("grand", grand, "getLabel", _ref("int#", "integer", "int32")),
+        ],
+    )
+    base = _type("base", "com/acme/orders/Base#")
+    base["superclass"] = _MODULE + grand
+    _write(facts / "base.jsonl", _document("base", "Base.java"), [base])
+    _write(
+        facts / "iface.jsonl",
+        _document("iface", "Named.java"),
+        [
+            _interface("iface", "com/acme/orders/Named#"),
+            _method("iface", "com/acme/orders/Named#", "getLabel", _string()),
+        ],
+    )
+    child = _type("child", "com/acme/orders/Child#")
+    child["superclass"] = _MODULE + "com/acme/orders/Base#"
+    child["interfaces"] = [_MODULE + "com/acme/orders/Named#"]
+    _write(facts / "child.jsonl", _document("child", "Child.java"), [child])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _WITH_ACCESSORS, ["com/acme/orders/Child#"])
+    fields = _fields_of(workspace, "com/acme/orders/Child#")
+    workspace.close()
+
+    assert fields["label"]["wire_type"] == "integer", (
+        "a declaration two levels up the class chain beats one on a direct interface"
+    )
+
+
+def test_a_subtypes_own_accessor_wins_over_the_one_it_overrides(tmp_path: Path):
+    """First declaration of a property name wins, which is what an override IS.
+
+    `of()` walks the closure and keeps the first declaration per property name. Drop that
+    dedup and a subtype narrowing its ancestor's accessor publishes the property twice —
+    two rows for one JSON key. Measured by mutation in W26's review: dropping the `seen`
+    set left the suite green.
+    """
+    facts = tmp_path / "facts"
+    _write(
+        facts / "base.jsonl",
+        _document("base", "Base.java"),
+        [
+            _interface("base", "com/acme/orders/Base#"),
+            _method("base", "com/acme/orders/Base#", "getLabel", _ref("int#", "integer", "int32")),
+        ],
+    )
+    _write(
+        facts / "child.jsonl",
+        _document("child", "Child.java"),
+        [
+            _interface("child", "com/acme/orders/Child#", extends=("com/acme/orders/Base#",)),
+            _method("child", "com/acme/orders/Child#", "getLabel", _string()),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _WITH_ACCESSORS, ["com/acme/orders/Child#"])
+    rows = [
+        row
+        for row in workspace.query("shape_fields")
+        if str(row["shape_id"]) == "com/acme/orders/Child#"
+    ]
+    workspace.close()
+
+    assert len(rows) == 1, "one property name is one field, however many declare it"
+    assert rows[0]["wire_type"] == "string", "the type's own declaration is the first found"
+
+
+def test_an_undescribed_object_nested_two_levels_deep_still_opens_its_owner(
+    tmp_path: Path,
+):
+    """W25's element-chain fix, at the depth its own docstring names as the reason it
+    recurses — and the recursion was untested (W26 review, mutation: stopping after one
+    level left the suite green; the single-level `List<T>` case is covered).
+
+    A `List<List<T>>` whose `T` is bound to nothing describes no object at any level, and
+    a shape holding it is OPEN. Checking only the outer reference reports a payload
+    complete while saying nothing about what it carries.
+    """
+    facts = tmp_path / "facts"
+    inner = _ref("java/util/List#", "array", arguments=[_ref("T", "object")])
+    _write(
+        facts / "holder.jsonl",
+        _document("holder", "Holder.java"),
+        [
+            _type("holder", HOLDER),
+            _field(
+                "holder",
+                HOLDER,
+                "rows",
+                _ref("java/util/List#", "array", arguments=[inner]),
+            ),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _WITH_ACCESSORS, [HOLDER])
+    is_open = _open_of(workspace, HOLDER)
+    workspace.close()
+
+    assert is_open is True
+
+
+def test_a_raw_collection_field_leaves_its_owner_open(tmp_path: Path):
+    """A field declared `List` with NO type argument names no element type, so its owner
+    is not a complete description of the payload (W26 review, minor 7).
+
+    The same over-claim W25 fixed one level in: `List<T>` on a raw type reported its
+    owner CLOSED while saying nothing about what the list carried. A raw `List` is the
+    degenerate case of it — there is not even a variable to fail to bind — and it read
+    closed because a missing `item` was taken for "holds nothing" rather than "holds
+    something unnamed". Only `array` changes: a `string` field genuinely holds no element.
+    """
+    facts = tmp_path / "facts"
+    _write(
+        facts / "holder.jsonl",
+        _document("holder", "Holder.java"),
+        [
+            _type("holder", HOLDER),
+            _field("holder", HOLDER, "rows", _ref("java/util/List#", "array")),
+            _field("holder", HOLDER, "label", _string()),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+
+    derive_shapes(workspace, _WITH_ACCESSORS, [HOLDER])
+    is_open = _open_of(workspace, HOLDER)
+    fields = _fields_of(workspace, HOLDER)
+    workspace.close()
+
+    # The field is still PUBLISHED — the row says `array` with no element, which is what
+    # was read. Open is about the shape's completeness, not about dropping the field.
+    assert set(fields) == {"rows", "label"}
+    assert is_open is True

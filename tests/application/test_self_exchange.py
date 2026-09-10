@@ -82,10 +82,20 @@ def _questions(workspace: DuckDbWorkspace) -> list[dict[str, object]]:
 
 
 def test_one_identity_in_both_directions_is_asked_about_not_merged(tmp_path: Path):
-    """The positive half (§10), and both of its claims.
+    """The positive half (§10): one identity claimed in both directions is a QUESTION,
+    not a merge.
 
-    The rows STAY two — that is the behaviour change, and a test that only checked the
-    question would pass with the merge still running.
+    The direction assertion below restates `_workspace`'s own two `INSERT`s — nothing
+    between them and the read can fold a row, because `record_self_exchange` only reads
+    `endpoints` and writes `open_questions`. It is kept as a statement of the invariant
+    the pass must not break, NOT as a check that the merge is gone: the docstring used to
+    claim it "would pass with the merge still running" the other way round, and that is
+    the inverse of the truth (W27 review). The merge was a statement inside
+    `derive_endpoints`, which this test never calls.
+
+    Where "the two rows stand" is genuinely pinned is against real derivation:
+    `test_endpoints.py::test_a_path_the_module_both_exposes_and_calls_stays_two_endpoints`
+    and `test_pipeline.py`'s fixture counts.
     """
     workspace = _workspace(
         tmp_path,

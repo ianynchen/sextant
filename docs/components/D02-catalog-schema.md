@@ -3139,9 +3139,19 @@ boolean, which is jackson-databind's own `findNameForIsGetter`; without the cons
 is lowercased whole before the remainder is appended (`getURL` → `url`, `getURLValue` →
 `urlvalue`).
 
-**Only public, non-static, non-synthetic, zero-argument methods with a return.** Each
-clause drops something a looser rule would publish as a wire field — `hasNext()`,
-`nextPageable()`, a private accessor, a bridge method javac generated.
+**Only public, non-static, non-synthetic, zero-argument methods that reach a wire type.**
+Each clause drops something a looser rule would publish as a wire field: a private
+accessor, a static one, a bridge method javac generated, `getScaled(String)` — and, for
+the last clause, `void getNothing()` and `Void getNothing()`, both of which reach no wire
+type at all. That last test is on the projected `wire_type` rather than on the return's
+presence or its name: the scanner always writes a `returns` reference, so "the key is
+absent" never described void, and "the symbol is `void#`" would have missed
+`java.lang.Void`.
+
+`hasNext()` and `nextPageable()` are dropped too, but by the PREFIX rule above rather than
+by any clause here — both are public, non-static, non-synthetic, zero-argument and return
+a value. This paragraph used to name them as its own examples, which credited the wrong
+rule with the work.
 
 **Accessors are collected across the scanned ancestry**, in JVMS 5.4.3.3's order, with
 the first declaration of a property name winning. `Page` declares only `getTotalPages`

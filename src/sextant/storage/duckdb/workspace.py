@@ -315,11 +315,30 @@ _NAMED_QUERIES = {
     # accessor. Pushing them down is what keeps the pass from parsing the `signature`
     # JSON of every method in the workspace — on `mall-admin` that is tens of thousands
     # of rows, and this runs once per catalog.
+    #
+    # **The no-value test is on `wire_type`, not on the key's presence**, and the first
+    # version got that wrong (W26 review). `json_type(... -> 'returns') NOT IN ('NULL')`
+    # reads as "the scanner omitted the key for a method that returns nothing", and no
+    # scanner does that: `returns` is ALWAYS written, and a no-value one is a JSON OBJECT
+    # like any other. Six such methods passed this filter on the fixture, and one named
+    # `getNothing` would have reached `shape_fields` as a field called `nothing` with
+    # `wire_type: ''` — a value outside D00 §5b's vocabulary, in the export.
+    #
+    # `wire_type = ''` is the projection's own answer for "reaches no wire type at all",
+    # and it covers both the no-value return and the uninstantiable placeholder TYPE
+    # beside it, which a test on the type's own name would have let through. Asking the
+    # projection rather than the name is also what keeps a language's spelling out of
+    # this layer (`test_language_confinement`).
+    #
+    # `visibility` is in the WHERE and NOT in the SELECT: the narrowing is this query's
+    # whole contribution over `method_declarations`, and no reader wants the value back.
+    # It was projected until W26's review, which read the comment above as saying the
+    # column travels to the caller.
     "accessor_declarations": """
-        SELECT symbol, enclosing, signature, modifiers, visibility FROM symbols
+        SELECT symbol, enclosing, signature, modifiers FROM symbols
         WHERE construct_kind = 'method'
           AND visibility = 'public'
-          AND json_type(signature -> 'returns') NOT IN ('NULL')
+          AND coalesce(signature -> 'returns' ->> 'wire_type', '') <> ''
           AND coalesce(json_array_length(signature -> 'parameters'), 0) = 0
         ORDER BY symbol
     """,

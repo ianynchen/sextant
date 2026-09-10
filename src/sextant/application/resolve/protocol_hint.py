@@ -9,10 +9,12 @@ here, once every engine has finished.
 section):
 
 1. It changes `protocol`, never `direction`. Direction is resolved at match
-   time and the inbound/outbound merge has already run by the time this pass
-   sees a row; a pass that moved direction afterwards would silently corrupt a
-   `both` row the merge had already built. A merged row reclassifies
-   WHOLESALE — one identity in, one identity out.
+   time, and a pass that moved it afterwards would be re-answering a question
+   the engine already answered from the evidence. *The reason used to be the
+   inbound/outbound merge — "would silently corrupt a `both` row the merge had
+   already built" — and W27 deleted that merge. The promise stands on its own:
+   direction comes from what the catalog matched, and nothing here looks at
+   that evidence.*
 2. It never creates or deletes an endpoint. Every row it writes is a row an
    engine already minted; the row count is identical before and after.
 3. It only ever moves a row of the SOURCE protocol its own catalog declares.
@@ -22,12 +24,14 @@ section):
    untouchable rather than merely untouched.
 
 **Where it runs, and why there** (2H design §6's amendment to D02, which said
-"runs last with `config_join`" before resolve passes existed): after the
-engines and their merge — the rows must all exist, and a merged `both` row
-must already be one row — and BEFORE `resolve_format`, so a reclassified row
-takes the format ladder under its true protocol. Rung 1 reads `protocol`
-directly; running afterwards would answer the ladder for a protocol the row
-no longer has.
+"runs last with `config_join`" before resolve passes existed): after every
+engine — the rows must all exist — and BEFORE `resolve_format`, so a
+reclassified row takes the format ladder under its true protocol. Rung 1 reads
+`protocol` directly; running afterwards would answer the ladder for a protocol
+the row no longer has. *The "and their merge" half of this went with the merge
+in W27; two passes now run BELOW it instead, `self_exchange` and
+`record_routing_conflicts`, both because `protocol` is part of the identity
+they name.*
 
 **Two evidence kinds, media first.** A row whose own declared media names the
 protocol's envelope is the cheaper and stronger read: it is the channel's own
@@ -89,23 +93,29 @@ _KEYS = (_TARGET, _MEDIA, _RETURNS)
 # stream" — and only one of the two columns can ever evidence it:
 #
 # - `produces` on an INBOUND row is what the route streams back. Evidence.
-# - `produces` carried onto a merged `both` row from the outbound twin the
-#   merge deleted is what a CALLER expects to receive. Also evidence: the
-#   thing on the wire is an event stream either way.
+# - `produces` on an OUTBOUND row is what a caller expects to receive. Also
+#   evidence: the thing on the wire is an event stream either way. *This used to
+#   read "carried onto a merged `both` row from the outbound twin the merge
+#   deleted"; W27 deleted the merge, so the outbound row is simply its own row
+#   now and the reasoning is unchanged.*
 # - `consumes`, on ANY row, means "this accepts event-stream REQUEST BODIES".
 #   That is a statement about input and is never evidence that anything serves
 #   a stream. A route declaring it is a handler being HANDED an event stream —
 #   a real, if unusual, thing to write — and reclassifying it would rename the
 #   channel after what it eats.
 #
-# Reading `consumes` on a client-side row was tempting (there it is what the
-# client RECEIVES) and is refused anyway, because after the merge the column's
-# PROVENANCE is gone: `merge_endpoints.sql` coalesces, keeping the surviving
-# inbound row's own `consumes` first, so a `both` row's `consumes` may be the
-# inbound half's "accepts" declaration or the outbound half's "receives" one
-# and nothing on the row says which. One column, one meaning, no direction
-# table — a rule that cannot be read two ways is worth more than the outbound
-# case it gives up, which no shipped catalog produces today.
+# Reading `consumes` on a client-side row was tempting — there it is what the
+# client RECEIVES — and is refused anyway: ONE COLUMN, ONE MEANING. A rule that
+# read `consumes` as "accepts" on one direction and "receives" on the other
+# would need every reader to check the direction before it could read the
+# column at all, and it buys an outbound case no shipped catalog produces.
+#
+# *The reason this once gave was the merge — `merge_endpoints.sql` coalesced,
+# so a `both` row's `consumes` might be either half's and nothing said which.
+# W27 deleted that statement and the provenance is no longer lost. The rule
+# stands on the argument above, which is the one D02 now states; the dead one is
+# recorded here rather than quietly swapped, because a rationale that has become
+# false is worse than none (§9).*
 _MEDIA_COLUMNS = ("produces",)
 
 # The row identity a reclassification is matched back onto — the same six

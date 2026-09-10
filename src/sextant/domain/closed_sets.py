@@ -146,6 +146,22 @@ class Protocol(StrEnum):
 
 
 class Direction(StrEnum):
+    """Which way a wire identity is used (D00 §4): served here, called from here, or both.
+
+    **`BOTH` has no producer, and that is stated rather than glossed** (§5.3, GUIDELINES
+    §2, and the `RootKind`/`TerminalKind` precedents below). W27 deleted
+    `merge_endpoints.sql`, the only pass that ever wrote it — it folded a declaration this
+    module can fully see together with an observation it fundamentally cannot — so a
+    module serving an address it also calls is two rows plus a `self_exchange` question
+    (F5 §6.1).
+
+    The member stays because the LINKING tier is where a schema match or a human can
+    justify one: `both` is a claim about two modules, made where both are visible, and a
+    single module's analysis is exactly the place that cannot make it. Recorded as
+    `OI-75`; this docstring, and D00 §4's own entry, exist because W27's review found
+    twelve citations pointing at a set definition that was nowhere.
+    """
+
     INBOUND = "inbound"
     OUTBOUND = "outbound"
     BOTH = "both"

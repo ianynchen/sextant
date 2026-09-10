@@ -132,12 +132,13 @@ def resolve(
     # against them does not matter — disjoint question kinds, disjoint tables.
     record_environment_divergence(workspace, declared, capabilities)
     # Between the binding and the ladder, and both sides of that are the
-    # pass's own contract (2H design §6). AFTER every engine and its merge:
-    # this pass reclassifies rows others minted, so they must all exist, and
-    # a merged `both` row must already be one row to move wholesale. BEFORE
+    # pass's own contract (2H design §6). AFTER every engine: this pass
+    # reclassifies rows others minted, so they must all exist. BEFORE
     # `resolve_format`: the ladder's rung 1 reads `protocol` directly, so a
     # row answered before it was reclassified would carry the format of a
-    # protocol it no longer has.
+    # protocol it no longer has. (The "and its merge" half of the first
+    # condition went with the merge in W27; two passes run BELOW this line
+    # now instead, and each says why on its own call.)
     apply_protocol_hints(workspace, declared)
     # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
     # question-filing passes: `protocol` is part of the identity this question names,
@@ -157,10 +158,11 @@ def resolve(
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns
     # and `scheduled_work.handler`, and every one of those is final only here.
-    # `derive_endpoints` writes the handler, the direction and the
-    # inbound/outbound merge that can turn two rows into one `both` row; the
-    # scheduled engine runs as one of its styles; and `apply_protocol_hints`
-    # RECLASSIFIES `protocol` on rows those engines already minted.
+    # `derive_endpoints` writes the handler and the direction; the scheduled
+    # engine runs as one of its styles; and `apply_protocol_hints`
+    # RECLASSIFIES `protocol` on rows those engines already minted. (It also
+    # ran an inbound/outbound merge that turned two rows into one `both` row
+    # until W27 deleted it; the columns this list depends on are unchanged.)
     #
     # **It sat above the three passes between them until the address columns
     # landed, and that was measurable rather than theoretical** (2Q close,

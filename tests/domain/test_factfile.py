@@ -8,6 +8,7 @@ integration-level coverage (`tests/storage/test_workspace.py`,
 edge-case coverage of the shared function itself."""
 
 import json
+import os
 from pathlib import Path
 
 from sextant.domain.factfile import discard_scanned_facts, redact_config_entry_line
@@ -114,12 +115,20 @@ def test_a_previous_scans_fact_file_is_retracted(tmp_path: Path):
 def test_the_same_directory_spelled_differently_is_still_this_scans_own(tmp_path: Path):
     """A workspace first written through a relative path and re-analysed through an
     absolute one still retracts — the comparison is on resolved paths, not on the
-    string the last run happened to use."""
+    string the last run happened to use.
+
+    Rooted at `tmp_path` rather than at the bare relative `_CLASSES`, which resolved
+    against whatever directory pytest was launched from and passed only because both
+    sides resolved against the same one (W26 review). The two spellings have to differ
+    in the SPELLING and agree after resolution, which is the whole claim.
+    """
     root = tmp_path / "facts"
-    stale = _fact_file(root / "com" / "acme" / "Gone.jsonl", _CLASSES)
+    relative = os.path.relpath(tmp_path / _CLASSES, Path.cwd())
+    stale = _fact_file(root / "com" / "acme" / "Gone.jsonl", relative)
 
-    discard_scanned_facts(root, Path(_CLASSES).resolve())
+    discard_scanned_facts(root, (tmp_path / _CLASSES).resolve())
 
+    assert relative != str((tmp_path / _CLASSES).resolve()), "the two spellings must differ"
     assert not stale.exists()
 
 

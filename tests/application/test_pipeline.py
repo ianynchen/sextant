@@ -3465,6 +3465,39 @@ def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(
     )
 
 
+def test_the_shipped_json_model_reads_an_interfaces_wire_contract_from_its_accessors(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """W26's shipped rule, end to end through `shape-models/json.yml` — which nothing
+    checked until its review measured it: the whole `accessors:` block could be DELETED
+    and the suite stayed green, because every assertion the wave added was a count and a
+    count is identical whether `OrderTotals` expands to three fields or to none.
+
+    `OrderTotals` is an interface, so it has no fields at all and its contract is entirely
+    in its accessors. All three near-misses the fixture file names as deliberate are
+    checked here too, against the SHIPPED entries rather than a hand-built catalog: `is`
+    on a non-boolean return is not a getter (jackson-databind's `findNameForIsGetter`
+    refuses it unless `isGettersNonBoolean` is on), `has` is not a declared prefix, and an
+    accessor takes no arguments.
+    """
+    workspace, _report = resolved_fixture
+    fields = [
+        f["wire_name"] for f in shape_fields_of(workspace, "com/acme/orders/contracts/OrderTotals#")
+    ]
+
+    assert fields == ["currency", "lineCount", "settled"]
+    # Each of these would appear under a rule one clause looser than Jackson's own.
+    for absent in ("isoCode", "oCode", "discount", "hasDiscount", "recalculate"):
+        assert absent not in fields
+    # And the shape is CLOSED: three accessors describe it completely, so it is not a gap.
+    [shape] = [
+        row
+        for row in workspace.query("shapes")
+        if row["shape_id"] == "com/acme/orders/contracts/OrderTotals#"
+    ]
+    assert shape["open"] is False
+
+
 def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):

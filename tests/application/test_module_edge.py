@@ -21,9 +21,11 @@ all, because `mall-mbg`, `mall-security` and `mall-common` declare no controller
 A shared `-web` or `-api` sibling does carry controllers and schemas. Two placements were
 wrong before this one:
 
-* **After `endpoints_merge`.** The merge folds an inbound and an outbound row for one
+* **After `endpoints_merge`.** That merge folded an inbound and an outbound row for one
   address into a single `both` row carrying the INBOUND handler, so a delete keyed on
-  that handler took the module's OWN outbound call with it — silently, no gap row.
+  that handler took the module's OWN outbound call with it — silently, no gap row. W27
+  deleted the merge (F5 §6.1), so the hazard cannot arise any more; the placement it
+  forced is still the placement, and the behaviour it protected is still pinned below.
 * **Keyed on `coalesce(handler, caller)` alone.** `schema_operations` mints rows with
   neither, by design: the schema names no code. A dependency's `.proto` published its
   service as this module's API through a route the delete could not reach.
@@ -221,16 +223,19 @@ def _outbound_catalog() -> Catalog:
 def test_a_dependency_serving_an_address_this_module_calls_keeps_the_outbound_row(
     tmp_path: Path,
 ):
-    """The merge-ordering Critical, pinned.
+    """A dependency serving an address this module CALLS must not take the module's own
+    call with it.
 
-    `endpoints_merge` folds an inbound and an outbound row for one address into a single
-    `both` row that carries the INBOUND handler. The drop therefore has to run BEFORE
-    it: keyed on a merged row's handler, a dependency serving an address this module
-    CALLS takes the module's own outbound row with it — and leaves no gap row, so
-    nothing in the output says a call was ever there.
+    This was the merge-ordering Critical: `endpoints_merge` folded an inbound and an
+    outbound row for one address into a single `both` row carrying the INBOUND handler,
+    so a delete keyed on that handler took the outbound row too — leaving no gap row, so
+    nothing in the output said a call had ever been there. W27 deleted the merge, so the
+    ordering argument is retired and the property is not. The delete still keys on
+    `coalesce(handler, caller)`, a borrowed inbound row still has to go, and this
+    module's own outbound row still has to stay — which is what is asserted here.
 
-    Here the dependency serves `/orders` and this module calls it. The module's own
-    outbound row must survive, and the dependency's inbound row must not appear.
+    The dependency serves `/orders` and this module calls it. The module's own outbound
+    row must survive, and the dependency's inbound row must not appear.
     """
     facts = tmp_path / "facts"
     caller = _MODULE + "com/acme/orders/OwnClient#fetch()."

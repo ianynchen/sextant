@@ -262,6 +262,19 @@ splitting it later is a rendering choice rather than a re-index. Measured on `ma
 the distinction the sub-field exists to make, and the question "does this call hit a
 database or a cache" could not be asked without it.
 
+**`direction`** — `inbound`, `outbound`, `both`. Which way a wire identity is used:
+served here, called from here, or both. **Twelve citations pointed at this entry before it
+existed** — the set lived only in `domain/closed_sets.py`, and W27's review found every
+"stays in D00 §4 for the linking tier" reference dangling.
+
+**`both` has no producer, and that is stated rather than left to a reader** (§5.3, the
+`entry_point` precedent below). W27 deleted `merge_endpoints.sql`, the only pass that ever
+wrote it: that merge folded a declaration this module can fully see together with an
+observation it fundamentally cannot, and a module serving an address it also calls is now
+two rows plus a `self_exchange` question. `both` stays in the set because the LINKING tier
+is where a schema match or a human can justify one — a claim about two modules, made where
+both are visible, which is exactly what a single module's analysis cannot make.
+
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
 `websocket`, `sse`, `amqp`, `pulsar`, `rsocket`. `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.

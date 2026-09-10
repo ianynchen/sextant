@@ -2607,3 +2607,33 @@ Either half may close on its own.
 **Falsified by** finding that `returns`/`ends_silently` were never meant for `call_edges`
 at all, in which case the fix is to narrow the set the way `RootKind` was narrowed from six
 to three — the precedent this issue is written against.
+
+### OI-75 — `Direction.both` has no producer
+
+**Found by** W27's review, which asked the question the repo's own precedent already
+answers for `entry_point` (`OI-22`) and nobody had asked here.
+
+**What happened.** W27 deleted `merge_endpoints.sql`, the only pass that ever wrote
+`both`. It folded a declaration this module can fully see together with an observation it
+fundamentally cannot — one module serving an address it also calls, and one module calling
+another service's copy of a shared address, are indistinguishable from inside a single
+module — so F5 §6.1 made the two rows stand and `resolve/self_exchange.py` file the
+question instead.
+
+**Consequence:** none to today's output. `both` never appears in an `endpoints` row, and
+nothing downstream branches on it in a way that would notice. It matters to a reader of the
+column, and to anyone wondering whether an absent value means "not found" or "not
+expressible here".
+
+**Why the member stays.** `both` is a claim about TWO modules, and the linking tier is
+where both are visible: a schema match or human curation can justify it there. Removing it
+would mean adding it back with the linking tier, and the set is the same set.
+
+**Closes by** the linking tier writing one, at which point this is not an issue but a
+feature. It could also close the way `RootKind` was narrowed from six to three — by
+deciding the member belongs to a different schema than this one — but that decision has not
+been made and the linking tier is the expected answer.
+
+**Falsified by** a linking design that gives the joined claim its own row kind rather than
+a direction, which would leave `both` genuinely unreachable and make narrowing the set the
+right close.

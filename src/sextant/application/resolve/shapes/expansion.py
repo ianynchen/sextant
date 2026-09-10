@@ -79,6 +79,16 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         # absent field fact, so a type whose only fields are static or `@JsonIgnore`d
         # falls back too; those are the same "we found no contract" as an interface's
         # no fields at all, and a shape with neither fields nor accessors is still open.
+        #
+        # **A type whose accessors are ALL filtered out is CLOSED with zero fields**, and
+        # that is the answer rather than a hole (W26 review raised it; measured and
+        # rejected). `_rows_of`'s only filters are `static`/`transient` and the catalog's
+        # own `ignore` list, and every one of those means the member is genuinely not on
+        # the wire — a type whose every accessor carries `@JsonIgnore` serialises as `{}`,
+        # and `{}` is a complete description. It is also exactly what the FIELD path does
+        # one line up: a class whose fields are all ignored has `base in declared` and is
+        # closed too. Making the accessor half report open would leave the two halves
+        # disagreeing about one question.
         from_accessors = False
         if descriptor is not None:
             rows = _declared_rows_of(descriptor, referenced)
@@ -204,7 +214,10 @@ def _type_parameters(workspace: Workspace) -> dict[str, list[str]]:
         symbol = bare_descriptor(str(row["symbol"]))
         if "(" in symbol:
             continue
-        declared = json.loads(str(row["type_parameters"]))
+        # A list rather than an object, so `_json_object` does not fit — the same
+        # absent-column reasoning applies and is spelled out here.
+        raw = row["type_parameters"]
+        declared = [] if raw is None else json.loads(str(raw))
         found[symbol] = [str(entry["name"]) for entry in declared if entry.get("name")]
     return found
 
@@ -325,7 +338,13 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
             {
                 "symbol": symbol,
                 "name": descriptor[len(owner) :].removesuffix("."),
-                "returns": json.loads(str(row["returns"])),
+                # `_json_object`, not a bare `json.loads`: the `fields` query projects
+                # `signature -> 'returns'` with no NOT NULL predicate, so a fact that
+                # omitted it reads back as SQL NULL and `str(None)` is `"None"` — the
+                # exact crash this helper exists for, on the path that carries every
+                # field in the workspace. Left bare until W26's review pointed out that
+                # the helper was guarding the accessor path and not this one.
+                "returns": _json_object(row["returns"]),
                 "static": bool(row["static"]),
                 "transient": bool(row["transient"]),
             }
@@ -384,11 +403,17 @@ class _Accessors:
     """Each type's bean accessors, its own and its scanned ancestors', resolved on the
     first ask and remembered (F4 §5.2, W26).
 
-    **Nothing is read until something asks.** The fallback this serves fires only where a
-    type's fields describe nothing, which most catalogs never reach — and `derive_shapes`
-    runs once per catalog, so building the map eagerly scanned every method symbol and
-    walked the whole type graph forty-odd times to answer nothing. Measured on
+    **Nothing is read until something asks**, and `derive_shapes` runs once per catalog,
+    so building the map eagerly scanned every method symbol and walked the whole type
+    graph forty-odd times before knowing whether any answer was wanted. Measured on
     `mall-admin`: eager cost 15s of a 90s resolve.
+
+    The saving is in the ORDER, not in rarity — this docstring used to add "which most
+    catalogs never reach", and W26's review measured that as false. `of` is also asked
+    from the `open` computation, once per referenced type that is neither declared nor a
+    descriptor, which is the ordinary case on any corpus reporting unexpanded types. So
+    the map really is built for most catalogs; it is built at the first ask rather than at
+    construction, which is what the measurement above is about.
 
     **Resolved per type asked about rather than per type that DECLARES an accessor**, and
     that is why `of` walks rather than reading a prebuilt dict. A first attempt keyed the
@@ -446,9 +471,13 @@ class _Accessors:
         a payload type with no fields is written on the getter. The method is where the
         annotation is, so the method is what is asked about.
 
-        The query already returns only public, zero-argument, non-`void` methods — the
-        accessor's own definition, which a shape model can narrow but never widen — so
-        what is left here is what the DECLARED prefixes decide.
+        The query already returns only public, zero-argument methods that reach a wire
+        type — the accessor's own definition, which a shape model can narrow but never
+        widen. A return that reaches NO wire type is excluded there by its empty
+        `wire_type` — the projection's own answer, which covers both the no-value return
+        and the uninstantiable placeholder type beside it; the guard that tested the
+        `returns` KEY instead let both through (W26 review). What is left here is what
+        the DECLARED prefixes decide.
         """
         if self._read is not None:
             return self._read
@@ -866,16 +895,26 @@ def _holds_an_undescribed_object(row: dict[str, Any]) -> bool:
         return True
     held = row.get("item")
     if held is None:
-        return False
+        # An ARRAY with no element descriptor is a RAW collection — `List` written with
+        # no type argument — and its element type is exactly as unnamed as the unbound
+        # variable above (W26 review). Every other `wire_type` genuinely holds nothing:
+        # a `string` or an `integer` has no element to describe and is complete as it is.
+        # Zero live instances across the fixture and the three corpora, so this closes a
+        # hole rather than changing a published answer.
+        return bool(row.get("wire_type") == "array")
     return _describes_no_object(json.loads(str(held)))
 
 
 def _describes_no_object(described: dict[str, Any]) -> bool:
-    """Whether an `item` descriptor, or anything it holds in turn, is an object with no
-    shape to point at — `List<List<T>>` is why this recurses rather than looking once."""
+    """Whether an `item` descriptor, or anything it holds in turn, describes no object it
+    could name — `List<List<T>>` is why this recurses rather than looking once."""
     if described.get("wire_type") == "object" and "shape_id" not in described:
         return True
     held = described.get("item")
+    if held is None:
+        # The nested twin of the raw-collection case above: `List<List>` is as unnamed
+        # one level down as `List` is at the top.
+        return bool(described.get("wire_type") == "array")
     return isinstance(held, dict) and _describes_no_object(held)
 
 

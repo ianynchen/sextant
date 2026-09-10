@@ -144,7 +144,7 @@ def discard_library_facts(fact_root: Path, coordinate: str | None = None) -> Non
 
 
 def discard_scanned_facts(fact_root: Path, classes_dir: Path) -> None:
-    """Remove every fact file a PREVIOUS scan of `origin_entry` left behind.
+    """Remove every fact file a PREVIOUS scan of `classes_dir` left behind.
 
     `discard_library_facts` above, generalised to the module's own classes, and for its
     own stated reason: *a fact file is written whole and never appended to, so a document
