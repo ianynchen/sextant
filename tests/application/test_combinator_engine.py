@@ -2245,6 +2245,92 @@ def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address
     assert identities == []
 
 
+_MVC_ROUTER_FUNCTIONS = "org/springframework/web/servlet/function/RouterFunctions#"
+_MVC_REQUEST_PREDICATES = "org/springframework/web/servlet/function/RequestPredicates#"
+
+
+def _shipped_mvc_router_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-mvc-router")
+
+
+def _mvc_java_route(ordinal: int, verb: str, path: str, handler: str) -> list[CallSiteFact]:
+    """The servlet twin of `_java_route`: identical call shape, `servlet` owners."""
+    predicate = 100 + ordinal * 10
+    return [
+        _site(
+            ROUTES,
+            ordinal * 2,
+            _MVC_REQUEST_PREDICATES,
+            verb,
+            result=predicate,
+            arguments=[CallArgument(kind="string", value=path)],
+        ),
+        _site(
+            ROUTES,
+            ordinal * 2 + 1,
+            _MVC_ROUTER_FUNCTIONS,
+            "route",
+            result=predicate + 5,
+            arguments=[
+                CallArgument(kind="unresolved", source=predicate),
+                CallArgument(kind="lambda", symbol=handler),
+            ],
+        ),
+    ]
+
+
+def test_the_mvc_router_catalog_reads_every_verb_the_servlet_package_declares(tmp_path: Path):
+    """W44's positive half. `org.springframework.web.servlet.function.RequestPredicates`
+    declares the same seven per-verb factories the reactive package does, each
+    `(Ljava/lang/String;)LRequestPredicate;` at spring-webmvc 6.1.6 — measured with
+    `javap -p -s` rather than assumed from the twin, which is the mistake W43 caught one
+    catalog earlier.
+
+    All seven in one tree, not one test per verb: the finding this shape exists for is
+    about the SET, and a per-verb test passes while the set is still short."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    for index, verb in enumerate(verbs):
+        facts += _mvc_java_route(index, verb, f"/{verb.lower()}", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert [(row[0], row[1]) for row in identities] == [
+        (verb, f"/{verb.lower()}") for verb in sorted(verbs)
+    ]
+    # Every one `resolved`, and every one attributed to the handler the route names —
+    # a verb read without its handler would be an address nobody serves.
+    assert {row[3] for row in identities} == {"resolved"}
+    assert {row[2].endswith("Handlers#listOrders(sig_a1).") for row in identities} == {True}
+
+
+@pytest.mark.declines("spring-mvc-router")
+@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
+def test_the_mvc_router_declines_a_reactive_owner_at_the_same_call_shape(tmp_path: Path):
+    """§10 near-miss, and it is the one this catalog could actually get wrong.
+
+    Every conjunct of the shipped rule holds — the same `route(predicate, handler)` call,
+    the same verb factory name, the same string argument, the same handler — and only the
+    PACKAGE differs: these are the reactive owners, which belong to `spring-webflux-router`.
+    A catalog written by copying its twin and forgetting an owner would match both and
+    publish a servlet row for a reactive route, or vice versa.
+
+    Nothing at all is the required answer, not "something different": the reactive twin
+    derives this tree correctly, and a second catalog deriving it as well is a duplicate
+    row for one boundary."""
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _java_route(0, "GET", "/orders", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
 def _kotlin_route(ordinal: int, verb: str, path: str, handler: str) -> CallSiteFact:
     """`coRouter { <VERB>("/x") { … } }` — the DSL's own two-argument form,
     which declares a whole route in one call (2E checkpoint (1b))."""

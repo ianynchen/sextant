@@ -113,10 +113,15 @@ matches:
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
     # `marshalSendAndReceive(String uri, Object payload)` — the URI-literal
-    # overload. Deliberately NO `body_arg`: the payload argument is a bare
-    # `parameter`, which names no value (`arguments._UNREAD_KINDS`), so a
-    # declared body capture would fail on exactly the rows whose payload the
-    # identity rule DID read (checkpoint ruling I1). The rule supplies both.
+    # overload. NO `body_arg`, and the reason has changed under it: the payload
+    # argument is a bare `parameter`, and a declared body capture over one used
+    # to FAIL, dropping the row's `resolution` on exactly the rows whose payload
+    # the identity rule DID read (checkpoint ruling I1). `OI-77` removed that —
+    # a body capture reading a parameter now resolves to the type the caller's
+    # own signature declares, and `_capture_resolved` asks what the capture
+    # produced rather than what kind it read. So declaring `body_arg` here would
+    # work today; it stays undeclared because the identity rule already supplies
+    # both, and a second source for one column is a second answer to reconcile.
     #
     # THE OVERLOAD COLLISION, CLOSED (descriptor sweep R1) — and the comment
     # that stood here was FALSE, which is worse than the bug it described.

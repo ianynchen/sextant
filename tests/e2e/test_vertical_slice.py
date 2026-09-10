@@ -196,11 +196,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
     # unit tests that exist hand-build the coverage dict and cannot see the composition.
     # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
-    assert "Calls whose callee body this workspace read: 465 of 1436 (32%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1434." in document
+    assert "Calls whose callee body this workspace read: 468 of 1462 (32%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1460." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 320."
+        "inherited 2, owner_not_scanned 332."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -209,19 +209,25 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `Object` — `convertAndSend` is declared on `MessageSendingOperations<D>` and `D`
     # erases, which is why a rule mirrored from `KafkaTemplate.send(String, V)` would
     # have matched nothing at all.
-    # The format column reads `json (assumed)` rather than `unresolved` because `OI-77`
-    # closed in the same commit: the payload is handed through from `announce`'s own
-    # parameter, so the row now carries `OrderView` and the ladder has a declared type to
-    # answer off. The row's own `resolution` is still `unresolved` — a destination is a
-    # value and the payload is a type, which is the whole distinction.
+    # Two columns moved with `OI-77`, and they are different questions. The FORMAT reads
+    # `json (assumed)` because the payload is handed through from `announce`'s own
+    # parameter, so the row carries `OrderView` and the ladder has a declared type to
+    # answer off. The row's own RESOLUTION reads `resolved` because both captures this row
+    # declares were read — the destination from its string literal, the payload's type from
+    # the caller's signature. It answered `unresolved` while the payload column was NULL,
+    # which was then the only place that fact could be stated.
     assert (
         "`websocket /topic/order-announced` | unresolved | "
         "`com/example/orders/ws/OrderStompPublisher#announce(sig_7cebbae5).` | "
-        "json (assumed) | unresolved |"
+        "json (assumed) | resolved |"
     ) in document
     # The default-destination overload takes no destination argument at all, so the
     # boundary is published with its address stated as unresolved rather than dropped —
     # `KafkaTemplate.sendDefault`'s own answer, one framework along.
+    # And the default-destination row stays `unresolved`, which is the pair that makes the
+    # distinction legible: it takes NO destination argument at all, so a capture really did
+    # fail here — the template's configuration carries the address and nothing in this
+    # module states it.
     assert (
         "`websocket (unresolved)` | unresolved | "
         "`com/example/orders/ws/OrderStompPublisher#announceToDefault(sig_7cebbae5).` | "
@@ -486,7 +492,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # envelope lives in a jar this fixture opts into scanning nowhere.
         # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
         # verb, which Spring registers because `params`/`headers` separate them.
-        "http": 51,
+        # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
+        "http": 54,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -683,8 +690,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 55 outbound since W27's review: six second callers the dedup had been deleting
     # (F5 §6.1 rule 1). Inbound is untouched — that key always carried the handler.
     # W43: +2 outbound — 57 — the two `SimpMessagingTemplate.convertAndSend` calls
-    # that close G-33's asymmetry, for a 160-endpoint total.
-    assert rows == [("inbound", 103), ("outbound", 57)]
+    # that close G-33's asymmetry.
+    # W44: +3 inbound — 106 — the three `/mvcfn` Spring MVC functional routes that close
+    # G-29, for a 163-endpoint total.
+    assert rows == [("inbound", 106), ("outbound", 57)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -1478,7 +1487,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # responses whose envelope nothing here can expand.
     # + 1: W28's `RoutingConditionsController`.
     # + 1: W43's `ws/OrderStompPublisher` — the outbound half of the STOMP surface.
-    assert (None, 130) in origins
+    # + 2: W44's `mvcroutes/` pair — Spring MVC functional routing.
+    assert (None, 132) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

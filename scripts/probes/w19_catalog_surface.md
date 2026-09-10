@@ -102,6 +102,9 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | 20 | — | **11 of 20** |
 | G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | 14 | **3 of 14** |
 | G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | 3 | **3 of 3** |
+| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | 6 | **1 of 6** |
+| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
+| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | 8 | **1 of 8** |
 | G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
 | G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | **1 of 29** |
 | G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **0 of 28** |
@@ -132,6 +135,9 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-pubsub` | `PubSubTemplate` | 9 | **0** | **0** | **0** | **0** |
 | `spring-stomp-template` | `SimpMessagingTemplate` | 11 | **1** | **0** | **0** | **1** |
 | `spring-stomp-template` | `SimpMessageSendingOperations` | 0 | **0** | **0** | **0** | **0** |
+| `spring-mvc-router` | `RouterFunctions` | 5 | **2** | **0** | **3** | **5** |
+| `spring-mvc-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
+| `spring-webflux-router` | `RouterFunctions` | 7 | **2** | **0** | **5** | **7** |
 | `spring-webflux-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
 | `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | **0** | **25** | **0** | **25** |
@@ -167,6 +173,24 @@ A raw ratio overstates every gap here: most of what a template class declares is
 > by name at argument 0 (1): `setUserDestinationPrefix`
 
 **`spring-stomp-template` / `SimpMessageSendingOperations`** — no unread method addresses a wire by either style.
+
+**`spring-mvc-router` / `RouterFunctions`**
+
+> by name at argument 0 (2): `resourceLookupFunction`, `resources`
+
+> by declaring a route (3): `changeParser`, `resource`, `route`
+
+**`spring-mvc-router` / `RouterFunctions$Builder`**
+
+> by name at argument 0 (10): `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`, `POST`, `PUT`, `path`, `resources`, `withAttribute`
+
+> by declaring a route (11): `DELETE`, `GET`, `HEAD`, `OPTIONS`, `PATCH`, `POST`, `PUT`, `add`, `nest`, `resource`, `route`
+
+**`spring-webflux-router` / `RouterFunctions`**
+
+> by name at argument 0 (2): `resourceLookupFunction`, `resources`
+
+> by declaring a route (5): `changeParser`, `resource`, `route`, `toHttpHandler`, `toWebHandler`
 
 **`spring-webflux-router` / `RouterFunctions$Builder`**
 
@@ -244,6 +268,39 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receiveMany` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `sendMany` | `argument 0` |
 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `setUserDestinationPrefix` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `resourceLookupFunction` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `resources` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `changeParser` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `resource` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `route` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `DELETE` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `GET` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `HEAD` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `OPTIONS` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `PATCH` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `POST` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `PUT` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `path` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `resources` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `withAttribute` | `argument 0` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `DELETE` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `GET` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `HEAD` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `OPTIONS` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `PATCH` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `POST` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `PUT` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `add` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `nest` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `resource` | `route declaration` |
+| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions$Builder` | `route` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `resourceLookupFunction` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `resources` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `changeParser` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `resource` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `route` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `toHttpHandler` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions` | `toWebHandler` | `route declaration` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `DELETE` | `argument 0` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `GET` | `argument 0` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctions$Builder` | `HEAD` | `argument 0` |

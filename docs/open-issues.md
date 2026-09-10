@@ -2660,7 +2660,7 @@ own comment enumerates what falls through as *"`unresolved`, `null`, `lambda`"*,
 `parameter` is not in that list, which is what makes this look like an omission rather than
 a decision: the kind is simply not handled.
 
-**Measured.** On the fixture, **24 of 27 outbound `single_call` rows carry no request shape**
+**Measured.** On the fixture, **24 of 27 outbound rows carry no request shape**
 — `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`,
 `spring-kafka-message` and `spring-stomp-template`. The three that do carry one all pass a
 `new` expression: `restTemplate.exchange(..., new HttpEntity<>(new OrderRequest()), ...)`
@@ -2688,8 +2688,11 @@ is derived from a signature.
 
 **CLOSED in the same commit that found it.** `CallFacts` carries the caller's own declared
 parameters, and `_reference_of` answers a `parameter` argument with the `type` member of the
-one it names. Re-measured on the fixture: **3 of 27 outbound `single_call` rows carried a
-payload, and 21 do.** The six that still do not have no body capture at all — a
+one it names. Re-measured on the fixture: **3 of 27 outbound rows carried a payload, and 21
+do.** *Both counts span the `single_call` AND `fluent` engines: `spring-kafka-message` and
+`aws-sqs-sdk` declare `style: fluent`, so counting `single_call` alone it is 3 of 25 and 19
+of 25. The figure was published as "27 outbound `single_call` rows" and the arithmetic was
+right while the label was not (W43's review).* The six that still do not have no body capture at all — a
 `send(Message)` whose payload rides inside the message — which is a different question and
 not this one.
 

@@ -73,6 +73,47 @@ here would restate those documents rather than add anything.
   the manifest and the rendered `## Coverage` — composed by one function on both paths,
   since `render` reads the workspace back rather than re-resolving.
 
+- **A row carrying a payload no longer calls itself unresolved** (`OI-77`'s second half,
+  found by W43's review). `_capture_resolved` failed a declared body capture whose argument
+  was a bare `parameter`, and the whole justification was that the payload column stayed
+  NULL either way — so the ROW was the only place a read failure could be recorded. Once
+  the column is filled, that premise is gone and the row claims a failure that did not
+  happen. The estate proved it inconsistent inside one fixture: `spring-ws-template` reads
+  a parameter payload through `path_from_argument_type` and answers `resolved`, while every
+  other outbound catalog answered `unresolved` for the identical fact. `_capture_resolved`
+  now asks what a capture PRODUCED rather than what kind it read. Measured: no outbound row
+  with a resolved address and a real payload still reads `unresolved` — there were eight.
+  An ADDRESS capture is untouched, because a destination IS its value.
+
+- **Spring MVC functional routing derives** (F10 §11, `G-29`, W44). `spring-webflux-router`
+  has read functional routing since 2E and only the REACTIVE package, so a servlet
+  application using the same DSL derived nothing at all — its whole routing surface absent,
+  with nothing saying so. `spring-mvc-router.yml` reads
+  `org.springframework.web.servlet.function`: the argument-rooted
+  `RouterFunctions.route(predicate, handler)`, `nest`, all seven `RequestPredicates` verb
+  factories, the media predicates, and Kotlin's `router { }`.
+  **Measured against spring-webmvc 6.1.6 rather than mirrored from the twin**, which is the
+  discipline W43 had just made the case for: the two packages really are structurally
+  identical here, and the one thing a copy would have got wrong is the Kotlin entry point —
+  `router`, not `coRouter`. Live on the fixture: `GET /mvcfn/invoices` carrying `produces`,
+  `POST /mvcfn/invoices` carrying `consumes`, and `PUT /mvcfn/invoices/{id}`.
+  **Two defects in the EXISTING reactive catalog fell out of measuring instead of copying.**
+  It declared `accept` alone for the Kotlin DSL, on the stated ground that *"Kotlin only
+  declares `accept`… no `contentType` call exists anywhere in the checkpoint's Kotlin
+  scan"* — the second half is about a fixture and true, the first is about the framework
+  and false: `CoRouterFunctionDsl` declares `contentType` too, two overloads. That is §8.1
+  rule 1's failure, the examples in front of the author encoded as the framework's rule.
+  And neither catalog declared `andOther`, which merges a whole router of a different
+  response type along `and`'s exact signature — undeclared, every route merged that way was
+  lost. Neither had a live instance in any fixture or corpus, so nothing published was
+  wrong; both are under-reports, and both are closed.
+  The surface enumeration gained `RouterFunctions` itself on both sides: only `$Builder`
+  was enumerated, so `route()`, `resource`, `resources`, `resourceLookupFunction` and
+  `changeParser` sat outside the slice AND outside the enumeration — the one place a reader
+  could not have found them. The builder DSL stays outside both catalogs, 0 of 20 each, and
+  that is engine work (`G-37`): this grammar roots a route at an argument or a lambda body
+  and has no word for a receiver chain.
+
 - **A service that sends STOMP is published sending it** (F10 §11, `G-33`, W43). The
   inbound half — `@MessageMapping`, `@SubscribeMapping`, the `@SendTo` reply — has shipped
   since 2H, and nothing read the outbound half at all, so a service doing both was published
@@ -99,8 +140,9 @@ here would restate those documents rather than add anything.
   `{"kind": "parameter"}`, which names no type of its own, and `_reference_of` answered for
   a class literal, a scalar and an `instance` and returned nothing for that — even though
   the type is stated in the CALLER's own signature. `CallFacts` carries those parameters
-  now. Measured before and after on the fixture: **3 of its 27 outbound `single_call` rows
-  carried a payload, and 21 do**, across six catalogs. The six that still do not have no
+  now. Measured before and after on the fixture: **3 of the fixture's 27 outbound rows across the
+  `single_call` AND `fluent` engines carried a payload, and 21 do — 3 of 25 and 19 of 25
+  counting `single_call` alone, since `spring-kafka-message` and `aws-sqs-sdk` are `fluent`**, across six catalogs. The six that still do not have no
   body capture at all. The DESTINATION half is deliberately untouched — a destination IS
   its value and a value lives in whatever called the method, so `parameter` stays in
   `_UNREAD_KINDS` and a `channel_arg` reading one is still `unresolved`. `OI-77`, closed.

@@ -100,7 +100,9 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     return arguments[index]
 
 
-def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
+def _capture_resolved(
+    declared: bool, argument: dict[str, Any] | None, resolved_to: str | None = None
+) -> bool:
     """Whether a DECLARED capture (checkpoint ruling I1) read something the
     scanner could resolve.
 
@@ -128,8 +130,25 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
     with the string literal its expression names, so a resolved field never
     reaches this test as a `field` at all; where it does not, a payload
     column would stay NULL on a row still claiming `resolved` — the one
-    thing D01 §3's amended disambiguation exists to prevent."""
+    thing D01 §3's amended disambiguation exists to prevent.
+
+    **`resolved_to` is what the capture actually produced, and it is the whole
+    of the exception** (W43's review, after `OI-77`). The paragraph above
+    turns on "the payload column stays NULL either way, so the ROW is the only
+    place to disambiguate". Once a body capture read from a `parameter` fills
+    that column with a real descriptor, the premise is gone: the column says
+    what was read, and a row still answering `unresolved` claims a read
+    failure that did not happen. The estate proved it inconsistent in one
+    fixture — `spring-ws-template` reads a parameter payload through
+    `path_from_argument_type` and answers `resolved`, while every other
+    outbound catalog answered `unresolved` for the identical fact.
+
+    An ADDRESS capture is untouched and still fails on a `parameter`, because
+    a destination IS its value and no descriptor is produced for one — the
+    caller passes `resolved_to=None` there, which is the default."""
     if not declared:
+        return True
+    if resolved_to is not None:
         return True
     return argument is not None and argument.get("kind") not in _UNREAD_KINDS
 
@@ -146,9 +165,12 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
 # wherever the field was assigned (2F design §4's ladder is the only thing
 # that can answer it), and a parameter, whose value lives in whatever called
 # this method (2G). `parameter` joined this set the day the kind existed: it
-# is the same fact `unresolved` used to state less precisely, so a row it
-# feeds must keep the resolution it has always had rather than start claiming
-# `resolved` over a NULL payload column.
+# is the same fact `unresolved` used to state less precisely.
+#
+# **This set is about a VALUE, and every member still belongs in it for an
+# ADDRESS capture.** A body capture reading a parameter no longer fails, and
+# that is not a change to this set — it is `_capture_resolved`'s `resolved_to`,
+# which asks what the capture produced rather than what kind it read.
 _UNREAD_KINDS = ("unresolved", "field", "parameter", "concat")
 
 
@@ -891,6 +913,11 @@ def argument_descriptor(
       further, and never where no `call_wrappers` entry matches;
     - a bare `instance` roots at the object (or known-type) descriptor for
       its own concrete type;
+    - a `parameter` roots at the type the CALLER's own signature declares for it
+      (`OI-77`): a payload handed straight through names no type of its own, and the
+      signature is where the type is stated. A DESTINATION read from a parameter is
+      still unread — that asks for the value, and the value lives in whatever called
+      this method;
     - anything else resolves to no payload — the row still derives (D02 §2's
       `single_call` rule), only the descriptor is absent.
     """

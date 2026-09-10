@@ -66,6 +66,10 @@ _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE = frozenset(
     {
         ("spring-webflux-router", "route"),
         ("spring-webflux-router", "nest"),
+        # W44's servlet twin, for the identical reason — the engine, not the catalog,
+        # is what has no `descriptor` key. Both files say so beside the entry.
+        ("spring-mvc-router", "route"),
+        ("spring-mvc-router", "nest"),
     }
 )
 

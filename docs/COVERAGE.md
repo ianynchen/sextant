@@ -682,7 +682,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**40 of 58 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**41 of 59 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -711,6 +711,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-kafka-replying` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka-template` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka` | `org.springframework.kafka:spring-kafka` | 3.1.4, 4.1.1 |
+| `spring-mvc-router` | `org.springframework:spring-webmvc` | 6.1.6 |
 | `spring-mvc` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
 |  | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-pubsub` | `com.google.cloud:spring-cloud-gcp-pubsub` | 5.1.2 |
@@ -776,7 +777,7 @@ breath that it looks perfect. It does. Measured:**
 | `mall-admin` | 24,591 | **100% resolved** | 19,239 (78%) |
 | `jhipster-sample-app` | 1,686 | **100% resolved** | 545 (32%) |
 | `spring-petclinic-rest` | 3,045 | 2,977 resolved, 68 narrowed | 971 (32%) |
-| `orders-service` (fixture) | 1,433 | 1,431 resolved, 2 narrowed | 465 (32%) |
+| `orders-service` (fixture) | 1,462 | 1,460 resolved, 2 narrowed | 468 (32%) |
 
 Each `body READ` percentage is the instrument's own — `round`, as `document.py` prints it.
 *Petclinic's read 31% here for one release: 971/3,045 is 31.9, and truncating instead of
@@ -805,7 +806,7 @@ their own key names.
   ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
   RESOLVED`, so a third bucket is impossible by construction.
 - **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (320 of the fixture's 546 METHODS, 425 of
+  `owner_not_scanned` is a scanning decision (332 of the fixture's 558 METHODS, 425 of
   jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
   has one.
 
@@ -1567,6 +1568,9 @@ owner's declared methods out of the jar and cross-references the catalog as load
 | `spring-sqs-template` | `SqsOperations` | **1 of 4** | 3 |
 | `spring-pubsub` | `PubSubTemplate` (spring-cloud-gcp-pubsub 5.1.2) | **11 of 20** | 0 |
 | `spring-webflux-router` | `RouterFunctions$Builder` (spring-webflux 6.1.6) | **0 of 20** | 14 |
+| `spring-webflux-router` | `RouterFunctions` (spring-webflux 6.1.6) | **1 of 8** | 7 |
+| `spring-mvc-router` | `RouterFunctions$Builder` (spring-webmvc 6.1.6) | **0 of 20** | 14 |
+| `spring-mvc-router` | `RouterFunctions` (spring-webmvc 6.1.6) | **1 of 6** | 5 |
 | `aws-sqs-sdk` | `SqsClient` (sqs 2.25.31) | **1 of 29** | 24 |
 | `aws-sqs-sdk` | `SqsAsyncClient` | **0 of 28** | 25 |
 
@@ -1970,6 +1974,8 @@ arrive there.
 | Java | WebFlux `Mono`/`Flux` return types | response shape roots through the declared wrapper ([D02](components/D02-catalog-schema.md) §2a) | — | ✅ shipped |
 | Java | **Vert.x** `router.get("/x").handler(this::h)` | receiver + verb + first arg | `fluent_chain` | **B — the cleanest first exercise for chain reconstruction** |
 | Java | WebFlux functional `RouterFunctions.route(RequestPredicates.GET("/x"), h)`, `coRouter { GET("/x") { … } }` | the static predicate factory attached by `RouterFunctions.route`, and the coroutine DSL's own two-argument form | `combinator` | ✅ shipped — all seven verbs on each, since `A-M9` |
+| Java | **Spring MVC** functional `RouterFunctions.route(RequestPredicates.GET("/x"), h)`, Kotlin's `router { GET("/x") { … } }` | the same two DSLs one package along, in `org.springframework.web.servlet.function` | `combinator` | ✅ **shipped** (W44, `G-29`). A servlet application using functional routing derived NOTHING before this — its whole routing surface absent, with nothing saying so, while the reactive twin had shipped since 2E. **Measured against spring-webmvc 6.1.6 rather than mirrored**: the two packages really are structurally identical here, and W43 is the cautionary case where a twin's own descriptor was wrong for its sibling. The one thing a copy would have got wrong is the Kotlin entry point, which is `router`, not `coRouter`. Live on the fixture: `GET /mvcfn/invoices` with `produces`, `POST /mvcfn/invoices` with `consumes`, and `PUT /mvcfn/invoices/{id}` |
+| Java | Either package's `RouterFunctions.route()` **builder** DSL | the verb sits on a RECEIVER returned by an argument-less `route()` | `combinator` | **Boundary — derives nothing, on both sides.** 0 of the 20 methods `RouterFunctions$Builder` declares, in each package. This grammar roots a route at an ARGUMENT or in a lambda BODY and has no word for a receiver chain, so closing it is engine work (`G-37`) rather than a catalog addition — and `route()` has been the reference documentation's recommended Java shape since Spring 5.2, so it is plausibly the majority of real functional routers on both sides |
 | Java | WebFlux functional — the BUILDER DSL, `RouterFunctions.route().GET("/orders", h)` | `RouterFunctions$Builder` declares seven verbs x four overloads (`javap`, spring-webflux 6.1.6) | `combinator` | **Boundary — derives NOTHING.** Undeclared in `spring-webflux-router.yml`, unmentioned in any probe. **This row used to say "✅ shipped" and name this exact call**; it never was. The catalog's `entries` are argument-rooted (`RouterFunctions.route(predicate, handler)`) or body-linked (`coRouter`), and a builder is neither — the verb call sits on a RECEIVER returned by an argument-less `route()`, which this grammar has no word for. Closing it is engine work plus a probe of which overload position carries the path. **Falsified by** any module using the builder form: its whole functional routing surface is absent |
 | Java | WebFlux functional — a route whose only predicate is a media or header constraint, e.g. `route(accept(APPLICATION_JSON), h)` | such a route IS served, at every path matching that constraint; this grammar reads a verb and an address and neither is present | `combinator` | **Boundary — derives NOTHING, since `derive_call_endpoints.sql` gained the addresses-nothing gate** (a `resolved` row with a NULL path and no peer). It used to derive an inbound-HTTP row with a NULL method AND a NULL path at `resolved`/`compiler` — an endpoint naming no endpoint, presented as observed — and NULL paths skip the insert's dedup key, so N such routes inserted N undeduped rows. Silence is the honest answer for an address we cannot express. **Falsified by** any such route appearing in an export; closes when the `combinator` vocabulary can express a constraint-only route's address |
 | Java | WebFlux functional — the non-coroutine Kotlin DSL, `router { GET("/x") { … } }` | `RouterFunctionDslKt.router` and `RouterFunctionDsl`'s seven verbs x five overloads (`javap`, spring-webflux 6.1.6) | `combinator` | **Boundary — derives NOTHING.** `spring-webflux-router.yml` declares `CoRouterFunctionDslKt.coRouter` and its `CoRouterFunctionDsl` verbs only. The two DSLs are structurally identical, so this is a catalog addition rather than engine work — but no probe has read `RouterFunctionDsl`'s call-site shape, and the coroutine one's was read by 2E checkpoint (1b) rather than assumed. **Falsified by** a Kotlin module using `router { }` rather than `coRouter { }` |
@@ -2528,7 +2534,7 @@ matchable exactly like a Kafka topic; `/ws` on its own tells us nothing.
 | Java | Spring STOMP `SimpMessagingTemplate.convertAndSend` — the OUTBOUND half | a `single_call`, `KafkaTemplate.send`'s own shape one framework along | `call_site` | ✅ **shipped** (W43, `G-33`). Before it a service that both received and sent STOMP was published with half its messaging surface and nothing saying which half. **The descriptor could not be mirrored from its twin**: `convertAndSend` is declared on `MessageSendingOperations<D>`, `D` erases to `java.lang.Object`, and `SimpMessagingTemplate` declares no bridge — so a real call site written `convertAndSend("/topic/orders", payload)` compiles to `(Ljava/lang/Object;Ljava/lang/Object;)V`, and the `(Ljava/lang/String;Ljava/lang/Object;)V` a copy of `KafkaTemplate.send(String, V)` would have declared matches NOTHING. Compiled and read at spring-messaging 6.1.6 rather than reasoned about, and that String descriptor is the near-miss the suite pins. Six `convertAndSend` overloads, two `send`, four `convertAndSendToUser`; reads 3 of the 14 methods `SimpMessagingTemplate` declares and 3 of `SimpMessageSendingOperations`' 3, with the one unread addressable method named in the slice |
 | Java | The same, to a DEFAULT destination — `convertAndSend(payload)` | no destination argument at all; the template's configuration carries it | `call_site` | ✅ shipped — `path` NULL at `unresolved`, `KafkaTemplate.sendDefault`'s own answer. The boundary is published and its address says outright it was not resolved, rather than the call vanishing |
 | Java | `convertAndSendToUser(user, destination, payload)` | Spring's `UserDestinationMessageHandler` rewrites the destination before the broker sees it | `call_site` | **Boundary — the row ships, the address does not.** The literal at argument 1 is NOT what is published: publishing `/queue/orders` would name an address no subscriber holds, which is an OVER-report and worse than silence because it looks resolved. So these four overloads capture the payload and leave `path` NULL at `unresolved`. **Falsified by** a measurement of the handler's own composition, which is what would let them carry a destination |
-| Any | An outbound `single_call` row whose payload is a method PARAMETER | the type is stated in the CALLER's own signature and nowhere else | `call_site` | ✅ **shipped** (`OI-77`, closed in W43's own commit). Found while checking W43's new rows against their siblings: `_reference_of` read a payload type from a class literal, a scalar or an `instance`, and a `parameter` named none of them — so a payload handed straight through (`send(OrderEvent event)` calling `template.send(topic, event)`) shipped with no contract at all. Measured before and after on the fixture: **3 of 27 outbound `single_call` rows carried a payload, and 21 do**, across `spring-resttemplate`, `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`, `spring-kafka-message` and this file. The six that still do not are rows with no body capture at all — a `send(Message)` whose payload rides inside the message. **The DESTINATION read from a parameter is unchanged and still `unresolved`**: a destination IS its value, and a value lives in whatever called the method; a contract needs the TYPE, which is a different question |
+| Any | An outbound `single_call` row whose payload is a method PARAMETER | the type is stated in the CALLER's own signature and nowhere else | `call_site` | ✅ **shipped** (`OI-77`, closed in W43's own commit). Found while checking W43's new rows against their siblings: `_reference_of` read a payload type from a class literal, a scalar or an `instance`, and a `parameter` named none of them — so a payload handed straight through (`send(OrderEvent event)` calling `template.send(topic, event)`) shipped with no contract at all. Measured before and after on the fixture: **3 of 27 outbound rows carried a payload, and 21 do** — across the `single_call` and `fluent` engines both; counting `single_call` alone it is 3 of 25 and 19 of 25, because `spring-kafka-message` and `aws-sqs-sdk` are `fluent` files, across `spring-resttemplate`, `spring-kafka-template`, `spring-jms-template`, `spring-pubsub`, `kafka-clients`, `spring-kafka-message` and this file. The six that still do not are rows with no body capture at all — a `send(Message)` whose payload rides inside the message. **The DESTINATION read from a parameter is unchanged and still `unresolved`**: a destination IS its value, and a value lives in whatever called the method; a contract needs the TYPE, which is a different question |
 | Java | Spring `registerWebSocketHandlers(registry).addHandler(h, "/ws")` | programmatic — the path is a literal argument, not a chain | `registration_call` | ✅ shipped as a catalog, with **no live fixture surface** (below) |
 | Go | `gorilla/websocket` `upgrader.Upgrade(w, r, nil)` | **the protocol is decided by a call *inside* the HTTP handler**, not by the route registration | `registration_call` in a body | B |
 | TS | NestJS `@WebSocketGateway()` + `@SubscribeMessage("event")` | annotation | `annotation` | A |
@@ -3220,7 +3226,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 
 Not a protocol, and not a library: a thing the COMPILER emits that a reader of the class
 file has to recognise. **Nothing in this section is measured against a corpus**: the six under `examples/` and the fixture contain **zero `.kt` files** between them, so every Kotlin row below is read from the class-file format and from `extractor-jvm`'s own tests, never from a scanned Kotlin module. That is the honest state and it is why the levels are what they are. Kotlin is where this axis earns its keep — §5.1 to §5.12 hold **0
-Kotlin rows out of 171** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
+Kotlin rows out of 176** while `coverage_matrix.py` aliases Kotlin to Java, so the matrix
 has been asserting a parity nobody measured.
 
 | Construct | What the class file holds | Committed at | Support |

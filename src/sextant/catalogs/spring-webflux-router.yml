@@ -198,12 +198,22 @@ matches:
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
         method: contentType
         fills: consumes
-      # Kotlin only declares `accept` (checkpoint (1b)'s one media call site);
-      # no `contentType` call exists anywhere in the checkpoint's Kotlin scan,
-      # so none is declared here.
+      # BOTH. *This block held `accept` alone, on the stated reason that "Kotlin only
+      # declares `accept`… no `contentType` call exists anywhere in the checkpoint's
+      # Kotlin scan". The second half is true and is about a FIXTURE; the first half is
+      # about the framework and is false — `CoRouterFunctionDsl` declares `contentType`
+      # too, two overloads, at spring-webflux 6.1.6 (`javap -p`). That is §8.1 rule 1's
+      # failure: the examples in front of the author encoded as the framework's rule.
+      # Found in W44 while measuring the servlet twin rather than copying it.*
+      #
+      # No live instance in any fixture or corpus, so nothing published was wrong — a
+      # Kotlin reactive route guarded by `contentType(JSON)` simply read NULL `consumes`.
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: accept
         fills: produces
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: contentType
+        fills: consumes
 
     # 2E checkpoint (3)/F1, frozen ruling: every `accept`/`contentType` call
     # in the fixture — Java and Kotlin alike — is a vararg
@@ -263,6 +273,11 @@ matches:
       path_arg: 0
       subtree_arg: 1
     - { name: and, owner: org.springframework.web.reactive.function.server.RouterFunction }
+    # `andOther` merges a router whose response type differs, and it has `and`'s exact
+    # signature — `(LRouterFunction;)LRouterFunction;` on this same interface. Undeclared
+    # until W44, so every route merged that way was lost. No live instance here either;
+    # found by reading the interface rather than the fixture.
+    - { name: andOther, owner: org.springframework.web.reactive.function.server.RouterFunction }
 
 # Harvest compatibility (Task 9 ruling): copied verbatim from spring-web.yml
 # rather than re-declared, so an outbound-shapes join never has to reconcile
@@ -307,6 +322,34 @@ shape_model: json
 # closing it is engine work and not a catalog addition.
 slice:
   outside:
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [route]
+      why: >
+        The ARGUMENT-LESS `route()` — the builder DSL's entry point, which returns a
+        `RouterFunctions$Builder` for every method in the block below. This catalog reads
+        the two-argument `route(predicate, handler)` at the same name and cannot read
+        this one, because a builder verb sits on a RECEIVER rather than in an argument or
+        a lambda body. `G-37`, and engine work.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [resource, resources, resourceLookupFunction]
+      why: >
+        Serve static resources under a pattern or a lookup function. Served routes, and
+        arguably boundaries — but each names a resource LOCATION rather than a handler,
+        and this analysis has no row shape for "these bytes are served here". Left
+        outside deliberately, the same ruling the builder's own `resources` takes.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [changeParser]
+      why: >
+        Swaps the `PathPatternParser` a whole router tree matches with. It changes how
+        addresses are PARSED rather than declaring one, and it appears in the enumeration
+        only because it takes a router as its first argument.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [toHttpHandler, toWebHandler]
+      why: >
+        Adapt a whole router into the reactive server's own handler types. They declare
+        no address and serve nothing new — they are how an assembled tree is MOUNTED —
+        and they appear in the enumeration only because their first argument is a router.
+        The servlet package declares neither.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
       method_names: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
       why: >

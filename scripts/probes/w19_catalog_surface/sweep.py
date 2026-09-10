@@ -159,6 +159,35 @@ SURFACES = (
         "6.1.6",
         "G-33",
     ),
+    # W44's servlet twin, enumerated for the same reason: the builder DSL is outside both
+    # catalogs and a reader must be able to see how much.
+    #
+    # BOTH owners, and the reactive twin gains its own `RouterFunctions` row below for the
+    # same reason. Only `RouterFunctions$Builder` was enumerated before, so the five
+    # addressable methods `RouterFunctions` itself declares — `route()`, `resource`,
+    # `resources`, `resourceLookupFunction`, `changeParser` — sat outside the slice AND
+    # outside the enumeration, which is the one place a reader cannot find them.
+    Surface(
+        "spring-mvc-router",
+        "org.springframework.web.servlet.function.RouterFunctions",
+        "org.springframework:spring-webmvc",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-mvc-router",
+        "org.springframework.web.servlet.function.RouterFunctions$Builder",
+        "org.springframework:spring-webmvc",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-webflux-router",
+        "org.springframework.web.reactive.function.server.RouterFunctions",
+        "org.springframework:spring-webflux",
+        "6.1.6",
+        "G-37",
+    ),
     Surface(
         "spring-webflux-router",
         "org.springframework.web.reactive.function.server.RouterFunctions$Builder",

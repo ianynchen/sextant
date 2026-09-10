@@ -1,0 +1,260 @@
+id: spring-mvc-router
+displayName: Spring MVC (functional routing)
+style: combinator
+protocol: http
+direction: inbound
+
+# THE ASYMMETRY THIS CLOSES (F10 §11, `G-29`, W44). `spring-webflux-router.yml` has read
+# functional routing since 2E and only the REACTIVE package: `org.springframework.web.
+# reactive.function.server`. Spring MVC ships the same two DSLs under
+# `org.springframework.web.servlet.function`, and a servlet application using them derived
+# nothing at all — its whole functional routing surface absent, with nothing saying so.
+#
+# **Measured against the jar, not mirrored from the twin.** The two packages really are
+# structurally identical here, and that is a MEASUREMENT rather than an assumption — W43
+# is the cautionary case, where the twin's own descriptor was wrong for its sibling.
+# Read out of spring-webmvc 6.1.6 with `javap -p -s`:
+#
+#   * `RouterFunctions.route(RequestPredicate, HandlerFunction)` and
+#     `nest(RequestPredicate, RouterFunction)` — the same two-argument static pair.
+#   * `RequestPredicates` declares the same SEVEN verb factories, each
+#     `(Ljava/lang/String;)LRequestPredicate;`, plus `path`, and `accept`/`contentType`
+#     as `MediaType...` varargs.
+#   * Kotlin's entry point is `RouterFunctionDslKt.router(Function1)` — `coRouter`'s twin,
+#     under a different NAME, which is the one thing a copy would have got wrong.
+#   * `RouterFunctionDsl` declares the same seven verbs, `nest`, `accept` AND
+#     `contentType`.
+detect:
+  coordinates: ["org.springframework:spring-webmvc", "org.springframework.boot:spring-boot-starter-web"]
+
+measured:
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  entries:
+    # The argument-rooted Java form. `nest` is ALSO a `prefixes` rule below — dispatch
+    # there wins, so this entry's `handler_arg` is read only for `route`.
+    #
+    # NO `descriptor` HERE, and that is the ENGINE's shape rather than an omission:
+    # `methods` in a `combinator` entry is a bare list of NAMES, matched on owner and name
+    # alone, and this engine has no `descriptor` key to declare. Closing the same overload
+    # question here is engine work. It stops being theoretical the day `RouterFunctions`
+    # declares a `route` or `nest` overload whose position 1 is not the handler; at
+    # spring-webmvc 6.1.6 `javap -p -s` says each name has exactly one two-argument form
+    # plus the argument-less `route()` builder entry, which is in the slice below.
+    - owner: org.springframework.web.servlet.function.RouterFunctions
+      methods: [route, nest]
+      handler_arg: 1
+    # Kotlin: the FILE-FACADE class (`…Kt`), not the DSL type — the same rooting the
+    # reactive twin uses, and the entry function is `router`, not `coRouter`.
+    - owner: org.springframework.web.servlet.function.RouterFunctionDslKt
+      method: router
+      body_arg: 0
+
+  vocabulary:
+    verbs:
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: GET
+        verb: GET
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: POST
+        verb: POST
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: PUT
+        verb: PUT
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: OPTIONS
+        verb: OPTIONS
+        path_arg: 0
+      # The Kotlin builder's own two-argument form: `GET("/x") { handler }` declares a
+      # whole route in one call, so it carries both positions.
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: GET
+        verb: GET
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: POST
+        verb: POST
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        path_arg: 0
+        handler_arg: 1
+
+    prefixes:
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: path
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctions
+        method: nest
+        path_arg: 0
+        subtree_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: nest
+        path_arg: 0
+        body_arg: 1
+
+    media:
+      # `accept` fills `produces`, `contentType` fills `consumes` — request-matching
+      # semantics: a route guarded by `accept(JSON)` serves clients that accept JSON.
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: accept
+        fills: produces
+      - owner: org.springframework.web.servlet.function.RequestPredicates
+        method: contentType
+        fills: consumes
+      # BOTH, because `RouterFunctionDsl` declares both. The reactive twin declared only
+      # `accept` on the strength of "no `contentType` call exists anywhere in the
+      # checkpoint's Kotlin scan" — a statement about a FIXTURE, written as a statement
+      # about the framework. Corrected there in this same commit.
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: accept
+        fills: produces
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: contentType
+        fills: consumes
+
+    # One measured member, and only one. A constant nobody declared contributes nothing
+    # rather than leaking its own symbol fragment into a media column — a route declaring
+    # `MediaType.APPLICATION_XML` reads NULL here, an under-report closed one measured
+    # member at a time and never by guessing that a constant's name is its wire value.
+    media_values:
+      owner: org.springframework.http.MediaType
+      values:
+        APPLICATION_JSON: application/json
+
+    composers:
+      and: [{ owner: org.springframework.web.servlet.function.RequestPredicate, method: and }]
+      or: [{ owner: org.springframework.web.servlet.function.RequestPredicate, method: or }]
+
+  # Merging ROUTE SETS along result→receiver, never constraints, so every one is
+  # owner-qualified to `RouterFunction` — an owner-free continuation never roots one.
+  # `andNest` is the SHAPED form: its second argument is a whole router to fold under its
+  # own prefix, not a handler.
+  #
+  # `andOther` is declared here and is NOT in the reactive twin, which is an omission
+  # there rather than a difference between the packages: both interfaces declare it, it
+  # has `and`'s exact signature — `(LRouterFunction;)LRouterFunction;` — and it merges a
+  # router whose response type differs. Undeclared, every route merged in that way is
+  # lost. Added to both files in this commit.
+  continuations:
+    - { name: andRoute, owner: org.springframework.web.servlet.function.RouterFunction }
+    - name: andNest
+      owner: org.springframework.web.servlet.function.RouterFunction
+      path_arg: 0
+      subtree_arg: 1
+    - { name: and, owner: org.springframework.web.servlet.function.RouterFunction }
+    - { name: andOther, owner: org.springframework.web.servlet.function.RouterFunction }
+
+# Copied verbatim from `spring-web.yml` rather than re-declared, so an outbound-shapes
+# join never has to reconcile two catalogs describing one wrapper surface two ways. The
+# reactive wrappers are absent on purpose: `Mono`/`Flux` are not what a servlet handler
+# returns, and declaring a type this package never carries would be catalog data with no
+# framework behind it.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json
+
+# D02's declared SLICE (F2 §3.8), and it is the same one the reactive twin carries, for
+# the same structural reason: this grammar roots a route at an ARGUMENT or in a lambda
+# BODY, and a builder verb sits on a RECEIVER returned by an argument-less `route()`.
+# There is no word for that here, so closing it is engine work (`G-37`) and not a catalog
+# addition — and `RouterFunctions.route()` has been the reference documentation's
+# recommended Java shape since Spring 5.2, so it is plausibly the majority of real
+# functional routers on this side too.
+slice:
+  outside:
+    - owner: org.springframework.web.servlet.function.RouterFunctions
+      method_names: [route]
+      why: >
+        The ARGUMENT-LESS `route()` — the builder DSL's entry point, which returns a
+        `RouterFunctions$Builder` for every method in the block below. This catalog reads
+        the two-argument `route(predicate, handler)` at the same name and cannot read
+        this one, because a builder verb sits on a RECEIVER rather than in an argument or
+        a lambda body. `G-37`, and engine work.
+    - owner: org.springframework.web.servlet.function.RouterFunctions
+      method_names: [resource, resources, resourceLookupFunction]
+      why: >
+        Serve static resources under a pattern or a lookup function. Served routes, and
+        arguably boundaries — but each names a resource LOCATION rather than a handler,
+        and this analysis has no row shape for "these bytes are served here". Left
+        outside deliberately, the same ruling the builder's own `resources` takes.
+    - owner: org.springframework.web.servlet.function.RouterFunctions
+      method_names: [changeParser]
+      why: >
+        Swaps the `PathPatternParser` a whole router tree matches with. It changes how
+        addresses are PARSED rather than declaring one, and it appears in the enumeration
+        only because it takes a router as its first argument.
+    - owner: org.springframework.web.servlet.function.RouterFunctions$Builder
+      method_names: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+      why: >
+        The builder DSL's seven verbs. Every route declared this way derives NOTHING —
+        not a partial row and not a question. `G-37`, and engine work: the verb call sits
+        on a receiver this grammar cannot root a walk at.
+    - owner: org.springframework.web.servlet.function.RouterFunctions$Builder
+      method_names: [path]
+      why: >
+        Nests a builder under a path prefix, composing an address the way a class-level
+        mapping does. Outside for the same reason as the verbs, and it compounds them.
+    - owner: org.springframework.web.servlet.function.RouterFunctions$Builder
+      method_names: [route, nest, add, resource]
+      why: >
+        The builder's four remaining route-declaring forms, addressing the wire through a
+        `RequestPredicate` object rather than a path string. All derive nothing, for the
+        same structural reason as the verbs.
+    - owner: org.springframework.web.servlet.function.RouterFunctions$Builder
+      method_names: [resources]
+      why: >
+        Serves static resources under a pattern. A served route, and arguably a boundary —
+        but it names a resource location rather than a handler, and this analysis has no
+        row shape for "these bytes are served here". Left outside deliberately.
+    - owner: org.springframework.web.servlet.function.RouterFunctions$Builder
+      method_names: [withAttribute]
+      why: >
+        Attaches metadata to the route being built. Names no address and serves nothing;
+        it appears in the enumeration only because its first parameter is a `String`.

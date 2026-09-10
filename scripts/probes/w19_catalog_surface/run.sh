@@ -13,6 +13,7 @@ for artifact in \
   "com.google.cloud:spring-cloud-gcp-pubsub:5.1.2" \
   "org.springframework:spring-webflux:6.1.6" \
   "org.springframework:spring-messaging:6.1.6" \
+  "org.springframework:spring-webmvc:6.1.6" \
   "software.amazon.awssdk:sqs:2.25.31"
 do
   echo "ensuring ${artifact}" >&2

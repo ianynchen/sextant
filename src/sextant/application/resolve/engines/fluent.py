@@ -543,8 +543,10 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             "resolved"
             if (verb is not None or verbless)
             and url_resolution == "resolved"
-            and _capture_resolved("body" in captures, body_argument)
-            and _capture_resolved("response" in captures, response_argument)
+            # What the captures PRODUCED, the `single_call` change one engine along
+            # (`OI-77`, W43's review): a body capture that filled its column did not fail.
+            and _capture_resolved("body" in captures, body_argument, request_shape)
+            and _capture_resolved("response" in captures, response_argument, response_shape)
             else "unresolved"
         )
         if path is not None and (verb is not None or verbless):

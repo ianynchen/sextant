@@ -336,6 +336,17 @@ any declared capture — url, body or response — that failed to resolve drops 
 be read — the flag says some declared capture failed, without naming which, so a `NULL`
 column on such a row is not by itself a claim of no payload.
 
+**What "failed to resolve" means for a BODY capture narrowed with `OI-77`.** The rule above
+turned on a payload column that stayed NULL either way, which made the row the only place a
+read failure could be recorded. A body or response capture reading a bare `parameter` now
+resolves to the type the caller's own signature declares, so it fills that column and no
+longer drops the row — `_capture_resolved` asks what a capture PRODUCED, not what kind it
+read. A capture that produced nothing still drops the row exactly as before, and an ADDRESS
+capture reading a parameter is unchanged: a destination is its VALUE, and the value lives in
+whatever called the method. So the consequence stated above holds — an `unresolved` row's
+NULL column is still not a claim of no payload — while the converse is now also true: a row
+carrying a payload no longer calls itself unresolved on account of it.
+
 **`endpoints.consumes` and `endpoints.produces` hold the declared media types**, each a JSON
 array of MIME strings verbatim, or `NULL`. `NULL` means no declaration is derivable from any
 evidence source — never a guessed default: an undeclared mapping is negotiated at runtime

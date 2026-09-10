@@ -1182,7 +1182,12 @@ the operation. **An absent attribute derives no operation** — a framework's ow
 for one is never written into the class file, and a scope defaulted from a schema is not in
 the class file at all, so the row is `unresolved` rather than carrying a plausible-looking
 address. **The resolved type is the payload**, so the row describes its request without a
-`body_arg` that would have failed on a bare parameter — but only once `annotation` has been
+`body_arg` — *which used to be the point: a declared body capture over a bare parameter
+failed and dropped the row's `resolution`, so this rule was the only way to read such a
+payload and keep the row resolved. `OI-77` removed that, and a body capture reading a
+parameter now resolves to the caller's declared type like any other; the rule remains
+because the identity and the payload are one read here, not because the alternative
+fails.* The type answers only once `annotation` has been
 found on it: a type carrying none is not evidence of a payload, whatever sits at that
 position. `path_from_argument_type` beside `record_arg` is a `CatalogError` (the record IS
 the payload source), as is any malformed or unrecognised rule.

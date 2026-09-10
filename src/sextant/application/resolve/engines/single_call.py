@@ -462,8 +462,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 "resolved"
                 if (verb is not None or verbless)
                 and url_resolution == "resolved"
-                and _capture_resolved(body_declared, body_argument)
-                and _capture_resolved(method.get("response_arg") is not None, response_argument)
+                # The descriptors are what these captures PRODUCED, and passing them is
+                # what stops a row claiming a read failure over a column that was read
+                # (`OI-77`, W43's review).
+                and _capture_resolved(body_declared, body_argument, request_shape)
+                and _capture_resolved(
+                    method.get("response_arg") is not None, response_argument, response_shape
+                )
                 else "unresolved"
             )
             # Only a *whole* resolved wire identity dedups, so an unreadable

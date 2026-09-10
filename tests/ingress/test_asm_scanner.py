@@ -88,6 +88,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcInvoiceRoutes.jsonl",
+        "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
@@ -208,7 +210,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # second caller outright sat here undetected.
     # 118 since W43: `OrderStompPublisher`, the outbound half of the STOMP surface, which
     # `G-33` names and this fixture had no instance of.
-    assert report.documents == 118
+    # 120 since W44: `MvcInvoiceRoutes` and `MvcRouteHandlers`, the servlet functional
+    # routing surface — `G-29`, and likewise absent here before.
+    assert report.documents == 120
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -274,6 +278,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcInvoiceRoutes.jsonl",
+        "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",

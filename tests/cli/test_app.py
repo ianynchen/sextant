@@ -108,7 +108,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # different mappings — and they are here because six repositories contained no use of
     # either attribute, so nothing else exercises the discriminators the conflict
     # detector reads.
-    assert metadata["endpoints"]["inbound"]["http"] == 51
+    # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`) — inbound
+    # http rows like any other, derived by the combinator engine rather than an
+    # annotation.
+    assert metadata["endpoints"]["inbound"]["http"] == 54
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -191,7 +194,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # + 1 (W28): `RoutingConditionsController`.
     # + 1 (W43): `ws/OrderStompPublisher`, the outbound half of the STOMP surface — the
     # module received STOMP and sent none, so `G-33`'s asymmetry had no live instance here.
-    assert metadata["coverage"]["documents"] == 131
+    # + 2 (W44): `mvcroutes/MvcInvoiceRoutes` and its handlers — Spring MVC functional
+    # routing, `G-29`, which this fixture likewise had no instance of.
+    assert metadata["coverage"]["documents"] == 133
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
