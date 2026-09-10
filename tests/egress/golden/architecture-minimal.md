@@ -92,7 +92,7 @@ sequenceDiagram
     a0->>a3: success [boundary]
 ```
 
-Elides: Reachability, not execution: an arrow is a call the compiler recorded, not one observed to run, and branches are not distinguished — no order here is claimed to have happened. All 5 steps of this trace are drawn; nothing is filtered. Arrows ending at a lifeline this workspace read no body for — a library, the JDK, a mapper or a sibling build module alike — which the walk did not enter: 2. Arrows naming a method already expanded earlier in this trace, whose own calls are drawn at that first arrow and not repeated here: 1.
+Elides: Reachability, not execution: an arrow is a call the compiler recorded, not one observed to run, and branches are not distinguished — no order here is claimed to have happened. All 5 steps of this trace are drawn, and none is dropped. Arrows ending at a lifeline this workspace read no body for — a library, the JDK, a mapper or a sibling build module alike — which the walk did not enter: 2. Arrows naming a method already expanded earlier in this trace, whose own calls are drawn at that first arrow and not repeated here: 1.
 
 - `com/example/golden/Sweeper#sweep().` — scheduled, reached by no wire address
   - Steps: None — this root calls nothing.

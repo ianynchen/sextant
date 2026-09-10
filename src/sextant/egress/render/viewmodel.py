@@ -59,3 +59,36 @@ class SequenceMessage:
     source: str
     target: str
     label: str
+
+
+@dataclass(frozen=True)
+class SequenceAlternatives:
+    """One call site whose dispatch NARROWED to several bodies, none picked — and
+    everything each of them leads to (F7 §8.3, W32).
+
+    A trace records one step per candidate, so a `narrowed` site arrives as several
+    messages, each followed by its own subtree. Drawn flat they read as a SEQUENCE:
+    `spring-petclinic-rest`'s `ClinicServiceImpl#saveOwner` draws `save` to the JDBC
+    repository and, eight arrows later, `save` to the JPA one — two saves, apparently
+    both, when exactly one repository is active in any running application. That is the
+    over-report NFR-2 rates worst, and it is live in rendered output rather than
+    hypothetical.
+
+    `branches` is one entry per candidate, in the walk's own order, each holding that
+    candidate's own message and everything below it. The emitter draws them as mermaid's
+    `alt`/`else`, which is the notation for exactly this and the only one mermaid has.
+
+    Nothing is dropped and nothing is reordered: the same messages appear, in the same
+    order, inside a block that says what they are.
+    """
+
+    branches: tuple["SequenceBranch", ...]
+
+
+@dataclass(frozen=True)
+class SequenceBranch:
+    """One alternative of a `SequenceAlternatives`: the label naming which body this
+    branch is, and the messages that follow if it is the one that runs."""
+
+    label: str
+    messages: tuple["SequenceMessage | SequenceAlternatives", ...]

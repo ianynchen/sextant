@@ -45,6 +45,7 @@ def _step(
     result: int | None = None,
     stop: TraceStop | None = None,
     returns: tuple[tuple[int, str], ...] = (),
+    resolution: Resolution = Resolution.RESOLVED,
 ) -> Step:
     return Step(
         depth=depth,
@@ -54,7 +55,7 @@ def _step(
         target=target,
         callee=callee,
         result=result,
-        resolution=Resolution.RESOLVED,
+        resolution=resolution,
         stop=stop,
         returns=returns,
     )
@@ -584,3 +585,110 @@ def test_two_renders_of_one_trace_are_byte_identical():
     )
     assert _diagram(trace).mermaid == _diagram(trace).mermaid
     assert _diagram(trace).elides == _diagram(trace).elides
+
+
+# ---------------------------------------------------------------------------
+# A `narrowed` call site: several bodies, none picked (F7 §8.3, W32).
+#
+# **Not a constructed-only shape.** W32's plan row said `narrowed` "has never fired on
+# real code (four corpora, zero occurrences)"; measured, it fires 68 times across 34 call
+# sites on `spring-petclinic-rest` — every repository interface narrows to a JDBC
+# implementation AND a JPA one — and twice in this repo's own fixture. It was live in the
+# rendered document: `ClinicServiceImpl#saveOwner` drew `save` to the JDBC repository and,
+# eight arrows later, `save` to the JPA one, which reads as two saves in sequence when
+# exactly one repository is active in any running application.
+# ---------------------------------------------------------------------------
+
+
+def _narrowed_trace() -> Trace:
+    """One site narrowing to two bodies, each with a call of its own — the shape the walk
+    produces, where a candidate is immediately followed by everything it leads to and then
+    by the next candidate."""
+    return _trace(
+        _step(
+            target="a/Repo#save().",
+            callee="s maven c 1 a/JdbcRepo#save().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            depth=2,
+            caller="s maven c 1 a/JdbcRepo#save().",
+            target="a/Jdbc#update().",
+            callee=None,
+            stop=TraceStop.BOUNDARY,
+        ),
+        _step(
+            target="a/Repo#save().",
+            callee="s maven c 1 a/JpaRepo#save().",
+            resolution=Resolution.NARROWED,
+        ),
+        _step(
+            depth=2,
+            caller="s maven c 1 a/JpaRepo#save().",
+            target="a/Em#persist().",
+            callee=None,
+            stop=TraceStop.BOUNDARY,
+        ),
+    )
+
+
+def test_a_narrowed_call_site_draws_its_candidates_as_alternatives():
+    """`alt`/`else`, which is the only notation mermaid has for "one of these, not all of
+    these" — and the graph means exactly that.
+
+    Each branch carries the candidate's own arrow AND everything below it, because the
+    walk is depth-first and a candidate's subtree is contiguous behind it. Drawn flat, the
+    subtree of the first candidate sat between the two arrows, so a reader could not even
+    see that they were alternatives.
+    """
+    text = _diagram(_narrowed_trace()).mermaid
+
+    assert "alt JdbcRepo" in text
+    assert "else JpaRepo" in text
+    assert text.count("end") == 1
+    # The JDBC call sits INSIDE the first branch and the JPA one inside the second —
+    # nothing is reordered and nothing is dropped.
+    before, after = text.split("else JpaRepo")
+    assert "update" in before and "persist" not in before
+    assert "persist" in after and "update" not in after
+
+
+def test_the_caption_says_exactly_one_branch_runs():
+    """The sentence used to read "nothing is filtered", which is true and useless here: a
+    reader who takes the arrows for a sequence is not helped by being told none was
+    dropped. It names the number of CHOICES instead — per site, not per candidate, because
+    two candidates on one site is one choice."""
+    elision = _diagram(_narrowed_trace()).elides
+
+    assert "none is dropped" in elision
+    assert "1 call site here dispatches to SEVERAL bodies with none picked" in elision
+    assert "exactly one branch of each runs, never all of them" in elision
+
+
+def test_an_ordinary_trace_says_nothing_about_alternatives():
+    """The near-miss. A trace with no narrowed site gets no `alt` block and no clause
+    about one — a caption that warned about choices on every diagram would teach a reader
+    to stop reading it."""
+    diagram = _diagram(_trace(_step()))
+
+    assert "alt " not in diagram.mermaid
+    assert "exactly one branch" not in diagram.elides
+    assert "All 1 step of this trace are drawn, and none is dropped." in diagram.elides
+
+
+def test_a_single_narrowed_candidate_is_not_drawn_as_a_choice():
+    """A `narrowed` row can stand alone where dispatch found one body and could not commit
+    to it. A one-branch `alt` would tell a reader there is a choice where there is none,
+    so the block needs two candidates on one site, not merely the `narrowed` word."""
+    diagram = _diagram(
+        _trace(
+            _step(
+                target="a/Repo#save().",
+                callee="s maven c 1 a/JdbcRepo#save().",
+                resolution=Resolution.NARROWED,
+            )
+        )
+    )
+
+    assert "alt " not in diagram.mermaid
+    assert "dispatch" not in diagram.elides

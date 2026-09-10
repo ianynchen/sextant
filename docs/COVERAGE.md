@@ -761,6 +761,43 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-ix. A call with several possible bodies stops reading as several calls (F7 §8.3)
+
+A `narrowed` call site is several candidate bodies with none picked — dispatch could not
+commit, so the walk records one step per candidate. Drawn flat they read as a SEQUENCE, and
+that was live in rendered output: `spring-petclinic-rest`'s `ClinicServiceImpl#saveOwner`
+drew `save` to the JDBC repository and, eight arrows later, `save` to the JPA one, with the
+first candidate's whole subtree in between. A reader could not see they were alternatives,
+and the diagram said the service saves twice when exactly one repository is active.
+
+**W32's own plan row said this shape "has never fired on real code (four corpora, zero
+occurrences)".** It was wrong, and the correction is the reason the item was worth doing:
+
+| Corpus | narrowed edges | call sites with several candidates |
+|---|---|---|
+| `spring-petclinic-rest` | 68 | 34 |
+| `orders-service` (fixture) | 2 | 1 |
+| `mall-admin` | 0 | 0 |
+| `jhipster-sample-app` | 0 | 0 |
+
+Every one of petclinic-rest's 34 is a repository interface narrowing to a JDBC
+implementation and a JPA one — the shape a profile-switched application has by design.
+
+They now draw as mermaid's `alt`/`else`, which is the only notation it has for "one of
+these, not all of these". Each branch carries the candidate's own arrow AND everything
+below it, which the walk being depth-first makes possible: a candidate is immediately
+followed by everything it leads to, so a branch is a contiguous range. **Nothing is
+reordered and nothing is dropped** — the same arrows, in the same order, inside a block
+that says what they are. Verified against the vendored mermaid build in a live browser.
+
+The caption changed with it. It read "nothing is filtered", which is true and useless to a
+reader who has taken the arrows for a sequence; it names the number of CHOICES instead —
+per site, not per candidate, because two candidates on one site is one choice.
+
+**A single `narrowed` candidate is NOT drawn as a choice.** Dispatch can narrow to one body
+and still decline to commit, and a one-branch `alt` would tell a reader there is a choice
+where there is none.
+
 ### 3a-viii. A terminal says what it reaches, not just that it is one (F7 §8.2)
 
 [D00](components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the fact

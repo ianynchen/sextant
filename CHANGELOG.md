@@ -52,6 +52,24 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **A call with several possible bodies stops reading as several calls** (F7 §8.3, W32).
+  A `narrowed` call site is several candidate bodies with none picked, and the walk records
+  one step per candidate. Drawn flat they read as a SEQUENCE — and this was live:
+  `spring-petclinic-rest`'s `ClinicServiceImpl#saveOwner` drew `save` to the JDBC
+  repository and, eight arrows later, `save` to the JPA one, with the first candidate's
+  whole subtree in between, so the diagram said the service saves twice when exactly one
+  repository is active. **W32's plan row said this shape "has never fired on real code
+  (four corpora, zero occurrences)"; measured, it is 68 edges across 34 call sites on
+  petclinic-rest and 2 in this repo's own fixture**, every one of the 34 a repository
+  interface narrowing to a JDBC implementation and a JPA one. They draw as mermaid's
+  `alt`/`else` now, each branch carrying the candidate's arrow and everything below it —
+  nothing reordered, nothing dropped, verified against the vendored mermaid build in a
+  live browser. The caption stopped saying "nothing is filtered", which is true and
+  useless to a reader who has read the arrows as a sequence, and names the number of
+  choices instead. A SINGLE narrowed candidate is not drawn as a choice: dispatch can
+  narrow to one body and still decline to commit, and a one-branch `alt` would invent a
+  decision.
+
 - **A terminal says what it reaches, not just that it is one** (F7 §8.2, W30).
   [D00](docs/components/D00-fact-schema.md) §4 declared `terminal_kind` for as long as the
   fact schema has existed and **nothing produced one for two phases** — the note it carried

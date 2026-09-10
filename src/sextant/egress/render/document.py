@@ -42,7 +42,7 @@ from sextant.application.resolve.pipeline import ResolveReport
 # addresses that reach it was made in `resolve/roots.py`, and re-making it here
 # is the derivation "Egress is read-only" exists to forbid.
 from sextant.application.resolve.roots import Root
-from sextant.domain.closed_sets import Anchor, Protocol, TraceStop
+from sextant.domain.closed_sets import Anchor, Protocol, Resolution, TraceStop
 from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
@@ -67,6 +67,8 @@ from sextant.egress.render.diagrams import class_diagram, sequence_diagram
 from sextant.egress.render.viewmodel import (
     ClassEdge,
     ClassNode,
+    SequenceAlternatives,
+    SequenceBranch,
     SequenceMessage,
     SequenceParticipant,
     simple_name,
@@ -1716,7 +1718,9 @@ def _returned_value(value: object, redactor: Redactor) -> str:
     return " ".join(parts)
 
 
-def _sequence_view(trace: Trace) -> tuple[list[SequenceParticipant], list[SequenceMessage]]:
+def _sequence_view(
+    trace: Trace,
+) -> tuple[list[SequenceParticipant], list[SequenceMessage | SequenceAlternatives]]:
     """One trace as participants and messages — the projection, where every
     decision about the diagram is made (M07 "The renderer adds nothing").
 
@@ -1754,19 +1758,127 @@ def _sequence_view(trace: Trace) -> tuple[list[SequenceParticipant], list[Sequen
     # nothing still draws as itself rather than as an empty diagram, and the
     # leftmost lifeline is always the thing that starts the work.
     _participant(bare_descriptor(trace.root.handler))
-    messages = [
-        SequenceMessage(
+
+    def _message(step: Step) -> SequenceMessage:
+        return SequenceMessage(
             source=_participant(bare_descriptor(step.caller)),
             target=_participant(_reached(step)),
             label=_message_label(step),
         )
-        for step in trace.steps
-    ]
+
+    messages = _grouped(list(trace.steps), _message)
     labels = _sequence_labels(participants)
+    messages = _named(messages, labels)
     drawn = [
         SequenceParticipant(identifier, labels[identifier]) for identifier in participants.values()
     ]
     return drawn, messages
+
+
+def _named(
+    messages: list["SequenceMessage | SequenceAlternatives"], labels: dict[str, str]
+) -> list["SequenceMessage | SequenceAlternatives"]:
+    """Every alternatives branch's participant ID replaced by that lifeline's display
+    label — a second pass because the labels are not known until every participant has
+    been seen (`_sequence_labels` disambiguates a colliding simple name against the whole
+    set)."""
+    return [
+        message
+        if isinstance(message, SequenceMessage)
+        else SequenceAlternatives(
+            branches=tuple(
+                SequenceBranch(
+                    label=labels[branch.label],
+                    messages=tuple(_named(list(branch.messages), labels)),
+                )
+                for branch in message.branches
+            )
+        )
+        for message in messages
+    ]
+
+
+def _grouped(
+    steps: list[Step], message: Callable[[Step], SequenceMessage]
+) -> list[SequenceMessage | SequenceAlternatives]:
+    """`steps` as messages, with each NARROWED call site's candidates folded into one
+    alternatives block (F7 §8.3, W32).
+
+    **Why this is not cosmetic.** A `narrowed` site is several candidate bodies with none
+    picked, and the walk records one step per candidate followed by that candidate's whole
+    subtree. Drawn flat they read as a sequence — `spring-petclinic-rest`'s
+    `ClinicServiceImpl#saveOwner` draws `save` to the JDBC repository and, eight arrows
+    later, `save` to the JPA one, so the diagram says the service saves twice when exactly
+    one repository is active. 34 sites on that corpus, live in the rendered document.
+
+    **The ranges are already contiguous, which is what makes this possible.** The walk is
+    depth-first, so a candidate is immediately followed by everything it leads to and then
+    by the next candidate: a branch is the candidate's own step plus every following step
+    DEEPER than it. Nothing is reordered and nothing is dropped — the same messages come
+    out in the same order, inside a block that says what they are.
+
+    A group is keyed on `(caller, ordinal)`, which is the call SITE (D00 §5), and only a
+    site whose steps are `narrowed` groups: two steps sharing an ordinal is exactly the
+    shape dispatch produces when it could not pick, and one step is an ordinary call
+    however it resolved.
+    """
+    drawn: list[SequenceMessage | SequenceAlternatives] = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        span = _candidate_span(steps, index)
+        if span is None:
+            drawn.append(message(step))
+            index += 1
+            continue
+        branches: list[SequenceBranch] = []
+        for start, end in span:
+            first = message(steps[start])
+            branches.append(
+                SequenceBranch(
+                    # The participant ID this branch's own first arrow points at, resolved
+                    # to a display name by `_named` once `_sequence_labels` has decided
+                    # what every lifeline is called. Taken from the message rather than
+                    # spelled again here: the branch names exactly the thing its arrow
+                    # lands on, and two rules for one name would let a colliding simple
+                    # name be disambiguated on the lifeline and stay ambiguous in the
+                    # branch that names it.
+                    label=first.target,
+                    messages=(first, *_grouped(steps[start + 1 : end], message)),
+                )
+            )
+        drawn.append(SequenceAlternatives(branches=tuple(branches)))
+        index = span[-1][1]
+    return drawn
+
+
+def _candidate_span(steps: list[Step], index: int) -> list[tuple[int, int]] | None:
+    """The `(start, end)` range of each candidate of the NARROWED site beginning at
+    `index`, or None where that step is not one.
+
+    A candidate's range runs to the next step at its own depth or shallower, which is
+    where its subtree ends — the walk being depth-first is the whole of why that holds.
+    """
+    first = steps[index]
+    if first.resolution != Resolution.NARROWED:
+        return None
+    spans: list[tuple[int, int]] = []
+    cursor = index
+    while (
+        cursor < len(steps)
+        and steps[cursor].resolution == Resolution.NARROWED
+        and (steps[cursor].caller, steps[cursor].ordinal) == (first.caller, first.ordinal)
+        and steps[cursor].depth == first.depth
+    ):
+        end = cursor + 1
+        while end < len(steps) and steps[end].depth > first.depth:
+            end += 1
+        spans.append((cursor, end))
+        cursor = end
+    # One candidate is not an alternative to anything: a `narrowed` row can stand alone
+    # where dispatch found exactly one body but could not commit to it, and a one-branch
+    # `alt` would tell a reader there is a choice where there is none.
+    return spans if len(spans) > 1 else None
 
 
 def _sequence_labels(participants: dict[str, str]) -> dict[str, str]:
@@ -1832,6 +1944,24 @@ def _message_label(step: Step) -> str:
     return label
 
 
+def _alternative_sites(trace: Trace) -> int:
+    """How many call sites in this trace narrowed to SEVERAL bodies (F7 §8.3, W32).
+
+    One per site, not per candidate: two candidates on one site is one choice a reader
+    has to make, and counting the arrows would say two.
+    """
+    sites: set[tuple[str, int]] = set()
+    counted: dict[tuple[str, int], int] = {}
+    for step in trace.steps:
+        if step.resolution != Resolution.NARROWED:
+            continue
+        key = (step.caller, step.ordinal)
+        counted[key] = counted.get(key, 0) + 1
+        if counted[key] > 1:
+            sites.add(key)
+    return len(sites)
+
+
 def _trace_elision(trace: Trace) -> str:
     """What this trace's diagram leaves out, counted from the trace itself.
 
@@ -1851,12 +1981,26 @@ def _trace_elision(trace: Trace) -> str:
     for step in trace.steps:
         if step.stop is not None:
             stops[step.stop] += 1
+    # F7 §8.3 (W32). Counted from the steps rather than from the built diagram, so this
+    # sentence and the arrows cannot disagree about how many choices there are.
+    alternatives = _alternative_sites(trace)
     drawn = (
         "This root calls nothing, so the diagram is its own lifeline and no arrow at all."
         if not trace.steps
         else (
             f"All {len(trace.steps)} step{'' if len(trace.steps) == 1 else 's'} of this "
-            "trace are drawn; nothing is filtered."
+            "trace are drawn, and none is dropped"
+            + (
+                "."
+                if not alternatives
+                else (
+                    f" — but {alternatives} call site{'' if alternatives == 1 else 's'} "
+                    f"here dispatch{'es' if alternatives == 1 else ''} to SEVERAL bodies "
+                    "with none picked, and each is drawn as an `alt` block: exactly one "
+                    "branch of each runs, never all of them, and which one is a runtime "
+                    "question this analysis does not answer."
+                )
+            )
         )
     )
     parts = [

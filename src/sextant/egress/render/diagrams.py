@@ -4,10 +4,12 @@ correctness stops depending on having a repository to analyse (M07 "The
 testing payoff")."""
 
 import re
+from collections.abc import Sequence
 
 from sextant.egress.render.viewmodel import (
     ClassEdge,
     ClassNode,
+    SequenceAlternatives,
     SequenceMessage,
     SequenceParticipant,
     simple_name,
@@ -62,7 +64,8 @@ _CALL_ARROW = "->>"
 
 
 def sequence_diagram(
-    participants: list[SequenceParticipant], messages: list[SequenceMessage]
+    participants: list[SequenceParticipant],
+    messages: Sequence["SequenceMessage | SequenceAlternatives"],
 ) -> str:
     """Mermaid text for one trace, in the order given — the projection already
     decided participant order (first appearance in the walk) and message order
@@ -82,6 +85,38 @@ def sequence_diagram(
     lines = ["sequenceDiagram"]
     for participant in participants:
         lines.append(f"    participant {participant.id} as {participant.label}")
-    for message in messages:
-        lines.append(f"    {message.source}{_CALL_ARROW}{message.target}: {message.label}")
+    _emit(lines, messages, "    ")
     return "\n".join(lines) + "\n"
+
+
+def _emit(
+    lines: list[str],
+    messages: Sequence["SequenceMessage | SequenceAlternatives"],
+    indent: str,
+) -> None:
+    """Every message at `indent`, with an alternatives block drawn as mermaid's
+    `alt`/`else`/`end` and its branches one level deeper (F7 §8.3, W32).
+
+    `alt` is the only notation mermaid has for "one of these, not all of these", and it
+    is what the graph means: a `narrowed` call site is several candidate bodies with none
+    picked. Recursive because a candidate's own body can narrow again — nothing in the
+    graph stops a repository implementation from calling another interface — and mermaid
+    nests these fine.
+
+    A branch LABEL is read to end of line by mermaid, like a participant's, so it is
+    never quoted here: the projection built it from a symbol and a fixed vocabulary.
+
+    **Verified against the vendored build in a live browser** (`assets/mermaid.min.js`,
+    the §5a precedent rather than a claim about the grammar): the block parses, produces
+    an SVG, and draws each branch label in the frame's own divider. A nested-class name
+    carrying `$` was in the same check, because these labels come from the same strings
+    the participant labels do.
+    """
+    for message in messages:
+        if isinstance(message, SequenceAlternatives):
+            for index, branch in enumerate(message.branches):
+                lines.append(f"{indent}{'alt' if index == 0 else 'else'} {branch.label}")
+                _emit(lines, branch.messages, indent + "    ")
+            lines.append(f"{indent}end")
+            continue
+        lines.append(f"{indent}{message.source}{_CALL_ARROW}{message.target}: {message.label}")
