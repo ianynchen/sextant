@@ -49,7 +49,17 @@ def class_diagram(nodes: list[ClassNode], edges: list[ClassEdge]) -> str:
     for edge in edges:
         source = _quoted(simple_name(edge.source))
         target = _quoted(simple_name(edge.target))
-        lines.append(f"    {source} --> {target}")
+        # The ANCESTOR is the arrowhead end in mermaid's inheritance notation, which
+        # reverses the association's reading: `Base <|-- Derived` is drawn from the base.
+        # Written out per kind rather than composed from a symbol table, so the direction
+        # and the glyph are decided in one place a reader can check against mermaid's own
+        # documentation.
+        if edge.kind == "extends":
+            lines.append(f"    {target} <|-- {source}")
+        elif edge.kind == "implements":
+            lines.append(f"    {target} <|.. {source}")
+        else:
+            lines.append(f"    {source} --> {target}")
     return "\n".join(lines) + "\n"
 
 

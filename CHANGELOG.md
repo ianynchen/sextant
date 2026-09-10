@@ -52,6 +52,19 @@ here would restate those documents rather than add anything.
   without them the walk does not terminate, and expanding a shared subtree once per route
   is exponential on an ordinary diamond.
 
+- **The contract class diagram draws inheritance** (F7 §8.4, W33). The emitter knew one
+  arrow — `-->`, the association a field makes — and two more say what a type IS: `<|--`
+  extends, `<|..` implements. The work was deciding which ancestors earn one.
+  `type_hierarchy` holds all of them and drawing all of them buries the diagram: 30 of
+  `mall-admin`'s 34 shape ancestors are a single marker interface, and drawing the
+  fixture's put four `<<open>>` boxes above four shapes the `.proto` describes completely.
+  An ancestor is drawn when it CONTRIBUTES — it is itself a contract here, or it is an
+  unscanned SUPERCLASS of a shape that is already `open`, which is where the unread
+  contract lives. Read from that one flag, so the arrow and the `<<open>>` box beside it
+  cannot disagree. One arrow each on the three corpora that have any; `<|..` has no live
+  instance anywhere and ships pinned rather than deferred, with the absence recorded.
+  Verified against the vendored mermaid build in a live browser.
+
 - **A payload publishes the fields it INHERITS** (F4 §5.2). A payload class extending
   another published only its OWN fields and claimed the description was complete.
   `mall-admin`'s `dto/OmsOrderDetail` — a real endpoint's response — published two fields

@@ -28,8 +28,18 @@ class ClassNode:
 
 @dataclass(frozen=True)
 class ClassEdge:
+    """One arrow between contract types.
+
+    `kind` says which relationship it draws (F7 §8.4, W33): `holds` is the association a
+    field makes, `extends` and `implements` are inheritance. Three kinds rather than a
+    boolean because mermaid draws each differently and a reader must not have to guess
+    which of two arrows means "has a field of" — `Owner --> Pet` and `Owner <|-- Person`
+    are opposite claims.
+    """
+
     source: str
     target: str
+    kind: str = "holds"
 
 
 @dataclass(frozen=True)

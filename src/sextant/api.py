@@ -843,6 +843,7 @@ def _assembled_sections(
         _commit_of(path),
         tuple(metadata.get("uncovered", [])),
         shape_fields=workspace.query("shape_fields"),
+        type_hierarchy=workspace.query("type_hierarchy"),
         resolved_config=workspace.query("resolved_config"),
         open_questions=workspace.query("open_questions"),
         library_symbols=workspace.query("library_symbols"),

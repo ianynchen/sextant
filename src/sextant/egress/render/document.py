@@ -895,6 +895,7 @@ def render_module_document(
     commit: str,
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
+    type_hierarchy: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
@@ -916,6 +917,7 @@ def render_module_document(
             commit,
             uncovered,
             shape_fields=shape_fields,
+            type_hierarchy=type_hierarchy,
             resolved_config=resolved_config,
             open_questions=open_questions,
             library_symbols=library_symbols,
@@ -934,6 +936,7 @@ def assemble_module_document(
     commit: str,
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
+    type_hierarchy: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
@@ -1022,7 +1025,7 @@ def assemble_module_document(
 
     sections.append(MachineHeading(2, "Structure"))
     if report.shapes:
-        nodes, edges = _contract_nodes(report.shapes, shape_fields)
+        nodes, edges = _contract_nodes(report.shapes, shape_fields, type_hierarchy)
         mermaid = class_diagram(nodes, edges).rstrip("\n")
         sections.append(MachineDiagram(mermaid))
     else:
@@ -2125,15 +2128,56 @@ def _fields_by_shape(
 
 
 def _contract_nodes(
-    shapes: list[dict[str, object]], shape_fields: Sequence[dict[str, object]]
+    shapes: list[dict[str, object]],
+    shape_fields: Sequence[dict[str, object]],
+    hierarchy: Sequence[dict[str, object]] = (),
 ) -> tuple[list[ClassNode], list[ClassEdge]]:
     """`shapes`/`shape_fields` projected into the view model the emitter draws
     (M07 "Structure — contract class diagram"): one node per shape with its
     own wire fields, one edge per field whose `item` descriptor points at
-    another shape."""
+    another shape, and — since W33 — one INHERITANCE edge per ancestor that
+    explains where a contract came from (F7 §8.4).
+
+    **Which ancestors earn an arrow, measured.** Not all of them: `type_hierarchy` holds
+    every supertype, and drawing every one buries the diagram in noise that says nothing
+    about the wire. On `mall-admin` 30 of the 34 shape ancestors are one marker interface;
+    on this repo's fixture four are a protobuf runtime base and four are generated builder
+    interfaces. So the rule is what the ancestor CONTRIBUTES:
+
+    * a **scanned** ancestor that is itself a shape here — its fields were inlined into
+      this shape's own list (the field pass walks the ancestry), so the arrow is what
+      explains their presence;
+    * an **unscanned SUPERCLASS of a shape that is itself `open`** — it may declare fields
+      nobody read, which is exactly why the subtype is open, and the arrow plus an
+      `<<open>>` node is where a reader is told the rest of the contract lives;
+    * nothing else. An **unscanned interface** cannot hold instance fields (an interface's
+      own fields are constants), so it explains no part of the payload, and a scanned
+      ancestor that contributed nothing has nothing to explain either.
+
+    An unscanned superclass gets a node of its own, with no fields and `<<open>>` — D02's
+    stereotype means "the expansion stopped here", which is exactly what it is.
+
+    **Reading the shape's own `open` flag is what keeps the two halves of the diagram from
+    contradicting each other.** A type whose contract comes from a SCHEMA takes nothing
+    from its class file, so it is closed however exotic its generated superclass is — every
+    protobuf message extends the runtime's unscanned `GeneratedMessage`, and drawing that
+    arrow put four `<<open>>` boxes above four shapes the `.proto` describes completely.
+    Deciding it from the flag rather than re-deriving the reason means the arrow and the
+    stereotype can never disagree.
+
+    **A scanned ancestor that is NOT itself a shape gets no arrow**, and that is a stated
+    boundary rather than an oversight. `mall-admin`'s `dto/OmsOrderDetail extends
+    model/OmsOrder` is the case: the parent's 45 fields are IN the child's own list, since
+    the field pass walks the ancestry, so the contract on the diagram is complete and an
+    arrow would point at an empty box. JSON has no inheritance; the flattening is what the
+    wire really carries, and this diagram draws the wire.
+    """
     grouped = _fields_by_shape(shape_fields)
+    described = {str(shape["shape_id"]) for shape in shapes}
+    ancestors = _ancestors_by_child(hierarchy)
     nodes: list[ClassNode] = []
     edges: list[ClassEdge] = []
+    opened: list[str] = []
     for shape in shapes:
         shape_id = str(shape["shape_id"])
         rows = grouped.get(shape_id, [])
@@ -2146,7 +2190,40 @@ def _contract_nodes(
             target = json.loads(str(item)).get("shape_id")
             if target:
                 edges.append(ClassEdge(shape_id, str(target)))
+        # A parameterised shape id names a type plus its bound arguments; the hierarchy is
+        # keyed on the type alone, exactly as the field and accessor passes key it.
+        for ancestor, kind, scanned in ancestors.get(_unparameterised(shape_id), ()):
+            if scanned and ancestor in described:
+                edges.append(ClassEdge(shape_id, ancestor, kind))
+            elif not scanned and kind == "extends" and bool(shape["open"]):
+                edges.append(ClassEdge(shape_id, ancestor, kind))
+                if ancestor not in described and ancestor not in opened:
+                    opened.append(ancestor)
+    # After every shape's own node, so a reader meets the module's types first and the
+    # boundary they stop at second. `open=True` and no fields is the whole of what is
+    # known about one.
+    nodes.extend(ClassNode(ancestor, (), True) for ancestor in opened)
     return nodes, edges
+
+
+def _unparameterised(shape_id: str) -> str:
+    """A shape id with its bound type arguments dropped — `CommonResult#<OrderView#>`
+    becomes `CommonResult#`. The hierarchy is keyed on the TYPE, which is what declares a
+    supertype; the binding belongs to the reference."""
+    return shape_id.split("<", 1)[0]
+
+
+def _ancestors_by_child(
+    hierarchy: Sequence[dict[str, object]],
+) -> dict[str, list[tuple[str, str, bool]]]:
+    """`type_hierarchy` rows as `child -> [(ancestor, kind, scanned)]`, in the table's own
+    `position` order so two runs draw one order (NFR-1)."""
+    found: dict[str, list[tuple[str, str, bool]]] = {}
+    for row in hierarchy:
+        found.setdefault(str(row["child"]), []).append(
+            (str(row["ancestor"]), str(row["kind"]), bool(row["scanned"]))
+        )
+    return found
 
 
 def _inline_descriptor(descriptor: dict[str, object]) -> str:

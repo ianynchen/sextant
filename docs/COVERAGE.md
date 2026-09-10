@@ -761,6 +761,43 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- END GENERATED: coverage_versions -->
 
+### 3a-xi. The contract diagram draws inheritance (F7 §8.4)
+
+FR-7 commits to class diagrams, and the emitter drew exactly one arrow — `-->`, the
+association a field makes. Two more say what a type IS: `<|--` extends, `<|..` implements.
+
+**Not every ancestor earns one.** `type_hierarchy` holds all of them, and drawing all of
+them buries the diagram in relationships that say nothing about the wire — measured, 30 of
+`mall-admin`'s 34 shape ancestors are a single marker interface, and four of this repo's
+fixture's are a protobuf runtime base with four generated builder interfaces beside them.
+Drawn naively, the fixture's diagram gained four `<<open>>` boxes above four shapes the
+`.proto` describes completely. So the rule is what an ancestor CONTRIBUTES:
+
+| Ancestor | Drawn? | Why |
+|---|---|---|
+| scanned, and itself a contract here | **yes** | both are payloads a reader can see |
+| unscanned SUPERCLASS of an `open` shape | **yes**, plus an `<<open>>` node | that is where the unread contract lives |
+| unscanned superclass of a CLOSED shape | no | nothing is missing — a schema-described type takes nothing from its class file |
+| unscanned interface | no | an interface's own fields are constants; it explains no part of the payload |
+| scanned, not a contract here | no | its fields are already IN the subtype's list, so the arrow points at an empty box |
+
+What that draws, measured: **one arrow each** on the three corpora that have any —
+`OrderResult <|-- DetailedOrderResult` (fixture), `PmsProductParam <|-- PmsProductResult`
+(`mall-admin`), `AdminUserDTO <|-- ManagedUserVM` (`jhipster-sample-app`) — and none on
+`spring-petclinic-rest`, whose payloads inherit nothing.
+
+**`<|..` has no live instance and is shipped anyway.** No corpus has a payload implementing
+an interface that is itself a payload. `Page<T>`/`Slice<T>` is exactly that shape and W26
+made such an interface expandable, so the rule is declared and pinned rather than deferred
+until something ships it — and its absence is recorded here rather than left for a reader
+to infer from a diagram that never draws one.
+
+**The arrow and the stereotype are read from ONE flag.** Whether an unscanned superclass is
+drawn comes from the shape's own `open`, not from re-deriving why it is open, so the arrow
+and the `<<open>>` box beside it cannot disagree. Verified against the vendored mermaid
+build in a live browser: both notations parse, and `<<open>>` renders as `«open»` above the
+class name.
+
 ### 3a-x. A payload publishes the fields it INHERITS (F4 §5.2)
 
 A payload class extending another published only its OWN fields, and said the description

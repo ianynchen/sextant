@@ -37,6 +37,7 @@ from sextant.egress.render.document import (
     StaleNoticeSection,
     _Anchors,
     _code,
+    _contract_nodes,
     _disambiguated_shape_names,
     _interleave,
     _runs,
@@ -1115,3 +1116,110 @@ def test_a_detail_entry_with_neither_a_body_nor_a_table_is_still_allowed():
     """The header entry every `MachineDetail` opens with — a bare title,
     deliberately neither — must not trip the new refusal."""
     DetailEntry(_code("GET /v1/orders"), None, None)
+
+
+# ---------------------------------------------------------------------------
+# Inheritance in the contract class diagram (F7 §8.4, W33).
+#
+# `type_hierarchy` holds EVERY supertype, and drawing every one buries the
+# diagram: 30 of `mall-admin`'s 34 shape ancestors are one marker interface, and
+# four of this repo's fixture's are a protobuf runtime base with four generated
+# builder interfaces beside them. So the rule is what an ancestor CONTRIBUTES,
+# and these pin each half of it.
+# ---------------------------------------------------------------------------
+
+
+def _shape(shape_id: str, *, open: bool = False) -> dict[str, object]:
+    return {"shape_id": shape_id, "open": open, "content_hash": "", "origin_tier": None}
+
+
+def _hierarchy(child: str, ancestor: str, kind: str, scanned: bool) -> dict[str, object]:
+    return {"child": child, "ancestor": ancestor, "kind": kind, "scanned": scanned, "position": 0}
+
+
+def test_an_ancestor_that_is_itself_a_contract_gets_an_inheritance_arrow():
+    """Two payloads, one extending the other — the live shape on all three corpora that
+    have any: `PmsProductParam <|-- PmsProductResult`, `AdminUserDTO <|-- ManagedUserVM`,
+    and the fixture's `OrderResult <|-- DetailedOrderResult`."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Base#"), _shape("a/Derived#")],
+        (),
+        [_hierarchy("a/Derived#", "a/Base#", "extends", True)],
+    )
+
+    assert [(e.source, e.target, e.kind) for e in edges] == [("a/Derived#", "a/Base#", "extends")]
+    assert [n.name for n in nodes] == ["a/Base#", "a/Derived#"]
+
+
+def test_an_implemented_contract_interface_draws_the_dotted_arrow():
+    """The second arrow kind. Unmeasured on the four corpora — none has a payload
+    implementing an interface that is itself a payload — but `Page<T>`/`Slice<T>` is
+    exactly that shape and W26 made such an interface expandable, so the rule is declared
+    and pinned rather than left until something ships it."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#"), _shape("a/Page#")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert [(e.target, e.kind) for e in edges] == [("a/Slice#", "implements")]
+
+
+def test_an_unscanned_superclass_of_an_open_shape_is_drawn_as_open():
+    """Where the rest of the contract lives. An unscanned superclass may declare fields
+    nobody read — which is why the subtype is `open` — so it gets an arrow and a node of
+    its own carrying no fields and the `<<open>>` stereotype."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Derived#", open=True)],
+        (),
+        [_hierarchy("a/Derived#", "vendor/Base#", "extends", False)],
+    )
+
+    assert [(e.target, e.kind) for e in edges] == [("vendor/Base#", "extends")]
+    ancestor = next(n for n in nodes if n.name == "vendor/Base#")
+    assert ancestor.open is True and ancestor.fields == ()
+
+
+def test_an_unscanned_INTERFACE_gets_no_arrow():
+    """An interface's own fields are constants, so an unscanned one explains no part of
+    the payload. Counting it drew 30 arrows to one marker interface on `mall-admin`."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Derived#", open=True)],
+        (),
+        [_hierarchy("a/Derived#", "java/io/Serializable#", "implements", False)],
+    )
+
+    assert edges == []
+    assert [n.name for n in nodes] == ["a/Derived#"]
+
+
+def test_a_CLOSED_shapes_unscanned_superclass_gets_no_arrow():
+    """The arrow and the stereotype beside it can never disagree, because both are read
+    from the shape's own `open` flag.
+
+    A type whose contract comes from a SCHEMA takes nothing from its class file, so it is
+    closed however exotic its generated superclass is. Every protobuf message extends the
+    runtime's unscanned `GeneratedMessage`, and drawing that arrow put four `<<open>>`
+    boxes above four shapes the `.proto` describes completely.
+    """
+    nodes, edges = _contract_nodes(
+        [_shape("a/Message#", open=False)],
+        (),
+        [_hierarchy("a/Message#", "runtime/GeneratedMessage#", "extends", False)],
+    )
+
+    assert edges == []
+    assert [n.name for n in nodes] == ["a/Message#"]
+
+
+def test_a_parameterised_shape_finds_its_own_types_ancestors():
+    """The hierarchy is keyed on the TYPE; a shape id names a type plus its bound
+    arguments. `CommonResult#<OrderView#>` must look up `CommonResult#`, exactly as the
+    field and accessor passes do."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Base#"), _shape("a/CommonResult#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/CommonResult#", "a/Base#", "extends", True)],
+    )
+
+    assert [(e.source, e.target) for e in edges] == [("a/CommonResult#<a/OrderView#>", "a/Base#")]

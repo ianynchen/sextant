@@ -53,3 +53,35 @@ def test_a_dotted_name_stays_unquoted():
     text = class_diagram(nodes, [])
     assert "class Outer.Inner {" in text
     assert "`Outer.Inner`" not in text
+
+
+def test_the_emitter_draws_the_two_inheritance_arrows():
+    """F7 §8.4 (W33). Three relationships, three notations — `-->` is "has a field of",
+    `<|--` is "extends", `<|..` is "implements", and a reader must not have to guess which
+    of two identical arrows means which.
+
+    **The ancestor is the arrowhead end**, which reverses the association's reading:
+    mermaid writes `Base <|-- Derived`, so the SOURCE of the edge appears second.
+    """
+    edges = [
+        ClassEdge("a/Derived#", "a/Base#", "extends"),
+        ClassEdge("a/Derived#", "a/Named#", "implements"),
+        ClassEdge("a/Derived#", "a/Held#"),
+    ]
+    text = class_diagram([ClassNode("a/Derived#", (), False)], edges)
+
+    assert "Base <|-- Derived" in text
+    assert "Named <|.. Derived" in text
+    assert "Derived --> Held" in text
+
+
+def test_an_inheritance_arrow_quotes_a_dollar_name_at_both_ends():
+    """The `$` rule reaches the new arrows too. A nested class is `Outer$Inner`, which
+    mermaid's bare-identifier grammar refuses, and the emitter's quoting is per-identifier
+    rather than per-arrow-kind."""
+    text = class_diagram(
+        [ClassNode("a/Outer$Inner#", (), False)],
+        [ClassEdge("a/Outer$Inner#", "a/Outer$Base#", "extends")],
+    )
+
+    assert "`Outer$Base` <|-- `Outer$Inner`" in text
