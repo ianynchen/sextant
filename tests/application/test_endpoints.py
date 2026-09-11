@@ -5169,6 +5169,143 @@ def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
     assert rows == []
 
 
+def test_a_controller_nested_inside_another_class_derives_its_route(tmp_path: Path):
+    """`G-110` (W54). `COVERAGE.md` carries *"Nested / inner classes ... read as
+    ordinary class files, so `@RestController`/`@Controller` resolve the same
+    nested or not"* as ✅ SHIPPED, and nothing derived a route from one.
+
+    The phase-1 scanner skipped nested classes outright; 2C lifted that, and the
+    claim since is that nothing downstream treats them specially. Nothing is the
+    hard part to test — there is no nested-class branch to point at, so the
+    assertion is that an ordinary route comes back from a symbol whose binary
+    name carries a `$`.
+
+    A route on an inner controller is not exotic: a `@RestController` nested in a
+    configuration class or a test fixture is ordinary Java, and if the `$` ever
+    stopped resolving, the failure would be silence — the class's whole surface
+    absent, with nothing saying so."""
+    nested = "com/acme/task7/Outer$Inner#"
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-web")],
+        class_symbol=nested,
+        method_symbol=f"{nested}list(sig_7a1).",
+        class_annotations={"org/springframework/web/bind/annotation/RestController#": {}},
+        method_annotations={
+            "org/springframework/web/bind/annotation/GetMapping#": {"value": ["/orders"]}
+        },
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("http", "inbound", "GET", "/orders")
+    ]
+
+
+@pytest.mark.declines("spring-web")
+@pytest.mark.declines("spring-mvc")
+@pytest.mark.declines("spring-cloud-openfeign")
+@pytest.mark.declines("spring-graphql")
+@pytest.mark.declines("netflix-dgs")
+@pytest.mark.declines("spring-ws")
+@pytest.mark.declines("jakarta-jws")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+@pytest.mark.parametrize(
+    ("catalog_id", "class_annotation", "method_annotation", "arguments"),
+    [
+        pytest.param(
+            "spring-web",
+            "org/springframework/web/bind/annotation/RestController#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-web",
+        ),
+        pytest.param(
+            "spring-mvc",
+            "org/springframework/stereotype/Controller#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-mvc",
+        ),
+        pytest.param(
+            "spring-cloud-openfeign",
+            "org/springframework/cloud/openfeign/FeignClient#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-cloud-openfeign",
+        ),
+        pytest.param(
+            "spring-graphql",
+            "org/springframework/stereotype/Controller#",
+            "com/acme/own/QueryMapping#",
+            {"value": ["orders"]},
+            id="spring-graphql",
+        ),
+        pytest.param(
+            "netflix-dgs",
+            "com/netflix/graphql/dgs/DgsComponent#",
+            "com/acme/own/DgsQuery#",
+            {"field": ["orders"]},
+            id="netflix-dgs",
+        ),
+        pytest.param(
+            "spring-ws",
+            "org/springframework/ws/server/endpoint/annotation/Endpoint#",
+            "com/acme/own/PayloadRoot#",
+            {"localPart": ["GetOrder"]},
+            id="spring-ws",
+        ),
+        # `jakarta-jws` declares no `type_annotation`: `@WebService` on the CLASS
+        # is its gate, and that is the FQN varied here. Its client twin is NOT
+        # here, and the measurement is why — see the note below the test.
+        pytest.param(
+            "jakarta-jws",
+            "com/acme/own/WebService#",
+            "jakarta/jws/WebMethod#",
+            {"operationName": ["getOrder"]},
+            id="jakarta-jws",
+        ),
+    ],
+)
+def test_an_annotation_with_the_right_simple_name_in_another_package_derives_nothing(
+    tmp_path: Path,
+    catalog_id: str,
+    class_annotation: str,
+    method_annotation: str,
+    arguments: dict,
+):
+    """§10 near-miss for SEVEN `annotation_driven` catalogs at once (W54), and it
+    measures the fully-qualified NAME alone.
+
+    Every other conjunct holds: the class carries the stereotype the catalog
+    gates on, the method carries an annotation of the right simple name with the
+    right address attribute holding a real address, and the capability set is
+    whole. Only the PACKAGE differs — `com.acme.own.GetMapping` rather than
+    Spring's.
+
+    That shape is ordinary rather than contrived. `GetMapping`, `QueryMapping`,
+    `WebService` and `PayloadRoot` are names a project writes for itself, and two
+    frameworks in one estate routinely ship annotations that differ only in
+    package — `jakarta.jws` and `javax.jws` are in this very catalog, and telling
+    them apart is the whole reason the match is on the FQN. Without that conjunct
+    every one of these catalogs would publish a boundary for an annotation its
+    framework never sees, at `resolved`/`compiler`, where nothing downstream can
+    tell it from an observation.
+
+    Parametrised because the finding is about the SET: each catalog spells its
+    own annotation list, and a per-catalog test passes while another file's list
+    is still matched on a simple name."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped(catalog_id)],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={class_annotation: {}},
+        method_annotations={method_annotation: arguments},
+    )
+
+    assert rows == [], f"{catalog_id} matched an annotation from another package"
+
+
 _SQS_HANDLER = "io/awspring/cloud/sqs/annotation/SqsHandler#"
 
 
@@ -5810,6 +5947,53 @@ _GET_EXCHANGE = "org/springframework/web/service/annotation/GetExchange#"
 _RETROFIT_GET = "retrofit2/http/GET#"
 
 
+def test_a_generated_client_stub_derives_its_operation(tmp_path: Path):
+    """The positive `jakarta-jws-client`'s near-miss below is paired with. The
+    two JWS catalogs partition `@WebService` by CONSTRUCT KIND — `declared_on:
+    class` for the service, `declared_on: interface` for the generated stub —
+    so the stub's shape is an interface, and an outbound row is what it earns.
+
+    The address is a SOAP QName rather than a bare operation name: JAX-WS derives
+    the target namespace from the declaring package when the annotation states
+    none, which is what puts `{http://gate.acme.com/}` in front of it."""
+    assert _gate_rows(
+        tmp_path,
+        "jakarta-jws-client",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={"jakarta/jws/WebService#": {"name": "OrderPort"}},
+        method_annotation="jakarta/jws/WebMethod#",
+        method_args={"operationName": "getOrder"},
+    ) == [("soap", "outbound", None, "{http://gate.acme.com/}getOrder")]
+
+
+@pytest.mark.declines("jakarta-jws-client")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+def test_a_client_stub_annotation_from_another_package_derives_nothing(tmp_path: Path):
+    """§10 near-miss for `jakarta-jws-client` (W54), and it needed measuring
+    rather than assuming.
+
+    This catalog was almost folded into the seven-way parametrised near-miss
+    above on a CLASS — as an eighth parameter. It survived the mutation there — because it declines a
+    class for its CONSTRUCT KIND (`declared_on: interface`), not for the
+    annotation's package, so the marker would have claimed coverage the test did
+    not carry. `scripts/guard_check.py` reports a survivor as a failure, and that
+    is what caught it.
+
+    On an INTERFACE, where the positive above derives, the only thing left to
+    vary is the package."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-jws-client",
+            owner_kind=ConstructKind.INTERFACE,
+            type_annotations={"com/acme/own/WebService#": {"name": "OrderPort"}},
+            method_annotation="jakarta/jws/WebMethod#",
+            method_args={"operationName": "getOrder"},
+        )
+        == []
+    )
+
+
 def test_a_websocket_client_endpoint_is_not_an_inbound_server_endpoint(tmp_path: Path):
     """`A-C1`, and the worst row in it: a `@ClientEndpoint` class — one that
     DIALS OUT — carrying the `@OnMessage` callback was published as an INBOUND
@@ -5819,7 +6003,24 @@ def test_a_websocket_client_endpoint_is_not_an_inbound_server_endpoint(tmp_path:
     `@OnMessage` cannot mint anything on its own: it is `@Target(METHOD)`, it
     carries no address, and it ships in the CLIENT api jar, so it is the
     message callback for both kinds of endpoint (CP-11 Q3). `@ServerEndpoint`
-    is what makes a class served."""
+    is what makes a class served.
+
+    **Deliberately carries no `declines` marker, and W54 measured why.** This is
+    a real near-miss with a paired positive below it, and `G-112` read it as an
+    entry the backlog over-states — a test needing only the marker. It is not:
+    the marker obliges a `pins` naming exactly ONE guard the test fails without,
+    and this test fails without neither `derive_endpoints.type-annotation-gate`
+    nor `derive_endpoints.addresses-nothing` alone. Measured by disabling each
+    (both SURVIVED under `scripts/guard_check.py`) and then both together, where
+    it fails.
+
+    The two are inseparable for THIS catalog and not by accident: the address is
+    `prefix_from: [value]` on `@ServerEndpoint`, which is the same annotation
+    `type_annotation` gates on. Any input missing the gate is also missing the
+    address. Constructing one that misses only the gate would mean giving
+    `@OnMessage` a `value` element the real annotation does not have — synthetic
+    input that cannot occur, which is the "broken in an unrelated way" failure
+    the guard harness exists to catch."""
     assert (
         _gate_rows(
             tmp_path,
@@ -6087,6 +6288,11 @@ _EXCHANGE_INTERFACE = _MODULE + "com/acme/api/OrderApi#"
 _EXCHANGE_METHOD = _MODULE + "com/acme/api/OrderApi#list(sig_0a1)."
 _IMPLEMENTER = _MODULE + "com/acme/api/OrderController#"
 _IMPLEMENTER_METHOD = _MODULE + "com/acme/api/OrderController#list(sig_0a1)."
+# A SECOND implementer of the same interface, whose symbol sorts BEFORE
+# `OrderController` — `A` < `O` — so which one wins is observable rather than
+# whichever the fact file happens to list first (W54, `G-110`).
+_ALT_IMPLEMENTER = _MODULE + "com/acme/api/AltOrderController#"
+_ALT_IMPLEMENTER_METHOD = _MODULE + "com/acme/api/AltOrderController#list(sig_0a1)."
 _LOCAL_STEREOTYPE = _MODULE + "com/acme/api/ApiController#"
 # The same type as a USE site names it. An annotation fact records its
 # annotation as a bare fqn descriptor and its target as a module-prefixed
@@ -6107,6 +6313,7 @@ def _flip_facts(
     overrides: bool = True,
     implementer_method_annotations: dict[str, dict] | None = None,
     stereotype_meta: str | None = None,
+    second_implementer: bool = False,
 ) -> None:
     """One `@HttpExchange` interface declaring one exchange operation, and
     optionally a local class implementing it.
@@ -6209,6 +6416,38 @@ def _flip_facts(
                 )
                 for fqn, args in (implementer_method_annotations or {}).items()
             ]
+    if second_implementer:
+        # The same annotations and the same overriding method, on a class whose
+        # symbol sorts first. Spring itself refuses to start an application with
+        # two such beans — they register one mapping — so this exists to pin the
+        # DETERMINISM of what we say about a module we cannot run (NFR-1), not to
+        # claim the shape works.
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_ALT_IMPLEMENTER,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_EXCHANGE_INTERFACE],
+            )
+        )
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=_ALT_IMPLEMENTER,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in (implementer_annotations or {}).items()
+        ]
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_ALT_IMPLEMENTER_METHOD,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_ALT_IMPLEMENTER,
+                signature=void,
+            )
+        )
     write_fact_file(root / "OrderApi.jsonl", document, facts)
 
 
@@ -6359,6 +6598,32 @@ def test_a_doubly_declared_route_merges_into_one_row_handled_by_the_class(
         implementer_annotations={_REST_CONTROLLER: {}},
         implementer_method_annotations={_GET_MAPPING: {"value": ["/orders/list"]}},
     ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+def test_two_controllers_implementing_one_exchange_interface_derive_one_row(tmp_path: Path):
+    """`G-110` (W54). `COVERAGE.md` states this boundary as *"one row, handled by
+    the lexicographically first implementer — a deterministic tie-break (NFR-1)
+    for an application the framework itself will not run"*, and nothing tested
+    it. The tie-break is ACTIVE: `resolve/engines/annotation_driven.py` sorts
+    `implementations` by symbol and `setdefault`s the handler, so the first
+    implementer in symbol order wins.
+
+    An untested determinism claim is the one kind that decays silently. Sorting
+    is easy to lose — a `set` where a sorted list was, a dict rebuild, a query
+    without an `ORDER BY` — and nothing about the output would look wrong
+    afterwards. It would simply differ between runs, which is the one property
+    NFR-1 forbids and no reader can check from a bundle.
+
+    `AltOrderController` sorts before `OrderController`, and the assertion names
+    it: a test asserting only "one row" would pass whichever won."""
+    rows = _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+        second_implementer=True,
+    )
+
+    assert rows == [("inbound", "GET", "/orders/list", _ALT_IMPLEMENTER_METHOD, None)]
 
 
 def _flip_catalog(**resolves: object) -> Catalog:

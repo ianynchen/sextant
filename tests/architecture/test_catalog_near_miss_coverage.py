@@ -2,8 +2,9 @@
 
 §10 requires that anything which detects, matches or classifies is tested on
 near-miss input that must NOT match, asserting *nothing* was produced. The
-suite honours that for the rules written since Task 5; it does not honour it
-for most of the catalogs shipped before, and that gap is not theoretical:
+suite honours that for the rules written since Task 5; it did not honour it for
+most of the catalogs shipped before — 24 of 64 still had no declining test when
+W54 started, and 10 do not now. That gap was never theoretical:
 
 - a gRPC endpoint was minted from an ordinary `extends` pair, and the golden
   fixture missed it — the reviewer's own word — "by luck", because its one
@@ -45,8 +46,10 @@ typo or a retired catalog fails here rather than quietly covering nothing.
 `test_a_web_filter_derives_nothing_from_any_shipped_catalog`
 (`tests/application/test_endpoints.py`) is deliberately NOT marked, although it
 runs every shipped catalog at once. It negates a boundary, not a catalog's own
-conjuncts, and counting it would mark all fifty covered on the strength of one
-input — which is the vacuous pass this whole file exists to prevent.
+conjuncts, and counting it would mark every shipped catalog covered on the
+strength of one input — which is the vacuous pass this whole file exists to
+prevent. *That sentence said "all fifty" until W54; the catalog count has moved
+three times since it was written, which is why it now names no number.*
 """
 
 import ast
@@ -65,40 +68,97 @@ TESTS = REPO / "tests"
 # NEW catalog cannot join them: adding a `.yml` without a declining test fails
 # `test_every_shipped_catalog_has_a_declining_test` immediately.
 #
-# `spring-kafka` is first on the list on purpose — the empty-name
-# `@KafkaHandler` row is the defect this file's docstring opens with, and it is
-# still live.
+# *This comment used to say "`spring-kafka` is first on the list on purpose — the
+# empty-name `@KafkaHandler` row is ... still live". `spring-kafka` is not on the
+# list and was not among the 24 W54 found; it gained a declining test some waves
+# ago, and the note outlived the entry it pointed at. Corrected in W54, which is
+# the wave that made this file tell the truth about itself.*
 _NO_DECLINING_TEST_YET = frozenset(
     {
+        # **Two entries below cannot have a declining test in the form this rule
+        # asks for, and W54 measured why rather than leaving them to look like
+        # ordinary debt.** `grpc-spring` and `spring-kafka-media` never mint an
+        # endpoint row at all — each says so in its own file: the first would be
+        # "inventing an address this evidence cannot support" and files a
+        # `service_identity` question instead; the second "derives no rows of its
+        # own — it stamps rows other engines minted". So `assert rows == []` is
+        # VACUOUSLY true for both, on every input, including one they should act
+        # on. That is the vacuous pass this file's docstring names, dressed as
+        # coverage.
+        #
+        # The guarantee each needs is real and differently shaped — no QUESTION
+        # filed for a class the catalog should not flag; no media or format
+        # STAMPED for a serializer absent from the map — and the `declines`
+        # marker as defined reads neither. Recorded as a limit of the rule, not
+        # as a gap in the two catalogs.
+        "grpc-spring",
         "spring-kafka-media",
-        "spring-kafka-message",
-        "aws-sqs-sdk",
+        # `aws-sqs-sdk`, `spring-kafka-message` and `okhttp` left this list in W54
+        # on one SHAPE between them — a message BUILT and never handed to the call
+        # that sends it — carried by two tests: the first two share one, `okhttp`
+        # has its own. All three split assembly from execution, so `build()` is
+        # reached on every abandoned builder in a codebase, which is why the
+        # execution join is a conjunct rather than a convenience and why one
+        # GUARD covers all three.
         "google-pubsub-publisher",
         "google-pubsub-subscriber",
-        "spring-cloud-stream",
+        # `spring-cloud-stream` left this list in W54, and it is the one entry
+        # that turned out to be the SHAPE `G-112` described — a near-miss already
+        # present against the SHIPPED catalog, already pinning a guard, carrying no
+        # `declines` marker. `G-112` did not name it: it named `jakarta-websocket`
+        # and `spring-stomp`, and neither held. `spring-stomp` had already left
+        # this list in W16, and `jakarta-websocket` cannot leave it at all (see
+        # its entry). The gap analysis was right that the backlog over-stated
+        # itself and wrong about every catalog it named. A binder name the
+        # catalog maps to no protocol derives no row and files a question, where
+        # it once fell back to the catalog's own `protocol:` and published a
+        # module's bindings on `kafka` it had never read.
+        # Eight `annotation_driven` catalogs left this list in W54, on TWO tests.
+        # Seven share one — an annotation of the right simple name in another
+        # package, on a class carrying the stereotype the catalog gates on:
+        # `spring-web`, `spring-mvc`, `spring-cloud-openfeign`, `spring-graphql`,
+        # `netflix-dgs`, `spring-ws` and `jakarta-jws`. `jakarta-jws-client` has
+        # its own, because it declines a CLASS for its construct kind rather than
+        # for the package — the mutation harness caught that: it SURVIVED the
+        # shared test, so a marker there would have claimed coverage nothing
+        # carried.
         # `spring-stomp` left this list in W16. Its near-miss is the RSocket
         # discriminator: every conjunct of the rule holds — `@Controller`,
         # `@MessageMapping`, and a class Spring's own STOMP handler would scan —
         # and only the module's BUILD differs. That is the one shape that can
         # decline it, because no fact about the class separates a STOMP
         # controller from an RSocket one.
+        # W54 measured this one rather than taking `G-112`'s word for it. The gap
+        # analysis read it as an entry the backlog OVER-STATES — a near-miss that
+        # exists and lacks only the marker. The near-miss does exist
+        # (`test_endpoints.py::test_a_websocket_client_endpoint_is_not_an_inbound_server_endpoint`,
+        # with a paired positive) and the marker cannot honestly be added: it
+        # obliges a `pins` naming exactly one guard, and that test survives the
+        # removal of `derive_endpoints.type-annotation-gate` and of
+        # `derive_endpoints.addresses-nothing` SEPARATELY, failing only when both
+        # are gone. For this catalog the address is `prefix_from: [value]` on
+        # `@ServerEndpoint` — the annotation `type_annotation` gates on — so no
+        # real input can miss one gate and not the other. It stays here, with the
+        # reason measured instead of assumed.
         "jakarta-websocket",
-        "spring-web",
-        "spring-mvc",
-        "spring-restclient",
-        "spring-cloud-openfeign",
-        "okhttp",
-        "spring-data-rest",
-        "spring-graphql",
+        # `spring-restclient` left this list in W54 — the WebClient near-miss's
+        # synchronous twin, and measured the same way: `RestClient` declares no
+        # `trace()` at spring-web 6.1.6 or 7.0.2, the two versions the catalog's
+        # own `measured:` block records, and its eight roots are exactly the eight
+        # methods that return a request spec at both.
+        # `okhttp` left this list in W54. Its near-miss is a request BUILT and
+        # never issued — every conjunct holds and only the `newCall` join is
+        # missing — measured against the shipped catalog, where the abandoned-
+        # builder negative that already existed used an invented one.
+        # `spring-data-rest` left this list in W54. Its near-miss is `G-46`'s own
+        # shape: a repository extending only the bare `Repository` marker, which
+        # licenses no CRUD operation at all, so not one of the six routes derives
+        # — measured against the framework rather than assumed, and the guard it
+        # pins dies when the `needs:` filter is removed.
         "graphql-schema",
-        "netflix-dgs",
         "grpc-java",
-        "grpc-spring",
         "grpc-schema",
         "grpc-net-devh",
-        "spring-ws",
-        "jakarta-jws",
-        "jakarta-jws-client",
         "wsdl-schema",
     }
 )

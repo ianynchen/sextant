@@ -226,6 +226,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.a-built-request-is-not-an-issued-one": Guard(
+        what="a `terminal_via_argument` terminal counts only where the value it produced is "
+        "actually handed to the executing call — `build()`'s own `result` appearing as the "
+        "`source` of an argument to `newCall`/`send`",
+        why="a request BUILT and never issued is not a call anyone makes. OkHttp and the "
+        "AWS SDK both split construction from execution, so `build()` is reached on every "
+        "abandoned builder in a codebase; counting it as a terminal publishes an outbound "
+        "boundary for a request that was assembled and dropped — at `resolved`/`compiler`, "
+        "where nothing downstream can tell it from one the module really issues",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        and _has_execute_join(site, context.sites, "
+                "context.via_argument_names[name])",
+                replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- `supertype_dispatch` ---------------------------------------------
     "supertype_dispatch.declared-supertype": Guard(
         what="a class matches only when it REACHES the descriptor the catalog names "
@@ -570,6 +588,25 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/engines/derived_resource.py",
                 find="        if not any(name in annotations.get(parent, {}) for name in no_repository_beans):",
                 replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "derived_resource.a-route-needs-an-operation-the-contract-licenses": Guard(
+        what="a route derives for a repository only where the repository reaches the CRUD "
+        "operation that route requires — and since W53 every route requires one",
+        why="`G-46`. The collection GET carried no `needs:` at all, on the belief that it is "
+        "the one route every exposed repository serves whatever it extends. Measured in the "
+        "framework: `CrudMethodsSupportedHttpMethods.getMethodsFor` adds GET only behind "
+        "`exposesFindAll()`, which reduces to a `findMethod` lookup over the repository "
+        "interface, and `org.springframework.data.repository.Repository` declares zero "
+        "methods at spring-data-commons 3.2.5 and 4.0.1. Without this filter a bare "
+        "`interface Foo extends Repository<Foo, Long>` publishes `GET /foos` for a collection "
+        "that answers OPTIONS and nothing else",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/derived_resource.py",
+                find="            if needed is not None and needed not in repository.operations:",
+                replace="            if False:  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),

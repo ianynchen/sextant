@@ -4417,6 +4417,45 @@ def _okhttp_generic_method_chain(caller: str, verb_argument: CallArgument) -> li
     ]
 
 
+@pytest.mark.declines("okhttp")
+@pytest.mark.pins("fluent.a-built-request-is-not-an-issued-one")
+def test_an_okhttp_request_built_and_never_issued_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the SHIPPED `okhttp` catalog (W54).
+
+    The abandoned-builder negative already existed against an INVENTED catalog
+    (`test_okhttp_build_joins_newcall_through_the_argument_source`), which is the
+    right place to pin the engine and the wrong place to claim catalog coverage:
+    a `declines` marker names a shipped catalog, and an invented one proves
+    nothing about the file that ships.
+
+    Every conjunct of the real rule holds — `okhttp3.Request$Builder` constructed,
+    a real URL, a real verb, `build()` reached — and only the execution join is
+    missing: nothing hands the built `Request` to `OkHttpClient.newCall`. A
+    request assembled and dropped is not a call anyone makes, and OkHttp splits
+    construction from execution, so this shape occurs in any codebase that builds
+    a request conditionally.
+
+    Paired with `test_okhttps_generic_verb_setter_derives_the_verb_it_was_handed`
+    below, which differs from it in exactly the `newCall` row — the shared chain
+    helper is what sits above."""
+    catalogs = YamlCatalogSource(CATALOGS_DIR).load()
+    okhttp = next(c for c in catalogs if c.id == "okhttp")
+    caller = "com/acme/http/Client#abandoned()."
+    facts = [
+        site
+        for site in _okhttp_generic_method_chain(
+            caller, CallArgument(kind="string", value="DELETE")
+        )
+        if site.target.name != "newCall"
+    ]
+
+    workspace = _resolve_fluent(tmp_path, facts, okhttp)
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 def test_okhttps_generic_verb_setter_derives_the_verb_it_was_handed(tmp_path: Path):
     """`A-C2`, the positive half. `Request.Builder.method("DELETE", body)` is
     OkHttp's fully generic verb setter, and until this fix it was an unmatched
@@ -4640,6 +4679,41 @@ def test_restclient_head_and_options_start_a_request_the_way_get_does(tmp_path: 
         "HEAD": [("HEAD", "/health", "resolved")],
         "OPTIONS": [("OPTIONS", "/health", "resolved")],
     }
+
+
+@pytest.mark.declines("spring-restclient")
+@pytest.mark.pins("fluent.root-is-a-declared-request-starter")
+def test_a_restclient_method_the_framework_does_not_declare_roots_nothing(tmp_path: Path):
+    """§10 near-miss for `spring-restclient` (W54), the synchronous twin of the
+    WebClient one above.
+
+    **Measured rather than assumed**, because the near-miss only means something
+    if the framework really lacks the method: `javap -p` on
+    `org.springframework.web.client.RestClient` at **spring-web 6.1.6 and 7.0.2 —
+    the two versions this catalog's own `measured:` block records** — declares
+    exactly eight methods returning a `RequestHeadersUriSpec`/`RequestBodyUriSpec`
+    (`get head post put patch delete options method`) and no `trace` at either.
+    Those eight are exactly the catalog's eight roots, so the list is complete and
+    `trace()` is outside it for the right reason. Read at the recorded versions
+    deliberately: a docstring citing a version no `measured:` block names is a
+    measurement nobody can find again, which is the shape that discipline exists
+    against.
+
+    It discriminates on the ROOT METHOD alone: the positive above differs from
+    this in that cell and nothing else, so a root that accepted any nullary call
+    on the owner would derive `TRACE /health` here — an outbound call nothing
+    makes, published at `resolved`/`compiler` where nothing downstream can tell
+    it from an observation."""
+    caller = "com/acme/http/Sync#trace()."
+    workspace = _resolve_fluent(
+        tmp_path,
+        _spring_client_chain(caller, _RESTCLIENT_FQN, _RESTCLIENT_SPEC, "trace", "retrieve"),
+        _shipped("spring-restclient"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 def test_a_verb_held_in_an_enum_constant_derives_the_call_without_the_verb(tmp_path: Path):
@@ -5043,6 +5117,136 @@ def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
 
 
 # --- Task 11 precondition (2E-prep, controller plan-amendment ruling):
+_SQS_REQUEST = "software/amazon/awssdk/services/sqs/model/SendMessageRequest#"
+_SQS_CLIENT = "software/amazon/awssdk/services/sqs/SqsClient#"
+_MESSAGE_BUILDER = "org/springframework/messaging/support/MessageBuilder#"
+_KAFKA_TEMPLATE = "org/springframework/kafka/core/KafkaTemplate#"
+
+
+def _split_builder_chain(caller: str, *, issue: bool) -> dict[str, list]:
+    """The two shipped `terminal_via_argument` chains that are NOT okhttp's, each
+    with and without the executing call.
+
+    Both frameworks split assembling a message from sending it, so `build()` is
+    reached on every abandoned builder in a codebase — which is exactly why the
+    execution join has to be a conjunct and not a convenience."""
+    sqs = [
+        _call(caller, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            caller,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        _call(caller, _SQS_REQUEST, "build", 2, receiver=2, result=3),
+    ]
+    kafka = [
+        _call(
+            caller,
+            _MESSAGE_BUILDER,
+            "withPayload",
+            10,
+            receiver=None,
+            result=11,
+            invoke_kind="static",
+            arguments=[CallArgument(kind="unresolved")],
+        ),
+        _call(
+            caller,
+            _MESSAGE_BUILDER,
+            "setHeader",
+            11,
+            receiver=11,
+            result=12,
+            arguments=[
+                CallArgument(kind="string", value="kafka_topic"),
+                CallArgument(kind="string", value="orders"),
+            ],
+        ),
+        _call(caller, _MESSAGE_BUILDER, "build", 12, receiver=12, result=13),
+    ]
+    if issue:
+        sqs.append(
+            _call(
+                caller,
+                _SQS_CLIENT,
+                "sendMessage",
+                3,
+                receiver=90,
+                result=4,
+                arguments=[CallArgument(kind="instance", source=3, symbol=_SQS_REQUEST)],
+            )
+        )
+        kafka.append(
+            _call(
+                caller,
+                _KAFKA_TEMPLATE,
+                "send",
+                13,
+                receiver=91,
+                result=14,
+                arguments=[
+                    CallArgument(
+                        kind="instance", source=13, symbol="org/springframework/messaging/Message#"
+                    )
+                ],
+            )
+        )
+    return {"aws-sqs-sdk": sqs, "spring-kafka-message": kafka}
+
+
+@pytest.mark.parametrize("catalog_id", ["aws-sqs-sdk", "spring-kafka-message"])
+def test_a_split_builder_chain_that_is_issued_derives_its_destination(
+    tmp_path: Path, catalog_id: str
+):
+    """The paired positive (W54). Without it the near-miss below would pass on a
+    chain broken in some unrelated way, which is the failure the guard harness
+    exists to catch and cannot catch on its own."""
+    caller = "com/acme/msg/Producer#issue()."
+    workspace = _resolve_fluent(
+        tmp_path,
+        _split_builder_chain(caller, issue=True)[catalog_id],
+        _shipped(catalog_id),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["protocol"], r["path"]) for r in rows] == {
+        "aws-sqs-sdk": [("sqs", "/acme/orders")],
+        "spring-kafka-message": [("kafka", "orders")],
+    }[catalog_id]
+
+
+@pytest.mark.declines("aws-sqs-sdk")
+@pytest.mark.declines("spring-kafka-message")
+@pytest.mark.pins("fluent.a-built-request-is-not-an-issued-one")
+@pytest.mark.parametrize("catalog_id", ["aws-sqs-sdk", "spring-kafka-message"])
+def test_a_split_builder_chain_never_issued_derives_nothing(tmp_path: Path, catalog_id: str):
+    """§10 near-miss for the two remaining `terminal_via_argument` catalogs (W54),
+    the same shape as okhttp's.
+
+    Every conjunct holds — the declared root, the declared step carrying a real
+    destination, `build()` reached — and only the execution join is missing:
+    nothing hands the built value to `SqsClient.sendMessage` or to
+    `KafkaTemplate.send`. A message assembled and dropped is not a message
+    anybody sends.
+
+    Differs from the positive above in exactly the executing row."""
+    caller = "com/acme/msg/Producer#abandon()."
+    workspace = _resolve_fluent(
+        tmp_path,
+        _split_builder_chain(caller, issue=False)[catalog_id],
+        _shipped(catalog_id),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], f"{catalog_id} derived a row for a message that is never sent"
+
+
 # verbless fluent chains — a root declaring NO `http_method` capture derives
 # `method` NULL, resolution not penalised for the missing verb, mirroring
 # single_call's own D02 §2 `verbless` row (a topic has no verb). The invented

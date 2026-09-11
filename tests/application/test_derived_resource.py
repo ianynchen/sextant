@@ -397,6 +397,8 @@ def test_item_routes_honour_which_crud_interface_is_extended(tmp_path: Path):
     assert routes == {("GET", "/orders")}
 
 
+@pytest.mark.declines("spring-data-rest")
+@pytest.mark.pins("derived_resource.a-route-needs-an-operation-the-contract-licenses")
 def test_a_bare_repository_marker_derives_nothing_not_even_the_collection_read(tmp_path: Path):
     """`G-46`, measured in W53 by opening the framework rather than by running it.
 

@@ -2660,6 +2660,7 @@ def test_one_function_bean_and_no_definition_still_binds(tmp_path: Path):
     assert rows == [("kafka", "orders.topic")]
 
 
+@pytest.mark.declines("spring-cloud-stream")
 @pytest.mark.pins("config_join.unmapped-binder-derives-no-row")
 def test_an_unmapped_binder_derives_no_row_and_files_a_question(tmp_path: Path):
     """F2 §3.4's second half, and the one defect in this analysis that leaves

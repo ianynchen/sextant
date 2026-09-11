@@ -87,6 +87,55 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **Fourteen catalogs stopped claiming a silence nothing checked** (F9 §10.6, W54). A catalog
+  that matches a shape and publishes a meaning needs a test proving it stays QUIET on a shape
+  it does not own; 24 of the 64 shipped had none. Ten do now.
+  **Seven tests cover the fourteen — five written here, and two markers placed on near-misses
+  that already existed** (`spring-data-rest`'s, written in W53, and `spring-cloud-stream`'s,
+  older still). The shapes repeat, which is why five tests reach twelve catalogs: **seven**
+  `annotation_driven` catalogs share one — an annotation of the right SIMPLE name in another
+  package, on a class carrying the stereotype the catalog gates on — and **two** catalogs that
+  split assembling a message from sending it share another, a message BUILT and never handed
+  to the call that issues it. `okhttp` is a third catalog of that second shape and has its own
+  test rather than a third parameter, so the three share a GUARD, not a near-miss.
+  *This entry first said "five near-misses", "eight" and "three". The first was arithmetic on
+  the other two, and both of those counted a catalog that has its own test as though it shared
+  one — in each case the very next sentence said otherwise. Caught in review.*
+  **Every marker was measured before it was kept, and the harness refused two.** A `declines`
+  marker is a claim that the test fails when a named guard is removed, and `guard_check.py`
+  disables the guard and re-runs to check. `jakarta-jws-client` was almost folded into the
+  eight-way near-miss: it survived, because it declines a CLASS for its CONSTRUCT KIND rather
+  than for the package, so the marker would have recorded coverage the test did not carry. It
+  got its own near-miss on an interface, where the only thing left to vary is the package.
+  **`jakarta-websocket` was the gap analysis's named example of an entry the backlog
+  over-states — a near-miss needing only its marker. Measured, that is not what it is.** The
+  near-miss is real and cannot carry the marker: it survives the removal of the type gate and
+  of the address gate *separately*, and fails only when both are gone. The two are inseparable
+  for this catalog and not by accident — its address is read from the very annotation the type
+  gate checks, so no real input can miss one and not the other. Constructing one that missed
+  only the gate would mean inventing an attribute the annotation does not have. It stays on the
+  backlog with that measured reason in place of the assumption.
+  **Two entries cannot satisfy the rule at all, and say so now rather than reading as ordinary
+  debt.** `grpc-spring` and `spring-kafka-media` never mint an endpoint row by design — each
+  says as much in its own file — so `assert rows == []` is VACUOUSLY true for them on every
+  input, including one they should act on. The guarantee each needs is real and differently
+  shaped: no question filed for a class that should not be flagged, no media stamped for a
+  serializer absent from the map. That is a limit of the rule, recorded as one.
+  **Two of the eight untested COVERAGE rows in the other half of the batch now have tests, and
+  the six that do not are named rather than absorbed** — a ✅ over "untested rows" with one row
+  tested is the same overclaim this wave is about. The second is a ✅ SHIPPED row nobody had
+  exercised: a `@RestController` nested inside another class derives its route the same as a
+  top-level one. Nothing special handles nested classes, which is exactly what makes it worth
+  a test — there is no branch to point at, and if a `$` ever stopped resolving the failure
+  would be silence, the class's whole surface absent with nothing saying so.
+  The first: `COVERAGE.md` states that two controllers
+  implementing one `@HttpExchange` interface derive ONE row, handled by the lexicographically
+  first — a determinism claim (NFR-1) about an application Spring itself refuses to start, with
+  nothing checking it. **An untested determinism claim is the kind that decays without the
+  output ever looking wrong**: a `set` where a sorted list was, and nothing reads as broken, it
+  just differs between runs. The test names the winner rather than counting the rows, and fails
+  when the sort is reversed.
+
 - **A route nobody's repository serves** (F9 §10.5, W53). `spring-data-rest.yml` derived a
   collection `GET` for every exposed repository and gave that one route **no required
   operation at all**, where every other route names one. The file said why: *"the collection
