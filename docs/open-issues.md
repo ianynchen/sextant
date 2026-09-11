@@ -2977,6 +2977,61 @@ per catalog.
 array-reading catalogs should all declare `array_arguments` and the rule W47 measured is
 the wrong test.
 
+### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive
+
+**Found by** the review of `G-63` (`7716ab3`), measured rather than reasoned.
+
+`suspend fun suspCount(): Int` publishes `symbol: java/lang/Integer#`; `fun plainCount(): Int`
+publishes `symbol: int#`. Same for `Boolean` and `Long`. `wire_type` agrees on both
+(`integer`), so a consumer reading the wire projection sees no difference — but
+`ClassScanner.java` names FOUR consumers that compare parameter and return SYMBOLS across
+declarations (an overload dedup key, a bridge-recognition rule, a supertype selector matched
+against catalog-declared types, and a payload-type lookup), and those see two spellings of one
+declared type.
+
+**The cause is the source, not a bug in the read.** A suspending function's declared return is
+recovered from the `Continuation`'s type argument, and a type argument cannot be a primitive —
+the class file genuinely says `Ljava/lang/Integer;` there.
+
+**Strictly better than what it replaced**, which was `java/lang/Object#` for every suspending
+return, so this is an unfinished improvement rather than a regression. **Closes by** reading
+the declared return's classifier from `@kotlin.Metadata` for the primitive cases only, where
+the boxed-versus-primitive answer is exactly what `Attributes.isNullable` already supplies.
+
+### OI-81 — a `$default` bridge and the function beside it disagree about one declared type
+
+**Found by** the review of `G-63` (`7716ab3`).
+
+Measured on `KotlinSample`: `copy` returns `nullable: false` and `copy$default` returns
+`nullable: true`. The bridge is a compiler synthetic with no entry in `@kotlin.Metadata`'s
+function list, so it falls back to Java's rule while its sibling reads the declared type.
+
+**Before this it was uniformly wrong rather than inconsistent** — both said `true` — so the
+register records a NEW disagreement, not a new error. Contained by the bridge carrying
+`synthetic: true`, which a consumer can already filter on, and by §5.13's `$default` row which
+states the bridge is read as a second symbol at all.
+
+**Closes by** the same work that closes `$default` generally: recognising the suffix and the
+mask parameter, at which point the bridge stops being published as an independent declaration.
+
+### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule
+
+**Found by** implementing `G-63`'s return half (`7716ab3`), which closed the half it names and
+left this one measurable.
+
+`KotlinOrder#<init>`'s parameters and `copy`'s read `nullable: true, nullable_resolution:
+"resolved"` regardless of what the source declared, carrying kotlinc's own `@NotNull` in the
+same fact — the identical defect the return half just closed, one position along.
+
+**The mechanism is now in place and unused for this:** `KotlinNullability.Decoded` already
+decodes the function list; what is missing is `KmValueParameter`'s type per position and the
+alignment from a metadata parameter index to a descriptor slot, which is not the identity
+where a synthetic leads or trails.
+
+**Recorded rather than absorbed into the return half's commit**, because a claim that `G-63`
+is closed when half of what its row names is still live is the register defect this file
+exists against. `docs/java-gap-analysis-2026-09-06.md:241`'s `G-63` row names both.
+
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 
 **Found by** the reviews of W50, W53, W54, W56 and W57, each of which caught the same shape
