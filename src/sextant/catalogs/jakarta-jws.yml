@@ -67,9 +67,16 @@ matches:
     # CHECKPOINT FACT (Phase 2I Task 2, item 4): `operationName` arrives as a
     # plain SCALAR string (`{"operationName": "chargeOrder"}`), and a
     # `@WebMethod` that names none carries the key not at all — an annotation's
-    # declared default is never written into the class file. So "absent" is the
-    # only shape the defaulted case can take, which is exactly what
+    # declared default is never written into the annotation USE. So "absent" is
+    # the only shape the defaulted case can take, which is exactly what
     # `path_fallback` below answers.
+    #
+    # *This read "never written into the class file", which W4 made false: the
+    # default IS in the class file, on the annotation TYPE (JVMS 4.7.22
+    # `AnnotationDefault`), and the extractor has emitted it since. The
+    # distinction is the difference between "nobody can know this default" and
+    # "this USE does not carry it" — the first forecloses reading it, the second
+    # is just why `path_fallback` exists.*
     path_from: [operationName]
     prefix_from: []
     prefix_annotation: null

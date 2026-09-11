@@ -6803,7 +6803,7 @@ def test_an_absent_identity_attribute_derives_no_operation_rather_than_a_default
 ):
     """DR-6's refusal-to-default, at the one place this phase could most
     easily have guessed. A framework's own defaults for these attributes are
-    never written into the class file (checkpoint item 4) and, for a
+    never written into the annotation USE (checkpoint item 4) and, for a
     namespace, live in a schema no class file carries — so an absent
     attribute derives an unresolved operation, never a plausible-looking one
     published at `resolved`/`compiler`.

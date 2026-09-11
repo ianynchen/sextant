@@ -1225,8 +1225,9 @@ stops being the identity**: a row declaring this reads its url argument for `pee
 WHOLE and unsplit (an address fed from configuration is a `${...}` expression with no
 authority half to take, and two deployments on one host are two peers), leaving `path` to
 the operation. **An absent attribute derives no operation** — a framework's own default
-for one is never written into the class file, and a scope defaulted from a schema is not in
-the class file at all, so the row is `unresolved` rather than carrying a plausible-looking
+for one is never written into the annotation USE (it lives on the annotation TYPE, JVMS
+4.7.22, emitted since W4), and a scope defaulted from a schema is not in the class file at
+all, so the row is `unresolved` rather than carrying a plausible-looking
 address. **The resolved type is the payload**, so the row describes its request without a
 `body_arg` — *which used to be the point: a declared body capture over a bare parameter
 failed and dropped the row's `resolution`, so this rule was the only way to read such a

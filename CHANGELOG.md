@@ -113,6 +113,26 @@ here would restate those documents rather than add anything.
   itself because a POM's `<dependencies>` list is declarations rather than a resolution — a
   difference between the build systems, not between the rules.
 
+- **"A declared default is never written into the class file" — false since W4, in seven
+  places** (W4a). The statement appears in `derive_endpoints.sql`, `jakarta-jws.yml`, D02 and
+  three test files. The default IS written into the class file: on the annotation TYPE, as
+  `AnnotationDefault` (JVMS 4.7.22), and the extractor has emitted it since W4. What it is
+  never written into is the annotation USE.
+  **That distinction is the whole point, not pedantry.** "Nobody can know this default"
+  forecloses reading it; "this use does not carry it" is merely why `path_fallback` exists. The
+  first sentence would have talked a later reader out of the very work this item proposed.
+  **The work itself is refused, because its consumer does not exist.** The row said a catalog
+  "hardcodes the same number from documentation". Every `default` in the estate was enumerated
+  and none is one: a config key, a framework media type, a strategy name, two Spring config
+  conventions, and `namespace_default: reversed_package` — which the runtime COMPUTES from the
+  package, so reading `AnnotationDefault` there answers `""` and helps nothing. Building the
+  grammar would have added a catalog key with no reader, which is exactly `detect.coordinates`'s
+  own defect: declared by 41 catalogs and read by nothing.
+  `annotation_default` is recorded in M03 as a capability with **no consumer**, with what would
+  end that — a framework whose meaningful default is a literal on the annotation type rather
+  than a rule its runtime computes. *The row's other claim, that `D02:634` needed amending, was
+  also stale: D02 already draws the use/type distinction and credits W4 in both places.*
+
 - **The field check passes, and the two defects that deferred it do not exist** (§1.4, W0b).
   `field_check.py` is the opt-in, network-using check that validates Sextant's output against
   real upstream repositories at pinned commits — never part of the suite, so its claims are

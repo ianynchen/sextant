@@ -438,7 +438,7 @@ declared AS (
     --
     -- `IS DISTINCT FROM` rather than `<>`, and that is the whole rule for an
     -- ABSENT attribute: an annotation's declared default is never written into
-    -- the class file (Phase 2I Task 2 checkpoint item 4), so the attribute
+    -- the annotation USE (Phase 2I Task 2 checkpoint item 4), so the attribute
     -- reads NULL when it was left at its default — and NULL IS DISTINCT FROM
     -- anything, so the declaration is KEPT. Absence is not the withdrawing
     -- value; only the value written out is. A plain `<>` would have made every

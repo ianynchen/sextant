@@ -678,7 +678,9 @@ def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
         )
     # `args` mirrors what a real extractor emits: an ABSENT attribute is
     # absent from the map entirely — an annotation's declared default is
-    # never written into the class file (2H checkpoint answer 1).
+    # never written into the annotation USE (2H checkpoint answer 1). It IS in
+    # the class file since W4, on the annotation TYPE (JVMS 4.7.22); nothing
+    # reads it, and this map is what a USE carries.
     declarations = {
         "explicit": {"value": ["named"]},
         "defaulted": {},
@@ -1525,7 +1527,8 @@ def _qname_facts(
     `scope_annotated` false means the annotation is ABSENT from the type
     altogether; true with `namespace` None means it is PRESENT with the
     attribute absent — which is the only shape a bytecode-defaulted attribute
-    can take, since a declared default is never written into the class file.
+    can take, since a declared default is never written into the annotation USE
+    (it lives on the annotation TYPE, JVMS 4.7.22).
     `owner` carries the package the reversed-package derivation reads, and is
     a parameter so a class in the DEFAULT package can be spelled.
     """
@@ -2276,10 +2279,14 @@ def test_a_withdrawn_declaration_derives_nothing_even_inside_a_gated_class(
 
 
 def test_an_absent_attribute_is_not_the_withdrawing_value(tmp_path: Path):
-    """An annotation's declared default is never written into the class file
+    """An annotation's declared default is never written into the annotation USE
     (checkpoint item 4: `@WebMethod(exclude = true)` emits the attribute,
     `@WebMethod` alone emits `{}`), so the withdrawing attribute reads NULL on
     every declaration that left it alone. Absence must therefore mean KEPT.
+
+    *The default is not unknowable — since W4 it is emitted from the annotation
+    TYPE (JVMS 4.7.22). It is simply not on the USE, which is what this rule
+    reads.*
 
     `defaulted` carries the rule with no attributes at all and still derives;
     a comparison written `<>` instead of `IS DISTINCT FROM` would have made
