@@ -113,6 +113,25 @@ here would restate those documents rather than add anything.
   itself because a POM's `<dependencies>` list is declarations rather than a resolution — a
   difference between the build systems, not between the rules.
 
+- **The field check passes, and the two defects that deferred it do not exist** (§1.4, W0b).
+  `field_check.py` is the opt-in, network-using check that validates Sextant's output against
+  real upstream repositories at pinned commits — never part of the suite, so its claims are
+  true only when someone runs it. Nobody had, since before the canonical-address gate landed.
+  **Run against all three pins on 2026-09-11: `jhipster-sample-app`, `mall-admin` and
+  `spring-petclinic-rest` all check out, analyze, render and match.** Verified as real work
+  rather than a silent success: each clone sits at its pinned commit and each workspace was
+  rewritten by the run.
+  **Both defects the backlog row cited turn out not to be there.** *"25 of 44 routes with no
+  leading slash"* is **zero** today, in every pin — fixed by the very gate the row names as
+  having landed after the pin was recorded. *"8 bare `/` routes, one per HTTP verb"* is real
+  and **correct**: the upstream's `RootRestControllerV1` carries `@RequestMapping("/")` on the
+  class and on the method with no `method` attribute, and Spring's `RequestMethod` enum has
+  exactly eight members, so the framework serves all eight. The row read a right answer as a
+  suspicious one.
+  **The premise that sent this item to the backlog was itself the thing that needed
+  re-measuring** — the same shape as W56's performance premise and W54's backlog counts. A
+  deferred item's justification decays exactly like any other unchecked figure.
+
 - **The eighth time a derived figure was published as a measured one** (§13.8, `OI-79`). The
   reviews of W50, W53, W54, W56 and W57 each caught the same shape independently: a number
   reached by arithmetic on other numbers, or by comparing two measurements that are not alike,
