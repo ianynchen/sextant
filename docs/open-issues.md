@@ -2306,7 +2306,10 @@ METHOD walk: the annotations sit on methods the subclass does not declare at all
 **Closes by** that walk, over `type_hierarchy` (W22). **Falsified by** a DGS codebase
 with no inheritance among its fetchers, for which today's rows are already complete.
 
-### OI-68 — analysing a reactor module now costs 10× what it did, and most of it is avoidable · **SCHEDULED as W56 (Wave 12)**
+### OI-68 — analysing a reactor module costs 10× what it did · **OPEN; both proposed causes REFUTED by W56**
+
+*The title said "and most of it is avoidable" until W56 measured it. The cost is real and has
+GROWN; the two mechanisms this entry blamed are not it.*
 
 **Found by** the W24 review, and confirmed on the pinned corpus.
 
@@ -2355,7 +2358,57 @@ or its method annotations. Two levers, in order of value:
 trace crosses into a dependency's body, its call graph is not waste and lever 1 would cost
 recall.
 
-Scheduled as **W56** in the plan's Wave 12, to run after v1's waves.
+---
+
+## W56 ran this, and refuted both levers. The item stays OPEN.
+
+**Lever 1 is falsified by the condition written directly above.** Traces cross into sibling
+bodies constantly: **2,105 of `mall-admin`'s 3,892 reachability rows are sibling symbols**,
+every one of them non-terminal — bodies that were read — at depths 1 through 8. So "none of
+them traced" and "22,000 edges from callers nothing will ever trace" are both false, and the
+call-graph work is buying recall.
+
+*How much a types-only scan would cost is larger in kind than those 2,105 rows and is NOT
+54% of the graph, which is what W56 first published. That figure was an inference from the
+2,105 stated as a measurement: a types-only sibling loses its CALL SITES, not its symbols, so
+a sibling method called straight from a module body keeps its row — and, in the other
+direction, rows reachable only THROUGH a sibling body are lost although they are not the
+dependency's own. A faithful replay of the walk during review put the loss near half with
+several hundred lost rows belonging to this module or its libraries. The number is not
+restated here because neither replay written for it reproduced the real table.*
+
+**Lever 2 was built, measured and reverted.** Filtering sibling annotations out of the
+endpoint root is output-neutral on this corpus — every table identical — and saves no
+measurable time: alternating runs put it within noise, in both directions. *That is itself
+evidence this entry's attribution was wrong. If removing every sibling annotation from the
+endpoint root changes nothing, the 13s charged to sibling roots in `derive_endpoints` is not
+there.*
+
+**And it loses a real route**, which is why it cannot simply be made cheaper and kept:
+`drop_borrowed_endpoints.sql` keys on the row's HANDLER, a root filter keys on the
+ANNOTATION's own document, and the two come apart wherever a catalog rebinds a handler to an
+implementing type. `tests/application/test_module_edge.py::test_an_exchange_interface_a_SIBLING_declares_still_serves_this_modules_route`
+is that case and fails with such a filter in. Deriving from every document and deleting what
+the module does not own is load-bearing.
+
+**Where the cost actually sits, profiled 2026-09-11** — every figure in the table above has
+drifted, the two largest passes upward, and the whole analyze is now ~100s rather than 67s:
+
+| pass | this entry recorded | measured today |
+|---|---|---|
+| `derive_endpoints` | 15.2s | **~25-36s** |
+| `derive_endpoint_shapes` | ~16.5s | **~35-37s** |
+| `record_call_edges` | 16.7s | **~14-19s** |
+| `record_return_flows` | 5.8s | **~5-6s** |
+| `record_reachability` | not in the table | **~1s** |
+
+*Two independent profiles taken the same day differ by several seconds a pass, so these are
+ranges rather than points — which is the honest shape for a wall-clock figure on one machine,
+and is why a single-run comparison misled this wave once already.*
+
+**Still closes by** attacking the two passes that actually dominate, which are shape
+expansion and endpoint derivation — not by the two levers named above. **Falsified by** a
+profile on another corpus putting the cost somewhere else entirely.
 
 ### OI-69 — Gradle modules cross no module edge · **SCHEDULED as W55 (Wave 12)**
 
@@ -2799,3 +2852,39 @@ per catalog.
 **Falsified by** a ruling that `requires` is a provenance record, in which case the four
 array-reading catalogs should all declare `array_arguments` and the rule W47 measured is
 the wrong test.
+
+### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
+
+**Found by** the reviews of W50, W53, W54, W56 and W57, each of which caught the same shape
+independently. Counted here rather than only in `docs/RUNBOOK.md` because §13.8's 2026-09-06
+ruling says violations are counted where someone other than the agent that committed them can
+see them.
+
+**The defect:** a number reached by arithmetic on other numbers, or by comparing two
+measurements that are not alike, written in the voice of a direct reading. The full table is in
+the RUNBOOK entry *"A figure derived is not a figure measured"*; the eight are `26 of 26`
+capabilities, `8/5/4` component statuses, "retired four entries", "478 of 481 citations", "five
+near-misses cover fourteen", "four methods take a `String`", "a 7s saving", and "would delete
+54% of the graph".
+
+**Why it is a VIOLATION and not an error.** §8.1 already rules that a rule taken from memory or
+documentation is a prediction, and the RUNBOOK already generalises it — *"Half a measured rule
+is a prediction"*. The principle exists and was agreed. What neither reaches is a number in
+PROSE: §8.1 governs what a catalog may claim about a framework, and these are sentences in
+changelog entries, plan rows, register tables and code comments. Those are where this project
+keeps its evidence, and they are checked by nothing.
+
+**Why prose will not fix it.** Every one of the eight was written by someone who had just done
+real measurement a few lines earlier. A measured figure and a derived figure are the same
+sentence once written — "23 entries" and "26 minus the 3 unshipped" — so the text carries no
+mark of which kind it is, and the derived one inherits the authority of the measured one.
+
+**What exists already, and what it does not reach.** `test_shipped_counts.py` checks a stated
+catalog total; `test_source_citations.py` checks a `file.py:NNN`. Both were written *after* this
+class had already recurred, both cover one narrow referent, and neither reaches a percentage, a
+wall-clock timing, a count of tests, or a ratio whose denominator is a judgement.
+
+**Closes by** a mechanism settled with the user, per §13.8 step 3 — a rule already written,
+already agreed and broken eight times is not fixed by writing it a ninth. **Falsified by** a
+ninth instance arising in a place a mechanism could not have reached, which would make this a
+hard problem rather than an unenforced rule.

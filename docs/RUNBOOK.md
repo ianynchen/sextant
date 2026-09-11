@@ -823,3 +823,43 @@ to occurrence 3 by construction. `KotlinInlined.kt` exists now for that reason.
 the set that Y"* about a class file, ask which compilers were in the sample and
 write that instead — or find the attribute where the provider states it, which in
 all three cases existed.
+
+## A figure derived is not a figure measured (§13.8, at least the sixth occurrence)
+
+**The error, in one sentence:** a number reached by arithmetic on other numbers, or by
+comparing two measurements that are not alike, published in the voice of a direct reading.
+
+It is not the same as getting a number wrong. Each of these was reachable by *some* correct-
+looking reasoning, which is why none of them felt like a guess in the moment:
+
+| Wave | Published | Measured | How the wrong one was reached |
+|---|---|---|---|
+| W50 | `26 of 26` scanner capabilities | 23 of 26 | remembered, and self-contradictory in its own sentence |
+| W50 | `8 delivered / 5 in-progress / 4 planned` | 4 / 9 / 4 | recalled instead of counted off the two tables |
+| W53 | "retired **four** entries" | three | counted an item that was already measured |
+| W53 | "478 of 481 citations" | 475 of 478 checkable | the checkable count against a different total |
+| W54 | "**five** near-misses cover fourteen" | seven tests | arithmetic on two sub-figures that were themselves wrong |
+| W57 | "**four** methods take a `String`" | 3, 4 or 5 | three defensible definitions, none stated |
+| W56 | "a **7s** saving" | none | a cold first run against a warm one |
+| W56 | "would delete **54%** of the graph" | near half, differently composed | one measurement restated as a consequence |
+
+**The cause is one thing, not eight.** A measured figure and a derived figure read identically
+in prose — "23 entries" and "26 minus the 3 unshipped" are the same sentence once written down
+— so nothing in the text marks which kind it is, and the derived one inherits the authority of
+the measured one. Every instance above was written by someone who had just done real
+measurement nearby.
+
+**The principle it violates already exists.** §8.1: a rule taken from memory or documentation
+is a PREDICTION, and the RUNBOOK already carries *"Half a measured rule is a prediction"*. What
+neither reaches is a NUMBER IN PROSE. §8.1 governs catalog rules; these are sentences in
+CHANGELOG entries, plan rows, register tables and code comments — the places this project keeps
+its evidence, and the places nothing checks.
+
+**Per §13.8 this is a rule with no reach rather than an implementer's slip**, and the fix is a
+mechanism rather than another correction. Two ratchets already exist for the narrow cases where
+a figure has a machine-checkable referent — `test_shipped_counts.py` for catalog totals,
+`test_source_citations.py` for `file.py:NNN` — and both were themselves written after this
+class had already recurred. Neither reaches a percentage, a timing, or a count of tests.
+
+**Raised rather than settled here**, which is what §13.8 step 3 requires: a rule already
+written, already agreed and broken this many times is not fixed by writing it again.

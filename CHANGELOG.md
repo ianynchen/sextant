@@ -113,21 +113,57 @@ here would restate those documents rather than add anything.
   itself because a POM's `<dependencies>` list is declarations rather than a resolution — a
   difference between the build systems, not between the rules.
 
+- **The eighth time a derived figure was published as a measured one** (§13.8, `OI-79`). The
+  reviews of W50, W53, W54, W56 and W57 each caught the same shape independently: a number
+  reached by arithmetic on other numbers, or by comparing two measurements that are not alike,
+  written in the voice of a direct reading. `26 of 26` capabilities, `8/5/4` statuses, "retired
+  four entries", "478 of 481 citations", "five near-misses cover fourteen", "four methods take
+  a `String`", "a 7s saving", "would delete 54% of the graph".
+  **It is a rule with no reach rather than eight slips.** §8.1 already rules that a rule taken
+  from memory is a PREDICTION and the RUNBOOK already generalises it, but neither reaches a
+  number in PROSE — and prose is where this project keeps its evidence. A measured figure and a
+  derived one are the same sentence once written down, so the derived one inherits the
+  authority of the measured one; every instance was written by someone who had just measured
+  something a few lines earlier.
+  Recorded in `docs/RUNBOOK.md` with the full table, counted in `OI-79` where someone other
+  than the agent that committed them can see it, and **raised rather than settled**: §13.8 step
+  3 says a rule already written, already agreed and broken this many times needs a mechanism
+  agreed with the user, not a ninth restatement.
+
 - **A performance wave that measured its own premise away** (F4 §5.2, W56). The plan said
   scanning a reactor sibling for everything, rather than for its types, costs roughly 33 of
   ~61 seconds of derivation and buys nothing, with two levers to reclaim it. **Neither
   survived contact with the corpus, and that is the deliverable.**
   **The first lever was falsified by the plan's own stated condition** — *"falsified by
   measuring that a real trace crosses into a dependency's body"*. They do, constantly:
-  **2,105 of 3,892 reachability rows are sibling bodies**, at depths 1 through 8, reached from
-  the module's own controllers. Not scanning those bodies would delete 54% of the reachability
-  graph and truncate every trace at the module edge. The 16.7s it costs is buying trace depth.
+  **2,105 of 3,892 reachability rows are sibling symbols**, every one of them non-terminal —
+  bodies that were read — at depths 1 through 8, reached from the module's own controllers.
+  Not scanning those bodies removes their CALL SITES and truncates every trace at the module
+  edge, so that work is buying recall.
+  *Two figures in this paragraph were wrong when first written and are corrected rather than
+  quietly dropped.* It said such a mode "would delete 54% of the reachability graph" — the
+  2,105 restated as a consequence instead of measured as one. A sibling method called straight
+  from a module body keeps its row; rows reachable only THROUGH a sibling body are lost even
+  though they are not the dependency's own. A replay during review put the loss near half, and
+  no figure is given here because neither replay written for it reproduced the real table.
+  It also said "the 16.7s it costs is buying trace depth", which misread the table it cites in
+  the same breath as saying that table had drifted: 16.7s was the WITH-siblings total against
+  1.6s without, and profiled today the pass that builds the reachability graph costs about a
+  second. The call-edge work — a little under twenty — is what the traces rest on.
   **The second lever was built, measured and reverted.** Filtering sibling annotations out of
-  the endpoint root is output-neutral — every table identical, all 160 rows across every
-  column — and **saves nothing**: six ALTERNATING runs give 95.8s with it and 94.7s without.
-  *A first, blocked comparison read 100.2s against 93.3s, and a 7s saving was one sentence from
-  being published. It was a cold run against a warm one. The BEFORE series warms monotonically
-  — 100.2, 96.8, 95.0 — and ends exactly where AFTER ends.*
+  the endpoint root is output-neutral **on this corpus** — every table identical, all 160 rows
+  across every column — and the qualifier matters, because the corpus is exactly what cannot
+  show the loss: `mall-admin`'s three siblings declare no controllers, so the shape that breaks
+  arises nowhere in it. The test below is the evidence, not the corpus.
+  It also **saves no measurable time**: six ALTERNATING runs give 95.8s with it and 94.7s
+  without, and an independent set taken during review put it 2.6s slower. What that excludes is
+  the ~13s the plan charged to this work; it does not establish an exact zero.
+  *A first, BLOCKED comparison — three runs of one configuration, then three of the other —
+  read 100.2s against 93.3s, and a 7s saving was one sentence from being published. It was a
+  cold run against a warm one: that blocked series warms monotonically, 100.2 → 96.8 → 95.0,
+  and its last run equals the other configuration's last run exactly. The alternating means
+  above come from a separate, later set; the two are not comparable and are kept apart here
+  deliberately.*
   **It also loses a real route, which is the finding worth keeping.** `drop_borrowed_endpoints`
   keys on the row's HANDLER; a root filter keys on the ANNOTATION's own document, and the two
   come apart wherever a catalog rebinds a handler to an implementing type — a contract
