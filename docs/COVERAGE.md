@@ -773,7 +773,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-scheduling` | `org.springframework:spring-context` | 6.1.6, 6.2.19, 7.0.9 |
 | `spring-sqs-legacy` | `io.awspring.cloud:spring-cloud-aws-messaging` | 2.4.4 |
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
-| `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
+| `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
 | `spring-stomp-advice` | `org.springframework:spring-messaging` | 6.1.6 |
 |  | `org.springframework:spring-websocket` | 6.1.6 |
@@ -2942,11 +2942,23 @@ binds — `@Bean`, `@Component`, a programmatic `FunctionRegistry` entry — and
 `spring.cloud.function.definition`, and any function-shaped utility method beside it: its real
 binding is absent from the export, with two open questions in its place.
 
-`KafkaTemplate.sendDefault`, `JmsTemplate.convertAndSend(Object)` with no destination and
-`SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` all put the destination
-somewhere the engine cannot read a literal from, so each derives a real row with `path: NULL,
-resolution: unresolved` — the same honesty rule an unreadable OkHttp verb argument follows in
-§5.2, never a fabricated name.
+`KafkaTemplate.sendDefault` and `JmsTemplate.convertAndSend(Object)` with no destination put
+the destination somewhere the engine cannot read a literal from, so each derives a real row
+with `path: NULL, resolution: unresolved` — the same honesty rule an unreadable OkHttp verb
+argument follows in §5.2, never a fabricated name.
+
+**`SqsTemplate`'s builder-lambda `send(Consumer<SqsSendOptions<T>>)` was in that list from
+2026-08-30 until W57 and is not any more** (`OI-74`). The queue name was never unreadable: it is a
+string literal inside the lambda's own synthetic method, which the fact stream records under
+the symbol this call's own argument names. The catalog declares `lambda_arg` and `lambda_steps`
+now — *which builder method inside the body carries the destination, and at which position* —
+and the fixture's `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derives
+`shipments-lambda` at `resolved`, with the payload's contract too. **Reading the named step is
+what keeps it reading rather than guessing**: `SqsSendOptions` declares seven methods and four
+take a string, so a reader taking the first literal in the body would publish a trace header as
+a queue. That conjunct is measured by `single_call.lambda-step-is-the-declared-method`. This
+row read "the engine cannot read a literal from" it, which was a statement about the engine
+dressed as one about the framework.
 
 A listener annotation that puts its destination in an attribute the catalog does not list —
 `@KafkaListener(topicPartitions = …)` is the one still live here — derives **nothing at all**:

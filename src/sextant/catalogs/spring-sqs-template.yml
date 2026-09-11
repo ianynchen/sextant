@@ -10,6 +10,12 @@ detect:
 measured:
   - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # W57. `SqsSendOptions`'s member list is byte-identical at 3.1.1 and 4.1.1 —
+  # seven methods, `queue(String)` and `payload(T)` among them — which is what
+  # `lambda_steps` below reads, so the second version is recorded rather than
+  # only cited in a comment.
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1", "4.1.1"],
+      identity: reported, by: scripts/probes/w57_sqs_send_options.md }
 
 requires: [call_site, string_constants]
 
@@ -25,22 +31,22 @@ matches:
   # CHECKPOINT FACT (real javap descriptors, spring-cloud-aws-sqs 3.1.1):
   # `send(String, T)` arity 2 is the covered form. `send(T)` (destination-
   # less) and `send(Consumer<SqsSendOptions<T>>)` (the queue-in-lambda
-  # builder form) are BOTH arity 1, indistinguishable by name+arity alone —
-  # the fixture only exercises the builder form (`sendShipmentViaBuilder`),
-  # but this row still has to be correct for BOTH: declaring `channel_arg: 0`
-  # (review round 1, finding 3, reproduced) would be safe for the builder
-  # form (its arg 0 is a lambda, `url_of` reads it as `unresolved`) but
-  # would FABRICATE a resolved queue name for `send(T)`'s own destination-
-  # less form the moment a caller anywhere passes a plain STRING payload —
-  # `url_of` cannot tell "the channel, resolved" from "the payload, which
-  # happens to be a string" apart by kind alone, and arg 0 there is genuinely
-  # the payload, not a destination. So this row declares NO `channel_arg` at
-  # all — `_arg_at(arguments, None)` is `None` for both overloads, `path`
-  # NULL, `resolution: unresolved` unconditionally — the call still MATCHES
-  # (name+arity) and derives an honest row rather than vanishing, but never
-  # a channel captured from the wrong argument. Verified live: the fixture's
-  # own builder-lambda row still derives identically (`path: NULL,
-  # resolution: unresolved`) with no `channel_arg` declared at all.
+  # builder form) are BOTH arity 1 — and `channel_arg: 0` would FABRICATE a
+  # resolved queue name for `send(T)`, whose argument 0 is genuinely the payload:
+  # `url_of` cannot tell "the channel, resolved" from "the payload, which happens
+  # to be a string" apart by kind alone.
+  #
+  # **That is still true, and it is no longer why the builder row reads nothing —
+  # because it reads something now** (`OI-74`, W57). This comment said the two
+  # overloads were "indistinguishable by name+arity alone" and concluded that
+  # NEITHER row could declare a capture. The premise expired: every row here
+  # declares its own erased `descriptor`, and `_matching_method` claims an arity
+  # once any candidate declares one, so `(Ljava/lang/Object;)` and
+  # `(Ljava/util/function/Consumer;)` are separated before any position is read.
+  # `send(T)` still declares no capture, for the reason above. The builder row
+  # declares `lambda_arg`/`lambda_steps` instead — not a position at the call
+  # site, which really would be unreadable, but the builder methods called INSIDE
+  # the lambda. The reasoning outlived the fact it rested on, from 2026-08-30 to W57.
   #
   # FOUR ROWS, ONE PER OVERLOAD (descriptor sweep R3), each declaring its own
   # erased JVM `descriptor`, because Java identifies a method by name and
@@ -49,9 +55,9 @@ matches:
   # inherited from `AbstractMessagingTemplate` and both carrying the queue at 0
   # and the payload at 1 — benign either way, so this closes the shape rather
   # than fixing a bug. Arity 1 is `(T)` and `(Consumer<SqsSendOptions<T>>)`,
-  # and the reasoning above is why NEITHER row declares a capture: the two rows
-  # exist so both overloads still MATCH and derive their honest empty row, not
-  # so one of them can start reading argument 0.
+  # and those descriptors are what separate them — which is what makes the
+  # builder row's `lambda_steps` safe and leaves `send(T)` reading nothing at all,
+  # exactly as before. Neither row reads argument 0.
   #
   # Every descriptor here returns `SendResult` because that is what the erasure
   # says; `javap -p -s SqsTemplate` alone does not show three of the four,
@@ -69,8 +75,31 @@ matches:
         channel_arg: 0, body_arg: 1 }
     - { name: send, arity: 1,
         descriptor: "(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;" }
+    # THE WHOLE SEND IN ONE LAMBDA (`OI-74`, W57).
+    # `sqsTemplate.send(to -> to.queue("q").payload(event))` is the SDK's own
+    # fluent overload, and every position this row could name at the call site
+    # is the lambda itself — so the destination is declared where it actually
+    # sits, inside the body. Measured with `javap` on
+    # `io.awspring.cloud.sqs.operations.SqsSendOptions` at **3.1.1 and 4.1.1**,
+    # the two versions this file's `measured:` block records: `queue(String)`
+    # and `payload(T)`, identical at both.
+    #
+    # Safe here and nowhere near the sibling: the arity-1 `(Ljava/lang/Object;)`
+    # row above is the destination-LESS `send(T)`, whose argument 0 genuinely IS
+    # the payload, and the two are separated by DESCRIPTOR rather than by arity —
+    # `_matching_method` claims an arity once any candidate declares one. That is
+    # what makes this declarable at all, and the block at the top of `methods`
+    # records why the older reasoning stopped applying.
+    #
+    # Each step names its OWNER as well as its method. A step matched on the name
+    # alone reads any call in the body that shares it, on any type — measured in
+    # W57's review, a body touching a metrics recorder with a `queue` method
+    # published `internal-metrics` as this module's queue.
     - { name: send, arity: 1,
-        descriptor: "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;" }
+        descriptor: "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsSendOptions, method: queue, channel_arg: 0 },
+                       { owner: io.awspring.cloud.sqs.operations.SqsSendOptions, method: payload, body_arg: 0 }] }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full

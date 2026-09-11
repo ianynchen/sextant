@@ -83,6 +83,129 @@ _DEFAULT_ADDRESS_KEYS = frozenset({"method", "arg"})
 # it is CATALOG data rather than row data because how a protocol spells its
 # composite identity is a property of the protocol, not of one overload.
 _ADDRESS_ARG_2 = "address_arg_2"
+# `OI-74` (W57). A row whose whole send is handed over as ONE builder lambda:
+# the argument at `lambda_arg` is that lambda, and `lambda_steps` names the
+# methods called INSIDE it and which of their arguments carry what.
+_LAMBDA_ARG = "lambda_arg"
+_LAMBDA_STEPS = "lambda_steps"
+
+
+def _channel_declared(method: dict[str, Any]) -> bool:
+    """Whether this row's destination is a CHANNEL — an opaque identity kept
+    whole — rather than a URL for CP-2's peer/path split.
+
+    Asks the `lambda_steps` too, because a row reading its destination inside a
+    lambda declares `channel_arg` on the STEP and not on itself. Reading it with
+    `url_of` instead would turn an SQS queue name into a fabricated peer plus a
+    truncated path, which is the mistake the alias exists to prevent.
+    """
+    return "channel_arg" in method or any(
+        "channel_arg" in step for step in method.get(_LAMBDA_STEPS, ())
+    )
+
+
+def _lambda_arguments(
+    method: dict[str, Any],
+    arguments: list[dict[str, Any]],
+    bare_callers: dict[str, set[str]],
+    by_caller: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """The destination and payload read from inside a builder lambda, and the
+    SYMBOL of the frame they belong to.
+
+    `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derived
+    an outbound SQS row with NO destination until W57 — `path` NULL,
+    `resolution: unresolved` — and the queue name was a string literal sitting in
+    the lambda's own synthetic method the whole time.
+
+    **This is reading, not guessing**, which is the objection the earlier
+    behaviour was written against — the fixture's own comment called the empty row
+    "an honest unresolved row, not a fabricated `shipments-lambda` path". The
+    lambda is ONE argument of ONE call and the fact stream names the synthetic
+    method it compiled to, so there is no ambiguity about whose builder this is.
+
+    **Three conjuncts keep it reading, and W57's review found the first version
+    carried only one of them.** A site in the body is read when its OWNER is one
+    the step declares, its NAME is the step's, and its receiver is a value the
+    body itself produced. Name alone was not enough: measured on the shipped
+    catalog, a body containing `metricsRecorder.queue("internal-metrics")` beside
+    `to.payload(event)` published `internal-metrics` as an SQS queue at
+    `resolved`, and so did a `queue(...)` on a receiver handed in from outside.
+    `fluent._captures_of_body` — the precedent these docstrings cite — gates on
+    all three, and this now matches it.
+
+    **One hop, and no chain walking.** Unlike `fluent`, this does not link sites
+    by `result → receiver` into a chain: a `single_call` row reads declared
+    POSITIONS off named methods, and that is what happens here, one step per name.
+    A lambda reached from inside a lambda is not followed, for the same reason
+    `fluent` stops at one hop — each hop is a place the argument could belong to
+    something else.
+
+    **Two sites matching one step is LAST-WINS, and that is a decision.** A
+    builder's own semantics are last-wins for straight-line code, which is what a
+    lambda body almost always is. A body that sets a destination in both arms of a
+    branch would publish the second arm as fact; that shape is not in any corpus
+    here and the honest alternative — refusing both — would lose the ordinary case
+    to protect against one nobody has seen. Stated rather than left to be found.
+
+    Returns `(None, None, None)` for anything it cannot read: an argument that is
+    not a lambda, a body the facts do not carry (the method compiled into a
+    container this scan never saw), a bare name two callers share, or a body
+    naming none of the declared steps. The row then derives exactly what it
+    derived before the key existed, which is an honest unresolved row.
+    """
+    argument = _arg_at(arguments, method[_LAMBDA_ARG])
+    if argument is None or argument.get("kind") != "lambda":
+        return None, None, None
+    symbol = argument.get("symbol")
+    if symbol is None:
+        return None, None, None
+    # A call argument's `symbol` carries no module coordinates and `call_sites.caller`
+    # does (D00 §5a), so the join is on the bare descriptor — the detail
+    # `fluent._captures_of_body` records as the one that costs a cycle if missed. Where
+    # two full callers share a bare name the body is NOT read: a merged frame would let
+    # another module's literal answer for this one.
+    callers = bare_callers.get(bare_descriptor(str(symbol)), set())
+    if len(callers) != 1:
+        return None, None, None
+    caller = next(iter(callers))
+    sites = by_caller.get(caller, [])
+    steps = {str(step["method"]): step for step in method[_LAMBDA_STEPS]}
+    # Every value this body made, and the ONE it was handed. The builder a lambda
+    # configures is its own PARAMETER — `to` in `to -> to.queue(…)` — so the first
+    # call on it has a receiver the body never produced, and a rule admitting only
+    # produced receivers would reject exactly the call that carries the
+    # destination. A rule admitting any unproduced receiver would be no rule at
+    # all, so: at most ONE unproduced receiver is the seed, and two mean two
+    # builders in one body, which this does not guess between.
+    produced = {site["result"] for site in sites if site["result"] is not None}
+    owned = [
+        site
+        for site in sites
+        if (step := steps.get(str(site["name"]))) is not None
+        and str(site["owner"]) in step["owners"]
+    ]
+    seeds = {
+        site["receiver"]
+        for site in owned
+        if site["receiver"] is not None and site["receiver"] not in produced
+    }
+    if len(seeds) > 1:
+        return None, None, None
+    reachable = produced | seeds
+    url_argument: dict[str, Any] | None = None
+    body_argument: dict[str, Any] | None = None
+    for site in owned:
+        step = steps[str(site["name"])]
+        if site["receiver"] is not None and site["receiver"] not in reachable:
+            continue
+        if "channel_arg" in step:
+            url_argument = _arg_at(site["arguments"], step["channel_arg"])
+        if "body_arg" in step:
+            body_argument = _arg_at(site["arguments"], step["body_arg"])
+    return url_argument, body_argument, caller
+
+
 _ADDRESS_SEPARATOR = "address_separator"
 
 # 2O Task 7 review, Critical 1: the OVERLOAD DISCRIMINATOR. `name` + `arity`
@@ -163,6 +286,29 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         else row
         for row in methods
     ]
+    # `lambda_steps[].owner` converted to the SCIP symbol form once, at run start — the
+    # `channel_via` treatment above and the same binding-seam discipline. A step comparing
+    # a dotted FQN against a call site's slash-and-hash symbol would match NOTHING,
+    # silently, which is what D02 §1's conversion rule exists against. Copied rows, never
+    # the catalog's own dicts: `matches` is the loaded file.
+    methods = [
+        {
+            **row,
+            _LAMBDA_STEPS: [
+                {
+                    **step,
+                    "owners": catalog_symbols(
+                        step["owner"],
+                        f"{catalog.source}: {row['name']}.{_LAMBDA_STEPS}[].owner",
+                    ),
+                }
+                for step in row[_LAMBDA_STEPS]
+            ],
+        }
+        if _LAMBDA_STEPS in row
+        else row
+        for row in methods
+    ]
     # 2I design §4, form 2: how this client type is CONFIGURED with the
     # address its address-less calls use. Catalog-level rather than per-row
     # because it describes the owner, not one of its methods.
@@ -204,8 +350,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for site in workspace.query("call_sites")
     ]
     by_caller: dict[str, list[dict[str, Any]]] = {}
+    # A SECOND index, keyed by BARE descriptor, for `lambda_arg` (`OI-74`, W57).
+    # `call_sites.caller` carries the module coordinates a fact writes (D00 §5a)
+    # and a `lambda` argument's `symbol` does not — a call argument never repeats
+    # them — so a lookup on the raw strings misses every time, silently. That is
+    # the detail `fluent._captures_of_body` records as the one that costs a cycle
+    # if missed, and it costs the same cycle here.
+    # Bare descriptor -> the FULL caller symbols that reduce to it. A set of
+    # names, not a merged site list: two callers differing only in module
+    # coordinates would otherwise have their BODIES merged, and a literal from
+    # the wrong module could win by position. Where the bare name is ambiguous
+    # the body is not read at all — an unresolved row is the honest answer and a
+    # merged frame is not (W57 review).
+    bare_callers: dict[str, set[str]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
+        bare_callers.setdefault(bare_descriptor(str(site["caller"])), set()).add(
+            str(site["caller"])
+        )
     # Both read once per run, the `field_facts`/`_rules_of` precedent, and
     # both empty-and-inert for every catalog declaring neither word.
     identity_facts = (
@@ -279,6 +441,46 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
             body_declared = method.get("body_arg") is not None
+            if _LAMBDA_ARG in method:
+                # THE DESTINATION IS INSIDE THE ARGUMENT (`OI-74`, W57).
+                # `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`
+                # hands the whole send over as one builder lambda, so every
+                # position this row could name at the call site is the lambda
+                # itself. The queue name is a string literal in the synthetic
+                # method that lambda compiled to, and the fact stream records it
+                # there under the symbol the argument names.
+                lambda_url, lambda_body, lambda_caller = _lambda_arguments(
+                    method, arguments, bare_callers, by_caller
+                )
+                if lambda_url is not None:
+                    url_argument = lambda_url
+                if lambda_body is not None:
+                    body_argument = lambda_body
+                body_declared = body_declared or any(
+                    "body_arg" in step for step in method[_LAMBDA_STEPS]
+                )
+                # AND THE FRAME MOVES WITH THEM (W57 review, Critical 1). Every
+                # value these arguments refer to — a `parameter` INDEX, a `source`
+                # VALUE ID — is scoped to the SYNTHETIC METHOD and not to the
+                # method that wrote the lambda. Read against the enclosing
+                # caller's frame, `parameter` 0 resolved to the ENCLOSING method's
+                # first parameter, and the send published a payload contract it
+                # never carries at `resolved`. The two frames line up only by
+                # luck: javac makes captured locals the synthetic method's LEADING
+                # parameters, so the fixture's own case agrees and a method with
+                # one unrelated parameter in front does not.
+                #
+                # Swapping the frame WHOLESALE is sound because a `lambda_arg` row
+                # reads nothing at the call site at all: `_validate_methods`
+                # refuses it beside every outer position, so no argument left here
+                # belongs to the enclosing frame.
+                if lambda_caller is not None:
+                    facts = CallFacts(
+                        supertypes=supertypes,
+                        caller_call_sites=by_caller.get(lambda_caller, []),
+                        referenced=referenced,
+                        caller_parameters=caller_parameters.get(lambda_caller, ()),
+                    )
         # 2I design §4, form 2: a row that names no address position at all
         # takes the one this client type was CONFIGURED with — the address is
         # a property of the receiver, set once, and the call carrying none is
@@ -286,12 +488,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # word AND the row names no position of its own: a declared position
         # is the call's own answer and always wins.
         configured = default_address is not None and not (
-            {"url_arg", "channel_arg", "record_arg"} & method.keys()
+            {"url_arg", "channel_arg", "record_arg", _LAMBDA_ARG} & method.keys()
         )
         if configured:
             declaring = _declaring_type(caller)
             url_argument = None if declaring is None else configured_addresses.get(declaring)
-        address_declared = configured or bool({"url_arg", "channel_arg"} & method.keys())
+        address_declared = configured or bool(
+            {"url_arg", "channel_arg", _LAMBDA_ARG} & method.keys()
+        )
         # `channel_arg` aliases `url_arg` in the grammar but not in the
         # READER (final review, IMPORTANT): a destination is an opaque
         # expression, never a URL to split. SQS's canonical destination is a
@@ -332,7 +536,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # untouched and this is the pre-2F path unchanged.
         url_argument = address_argument(url_argument, field_sources, facts, caller)
         destinations: Sequence[tuple[str | None, str | None, str]]
-        read_destination = channel_of if "channel_arg" in method else url_of
+        read_destination = channel_of if _channel_declared(method) else url_of
         # 2I design §4, form 1: THE IDENTITY IS NOT AT THE CALL. Some
         # protocols name the operation on the payload rather than in the
         # address — the declared type of the argument the call hands over
@@ -391,7 +595,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # meaning applied element-wise to an array nobody has measured.
             destinations = (
                 channels_of(url_argument)
-                if "channel_arg" in method
+                if _channel_declared(method)
                 else [read_destination(url_argument)]
             )
         response_argument = _arg_at(arguments, method.get("response_arg"))
@@ -634,6 +838,78 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`url_arg` and `channel_arg` — they name the same capture (D02 §2's "
                 f"single_call style)"
             )
+        # `lambda_arg`/`lambda_steps` (`OI-74`, W57) are one declaration in two
+        # halves: WHICH argument is the builder lambda, and WHAT to read inside
+        # it. Either alone is a row that says it reads a destination somewhere and
+        # never names the place, which derives an unresolved row while LOOKING
+        # like it declares an address — the shape `address_declared` would then
+        # count as declared and the reader would never fill.
+        if (_LAMBDA_ARG in row) != (_LAMBDA_STEPS in row):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_LAMBDA_ARG}` without `{_LAMBDA_STEPS}` or the reverse — one names the "
+                f"argument that IS the builder lambda and the other what to read inside it, "
+                f"and a row carrying only one of them names no readable position at all "
+                f"(D02 §2, `OI-74`)"
+            )
+        # The lambda IS the whole call, so nothing is left at the call site for an
+        # outer position to name — and the engine relies on that: it swaps the whole
+        # resolution FRAME to the lambda's, which would silently misresolve any
+        # argument still belonging to the enclosing method (W57 review, Critical 1).
+        outer = {
+            "url_arg",
+            "channel_arg",
+            "body_arg",
+            "record_arg",
+            "response_arg",
+            "channel_via",
+            _ADDRESS_ARG_2,
+        } & row.keys()
+        if _LAMBDA_ARG in row and outer:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_LAMBDA_ARG}` beside {sorted(outer)} — a builder lambda IS the whole "
+                f"call, so every position is read inside it, and the values inside belong "
+                f"to a different frame from the ones outside (D02 §2, `OI-74`)"
+            )
+        if _LAMBDA_STEPS in row and not row[_LAMBDA_STEPS]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares an EMPTY "
+                f"`{_LAMBDA_STEPS}` — the row then says it reads a position inside the "
+                f"lambda and names none, which is the shape the paired-key refusal above "
+                f"exists to prevent (D02 §2, `OI-74`)"
+            )
+        for step in row.get(_LAMBDA_STEPS, ()):
+            if "owner" not in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: a `{_LAMBDA_STEPS}` entry on "
+                    f"`{row['name']}` names no `owner` — a step matched on NAME alone "
+                    f"reads any call in the body that happens to share it, on any type, "
+                    f"which publishes an unrelated literal as this row's destination "
+                    f"(D02 §2, `OI-74`; W57 review)"
+                )
+            if "method" not in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: a `{_LAMBDA_STEPS}` entry on "
+                    f"`{row['name']}` names no `method` — a step is matched by the name of "
+                    f"the builder method called inside the lambda, and one without a name "
+                    f"matches every call in the body (D02 §2, `OI-74`)"
+                )
+            if not {"channel_arg", "body_arg"} & step.keys():
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: the `{_LAMBDA_STEPS}` entry "
+                    f"`{step['method']}` on `{row['name']}` declares neither `channel_arg` "
+                    f"nor `body_arg` — a step that reads nothing is a name with no consumer "
+                    f"(D02 §2, `OI-74`)"
+                )
+            if "url_arg" in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: the `{_LAMBDA_STEPS}` entry "
+                    f"`{step['method']}` on `{row['name']}` declares `url_arg` — a "
+                    f"destination read inside a builder lambda is an opaque CHANNEL, kept "
+                    f"whole, and CP-2's peer/path split has nothing to say about it. Use "
+                    f"`channel_arg` (D02 §2, `OI-74`)"
+                )
         if "channel_via" in row and "channel_arg" not in row and "url_arg" not in row:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "

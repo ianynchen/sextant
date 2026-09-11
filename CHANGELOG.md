@@ -87,6 +87,52 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **An SQS send stopped losing its whole queue name** (F5 §6.2, W57, `OI-74`).
+  `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derived an outbound row
+  with **no destination** — `path` NULL, `resolution: unresolved` — **since 2026-08-30**
+  (`dacdf67`, phase 2D), with one live instance in this repository's own fixture output on
+  every run since. *Dated rather than counted in phases: "four phases" appeared here and in a
+  test comment, and no counting of the plan's phases reproduces it.* The queue name was never
+  unreadable: it is a string literal in the lambda's own synthetic method, which the fact
+  stream records under the symbol that call's own argument names.
+  **The empty row was written down as a virtue.** The fixture comment called it "an honest
+  unresolved row, not a fabricated `shipments-lambda` path", and the catalog declared no
+  position because the two arity-1 overloads were "indistinguishable by name+arity alone".
+  Both halves had expired. Descriptors arrived and separate them — the destination-less
+  `send(T)` is `(Ljava/lang/Object;)`, the builder form `(Ljava/util/function/Consumer;)`, and
+  a matcher claims an arity once any candidate declares a descriptor — and reading a literal
+  the fact stream files under the symbol this argument names is reading, not guessing. It is
+  `OI-73` one engine over, where the identical framing cost a WebClient call its whole URL.
+  The address IS the row's identity: DR-5 matches on the wire contract, so a destination-less
+  outbound row links to nothing and tells a reader only that this method sends to SQS.
+  **Measured on the fixture, before and after**: `path` NULL → `shipments-lambda`, `resolution`
+  unresolved → resolved, and the PAYLOAD came back with it, because the same declaration names
+  `payload(arg0)` beside `queue(arg0)` — so the row gained its contract as well as its address
+  and moved from the format ladder's unanswerable rung to `narrowed`. No destination-less SQS
+  row survives anywhere in the fixture, which is the defect's own measure.
+  **The review of this wave found the fix publishing a contract the send never carries, and
+  it is the more interesting half.** A value read out of the lambda belongs to the SYNTHETIC
+  METHOD's frame: `payload(event)` compiles to a `parameter` argument on the lambda's own
+  method, and `parameter` resolves by index against the caller's parameters. Resolved against
+  the ENCLOSING method's, index 0 is that method's first parameter — which in the fixture
+  happens to BE the captured value, so the fixture could not see it. javac makes the mismatch
+  ordinary, because captured locals become the synthetic method's leading parameters.
+  Measured with the two deliberately misaligned: the row published `AuditRecord`, a type the
+  send never carries, at `resolved`. **The frame moves with the arguments now**, which is
+  sound precisely because a builder-lambda row reads nothing at the call site at all — the
+  loader refuses it beside every outer position, so nothing is left belonging to the outer
+  frame.
+  Two more fabrications came with it, both measured rather than reasoned about: a step matched
+  on the method NAME alone read `metricsRecorder.queue("internal-metrics")` as this module's
+  SQS queue, and a bare-descriptor index built with `append` MERGED two callers' bodies so a
+  foreign module's literal could win. A step names its OWNER now, a body with two builders in
+  it is not guessed between, and an ambiguous bare name is not read at all.
+  **What keeps this reading rather than guessing is the step NAME — and its OWNER.** `SqsSendOptions` declares
+  seven methods (`javap`, spring-cloud-aws-sqs 3.1.1 and 4.1.1) and four of them take a string,
+  so a reader taking the first literal in the body would publish a trace header or a message
+  group id as an SQS queue, at `resolved`/`compiler`. That conjunct has a near-miss and a guard
+  that dies without it.
+
 - **Fourteen catalogs stopped claiming a silence nothing checked** (F9 §10.6, W54). A catalog
   that matches a shape and publishes a meaning needs a test proving it stays QUIET on a shape
   it does not own; 24 of the 64 shipped had none. Ten do now.

@@ -1063,7 +1063,7 @@ matches:
 
 Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
 url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
-path_from_argument_type?}`,
+path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?}`,
 beside the catalog-level `default_address?` both described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
@@ -1144,6 +1144,31 @@ answered. This same ladder — literal first, linked call as fallback — is wha
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too.
 
+**`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
+all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
+`sqsTemplate.send(to -> to.queue("shipments").payload(event))`. Every position such a row
+could name is the lambda itself, so `lambda_arg` names which argument that is and
+`lambda_steps` names the builder methods called INSIDE it, each with the positions it
+carries: `[{ method: queue, channel_arg: 0 }, { method: payload, body_arg: 0 }]`. A row
+declaring one without the other is a `CatalogError` — one says which argument, the other what
+to read in it, and a row with only one names no readable position at all. So is a step
+declaring no `method`, a step declaring neither `channel_arg` nor `body_arg`, and a step
+declaring `url_arg`: a destination read inside a builder is an opaque CHANNEL kept whole, and
+CP-2's peer/path split has nothing to say about it.
+
+**Reading the body is reading, not guessing, and the STEP NAME is what makes that true.** The
+lambda is one argument of one call, the fact stream names the synthetic method it compiled to
+under the symbol that argument carries, and that method's own call sites say which builder
+method received which literal — there is no ambiguity about whose builder this is. What there
+would be, without matching the name, is a fabrication: `SqsSendOptions` declares seven methods
+and four of them take a string, so a reader taking the first literal in the body would publish
+a trace header as a queue. One hop only, and no chain linking: a `single_call` row reads
+declared positions off named methods, which is exactly what happens here, and a lambda reached
+from inside a lambda is not followed. *`fluent` solved the same defect at `OI-73` by folding a
+lambda body's captures into a chain; the vocabulary differs because the engines differ, and
+the bare-descriptor lookup — `call_sites.caller` carries module coordinates a call argument's
+`symbol` does not — is shared.*
+
 **`mapping.duplicate: conflict` says the framework REFUSES two handlers on one address**
 (F5 §6.1, W28), and its absence — which is every catalog but `spring-web` and `spring-mvc` —
 says several handlers there is ordinary. `@KafkaListener` on a class with `@KafkaHandler` on
@@ -1216,7 +1241,7 @@ the payload source), as is any malformed or unrecognised rule.
 **`default_address: {method, arg}` is the address a client was CONFIGURED with**, for the
 overloads that carry none — a `WebServiceTemplate` whose `setDefaultUri` was called in its
 holder's constructor. Catalog-level, because it describes the `owner` rather than one of
-its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg` of
+its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg`/`lambda_arg` of
 their own: a declared position is the call's own answer and always wins. The lookup is
 CONFINED TO THE TYPE THAT MAKES THE CALL, and that boundary is the soundness argument —
 nothing links a call's receiver back to the field holding it (a receiver is a value id,

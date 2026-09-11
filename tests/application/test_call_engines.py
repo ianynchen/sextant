@@ -2643,6 +2643,240 @@ _CONNECT_ASYNC = (
 )
 
 
+_SQS_TEMPLATE_OWNER = "io/awspring/cloud/sqs/operations/SqsTemplate#"
+_SQS_SEND_CONSUMER = "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;"
+_SQS_OPTIONS = "io/awspring/cloud/sqs/operations/SqsSendOptions#"
+
+
+def _sqs_builder_lambda(
+    body: list[tuple[str, list]], owners: list[str] | None = None
+) -> list[CallSiteFact]:
+    """`sqsTemplate.send(to -> …)` plus whatever the lambda's own body calls.
+
+    The body's sites are recorded under the SYNTHETIC method the lambda compiled
+    to, exactly as the fact stream records any other method's — that symbol is
+    what the `lambda` argument names, and it carries no module coordinates, which
+    is why the engine looks it up by bare descriptor.
+    """
+    caller = "com/acme/msg/Producer#send()."
+    lambda_symbol = "com/acme/msg/Producer#lambda$send$0(sig_x)."
+    return [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=_SQS_TEMPLATE_OWNER, name="send", descriptor=_SQS_SEND_CONSUMER
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="lambda", symbol=lambda_symbol)],
+        ),
+        *[
+            CallSiteFact(
+                document_id="doc_1",
+                caller=lambda_symbol,
+                # The builder's own erased descriptor. Every `SqsSendOptions` method
+                # returns the options object, which is what makes it a builder;
+                # `lambda_steps` matches on the NAME, so this is shape rather than
+                # a conjunct — but a fact carries one, so the fixture does too.
+                target=CallTarget(
+                    owner=(owners[index] if owners else _SQS_OPTIONS),
+                    name=name,
+                    descriptor=f"({'Ljava/lang/Object;' * len(arguments)})L{_SQS_OPTIONS[:-1]};",
+                ),
+                invoke_kind="interface",
+                ordinal=index,
+                receiver=10 + index,
+                result=11 + index,
+                arguments=arguments,
+            )
+            for index, (name, arguments) in enumerate(body)
+        ],
+    ]
+
+
+def test_a_payload_read_inside_a_lambda_uses_the_LAMBDAS_frame_not_the_callers(
+    tmp_path: Path,
+):
+    """W57 review, Critical 1. A value read out of the lambda body belongs to the
+    SYNTHETIC METHOD's frame, and resolving it against the enclosing method's is
+    how a send publishes a contract it never carries.
+
+    `payload(event)` compiles to a `parameter`-kind argument on the lambda's own
+    method, and `parameter` resolves through `caller_parameters[index]`. Built
+    from the OUTER caller, index 0 is the outer method's first parameter — which
+    in the fixture happens to BE the captured value, so the fixture cannot see
+    the bug. javac makes the mismatch ordinary: captured locals become the
+    synthetic method's leading parameters, so the two frames line up only by
+    luck.
+
+    Here they deliberately do not. The lambda's parameter 0 is an `OrderEvent`;
+    the enclosing method's is an `AuditRecord`. Before the fix this published
+    `AuditRecord` at `resolved` — a type this send never carries, at the tier
+    where nothing downstream can tell it from an observation."""
+    caller = "com/acme/msg/Producer#send()."
+    lambda_symbol = "com/acme/msg/Producer#lambda$send$0(sig_x)."
+    facts = [
+        # The ENCLOSING method, whose parameter 0 is a different type entirely.
+        SymbolFact(
+            document_id="doc_1",
+            symbol=caller,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/msg/AuditRecord#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+        # The lambda's own synthetic method: parameter 0 is what `payload` gets.
+        SymbolFact(
+            document_id="doc_1",
+            symbol=lambda_symbol,
+            construct_kind="method",
+            signature=Signature(
+                parameters=[
+                    Parameter(type=TypeRef(symbol="com/acme/msg/OrderEvent#", wire_type="object"))
+                ],
+                returns=TypeRef(symbol="void#", wire_type=""),
+            ),
+        ),
+        *_sqs_builder_lambda(
+            [
+                ("queue", [CallArgument(kind="string", value="shipments")]),
+                ("payload", [CallArgument(kind="parameter", value=0)]),
+            ]
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog_by_id("spring-sqs-template"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    [row] = rows
+    assert row["path"] == "shipments"
+    assert "AuditRecord" not in str(row["request_shape"]), (
+        "the payload was resolved against the ENCLOSING method's parameters — "
+        f"got {row['request_shape']!r}"
+    )
+
+
+def test_a_queue_named_inside_a_builder_lambda_is_read(tmp_path: Path):
+    """`OI-74`, closed in W57 — the positive, on the shipped catalog.
+
+    Every position `send(Consumer<SqsSendOptions<T>>)` could name at the call site
+    IS the lambda, so `lambda_steps` names the builder methods called inside it
+    instead. Measured with `javap` on `SqsSendOptions` at spring-cloud-aws-sqs
+    3.1.1 and 4.1.1, the two versions the catalog records: `queue(String)` and
+    `payload(T)` at both."""
+    workspace = _resolve(
+        tmp_path,
+        _sqs_builder_lambda(
+            [
+                ("queue", [CallArgument(kind="string", value="shipments")]),
+                ("payload", [CallArgument(kind="instance", symbol="com/acme/msg/Event#")]),
+            ]
+        ),
+        _catalog_by_id("spring-sqs-template"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["protocol"], r["path"], r["peer"], r["resolution"]) for r in rows] == [
+        ("sqs", "shipments", None, "resolved")
+    ]
+
+
+@pytest.mark.declines("spring-sqs-template")
+@pytest.mark.pins("single_call.lambda-step-owner-is-the-declared-type")
+def test_a_declared_step_name_on_another_type_inside_the_lambda_is_not_read(tmp_path: Path):
+    """§10 near-miss for `OI-74`'s reader (W57 review), and it measures the OWNER.
+
+    The first version of this reader matched a step on its NAME alone, and the
+    review measured what that publishes: a body calling
+    `metricsRecorder.queue("internal-metrics")` beside `to.payload(event)` put
+    `internal-metrics` on the row as this module's SQS queue, at
+    `resolved`/`compiler`.
+
+    Every other conjunct holds here — the right outer call, a real lambda, a body
+    the facts carry, a call literally named `queue` carrying a string. Only the
+    TYPE it is called on differs, and a lambda body is ordinary code that touches
+    whatever it likes: a metrics recorder with a `queue` method is not a
+    contrivance, it is one word two libraries both wanted.
+
+    The `payload` call is on the real builder, so the row still derives — the
+    destination alone is withheld, which is the honest shape."""
+    workspace = _resolve(
+        tmp_path,
+        _sqs_builder_lambda(
+            [
+                ("queue", [CallArgument(kind="string", value="internal-metrics")]),
+                ("payload", [CallArgument(kind="instance", symbol="com/acme/msg/Event#")]),
+            ],
+            owners=["com/acme/metrics/MetricsRecorder#", _SQS_OPTIONS],
+        ),
+        _catalog_by_id("spring-sqs-template"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(None, "unresolved")], (
+        "a `queue` call on an unrelated type was read as this row's destination"
+    )
+
+
+@pytest.mark.declines("spring-sqs-template")
+@pytest.mark.pins("single_call.lambda-step-is-the-declared-method")
+def test_a_builder_lambda_naming_no_declared_step_derives_no_destination(tmp_path: Path):
+    """§10 near-miss for `OI-74`'s reader (W57), and it measures the STEP NAME.
+
+    Every other conjunct holds: the right owner, the right descriptor, argument 0
+    a real lambda, a body the facts carry, and string literals sitting in it. Only
+    the method NAMES differ — this body sets a header and a delay, and never calls
+    `queue`. A reader that took the first literal it found in the body would
+    publish `trace-id` as an SQS queue, at `resolved`/`compiler`, where nothing
+    downstream can tell it from an observation.
+
+    That is not a contrived body. `header`, `messageGroupId` and
+    `messageDeduplicationId` are three of the seven methods `SqsSendOptions`
+    declares — measured at spring-cloud-aws-sqs 3.1.1 and 4.1.1 in
+    `scripts/probes/w57_sqs_send_options.md` — and a send that sets a header and
+    takes its queue from a constant elsewhere is ordinary. The row stays
+    destination-less, which is the honest answer and the one the catalog gave
+    before W57 for a different reason.
+
+    *With the guard disabled the published value is `abc123`, the header's own
+    second argument, not `trace-id`: the weakening defaults every unmatched name
+    to the FIRST declared step and last-wins picks the later site. An earlier
+    version of this docstring named `trace-id`, which is what a "first literal in
+    the body" reader would publish and not what this mutation does.*"""
+    workspace = _resolve(
+        tmp_path,
+        _sqs_builder_lambda(
+            [
+                (
+                    "header",
+                    [
+                        CallArgument(kind="string", value="trace-id"),
+                        CallArgument(kind="string", value="abc123"),
+                    ],
+                ),
+                # `messageGroupId(String)`, not `delaySeconds(Integer)`: the first
+                # version of this handed a string to a method the framework
+                # declares as taking an `Integer`, in a docstring arguing the body
+                # is realistic.
+                ("messageGroupId", [CallArgument(kind="string", value="orders-group")]),
+            ]
+        ),
+        _catalog_by_id("spring-sqs-template"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(None, "unresolved")]
+
+
 def _catalog_by_id(catalog_id: str) -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
 

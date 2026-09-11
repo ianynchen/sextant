@@ -211,6 +211,43 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "single_call.lambda-step-is-the-declared-method": Guard(
+        what="a position read INSIDE a builder lambda comes from the builder method the "
+        "catalog names — `queue(arg0)` — and never from whichever call in the body "
+        "happened to carry a literal",
+        why="`OI-74`. The lambda is one argument of one call, which is what makes reading "
+        "its body reading rather than guessing; the NAME is what keeps it so. "
+        "`SqsSendOptions` declares seven methods and four of them take a string, so a "
+        "reader that took the first literal in the body would publish a trace header or a "
+        "message group id as an SQS QUEUE — at `resolved`/`compiler`, where nothing "
+        "downstream can tell it from an observation, and DR-5 would link it against "
+        "endpoints this module never speaks to",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find='        if (step := steps.get(str(site["name"]))) is not None',
+                replace='        if (step := steps.get(str(site["name"]), next(iter(steps.values()))))'
+                " is not None  # guard disabled",
+            ),
+        ),
+    ),
+    "single_call.lambda-step-owner-is-the-declared-type": Guard(
+        what="a call inside a builder lambda is read only where its OWNER is the type the "
+        "step declares — the builder itself, never another object the body happens to touch",
+        why="W57's review measured this one: with the name alone as the conjunct, a body "
+        'containing `metricsRecorder.queue("internal-metrics")` beside `to.payload(event)` '
+        "published `internal-metrics` as this module's SQS QUEUE, at `resolved`/`compiler`. "
+        "A lambda body is ordinary code and touches whatever it likes; what makes reading it "
+        "reading rather than guessing is that every conjunct of the step holds, and the type "
+        "the call is made ON is one of them",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find='        and str(site["owner"]) in step["owners"]',
+                replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- `fluent` ----------------------------------------------------------
     "fluent.root-is-a-declared-request-starter": Guard(
         what="a chain roots only on an owner AND method pair the catalog declares",

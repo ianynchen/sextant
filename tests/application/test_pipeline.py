@@ -358,9 +358,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "order-return-receipts"),
         # `escalate`'s dynamic reply: value-returning, no `@SendTo` at all —
         # `path` NULL, `unresolved` (asserted below). Also shared, from Task
-        # 11 on, by `sendDefault`'s own NULL-path row, JmsTemplate's
-        # destination-less `convertAndSend(event)`, and SqsTemplate's
-        # builder-lambda `send` — every path-NULL messaging row renders the
+        # 11 on, by `sendDefault`'s own NULL-path row and JmsTemplate's
+        # destination-less `convertAndSend(event)` — every path-NULL messaging row renders the
         # same `(None, None)` tuple, so the SET gains no new entry for any
         # of them even though `len(report.endpoints)` does (asserted below).
         # 2E-prep Task 6 adds one more to this same tuple:
@@ -388,6 +387,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `shipments-outbound` is a different topic from the inbound
         # listener's own `shipments-inbound`, so no merge here either.
         (None, "shipments-outbound"),
+        # W57 (`OI-74`): `SqsTemplate#send(to -> to.queue(...).payload(...))`.
+        # This row used to be one of the `(None, None)` tuple's several
+        # contributors — its queue name sat unread inside the builder lambda
+        # since 2026-08-30 (`dacdf67`) — and it is now its own destination.
+        (None, "shipments-lambda"),
         # Both (Phase 2D, Task 11): Pub/Sub's `publish`/`subscribeAndConvert`
         # share this identity — the ONLY messaging path Task 11 introduces on
         # both sides of the merge in the same task (every other Task 11
@@ -2483,35 +2487,50 @@ def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(
     assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
-def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricated_path(
+def test_the_sqs_builder_lambda_derives_the_queue_inside_it(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`:
-    `SqsTemplate.send` has two arity-1 overloads (the destination-less
-    `send(T)` and this builder-consumer `send(Consumer<SqsSendOptions<T>>)`)
-    indistinguishable by name+arity alone, so the catalog declares NO
-    `channel_arg` at all for arity 1 (review round 1, finding 3: declaring
-    `channel_arg: 0` would be safe for THIS call — its arg 0 is a lambda —
-    but would fabricate a resolved queue name for `send(T)`'s own
-    destination-less form the moment some other caller passes a plain
-    string payload, since arg 0 there genuinely IS the payload). The row
-    still MATCHES (name+arity) and still derives — `_arg_at(arguments,
-    None)` is `None` regardless of what kind arg 0 actually carries — `path:
-    NULL, resolution: unresolved` unconditionally, for either overload.
-    Verified directly against the real `call_sites` fact that THIS call
-    site's own arg 0 carries `kind: lambda` (not assumed) — confirming the
-    row derives the same honest answer either way, never the literal
-    `"shipments-lambda"` string sitting inside the lambda body."""
+    """`OI-74`, closed in W57. `sqsTemplate.send(to -> to.queue("shipments-lambda")
+    .payload(event))` derived an outbound SQS row with NO destination for four
+    phases — `path` NULL, `resolution: unresolved` — while the queue name sat as
+    a string literal in the lambda's own synthetic method the whole time.
+
+    **The old behaviour was written down as a virtue**, and this docstring said
+    so: the row was "an honest unresolved row, not a fabricated
+    `shipments-lambda` path", and the catalog declared no position for arity 1
+    because the two overloads were "indistinguishable by name+arity alone". Both
+    halves stopped being true. Descriptors arrived and separate the two — the
+    destination-less `send(T)` is `(Ljava/lang/Object;)` and this is
+    `(Ljava/util/function/Consumer;)`, and `_matching_method` claims an arity
+    once any candidate declares a descriptor — and reading a literal the fact
+    stream records under the symbol this call's own argument names is reading,
+    not guessing. It is `OI-73` one engine over, where the same framing cost a
+    WebClient call its whole URL.
+
+    The address IS the row's identity: DR-5 matches on the wire contract, so a
+    destination-less outbound row links to nothing and tells a reader only that
+    this method sends to SQS.
+
+    Measured on the fixture, before and after: `path` NULL → `shipments-lambda`,
+    `resolution` unresolved → resolved. `peer` stays NULL because a channel is
+    peerless by construction, and the PAYLOAD comes back too — `lambda_steps`
+    names `payload(arg0)` beside `queue(arg0)`, so the row gains its request
+    shape rather than only its address."""
     _, report = resolved_fixture
     [row] = [
         e
         for e in report.endpoints
-        if e["protocol"] == "sqs" and e["direction"] == "outbound" and e["path"] is None
+        if e["protocol"] == "sqs"
+        and e["direction"] == "outbound"
+        and "sendShipmentViaBuilder" in str(e["caller"])
     ]
 
     assert row["caller"].endswith("EventProducers#sendShipmentViaBuilder(sig_b2a754d9).")
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    assert (row["path"], row["resolution"], row["peer"]) == ("shipments-lambda", "resolved", None)
+    assert "OrderEvent" in str(row["request_shape"])
+    # And no destination-less SQS row survives anywhere in the fixture: this
+    # was the only one, so its disappearance is the defect's own measure.
+    assert [e for e in report.endpoints if e["protocol"] == "sqs" and e["path"] is None] == []
 
 
 def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
@@ -3177,7 +3196,13 @@ def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contrac
     rows with no body capture at all — a `send(Message)` whose payload is inside the
     message.
 
-    The guard below counts (20, 26) rather than those figures, and the difference is the
+    **Re-measured in W57**: 20 → 21. `OI-74` taught `single_call` to read a destination and
+    a payload from inside a builder lambda, and the fixture's
+    `sqsTemplate.send(to -> to.queue(…).payload(event))` is a `single_call` row in this very
+    set — so it gains a carried contract, not just an address. The guard's own message says
+    to re-measure rather than re-pin when this moves, and this is that.
+
+    The guard below counts (21, 26) rather than those figures, and the difference is the
     SET, not the run: it omits `aws-sqs-sdk`, and `spring-kafka-message` and `aws-sqs-sdk`
     are `fluent` catalogs rather than `single_call` ones. *An earlier version of this
     docstring explained the gap as "this test's resolve writes one row fewer than the
@@ -3225,7 +3250,7 @@ def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contrac
     # would under-count exactly the rows this measures.
     rows = [row for row in written if row["catalog_id"] in single_call]
     carried = sum(1 for row in rows if row["request_shape"])
-    assert (carried, len(rows)) == (20, 26), (
+    assert (carried, len(rows)) == (21, 26), (
         "the outbound payload count moved — re-measure rather than re-pinning, because a "
         "handful of rows carrying a contract was the defect and this number is what closed it"
     )
@@ -3459,7 +3484,10 @@ def test_the_format_ladder_answers_every_live_row(
     # from the caller's own parameter and its type was not being read. Nothing about the
     # ladder changed; it was being asked about rows with a NULL contract. `resolution` on
     # those rows is untouched and still `unresolved`, which is the other column.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 75
+    # + 1 (`OI-74`, W57): the SQS builder-lambda row gained a declared payload — read from
+    # `payload(arg0)` inside the lambda — so the ladder now has a type to answer off for a
+    # row that carried none. Same mechanism as the nine above, one catalog over.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 76
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
@@ -3493,7 +3521,10 @@ def test_the_format_ladder_answers_every_live_row(
     # 29 since W46: the three client connects. A handshake carries no payload declaration
     # — there is no body to type — so the ladder has nothing to answer off, the same
     # honest answer the server-side connect URLs and `/live`'s raw frame already get.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 29
+    # 28 since W57 (`OI-74`): the SQS builder-lambda row LEFT this bucket for the
+    # `narrowed` one above — the same single row, counted once on each side, which is
+    # what makes these two assertions a pair rather than two numbers.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

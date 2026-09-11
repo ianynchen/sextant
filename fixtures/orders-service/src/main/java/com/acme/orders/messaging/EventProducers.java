@@ -73,13 +73,15 @@ public class EventProducers {
         sqsTemplate.send("shipments-outbound", event);
     }
 
-    // The consumer-builder overload (Task 11 checkpoint ruling): the queue
-    // name is set inside the lambda, not at the call site's own arg 0, so
-    // the catalog's `send arity 1` row (review round 1, finding 3: no
-    // `channel_arg` at all, since arg 0 is the payload on the OTHER arity-1
-    // overload, `send(T)`) matches this call but captures nothing at that
-    // position — an honest unresolved row, not a fabricated
-    // "shipments-lambda" path.
+    // The consumer-builder overload. The queue name is set INSIDE the lambda,
+    // not at the call site's own arg 0 — the SDK's own fluent form.
+    //
+    // This comment used to end "an honest unresolved row, not a fabricated
+    // \"shipments-lambda\" path", and that was the defect rather than the
+    // discipline (`OI-74`, closed in W57). The literal is in the lambda's own
+    // synthetic method, which the fact stream records under the symbol this
+    // call's argument names, so reading it is reading. The row derives
+    // `shipments-lambda` at `resolved` now, with the payload's contract too.
     public void sendShipmentViaBuilder(OrderEvent event) {
         sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event));
     }

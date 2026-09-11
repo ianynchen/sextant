@@ -2565,7 +2565,7 @@ Measured on the fixture: `InventoryWebClient#search` went from `path` NULL to
 Chain reconstruction stays within-method (D00 §5): the lambda body is walked as its own
 chain and only its captures return, one hop, never spliced.
 
-### OI-74 — a `single_call` destination built inside a lambda argument is never read · **SCHEDULED as W57 (Wave 12)**
+### OI-74 — a `single_call` destination built inside a lambda argument is never read · **CLOSED, W57**
 
 **Found by** closing `OI-73`, by asking whether that defect class had siblings.
 
@@ -2589,18 +2589,46 @@ destination-less outbound row links to nothing and tells a reader only that this
 sends to SQS. `SqsTemplate.send(Consumer<SqsSendOptions>)` is the SDK's own fluent
 overload, not an exotic shape.
 
-**Closes by** the mechanism `OI-73` already built one engine over: follow a `lambda`-kind
-argument to the synthetic method it names, walk that method's own call sites, and read the
-catalog-declared positions there. `fluent._fold_lambda_captures` is the working precedent,
-including the detail that costs a cycle if missed — `call_sites.caller` carries the module
-coordinates and a call argument's `symbol` does not, so the lookup is by bare descriptor.
+**CLOSED by W57**, by the mechanism `OI-73` built one engine over, and the detail this entry
+warned about did cost a cycle in the writing: the lookup is by bare descriptor, because
+`call_sites.caller` carries module coordinates a call argument's `symbol` does not.
 
-`single_call` reads its positions off one call site rather than walking a chain, so the
-shape of the fix differs: it needs a declared way to say "this argument is a builder
-lambda, and the destination is at `queue(arg0)` inside it".
+`single_call` reads declared POSITIONS off named methods rather than walking a chain, so the
+vocabulary mirrors that rather than `fluent`'s: `lambda_arg` names the argument that IS the
+builder lambda, and `lambda_steps` names the builder methods called inside it with the
+positions each carries. One hop, no chain linking, and a lambda inside a lambda is not
+followed.
 
-**Falsified by** measuring that the consumer-builder overloads are rare in practice — which
-would lower its priority, not make it correct.
+**Measured on the fixture, before and after.** `EventProducers#sendShipmentViaBuilder`:
+`path` NULL → `shipments-lambda`, `resolution` unresolved → resolved, `peer` NULL throughout
+because a channel is peerless by construction. The PAYLOAD came back with it — `lambda_steps`
+names `payload(arg0)` beside `queue(arg0)` — so the row gained its request shape as well as
+its address, and moved from the format ladder's unanswerable rung to `narrowed`. No
+destination-less SQS row survives anywhere in the fixture, which is the defect's own measure.
+
+**What made it declarable at all was already there.** The catalog's comment said the two
+arity-1 overloads were "indistinguishable by name+arity alone", so it declared no position
+for either — and that stopped being true when descriptors arrived: `_matching_method` claims
+an arity once any candidate row declares a descriptor, and the destination-less `send(T)` is
+`(Ljava/lang/Object;)` where the builder form is `(Ljava/util/function/Consumer;)`. The
+reason for the silence had expired and nothing re-asked the question.
+
+**The conjunct that keeps this reading rather than guessing is the STEP NAME**, measured by
+`single_call.lambda-step-is-the-declared-method` and, since W57's own review, by
+`single_call.lambda-step-owner-is-the-declared-type` beside it. `SqsSendOptions` declares
+**seven** methods and **four** take a `String` at a top-level parameter position — `queue`,
+`header`, `messageGroupId`, `messageDeduplicationId`, measured at spring-cloud-aws-sqs 3.1.1
+and 4.1.1 in `scripts/probes/w57_sqs_send_options.md`, which states that definition because
+three plausible readings of "takes a string" give 3, 4 and 5. So a reader taking the first
+literal in the body has four chances to publish something that is not a queue as one. The
+review measured the owner half of that happening: a body touching a metrics recorder with a
+`queue` method published `internal-metrics` as this module's SQS queue.
+
+*`single_call` reads its positions off one call site rather than walking a chain, so this
+entry predicted the fix "needs a declared way to say `this argument is a builder lambda, and
+the destination is at `queue(arg0)` inside it`". That is what shipped, near enough to quote —
+`lambda_arg` and `lambda_steps` — and the paragraph is kept for that rather than repeated as
+an open question.*
 
 ### OI-75 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
 
