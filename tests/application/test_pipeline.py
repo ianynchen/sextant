@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -1096,8 +1097,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         combinator_rows[("GET", "/fn/health")]["handler"]
         == combinator_rows[("HEAD", "/fn/health")]["handler"]
     )
-    assert combinator_rows[("GET", "/fn/health")]["handler"].endswith(
-        "OrderRoutes#lambda$routes$0(sig_a2451eb8)."
+    # The counter in `lambda$routes$N` is javac's private bookkeeping and the
+    # two JDKs this project builds with disagree: javac 21 numbers per CLASS,
+    # javac 26 per METHOD. `routes` happens to hold the first lambda in this
+    # file, so both spell it `$0` today — and it stops being true the moment a
+    # lambda is added to a method declared above it, as a JDK-21-only failure.
+    # Matched rather than pinned for the same reason
+    # `tests/ingress/test_asm_scanner.py` normalises it: the enclosing method
+    # and the signature are what this asserts, never the counter.
+    assert re.search(
+        r"OrderRoutes#lambda\$routes\$\d+\(sig_a2451eb8\)\.$",
+        combinator_rows[("GET", "/fn/health")]["handler"],
     )
     # `composite()`'s cross-method `.and(other())` reference derives one
     # unresolved row, `(None, None)` — asserted by caller, since its own

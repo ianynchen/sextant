@@ -1,4 +1,5 @@
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -842,11 +843,22 @@ def test_a_returned_lambdas_body_is_named_by_the_site_that_creates_it(tmp_path: 
     sites = [fact for fact in facts if fact.get("kind") == "call_site"]
     dynamic = [site for site in sites if site["invoke_kind"] == "dynamic"]
     assert len(dynamic) == 4, "four @Bean methods, each returning one lambda"
-    assert [site["implementation"] for site in dynamic] == [
-        "com/acme/orders/streams/OrderStreamBindings#lambda$handleOrder$0(sig_b2a754d9).",
-        "com/acme/orders/streams/OrderStreamBindings#lambda$auditTap$0(sig_7f15bbda).",
-        "com/acme/orders/streams/OrderStreamBindings#lambda$orphanConsumer$0(sig_b2a754d9).",
-        "com/acme/orders/streams/OrderStreamBindings#lambda$unselectedBean$0(sig_b2a754d9).",
+    # The trailing counter in `lambda$method$N` is javac's, not the class
+    # file format's, and the two JDKs this project is built with disagree
+    # about it. MEASURED on four methods each returning one lambda:
+    # javac 21 numbers per CLASS (`$0 $1 $2 $3`) and javac 26 numbers per
+    # METHOD (`$0 $0 $0 $0`). Pinning either spelling makes this test assert
+    # the compiler's private bookkeeping, and it green on one JDK and red on
+    # the other — which is exactly how it reached CI red while passing here.
+    #
+    # Everything this test is ABOUT survives the normalisation: the owning
+    # class, which enclosing method each body belongs to, the signature
+    # disambiguator, and the order. Only the counter is dropped.
+    assert [re.sub(r"\$\d+\(", "$N(", site["implementation"]) for site in dynamic] == [
+        "com/acme/orders/streams/OrderStreamBindings#lambda$handleOrder$N(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$auditTap$N(sig_7f15bbda).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$orphanConsumer$N(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$unselectedBean$N(sig_b2a754d9).",
     ]
     # The near-miss on the emission side, and the reason it is checked here
     # too: `implementation` belongs to a bootstrap that names a method, so the
