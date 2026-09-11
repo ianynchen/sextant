@@ -29,12 +29,12 @@ environment or another contributor's machine can be expected to carry.
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
+from fixture_build import compile_fixture
 from sextant.cli.app import cli
 from sextant.domain.enrichment import ENRICHMENT_FILE, load_overlay
 
@@ -65,7 +65,7 @@ def test_tradewind_api_key_enriches_the_fixture_module_live(tmp_path: Path):
         # VACUOUSLY, against a file this run never wrote.
         ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE, ".tradewind"),
     )
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=module_root, check=True)
+    compile_fixture(module_root)
 
     runner = CliRunner()
     for command in ("analyze", "render"):

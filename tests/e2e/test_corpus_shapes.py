@@ -30,7 +30,6 @@ has to answer for. It does not assert what the answer is: that belongs with W22'
 this file fail when the defect is fixed.
 """
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -42,6 +41,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from corpus_shapes import resolvable_superclass_calls
 
+from fixture_build import compile_fixture
+
 FIXTURE = REPO / "fixtures" / "orders-service"
 
 
@@ -52,7 +53,7 @@ def test_the_fixture_contains_a_call_declared_only_on_a_scanned_superclass():
     called with `Customer` as the owner — `spring-petclinic-rest`'s `Owner#setId` shape,
     which occurs there 131 times and occurred here zero times until W21.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
 
     found = set(resolvable_superclass_calls(FIXTURE / "target" / "classes"))
 

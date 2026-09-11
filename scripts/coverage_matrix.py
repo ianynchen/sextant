@@ -116,7 +116,35 @@ def parse(md: str) -> tuple[dict, dict]:
     return counts, numbers
 
 
-def cell(c: Counter | None) -> str:
+def open_blockers() -> dict[str, int]:
+    """`COVERAGE column -> open blocker count`, from `java-kotlin-delivery-list.md`.
+
+    **Why the matrix reads a second document.** A cell's counters answer *how many
+    libraries are catalogued*, and for a week `✅` was written from that alone — so SOAP,
+    GraphQL and WebSocket all read "shipped, nothing outstanding" while each carried an
+    open Major inside a library that WAS catalogued. The word in the legend is
+    "outstanding", and a defect is outstanding; nothing in these counters can see one.
+
+    Read for the Java/Kotlin row only, which is the row that register covers.
+    """
+    import re as _re
+
+    delivery = DOC.parent / "java-kotlin-delivery-list.md"
+    if not delivery.exists():
+        return {}
+    match = _re.search(r"```delivery\n(.*?)```", delivery.read_text(), _re.DOTALL)
+    if match is None:
+        return {}
+    counts: dict[str, int] = {}
+    for line in match.group(1).split("\n"):
+        if not line.strip():
+            continue
+        _, column, blockers = (part.strip() for part in line.split("|"))
+        counts[column] = len(blockers.split())
+    return counts
+
+
+def cell(c: Counter | None, blocked: int = 0) -> str:
     """One matrix cell, in a notation a reader can take at face value.
 
         ✅                        shipped, nothing outstanding
@@ -158,7 +186,18 @@ def cell(c: Counter | None) -> str:
         # no shipped half for them to qualify.
         return f"{gaps}{tail}"
     if not c["partial"] and not gaps:
+        # Every library catalogued — but `✅` claims nothing outstanding, and an open
+        # Critical or Major is outstanding. `tests/architecture/test_feature_delivery.py`
+        # enforces the same rule from the other side.
+        if blocked:
+            return f"◐ ({blocked} open){tail}"
         return f"✅{tail}"
+    if blocked:
+        missing = [f"{c['partial']} limited"] if c["partial"] else []
+        if gaps:
+            missing.append(gaps)
+        missing.append(f"{blocked} open")
+        return f"◐ ({', '.join(missing)}){tail}"
     missing = [f"{c['partial']} limited"] if c["partial"] else []
     if gaps:
         missing.append(gaps)
@@ -173,7 +212,8 @@ def render(counts, numbers, columns, first_col=None) -> str:
         row = [f"**{lang}**"]
         if first_col:
             row.append("✅ ASM" if lang == "Java / Kotlin" else "none")
-        row += [cell(counts.get((lang, h))) for h, _ in columns]
+        blocked = open_blockers() if lang == "Java / Kotlin" else {}
+        row += [cell(counts.get((lang, h)), blocked.get(label, 0)) for h, label in columns]
         out.append("| " + " | ".join(row) + " |")
     return "\n".join(out)
 

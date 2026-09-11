@@ -30,6 +30,7 @@ from pathlib import Path
 
 import pytest
 
+from fixture_build import compile_fixture
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -559,7 +560,6 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     registrations. Confirms both real receiver-argument shapes named in the
     task brief resolve exactly as the hand-built (a)/(b) cases above assert.
     """
-    import subprocess
 
     from sextant.application.ports.scanner import ScanRequest
     from sextant.ingress.extract.jvm.scanner import AsmScanner
@@ -567,7 +567,7 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
 
     repo = Path(__file__).parents[2]
     fixture = repo / "fixtures" / "orders-service"
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    compile_fixture(fixture)
     facts = tmp_path / "facts"
     AsmScanner(extractor_jar()).scan(
         ScanRequest(
@@ -829,7 +829,6 @@ def _resolved_raw_pubsub(tmp_path: Path) -> tuple[DuckDbWorkspace, list]:
     The shipped catalog, not an invented one: `started_by` lives in that file, and a
     test that reproduced it here would pass while the shipped catalog said something
     else — which is how the fabrication survived. The workspace is handed back open."""
-    import subprocess
 
     from sextant.application.ports.scanner import ScanRequest
     from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -838,7 +837,7 @@ def _resolved_raw_pubsub(tmp_path: Path) -> tuple[DuckDbWorkspace, list]:
 
     repo = Path(__file__).parents[2]
     fixture = repo / "fixtures" / "orders-service"
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    compile_fixture(fixture)
     facts = tmp_path / "facts"
     AsmScanner(extractor_jar()).scan(
         ScanRequest(

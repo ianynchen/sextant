@@ -18,7 +18,6 @@ import asyncio
 import gc
 import json
 import shutil
-import subprocess
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +26,7 @@ from typing import cast
 import pytest
 from click.testing import CliRunner
 
+from fixture_build import compile_fixture
 from sextant import api
 from sextant.agents import AGENT_REGISTRY
 from sextant.application.enrich.tools import ToolExecutor
@@ -103,7 +103,7 @@ def compiled_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns(".sextant", ENRICHMENT_FILE, ".tradewind"),
     )
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
+    compile_fixture(root)
     return root
 
 

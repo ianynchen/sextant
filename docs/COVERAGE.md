@@ -18,7 +18,8 @@ differ and one eleven-column table is unreadable.
 
 | cell | means |
 |---|---|
-| `✅` | shipped, nothing outstanding |
+| `✅` | shipped, **and nothing outstanding** — no uncatalogued library AND no open Critical or Major. Enforced by `tests/architecture/test_feature_delivery.py` against `java-kotlin-delivery-list.md` |
+| `◐ (2 open Major)` | every library catalogued, and that many defects open against it — the cell a reader used to see as `✅` |
 | `◐ (2 limited)` | every library catalogued, 2 of them narrower than the framework's rule |
 | `◐ (4A 3B 4C)` | 4 + 3 + 4 libraries not catalogued at all |
 | `◐ (2 limited, 4A 3B 4C)` | both |
@@ -34,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C) | ◐ (2A 2B) | ✅ | ✅ | ✅ | ◐ (1A) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C, 13 open) | ◐ (2A 2B, 4 open) | ◐ (3 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -46,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1A 2B) | ◐ (1A) | ◐ (1B) | ◐ (1A 1B) | ◐ (1 limited, 2A 1B 1C) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1A 2B, 4 open) | ◐ (1A, 2 open) | ◐ (1B, 2 open) | ◐ (1A 1B, 2 open) | ◐ (1 limited, 2A 1B 1C, 4 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -1371,7 +1372,7 @@ parameters but the ADDRESS, on every WebClient call that builds a URL the idioma
 ### 3a-vi. Two handlers a framework would refuse to register (F5 §6.1)
 
 D01 has said since it was written that two handlers declaring one wire contract "is a
-routing-ambiguity finding". Nothing detected one — `docs/documented-not-implemented.md`
+routing-ambiguity finding". Nothing detected one — `docs/open-issues.md` OI-83
 row 9 recorded exactly that — and W28 builds it.
 
 **The reason it is catalog data and not a rule.** Two rows on one address is ORDINARY in
@@ -1955,7 +1956,7 @@ configuration key, a trace, the bundle, the open-question ledger, the rendered d
 a finding about the code's shape. So each of those was committed somewhere — a requirement,
 a design document, a roadmap line — and enumerated NOWHERE, which is how twelve committed
 items came to have no support level anybody could look up. The gap analysis lists all twelve
-(`docs/java-gap-analysis-2026-09-06.md`, RC-4); every one of them is a row below.
+(`docs/java-kotlin-delivery-list.md`, RC-4); every one of them is a row below.
 
 | Axis | Section | First column |
 |---|---|---|

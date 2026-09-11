@@ -182,7 +182,7 @@ def test_every_registered_guard_is_named_by_some_test():
 
     A guard worth registering and pinned by no test is a REAL finding, and it
     belongs where the other coverage gaps are recorded (the near-miss file's
-    backlog, `docs/principles-sweep-2026-09-05.md`'s S1-MAJ-1), not as an entry
+    backlog, `docs/open-issues.md` OI-84's S1-MAJ-1), not as an entry
     here that looks measured.
     """
     named = {guard_id for ids in pinning_tests().values() for guard_id in ids}

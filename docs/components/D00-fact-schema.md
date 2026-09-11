@@ -210,7 +210,7 @@ trace starts from, and the set is `CONTEXT.md`'s own three: "an inbound endpoint
 scheduled job, or a program entry point". Produced by `application/resolve/roots.py` into
 [D01](D01-graph-schema.md) §3's `roots` since 2Q's `I1` — before which this set had no
 producer at all and was entry #7 of
-[documented-not-implemented.md](../documented-not-implemented.md).
+`open-issues.md` OI-83.
 
 *It read `http_inbound`, `soap_inbound`, `grpc_inbound`, `message_inbound`, `scheduled`,
 `cli_entry` until `I1`, and four of those six were one member spelled once per protocol.*

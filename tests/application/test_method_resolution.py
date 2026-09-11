@@ -14,6 +14,7 @@ to hold is a test that stops working the moment the corpus changes.
 
 from pathlib import Path
 
+from fixture_build import compile_fixture
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.domain.closed_sets import MethodResolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
@@ -177,7 +178,6 @@ def test_a_value_returned_from_an_inherited_getter_links_to_its_declaring_class(
     `customer.getId()`, where `getId` is declared on `BaseEntity` and called through
     `Customer`.
     """
-    import subprocess
 
     from sextant.application.ports.scanner import ScanRequest
     from sextant.application.resolve.return_flow import record_return_flows
@@ -186,7 +186,7 @@ def test_a_value_returned_from_an_inherited_getter_links_to_its_declaring_class(
     from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
     fixture = Path(__file__).parents[2] / "fixtures" / "orders-service"
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    compile_fixture(fixture)
     facts = tmp_path / "facts"
     AsmScanner(extractor_jar()).scan(
         ScanRequest(

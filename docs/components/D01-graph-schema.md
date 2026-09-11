@@ -895,7 +895,7 @@ literals are already extracted for endpoint paths; storing all of them is nearly
 > (`documents`, `endpoints`, `shapes`, `annotations`, …) reached through `Workspace.query`,
 > serving M04 rather than M09 — and no consumer of this section's vocabulary has been
 > written. Recorded as entry #11 of
-> [documented-not-implemented.md](../documented-not-implemented.md) by the 2O documentation
+> `open-issues.md` OI-83 by the 2O documentation
 > sweep, which found five documents citing `trace_of` as though it were built. §5.3's second
 > corollary: where a document deliberately describes something ahead of its implementation,
 > it must say so in words a reader cannot mistake for a shipped feature.

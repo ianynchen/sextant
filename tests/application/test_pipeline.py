@@ -1,11 +1,11 @@
 import json
 import re
-import subprocess
 from pathlib import Path
 
 from fixture_module import write_fixture_module_fact
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
+from fixture_build import compile_fixture
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
@@ -58,7 +58,7 @@ def _resolved_fixture(
     two lines mirror `stages/analyze.py`'s own read step exactly, with the
     resource root written out rather than re-detected (this helper already
     hard-codes the module's coordinates for the same reason)."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     facts = tmp_path / "facts"
     AsmScanner(JAR).scan(
         ScanRequest(
@@ -643,6 +643,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `qualifier_from: [namespace]` reads NULL for it and composes no
         # braces). Two identity forms, one mapping block, no engine branch.
         (None, "http://orders.example.com/action/cancelOrder"),
+        # `amendOrder` carries TWO `@PayloadRoot`, which is how Spring-WS routes two
+        # message types to one handler — `@PayloadRoot` declares itself
+        # `@Repeatable(PayloadRoots.class)` and
+        # `PayloadRootAnnotationMethodEndpointMapping` resolves through
+        # `getMergedRepeatableAnnotations`. Both derive because `spring-ws.yml` names the
+        # container (`G-36`); before that the second message was served in production and
+        # absent from the document. Proven independently by
+        # `tests/e2e/test_soap_delivered.py`, which fails if either goes missing.
+        (None, "{http://orders.example.com/ws}amendOrderRequest"),
+        (None, "{http://orders.example.com/ws}reviseOrderRequest"),
         #
         # 2I Task 2 (controller ruling): the JAX-WS surface, `jakarta-jws.yml`.
         # `BillingWebService#charge`'s own `@WebMethod(operationName)`, scoped
@@ -937,7 +947,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 150 since W44: the three `/mvcfn` servlet functional routes that close `G-29`.
     # 153 since W45: the three STOMP connect URLs that close `G-42`.
     # 156 since W46: the three client connects that close `G-32`.
-    assert len(report.endpoints) == 156
+    # 158 since `G-36`: `OrderSoapEndpoint#amendOrder` carries two `@PayloadRoot`,
+    # which is how Spring-WS routes two message types to one handler, and the
+    # container is now declared so both derive. +2 soap inbound.
+    assert len(report.endpoints) == 158
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1801,7 +1814,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # `{http://orders.example.com/ws}placeOrderRequest` is two rows since W27 — the served
         # operation, and `BillingSoapClient`'s call to `${soap.billing.uri}`. They share a QName
         # because they share a payload TYPE, which is not identity
-        "soap": 7,
+        # 9 since `G-36`: `amendOrder` carries two `@PayloadRoot`, and Spring-WS routes both
+        # message types to it. The container is now declared, so both derive rather than the
+        # first one only — one handler, two served messages, two rows.
+        "soap": 9,
         "sse": 2,
         # 7 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
         # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
@@ -1809,7 +1825,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 13,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 156
+    assert sum(counts.values()) == len(report.endpoints) == 158
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3354,7 +3370,8 @@ def test_the_format_ladder_answers_every_live_row(
     # payload type.
     # 7 since W27's review: a SOAP call to a different billing address, a second caller
     # the outbound dedup had been deleting (F5 §6.1 rule 1).
-    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 7
+    # 9 since `G-36` — see the `"soap": 9` bucket above for the derivation.
+    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 9
 
     # Rung 2 — every HTTP route that declares a media type at all, in either
     # of the two ways a route can. THREE declare it on a mapping ANNOTATION;

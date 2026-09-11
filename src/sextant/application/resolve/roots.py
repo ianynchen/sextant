@@ -2,7 +2,7 @@
 
 **The set a trace starts from, made real.** [D00](docs/components/D00-fact-schema.md)
 §4 has documented a `root_kind` set since the fact schema was written and
-nothing produced it — entry #7 of `docs/documented-not-implemented.md` — so a
+nothing produced it — entry #7 of `docs/open-issues.md` OI-83 — so a
 scheduled method sat in a table nobody traced from while an endpoint handler
 was the only thing anything ever started at. `CONTEXT.md` settles the model
 this pass implements:

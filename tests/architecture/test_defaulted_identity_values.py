@@ -1,5 +1,5 @@
 """No catalog seeds an identity value the matched call does not evidence
-(GUIDELINES §8, §8.3; `docs/principles-sweep-2026-09-05.md` §4).
+(GUIDELINES §8, §8.3; `docs/open-issues.md` OI-84 §4).
 
 ## The rule
 

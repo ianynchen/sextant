@@ -307,7 +307,7 @@ and had a task read a `constant` fact kind's value. Neither existed when the spe
 was written: `detect:` was declared by every one of the 41 catalogs shipping then
 and read by nothing, and D00's `constant` kind has no producer at all. Fourteen
 such mechanisms are now registered
-in [documented-not-implemented.md](documented-not-implemented.md), one of which
+in `open-issues.md` OI-83, one of which
 (a routing-ambiguity "collision detector" that D01 describes as a *property* of
 identity, not a component) reached an implementation task's dispatch before a
 grep caught it. *(Both counts are of that moment and are left there deliberately:
@@ -626,7 +626,7 @@ The first half had already been closed, by a different pass. `A-C1` gave
 catalog also engages the SEI fence, and the fence subtracts every interface the
 module implements. So the shipped behaviour on the day the task started was not
 a fabrication and silence — it was **silence alone**: no outbound row, no
-inbound row, a whole HTTP surface absent from the export. `docs/documented-not-implemented.md`
+inbound row, a whole HTTP surface absent from the export. `docs/open-issues.md` OI-83
 still described the fabrication too, in the present tense.
 
 Two things generalise, and the second is the uncomfortable one.
