@@ -266,6 +266,28 @@ WITH RECURSIVE mapping_catalog AS (
 -- catalog composing nothing (every catalog but the two the fixture proves)
 -- costs one empty UNNEST.
 annotations_effective AS (
+    -- W56 tried to filter a SIBLING's annotations out HERE, so that
+    -- `drop_borrowed_endpoints.sql` became a belt-and-braces check rather than the
+    -- mechanism, and MEASUREMENT refused it twice over.
+    --
+    -- **It saves nothing.** Six alternating runs on the largest corpus available
+    -- (2026-09-11): 95.8s mean with the filter, 94.7s without. An earlier blocked
+    -- comparison read 100.2s against 93.3s, which was a cold first run against a
+    -- warm one and not a saving at all.
+    --
+    -- **And it loses a real route.** The delete keys on `coalesce(handler, caller)`;
+    -- a filter here keys on the ANNOTATION's own document, and the two come apart
+    -- wherever a catalog's `resolves.direction` rebinds a row's handler to an
+    -- IMPLEMENTING type: the annotation is then the dependency's and the handler is
+    -- this module's own. The delete keeps such a row correctly; this filter dropped
+    -- it, taking with it an API the module really serves. That shape is ordinary —
+    -- a contract interface in one module, implemented in another — and
+    -- `test_module_edge.py::test_an_exchange_interface_a_SIBLING_declares_still_
+    -- serves_this_modules_route` is the case, which fails with the filter in.
+    --
+    -- So deriving from every document and deleting what the module does not own is
+    -- LOAD-BEARING rather than wasteful, and the tidier-looking root filter is not
+    -- equivalent to it.
     SELECT target, annotation, args FROM annotations
     UNION ALL
     SELECT s.target, s.annotation, s.args::JSON FROM (SELECT UNNEST(

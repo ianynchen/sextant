@@ -87,6 +87,32 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **A performance wave that measured its own premise away** (F4 §5.2, W56). The plan said
+  scanning a reactor sibling for everything, rather than for its types, costs roughly 33 of
+  ~61 seconds of derivation and buys nothing, with two levers to reclaim it. **Neither
+  survived contact with the corpus, and that is the deliverable.**
+  **The first lever was falsified by the plan's own stated condition** — *"falsified by
+  measuring that a real trace crosses into a dependency's body"*. They do, constantly:
+  **2,105 of 3,892 reachability rows are sibling bodies**, at depths 1 through 8, reached from
+  the module's own controllers. Not scanning those bodies would delete 54% of the reachability
+  graph and truncate every trace at the module edge. The 16.7s it costs is buying trace depth.
+  **The second lever was built, measured and reverted.** Filtering sibling annotations out of
+  the endpoint root is output-neutral — every table identical, all 160 rows across every
+  column — and **saves nothing**: six ALTERNATING runs give 95.8s with it and 94.7s without.
+  *A first, blocked comparison read 100.2s against 93.3s, and a 7s saving was one sentence from
+  being published. It was a cold run against a warm one. The BEFORE series warms monotonically
+  — 100.2, 96.8, 95.0 — and ends exactly where AFTER ends.*
+  **It also loses a real route, which is the finding worth keeping.** `drop_borrowed_endpoints`
+  keys on the row's HANDLER; a root filter keys on the ANNOTATION's own document, and the two
+  come apart wherever a catalog rebinds a handler to an implementing type — a contract
+  interface declared in a sibling api module and implemented by this module's own controller.
+  The annotation is the sibling's, the handler is ours, the delete keeps it correctly and the
+  filter dropped it, taking an API the module really serves. **So deriving from every document
+  and deleting what the module does not own is load-bearing rather than wasteful**, and a test
+  now pins that rather than leaving the design looking like an oversight somebody should tidy.
+  The supporting figures had drifted too: the plan cites 6,388 → 79,315 facts and ~61s of
+  derivation, where the same corpus today scans 74,875 facts and resolves in ~95s.
+
 - **An SQS send stopped losing its whole queue name** (F5 §6.2, W57, `OI-74`).
   `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derived an outbound row
   with **no destination** — `path` NULL, `resolution: unresolved` — **since 2026-08-30**

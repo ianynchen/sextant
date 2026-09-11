@@ -49,6 +49,8 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CONTROLLER = "org/springframework/web/bind/annotation/RestController#"
@@ -169,6 +171,105 @@ def _resolved(tmp_path: Path) -> list[dict]:
     rows = [dict(row) for row in workspace.query("endpoints")]
     workspace.close()
     return rows
+
+
+def test_an_exchange_interface_a_SIBLING_declares_still_serves_this_modules_route(
+    tmp_path: Path,
+):
+    """W56. The case that separates deriving-then-deleting from filtering at the
+    root, and the reason this wave kept the former.
+
+    `spring-http-interface`'s flip takes an `@HttpExchange` INTERFACE that a local
+    `@RestController` implements and publishes the route INBOUND, rebinding the
+    handler to the implementing class's method. Put that interface in a reactor
+    sibling — an api module, which is exactly where such interfaces live — and the
+    two keys come apart: the ANNOTATION is the sibling's, and the HANDLER is ours.
+
+    `drop_borrowed_endpoints.sql` keys on `coalesce(handler, caller)` and keeps
+    the row, correctly: this module really serves it. A filter keyed on the
+    annotation's own document would drop it, and the module's whole implemented
+    API would vanish with nothing saying so.
+
+    So the apparently wasteful shape — derive from every document, then delete
+    what the module does not own — is load-bearing, and the tidier-looking
+    root filter is not equivalent to it."""
+    facts = tmp_path / "facts"
+    exchange = "org/springframework/web/service/annotation/HttpExchange#"
+    get_exchange = "org/springframework/web/service/annotation/GetExchange#"
+    interface = "com/acme/common/OrderApi#"
+    interface_method = "com/acme/common/OrderApi#list(sig_a)."
+    implementer = "com/acme/orders/OrderController#"
+    implementer_method = "com/acme/orders/OrderController#list(sig_a)."
+
+    write_fact_file(
+        facts / "sibling.jsonl",
+        _document("sibling", OriginTier.DEPENDENCY, "com.acme:orders-common"),
+        [
+            SymbolFact(
+                document_id="sibling", symbol=interface, construct_kind=ConstructKind.INTERFACE
+            ),
+            SymbolFact(
+                document_id="sibling",
+                symbol=interface_method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=interface,
+            ),
+            AnnotationFact(
+                document_id="sibling",
+                target=interface,
+                retention="runtime",
+                use=AnnotationUse(annotation=exchange, args={"value": "/orders"}),
+            ),
+            AnnotationFact(
+                document_id="sibling",
+                target=interface_method,
+                retention="runtime",
+                use=AnnotationUse(annotation=get_exchange, args={"value": "/list"}),
+            ),
+        ],
+    )
+    write_fact_file(
+        facts / "own.jsonl",
+        _document("own", OriginTier.MODULE_OUTPUT, None),
+        [
+            SymbolFact(
+                document_id="own",
+                symbol=implementer,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[interface],
+            ),
+            SymbolFact(
+                document_id="own",
+                symbol=implementer_method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=implementer,
+            ),
+            AnnotationFact(
+                document_id="own",
+                target=implementer,
+                retention="runtime",
+                use=AnnotationUse(annotation=CONTROLLER, args={}),
+            ),
+        ],
+    )
+    _module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    shipped = [
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-http-interface"
+    ]
+    # `spring-http-interface` declares `requires: [annotation_args, typed_signatures]`,
+    # and a catalog whose requirements are unmet is SKIPPED — which derives nothing and
+    # would make this test pass for the wrong reason.
+    assert (
+        derive_endpoints(workspace, shipped, capabilities=CAPABILITIES | {"typed_signatures"}) == []
+    )
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+
+    assert [(r["direction"], r["path"]) for r in rows] == [("inbound", "/orders/list")], (
+        "the route this module serves through a SIBLING-declared interface was lost"
+    )
 
 
 def test_a_dependencys_controller_does_not_become_this_modules_endpoint(tmp_path: Path):
