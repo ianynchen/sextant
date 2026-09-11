@@ -20,10 +20,94 @@ from typing import Any
 
 from sextant.application.ports.workspace import Workspace
 
-# 2G design §6's closed question set. Adding a kind is a schema change (the
-# renderer and the export both switch on it), never an implementation
-# choice — the same discipline D00's own closed sets keep (NFR-5).
-QUESTIONS = ("payload_binding", "format_conflict")
+# 2G design §6's closed question set, extended by 2O design §0. Adding a kind
+# is a schema change — `egress/render/document.py`'s `_candidate_sentence`
+# switches on it and raises for a kind it does not know — which is why all three
+# of this phase's arrive together. *This read "both the renderer and the export
+# switch on it" until the 2O documentation sweep (`A-Mi12`): only the renderer
+# does. The export carries the rows through unread (`api.py:768`), so the cost
+# of a new kind is one arm, not two.*
+QUESTIONS = (
+    "payload_binding",
+    "format_conflict",
+    # 2O §5: a Spring Integration channel whose destination no configuration
+    # key carries. Candidates: the channel name and the handler symbol.
+    "channel_destination",
+    # 2O §1b: a class a gRPC catalog flagged whose service identity could not
+    # be read. Candidates: the class symbol and the reason.
+    "service_identity",
+    # 2O §2b: a config key whose value differs between environments where one
+    # identity needs one value. Candidates: the key and the per-environment values.
+    "environment_divergence",
+    # F2 §3.4: a configured binder name the catalog's `binder_protocols` does not
+    # map, so the wire this binding speaks is UNREAD. Candidates: the binding and
+    # the configured name.
+    #
+    # It earns a kind of its own rather than joining `channel_destination`
+    # because the two ask different questions of the same row: that one asks
+    # WHERE a known wire addresses, this one asks WHICH WIRE. Before it, an
+    # unmapped name silently took the catalog's declared `protocol:` — and
+    # protocol is identity, so DR-5 linked the row into another consumer's graph
+    # against endpoints this module never speaks to.
+    "binder_protocol",
+    # F2 §3.4: a `sole` cardinality rule found several candidates and the selection
+    # key named none, so WHICH of them the application binds is unread. Candidates:
+    # the candidate names and the key that would answer it.
+    #
+    # It exists because the count taken here is not the count the framework takes:
+    # the framework counts registered beans, `config_join._candidates` counts every
+    # declared method returning one of the declared interfaces. Suppressing without
+    # this question turned a known over-report into a silent under-report.
+    "unselected_binding",
+    # F2 §3.6: a class carrying a messaging handler annotation two frameworks
+    # share, in a module whose build names neither framework's library. WHICH
+    # wire it serves is unread. Candidates: the class and the annotation.
+    #
+    # It is not `service_identity`: that asks what a service is CALLED, this asks
+    # what PROTOCOL it speaks — and protocol is the column DR-5 links on, so
+    # answering it wrongly reaches other people's graphs while a wrong name does
+    # not.
+    "handler_protocol",
+    # `OI-64`. A registration whose framework requires a later ACTIVATION call —
+    # `Subscriber.newBuilder(...).build()` needs `startAsync()` before any message
+    # arrives — where nothing in the building method activates it AND the built object
+    # is returned. The construction alone used to derive a live inbound endpoint, so
+    # this kind replaces a fabricated row. It is asked rather than answered because
+    # chain reconstruction is within-method only (D00 §5): a factory handing a
+    # subscriber back is ordinary code whose caller may well start it, and answering
+    # "no boundary" would swap a fabrication for a silent false negative.
+    "registration_activation",
+    # F5 §6.1 (W27). One wire identity this module both SERVES and CALLS. Candidates:
+    # the served side's handler, and each calling side's caller with the address it
+    # reaches.
+    #
+    # It replaces a merge, not a silence. These two rows used to collapse into one
+    # `direction: both` row, which asserts that the thing served and the thing called
+    # are the same endpoint — a claim about the far end of a call, which is the one
+    # thing a module's own bytecode cannot show. The merge keyed on
+    # `(protocol, method, path)`, and `peer` is not part of endpoint identity (RC-5), so
+    # the fixture's `${soap.billing.uri}` call collided with the module's own served
+    # operation on a shared payload QName.
+    #
+    # It is asked rather than answered because BOTH answers are real and the evidence
+    # does not separate them: a service that publishes to a topic and consumes it back
+    # genuinely is one identity in both directions, while a client calling another
+    # service's copy of a path this module also serves genuinely is two. Curation or the
+    # linking tier decides; a pass that decided here would be guessing at the far end.
+    "self_exchange",
+    # F5 §6.1 (W28). Two handlers claiming one address, where the catalog that derived
+    # them says the framework REFUSES that — Spring MVC throws `IllegalStateException` at
+    # startup rather than choosing, so the application does not run. Candidates: the
+    # handlers.
+    #
+    # A question rather than a silent drop, and rather than a finding of its own: it is
+    # `format_conflict`'s shape one table over — a disagreement in the analysed code that
+    # a person resolves, not something a pass could answer. It is catalog-declared
+    # (`mapping.duplicate: conflict`) because several handlers on one address is ORDINARY
+    # elsewhere: `@KafkaHandler` dispatches by payload type, and this repo's own fixture
+    # has such a pair.
+    "routing_conflict",
+)
 
 
 def reset_open_questions(workspace: Workspace) -> None:

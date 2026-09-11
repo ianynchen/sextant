@@ -18,6 +18,7 @@ from test_render_assembly import (
     GOLDEN_MODULE,
     GOLDEN_REPORT,
     GOLDEN_SHAPE_FIELDS,
+    GOLDEN_TRACES,
     MODULE,
     OPEN_QUESTIONS,
     REPORT,
@@ -255,10 +256,16 @@ def test_the_fixture_workspace_assembles_with_zero_untyped_machine_sections():
 
 def test_every_markdown_heading_becomes_its_own_html_heading():
     """`<h2>` per `##`, `<h1>` for the module title — the golden fixture's own
-    seven `##` sections (Coverage, Structure, Inbound endpoints, Outbound
-    endpoints, Open questions, Known gaps, Catalogs skipped), pinned by count
+    ten `##` sections (Coverage, Structure, Inbound endpoints, Outbound
+    endpoints, Scheduled work, Error handling, Traces, Open questions, Known
+    gaps, Catalogs skipped), pinned by count
     against the same golden markdown this fixture is proven byte-identical to
-    (`test_render_assembly.test_a_module_with_no_overlay_renders_the_checked_in_golden_document`)."""
+    (`test_render_assembly.test_a_module_with_no_overlay_renders_the_checked_in_golden_document`).
+
+    Nine became ten with `## Traces`, which renders unconditionally — the
+    `Scheduled work`/`Error handling` rule rather than the `Open questions`
+    one, because "nothing in this module starts any work" is a finding and a
+    section that disappears cannot say it."""
     sections = assemble_module_document(
         GOLDEN_MODULE,
         GOLDEN_REPORT,
@@ -266,6 +273,7 @@ def test_every_markdown_heading_becomes_its_own_html_heading():
         ("com/example/golden/Newer.class: metadata unreadable",),
         shape_fields=GOLDEN_SHAPE_FIELDS,
         open_questions=OPEN_QUESTIONS,
+        traces=GOLDEN_TRACES,
     )
     document = _html(sections, module_id=GOLDEN_MODULE.module_id)
     # Scoped to the document's own body, before the vendored mermaid script:
@@ -276,7 +284,7 @@ def test_every_markdown_heading_becomes_its_own_html_heading():
     # that coincidence (fix round 1, MINOR 9).
     body = document.split("<script>", 1)[0]
     assert body.count("<h1>") == 1
-    assert body.count("<h2>") == 7
+    assert body.count("<h2>") == 10
     assert "## " not in body
 
 
@@ -284,7 +292,10 @@ def test_the_endpoint_table_is_a_real_table_with_one_row_per_endpoint():
     """A real `<table>`, not a `<pre>` a reader has to squint at — one
     `<tbody>` row per endpoint the golden fixture's report carries: one
     inbound, one outbound (spec §5b/§7's "HTML table/heading presence for the
-    fixture" pin)."""
+    fixture" pin). Four tables now, not two: the same report carries one
+    scheduled-work row and one error-handler row, and each renders as a table
+    of its own (2O design §4). The scoped `<tbody>` searches below are what
+    keep this test about the ENDPOINT tables regardless."""
     sections = assemble_module_document(
         GOLDEN_MODULE,
         GOLDEN_REPORT,
@@ -296,7 +307,7 @@ def test_the_endpoint_table_is_a_real_table_with_one_row_per_endpoint():
     # unrelated `<table>` literal of its own (an HTML template string buried
     # in the library, not this renderer's output).
     body = document.split("<script>", 1)[0]
-    assert body.count("<table>") == 2
+    assert body.count("<table>") == 4
     inbound_body = re.search(
         r"<h2>Inbound endpoints</h2>.*?<tbody>(.*?)</tbody>", document, re.DOTALL
     )

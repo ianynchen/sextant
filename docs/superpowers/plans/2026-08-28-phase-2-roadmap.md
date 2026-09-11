@@ -7,7 +7,7 @@ the linking tier that turns per-service analyses into a system. Each phase is it
 plan, ships one *capability* and the frameworks that ride it, and ends with the same
 review discipline.
 
-**Where we actually are.** Forty-two of the seventy-nine Java rows in
+**Where we actually are — see "Where we actually are — 2026-09-06" below for the current state; the paragraph that follows is the coverage history through 2I and its counts are NOT re-derived past that point.** The §5 checklist has grown since (2O added surfaces and boundary rows, and 2Q added a whole section), so the ratio below is history rather than status — `scripts/coverage_matrix.py` regenerates §2 from §5 and is the only number that cannot drift. Forty-two of the seventy-nine Java rows in
 [COVERAGE.md](../../COVERAGE.md) §5 are shipped — about 53%. An endpoint carries request and
 response contracts field by field, in both directions, with `required` and `nullable`
 resolved; Feign, Retrofit and `@HttpExchange` outbound clients are read (a path a module
@@ -54,11 +54,527 @@ messaging) both exist.
 | **2K** | Enrich | delivered — [spec](../specs/2026-09-02-phase-2k-enrich-design.md) | `sextant module enrich` — a jailed, tool-using agent behind the `EnrichmentAgent` port writes add-only overlay claims (components, sections, diagrams, verdicts) at `evidence: llm`, auto-assembled into `architecture.md`/`architecture.html`; the LLM verification seat D02 §2d reserved for doubtful config joins, now real (2F records the evidence, 2K judges it); internal redaction at every trust-boundary exit (render, export, the enrichment tools' own read path) and `.sextantignore`, both default-on | redaction-before-wire; the enrichment jail; first network dependency, wrapped behind a port with `--dry-run`/`--ingest` doors for any other agent |
 | **2M** | Build systems and output quality | delivered — [spec](../specs/2026-09-02-phase-2m-build-and-output-design.md) | `GradleDetector` (the project's own wrapper + a read-only init script, offline-first, three honest failure classes); Maven's recursive `<modules>` walk with each non-library, non-BOM module analyzed into its own workspace and pinned in `modules.json`; the four rendered-output fixes — backtick-quoted mermaid identifiers, typed HTML sections replacing the `<pre>` blocks, endpoint/shape readability, inline-code in LLM prose; commit-pinned field checks against two live Boot 4.1 repos | detection by asking the build tool itself — DR-6 applied to Gradle |
 | **2N** | Enrichment polish | delivered — [spec](../specs/2026-09-03-phase-2n-enrichment-polish-design.md) | the Tradewind adapter replacing `claude-api` (subscription and api-key auth, module-local session store, the redesigned no-progress guard); config-shaped verdict identities so unresolved-configuration rows become LLM-answerable; the flight-1 INSTRUCTIONS fixes; the `sextant.api` library facade (embed the four verbs, typed errors, CLI byte-unchanged); the first verdict-engine validation flight | the agent behind the port becomes swappable in practice, not just in design |
-| **2O** | Spring surface | planned | the A-tier unshipped rows — gRPC (both starters), `@RabbitListener`, Actuator `@Endpoint`, `@Scheduled`, older `@SqsListener` spellings, Spring Integration adapters; the `@HttpExchange` server-side fence; module-kind evidence widening; leading-slash normalization | catalogs-only again — every row a rehearsal for 2J's acceptance test |
-| **2P** | Spring Cloud | planned | Spring Cloud Gateway's config-declared proxy routes (today invisible — a live gateway analysis showed four `lb://` routes the tables cannot see); `lb://` discovery URIs; the Config Server honesty story | config-declared endpoints — routes that exist in YAML, not code |
+| **2O** | Spring surface | **delivered** — [spec](../specs/2026-09-03-phase-2o-spring-surface-design.md) · [plan](2026-09-03-phase-2o-spring-surface.md) | gRPC both halves (descriptor + bytecode, both starters); Spring Data REST's controller-less API; `@RabbitListener`/`@PulsarListener`, legacy `@SqsListener`, Actuator `@Endpoint`; servlets; `@Scheduled` and `@ControllerAdvice` as their own non-wire tables; Spring Integration channels; the `@HttpExchange` direction flip; the served-path identity migration — **details below the table** | **NOT catalogs-only** — that prediction was wrong. Five new engine styles, two extractor capabilities (9.15 varargs, 9.16 nested annotations), and three closed-set amendments |
+| **2P** | Spring Cloud + Meridian contract + docs-honesty backlog | planned | Spring Cloud Gateway's config-declared proxy routes (today invisible — a live gateway analysis showed four `lb://` routes the tables cannot see); `lb://` discovery URIs; the Config Server honesty story; **the Meridian integration** ([docs/meridian-integration.md](../../meridian-integration.md), ruled into 2P 2026-09-03): boundary vocabulary (FR-21), derivation diff (FR-22), observability map (FR-23) — FR-24's library embedding largely delivered by 2N's `sextant.api` facade | config-declared endpoints — routes that exist in YAML, not code — plus the typed diff/observability contract a consumer can gate PRs on |
 | **2J** | Second frameworks | planned | Micronaut, Quarkus/JAX-RS, MicroProfile REST Client — **zero engine changes is the acceptance test**; then the typed-Catalog refactor | none — that is the point |
-| **2Q** | Call graph | planned — ruled 2026-09-04, after 2J and before L | edge resolution over the already-extracted `call_site` facts (declared edge always; a sole in-module implementer resolves, multiple implementers list as a branch, never a pick); a derived `call_edges` table with bounded, cycle-refusing traversal; machine sequence diagrams per endpoint with machine-stated elision; parse binding past one hop, computed base addresses and reactive flow all upgraded by the same walk | the graph itself — six of the sixteen Known-gaps lines retire or shrink |
+| **2Q** | Call graph and traces | **in progress** — the traversal, `return_flows`, `roots` and the diagrams shipped 2026-09-06, but FR-6 and FR-7 are not met (see 2026-09-07 below). Scope and evidence below | `call_edges` and a bounded, cycle-refusing traversal from every ROOT kind; `return_flows` linking a callee's returned value to its caller's result, so a trace runs request → handler → service → terminal → back through the composition → **response**; lambda bodies (9.17) and return values (9.18) as extractor capabilities; a `roots` table carrying wire identity; a rendered trace and a Mermaid sequence diagram per root with machine-stated elision | the graph itself — and it came in AHEAD of 2J rather than after it, because the sweep's fixes made the boundary set trustworthy enough to trace from |
+| **2R** | Catalog measurement + near-miss coverage | **in progress** — **36 of 55 catalogs carry a `measured:` block, 19 on the unmeasured allowlist** (an earlier "10 of 55" here was wrong: 10 is what Stage 4's own batches measured, not the total, and the two numbers were reported as one) | one pass per catalog answering two questions with one reading: is the encoded rule what the framework ACTUALLY does (a `measured:` block naming coordinate, version and probe), and does a test prove the catalog DECLINES. Batch 1 found a disabled cron reported as live work and a wrong GraphQL address; batch 2 found `@PulsarReader`, an entire inbound surface named nowhere | the `annotation_driven` vocabulary pass — `container`, `path_from_siblings`, direction-aware accessor fallback — each key forced by a measurement, after §13.8's third-occurrence rule fired |
+| **2S** | Documentation debt + the open-issue sweep | planned | ~34 rows answered built / designed / retired, every retirement recorded; then `docs/open-issues.md` worked top to bottom — every Major, plus every Minor whose fix is cheaper than the row describing it, and a stated reason on any that is not | nothing new — this is the phase that makes the documents true |
+| **2T** | Multi-version | planned | Boot 2.x and Boot 4.x acceptance runs (only 3.x has ever been run), then the Jackson 2 vs Jackson 3 shape catalogs F2 made a two-file change instead of 84 | selecting a shape model by resolved dependency coordinate — `tools.jackson.core` vs `com.fasterxml.jackson.core` |
 | **L** | Linking and system scope | planned | `participants`, `links`, DR-5 over bundles; the system document; shape provenance fixed structurally | M05/M06 over federated Parquet |
+
+## What 2O actually carries
+
+**2O gains extractor capability 9.15 — varargs argument modelling — on measured
+evidence, and it is the phase's most reusable single change** (ruled 2026-09-04
+from `scripts/probes/spring-integration-destinations.md`). `MethodFlow.argumentJson`
+does not model the `ANEWARRAY` that builds a varargs array, so every `String...`
+destination — `Amqp.inboundAdapter`, `setQueueNames`, `Kafka.messageDrivenChannelAdapter`
+— emits one opaque `unresolved` and the literal never enters the fact stream. A
+control arm proved the cause is the varargs shape alone: the same eight
+destination spellings into a single-`String` sink discriminate every one. So JMS
+reads and AMQP does not, purely on signature shape, and today a hard-coded
+literal is indistinguishable from an externally configured value for any varargs
+API. 9.15 repairs all of them at once — it is not a Spring Integration feature.
+**Where a value is still not statically knowable after 9.15, it is marked, not
+guessed:** a `channel_destination` open question carrying the channel and
+handler, which is already the enrichment pass's inbox (2K §8, 2N's verdict
+engine), so the model is pointed at exactly the uncertainties rather than at the
+whole document.
+
+### The principles sweep — pulled forward, mid-2O
+
+**Rescheduled 2026-09-05 (user ruling), from "a checkpoint between 2O and 2P".**
+Run the sweeps NOW, against everything shipped to date; fix what they find;
+then resume 2O at Task 8.
+
+The reason is the arity defect. `single_call` matched a catalog row by method
+name and ARGUMENT COUNT — a rule Java does not have — and published a message
+payload as an AMQP destination, a JMS destination and a SOAP service address.
+It was found **by luck**, during an unrelated review of Task 7, five days after
+it shipped and after four earlier reviews had passed the file. Nothing was
+looking for it, because §8.1's language rule did not exist when the code was
+written and a new rule reaches backwards through nothing (§8.3).
+
+Two consequences follow, and they are why the schedule moved:
+
+1. **Every remaining 2O task adds to an unswept pile.** Sweeping after 2O means
+   auditing work written under rules that will themselves be revised by the
+   audit. Sweeping first means Tasks 8-13 are written under settled rules.
+2. **We do not know the count.** One invented language rule was found by
+   accident. The sweep is the only mechanism that turns that into a number, and
+   until it has run, every estimate of what is left in 2A-2N is a guess.
+
+The sweeps are read-only audits and run in parallel; the fixes that follow are
+one writer at a time (§13.9).
+
+
+**Ruled 2026-09-04.** Phases 2A–2N were built before the principles now written
+into GUIDELINES §5.3, §5.4, §8, §8.1, §9 and §10 — because **those principles
+were derived from 2O's failures**. Every rule there exists because something
+shipped without it. So the same defect classes are presumed present in earlier
+work, undetected, and 2O already produced the evidence: eleven documented
+mechanisms that were never built, a `publishing → library` inference asserting
+more than its evidence, a rung-5 doc/code divergence, a path rule applied to a
+client library it was never measured against, and a renderer that raised on a
+question kind the same phase had added.
+
+**Why before 2P specifically, and not at the version-bump gate:** 2P derives the
+Meridian boundary vocabulary from 2O's tables and hands it to an outside
+consumer. A fabrication that survives to that point stops being our bug and
+becomes someone else's data. Auditing after 2J would be cheaper per phase and
+far more expensive per defect.
+
+Six sweeps, each mechanical enough to run independently, ordered by what
+actually found defects in 2O:
+
+1. **Near-miss coverage (§10) — highest yield.** For every engine style and
+   every catalog: does a test prove it DECLINES on near-miss input? 2O's C-1
+   fabricated a gRPC endpoint from an ordinary `extends` pair and the golden
+   fixture missed it *by luck*. Every fixture in this repo demonstrates
+   detection firing; almost none demonstrates it correctly declining.
+2. **Fabrication audit (§8).** For every derivation: what evidence justifies
+   each row, and does the rule assert more than that evidence supports?
+   **Negative claims deserve the hardest look** — `library` meant "publishes AND
+   has no endpoints" and was asserted from publishing alone.
+3. **Mechanism existence and behaviour (§5.3).** Extend
+   `documented-not-implemented.md` beyond the eleven found: cite the CONSUMER,
+   and hunt the costlier second form — mechanisms that ARE read but are gated,
+   scoped, or answer differently than the citing document assumes.
+4. **Framework fidelity (§8.1).** For every catalog: is its rule MEASURED or
+   assumed, and is its version scope stated? A rule taken from documentation is
+   a prediction; two of 2O's checkpoints falsified exactly such predictions.
+5. **Stale rationale (§9).** Comments justifying an omission whose condition a
+   later change silently falsified. Two shipped instances in 2O alone — the
+   renderer's "unreached while QUESTIONS stays the two-kind set", and
+   `# No stamp — the row already carries its own value`, true under one minter
+   and false under two.
+6. **Invented language rules (§8.1's language rule).** *Added 2026-09-05 on the
+   user's instruction, and it is the sweep with the sharpest precedent: 2O's
+   worst shipped defect was one.* For every place we decide what a piece of Java
+   *is* — which method a call resolves to, what a type erases to, what a
+   modifier permits, when two declarations are the same declaration — is the
+   rule the **Java Language Specification's**, or one we invented because it was
+   easier to compute from the facts we happened to have? `_matching_method`
+   selected an overload by name and ARGUMENT COUNT, which is not a rule Java has,
+   and it published a message payload as a wire destination in two shipped
+   catalogs. Arity was convenient because the facts carried an argument list;
+   the parameter-type list was right there too. **The tell is a rule that is a
+   projection of our fact schema rather than a sentence from the JLS.** Named
+   candidates to audit: erasure and generic-signature handling (9.13/9.14),
+   `outer_class`/nested-name parsing, visibility (D00 §5a is two-valued, which
+   Task 7b found the hard way), override identity, varargs and array arguments
+   (9.15), annotation inheritance and meta-annotation resolution, and anywhere a
+   descriptor is compared, split, or constructed by string surgery.
+
+The output is corrections, not a report: each finding either fixes shipped
+behaviour, retires a boundary, or lands in the register with its evidence.
+
+**2O also wires the two consumers 9.15 unblocked.** Capability 9.15 emits the
+varargs elements, but `spring-webflux-router.yml`'s `media_values` and
+`kafka-consumer.yml`'s `all_strings` read POSITIONAL arguments, not `elements`,
+so their derived output is unchanged — WebFlux media columns are still NULL
+even though `MediaType.APPLICATION_JSON` is now in the facts, and Kafka's
+multi-topic arity is readable but unread. Their comments and a COVERAGE row had
+asserted the extractor could not read varargs, which 9.15 made false and which
+that commit corrected in place. Reading `elements` is engine work, small and now
+unblocked, and it stays in 2O rather than becoming a note nobody actions —
+without it 9.15 is a capability with no visible output.
+
+**2O also gains capability 9.16 — nested annotation arguments** (folded in
+2026-09-04, same probe). The annotation-argument collector overrides `visit`,
+`visitEnum` and `visitArray` but not `visitAnnotation`, so an annotation nested
+in another is dropped entirely rather than recorded as unreadable. That one
+missing override is the cause behind three boundaries the spec was about to
+state separately: `@Poller` inside `@InboundChannelAdapter`, `@RabbitListener`'s
+`bindings = @QueueBinding(@Queue(…))`, and `@Schedules` — which matters most,
+because javac folds two or more repeatable `@Scheduled` into it, so the
+multi-trigger case currently yields no readable trigger at all. Fixing the
+override retires all three. It carries a fact-schema decision with it: D00's
+literal model has no annotation-valued argument, so one must be added
+recursively, reusing D00's existing vocabulary.
+
+**Nothing from 2O is deferred to a new phase. Two items were mis-sized inside
+it, not misplaced (ruled 2026-09-04):** servlets (`@WebServlet`) and Spring
+Integration destinations are Spring surface, so they stay in **2O** and their
+tasks are re-scoped to state the engine work each needs, rather than being cut
+to a later letter. Servlets need a member selector that admits `protected` plus
+the Servlet spec's own address/verb rule; Spring Integration needs whatever the
+committed destination probe (`scripts/probes/spring-integration-destinations.md`)
+shows is actually readable. **Project catalogs — letting a repo declare its own
+catalogs — are deliberately NOT scheduled anywhere.** The probe may make them
+unnecessary for Integration, and they carry a commitment worth deciding on its
+own merits: they would turn D02's catalog schema into a public API, after which
+every schema change is a breaking change for users.
+
+
+### 2Q — the full request-to-response trace. Scope ruled 2026-09-05, on measured evidence
+
+**The user's requirement, verbatim in effect: the ENTIRE trace, from request to
+response, and inside lambda bodies. Not inside MyBatis or any third party — the
+third-party boundary is where a trace stops, as already agreed.**
+
+This section exists because the feasibility was PROVEN, not argued, against a
+real application. Everything below was measured on `macrozheng/mall`
+(524 Java files, 31 service implementations, Maven, Spring Boot), built with
+JDK 21 and analysed with the shipped pipeline.
+
+#### What already works, measured
+
+| | mall-admin |
+|---|---|
+| inbound endpoints with a handler | 160 |
+| produce a trace with at least one hop | 159 |
+| **reach a real terminal** (DB / cache / object store) | **158** |
+| reach no terminal, and correctly so | 2 |
+| calls whose target class the workspace scanned | 668 |
+| **resolved to a method symbol** | **655 (98%)** |
+| interface calls into own code | 389 |
+| **sole implementer → RESOLVED** (2Q's own rule) | **180** |
+| several implementers → narrowed branch | 0 — the rule is UNTESTED on real code |
+
+The two endpoints reaching no terminal are correct: `GET /admin/refreshToken` is
+pure JWT string manipulation, and `POST /aliyun/oss/callback` only reads request
+parameters. Both verified in source.
+
+Terminals are the RIGHT ones, not merely present. `/admin/login` derives
+`UmsAdminMapper`, `UmsAdminRoleRelationDao` AND `UmsAdminLoginLogMapper` — the
+third reached only through a private helper two levels down.
+`/brand/update/{id}` derives `PmsBrandMapper` AND `PmsProductMapper`, the second
+being the denormalised write the source comments call out. And it is
+per-METHOD, not per-class: the same `UmsAdminServiceImpl` yields 1, 3 and 1
+terminals for three different endpoints.
+
+The caller-to-callee join is **arithmetic, not a lookup**: `sig_<hex>` is the
+first four bytes of SHA-256 of the JVM descriptor (`ClassScanner.disambiguatorOf`),
+and a `call_site` carries owner, name and descriptor. Inherited calls need one
+walk up `superclass`/`interfaces` — on `spring-petclinic` that lifted resolution
+from 67% to 95%, and the residue was five calls to a method declared in a
+LIBRARY, which is correctly external.
+
+#### The three things missing, and what each costs
+
+**1. Lambda bodies are orphaned. PROVEN RECOVERABLE.** An `invokedynamic` call
+site records the BOOTSTRAP method (`LambdaMetafactory#metafactory`), not the
+implementation it creates. `javap -v` on `OmsOrderServiceImpl` shows the class
+file naming the body outright:
+
+```
+BootstrapMethods:
+  0: LambdaMetafactory.metafactory
+     Method arguments:
+       #322 REF_invokeStatic OmsOrderServiceImpl.lambda$delivery$0:(...)
+```
+
+ASM hands that to the visitor as `bootstrapMethodArguments[1]`, a `Handle` with
+owner, name and descriptor. **The fix is to record the handle instead of the
+factory.** 15 lambda bodies are unreachable in mall-admin alone. None of them
+happened to contain a terminal — **by luck, not design**, which is the same
+shape as the gRPC fabrication the golden fixture missed. A
+`list.forEach(x -> mapper.insert(x))` is silently lost today.
+
+The same table carries `StringConcatFactory`'s format recipes
+(`"订单关闭:\u0001"`), which is how a composed string could be recovered — the
+constant-folding gap, closed by the same read.
+
+**2. The return value is never recorded.** `ARETURN` appears in the extractor
+only inside a comment. Yet the value chain that makes the round trip possible is
+ALREADY EXTRACTED — this is `OmsOrderController#list`, from the facts:
+
+```
+ord=0   OmsOrderService#list      result=7
+ord=1   CommonPage#restPage       args=[source:7]     result=12
+ord=2   CommonResult#success      args=[source:12]    result=13
+```
+
+The DB result flows into `restPage`, which flows into `success` — the response.
+**993 of 1,817 arguments carry a `source` value-id**, so this is systemic.
+The only missing link is that nothing records value 13 as what the method
+returns. The extractor already maintains the value stack that produces
+`result`/`receiver`/`source`; recording what `ARETURN` pops is the same
+machinery, one instruction further.
+
+**3. Cross-method return propagation.** Without (2), a callee's returned value
+cannot be linked to the caller's `result` id — we know
+`OmsOrderService#list` produced value 7, but not that 7 came from
+`orderDao.getList`. This is the actual work of the three; (1) and (2) are small.
+
+With all three, a trace runs **request → handler → service → terminal → back
+through the composition → response**, every hop a compiler fact.
+
+#### Stated boundaries — where a trace stops, deliberately
+
+- **The third-party boundary.** A MyBatis mapper, a Spring Data repository, a
+  JDBC driver: the call is the terminal. We do not trace into it, and we do not
+  read MyBatis XML — so a terminal is `OmsOrderMapper#selectByExample`, never a
+  table name or a statement. **Ruled: this is out of scope, not a gap.**
+- **Values through library code.** `stream().map(f).collect()` leaves for the
+  JDK and returns; the `collect` result is visible, per-element provenance is
+  not.
+- **Values parked in a field** between calls — `FieldWriteFact` is
+  constructors-only by design.
+- **Responses built by mutation** rather than composition
+  (`result.setFilename(x); return result;`). The setters ARE visible with a
+  receiver id matching the returned value, so this is attributable; nothing does
+  it today. Decide in the spec.
+- **Branches.** Two return statements yield a set of possible responses, not the
+  one that runs. A trace is reachability, never execution.
+- **AOP, interceptors, `@Transactional`** — applied to runtime proxies, absent
+  from the call graph.
+- **Cross-module depth.** 1,041 of mall-admin's calls leave for sibling Maven
+  modules, each with its own workspace. Harmless where the mapper IS the
+  terminal; a service delegating real logic to a sibling module would stop early
+  and we would not know. That is `Bundle`/`Link` work, not 2Q.
+
+#### Acceptance
+
+`macrozheng/mall` is the acceptance corpus, kept precisely because the user can
+check any trace against source without trusting a report. `mall-admin` is built
+and analysed; `mall-portal` (15 more service implementations) was not reached by
+the build and is the natural second module. **The "several implementers →
+narrowed branch" rule has never run on real code and must not ship unexercised.**
+
+### Where we actually are — 2026-09-07
+
+**The operative documents are now the gap analysis, the spec and the sequenced plan:**
+
+| | |
+|---|---|
+| **Gap analysis** | [`docs/java-gap-analysis-2026-09-06.md`](../../java-gap-analysis-2026-09-06.md) — 123 gaps consolidated from five read-only audits, grouped into nine root causes |
+| **Spec** | [`2026-09-06-java-kotlin-completeness-design.md`](../specs/2026-09-06-java-kotlin-completeness-design.md) — eleven foundations; every one of the 123 gaps placed exactly once |
+| **Plan** | [`2026-09-07-java-kotlin-completeness-plan.md`](2026-09-07-java-kotlin-completeness-plan.md) — 54 work items in 11 waves, with dependencies |
+
+They replace the stage list below, which is kept for its record of what the sweep cost and
+bought. The work is now organised **by root cause, not by symptom**: fixing an instance
+without fixing the cause underneath it is how four javax/jakarta misses accumulated one at a
+time, and it is why this consolidation exists.
+
+**Three findings from the analysis that change what "next" means:**
+
+1. **2Q is not delivered.** PROJECT.md said `in-progress` and gave its reason — FR-6 requires
+   a trace bounded only by a terminal and ours stops at a depth bound; FR-7's diagrams draw no
+   `alt`/`opt`/`loop`. The roadmap said "delivered". The stale document was the right one, so
+   **the roadmap row is what changes**. Wave 6 closes it.
+2. **The suite is corpus-blind.** 2,346 tests, 82 guards at 0 survived, byte-stable, contracts
+   clean — and it notices neither of the analysis's two hardest Criticals. `orders-service`
+   and `mall-admin` both score **0** for the superclass-call shape; `spring-petclinic-rest`
+   scores **96** — *re-measured at W21: **131***. Adding that corpus (W21) is part of the
+   fix, not an extra.
+3. **The response side of every contract is empty on real code.** mall-admin: 160 of 160
+   endpoints carry a response shape, **one** distinct shape, **zero** fields. DR-5 gates
+   linking on payload compatibility, so stitching could not have worked there at all.
+   Wave 4 is the largest single improvement in the plan.
+
+**Superseded — the stage list as of 2026-09-06.** The operative plan was
+[the Java completion plan](2026-09-05-java-completion-plan.md).
+It was written after the principles sweep, it carries every outstanding item with
+its evidence, and this roadmap's phase table records the *phases* it completes.
+Read that document for the work; read this one for the shape.
+
+| stage (Java completion plan) | status |
+|---|---|
+| **1** — close 2O | **done.** All six remaining tasks (8, 9, 10, 11, 12, 13) |
+| **2** — prerequisites (F1 resolved dependencies + versions, F5 the `measured:` block, F2 the shape model extracted from 42 catalogs) | **done** |
+| **3** — 2Q: traces (G1-G5, I1, I3) plus the renderer | **done** |
+| **4** — the per-catalog pass, 55 catalogs | **in progress — 10 measured, 19 on the unmeasured allowlist** |
+| **5** — the documentation debt, ~34 rows | not started |
+| **5b** — the open-issue sweep (every Major, plus Minors cheaper than their own row) | not started |
+| **6** — multi-version: Boot 2.x and 4.x acceptance, then Jackson 2/3 | not started |
+
+**What the sweep and its fixes cost and bought.** Six read-only audits found 48
+shipped defects and 34 documents describing an unbuilt system. Two fix rounds and
+a review closed the 9 Criticals and 15 of 16 Majors — and the review found the fix
+pass had introduced two fabrications of its own, which is why the review existed.
+The suite went 1,911 → 2,346 and the mutation harness (`scripts/check.sh --guards`)
+went from nothing to **82 guards at 0 survived with an empty allowlist**: it is now
+impossible to write a near-miss test that proves nothing and have it counted.
+
+**`docs/open-issues.md` is the standing register** — every defect open or
+introduced, entered in the commit group that finds it, with the §13.8 stop rules
+and a principle-violation count in its header.
+
+### The order the table runs in — 2R, 2S, 2T come BEFORE 2P
+
+The table is alphabetical-ish by the letter each phase was given, not by
+execution order, and that has misled a reader once. **Execution order from here:**
+
+**2R** (catalog measurement, running) → **2S** (documentation debt + the issue
+sweep) → **2T** (multi-version) → **2P** (Spring Cloud + Meridian) → **2J**
+(second frameworks; the version-bump gate) → **L** (linking).
+
+2R and 2S come before 2P for the reason the sweep section already gives: 2P hands
+a boundary vocabulary to an outside consumer, and a fabrication that survives to
+that point stops being our bug and becomes someone else's data.
+
+### What "done" means, and why our own scorecard cannot say it
+
+**COVERAGE §2's generator never writes `✅` for a protocol cell — by design.** It
+writes `◐ —` for a cell whose rows are all shipped and whose gap list is empty,
+and `◐ <tiers>` for one with gaps. So the Java row reads `✅ ASM` followed by
+thirteen `◐`, and **"one feature fully done" is literally unrepresentable in the
+document we use to judge whether anything is done.** That is a defect in the
+scorecard, not only in the coverage.
+
+Re-measured 2026-09-07 over §5's 170 Java and Kotlin rows. **This corrects an earlier count
+on this page that read "59 shipped" — that figure was a regex artefact, not a census:**
+
+| | count |
+|---|---|
+| ✅ shipped | **86** |
+| ◐ partial | **3** |
+| stated boundaries and pending work | **81** (roughly 50 / 31, split by a prose match that is not exact — the verdict column is prose, not a closed set, which is itself part of what F6 fixes) |
+
+So the shape is not "111 things half done": it is **86 shipped**, 3 partial, and 81 rows that
+are either a deliberate documented limit or real remaining work. The imprecision in that last
+split is the finding — a verdict column a script cannot classify exactly is why §2's generator
+and §5's prose can drift apart, and why F6 gives §5 axes and closed verdicts.
+
+*The earlier claim that `5.5 WebSocket` is "a complete cell" was also wrong: §5.5 states its
+boundaries as prose bullets and the generator counts rows, so the two disagree by
+construction.*
+
+**And the one `✅` in the Java row is the least defensible mark on it.** `✅ ASM`
+means "implemented, tested, verified against a real project", and the scanner
+gained **four capabilities in two days** — 9.15 varargs, 9.16 nested annotations,
+9.17 lambda handles, 9.18 return values — each because something it could not do
+was found by measurement rather than by test. `OI-19` records that `sig_` is now
+computed in two languages with no guard the harness can carry. Nobody has audited
+that mark, and it is the prerequisite every other cell in the row depends on.
+
+### What is next, in order
+
+**Superseded 2026-09-07 by the wave sequence** in
+[the completeness plan](2026-09-07-java-kotlin-completeness-plan.md). In short:
+
+```
+Wave 1  F1  the extractor reads JVMS 4.7 as a specification   W1-W8    (nothing derived changes yet)
+Wave 2  F2  a catalog may spell a type more than once         W9-W19   (new rows appear)
+Wave 3  F3  method identity and JVMS 5.4.3.3/5.4.3.4          W20-W23  (21% of boundaries stop being false)
+Wave 4  F4  the module edge — generic substitution            W24-W26  (mall's contracts go empty → real)
+Wave 5  F5  endpoint identity; never merge the unobservable   W27-W29
+Wave 6  F7  the trace tier meets FR-6 and FR-7                W30-W33  (2Q becomes delivered)
+Wave 7  F8  the bundle carries everything, plus the index     W34-W39  (Sextant can say WHERE)
+Wave 8  F6  the checklist gains axes beyond protocol          W40-W42
+Wave 9  F10 the five asymmetries                              W43-W47
+Wave 10 F11 the curation file                                 W48-W49
+Wave 11 F9  the registers tell the truth                      W50-W54
+```
+
+The stage-4 batch work below is **absorbed into Wave 2**: W19 is the per-catalog enumeration
+pass, and W11 and W14 are its measurement obligations. The probe backlog's ranks 3-5, which
+need a live framework rather than `javap` alone, are W53.
+
+*Historical, superseded:*
+
+1. **Stage 4 batch 3** — the jar-enumeration sweep across the 20
+   `annotation_driven` catalogs (list the framework's annotation package and diff
+   it against what the catalog names; this is how `@PulsarReader`, an entire
+   missing inbound surface, was found), and **rank 1 of the probe backlog**,
+   `spring-web` + `spring-mvc` — the two highest-volume catalogs we ship, and
+   `spring-mvc.yml` cites no evidence of any kind.
+2. **Batches 4-7** — ranks 3-13 of `docs/principles-sweep-2026-09-05.md` §6.2.
+   Ranks 3, 4 and 5 need a **live** framework (a deployed Cloud Stream module, a
+   real WebSocket container, curl against actual routes), not `javap` alone.
+3. **COVERAGE.md rewritten** as Stage 4's closing act — a clear per-surface
+   statement of what is measured, what ships, and what is a stated boundary.
+4. **Stage 5**, then **5b**, then **6**.
+
+Then the phase table resumes at **2P**, **2J** and **L**.
+
+### The order after round 1 — historical, superseded by the table above
+
+Recorded 2026-09-05 and kept because its reasoning still holds; its items 1-3 are
+complete and item 4's stage is the one now running.
+
+### The combined per-catalog pass — stage 4
+
+**Measurement and near-miss coverage are one pass, not two.** §6.2 lists 31 of
+52 catalogs whose rule was never checked against the real framework; §6.3 lists
+33 with no test proving they DECLINE, and 8 of 11 engine styles with no such
+test at all. Both questions need the same jar open, the same framework source
+read, and the same rule understood — so run them per catalog, together. The
+measurement is also what tells you which near-miss is worth writing.
+
+**This is detection, not verification, and must be sized as such.** The
+Spring Cloud Stream fabrication survived every review it ever had and died the
+moment someone asked what the catalog does when it should not match. Scheduled
+as a review pass it would be cut when time is short; it is build work that
+produces defects.
+
+**It is also where round 1a's four deliberate residuals close.** Each already
+carries a COVERAGE row stating what would falsify it and what would close it;
+this is the stage that runs those probes:
+
+| residual | COVERAGE | closes by |
+|---|---|---|
+| A controller whose stereotype is inherited from a `@Controller` superclass or interface | `:802` | measuring whether component scan admits such a subclass (`@Component` is not `@Inherited`), then walking `superclasses`/`implementations` for the gate. Probe rank 1 |
+| Spring Cloud Stream's bean conjunct — a `Function`/`Consumer`/`Supplier` that is not a registered bean | `:1530` | measuring the `@Bean`/programmatic `FunctionRegistry` registration. Probe rank 3 |
+| `@ServerEndpoint` with no `@OnMessage` — a real served endpoint deriving nothing | `:1272-1275` | listing the lifecycle annotations. Probe rank 4 |
+| Spring RSocket published as `websocket`, since `@MessageMapping` is also RSocket's routing annotation and an RSocket controller is a `@Controller` too | `:1278-1282` | verifying what a real RSocket controller derives |
+
+None of the four is a wrong row today: three are silences and the fourth is a
+mislabelled protocol whose behaviour is unverified. All four were left open
+rather than guessed, under §8.1 rule 4 — deriving on half a measured rule adds
+rows on the framework's behalf under conditions nobody checked.
+
+### The documentation-debt checkpoint — immediately after 2O, before 2P
+
+**Ruled 2026-09-05 (user).** Sweep 3 found the component documents describe a
+substantially larger system than the one that exists, and the user's ruling is
+that this is **tech debt to be addressed, not dropped**: *"one feature fully
+done is better than ten half baked"* (now GUIDELINES §2). Retire-and-mark is
+the expected outcome for most of it — but deliberately, recorded, and done.
+
+The size, measured rather than estimated:
+
+| documented | exists |
+|---|---|
+| D01's 12+ base tables, `edges`, `dispatch`, `trace_summary`, `findings`, full-text index | **8 tables** — `endpoints`, `open_questions`, `raw_facts`, `resolved_config`, `shape_fields`, `shapes`, and 2O Task 8's `scheduled_work` and `error_handlers`. Six when this table was written |
+| D01 §5's ten named queries (`trace_of`, `impact_of`, …) | zero implementations in `src/`; the only occurrence of any of the ten names is a docstring citing `trace_of` as absent. Register entry #11 since the 2O documentation sweep |
+| M00's 25 CLI verbs across five nouns | 4 |
+| D00 §5's 15 fact kinds | 8 have a producer |
+| the overlay tier — D03 + M01, FR-15/FR-16 | unimplemented; "overlay" in `src/` names something else |
+| D02 §2's style sections | **fifteen sections, thirteen engines** — `protocol_hint` is a resolve pass and `filesystem` has a grammar, no engine, and would abort a run. Thirteen sections and twelve engines when this table was written; 2O Task 8's two non-wire styles gained sections in the documentation sweep, which also made §2 state which sections are not engines. Register entry #14 |
+
+**Three items are operational, not documentary, and do not wait for this
+checkpoint** — they are Class A defects and go into the sweep fix pass:
+
+1. **`ARCHITECTURE.md:341` claims redaction happens during extraction.** It does
+   not: the ingest path and `stages/analyze.py` both write
+   `redaction_set_hash=NO_REDACTION_HASH`, so the workspace holds verbatim
+   values and redaction runs only at the render and export exits. D04 was
+   amended when that changed; ARCHITECTURE was not. The cache-key guarantee in
+   the following sentence is unbacked too. This is the one finding whose
+   consequence is outside correctness — a reader of ARCHITECTURE would believe a
+   workspace is safe to hand over.
+2. **Neither documented config file is ever opened** (`~/.sextant/config.yml`,
+   repo-root `sextant.yml`), and writing their keys into the file that IS read —
+   `.sextant.yml`, one character apart — aborts every command.
+3. **`.sextantignore` loads at the module root, not the repository root**, so a
+   reactor's ignore file reaches no submodule.
+
+The rest is one question asked ~38 times: **is this claim built, designed, or
+retired?** The deliverable is a status convention applied across D00-D06, M00,
+M01, ARCHITECTURE and REQUIREMENTS, with every retirement recorded in
+`docs/documented-not-implemented.md` — which sweep 3 also found is missing two
+of the six instances RUNBOOK counts, and skips entry numbers 10 and 11.
+
+## What 2P carries first
+
+
+**2P carries the documented-but-unimplemented backlog, and it runs FIRST within
+the phase** ([docs/documented-not-implemented.md](../../documented-not-implemented.md),
+opened 2026-09-04). The sequencing is not arbitrary: 2P's Meridian work (FR-21)
+specifies a boundary vocabulary derived from D00/D01/D06, and `root_kind` is
+documented in D00 with a full member list while existing nowhere in `src/`. A
+vocabulary written from those documents the way 2O's spec was would be specified
+against fiction, and would fail at a consumer rather than in our tests. So the
+register is settled before the vocabulary is written, not after. Carried in:
+`root_kind` (#7), `ClasspathEntry`/`ModuleFact` (#2/#3, if 2O's R9 does not
+retire them), the `constant` fact kind (#4, which 2O routed around rather than
+implemented), and the recurrence-prevention architecture test — every catalog
+key D02 declares must be read by the loader, every fact field D00 declares must
+exist on its model. 2O closes #1, #5, #6 and #8 as part of its own tasks.
 
 **The gap program (2M–2P) sits in the table where it runs — ahead of 2J.** A 2026-09-02 gap analysis found build systems and
 project shape (gap area A) never priced into that table, plus four rendered-output defects
@@ -73,9 +589,9 @@ diagram, typed HTML sections (`<h1>`-`<h3>`, real `<table>`s) replacing the mach
 three giant `<pre>` blocks, endpoint/shape readability (human handler spelling, an
 always-emitted detail block, a `### Shapes` subsection), and inline-code/fenced-block
 formatting in LLM claim prose. 2N (enrichment polish), 2O (Spring surface) and 2P (Spring
-Cloud) follow the same gap program before 2J resumes; the call graph (2Q) lands after
-2J and before L, ruled 2026-09-04 — L consumes its traces; the version-bump gate below
-is unchanged by any of it.
+Cloud) follow the same gap program before 2J resumes; the call graph (2Q) was ruled after 2J on 2026-09-04 and **landed ahead of it instead**, on
+2026-09-06 — the principles sweep made the boundary set trustworthy enough to trace
+from, and L still consumes its traces; the version-bump gate below is unchanged.
 
 **The remaining sequence, and its three milestones** (2K deliberately moved ahead of 2J,
 ruled 2026-08-31: a complete end-to-end flow for module-level Java/Spring — coverage,

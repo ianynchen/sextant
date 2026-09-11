@@ -136,11 +136,24 @@ def test_only_the_generated_schema_holders_carry_the_new_fact(tmp_path: Path):
     assert holders == {HOLDER, COMMON_HOLDER, AUDIT_EVENT}
 
 
-def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Path):
-    """A new fact kind that a stale jar does not emit is indistinguishable
-    from a module that embeds no schema, so the version is the only thing
-    that says which extractor ran."""
-    report = AsmScanner(JAR).scan(
+def test_the_scanner_declares_the_capability_that_harvests_descriptors(tmp_path: Path):
+    """A new fact kind that a stale jar does not emit is indistinguishable from
+    a module that embeds no schema, so something must say what the extractor
+    that ran can actually read.
+
+    That something is the JAR's own declaration (`D02` §3: *"capabilities are
+    scanner-declared — earned once, up front, by the scanner that produced a
+    module's facts"*), asked for directly rather than inferred from a version
+    string. Until Step 1 this test asserted `scanner_version == "9.18"`, which
+    was capability 9.18 wearing a library version's name — the reason that
+    field drifted to a value naming no ASM release at all.
+    """
+    scanner = AsmScanner(JAR)
+    # `method_return` is a whole fact KIND an older jar never wrote, which is a
+    # stronger case than an absent key: a consumer reading no returns from a
+    # stale scan would conclude the module's methods return nothing.
+    assert "method_returns" in scanner.capabilities()
+    report = scanner.scan(
         ScanRequest(
             module_id="com.acme:orders",
             coordinates="com.acme/orders",
@@ -149,4 +162,5 @@ def test_the_scanner_reports_the_version_that_harvests_descriptors(tmp_path: Pat
             out_dir=tmp_path,
         )
     )
-    assert report.scanner_version == "9.12"
+    # The scan agrees with the up-front declaration: one jar, one answer.
+    assert report.scanner_id == "sextant-jvm-extractor"

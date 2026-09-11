@@ -7,6 +7,18 @@ direction: outbound
 detect:
   coordinates: ["com.squareup.okhttp3:okhttp"]
 
+measured:
+  - { artifact: com.squareup.okhttp3:okhttp, versions: ["4.12.0"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  # W53 (`G-22`). The comment below claimed the verb-setter set was measured on
+  # 3.14.9 as well as 4.12.0, and only 4.12.0 had ever been read — `3.14.9`
+  # appeared nowhere else in the repository. Now it has been: same eight, no
+  # ninth. Its identity is `reported` by a different route from 4.12.0's — the
+  # 3.x jar states its version in `pom.properties`, where the 4.x jar states it
+  # only as the `ConstantValue` of `okhttp3.OkHttp.VERSION`.
+  - { artifact: com.squareup.okhttp3:okhttp, versions: ["3.14.9"],
+      identity: reported, by: scripts/probes/w53_okhttp_verb_setters.md }
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:
@@ -16,18 +28,35 @@ matches:
   # receiver/result chaining, which is what `terminal_via_argument` is for.
   roots:
     - { owner: okhttp3.Request$Builder, method: <init>, captures: { http_method: GET } }  # GET is OkHttp's own default
-  # Every verb OkHttp's `Request.Builder` exposes as its own named method —
-  # not just `get`/`post`: a `.put(body)`/`.patch(body)`/`.delete()`/`.head()`
-  # chain that only matched `get`/`post` would fall through as an unmatched
-  # step (D02 §4's "unmatched steps pass through uncaptured") and the root's
-  # own `http_method: GET` default would stand uncorrected — a confidently
-  # WRONG verb, not an honest gap. `delete()` carries no body capture: OkHttp
-  # itself makes a DELETE body optional, and the zero-arg overload this
-  # step's bare method name matches has no `arg0` to capture in the first
-  # place; `head()` sets no body either, exactly like `get`. (`Request.Builder
-  # .method(String, RequestBody)` — the fully generic overload — is not
-  # covered: the fluent grammar has no way to read `http_method` off an
-  # argument, only off a catalog literal; a known gap, not silently guessed.)
+  # EVERY verb-setting method `okhttp3.Request$Builder` declares, measured
+  # rather than remembered — `javap -p` on okhttp 3.14.9 (W53) and 4.12.0
+  # (CP-11) gives the same eight: `get() head() post(RequestBody) put(RequestBody)
+  # patch(RequestBody) delete() delete(RequestBody) method(String,
+  # RequestBody)` (`scripts/probes/w53_okhttp_verb_setters.md`, which reads both
+  # versions and reports any method declared and not encoded — none). Completeness
+  # is the load-bearing property, not coverage: a verb-setting call this list
+  # misses falls through as an unmatched step (D02 §4's "unmatched steps pass
+  # through uncaptured") and the root's own `http_method: GET` default stands
+  # uncorrected — a confidently WRONG verb, not an honest gap. That default is
+  # allowlisted in `tests/architecture/test_defaulted_identity_values.py` on
+  # exactly this condition, and it stops being true the day OkHttp adds a
+  # ninth.
+  #
+  # `method(String, RequestBody)` is the fully generic overload (`A-C2`): its
+  # verb is argument 0, read through the same `argN` grammar `url`/`body`
+  # already use, so `.method("DELETE", body)` derives DELETE and a verb held
+  # in a variable the scanner cannot read derives `method: NULL` at
+  # `unresolved` — the honest gap this file previously CLAIMED to take while
+  # publishing GET.
+  #
+  # `delete` and `head` capture no body, and the two reasons differ. `head()`
+  # has no body overload at all. `delete(RequestBody)` DOES exist in both
+  # measured versions — a stated under-report: a `fluent` step matches on name
+  # alone (no descriptor key exists in this grammar), so the one step covers
+  # both overloads and the arity-1 form's body goes unread. Adding
+  # `body: arg0` would fix that overload and break the other, whose absent
+  # argument 0 would read as a capture that was reached and could not be
+  # resolved, demoting every plain `.delete()` chain to `unresolved`.
   steps:
     - { method: url,    captures: { url: arg0 } }
     - { method: get,    captures: { http_method: GET } }
@@ -36,6 +65,7 @@ matches:
     - { method: put,    captures: { http_method: PUT, body: arg0 } }
     - { method: patch,  captures: { http_method: PATCH, body: arg0 } }
     - { method: delete, captures: { http_method: DELETE } }
+    - { method: method, captures: { http_method: arg0, body: arg1 } }
   # A mapping, not the bare flag: without it, any consumer of `build`'s
   # result (a log statement) would count as executing the request.
   terminal:
@@ -55,15 +85,16 @@ matches:
     getter_prefixes: [get, is]
 
 # Shared verbatim across every outbound catalog on purpose (not just these
-# three plus RestTemplate), for the same reason `nullability` is copied from
-# spring-mvc.yml elsewhere: shape (type) expansion is a *global*,
+# three plus RestTemplate): shape (type) expansion is a *global*,
 # insert-if-absent pass keyed on the type symbol alone (`derive_shapes`), so
 # the FIRST catalog to reach a shared payload type is the one that expands
 # it, and every later catalog finds it already there — regardless of
 # protocol or direction, including a row a *different* catalog produced
-# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's
-# wrappers/serialization/known_types must therefore agree, or the first one
-# alphabetically silently mis-describes a route it never derived.
+# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's `wrappers`
+# must therefore agree, or the first one alphabetically silently mis-describes
+# a route it never derived. **The three payload-type blocks that used to be
+# copied alongside them are one file now** (D02 §1b), which is what closed
+# this hazard for them and leaves it open only for `wrappers`.
 # Endpoint-level ownership is a different question and is NOT this reason:
 # `_owns` reads a row's own `catalog_id` (2E-prep design §1a), so a
 # catalog's rules describe only the rows it derived itself.
@@ -73,30 +104,6 @@ wrappers:
   - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
   - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

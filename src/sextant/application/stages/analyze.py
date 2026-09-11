@@ -9,6 +9,7 @@ produces no declared shape, the same honest absence an untyped scanner
 already leaves for a construct it never emits — no catalog's `requires`
 needs a name for that."""
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,22 +27,51 @@ from sextant.application.ports.progress import Progress
 from sextant.application.ports.scanner import (
     ScanError,
     Scanner,
+    ScannerProvenance,
     ScanRequest,
     select_scanner,
 )
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import (
     config_fact_target,
     discard_library_facts,
+    discard_scanned_facts,
     library_fact_root,
     read_fact_tree,
     schema_fact_target,
     write_fact_file,
 )
-from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact, Fact
+from sextant.domain.facts import (
+    DeclaredShapeFact,
+    Document,
+    EmbeddedDescriptorFact,
+    Fact,
+    ModuleFact,
+)
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
+from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
+
+# The module fact's own document (`_write_module_fact`). Its `relative_path`,
+# its `language` and its fact file's name are one literal: the document IS the
+# module, not a file under a root, and naming it three different ways would
+# invite a reader to look for three things.
+_MODULE_DOCUMENT = "module"
+# The facility that produced it — the detector, through this stage. Named the
+# way `ingress/read`'s own `SCANNER_ID` names the config-reading facility (D00
+# §2: `scanner_id` names the facility, never the format).
+_MODULE_SCANNER_ID = "sextant-detector"
+# `application` may not import `ingress` (the layering contract), which is why
+# `SEXTANT_VERSION` and `FACT_SCHEMA_VERSION` were RESTATED here for three
+# phases — and the restatement is what let a module document and a config
+# document stamp two different fact schemas, the invariant this comment used to
+# assert while violating it. Both may import `domain`, so both now come from the
+# one place that owns them. The detector's own `SCANNER_VERSION = "0.1.0"` is
+# gone entirely rather than moved: the detector ships inside the wheel, so its
+# version IS `sextant_version`, and that literal was a fourth copy of it.
+NO_REDACTION_HASH = "sha256:none"
 
 
 def _config_files(
@@ -66,7 +96,12 @@ def _config_files(
     """
     return tuple(
         file
-        for file in list_files(root, module.root, ignore)
+        # `ignore.repo_root`, never `module.root`: the root a pattern is
+        # matched relative to must be the root the rules were LOADED at, or a
+        # reactor-root pattern is compared against a submodule-relative path
+        # and matches nothing (`A-M16`). The two coincide for a single-module
+        # repository, which is why passing `module.root` looked right.
+        for file in list_files(root, ignore.repo_root, ignore)
         if not (
             any(file.is_relative_to(schema_root) for schema_root in module.schema_roots)
             and any(reader.accepts(file_kind(file)) for reader in schema_readers)
@@ -78,8 +113,11 @@ def _config_files(
 class AnalyzeResult:
     module: ModuleModel
     report: ResolveReport
-    scanner_id: str
-    scanner_version: str
+    # EVERY facility that produced a document in this run, not just the class
+    # scanner. `metadata.json` has always shaped this field as a list and has
+    # always been handed one entry, so two of the three facilities that write
+    # documents were invisible in a bundle's provenance.
+    scanners: tuple[ScannerProvenance, ...]
     # Compiled sources the scan did not account for. Carried out of the stage
     # rather than dropped here: a source nothing read is a gap the artifacts
     # must name (FR-17, M03), and this is the only place that knows it.
@@ -127,11 +165,20 @@ def analyze(
     # rather than the interpreter's own `GeneratedNaming` parameter).
     interpret: DescriptorInterpreter | None = None,
     # Threaded to the detector and nowhere else (2M design §1 network-posture
-    # bullet): today's port parameter exists on every detector and nothing
-    # passed it, so an offline-only build could never opt into the one online
-    # retry `allow_resolve` is for. Defaulted so every existing caller stays
-    # offline exactly as before.
+    # bullet): the port parameter exists on every detector, and the CLI's
+    # `--allow-resolve` passes it (`cli/app.py:61` → `api.py:696` → here), so an
+    # offline-only build opts into the one online retry `allow_resolve` is for
+    # by asking. Defaulted so every existing caller stays offline exactly as
+    # before. *This read "nothing passed it" until the 2O documentation sweep
+    # (`A-Mi16`); the flag arrived in the same commit that wrote the sentence.*
     allow_resolve: bool = False,
+    # The root a `.sextantignore` sits at and every pattern in it is written
+    # against (D04 §3, `A-M16`). Defaulted to None so every existing caller —
+    # every test that builds this pipeline by hand — keeps the module-root
+    # behaviour it had; `api.py` passes the analysed root, which is the
+    # reactor's for a submodule and the module's own for a single-module
+    # repository.
+    ignore_root: Path | None = None,
 ) -> AnalyzeResult:
     progress.define("detect", "detect")
     progress.define("scan", "scan")
@@ -143,6 +190,13 @@ def analyze(
     model = select_detector(detectors, path).detect(path, allow_resolve=allow_resolve)
     module = model.modules[0]
     progress.finish("detect", f"modules: {len(model.modules)}")
+
+    # The detector's conclusions become facts here, before anything else is
+    # written — D00 §5's `module` kind, which nothing constructed until this
+    # phase needed the declared dependency coordinates in the workspace
+    # (2O design §2a, ruling R9). Rewritten whole on every run, like every
+    # other fact file.
+    _write_module_fact(fact_root, module)
 
     # Selected here, not by the caller: a scanner is chosen per language
     # (ARCHITECTURE §7) and the languages are not known until detection has
@@ -170,6 +224,14 @@ def analyze(
     # rewrite. Stated because it is load-bearing and free to satisfy, not
     # because it is enforced.
     discard_library_facts(fact_root)
+    # And the module's OWN classes, for the same reason one line up: a class that was
+    # deleted, renamed, or moved to another package overwrites nothing, so its facts
+    # would stay in the workspace and keep deriving rows for source that is not there.
+    # Measured in this repo's own fixture — a renamed `Shapes` class went on publishing
+    # two inbound Pub/Sub endpoints, 143 against a fresh workspace's 141 on identical
+    # source. BEFORE the scan, for the reason above and for one more: after it, this
+    # would delete what the scan had just written.
+    discard_scanned_facts(fact_root, module.output_dirs[0])
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,
@@ -233,7 +295,16 @@ def analyze(
             libraries_not_scanned.append(f"{library.coordinate}: {reason}")
             continue
         scanned_facts += library_report.facts
-        uncovered.extend(library_report.uncovered)
+        # The SAME substitution the failure branch above makes, for the same
+        # reason: these strings travel into metadata.json, the rendered gaps
+        # list and a published bundle, where an absolute path under someone's
+        # home directory identifies nothing. The success path grew its own
+        # path-carrying channel when a skipped class began reporting the
+        # exception's own text, and the rule was applied to one branch only.
+        uncovered.extend(
+            note.replace(str(library.archive), library.coordinate)
+            for note in library_report.uncovered
+        )
     progress.finish("scan", f"{scanned_facts} facts")
 
     # Ingress stays model-blind (design §1): every parseable config file
@@ -244,15 +315,52 @@ def analyze(
     entries = 0
     # `.sextantignore` (2K design §2), loaded once and applied at both walk
     # loops below through `list_files` — a file it excludes is read by
-    # neither loop, config or schema. `module.root` is the repo root a
-    # `.sextantignore` sits at and every pattern in it is written against
-    # (2K Task 2 binding), the same root `.sextant.yml`'s own reader already
-    # keys its lookup on.
-    ignore = IgnoreRules.load(module.root)
+    # neither loop, config or schema.
+    #
+    # **`ignore_root`, not `module.root` (`A-M16`).** D04 §3 is emphatic, and
+    # is itself an amendment: "One file, at the REPOSITORY root, and every
+    # pattern in it is matched against a path made relative to THAT root."
+    # Loading at `module.root` made that false for every multi-module reactor
+    # — `api.py` analyzes each submodule with its own root, so a
+    # `.sextantignore` at the reactor root was never read for any of them, and
+    # a pattern written relative to the reactor root would not have matched if
+    # it had. For a single-module repository the two roots coincide and this
+    # is the same load it always was, which is why `module.root` is still the
+    # fallback: a caller that does not know the analysed root gets the
+    # behaviour it had rather than a silently wider jail.
+    #
+    # `IgnoreRules.matches` relativizes each path against the root it was
+    # loaded at, so a submodule's files match reactor-root patterns exactly as
+    # the document says. The BUILT-IN layer is unaffected either way — it
+    # applies at every depth (`domain/ignorefile.py`), which is why this was a
+    # coverage gap in the repository-authored layer and never a credential
+    # leak.
+    #
+    # **A reactor root is not always an ancestor of its own modules**, and that
+    # is not a corner: `<module>../orders-service</module>` is legal Maven and
+    # `fixtures/orders-reactor` is exactly that shape. A path outside the root
+    # has no root-relative form at all, so a pattern written against that root
+    # could not address it even in principle — this falls back to the module's
+    # own root there, which is the behaviour that shipped. It stops being right
+    # if a repository ever wants one ignore file to govern modules it does not
+    # contain, which is a question about where the file lives rather than about
+    # how it is read.
+    ignore = IgnoreRules.load(
+        ignore_root
+        if ignore_root is not None and module.root.is_relative_to(ignore_root)
+        else module.root
+    )
     # Which loop a reader serves is the reader's own declaration (the
     # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
     # root a file was found under: since 2H one schema root lives inside a
     # resource root, so the root no longer tells the two apart.
+    # Collected from the documents the readers actually STAMPED, never from a
+    # copy of their id restated here. `application` may not import `ingress`
+    # (the layering contract) and that is exactly what produced the duplicated
+    # constants Step 1 is removing — so this asks the document who wrote it
+    # instead of asserting an answer. A facility that ran and found no file
+    # writes no document and is correctly absent from the provenance.
+    read_scanner_ids: set[str] = set()
     schema_readers = [reader for reader in readers if reader.reads_schema_sources]
     for root in module.resource_roots:
         for reader, owned in group_files_by_reader(
@@ -265,6 +373,7 @@ def analyze(
                 target = config_fact_target(fact_root, document.relative_path)
                 write_fact_file(target, document, config_facts)
                 entries += len(config_facts)
+                read_scanner_ids.add(document.scanner_id)
     # Schema roots are read the same way, through the same registry — a
     # reader claims its own extension (`avsc`/`proto`/`graphqls`) regardless
     # of which root it is handed, and only the schema readers are offered
@@ -276,7 +385,7 @@ def analyze(
     schema_sources_not_compiled: list[str] = []
     for root in module.schema_roots:
         for reader, owned in group_files_by_reader(
-            list_files(root, module.root, ignore), schema_readers
+            list_files(root, ignore.repo_root, ignore), schema_readers
         ):
             request = ReadRequest(
                 module_id=module.module_id, version=module.version, files=owned, root=root
@@ -285,6 +394,7 @@ def analyze(
                 target = schema_fact_target(fact_root, document.relative_path)
                 write_fact_file(target, document, schema_facts)
                 entries += len(schema_facts)
+                read_scanner_ids.add(document.scanner_id)
                 if document.partial:
                     schema_sources_not_compiled.append(document.relative_path)
     progress.finish("read", f"{entries} entries")
@@ -336,17 +446,105 @@ def analyze(
     report = resolve(workspace, fact_root, catalogs, scanner.capabilities())
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
+    # The detector always writes the module document, so it is always a
+    # producer; the class scanner reports its own third-party libraries; the
+    # config reader joins only if it wrote at least one document. Sorted by id
+    # so `metadata.json` is byte-identical between runs (NFR-1).
+    # Named `produced_by`, not `scanners`: this stage's `scanners` parameter
+    # holds the Scanner IMPLEMENTATIONS it may choose between, which is a
+    # different thing from the facilities that turned out to write documents.
+    produced_by = [
+        ScannerProvenance(_MODULE_SCANNER_ID),
+        ScannerProvenance(scan_report.scanner_id, scan_report.scanner_libraries),
+    ]
+    produced_by.extend(ScannerProvenance(one) for one in read_scanner_ids)
+
     return AnalyzeResult(
         module,
         report,
-        scan_report.scanner_id,
-        scan_report.scanner_version,
+        tuple(sorted(produced_by, key=lambda one: one.id)),
         tuple(uncovered),
         tuple(schema_sources_not_compiled),
         descriptors_not_interpreted,
         tuple(libraries_not_scanned),
         model.notes,
     )
+
+
+def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
+    """The detector's own conclusions, written as a fact like any other
+    (D00 §5's `module` kind, and its own "why `module` is a fact and not a
+    passing argument": three later components need it and never see the
+    detector, and a stage resumed from disk never runs one).
+
+    **What it carries is the coordinate half plus the versions** —
+    `dependency_coordinates` and `dependency_versions` (F1) — because that is
+    what both build systems can answer: the coordinates are what a
+    dependency-gated catalog reads (2O design §2a, ruling R9), and the version
+    beside each is what a rule scoped to one can. Classpath TIERING, which D00
+    also names here, needs a resolved ARCHIVE per entry — which the Gradle
+    report carries and a pom parse does not — and stays unwritten rather than
+    half-invented.
+
+    `dependencies_not_resolved` is deliberately NOT a fact: it says what this
+    ANALYSIS could not read, not what the module is, and D05 §3 already has the
+    place for that — `metadata.json`, beside `libraries_not_scanned`.
+
+    The document is synthesized rather than read from a file: this stage may
+    not touch the filesystem (ARCHITECTURE §10), so `content_hash` is the hash
+    of the module's own detected identity — the content this document actually
+    records — which changes exactly when that identity does. `relative_path`
+    is the literal `module`, and the fact file sits at `facts/module.jsonl`,
+    which shares its one collision risk with `facts/config`, `facts/schema`
+    and `facts/lib`: a top-level class named `module` in the default package
+    would write to the same target.
+    """
+    identity = "\n".join(
+        [
+            module.module_id,
+            module.version,
+            module.kind,
+            *module.dependency_coordinates,
+            # The versions are part of the identity this document records (F1),
+            # so a run whose resolution reached further — a parent pom that was
+            # missing and is now in the local repository — writes a different
+            # `content_hash` rather than the previous run's.
+            *(f"{coordinate}:{found}" for coordinate, found in module.dependency_versions.items()),
+        ]
+    )
+    document = Document(
+        document_id=hashlib.sha256(f"module:{module.module_id}".encode()).hexdigest(),
+        relative_path=_MODULE_DOCUMENT,
+        module_id=module.module_id,
+        language=_MODULE_DOCUMENT,
+        sextant_version=SEXTANT_VERSION,
+        fact_schema_version=FACT_SCHEMA_VERSION,
+        scanner_id=_MODULE_SCANNER_ID,
+        content_hash="sha256:" + hashlib.sha256(identity.encode()).hexdigest(),
+        # The module's own COORDINATES, not a path: this document was not read
+        # from a classpath entry at all, and D00 §2's rule that a path under
+        # someone's home identifies nothing off the machine that wrote it
+        # applies here with nothing to trade against it — a filesystem root
+        # would also make two runs of the same module at two checkout paths
+        # write different bytes (NFR-1, and `test_analyze_library_wiring`'s
+        # own byte-identity pins).
+        origin_entry=module.coordinates,
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash=NO_REDACTION_HASH,
+    )
+    fact = ModuleFact(
+        document_id=document.document_id,
+        module_id=module.module_id,
+        module_kind=module.kind,
+        languages=sorted(module.languages),
+        source_roots=[root.as_posix() for root in module.source_roots],
+        output_dirs=[directory.as_posix() for directory in module.output_dirs],
+        dependency_coordinates=list(module.dependency_coordinates),
+        dependency_versions=dict(module.dependency_versions),
+        declared_release=module.declared_release,
+        sibling_coordinates=list(module.sibling_coordinates),
+    )
+    write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 
 
 def _prefer_compiled(shapes: list[DeclaredShapeFact]) -> list[DeclaredShapeFact]:

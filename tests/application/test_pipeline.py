@@ -1,7 +1,9 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
+from fixture_module import write_fixture_module_fact
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
@@ -67,6 +69,10 @@ def _resolved_fixture(
             out_dir=facts,
         )
     )
+    # `A-C5`: the dependency-gated styles need a module fact and this helper
+    # runs no detector — see `conftest.write_fixture_module_fact` for which
+    # coordinates it declares and why that list is a deliberate subset.
+    write_fixture_module_fact(facts)
     root = FIXTURE / "src" / "main" / "resources"
     for reader, owned in group_files_by_reader(
         list_files(root, FIXTURE, IgnoreRules.load(FIXTURE)),
@@ -91,9 +97,10 @@ def _resolved_fixture(
         # SAME three capabilities (`call_site`, `string_constants`,
         # `chain_reconstruction`), no new one added; `implemented_interfaces`
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
-        # `interface_implementation` style — a real subset of what
-        # `AsmScanner.capabilities()` actually declares, the same way the
-        # other capabilities here already are.
+        # `interface_implementation` style; `superclass` (capability 9.13, 2O
+        # design §1b, Task 5) gates `grpc-java.yml`'s own `supertype_derived`
+        # style — a real subset of what `AsmScanner.capabilities()` actually
+        # declares, the same way the other capabilities here already are.
         {
             "annotation_args",
             "typed_signatures",
@@ -102,6 +109,18 @@ def _resolved_fixture(
             "string_constants",
             "chain_reconstruction",
             "implemented_interfaces",
+            "superclass",
+            # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+            # these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+            # it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+            # degradation into a total skip), so nothing here depends on it now. Kept because the
+            # varargs reads it feeds are real and a harness that withheld it would be measuring a
+            # scanner nobody ships.*
+            "array_arguments",
+            # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)
+            # gates `spring-scheduling.yml`'s own `scheduled_work` style —
+            # granted, like the rest, because `AsmScanner` declares it.
+            "nested_annotation_args",
         },
     )
     return workspace, report
@@ -121,6 +140,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("POST", "/v1/orders"),
         ("GET", "/v1/orders/{id}"),
         ("GET", "/v1/orders/{id}/{view}"),
+        # `SharedPathClients`: TWO callers on this one address, at two different hosts.
+        # One route here, two ROWS below — which is the point of the fixture. W27's
+        # outbound dedup keyed on wire identity alone and dropped the second caller
+        # outright, and no fixture had the shape that would have shown it.
+        ("GET", "/shared/path"),
         ("GET", "/v1/orders"),
         # The one endpoint whose request and response are both real payloads:
         # `OrderRequest` in, `ResponseEntity<OrderView>` out.
@@ -172,14 +196,46 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `/api/composed`: the composed-AND-inherited case — `@ApiGet` on
         # `OrdersApi#composed` composes to a real `@RequestMapping` (Task 6)
         # BEFORE this task's own inheritance walk has anything to resolve.
-        # NOT here, and asserted absent below: `/api/orders/{id}` —
-        # `OrdersApiController#find` returns the covariant
-        # `DetailedOrderResult`, a different descriptor from the interface's
-        # `find`, so the real override misses the join honestly; the
-        # compiler's own bridge method DOES carry the interface's exact
-        # descriptor and would join if left alone, so its exclusion
-        # (checkpoint item (4)'s structural rule) is load-bearing here, not
-        # a nicety.
+        ("POST", "/v1/orders/scoped"),
+        # W28: three handlers on ONE path and verb, which Spring registers because
+        # `params`/`headers` separate them — `RequestMappingInfo.equals` compares seven
+        # conditions and these are two of them. They are one route in this set and three
+        # rows in the table, and the routing-conflict detector reports nothing about
+        # them. Six repositories contained zero uses of either attribute, so nothing
+        # else here exercises the discriminators it reads.
+        ("GET", "/v1/routing/orders"),
+        # W29: the header-carrying WebClient chain. Its three headers are the
+        # `endpoint_metadata` rows; the route itself is an ordinary outbound row.
+        ("GET", "/v2/inventory/tagged"),
+        # `OI-73`: both of these build their URL inside a `uri(Function)` lambda, and
+        # `/v2/inventory/search` was ALREADY IN THIS FIXTURE deriving a row with `path`
+        # NULL — a real outbound call with no address, invisible in this set. The lambda
+        # body is now walked as a chain of its own, so both appear.
+        ("GET", "/v2/inventory/lookup"),
+        ("GET", "/v2/inventory/search"),
+        # W26's four, and they are two different answers on purpose.
+        # `/v1/paged/totals` returns `OrderTotals`, an interface: no fields at all, so
+        # its wire contract is its bean accessors, and the shape carries real fields.
+        # The three below return `Page`/`Slice`, which live in a jar this fixture names
+        # in no `extract_libraries` — so their shapes stay open with zero fields and the
+        # types are reported as ones nothing could expand. Reading a type's accessors
+        # needs its class file exactly as reading its fields does, and pinning both
+        # halves here is what keeps the first from being mistaken for a rule that
+        # describes types the workspace never read.
+        ("GET", "/v1/paged/orders"),
+        ("GET", "/v1/paged/slice"),
+        ("GET", "/v1/paged/totals"),
+        ("GET", "/v1/paged/wrapped"),
+        # `/api/orders/{id}`: the COVARIANT case, and it derives now (OI-47).
+        # `OrdersApiController#find` returns `DetailedOrderResult`, so its
+        # descriptor differs from the interface's `find` and it misses the
+        # name+descriptor join outright. javac's bridge carries the interface's
+        # exact descriptor and is the only thing that CAN match — so the mapping
+        # is reachable only through it, and it is not the method anyone wrote.
+        # The bridge used to be excluded and the mapping went with it; it is now
+        # read from `modifiers.synthetic` and its mapping carried across to the
+        # real override (handler asserted below).
+        ("GET", "/api/orders/{id}"),
         ("GET", "/api/orders"),
         ("GET", "/api/composed"),
         # Phase 2E Task 9 (the `combinator` engine — the WebFlux router tree,
@@ -217,6 +273,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/billing/invoices"),
         ("GET", "/v1/inventory/levels"),
         ("POST", "/v1/inventory/reserve"),
+        # `LegacyBillingApi`'s two Retrofit declarations, recorded WITHOUT a
+        # leading separator because that is what they wrote. 2O Task 2's
+        # canonical-address gate does NOT reach them (ruling R8): it applies
+        # to inbound HTTP alone, and a CLIENT's slashless path resolves
+        # against its base address's own path while a leading separator is
+        # root-relative — two different URLs, so prefixing one here would
+        # rewrite an address rather than normalize a spelling.
         ("GET", "legacy/invoices/{id}"),
         ("POST", "legacy/invoices"),
         # Outbound (Phase 2C): BillingRestTemplate's `single_call` surface —
@@ -296,9 +359,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "order-return-receipts"),
         # `escalate`'s dynamic reply: value-returning, no `@SendTo` at all —
         # `path` NULL, `unresolved` (asserted below). Also shared, from Task
-        # 11 on, by `sendDefault`'s own NULL-path row, JmsTemplate's
-        # destination-less `convertAndSend(event)`, and SqsTemplate's
-        # builder-lambda `send` — every path-NULL messaging row renders the
+        # 11 on, by `sendDefault`'s own NULL-path row and JmsTemplate's
+        # destination-less `convertAndSend(event)` — every path-NULL messaging row renders the
         # same `(None, None)` tuple, so the SET gains no new entry for any
         # of them even though `len(report.endpoints)` does (asserted below).
         # 2E-prep Task 6 adds one more to this same tuple:
@@ -326,6 +388,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `shipments-outbound` is a different topic from the inbound
         # listener's own `shipments-inbound`, so no merge here either.
         (None, "shipments-outbound"),
+        # W57 (`OI-74`): `SqsTemplate#send(to -> to.queue(...).payload(...))`.
+        # This row used to be one of the `(None, None)` tuple's several
+        # contributors — its queue name sat unread inside the builder lambda
+        # since 2026-08-30 (`dacdf67`) — and it is now its own destination.
+        (None, "shipments-lambda"),
         # Both (Phase 2D, Task 11): Pub/Sub's `publish`/`subscribeAndConvert`
         # share this identity — the ONLY messaging path Task 11 introduces on
         # both sides of the merge in the same task (every other Task 11
@@ -519,6 +586,37 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # resolved row (D02 §2's `reply`, spring-kafka.yml's own precedent,
         # now serving a second protocol with zero engine change).
         (None, "/topic/order-placed"),
+        # W43, `G-33`: `OrderStompPublisher#announce`'s own
+        # `SimpMessagingTemplate.convertAndSend("/topic/order-announced", order)` — the
+        # OUTBOUND half of this module's STOMP surface, which nothing read before it. The
+        # destination resolves from the call's string literal even though the descriptor
+        # types it `Object`, because `convertAndSend` is declared on
+        # `MessageSendingOperations<D>` and `D` erases.
+        #
+        # `announceToDefault` takes no destination argument at all and shares the existing
+        # `(None, None)` tuple, exactly as `board`'s dynamic reply does — the SET gains one
+        # entry for two new rows, and the count below gains two.
+        (None, "/topic/order-announced"),
+        # W44, `G-29`: the three servlet functional routes under `/mvcfn`. Verbed, unlike
+        # every websocket row above — a functional route declares an HTTP method the same
+        # way an annotated one does, and the nested `path("/mvcfn")` prefix composes onto
+        # each exactly as a class-level `@RequestMapping` would.
+        ("GET", "/mvcfn/invoices"),
+        ("POST", "/mvcfn/invoices"),
+        ("PUT", "/mvcfn/invoices/{id}"),
+        # W45, `G-42`: the URLs a STOMP client opens. Verbless, like every other websocket
+        # row — a handshake path declares no HTTP method — and three of them from TWO
+        # calls, because `addEndpoint("/ws-alt", "/ws-legacy")` registers both.
+        (None, "/ws"),
+        (None, "/ws-alt"),
+        (None, "/ws-legacy"),
+        # W46, `G-32`: the three URLs this module OPENS. Verbless like every websocket
+        # row, and the whole URL is the path with `peer` NULL — one address shape across
+        # every client row, because the `channel_via` rung that reads the two jakarta ones
+        # is peerless by construction and splitting only the literal row would publish two.
+        (None, "ws://feeds.example.com/orders"),
+        (None, "ws://feeds.example.com/audit"),
+        (None, "ws://feeds.example.com/stomp"),
         # `board` is ALSO value-returning (`OrderView`) and declares no
         # `@SendTo` — the SAME dynamic-reply shape `escalate`'s own kafka row
         # keeps (comment above, line ~285): a path-NULL, `unresolved` reply
@@ -797,10 +895,81 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # never loads (`resolved_fixture` runs no reader or interpret step —
     # `test_the_format_ladder_answers_every_live_row`'s own docstring) —
     # pinned instead in `tests/e2e/test_vertical_slice.py`, where the
-    # interpreter runs. 122 stands unmoved through this task.
-    assert len(report.endpoints) == 122
-    assert report.skipped_catalogs == []
-    assert ("GET", "/api/orders/{id}") not in {(e["method"], e["path"]) for e in report.endpoints}
+    # interpreter runs. 122 stood unmoved through that task.
+    #
+    # OI-47 makes it 123. The one added row is `GET /api/orders/{id}` — a
+    # mapping the fixture always declared and this pass always lost, because a
+    # covariant override's descriptor cannot match its interface's and the only
+    # method that can, javac's bridge, was excluded outright. Reading
+    # `modifiers.synthetic` and carrying the bridge's mapping across to the
+    # method it forwards to recovers it. 122 -> 123 was the whole effect of that.
+    #
+    # OI-48 makes it 124: `POST /v1/orders/scoped`, added because `ScopedRequest`
+    # was referenced by NOTHING, so no endpoint rooted it, so the package-scope
+    # nullability rule ran only in a hand-built unit test and never in the
+    # pipeline. The fixture could not see the thing it was built to demonstrate.
+    #
+    # W26 makes it 128: the four `/v1/paged/*` routes. `/totals` is a payload type whose
+    # wire contract is in its ACCESSORS — an interface has no fields at all — and the
+    # three paged ones are the boundary beside it, returning an envelope whose jar this
+    # fixture names in no `extract_libraries`.
+    #
+    # W27 makes it 134, and every one of the six is a row that ALREADY EXISTED and was
+    # being folded away (F5 §6.1). A wire identity the module both serves and calls used
+    # to collapse into one `direction: both` row; two of these six were fabrications —
+    # a SOAP operation merged with a call to `${soap.billing.uri}`, and `POST /v1/orders`
+    # merged with a call to `orders-loop` — and the other four are genuine
+    # self-publish/self-consume. Nothing new is derived; six deletions stopped happening.
+    # W28 makes it 137: `RoutingConditionsController`'s three handlers on one address.
+    # W29 makes it 139: two WebClient chains — one carrying headers, one whose url is
+    # built in a lambda and stays honestly pathless (`OI-73`).
+    # W27's REVIEW makes it 145, and all six are rows that were being dropped outright.
+    # The outbound dedup keyed on wire identity alone — `(protocol, direction, verb,
+    # path)` — with a `seen` set spanning every caller in the module, so a second caller
+    # on one address was `continue`d away with no row, no `peer` and no question. That is
+    # F5 §6.1 rule 1 unmet ("one row per (caller, target)"), and strictly worse than the
+    # `both` merge W27 deleted, which at least kept the caller. Two of the six are
+    # `SharedPathClients`, added to give the fixture the shape it lacked; the other four
+    # were already in the fixture and unseen — a second caller on `/v2/inventory/levels`,
+    # another on `/v2/inventory/reserve`, `EventProducers#sendKeyed`'s `order-events`,
+    # and a SOAP call to a different billing address.
+    # 147 since W43: the two STOMP outbound rows that close `G-33`.
+    # 150 since W44: the three `/mvcfn` servlet functional routes that close `G-29`.
+    # 153 since W45: the three STOMP connect URLs that close `G-42`.
+    # 156 since W46: the three client connects that close `G-32`.
+    assert len(report.endpoints) == 156
+    # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
+    # fixture is exactly the module the gate exists for — a Spring module with
+    # a repository-shaped interface (`OrderRepository extends
+    # Repository<OrderResult, Long>`) and no Spring Data REST anywhere in its
+    # build. Ungated it would mint a whole CRUD API here; gated, it is skipped
+    # with its reason and the endpoint count above does not move.
+    #
+    # 2O Task 9 adds the second, and it is the same gate answering honestly
+    # about a different framework: this fixture declares no Spring Integration,
+    # writes no `@ServiceActivator`, and `spring-integration.yml` is therefore
+    # skipped rather than silently finding nothing. The count above does not
+    # move for it either — that catalog declares no `key` and mints no endpoint
+    # row at all, by design (2O design §5).
+    #
+    # F2 §3.6 adds the third, and it is the gate doing the job it was extended
+    # for: this fixture declares `spring-websocket` and no RSocket coordinate, so
+    # `spring-rsocket.yml` is skipped while `spring-stomp.yml` runs. Before W16
+    # neither was gated on anything that could tell them apart — `@MessageMapping`
+    # is both frameworks' routing annotation, and Spring's own handlers scan for
+    # it with the same `@Controller` predicate — so this fixture's five STOMP rows
+    # were published on `websocket` with no evidence distinguishing them from
+    # RSocket, and adding the RSocket catalog ungated derived five more on
+    # `rsocket`. The count above does not move: the skip is what keeps it still.
+    # ORDER is the engine ordering `derive_endpoints` sorts by, not the catalog
+    # id: `spring-rsocket` is `annotation_driven` and runs before the two
+    # dependency-gated styles, which is why it heads the list rather than
+    # trailing it alphabetically.
+    assert [entry.catalog_id for entry in report.skipped_catalogs] == [
+        "spring-rsocket",
+        "spring-data-rest",
+        "spring-integration",
+    ]
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec
     # §3's own boundary sentence), never the interface's — shapes and
@@ -809,7 +978,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     inherited_handlers = {
         (e["method"], e["path"]): e["handler"]
         for e in report.endpoints
-        if e["path"] in ("/api/orders", "/api/composed")
+        if e["path"] in ("/api/orders", "/api/composed", "/api/orders/{id}")
     }
     assert inherited_handlers[("GET", "/api/orders")].endswith(
         "OrdersApiController#list(sig_3f061508)."
@@ -817,10 +986,31 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     assert inherited_handlers[("GET", "/api/composed")].endswith(
         "OrdersApiController#composed(sig_d5afb768)."
     )
+    # OI-47: the covariant case, which used to derive nothing at all. The
+    # handler must be the method someone WROTE — `find` returning the covariant
+    # `DetailedOrderResult` — never javac's bridge, which carries the
+    # interface's own descriptor and is the only thing that can match the join.
+    # OI-47's end-to-end proof, on a really compiled class file. `sig_95a78dff`
+    # is `(J)Lcom/acme/orders/openapi/DetailedOrderResult;` — the override
+    # someone wrote. javac's bridge is `(J)Lcom/acme/orders/OrderResult;`,
+    # `sig_4cb6f523`, and it is the only method whose descriptor matches the
+    # interface's, so it is what the join finds and what would be published if
+    # the mapping were not carried across to the real one.
+    assert inherited_handlers[("GET", "/api/orders/{id}")].endswith(
+        "OrdersApiController#find(sig_95a78dff)."
+    )
 
-    directions = {(e["method"], e["path"]): e["direction"] for e in report.endpoints}
-    assert directions[("POST", "/billing/invoices")] == "outbound"
-    assert directions[("POST", "/v1/orders")] == "both"  # the self-call merged
+    directions: dict[tuple, set[str]] = {}
+    for endpoint in report.endpoints:
+        directions.setdefault((endpoint["method"], endpoint["path"]), set()).add(
+            str(endpoint["direction"])
+        )
+    assert directions[("POST", "/billing/invoices")] == {"outbound"}
+    # Two rows, not one `both` row (W27, F5 §6.1): the module serves `POST /v1/orders`
+    # and `OrdersLoopClient` calls that path at `orders-loop`. The merge compared
+    # `(protocol, method, path)` and could not see the different host, because `peer` is
+    # not part of endpoint identity (RC-5).
+    assert directions[("POST", "/v1/orders")] == {"inbound", "outbound"}
     peers = {e["path"]: e["peer"] for e in report.endpoints if e["direction"] != "inbound"}
     assert peers["/billing/invoices"] == "billing"
     assert peers["/v1/inventory/levels"] is None  # base URL is builder code
@@ -833,33 +1023,44 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # URL, unlike every `channel_arg` destination elsewhere in this file.
     assert peers["/123456789012/raw-queue"] == "sqs.us-east-1.amazonaws.com"
 
-    # The `uri(uriBuilder -> …)` chain: the engine only follows one hop off
-    # the lambda argument, so the row still derives (a call was made) but
-    # honestly as unresolved, path NULL — never a guess at the literal
-    # inside the builder lambda.
+    # The `uri(uriBuilder -> …)` chain, and this assertion used to read the other way
+    # round (`OI-73`, closed in W29): the row derived with `path` NULL and
+    # `resolution: unresolved` — a real outbound call with no address at all.
+    #
+    # That was not a small loss. The address IS the row's identity, DR-5 matches on the
+    # wire contract, and `uri(Function)` is the idiomatic way to build a URL with query
+    # parameters — so the shape cost every such call its address. The comment here called
+    # it "never a guess at the literal inside the builder lambda", and that framing was
+    # the mistake: the lambda is ONE argument of ONE call, the fact stream names the
+    # synthetic method it compiled to, and reading that method's own call sites is
+    # reading rather than guessing.
     [search_row] = [
         e
         for e in report.endpoints
         if e["caller"] and e["caller"].endswith("InventoryWebClient#search(sig_e02a4703).")
     ]
     assert search_row["method"] == "GET"
-    assert search_row["path"] is None
-    assert search_row["resolution"] == "unresolved"
+    assert search_row["path"] == "/v2/inventory/search"
+    assert search_row["resolution"] == "resolved"
 
-    # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in
-    # its own synthetic method — the dataflow pass has to scan the
-    # `lambda$reserveAfterLevels$N` method, not just the enclosing method, to
-    # find it. Wire-identity dedup collapses it with `reserve()`'s own
-    # identical row (D02 §5's `derive_call_endpoints.sql` contract); the row
-    # that survives is whichever caller sorts first (`call_sites`' own
-    # `caller, ordinal` order), which is the lambda's — asserted here rather
-    # than assumed, so a resort silently changing this is caught. The numeric
-    # suffix is javac's per-class lambda counter, which different compiler
-    # versions assign in different orders, so only the stable stem is pinned.
-    [reserve_row] = [
+    # The flatMap lambda's own chain derives `POST /v2/inventory/reserve` in its own
+    # synthetic method — the dataflow pass has to scan the `lambda$reserveAfterLevels$N`
+    # method, not just the enclosing method, to find it.
+    #
+    # **Two callers, two rows** (F5 §6.1 rule 1). Until W27's review this collapsed with
+    # `reserve()`'s own identical row and the surviving one was "whichever caller sorts
+    # first" — a real caller deleted, and this comment used to say so in as many words
+    # while asserting the sort order rather than the rule. Both are genuine call sites and
+    # both stand. The numeric suffix is javac's per-class lambda counter, which different
+    # compiler versions assign in different orders, so only the stable stem is pinned.
+    reserve_rows = [
         e for e in report.endpoints if (e["method"], e["path"]) == ("POST", "/v2/inventory/reserve")
     ]
-    assert "lambda$reserveAfterLevels$" in reserve_row["caller"]
+    assert len(reserve_rows) == 2
+    assert any("lambda$reserveAfterLevels$" in e["caller"] for e in reserve_rows)
+    # The signature hash is javac's, so only the member name is pinned — the same reason
+    # the lambda's counter above is not.
+    assert any("InventoryWebClient#reserve(sig_" in e["caller"] for e in reserve_rows)
 
     # Task 5: OrderController's two media-declaring routes fill consumes/
     # produces off their own `@GetMapping`/`@PostMapping` attributes (spec §4
@@ -896,8 +1097,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         combinator_rows[("GET", "/fn/health")]["handler"]
         == combinator_rows[("HEAD", "/fn/health")]["handler"]
     )
-    assert combinator_rows[("GET", "/fn/health")]["handler"].endswith(
-        "OrderRoutes#lambda$routes$0(sig_a2451eb8)."
+    # The counter in `lambda$routes$N` is javac's private bookkeeping and the
+    # two JDKs this project builds with disagree: javac 21 numbers per CLASS,
+    # javac 26 per METHOD. `routes` happens to hold the first lambda in this
+    # file, so both spell it `$0` today — and it stops being true the moment a
+    # lambda is added to a method declared above it, as a JDK-21-only failure.
+    # Matched rather than pinned for the same reason
+    # `tests/ingress/test_asm_scanner.py` normalises it: the enclosing method
+    # and the signature are what this asserts, never the counter.
+    assert re.search(
+        r"OrderRoutes#lambda\$routes\$\d+\(sig_a2451eb8\)\.$",
+        combinator_rows[("GET", "/fn/health")]["handler"],
     )
     # `composite()`'s cross-method `.and(other())` reference derives one
     # unresolved row, `(None, None)` — asserted by caller, since its own
@@ -922,12 +1132,25 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/kt/rich"),
     }
     assert all(row["handler"] is None for row in kt_rows)
-    # F1: every predicate-derived media column on every combinator row is
+    # F1, and the boundary it named is CLOSED (2O Task 13). This assertion
+    # read "every predicate-derived media column on every combinator row is
     # NULL — the vararg `accept`/`contentType` constants are unreadable
-    # (checkpoint (3)), and that unreadability never touches `resolution`.
-    assert all(
-        (row["consumes"], row["produces"]) == (None, None) for row in combinator_rows.values()
-    )
+    # (checkpoint (3))". They are readable since extractor capability 9.15 put
+    # the constants in the array slot's own `elements`, and the engine reads
+    # them now. What F1 ruled is untouched and still pinned below: an
+    # unreadable media constant never moves `resolution`.
+    media = {(m, p): (row["consumes"], row["produces"]) for (m, p), row in combinator_rows.items()}
+    assert media[("GET", "/fn/orders")] == (None, '["application/json"]')
+    assert media[("POST", "/fn/orders")] == ('["application/json"]', None)
+    assert media[("GET", "/kt/rich")] == (None, '["application/json"]')
+    # Every OTHER combinator row declares no media predicate at all, so its
+    # columns stay NULL — the read fires where a declaration exists and
+    # nowhere else.
+    assert {
+        columns
+        for (m, p), columns in media.items()
+        if (m, p) not in {("GET", "/fn/orders"), ("POST", "/fn/orders"), ("GET", "/kt/rich")}
+    } == {(None, None)}
 
 
 # --- 2H Task 2: the GraphQL surface, live on real bytecode ---------------
@@ -1259,8 +1482,18 @@ def test_a_value_returning_stomp_handler_with_no_sendto_derives_an_unresolved_re
 # different protocol.
 
 
-def _soap_row(report: ResolveReport, path: str) -> dict:
-    [row] = [e for e in report.endpoints if e["protocol"] == "soap" and e["path"] == path]
+def _soap_row(report: ResolveReport, path: str, direction: str = "inbound") -> dict:
+    """One SOAP row by identity AND direction.
+
+    The direction became necessary with W27 (F5 §6.1): a QName the module both serves and
+    calls is two rows now, where the merge used to leave one. Naming the side is what
+    these tests mean anyway — every one of them is about a served operation.
+    """
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["protocol"] == "soap" and e["path"] == path and e["direction"] == direction
+    ]
     return row
 
 
@@ -1290,14 +1523,13 @@ def test_a_payload_root_derives_its_qname_identity_from_two_attributes_of_one_an
     row = _soap_row(report, "{http://orders.example.com/ws}placeOrderRequest")
 
     assert row["method"] is None
-    # 2I Task 5: `both`, not `inbound` — `BillingSoapClient` calls the very
-    # operation this endpoint serves (its payload type's `@XmlRootElement`
-    # states the same QName), so D02 §3's merge folded the outbound row into
-    # this one. Everything this test is ABOUT is untouched by that: the merge
-    # keeps the handler's own row, its handler, its contracts and its
-    # `catalog_id`, and changes only the direction and the carried
-    # caller/peer.
-    assert row["direction"] == "both"
+    # `inbound`, and it read `both` until W27 (F5 §6.1). `BillingSoapClient` calls an
+    # operation whose payload type's `@XmlRootElement` states this same QName, and the
+    # two rows were merged on that basis — publishing the module's own served operation
+    # and a call to `${soap.billing.uri}` as ONE endpoint. They share a QName because
+    # they share a payload TYPE, which is not identity. The call is still recorded, as
+    # its own outbound row, with a `self_exchange` question naming both sides.
+    assert row["direction"] == "inbound"
     assert row["handler"].endswith("OrderSoapEndpoint#placeOrder(sig_fd19bfc7).")
     assert row["resolution"] == "resolved"
     assert row["evidence"] == "compiler"
@@ -1529,10 +1761,34 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 54 + 2: the prefix-seam controllers, one route each. They ride the
         # same `spring-web.yml` `protocol_hint` every other http row does and
         # are equally untouched by it.
-        "http": 56,
+        # 58 since OI-48 added `POST /v1/orders/scoped`; 57, not 56, since OI-47: `GET /api/orders/{id}` is the covariant
+        # inherited mapping this pass used to lose with the bridge it was
+        # reachable through. One row, and the only movement in this whole map.
+        # 62 since W26: the four `/v1/paged/*` routes — one payload described from its
+        # accessors, three left open because their envelope's jar is not in reach.
+        # 63 since W27: `POST /v1/orders` is two rows, not one. The module serves it and
+        # `OrdersLoopClient` calls it at `orders-loop` — a different host, which the
+        # merge could not see because `peer` is not part of endpoint identity (RC-5).
+        # 66 since W28: three handlers on `/v1/routing/orders`, separated by conditions
+        # Spring compares and this table does not carry.
+        # 68 since W29: `/v2/inventory/tagged` (the header-carrying chain) and
+        # `searched`, whose url is built inside a `uri(Function)` lambda — that one
+        # derives a row with `path` NULL and `resolution: unresolved`, which is the whole
+        # of `OI-73`: the call is recorded and its address is honestly unread.
+        # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
+        # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
+        # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
+        "http": 75,
+        # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
+        # ride `protocol_hint` exactly as every other http row does.
         "jms": 8,
-        "kafka": 22,
-        "pubsub": 6,
+        # three topics the module both publishes to and consumes — `order-events`,
+        # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
+        # row. Self-publish/self-consume is real, and so is a client calling somebody else's
+        # copy of an address; `self_exchange` asks rather than deciding
+        "kafka": 26,
+        # `order-notifications`, published and subscribed here, is two rows since W27
+        "pubsub": 7,
         "sqs": 7,
         # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
         # pass for the same reason the graphql and messaging buckets are —
@@ -1542,11 +1798,18 @@ def test_nothing_but_the_two_sse_routes_moves(
         # adds nothing to `graphql` above: this fixture loads no
         # `declared_shape` facts at all (comment above `len(report.endpoints)
         # == 122`).
-        "soap": 5,
+        # `{http://orders.example.com/ws}placeOrderRequest` is two rows since W27 — the served
+        # operation, and `BillingSoapClient`'s call to `${soap.billing.uri}`. They share a QName
+        # because they share a payload TYPE, which is not identity
+        "soap": 7,
         "sse": 2,
-        "websocket": 5,
+        # 7 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
+        # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
+        # 10 since W45: the three connect URLs `addEndpoint` registers.
+        # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
+        "websocket": 13,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 122
+    assert sum(counts.values()) == len(report.endpoints) == 156
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -1666,8 +1929,23 @@ def test_a_streams_per_event_payload_unwraps_through_the_sse_envelope(
 # --- Task 10: the three listener catalogs, end to end, on real bytecode ---
 
 
-def _messaging_rows(report: ResolveReport, protocol: str, path: str) -> list[dict]:
-    return [e for e in report.endpoints if e["protocol"] == protocol and e["path"] == path]
+def _messaging_rows(
+    report: ResolveReport, protocol: str, path: str, direction: str | None = None
+) -> list[dict]:
+    """Rows on one messaging address, optionally on one side of it.
+
+    The side became sayable with W27 (F5 §6.1): a topic a module publishes to AND
+    consumes is two rows now, where the merge used to leave one `both` row. That is the
+    self-publish/self-consume case, and it is real — which is why these rows stand and a
+    `self_exchange` question asks about them rather than a pass deciding.
+    """
+    return [
+        e
+        for e in report.endpoints
+        if e["protocol"] == protocol
+        and e["path"] == path
+        and (direction is None or e["direction"] == direction)
+    ]
 
 
 def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
@@ -1681,8 +1959,8 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
     bare parameter `sole_unannotated` would otherwise have matched too, had
     it not been excluded)."""
     _, report = resolved_fixture
-    [events] = _messaging_rows(report, "kafka", "order-events")
-    [audit] = _messaging_rows(report, "kafka", "order-audit")
+    [events] = _messaging_rows(report, "kafka", "order-events", "inbound")
+    [audit] = _messaging_rows(report, "kafka", "order-audit", "inbound")
 
     assert events["handler"] == audit["handler"]
     assert events["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
@@ -1693,48 +1971,92 @@ def test_a_kafka_listeners_two_topics_derive_two_rows_off_one_handler(
         assert row["response_shape"] is None
 
 
+def test_a_package_scope_makes_an_unannotated_field_not_null(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """D02 §2e's scope rule, exercised end to end at last (OI-48).
+
+    A package-level `@NullMarked` or `@NonNullApi` inverts Java's permissive
+    default: a field with NO annotation of its own is not-null, and only the
+    exceptions are marked. That is the whole point of the mechanism — measured on
+    spring-web 6.1.6, `HttpHeaders` declares 68 fields and ZERO carry an
+    annotation, because the package declares the rule once.
+
+    The resolver has always implemented it; nothing reached it. `ScopedRequest`
+    was referenced by no endpoint, so no shape was ever rooted at it and the rule
+    ran only in a hand-built unit test. It is a request body now.
+
+    Both spellings, because a Spring codebase writes Spring's: JSpecify's
+    `@NullMarked` was declared in `shape-models/json.yml` and Spring's
+    `@NonNullFields` was not — so every Spring package declaring itself non-null
+    read as fully nullable. `SpringScopedDetail` is reached through the payload
+    graph rather than a second endpoint.
+
+    The two negative cases travel the same way, and both were wrong. A package
+    declaring `@NonNullApi` and nothing else says nothing about FIELDS — Spring
+    scopes parameters and returns with it — and 197 of 1,672 cached jars'
+    packages declare it alone. A SUBpackage of a scoped package inherits nothing
+    (JLS 7.4.1), and matching the parent's prefix by bare `startswith` claimed
+    462 unmarked subpackages.
+    """
+    workspace, _ = resolved_fixture
+    nullable_by_field = {
+        (str(row["shape_id"]).split("/")[-1], str(row["wire_name"])): row["nullable"]
+        for row in workspace.query("shape_fields")
+        if "Scoped" in str(row["shape_id"])
+    }
+
+    # JSpecify's spelling.
+    assert nullable_by_field[("ScopedRequest#", "code")] is False
+    # Spring's, which is what a Spring codebase actually declares.
+    assert nullable_by_field[("SpringScopedDetail#", "label")] is False
+    # `@NonNullApi` alone scopes no field.
+    assert nullable_by_field[("ApiScopedDetail#", "note")] is True
+    # A subpackage of a scoped package is not scoped by it.
+    assert nullable_by_field[("NestedScopedDetail#", "tag")] is True
+
+
 def test_a_batch_listeners_request_shape_is_an_array(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`onBatch(List<OrderEvent> events)`: the checkpoint's own expectation is
-    `wire_type: array`, exactly what this asserts — no `item` (which would
-    name the array's own element shape) survives, because the extractor does
-    not capture a *parameter*'s own generic type arguments the way it does a
-    *return* type's (`OrderController#list`'s `List<OrderResult>` return, by
-    contrast, does carry its element — see
-    `test_an_endpoint_whose_response_is_a_collection_records_its_element_shape`
-    above). A real, pre-existing scanner limitation this task's fixture is
-    the first to expose (no earlier fixture ever put a generic type on a
-    *parameter*), not something a catalog's own rules can work around —
-    verified live rather than assumed, and left as an honest gap rather than
-    worked around."""
+    """`onBatch(List<OrderEvent> events)`: `wire_type: array` carrying its
+    element, which is the checkpoint's own expectation in full.
+
+    This test used to assert `"item" not in descriptor`. That was an honest gap,
+    recorded rather than guessed past: the extractor read the `Signature`
+    attribute for a *return* type but not for a *parameter*, so a parameter's
+    type arguments were erased before anything downstream could see them —
+    `OrderController#list`'s `List<OrderResult>` return kept its element and this
+    parameter could not. **W5 closed it**, and the element is now here, so the
+    row states the element type a consumer of `order-batches` has to expect
+    instead of an array of nothing in particular."""
     _, report = resolved_fixture
     [batch] = _messaging_rows(report, "kafka", "order-batches")
 
     descriptor = json.loads(batch["request_shape"])
     assert descriptor["wire_type"] == "array"
-    assert "item" not in descriptor
+    assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
 
 
 def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shape(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the same
-    erased-parameter-generics limitation as the batch row above means
-    `ConsumerRecord`'s own type arguments never reach the signature, so the
-    declared `{type: ..., payload_arg: 1, semantics: envelope}` wrapper rule
-    finds nothing at its payload position — D02 §2a's "a declared envelope
-    holding nothing at the payload position... is no payload either:
-    describing the envelope would report a type the catalog already declares
-    as one nobody could expand." The checkpoint's own expectation
-    (`ConsumerRecord payload -> OrderEvent via payload_arg 1`) does not hold
-    against this scanner's real output; this is that divergence, verified
-    live and frozen honestly rather than guessed past."""
+    """`onDeadLetter(ConsumerRecord<String, OrderEvent> record)`: the declared
+    `{type: ..., payload_arg: 1, semantics: envelope}` wrapper rule reaches the
+    payload at argument 1 and the row describes `OrderEvent`, not the envelope.
+
+    This test used to assert `request_shape is None`, for the same cause as the
+    batch row above: a parameter's type arguments were erased, so the envelope
+    held nothing at its payload position, and D02 §2a says an envelope holding
+    nothing is no payload — the row was therefore empty. **W5 closed it**, and
+    the checkpoint's own expectation (`ConsumerRecord payload -> OrderEvent via
+    payload_arg 1`) now holds against the scanner's real output, which it could
+    not before."""
     _, report = resolved_fixture
     [dlq] = _messaging_rows(report, "kafka", "order-.*-dlq")
 
     assert dlq["path"] == "order-.*-dlq"  # the pattern lands on `path` verbatim
-    assert dlq["request_shape"] is None
+    assert json.loads(dlq["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
 
 
 def test_a_class_level_kafka_listener_derives_one_row_per_handler_sharing_the_topic(
@@ -1910,26 +2232,44 @@ def test_a_bare_unannotated_http_parameter_is_never_claimed_by_a_messaging_catal
 # --- Task 11: the producer catalogs, end to end, on real bytecode ---
 
 
-def test_kafka_templates_two_send_arities_dedup_and_merge_into_the_listeners_row(
+def test_two_producers_of_one_topic_stay_two_rows_beside_its_consumer(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`kafkaTemplate.send("order-events", event)` (arity 2) and
-    `kafkaTemplate.sendKeyed("order-events", key, event)` (arity 3) both
-    target the same topic: the two `methods` rows' own dedup key
-    (`protocol, direction, verb or "", path`) collapses them to one derived
-    outbound row before merging ever runs. That one row then merges with
-    Task 10's own `order-events` INBOUND row (`OrderEventsListener#onEvent`)
-    into `direction: both` — `merge_endpoints.sql` keeps the handler's own
-    request shape (`OrderEvent`, from `onEvent`'s signature), not whatever
-    the single_call engine derived off `event`'s own pass-through capture,
-    and gains the caller from whichever of the two send calls sorts first."""
-    _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-events")
+    """`EventProducers#send` and `#sendKeyed` both publish to `order-events`, and
+    `OrderEventsListener#onEvent` consumes it: **three rows, two outbound and one
+    inbound**, and getting to three took correcting two separate merges.
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
-    assert row["caller"].endswith("EventProducers#send(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    This test used to be called `..._two_send_arities_dedup_into_one_outbound_row` and its
+    docstring called that dedup "the collapse only within one caller half of F5 §6.1,
+    which was already true". Both halves of that were wrong. `send` and `sendKeyed` are
+    two DIFFERENT methods — two callers — so the collapse was ACROSS callers, which rule 1
+    forbids outright, and W27's review measured it deleting a real producer here and in
+    three other places. Within one caller the dedup is real and still runs
+    (`test_call_engines.py::test_two_identical_calls_in_one_method_dedup_to_one_row`).
+
+    The inbound row stays separate for W27's own reason: a module publishing to a topic it
+    also consumes is self-publish/self-consume, which is REAL — and so is a client calling
+    another service's copy of a shared address, which is why a pass cannot decide between
+    them. `self_exchange` asks the question instead of a merge answering it.
+    """
+    _, report = resolved_fixture
+    [inbound] = _messaging_rows(report, "kafka", "order-events", "inbound")
+    outbounds = _messaging_rows(report, "kafka", "order-events", "outbound")
+    assert sorted(row["caller"].split("#")[-1].split("(")[0] for row in outbounds) == [
+        "send",
+        "sendKeyed",
+    ]
+    outbound = next(row for row in outbounds if "#send(" in row["caller"])
+
+    assert inbound["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert inbound["caller"] is None
+    assert outbound["caller"].endswith("EventProducers#send(sig_b2a754d9).")
+    assert outbound["handler"] is None
+    # The handler's own request shape, off `onEvent`'s signature — no longer "the shape
+    # the merge kept", just the shape its own row always had.
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
 
 
 def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
@@ -1938,15 +2278,16 @@ def test_the_producer_records_channel_and_payload_come_from_its_own_constructor(
     """`kafkaTemplate.send(new ProducerRecord<>("order-audit", event))`: the
     `record_wrappers` one-hop reads the topic and payload off the
     `ProducerRecord`'s own constructor call, not off `send`'s single
-    argument (the record itself). `order-audit` also merges with Task 10's
-    `onEvent` row (the SAME handler, its second `@KafkaListener` topic) —
-    both, handler + caller, on the merged row."""
+    argument (the record itself). `order-audit` is also consumed here — it is `onEvent`'s
+    second `@KafkaListener` topic, the SAME handler — so the module publishes to a topic
+    it reads back. That is two rows since W27 (F5 §6.1), not one `both` row, with a
+    `self_exchange` question naming both sides."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-audit")
+    [inbound] = _messaging_rows(report, "kafka", "order-audit", "inbound")
+    [outbound] = _messaging_rows(report, "kafka", "order-audit", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
-    assert row["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
+    assert inbound["handler"].endswith("OrderEventsListener#onEvent(sig_cf042f06).")
+    assert outbound["caller"].endswith("EventProducers#sendAudit(sig_b2a754d9).")
 
 
 def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(
@@ -1974,8 +2315,14 @@ def test_the_raw_kafka_producer_derives_its_own_unmerged_outbound_row(
     assert row["direction"] == "outbound"
     assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendRaw(sig_086ab63d).")
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert row["resolution"] == "resolved"
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
@@ -1986,21 +2333,26 @@ def test_the_replying_kafka_templates_send_and_receive_merges_with_its_listener(
     (`spring-kafka-replying.yml`), `matches.owner` being single-valued and
     `ReplyingKafkaTemplate` a different owner type from `KafkaTemplate`. No
     overload exposes the reply type at the call site, so this catalog
-    declares no `response_arg` at all; merged with Task 10's own
-    `order-returns` inbound row (`onReturn`), the surviving row keeps the
-    handler's own contract (`OrderEvent` request, `ReceiptView` response —
-    `onReturn`'s RETURN type, never the reply the `@SendTo` row already
-    covers), plus the new caller from this task."""
+    declares no `response_arg` at all. `order-returns` is also consumed here (Task 10's
+    `onReturn`), so the module sends to a topic it reads back — two rows since W27 (F5
+    §6.1), each keeping its own contract, with a `self_exchange` question naming both.
+    The handler's row carries `OrderEvent` request and `ReceiptView` response —
+    `onReturn`'s RETURN type, never the reply the `@SendTo` row already covers."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "kafka", "order-returns")
+    [inbound] = _messaging_rows(report, "kafka", "order-returns", "inbound")
+    [outbound] = _messaging_rows(report, "kafka", "order-returns", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
-    assert row["caller"].endswith("EventProducers#sendReturn(sig_b2a754d9).")
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
-    assert json.loads(row["response_shape"])["shape_id"] == (
+    assert inbound["handler"].endswith("OrderEventsListener#onReturn(sig_160f6bce).")
+    assert outbound["caller"].endswith("EventProducers#sendReturn(sig_b2a754d9).")
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
+    assert json.loads(inbound["response_shape"])["shape_id"] == (
         "com/acme/orders/contracts/ReceiptView#"
     )
+    # The catalog declares no `response_arg`, so the CALLING side states no reply type —
+    # which used to be invisible, the merge having kept the handler's answer for both.
+    assert outbound["response_shape"] is None
 
 
 def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
@@ -2024,7 +2376,9 @@ def test_kafka_templates_send_default_derives_an_unresolved_null_path_row(
     ]
 
     assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_a_kafka_templates_message_send_derives_a_second_distinct_unresolved_row(
@@ -2089,8 +2443,14 @@ def test_a_jms_templates_destination_no_longer_merges_once_its_listener_moves_to
     assert row["direction"] == "outbound"
     assert row["handler"] is None
     assert row["caller"].endswith("EventProducers#sendAuditMessage(sig_b2a754d9).")
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert row["resolution"] == "resolved"
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
 def test_a_destination_less_jms_send_derives_an_unresolved_null_path_row(
@@ -2127,39 +2487,60 @@ def test_an_sqs_templates_send_derives_its_own_unmerged_outbound_row(
 
     assert row["direction"] == "outbound"
     assert row["caller"].endswith("EventProducers#sendShipment(sig_b2a754d9).")
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert row["resolution"] == "resolved"
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(row["request_shape"])
 
 
-def test_the_sqs_builder_lambda_derives_an_honest_unresolved_row_not_a_fabricated_path(
+def test_the_sqs_builder_lambda_derives_the_queue_inside_it(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
-    """`sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`:
-    `SqsTemplate.send` has two arity-1 overloads (the destination-less
-    `send(T)` and this builder-consumer `send(Consumer<SqsSendOptions<T>>)`)
-    indistinguishable by name+arity alone, so the catalog declares NO
-    `channel_arg` at all for arity 1 (review round 1, finding 3: declaring
-    `channel_arg: 0` would be safe for THIS call — its arg 0 is a lambda —
-    but would fabricate a resolved queue name for `send(T)`'s own
-    destination-less form the moment some other caller passes a plain
-    string payload, since arg 0 there genuinely IS the payload). The row
-    still MATCHES (name+arity) and still derives — `_arg_at(arguments,
-    None)` is `None` regardless of what kind arg 0 actually carries — `path:
-    NULL, resolution: unresolved` unconditionally, for either overload.
-    Verified directly against the real `call_sites` fact that THIS call
-    site's own arg 0 carries `kind: lambda` (not assumed) — confirming the
-    row derives the same honest answer either way, never the literal
-    `"shipments-lambda"` string sitting inside the lambda body."""
+    """`OI-74`, closed in W57. `sqsTemplate.send(to -> to.queue("shipments-lambda")
+    .payload(event))` derived an outbound SQS row with NO destination for four
+    phases — `path` NULL, `resolution: unresolved` — while the queue name sat as
+    a string literal in the lambda's own synthetic method the whole time.
+
+    **The old behaviour was written down as a virtue**, and this docstring said
+    so: the row was "an honest unresolved row, not a fabricated
+    `shipments-lambda` path", and the catalog declared no position for arity 1
+    because the two overloads were "indistinguishable by name+arity alone". Both
+    halves stopped being true. Descriptors arrived and separate the two — the
+    destination-less `send(T)` is `(Ljava/lang/Object;)` and this is
+    `(Ljava/util/function/Consumer;)`, and `_matching_method` claims an arity
+    once any candidate declares a descriptor — and reading a literal the fact
+    stream records under the symbol this call's own argument names is reading,
+    not guessing. It is `OI-73` one engine over, where the same framing cost a
+    WebClient call its whole URL.
+
+    The address IS the row's identity: DR-5 matches on the wire contract, so a
+    destination-less outbound row links to nothing and tells a reader only that
+    this method sends to SQS.
+
+    Measured on the fixture, before and after: `path` NULL → `shipments-lambda`,
+    `resolution` unresolved → resolved. `peer` stays NULL because a channel is
+    peerless by construction, and the PAYLOAD comes back too — `lambda_steps`
+    names `payload(arg0)` beside `queue(arg0)`, so the row gains its request
+    shape rather than only its address."""
     _, report = resolved_fixture
     [row] = [
         e
         for e in report.endpoints
-        if e["protocol"] == "sqs" and e["direction"] == "outbound" and e["path"] is None
+        if e["protocol"] == "sqs"
+        and e["direction"] == "outbound"
+        and "sendShipmentViaBuilder" in str(e["caller"])
     ]
 
     assert row["caller"].endswith("EventProducers#sendShipmentViaBuilder(sig_b2a754d9).")
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    assert (row["path"], row["resolution"], row["peer"]) == ("shipments-lambda", "resolved", None)
+    assert "OrderEvent" in str(row["request_shape"])
+    # And no destination-less SQS row survives anywhere in the fixture: this
+    # was the only one, so its disappearance is the defect's own measure.
+    assert [e for e in report.endpoints if e["protocol"] == "sqs" and e["path"] is None] == []
 
 
 def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
@@ -2172,9 +2553,10 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
     override inside an otherwise-outbound catalog. Both
     `pubSubTemplate.publish("order-notifications", event)` and
     `NotificationsSubscriber#subscribe`'s `subscribeAndConvert(...)` target
-    the same topic, so they merge into ONE `both` row — the only Task 11
-    merge where BOTH sides are new in this same task (every other merge
-    target already existed as a Task 10 inbound row). The typed subscribe's
+    the same topic. They used to fold into ONE `both` row; since W27 (F5 §6.1) they are
+    two, because a module publishing to a subscription it also consumes is real and so is
+    a client calling somebody else's copy of one address — and the evidence does not
+    separate them, so `self_exchange` asks. The typed subscribe's
     own payload capture is its trailing `OrderEvent.class` literal, read at
     `body_arg` (review round 1, finding 1: an earlier draft read it into
     `response_arg` instead, which put the SUBSCRIBER'S received payload in
@@ -2184,14 +2566,16 @@ def test_pubsubs_publish_and_subscribe_share_one_file_and_merge_into_both(
     `spring-kafka.yml`/`spring-jms.yml`/`spring-sqs.yml`'s own inbound rows,
     never `response_shape`, on the surviving inbound-owned row."""
     _, report = resolved_fixture
-    [row] = _messaging_rows(report, "pubsub", "order-notifications")
+    [inbound] = _messaging_rows(report, "pubsub", "order-notifications", "inbound")
+    [outbound] = _messaging_rows(report, "pubsub", "order-notifications", "outbound")
 
-    assert row["direction"] == "both"
-    assert row["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
-    assert row["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
-    assert row["resolution"] == "resolved"
-    assert row["response_shape"] is None
-    assert json.loads(row["request_shape"])["shape_id"] == ("com/acme/orders/contracts/OrderEvent#")
+    assert inbound["handler"].endswith("NotificationsSubscriber#subscribe(sig_da8c82d5).")
+    assert outbound["caller"].endswith("EventProducers#publishNotification(sig_b2a754d9).")
+    assert inbound["resolution"] == "resolved"
+    assert inbound["response_shape"] is None
+    assert json.loads(inbound["request_shape"])["shape_id"] == (
+        "com/acme/orders/contracts/OrderEvent#"
+    )
 
 
 def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_catalog_present(
@@ -2213,19 +2597,27 @@ def test_a_catalogs_row_level_direction_override_is_still_owned_with_no_other_ca
 
     Kept as a pin after 2E-prep's `catalog_id` collapse (`_owns` now reads
     `endpoint["catalog_id"] == catalog.id`, no direction reasoning at all,
-    `_owned_directions` deleted): the merged `both` row keeps the inbound
-    side's `catalog_id`, which with only `spring-pubsub.yml` loaded is this
-    same catalog, so ownership stays trivially true and `OrderEvent` keeps a
-    real `shapes` row behind it — proving the collapse didn't quietly
-    reintroduce the masked-by-luck gap."""
+    `_owned_directions` deleted): with only `spring-pubsub.yml` loaded, the row is this
+    same catalog's, so ownership stays trivially true and `OrderEvent` keeps a real
+    `shapes` row behind it — proving the collapse didn't quietly reintroduce the
+    masked-by-luck gap.
+
+    *The row read `direction: both` until W27 (F5 §6.1). The INBOUND row is the one this
+    test is about — the per-row `direction: inbound` override inside an otherwise-outbound
+    catalog is the whole subject — and it is now that row directly rather than a merged
+    one carrying the override's side.*"""
     catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-pubsub")
     workspace, report = _resolved_fixture(tmp_path, catalogs=_Catalogs([catalog]))
-    [row] = [e for e in report.endpoints if e["path"] == "order-notifications"]
+    [row] = [
+        e
+        for e in report.endpoints
+        if e["path"] == "order-notifications" and e["direction"] == "inbound"
+    ]
     shape_id = json.loads(row["request_shape"])["shape_id"]
     shapes = {s["shape_id"] for s in workspace.query("shapes")}
     workspace.close()
 
-    assert row["direction"] == "both"
+    assert row["direction"] == "inbound"
     assert shape_id in shapes
 
 
@@ -2349,8 +2741,14 @@ def test_the_raw_sqs_sdk_builder_chain_splits_its_absolute_queue_url_but_reads_u
     assert row["handler"] is None
     assert row["caller"].endswith("RawSqsClientSender#send(sig_a7421bf5).")
     assert row["peer"] == "sqs.us-east-1.amazonaws.com"
-    assert row["resolution"] == "unresolved"
-    assert row["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert row["resolution"] == "resolved"
+    # `OI-77`. A bare `String` body is a real contract and NULL keeps exactly one
+    # meaning, so this reads `string` rather than nothing.
+    assert '"wire_type":"string"' in str(row["request_shape"])
 
 
 # --- 2E-prep Task 12: driver catalogs B — the pubsub trio +
@@ -2432,7 +2830,12 @@ def test_the_field_held_publisher_derives_two_honest_unresolved_duplicate_rows(
         assert row["path"] is None
         assert row["peer"] is None
         assert row["resolution"] == "unresolved"
-        assert row["request_shape"] is None
+        # `OI-77`. The ENVELOPE, because that is what this overload takes: the
+        # catalog captures `publish(PubsubMessage)`'s own argument, and a
+        # `PubsubMessage` is what the caller declared. The same answer an
+        # `instance` argument of that type already gave — what changed is that a
+        # parameter now reads like one.
+        assert "com/google/pubsub/v1/PubsubMessage#" in str(row["request_shape"])
 
 
 def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_handler(
@@ -2440,13 +2843,13 @@ def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_han
 ):
     """`google-pubsub-subscriber.yml`, D02 §2's `interface_implementation`
     style's own worked example against the real fixture:
-    `RawPubSubSubscribers#withNamedReceiver`'s
+    `RawPubSubSubscribers#startNamedReceiver`'s
     `Subscriber.newBuilder(ProjectSubscriptionName.of(project,
     "raw-notify"), new RawPubSubReceiver())` resolves the `instance`
     receiver to `RawPubSubReceiver#receiveMessage` (its class's own
     declared `interfaces` includes `MessageReceiver`, D00 §5a's
     `implemented_interfaces` capability — direct implementers only);
-    `withLambdaReceiver`'s own `Subscriber.newBuilder(...,
+    `startLambdaReceiver`'s own `Subscriber.newBuilder(...,
     (MessageReceiver) (m, c) -> c.ack())` resolves the `lambda` receiver to
     its own synthetic method symbol. Both channels read through
     the SAME `channel_via` form (`ProjectSubscriptionName.of`'s own
@@ -2471,7 +2874,7 @@ def test_a_named_messagereceiver_and_a_lambda_receiver_each_derive_their_own_han
 
     assert lambda_row["direction"] == "inbound"
     assert lambda_row["caller"] is None
-    assert "lambda$withLambdaReceiver$" in lambda_row["handler"]
+    assert "lambda$startLambdaReceiver$" in lambda_row["handler"]
     assert lambda_row["resolution"] == "resolved"
     assert lambda_row["request_shape"] is None
 
@@ -2520,8 +2923,14 @@ def test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payl
     assert message_row["method"] is None
     assert message_row["caller"].endswith("RawKafkaMessageSender#send(sig_b2a754d9).")
     assert message_row["catalog_id"] == "spring-kafka-message"
-    assert message_row["resolution"] == "unresolved"
-    assert message_row["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert message_row["resolution"] == "resolved"
+    # `OI-77`: the payload is handed through from this method's own parameter, and its
+    # TYPE is stated in that signature.
+    assert "com/acme/orders/contracts/OrderEvent#" in str(message_row["request_shape"])
 
     assert len(template_siblings) == 1
     [template_row] = template_siblings
@@ -2728,7 +3137,9 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
     # kafka metadata count. NOTHING consumes: the consumer rule resolved its
     # key, agreed across environments, and still stamped nothing, because
     # the class it named has no MIME to stamp.
-    assert len([e for e in kafka if e["produces"] == json_media]) == 10
+    # 11 since W27's review: `EventProducers#sendKeyed`'s `order-events` row, a second
+    # caller the outbound dedup had been deleting (F5 §6.1 rule 1).
+    assert len([e for e in kafka if e["produces"] == json_media]) == 11
     assert {e["consumes"] for e in kafka} == {None}
 
     # Untouched: every non-kafka row, including the HTTP rows that declare
@@ -2759,8 +3170,100 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/v1/orders/{id}", None, json_media),
         ("http", "/v1/orders/detailed", json_media, json_media),
         ("http", "/v1/orders/proto-orders", None, json_media),
+        # W44's servlet functional routes: `accept` fills `produces` and `contentType`
+        # fills `consumes`, read through the same `media_values` table the reactive twin
+        # uses — one measured member, `APPLICATION_JSON`, and nothing guessed.
+        ("http", "/mvcfn/invoices", None, json_media),
+        ("http", "/mvcfn/invoices", json_media, None),
         ("sse", "/events/stream", None, '["text/event-stream"]'),
+        # 2O Task 13, and NOT a stamp: these three are the functional-routing
+        # rows' own `accept`/`contentType` predicates, read off the vararg
+        # array's `elements` by the combinator engine. They belong in this set
+        # for the same reason the mapping-annotation rows do — the media is
+        # DECLARED at the route — and their presence here is what keeps the
+        # kafka stamp's own claim below honest: the stamp fires on kafka rows
+        # and nowhere else, which is only checkable if every non-kafka
+        # declaration is enumerated.
+        ("http", "/fn/orders", None, json_media),
+        ("http", "/fn/orders", json_media, None),
+        ("http", "/kt/rich", None, json_media),
     }
+
+
+def test_an_outbound_payload_handed_through_from_a_parameter_carries_its_contract(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """`OI-77`, found while checking W43's new STOMP rows against their siblings.
+
+    A payload passed straight through — `send(OrderEvent event)` calling
+    `kafkaTemplate.send("order-events", event)` — arrives as `{"kind": "parameter"}`, which
+    names no type of its own. `_reference_of` answered for a class literal, a scalar and an
+    `instance` and returned None for everything else, so the row shipped without a
+    contract; the type is stated in the CALLER's own signature and was simply not read.
+
+    **Measured before and after**, on a full `module analyze` of this fixture: 3 of its 25
+    outbound `single_call` rows carried a payload, and 19 do. The six that still do not are
+    rows with no body capture at all — a `send(Message)` whose payload is inside the
+    message.
+
+    **Re-measured in W57**: 20 → 21. `OI-74` taught `single_call` to read a destination and
+    a payload from inside a builder lambda, and the fixture's
+    `sqsTemplate.send(to -> to.queue(…).payload(event))` is a `single_call` row in this very
+    set — so it gains a carried contract, not just an address. The guard's own message says
+    to re-measure rather than re-pin when this moves, and this is that.
+
+    The guard below counts (21, 26) rather than those figures, and the difference is the
+    SET, not the run: it omits `aws-sqs-sdk`, and `spring-kafka-message` and `aws-sqs-sdk`
+    are `fluent` catalogs rather than `single_call` ones. *An earlier version of this
+    docstring explained the gap as "this test's resolve writes one row fewer than the
+    CLI's". That is true and is not the reason — the row it writes fewer is a SOAP call
+    from a second fixture module, which is in neither set.*
+
+    The value of a parameter really does live in whatever called the method, which is why
+    `parameter` belongs in `_UNREAD_KINDS` and why a DESTINATION read from one stays
+    `unresolved`. A payload is the other question: what a contract needs is the type.
+    """
+    workspace, _report = resolved_fixture
+    # Read off the WORKSPACE rather than the report: the two differ by one outbound row on
+    # this fixture, and the table is what the bundle and the document are built from.
+    written = [row for row in workspace.query("endpoints") if row["direction"] == "outbound"]
+    outbound = {(row["catalog_id"], row["path"]): row for row in written}
+
+    # The plainest instance: one field, one call, the payload straight off the parameter.
+    kafka = outbound[("spring-kafka-template", "order-events")]
+    assert "com/acme/orders/contracts/OrderEvent#" in str(kafka["request_shape"])
+    # A second catalog, a second protocol, the same shape of call — this is a class of
+    # defect and not one catalog's.
+    jms = outbound[("spring-jms-template", "audit.queue")]
+    assert "com/acme/orders/contracts/OrderEvent#" in str(jms["request_shape"])
+    # And W43's own rows, which is where it was found.
+    stomp = outbound[("spring-stomp-template", "/topic/order-announced")]
+    assert "com/acme/orders/contracts/OrderView#" in str(stomp["request_shape"])
+
+    single_call = {
+        "spring-resttemplate",
+        "spring-kafka-template",
+        "kafka-clients",
+        "spring-jms-template",
+        "spring-sqs-template",
+        "google-pubsub-client",
+        "spring-pubsub",
+        "spring-ws-template",
+        "spring-kafka-replying",
+        "spring-stomp-template",
+        "jakarta-jms",
+        "javax-jms",
+        "spring-kafka-message",
+    }
+    # Counted off the full list, not off the lookup above: two `order-events` rows share a
+    # key there and so do the path-NULL default-destination rows, and collapsing them
+    # would under-count exactly the rows this measures.
+    rows = [row for row in written if row["catalog_id"] in single_call]
+    carried = sum(1 for row in rows if row["request_shape"])
+    assert (carried, len(rows)) == (21, 26), (
+        "the outbound payload count moved — re-measure rather than re-pinning, because a "
+        "handful of rows carrying a contract was the defect and this number is what closed it"
+    )
 
 
 def test_the_format_ladder_answers_every_live_row(
@@ -2845,17 +3348,48 @@ def test_the_format_ladder_answers_every_live_row(
     # fixture loads no `declared_shape` facts (comment above `len(report.
     # endpoints) == 122`), so its one row never reaches this table; pinned
     # instead in `tests/e2e/test_vertical_slice.py`.
-    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 5
+    # 6 since W27 (F5 §6.1): `{...}placeOrderRequest` is two rows — the operation this
+    # module serves, and `BillingSoapClient`'s call to `${soap.billing.uri}`, which the
+    # merge published as one endpoint because they compose the same QName off the same
+    # payload type.
+    # 7 since W27's review: a SOAP call to a different billing address, a second caller
+    # the outbound dedup had been deleting (F5 §6.1 rule 1).
+    assert len([e for e in report.endpoints if e["protocol"] == "soap"]) == 7
 
-    # Rung 2 — the only three HTTP routes whose mapping annotations declare a
-    # media type at all.
+    # Rung 2 — every HTTP route that declares a media type at all, in either
+    # of the two ways a route can. THREE declare it on a mapping ANNOTATION;
+    # five more declare it on a functional-routing PREDICATE
+    # (`accept(...)`/`contentType(...)`), and those three arrived here in 2O
+    # Task 13, when the combinator engine learned to read a vararg array's own
+    # `elements`. Nothing about the rung changed — the media column those rows
+    # were always entitled to simply stopped being NULL, which is exactly what
+    # a ladder rung reading that column is supposed to notice.
     assert {
         key for key, answer in answers.items() if key[0] == "http" and answer[1] == "resolved"
     } == {
         ("http", "inbound", "GET", "/v1/orders/{id}"),
         ("http", "inbound", "POST", "/v1/orders/detailed"),
+        # W44's two media-carrying servlet routes. FIVE functional-routing rows declare a
+        # media predicate now, not three — the servlet twin reads `accept`/`contentType`
+        # through the same table, so the rung sees them for the same reason.
+        ("http", "inbound", "GET", "/mvcfn/invoices"),
+        ("http", "inbound", "POST", "/mvcfn/invoices"),
         ("http", "inbound", "POST", "/v1/orders/proto-orders"),
+        ("http", "inbound", "GET", "/fn/orders"),
+        ("http", "inbound", "POST", "/fn/orders"),
+        ("http", "inbound", "GET", "/kt/rich"),
     }
+    # The three predicate-derived rows answer `json`, off `application/json`
+    # and nothing else — the same table, the same rung, a different place the
+    # declaration was written.
+    assert {
+        answers[key]
+        for key in (
+            ("http", "inbound", "GET", "/fn/orders"),
+            ("http", "inbound", "POST", "/fn/orders"),
+            ("http", "inbound", "GET", "/kt/rich"),
+        )
+    } == {("json", "resolved")}
     # **Rung 2 beats rung 4**, live: `proto-orders` takes a generated
     # protobuf type in and returns one out — Task 5 pinned both shapes
     # expanding from their descriptors — and is still `json`, because its
@@ -2875,6 +3409,18 @@ def test_the_format_ladder_answers_every_live_row(
         ("kafka", "inbound", None, "order-escalations"),
         ("kafka", "inbound", None, "order-polymorphic"),
         ("kafka", "inbound", None, "raw-.*"),
+        # The three W27 added, and they are the item's own point made twice over. This
+        # fixture configures a JSON producer and a PROTOBUF consumer deliberately, and
+        # these three topics are the ones it both publishes to and consumes. As merged
+        # `both` rows they answered `json` at rung 2, off a `produces` the merge had
+        # carried across from the outbound twin it deleted — so the consumer's configured
+        # protobuf deserializer, which is a direct statement about the INBOUND side, was
+        # never consulted. Each row now answers off its own evidence: the producer
+        # declares JSON, the consumer reads protobuf, and the disagreement is visible
+        # instead of laundered into one confident wrong answer.
+        ("kafka", "inbound", None, "order-audit"),
+        ("kafka", "inbound", None, "order-events"),
+        ("kafka", "inbound", None, "order-returns"),
         ("kafka", "inbound", None, "raw-t1"),
         ("kafka", "inbound", None, "raw-t2"),
         ("kafka", "inbound", None, "stream-orders"),
@@ -2882,17 +3428,20 @@ def test_the_format_ladder_answers_every_live_row(
         # channel is knowable even where its address is not.
         ("kafka", "inbound", None, None),
     }
-    # 12 rows, not 10 keys: `order-polymorphic` and the NULL-path identity
-    # each carry two rows that differ only in their handler and payload.
-    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 12
-    # Every other kafka row is rung 2's, off the producer stamp — including
-    # the three merged `both` rows, whose `produces` exists only because the
-    # merge carried it off the twin it deleted.
+    # 15 rows, not 12 keys: `order-polymorphic` and the NULL-path identity each carry two
+    # rows that differ only in their handler and payload. 12 became 15 with W27 (F5 §6.1)
+    # — the inbound halves of the three self-published topics, which used to be merged
+    # rows answering `json` off the producer's stamp.
+    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 15
+    # Every other kafka row is rung 2's, off the producer stamp.
     assert {
         answer for key, answer in answers.items() if key[0] == "kafka" and key not in protobuf
     } == {("json", "resolved")}
+    # The OUTBOUND halves of the three self-published topics, which do carry the
+    # producer's `application/json` because it was stamped on their own rows rather than
+    # carried onto somebody else's.
     assert {
-        answers[("kafka", "both", None, path)]
+        answers[("kafka", "outbound", None, path)]
         for path in ("order-audit", "order-events", "order-returns")
     } == {("json", "resolved")}
 
@@ -2924,20 +3473,81 @@ def test_the_format_ladder_answers_every_live_row(
     # is the fixture's own live proof they can disagree.
     # + 2: the two prefix-seam routes, which reach the same rung 5 default
     # every other json-bodied http row here does.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 50
+    # + 1 (OI-47): `GET /api/orders/{id}`, the recovered covariant mapping,
+    # which is a json-bodied http row like any other and reaches the same rung.
+    # + 1 (OI-48): `POST /v1/orders/scoped`, likewise.
+    # + 4 (W26): the four `/v1/paged/*` routes. All four are json-bodied http rows and
+    # reach the same rung, whether or not their payload TYPE could be expanded — which
+    # is the point: the format ladder answers off the declared type, and three of these
+    # four have a type nothing here can open.
+    # + 1 (W27): `POST /v1/orders` is two rows, and the outbound half is a json-bodied
+    # http row reaching the same rung its inbound twin does.
+    # + 3 (W28): the three `/v1/routing/orders` handlers, json-bodied http rows reaching
+    # the same rung every other one does.
+    # + 2 (W29): the two new WebClient chains, which reach the same rung whether or not
+    # their address resolved — the ladder answers off the declared payload type.
+    # + 4 (W27's review): the four http second callers the outbound dedup had been
+    # deleting. Each reaches the rung its surviving twin already reached — the ladder
+    # answers off the declared payload type, which a second caller of one address shares.
+    # + 9 (`OI-77`, W43): the rung answers off the row's DECLARED PAYLOAD TYPE, and nine
+    # outbound rows had no declared payload to answer off — their body was handed through
+    # from the caller's own parameter and its type was not being read. Nothing about the
+    # ladder changed; it was being asked about rows with a NULL contract. `resolution` on
+    # those rows is untouched and still `unresolved`, which is the other column.
+    # + 1 (`OI-74`, W57): the SQS builder-lambda row gained a declared payload — read from
+    # `payload(arg0)` inside the lambda — so the ladder now has a type to answer off for a
+    # row that carried none. Same mechanism as the nine above, one catalog over.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 76
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
     # definition (`jakarta-websocket.yml` declares no `request_body` block at
     # all, and `onFrame` returns `void`), so this row carries no payload
     # shape for rung 5 to read either, and falls all the way to rung 6.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 31
+    # - 3 with 2O Task 13: `GET`/`POST /fn/orders` and `GET /kt/rich` had no
+    # media to read and no payload type behind a Kotlin-generated or
+    # method-ref handler, so all three fell to rung 6 with nothing described.
+    # Their `accept`/`contentType` predicates are readable now, so rung 2
+    # answers them — a row leaving rung 6 for a DECLARATION is the ladder
+    # working, and the only three rows in the fixture that could move.
+    # + 1 (W27): the SOAP call to `${soap.billing.uri}` is its own row now. It was
+    # merged into the served operation's, and the merge took the WEAKER of the two
+    # format markers — so the served row read `unresolved` on the strength of its
+    # caller's silence. Both rows are `unresolved` here for their own reasons, which is
+    # one more row and one less laundering.
+    # 22 since `OI-77` closed (W43). NINE of these rows left this bucket in the same
+    # commit that added two to it, and both movements are the same fact: the ladder answers
+    # off a row's DECLARED PAYLOAD TYPE, and an outbound body handed through from the
+    # caller's own parameter had no declared type recorded — so NINE rows, the two new
+    # STOMP ones included, were asking the ladder about a NULL contract. The ladder was
+    # right to say `unresolved`; the missing rung was one earlier, and it is there now.
+    # 23 since W44: `PUT /mvcfn/invoices/{id}` declares no media predicate and its
+    # handler returns a bare `ServerResponse`, so there is no declared payload type
+    # for the ladder to answer off — the honest answer, and the same one every other
+    # verb-only functional route gets.
+    # 26 since W45: the three STOMP connect URLs. A handshake path carries no payload
+    # declaration of any kind — there is no body to type — so the ladder has nothing to
+    # answer off and says so, which is the same honest answer `/live`'s raw frame gets.
+    # 29 since W46: the three client connects. A handshake carries no payload declaration
+    # — there is no body to type — so the ladder has nothing to answer off, the same
+    # honest answer the server-side connect URLs and `/live`'s raw frame already get.
+    # 28 since W57 (`OI-74`): the SQS builder-lambda row LEFT this bucket for the
+    # `narrowed` one above — the same single row, counted once on each side, which is
+    # what makes these two assertions a pair rather than two numbers.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
 
-    # No rung saw two answers for one row anywhere in this fixture, so the
-    # ledger holds no `format_conflict` at all — every row in it is the
-    # parse binding's own (2G design §6's other question kind).
+    # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
+    # no `format_conflict` at all.
+    #
+    # `self_exchange` joins it with W27 (F5 §6.1) — the six identities this module both
+    # serves and calls, which used to be merged away. Three of them are the kafka topics
+    # above, and they are worth reading together: the producer declares JSON and the
+    # consumer is configured for protobuf, so the question a reader now gets ("are these
+    # the same endpoint?") sits beside two rows that visibly disagree about the wire.
+    # The merged row had one format and no question.
     assert {str(row["question"]) for row in workspace.query("open_questions")} == {
-        "payload_binding"
+        "payload_binding",
+        "self_exchange",
     }
 
 
@@ -3082,6 +3692,39 @@ def test_an_endpoint_carries_the_request_and_response_shapes_it_declares(
     )
 
 
+def test_the_shipped_json_model_reads_an_interfaces_wire_contract_from_its_accessors(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """W26's shipped rule, end to end through `shape-models/json.yml` — which nothing
+    checked until its review measured it: the whole `accessors:` block could be DELETED
+    and the suite stayed green, because every assertion the wave added was a count and a
+    count is identical whether `OrderTotals` expands to three fields or to none.
+
+    `OrderTotals` is an interface, so it has no fields at all and its contract is entirely
+    in its accessors. All three near-misses the fixture file names as deliberate are
+    checked here too, against the SHIPPED entries rather than a hand-built catalog: `is`
+    on a non-boolean return is not a getter (jackson-databind's `findNameForIsGetter`
+    refuses it unless `isGettersNonBoolean` is on), `has` is not a declared prefix, and an
+    accessor takes no arguments.
+    """
+    workspace, _report = resolved_fixture
+    fields = [
+        f["wire_name"] for f in shape_fields_of(workspace, "com/acme/orders/contracts/OrderTotals#")
+    ]
+
+    assert fields == ["currency", "lineCount", "settled"]
+    # Each of these would appear under a rule one clause looser than Jackson's own.
+    for absent in ("isoCode", "oCode", "discount", "hasDiscount", "recalculate"):
+        assert absent not in fields
+    # And the shape is CLOSED: three accessors describe it completely, so it is not a gap.
+    [shape] = [
+        row
+        for row in workspace.query("shapes")
+        if row["shape_id"] == "com/acme/orders/contracts/OrderTotals#"
+    ]
+    assert shape["open"] is False
+
+
 def test_an_endpoint_whose_response_is_a_collection_records_its_element_shape(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):
@@ -3161,16 +3804,23 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
       `resolved`, no body declared at all (a genuine no-body call, not a
       failure), a real response descriptor.
     - `submitSettlement`'s `settlement` parameter is passed straight
-      through, never a literal or a `NEW`, so the scanner records it
-      `unresolved` (D00 §5) even though the url is a plain string — the row
-      itself is therefore `unresolved` (I1), `request_shape` stays NULL
-      (could-not-read, not no-payload), and `response_shape` — a
+      through, never a literal or a `NEW`, so the scanner records the
+      argument `unresolved` (D00 §5) even though the url is a plain string —
+      the row itself is therefore `unresolved` (I1), and `response_shape` — a
       *different*, independently resolved capture on the very same row —
       still carries its real descriptor.
     - `updateSettlement` (`put`) has the identical `settlement` failure on
       its body, and declares no `response_arg` at all: `unresolved` for the
-      same reason, `request_shape` NULL (could-not-read), `response_shape`
-      NULL for the ordinary reason (no capture ever named one).
+      same reason, `response_shape` NULL for the ordinary reason (no capture
+      ever named one).
+
+    **`request_shape` on those two rows used to be NULL as well**, and this
+    docstring called it "could-not-read, not no-payload" — which named `OI-77`
+    exactly and read it as a designed limit. It was not: the parameter's own
+    declared TYPE is in `submitSettlement`'s signature, and a contract needs
+    the type, not the value. Both now carry `OrderRequest`, while `resolution`
+    stays `unresolved` — those are two columns answering two different
+    questions, and this pair is the fixture's live proof they can disagree.
     """
     _, report = resolved_fixture
     by_route = {(e["method"], e["path"]): e for e in report.endpoints}
@@ -3186,8 +3836,14 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
     }
 
     settlements = by_route[("POST", "/billing/settlements")]
-    assert settlements["resolution"] == "unresolved"
-    assert settlements["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review: BOTH captures this row declares were
+    # read — the destination from its own string literal, and the payload's TYPE from
+    # the caller's signature. It answered `unresolved` while the payload column was
+    # NULL, which was the only place that fact could be said; the column says it now.
+    assert settlements["resolution"] == "resolved"
+    # `OI-77`: the body is the caller's own `settlement` parameter, and its type is
+    # declared there.
+    assert "com/acme/orders/contracts/OrderRequest#" in str(settlements["request_shape"])
     assert json.loads(settlements["response_shape"]) == {
         "wire_type": "object",
         "wire_format": "",
@@ -3196,8 +3852,14 @@ def test_every_resttemplate_route_carries_its_own_resolution_and_descriptors(
     }
 
     update = by_route[("PUT", "/billing/settlements/{id}")]
-    assert update["resolution"] == "unresolved"
-    assert update["request_shape"] is None
+    # `resolved` since `OI-77` and W43's review, for the same reason as the row above: the
+    # url is a plain string and the body's TYPE is declared on the caller's own parameter,
+    # so both declared captures were read. `response_shape` stays NULL below because this
+    # row declares no response capture at all — an absent capture never failed.
+    assert update["resolution"] == "resolved"
+    assert "com/acme/orders/contracts/OrderRequest#" in str(update["request_shape"])
+    # Still NULL, and for the ordinary reason rather than the one above: this row declares
+    # no `response_arg` at all, so nothing ever named a response payload.
     assert update["response_shape"] is None
 
 
@@ -3361,9 +4023,8 @@ def test_resolve_reports_the_skip_instead_of_crashing_when_no_catalog_is_satisfi
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -3423,3 +4084,29 @@ def test_config_documents_with_colliding_basenames_both_survive_to_the_workspace
         "application.yml",
     }
     assert {e["key_raw"] for e in entries} == {"server.port", "server.host"}
+
+
+def test_the_reachability_table_is_written_by_the_pipeline(
+    resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
+):
+    """F8 §9.4 (W37). Every test of the pass calls `record_reachability` DIRECTLY, so
+    deleting the call from `resolve()` left the whole suite green — 2,631 passed, the exact
+    number the commit quoted as its gate — while the table would be empty in every real
+    bundle (W37 review).
+
+    A pass nothing runs is a pass that does not exist, and no unit test of it can say
+    otherwise. This asserts the pipeline runs it, over the real fixture.
+    """
+    workspace, _report = resolved_fixture
+    rows = workspace._connection.execute(
+        "SELECT root, symbol, depth, terminal FROM reachability"
+    ).fetchall()
+
+    assert rows, "the pipeline did not write the reachability table"
+    # Every root the walk starts at records ITSELF at depth 0, so the table covers the
+    # whole root set rather than whichever roots happened to call something.
+    roots = {row["handler"] for row in workspace.query("roots")}
+    assert {row[0] for row in rows} == roots
+    assert {row[0] for row in rows if row[2] == 0} == roots
+    # And the walk really walked: some root reaches something other than itself.
+    assert any(row[2] > 0 for row in rows)

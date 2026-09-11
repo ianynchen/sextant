@@ -7,62 +7,158 @@ direction: outbound
 detect:
   coordinates: ["org.springframework:spring-jms"]
 
+measured:
+  - { artifact: org.springframework:spring-jms, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.jms.core.JmsTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework:spring-jms 6.1.6 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.jms.core.JmsTemplate
+    - org.springframework.jms.core.JmsOperations
   # CHECKPOINT FACT (real javap descriptors, spring-jms 6.1.6):
   # `convertAndSend(String, Object)` arity 2; `convertAndSend(Object)` arity
   # 1 targets the template's own configured default destination — no
   # destination argument at the call site at all, so no `channel_arg` is
-  # declared — `path` NULL, `resolution: unresolved` (I1). `convertAndSend`
-  # also overloads on `jakarta.jms.Destination` and with a trailing
-  # `MessagePostProcessor`; neither is exercised by the fixture, so neither
-  # is declared.
+  # declared — `path` NULL, `resolution: unresolved` (I1).
+  #
+  # THE OVERLOAD COLLISION, CLOSED (2O Task 7 review, Critical 1). Arity 2 is
+  # THREE overloads, not one: `(String, Object)`, `(Destination, Object)` and
+  # `(Object, MessagePostProcessor)`. Matching on name+arity alone reached
+  # this row for all three, so a `convertAndSend(payload, postProcessor)` call
+  # whose payload itself READS — an ordinary lambda-free
+  # `MessagePostProcessor` passed as a `class`/`instance` literal — published
+  # the message BODY as the queue name at `resolved`/`compiler` (§8: the
+  # failure mode is fabrication). The earlier note here said those overloads
+  # were "not exercised by the fixture, so neither is declared", which implied
+  # no consequence; arity matching meant they WERE matched, and that rationale
+  # was false. The arity-2 row now states its own erased JVM descriptor, which
+  # `_matching_method` compares verbatim against the call's own
+  # `target.descriptor`.
+  #
+  # THE CONSEQUENCE: the arity is claimed by that descriptor. For the
+  # `MessagePostProcessor` form that is exactly right — it is the fabrication
+  # the key exists to stop. For `(Destination, Object)` it was a REGRESSION,
+  # and the descriptor sweep (R5) repaired it: that overload is an ordinary
+  # destination-carrying call whose argument 0 is a `Queue`/`Topic` instance
+  # rather than a string constant, so it can never fabricate anything —
+  # `channel_of` reads a non-string as `unresolved` — and before the descriptor
+  # it derived an honest path-NULL row. It now has its own row again.
+  #
+  # ARITY 3 WAS NEVER DECLARED AT ALL, which cost recall nobody had written
+  # down. `convertAndSend(String, Object, MessagePostProcessor)` is a plain
+  # destination + payload + post-processor call: the destination IS at position
+  # 0 and IS readable as a string constant, and every such call derived nothing
+  # because no arity-3 row existed. It has one now. This is recall gain with no
+  # fabrication risk, because the row reads exactly the positions that overload
+  # declares.
+  #
+  # STILL NOT DECLARED, and each therefore deriving no row at all: the arity-2
+  # `(Object, MessagePostProcessor)` form (deliberately — it is the bug), the
+  # arity-3 `(Destination, Object, MessagePostProcessor)` form, and every
+  # `send(...)`/`convertSendAndReceive(...)` overload. Each is a COVERAGE
+  # boundary rather than a silent miss, the same shape
+  # `spring-rabbit-template.yml` already records for its own file — which this
+  # file previously documented none of, though it carries the same claim.
+  #
+  # Arity 1 is `convertAndSend(Object)` and nothing else, and it declares its
+  # descriptor all the same (R2). The note here used to say a unique overload
+  # needs none; true of this jar, and it made the file's correctness rest on a
+  # fact no test could see. The claim costs nothing while the overload is
+  # unique — a unique overload's descriptor can only equal what a matching call
+  # carries — and the day spring-jms adds a second one-argument
+  # `convertAndSend`, that overload derives NOTHING rather than having its own
+  # argument 0 read as a payload. Every descriptor here is `javap -p -s`
+  # output; re-running `scripts/probes/cp10_catalog_descriptors/run.sh` is the
+  # check on all four.
   methods:
-    - { name: convertAndSend, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: convertAndSend, arity: 1, body_arg: 0 }
+    - { name: convertAndSend, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/jms/core/MessagePostProcessor;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 2, descriptor: "(Ljakarta/jms/Destination;Ljava/lang/Object;)V",
+        channel_arg: 0, body_arg: 1 }
+    - { name: convertAndSend, arity: 1, descriptor: "(Ljava/lang/Object;)V", body_arg: 0 }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale). `nullability` is harvested from spring-mvc.yml.
+# rationale).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02's declared SLICE (F2 §3.8). Measured, not remembered: `JmsTemplate` declares
+# 37 public methods at spring-jms 6.1.6 and this catalog reads ONE
+# (`scripts/probes/w19_catalog_surface.md`). Ten of the unread take a destination
+# name at argument 0, so ten are addressable and every one is named below with the
+# reason it is outside. `tests/architecture/test_catalog_slice_coverage.py` fails if
+# a release adds an eleventh and nobody decides which side of the line it is on.
+#
+# **The honest summary a reader needs: this catalog models the CONVERT-AND-SEND half
+# of JmsTemplate and nothing else.** A module that receives over JMS through this
+# template derives nothing from this file.
+slice:
+  outside:
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [receive, receiveSelected, receiveAndConvert, receiveSelectedAndConvert]
+      why: >
+        A boundary this catalog does NOT model. Each is a synchronous receive from a
+        named destination — a real inbound wire, and the largest half of G-44. Reading
+        them needs no new engine capability (the destination is at argument 0, the shape
+        `convertAndSend` already reads); it needs a fixture and a measurement of which
+        overloads carry a payload type, which is the work, not the design.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [send, sendAndReceive]
+      why: >
+        Outbound boundaries this catalog does NOT model, in the same file that models
+        `convertAndSend`. `send(String, MessageCreator)` builds its own message rather
+        than converting one, so the payload is inside a callback and no argument
+        position carries it; `sendAndReceive` is request/reply and would derive two
+        rows on one call. Both are real sends and both derive nothing today.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [browse, browseSelected]
+      why: >
+        Reads a named queue WITHOUT consuming from it. Whether a browse is a boundary
+        is a genuine question this catalog does not answer either way: it observes the
+        queue's contents, but it is not a participant in the conversation the queue
+        carries. Left outside deliberately rather than by oversight.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [execute]
+      why: >
+        Takes a destination name and a `ProducerCallback` — the overload with a
+        `SessionCallback` takes no destination at all. The destination is real, but
+        what the callback DOES — send, receive, both, neither — is not readable from
+        the call, so any row derived here would state a direction we did not measure.
+        Silence is the honest answer until the callback body is traced.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [setSessionAcknowledgeModeName]
+      why: >
+        Configuration that names no destination — it sets the JMS acknowledge mode.
+        Inherited from `JmsAccessor`, and it appears in the enumeration only because
+        the argument-0 test admits any method whose first parameter is a `String`.
+    - owner: org.springframework.jms.core.JmsTemplate
+      method_names: [setDefaultDestinationName]
+      why: >
+        Configuration, not a boundary — but it is why the destination-less
+        `convertAndSend(Object)` overload is addressable at all, and this catalog does
+        not read that overload either. Named here so the connection is on record rather
+        than rediscovered.
+    - owner: org.springframework.jms.core.JmsOperations
+      method_names: [browse, browseSelected, execute, receive, receiveAndConvert, receiveSelected,
+                receiveSelectedAndConvert, send, sendAndReceive]
+      why: >
+        The interface `JmsTemplate` implements, carried as an owner alternate since W10
+        so an interface-typed field derives the same rows. Its slice is its
+        implementation's slice: every method here is outside for the reason given above
+        for the same name on `JmsTemplate`.

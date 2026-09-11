@@ -22,6 +22,37 @@ the catalog.
 
 ## 2. Two configuration files
 
+> **Amendment (2026-09-05, principles sweep `A-C9`).** Of the three files in the table
+> below, **only `.sextant.yml` beside a module is ever opened.** Neither
+> `~/.sextant/config.yml` nor the repository-root `sextant.yml` has a reader anywhere in
+> `src/`: `grep -rn "sextant\.yml" src/ | grep -v "\.sextant\.yml"` returns nothing, the
+> catalog set is hard-wired to the package's own directory
+> (`api.py` → `resources.py` → `ingress/catalogs/yaml_source.py`), `scanners.pin` has no
+> parameter to reach (`ports/scanner.py::select_scanner` takes no pin), and `tools.helm` has
+> no reader. Everything below about those two files, including the precedence chain and the
+> merge rule, describes a mechanism that was designed and never built.
+>
+> **This is not a degraded path, it is a stopped one.** The file that IS read is the
+> per-module `.sextant.yml`, one character from the documented repository name, and it
+> enforces a closed key set. In a single-module repository the module root and the
+> repository root coincide, so following §2 as written writes `catalogs:`/`first_party:`/
+> `modules:`/`redaction:` into the file Sextant does read — and all four commands share that
+> reader, so the whole run is refused. `ingress/detect/sextant_config.py` now names this
+> mistake specifically rather than saying only that the key is read nowhere.
+>
+> **What is supported instead, today:** command-line flags, then the per-module
+> `.sextant.yml`'s three keys (§2a), then built-in defaults. The precedence chain at `:33`
+> is that, with the two middle rungs removed.
+>
+> **The `catalogs:` half is deliberately unscheduled**, and that is a standing ruling rather
+> than a backlog item (2O roadmap `:201-205`): a repository-supplied catalog would turn
+> [D02](D02-catalog-schema.md)'s schema into a public API, after which every schema change
+> is breaking. NFR-9's stated case — extension without modification, for an in-house client
+> library — is therefore unmet and knowingly so. Recorded in
+> [documented-not-implemented.md](../documented-not-implemented.md), which is where a
+> retirement decision belongs; retiring the SECTION is the documentation-debt checkpoint's
+> call, not this pass's, so the text stays and this box says what is true of it.
+
 Different settings have different owners, so one file is not enough.
 
 | File | Owner | Holds |
@@ -168,6 +199,20 @@ indistinguishable from an unconfigured module for as long as nobody checked.
 >   `.sextantignore` is a stated fast-follow, not read today. One file, at the repository
 >   root, and every pattern in it is matched against a path made relative to THAT root —
 >   never to whatever resource or schema root a given walk happens to start from.
+>
+>   **Correction (2026-09-05, principles sweep `A-M16`).** That sentence describes what
+>   ships only since this correction. `analyze` loaded the file at the MODULE root, and
+>   `api.py` analyzes each submodule of a reactor with its own root — so a reactor-root
+>   `.sextantignore` was read for no submodule at all, and a pattern written relative to the
+>   reactor root would not have matched even if it had been. It is now loaded at the root
+>   the run was invoked against, which is the reactor's for a submodule and the module's own
+>   for a single-module repository, where the two coincide and nothing changes. **The
+>   built-in layer was never affected**: it applies at every depth, so this was a coverage
+>   gap in the repository-authored layer and never a credential leak. **Still true of the
+>   enrichment jail's own load** (`api.py::_tool_executor_for`): `sextant module enrich` is
+>   invoked against one module and has no reactor model to ask, so a reactor-root file does
+>   not reach it — stated here rather than fixed, because inferring a repository root from a
+>   directory is a rule nobody has decided.
 > - **The JVM subtlety below does not apply.** The extractor's `.class` walk is out of
 >   scope (ledgered, rarely wanted); `.sextantignore` governs the Python-side file
 >   enumerations only — config readers, schema readers, resource walks, and the
@@ -415,7 +460,7 @@ rank among those accepting the language**, unless configuration pins one.
 reintroduces cross-tier reconciliation, which is the defect this architecture was shaped to
 avoid. Artifact readers are not competing scanners and are unaffected.
 
-Switching scanners invalidates the cache, because `scanner_id` and `scanner_version` are
+Switching scanners invalidates the cache, because `scanner_id` and the scanner's declared libraries are
 both on the document record.
 
 ---

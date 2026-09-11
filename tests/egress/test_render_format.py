@@ -4,9 +4,20 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.egress.render.document import render_module_document
 from sextant.egress.render.metadata import write_metadata
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -422,6 +433,101 @@ def test_the_open_questions_section_lists_wire_identity_question_and_candidates(
     ) in text
 
 
+def test_a_service_identity_question_renders_the_flagged_class_and_reason():
+    """Regression for the live bug: `_candidate_line` had no arm for
+    `service_identity` even though three resolve engines
+    (`supertype_derived`, `injected_client`, `annotation_driven.gaps`) file
+    it, so any module with such a question raised `ValueError` at render.
+    Candidate shape (`class`, `reason`) matches what those three engines
+    actually put in `candidates`, not only what `open_questions.py`'s
+    comment says."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "grpc",
+            "method": None,
+            "path": "com/acme/OrderServiceGrpc$OrderServiceImplBase.",
+            "question": "service_identity",
+            "candidates": json.dumps(
+                [
+                    {
+                        "class": "com/acme/OrderServiceImpl",
+                        "reason": "SERVICE_NAME constant unreadable",
+                    }
+                ]
+            ),
+            "evidence": "SERVICE_NAME constant unreadable",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `(unresolved) com/acme/OrderServiceGrpc$OrderServiceImplBase.` — service_identity: "
+        "com/acme/OrderServiceImpl: SERVICE_NAME constant unreadable"
+    ) in text
+
+
+def test_a_channel_destination_question_renders_the_channel_and_handler():
+    """2O §5: the shape `spring-integration.yml` files, with the protocol
+    column EMPTY — which is what it carries since OI-1 re-keyed the
+    wire-identity rule on what a catalog derives. A channel is an in-process
+    pipe and which broker it reaches is the question, so the catalog declares
+    no protocol and the ledger row carries none.
+
+    The identity is then the channel name alone. Without `_wire_identity`'s
+    no-protocol arm this line reads `(unresolved) orders.inbound` — a verb
+    reported as unread on a row that was never going to have one."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "orders.inbound",
+            "question": "channel_destination",
+            "candidates": json.dumps(
+                [{"channel": "orders.inbound", "handler": "com/acme/Activator#handle(byte[])."}]
+            ),
+            "evidence": "no configuration key carries a Spring Integration channel's destination",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `orders.inbound` — channel_destination: "
+        "orders.inbound → com/acme/Activator#handle(byte[])."
+    ) in text
+    assert "(unresolved)" not in text
+
+
+def test_an_environment_divergence_question_renders_the_key_and_per_environment_values():
+    """2O §2b (Task 6, not yet shipped): pinned ahead of the writer for the
+    same reason as `channel_destination` above."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": "/v1/orders",
+            "question": "environment_divergence",
+            "candidates": json.dumps(
+                [
+                    {
+                        "key": "spring.data.rest.base-path",
+                        "values": {"prod": "/v1", "staging": "/v2"},
+                    }
+                ]
+            ),
+            "evidence": "spring.data.rest.base-path differs between environments",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `GET /v1/orders` — environment_divergence: "
+        "spring.data.rest.base-path: prod=/v1, staging=/v2"
+    ) in text
+
+
 def test_the_open_questions_section_is_absent_when_the_ledger_is_empty():
     """Rendered only when rows exist (2G design §8) — the `## Catalogs
     skipped` precedent, not the NFR-7 "looked and found nothing" one this
@@ -537,8 +643,7 @@ def test_metadata_carries_the_two_analyze_side_gap_lists(tmp_path: Path):
         tmp_path / "metadata.json",
         MODULE,
         report,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         schema_sources_not_compiled=("broken.proto",),
         descriptors_not_interpreted=("pkg.Widget",),
@@ -550,7 +655,182 @@ def test_metadata_carries_the_two_analyze_side_gap_lists(tmp_path: Path):
 
 def test_metadata_gap_lists_are_empty_by_default(tmp_path: Path):
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
-    write_metadata(tmp_path / "metadata.json", MODULE, report, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["schema_sources_not_compiled"] == []
     assert written["descriptors_not_interpreted"] == []
+
+
+def test_a_binder_protocol_question_renders_the_binding_and_the_binder():
+    """F2 §3.4's kind, and this test is the reason it has one at all: the whole
+    suite passed with the arm disabled. `open_questions.py`'s own comment says
+    the renderer is the ONLY switch on question kind, so an arm reading a key the
+    writer does not produce raises `KeyError` on the first real module with an
+    unmapped binder and nothing else would catch it — which is exactly the live
+    bug `service_identity`'s own arm test records.
+
+    `protocol` is EMPTY on purpose: a question reporting that a protocol was not
+    read must not name one."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "orders-in-0",
+            "question": "binder_protocol",
+            "candidates": json.dumps([{"binding": "orders-in-0", "binder": "rocketmq"}]),
+            "evidence": "the configured binder `rocketmq` is absent from binder_protocols",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `orders-in-0` — binder_protocol: orders-in-0: binder `rocketmq` maps to no protocol"
+    ) in text
+    assert "(unresolved)" not in text
+
+
+def test_an_unselected_binding_question_renders_the_candidate_and_the_key():
+    """The other kind F2 §3.4 added. It exists because the cardinality count taken
+    in the engine is over declared METHODS while the framework counts registered
+    BEANS — so a suppression here is not evidence the framework suppressed, and
+    the reader needs the key that would settle it."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "",
+            "method": None,
+            "path": "orders",
+            "question": "unselected_binding",
+            "candidates": json.dumps(
+                [{"candidate": "orders", "selected_by": "spring.cloud.function.definition"}]
+            ),
+            "evidence": "2 candidates were found and the selection key names none of them",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "- `orders` — unselected_binding: orders (set `spring.cloud.function.definition` to choose)"
+    ) in text
+
+
+def test_a_handler_protocol_question_renders_one_line_per_candidate_wire():
+    """F2 §3.6's kind. Added with its arm test in the same change, because the
+    review one wave earlier found the two preceding kinds shipping arms that
+    nothing exercised — the whole suite passed with each disabled, and a wrong
+    key would raise `KeyError` on the first real module to file one.
+
+    The row here is the SHIPPED one, byte for byte: `protocol` is `None` (the
+    writer's own value, not the `""` an earlier draft of this test passed, which
+    reached the same branch by luck), and the candidates are the two wires
+    `service_identity._merged` folds together. Both lines must appear and must
+    DIFFER — §3.6 review finding 3 was two byte-identical lines, under which a
+    verdict anchors to the first and the second stands unanswered forever.
+    """
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    annotation = "org/springframework/messaging/handler/annotation/MessageMapping#"
+    open_questions = [
+        {
+            "protocol": None,
+            "method": None,
+            "path": "com/acme/orders/LiveController#",
+            "question": "handler_protocol",
+            "candidates": json.dumps(
+                [
+                    {
+                        "class": "com/acme/orders/LiveController#",
+                        "annotation": annotation,
+                        "protocol": protocol,
+                    }
+                    for protocol in ("rsocket", "websocket")
+                ]
+            ),
+            "evidence": "this module's build does not settle whether it declares one of x",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    # Candidates render joined onto the question's own line, so the assertion is
+    # that BOTH wires appear on it and that the two halves are not the same text.
+    assert (
+        "- `com/acme/orders/LiveController#` — handler_protocol: "
+        f"`rsocket` — com/acme/orders/LiveController# carries {annotation}; "
+        f"`websocket` — com/acme/orders/LiveController# carries {annotation}"
+    ) in text
+
+
+def test_a_registration_activation_question_names_the_method_that_returns_it():
+    """`OI-64`'s kind, with its arm test in the same change — the two waves before
+    this one each shipped a renderer arm nothing exercised, and the whole suite passed
+    with the arm disabled while a wrong key would `KeyError` on the first real module
+    to file one.
+
+    The sentence must name the ENCLOSING METHOD, because that is where a reader has to
+    look. The question is not "is this subscription real" but "does anyone call what
+    this method returns, and start it" — without the method there is nothing to open.
+    """
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    enclosing = "com/acme/orders/messaging/raw/RawPubSubSubscribers#withNamedReceiver()."
+    open_questions = [
+        {
+            "protocol": "pubsub",
+            "method": None,
+            "path": "raw-notify-factory",
+            "question": "registration_activation",
+            "candidates": json.dumps(
+                [
+                    {
+                        "registration": "com/google/cloud/pubsub/v1/Subscriber#newBuilder",
+                        "enclosing": enclosing,
+                        "activated_by": (
+                            "com.google.cloud.pubsub.v1.Subscriber$Builder.build then "
+                            "com.google.cloud.pubsub.v1.Subscriber.startAsync"
+                        ),
+                    }
+                ]
+            ),
+            "evidence": "constructed, but nothing in this method completes the chain",
+        }
+    ]
+
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+
+    assert (
+        "- `pubsub raw-notify-factory` — registration_activation: "
+        f"com/google/cloud/pubsub/v1/Subscriber#newBuilder in {enclosing} is returned, "
+        "not activated — nothing here calls "
+        "com.google.cloud.pubsub.v1.Subscriber$Builder.build then "
+        "com.google.cloud.pubsub.v1.Subscriber.startAsync"
+    ) in text
+
+
+def test_a_routing_conflict_question_renders_both_handlers():
+    """W28's arm, for the reason `test_a_service_identity_question_renders_the_flagged_
+    class_and_reason` exists: a missing `_candidate_line` arm was a live render-time
+    `ValueError`, and W28 added an arm with no test because the fixture files zero
+    conflicts. An arm reached by nothing is an arm nobody has run.
+
+    The verb is NULL here, which is the shape a conflict between two VERBLESS mappings
+    files — the case `_verbs_of` reports once rather than eight times — so this also pins
+    that `_wire_identity` renders such a row without inventing a verb for it.
+    """
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/orders",
+            "question": "routing_conflict",
+            "candidates": json.dumps(
+                [
+                    {"handler": "com/acme/Controller#first(sig_1)."},
+                    {"handler": "com/acme/Controller#second(sig_2)."},
+                ]
+            ),
+            "evidence": "one address, two handlers",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `any /orders` — routing_conflict: com/acme/Controller#first(sig_1).; "
+        "com/acme/Controller#second(sig_2)."
+    ) in text

@@ -299,3 +299,567 @@ swapped for `gitignore` on this agent's own judgment — a factory-name substitu
 exactly the kind of unrequested deviation §1.1 rules against. The warning is harmless
 (non-fatal, no `filterwarnings=error` in this suite) and worth revisiting the day
 `gitwildmatch` is actually removed rather than merely deprecated.
+
+### A document naming a mechanism is not evidence the mechanism exists
+
+Phase 2O's spec called `detect.coordinates` "the SHIPPED jar-presence mechanism"
+and had a task read a `constant` fact kind's value. Neither existed when the spec
+was written: `detect:` was declared by every one of the 41 catalogs shipping then
+and read by nothing, and D00's `constant` kind has no producer at all. Fourteen
+such mechanisms are now registered
+in [documented-not-implemented.md](documented-not-implemented.md), one of which
+(a routing-ambiguity "collision detector" that D01 describes as a *property* of
+identity, not a component) reached an implementation task's dispatch before a
+grep caught it. *(Both counts are of that moment and are left there deliberately:
+2O Task 6 made `detect.coordinates` real for two styles, and 64 catalogs ship
+today. The lesson is about the spec, not about the current numbers — register
+entry #1 carries those.)*
+
+**What did not work:** four rounds of adversarial spec review. The reviewer read
+the same documents the author did and cited the same lines back — a premise both
+share is invisible to review.
+
+**What worked, in minutes:** grepping `src/` for every mechanism the remaining
+tasks named. Before writing a spec section or dispatching a task that depends on
+a mechanism, verify it in the code and cite the `file:line`. GUIDELINES §5.3 now
+requires this.
+
+**The tell to watch for:** a doc sentence that reads as description ("that
+collision is a routing-ambiguity finding", "the shipped jar-presence mechanism")
+rather than as specification. Descriptive prose about a design's *consequences*
+is easy to promote into a component that was never built.
+
+### A column that exists is not a column that answers
+
+2O Task 7b's brief said, of servlet handlers being `protected`: *"Is `protected`
+visibility recorded? (It is — `workspace.py:163-168` projects it — confirm
+rather than assume.)"* The projection is real, the citation is correct, and the
+answer is still no: D00 §5a's `visibility` is TWO-VALUED, so a `protected`
+member is recorded as `other` and the column cannot say which. A design built on
+"widen the selector from `public` to `protected`" would have had nothing to
+widen it to.
+
+This is §5.3's second form — a mechanism that IS read but answers differently
+than assumed — and it cost nothing here only because the brief said "confirm
+rather than assume" and the probe printed the literal value. **The cheap check is
+to read the VALUE the mechanism produces, not the line that produces it.** A
+grep proves existence; only a value proves the answer.
+
+(The design survived intact, for a reason worth keeping: the language forbids an
+override from narrowing visibility, so the column was never needed. A rule that
+mirrors the language rather than the fact stream had one fewer thing to get
+wrong.)
+
+### The rule that matters most was the one not written down
+
+Phase 2O shipped an engine that minted a gRPC endpoint from `NightlyJob extends
+AbstractJob` — plain Java inheritance, zero gRPC evidence anywhere. The match
+required only "extends something in this module" plus "overrides a public
+method"; the gRPC-specific marker was read *afterwards*, and only chose
+resolved-vs-unresolved.
+
+The uncomfortable part is that **no guideline was broken.** §8's design
+principles were structural — single responsibility, dependency direction,
+immutability — and the change satisfied every one. The project's actual central
+invariant, "the failure mode is fabrication, not imprecision", lived in
+ARCHITECTURE prose rather than in the rules document CLAUDE.md calls
+non-negotiable. It is now a §8 bullet.
+
+**The two fabrication shapes seen in practice**, worth recognising by sight:
+
+- **Generic match, specific label.** A rule keys on structure any codebase has
+  (an `extends` pair, a public override) and then labels the result with a
+  meaning only some codebases have. The give-away: the framework-specific
+  evidence is read *after* the match, to decorate it, rather than *as* the match.
+- **Ambiguity emitted as certainty.** A lookup that cannot separate two
+  candidates emits BOTH rather than neither — two rows, both `resolved`, sharing
+  one handler symbol, at least one of them false.
+
+Two supporting gaps found the same phase:
+
+- **Every fixture demonstrated detection working; none demonstrated it
+  declining.** The reviewer's own words were that the golden fixture missed the
+  fabrication "by luck" — its single subclass happens to override nothing. §10
+  now requires near-miss input that must NOT match, asserting *nothing* is
+  produced.
+- **A rationale comment went stale and nobody noticed.** `# No stamp — the row
+  already carries its own response_shape` was true while one engine minted that
+  identity and false the moment a second did; the merged row silently lost both
+  contracts and the streaming detail that rides one of them. §9 now requires
+  such a comment to state the condition that would make it wrong.
+
+**The generalisable lesson:** when a review finds something the guidelines do
+not forbid, the guidelines are the defect. Check whether the violated principle
+is written down before concluding the implementer was careless.
+
+### Two error classes that recurred, and what they cost before anyone counted
+
+GUIDELINES §13.8 exists because of these. Both are recorded here so a later
+reader inherits the count rather than starting it again — which is the whole
+mechanism: without a record, the third occurrence looks like the first.
+
+**Class 1 — treating documentation as evidence about code. Six occurrences.**
+`detect.coordinates` (declared by all 41 catalogs then shipping, read by
+nothing), D00's `constant` fact kind (no producer), a routing-ambiguity
+"collision detector" (no findings mechanism exists at all), `root_kind`,
+`trace_of`, and project catalogs (whose config key does not merely fail — it
+aborts the analysis). Each was corrected on its own, and **all six now have a row
+in the register** — `trace_of` and project catalogs were the two this count named
+and the file did not carry, added as entries #11 and #10 by the 2O documentation
+sweep. The rule that would have prevented the rest is
+§5.3, and writing it at the third occurrence instead of the sixth would have
+put it in front of the spec that four of them went on to break.
+
+**Class 2 — a rule matching on SHAPE and publishing a specific MEANING.
+Four occurrences, four unrelated frameworks.** A gRPC endpoint minted from an
+ordinary `extends` pair plus one overridden method. A module excluded from
+analysis entirely because it applied `maven-publish`. An endpoint derived with
+an empty name at `resolved`/`compiler`. A String payload published as part of an
+AMQP destination because overloads collide on arity.
+
+The give-away in every case: **the specific evidence is read AFTER the match, to
+decorate it, rather than being the match.** `supertype_derived` matched any
+subclass and then looked for a gRPC marker; the Gradle detector matched a
+publishing plugin and then asserted "no endpoints"; `single_call` matched a name
+and arity and then published whatever was in the slot. Four separate fixes found
+that; one upstream question would have.
+
+**The lesson is not "be more careful."** Every individual fix was correct, and
+correctness at the instance level is precisely what hides the cause — each fix
+feels like progress and leaves the generator running.
+
+### A shared working tree is a shared failure surface
+
+Three occurrences in one phase, one cause (GUIDELINES §13.9): agents and the
+controller share one working tree AND one git index, and the pre-commit hook
+validates the whole tree rather than the staged paths.
+
+1. An implementer's unformatted in-flight file blocked an unrelated docs commit.
+2. A second agent's bare `git commit` swept a first agent's staged files into
+   its own commit — caught only because that agent ran `git show --stat`
+   afterwards and recognised files it had not written.
+3. A **read-only reviewer**'s probe files, created under `tests/`, blocked the
+   controller's commit exactly as (1) did.
+
+**Explicit pathspecs stop contamination, not blocking.** After (2) the rule was
+"commit with `git commit -- <paths>`", which correctly prevents sweeping someone
+else's staged work — and (3) happened anyway, because the tree is shared whether
+or not your commit is scoped.
+
+**The tell for (3) specifically:** a reviewer is asked to verify by execution,
+execution means writing probes, and nothing in the brief said where to put them.
+A reviewer that leaves files in the repository has modified the tree it was asked
+to judge — which is a correctness problem before it is a hygiene one.
+
+Isolated worktrees would also solve this and were rejected on cost: several trees
+to merge is worse than one writer at a time.
+
+### A deployment default is not a code fact — and this is the second time
+
+2O Task 7 settled it for Actuator: `management.endpoints.web.exposure.include`
+defaults to `health` alone, so a custom `@Endpoint` is a 404 out of the box —
+and the endpoint still ships, because exposure is configuration any deployment
+overrides and no repository can see. We report code and state the dependency.
+
+Task 7b then measured TRACE as a 405 *even with `doTrace` explicitly
+overridden*, concluded the address was unserved, and dropped `doTrace` from the
+verb map. Same shape, opposite answer: Tomcat's `allowTrace` is connector
+configuration, exactly as overridable and exactly as invisible. The 405 was a
+fact about the probe's connector, not about the servlet. Re-measured over a
+connector with `allowTrace="true"`, `service()` dispatches TRACE to `doTrace`
+like any other verb, on all three containers.
+
+**The tell is a probe that answers the same for the class that declares the
+handler and the class that does not.** Rows 10 and 13 were both 405 — the
+overriding class and the bare one, indistinguishable — which means the thing
+being measured was upstream of the code under test. When a probe cannot tell
+your two cases apart, it is measuring something else; change the configuration
+that might be doing the masking and probe again, rather than recording the
+answer.
+
+The generalisation: before a measured absence becomes an exclusion, ask **who
+can turn this on, and can we see them do it**. If the answer is "the deployment,
+and no" — derive the row and state the dependency. §8's "exclude only on proof,
+never on inference" is the same rule read from the other end.
+
+**Outcome, and why §13.8 was amended because of this entry.** Naming §8 here was
+the correct diagnosis and it changed nothing: the entry was written, the work
+continued, and §8.2 exists only because a human raised it afterwards. §13.8 now
+makes the SECOND occurrence the diagnosis point — state the cause, test it
+against the principles that already exist, and where it violates one, stop and
+settle the mechanism rather than recording the finding and moving on. A rule
+already written and broken twice needs enforcement, not another correction. This
+entry is the worked example in §13.8 and the sole hit in its audit list.
+
+---
+
+## A test that describes a module which cannot exist (principles sweep round 1a)
+
+Four gates were added to catalogs this round, each mirroring what a framework
+measurably does: a WebSocket endpoint is a class carrying `@ServerEndpoint`, a
+STOMP handler lives on a `@Controller`, a Retrofit or `@HttpExchange` client is
+an interface, a Spring Cloud Stream binding needs Spring Cloud Stream on the
+build. **Every one of the four found a shipped test or fixture that had been
+describing something the framework would never serve**, and each went red the
+moment the gate landed:
+
+- a Retrofit-shaped fact set whose docstring said "interface method" while its
+  own `construct_kind` said `class`;
+- a STOMP handler on a class carrying no stereotype at all;
+- `fixtures/orders-service`, which has modelled a Spring Cloud Stream module
+  since 2F — functional beans, `spring.cloud.function.definition`,
+  `spring.cloud.stream.bindings.*` — while its POM declared no Spring Cloud
+  Stream, a module with no binder and therefore no bindings.
+
+None of these was caught by review, and none could have been: they are all
+*plausible*, and the pipeline derived rows from them happily because nothing
+encoded the framework's own precondition. **A synthetic fact set is a claim
+about a module, and an unfalsifiable one is where a wrong rule hides.** The
+practical form: when a fixture is built by hand, write down which real
+declaration it is standing in for, and when a gate lands, expect the fixtures to
+tell you which of them were fiction. The gate going red is the cheapest audit of
+the fixture set anybody runs.
+
+**And a mechanical one, learned the annoying way.** Recording a commit SHA in a
+document and then `git commit --amend`ing that commit invalidates every SHA
+written into it. Stamp the identifier after the commit is final, or in a
+separate commit — the same "record identity from the run's own output" rule
+§5.4 states for probes, applied to git.
+
+## A marker declaring coverage is not coverage (principles sweep round 1b)
+
+`@pytest.mark.declines("<catalog>")` made §10's near-miss rule countable, and
+`test_catalog_near_miss_coverage.py` said in its own docstring what it could not
+do: *"the marker is a DECLARATION by the test's author, not a proof."* Nothing
+checked that the marked body discriminates, so a near-miss could pass because
+its synthetic input was broken in some unrelated way — the guard it named
+deletable, the test still green, and the catalog counted as covered.
+
+**It shipped twice, and the second time it was the fix pass that wrote it.**
+Sweep 1 found three non-discriminating markers by hand; the round correcting
+them produced three more, `A-M2`'s servlet `bypassed_by` near-misses, whose
+input declares no `doXxx` at all — the shape the branch *below* the bypass
+already declines, so the bypass changes no outcome. §13.8 step 3 applies
+exactly: a rule we had already written (§10) and still broke twice is a rule
+with no reach, and the answer is enforcement, not another correction.
+
+The enforcement is `scripts/guard_check.py` (`scripts/check.sh --guards`): a
+test names the guard it pins with a second marker, the harness disables that one
+guard in a COPY of the tree and reruns only the tests naming it, and a test that
+still passes is a failure. Its first run measured all 28 declining tests in 41
+seconds and found six that measure nothing — four predicted, two new.
+
+Three things about it generalise beyond this one harness:
+
+- **Disabling a guard is not deleting a line; it is writing the specific mistake
+  the line exists to prevent.** Two of the servlet guards are no-ops when simply
+  deleted (the loop they protect iterates zero times either way), and a run that
+  counted a no-op mutation would have manufactured findings against tests that
+  are fine.
+- **A mutation harness needs a positive control more than the suite it
+  measures.** The first run reported all 28 tests as unmeasurable, because the
+  copied tree was missing one fixture. Without the control it would have printed
+  "28 killed" and been believed — the harness's own version of the defect it
+  exists to find.
+- **Name the guard from the test's docstring, then check the name against the
+  code.** Two guard names in the first registry were false — one pointed at a
+  `declared_on` conjunct the catalog does not declare at all — and both were
+  caught only by the run.
+
+
+## Half a measured rule is a prediction (principles sweep, round-1 review)
+
+**Twice in one fix pass, a probe measured half a framework rule and the
+implementer reasoned about the other half. Both halves published a fabrication
+where the code had previously derived nothing** — the only two places in the
+whole sweep where the fix pass left the project worse than it found it.
+
+- **`A-M15`.** CP-13 Q3 measured that the JAX-WS RI walks the implementor's
+  `Class.getMethods()`. The fix widened the member rule to the superclass
+  closure — correct — and enumerated one row per DECLARATION, where the
+  enumeration it was mirroring returns one per SIGNATURE. An overridden SOAP
+  operation shipped twice, the second attributed to a base the RI never
+  exposes; and an override carrying `@WebMethod(exclude = true)` withdrew only
+  its own row while the base's identical declaration published the withdrawn
+  operation at `resolved`/`compiler`.
+- **`A-M13`.** CP-13 Q1 recorded `calculateQueryMethods`' filter and named
+  `isCustomMethod` inside it. The fix read the enumeration beside that name and
+  stopped. The walk crossed every module-local superinterface, so a
+  custom-fragment method — whose body lives in a hand-written `…Impl` — was
+  published as `GET /orders/search/searchByFullText`, a route Spring Data REST
+  does not serve.
+
+**The cause is one, and no new principle is missing.** §5.4 says a verdict is
+bounded by the configuration it measured. §8.1 rule 4 says never add behaviour
+the framework does not have under the exact circumstances. Both were written,
+both were agreed, and both were broken twice in one round — which §13.8 step 3
+calls a rule with no reach, whose answer is a mechanism rather than another
+correction. **That mechanism has not been built, and it is the thing to settle
+before the next probe-backed fix**, not something this round closed.
+
+Three things that generalise while it is unsettled:
+
+- **A probe row that names a predicate has not opened it.** Q1's cell contained
+  the literal string `isCustomMethod` and the fix pass read past it. A recorded
+  instruction sequence is a list of questions as much as a list of answers, and
+  the ones it names by symbol are exactly the ones nobody has looked at.
+- **Extending the probe is cheaper than the argument about whether to.** Q5, Q6
+  and Q7 took under an hour between them, jars already cached, and CP-9's rows
+  41-46 needed one new probe servlet and one new fact reader. Both rounds that
+  got this wrong had budget for the measurement and spent it on reasoning
+  instead.
+- **A generalisation can run in either direction, and the second is harder to
+  see.** `A-M2` was found deriving nothing for a configuration a probe had not
+  covered; the fix then derived SOMETHING for a different configuration the
+  same probe had not covered. Reviewers looked for the first shape and found
+  it. Ask of every verdict: which configurations does it now decide, and which
+  of those did the run touch?
+
+## A brief's premise can be stale in the direction that hides the defect (2O Task 10)
+
+Task 10's brief opened: "a locally-implemented `@HttpExchange` interface derives
+an **outbound** row — the module reported calling a service it actually serves —
+and its inbound routes are missed entirely. Both errors in the same rows."
+
+The first half had already been closed, by a different pass. `A-C1` gave
+`spring-http-interface.yml` `declared_on: interface`, which on an outbound
+catalog also engages the SEI fence, and the fence subtracts every interface the
+module implements. So the shipped behaviour on the day the task started was not
+a fabrication and silence — it was **silence alone**: no outbound row, no
+inbound row, a whole HTTP surface absent from the export. `docs/documented-not-implemented.md`
+still described the fabrication too, in the present tense.
+
+Two things generalise, and the second is the uncomfortable one.
+
+- **Check the defect the brief describes before fixing it.** It cost one query
+  to find out, and it changed the implementation: the brief's Step 2 said "do
+  NOT also add `declared_on: interface`", which reads as advice about a key that
+  is not there and is in fact a warning about one that is. Had it been followed
+  literally — flip added, fence untouched — the fence would have subtracted
+  exactly the rows the flip flips and **no inbound row would have shipped at
+  all**, which is the cancellation the spec warned of, reached from the other
+  side. The fix was to make the fence YIELD to the flip, which nothing in the
+  brief could have said.
+- **A fix that converts a wrong row into a missing row moves the entry down the
+  severity list and out of everyone's attention.** The fabrication was the
+  reason #5 was called "the only entry where shipped output is actively false".
+  Closing that half quietly demoted the entry to an under-report while its
+  register text still claimed the worse failure — so the register overstated the
+  problem and the estate understated it, at the same time. When a pass narrows a
+  known defect rather than closing it, the register entry is part of the change.
+
+### A fixture spelled in a simpler coordinate space cannot see a coordinate-space bug
+
+Most synthetic fixtures in `tests/application/test_endpoints.py` write BARE
+descriptors (`com/acme/api/OrderApi#`) where a real fact writes a
+module-prefixed symbol (`sextant-jvm maven com.acme/orders-service 1.0.0
+com/acme/api/OrderApi#`). That is harmless for a rule comparing two values from
+the same space, and it is not harmless for a rule that crosses one.
+
+Task 10's flip crosses one: it joins a declaring method to the method
+implementing it, and an interface scanned out of an opted-in dependency jar
+carries that jar's coordinates while the class implementing it carries the
+module's. So every comparison is on the bare descriptor and the published symbol
+is the prefixed one. The first version keyed its handler map on the **prefixed**
+declaration and joined it against a **bare** one — which cannot match, so on
+every real module the handler would silently have fallen back to the interface's
+own method. Six tests passed, because in a bare fixture the two spellings are
+the same string.
+
+**The rule: a fixture for a rule that crosses a coordinate boundary must be
+written in the coordinate space the facts actually use.** It costs one constant.
+`test_effective_annotations.py`'s `_MODULE` prefix is the precedent, and it is
+there for exactly this reason.
+
+## An opt-in check that nobody runs is not a net (2Q close, §8.4 wave)
+
+`scripts/field_check.py` is the only always-available evidence for §5's
+beyond-fixture claims. Adding a third pin to it meant running the other two for
+the first time in a while, and one of them — `spring-petclinic-rest` — **had
+been failing since 2O's identity migration**: 25 of its 44 recorded inbound
+routes are spelled without the leading separator that migration added to every
+one. The counts still matched, so nothing about the failure was subtle; it was
+simply never observed. It is now `OI-32`, closed by Wave 0's W0b.
+
+Three things to do differently:
+
+- **When you add an entry to an opt-in suite, run the whole suite, not your
+  entry.** The marginal cost is minutes and it is the only moment anyone has a
+  reason to look at the others.
+- **A CHANGELOG entry that says "goldens moved" is a work item, not a notice.**
+  2O's identity migration listed its own blast radius accurately — *"Every
+  recorded INBOUND HTTP path that omitted its leading separator now carries
+  one"* — and the recorded expectations that sentence describes were not
+  re-recorded. Enumerate the artifacts a migration invalidates and fix or file
+  each; a correct prose warning that reaches no file is §8.3's failure in
+  miniature.
+- **A refusal a reader cannot act on is a hole in the check, not a safe
+  default.** `mall-admin` pins `jdk: "21"` and this machine's default JDK is 26,
+  so `field_check.py` refuses before building and says so — correctly, and with
+  nothing anyone could DO about it written down anywhere. Running the full
+  suite needs the toolchain named:
+
+  ```bash
+  JAVA_HOME=/opt/homebrew/opt/openjdk@21 PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH \
+      .venv/bin/python scripts/field_check.py
+  ```
+
+  W0b found the count in `OI-32` was wrong (13, actually 25) and the claim
+  *"`mall-admin` is clean"* recorded without that gate ever having been passed —
+  both because the previous round read the entry instead of re-running it.
+
+## A grammar gap is cheaper to close in a batch than in a dispatch (the `annotation_driven` vocabulary pass)
+
+Three catalogs in one Stage 4 dispatch knew their framework's rule exactly and
+had no word for it. The implementer fixed none and was right not to: each had an
+obvious local hack, and three local hacks to one grammar is how a vocabulary
+rots. §13.8 fired, and the design pass that followed is what this entry is about.
+
+Four things it is worth doing the same way next time.
+
+- **Design the whole key set against every measurement before writing any of
+  it.** The three words interlock — `container` feeds the same synthetic-row
+  channel composition and inheritance already use, and the per-annotation
+  `path_fallback` only makes sense beside the sibling sources that run before it.
+  Taken one at a time each would have been a plausible local key; taken together
+  they are one shape.
+
+- **The additive form beats the general one when 21 files run through the
+  code.** `OI-35`'s close condition literally said "make `path_from` take
+  `{annotation, arg}` entries, with the ORDER preserved" — the fully interleaved
+  list. That rewrites the single most load-bearing expression in the engine to
+  buy an interleaving no measurement asks for. A separate ordered list expresses
+  the measured order exactly, leaves 20 catalogs byte-identical, and puts the
+  generality given up in COVERAGE as a named boundary. **Name what you gave up;
+  that is what makes the smaller change honest rather than lazy.**
+
+- **A close condition can be missing a question, and the missing one is usually
+  an identifier.** `OI-35` named the annotation TYPES and the ORDER, and a
+  catalog needs a third thing: the ATTRIBUTE. The method that reads them is
+  called `getOneOfTheseMethodAnnotationsValue`, so `value` was one inference
+  away — and one of the five sources declares six members. CP-15 gained a sixth
+  question rather than the catalog gaining a guess. **Before encoding a
+  measurement, list the identifiers the catalog will have to spell and check
+  each came from the run.**
+
+- **An unmeasured absence is a claim and belongs in the file.** Two of the words
+  had somewhere obvious to go that nothing had measured: `@KafkaHandler`'s and
+  `@RabbitHandler`'s repeatability, and `@PulsarListener`'s. Each catalog says in
+  place why it declares nothing, and the Pulsar COVERAGE row was rewritten from
+  "the grammar cannot say it" to "one `javap` question would settle it" — which
+  is a different and much cheaper backlog item. **When a pass makes something
+  newly expressible, re-read the boundaries that blamed the grammar; some of
+  them just changed category.**
+
+## Check the contract before asking for a ruling (Step 1)
+
+Removing `scanner_version` exposed that Python's `_CAPABILITIES` — a fourteen-name
+set in `ingress/extract/jvm/scanner.py` — was gating catalogs on an unverified
+claim about a separately-built subprocess. I put it to the user as a design fork
+with three options.
+
+**It was not a fork. It had been decided from the start**, and both halves are
+written down: `D02-catalog-schema.md:96` — *"Capabilities are scanner-declared …
+earned once, up front, by the scanner that produced a module's facts"* — and
+`M03-scanner.md:17`, which puts `capabilities() -> {Capability}` on the scanner's
+own interface. The Python constant was a VIOLATION of a shipped contract, so the
+work was to implement the spec, not to choose between designs.
+
+The lesson is narrower than "read the docs", because the spec-review round had
+already diagnosed writing from the conversation instead of from the repository
+and fixed it with `verify:` commands on every factual claim. That discipline was
+applied to claims and not to QUESTIONS:
+
+- **A question to your human partner is a claim that a decision is open.** It
+  needs the same evidence as any other claim about our own system — grep
+  `docs/components/*` for the vocabulary first. Asking about something already
+  settled costs their time and risks re-deciding it differently from the
+  shipped design.
+- **The tell was in the finding itself.** "Nothing verifies X, and X gates
+  behaviour" almost always means a contract exists and is unimplemented, not
+  that nobody thought about it. Search for the contract before drafting options.
+
+## One compiler's conventions written down as the format's rules (§13.8, third occurrence)
+
+Three times in one wave, a rule was read off whichever class files happened to be
+compiled to hand and then stated in the indicative as a property of the class-file
+**format**. Every one produced a WELL-FORMED fact that was false, so nothing
+downstream could notice, and every one was caught by review rather than by a test.
+
+| # | The rule as written | Right for | Wrong for | What shipped |
+|---|---|---|---|---|
+| 1 | a `Signature`'s parameters align with the descriptor's by the difference in the two counts | an inner class, an enum | a local class that captures (javac appends captures at the END) | `List<String>` stamped onto an `int` |
+| 2 | `ACC_MANDATED`/`ACC_SYNTHETIC` are "exactly the set the short tables omit" | four measured shapes | a record's COMPACT canonical constructor — every slot mandated, nothing omitted | every type annotation on a record component silently dropped |
+| 3 | every `LineNumberTable` entry is a line in this class's own `SourceFile` | javac | any Kotlin method calling an `inline` function | a 13-line file reporting a method that ends at line 17 — a line in the standard library's `_Collections.kt` |
+
+**The cause is one thing, and it is not carelessness.** Each rule was *measured* —
+that is what made it feel finished. What was measured was a sample of compilers,
+and the conclusion was written about the format. **The format permits more than
+any one compiler emits**, so "I compiled four shapes and they all agreed" is
+evidence about javac and silence about everything else. §8.1 already forbids
+exactly this ("never predict — measure"), and §8.1 rule 5 says to follow the
+provider where it makes a distinction; the provider stated the answer in all
+three cases (`MethodParameters`, `MethodParameters` again, `SourceDebugExtension`)
+and the code inferred instead.
+
+**§13.8 step 3 applies: a rule already written, already agreed and broken three
+times is not an implementer's slip.** Prose has been tried on this cause and lost,
+so the correction is a mechanism.
+
+**The mechanism: `FactInvariantTest` — invariants over the FACTS, across every
+compiler that produced a fixture.** Not another per-case pin, because a pin only
+ever covers the compiler somebody remembered to compile. *"No symbol claims a line
+its own source file does not have"* catches occurrence 3 without anyone thinking
+about Kotlin inlining, and would catch the same defect from ECJ, Groovy or Scala
+the day such a fixture lands. Each per-case fix also keeps its own test; what was
+missing was the layer above them.
+
+**And the fixture that cannot see the bug is half the cause** — the entry above on
+coordinate spaces says the same thing about a different defect. No class under
+`fixtures/` carried a `SourceDebugExtension` at all, so the whole suite was blind
+to occurrence 3 by construction. `KotlinInlined.kt` exists now for that reason.
+
+**The reading to carry forward:** when a comment is about to say *"X is exactly
+the set that Y"* about a class file, ask which compilers were in the sample and
+write that instead — or find the attribute where the provider states it, which in
+all three cases existed.
+
+## A figure derived is not a figure measured (§13.8, at least the sixth occurrence)
+
+**The error, in one sentence:** a number reached by arithmetic on other numbers, or by
+comparing two measurements that are not alike, published in the voice of a direct reading.
+
+It is not the same as getting a number wrong. Each of these was reachable by *some* correct-
+looking reasoning, which is why none of them felt like a guess in the moment:
+
+| Wave | Published | Measured | How the wrong one was reached |
+|---|---|---|---|
+| W50 | `26 of 26` scanner capabilities | 23 of 26 | remembered, and self-contradictory in its own sentence |
+| W50 | `8 delivered / 5 in-progress / 4 planned` | 4 / 9 / 4 | recalled instead of counted off the two tables |
+| W53 | "retired **four** entries" | three | counted an item that was already measured |
+| W53 | "478 of 481 citations" | 475 of 478 checkable | the checkable count against a different total |
+| W54 | "**five** near-misses cover fourteen" | seven tests | arithmetic on two sub-figures that were themselves wrong |
+| W57 | "**four** methods take a `String`" | 3, 4 or 5 | three defensible definitions, none stated |
+| W56 | "a **7s** saving" | none | a cold first run against a warm one |
+| W56 | "would delete **54%** of the graph" | near half, differently composed | one measurement restated as a consequence |
+
+**The cause is one thing, not eight.** A measured figure and a derived figure read identically
+in prose — "23 entries" and "26 minus the 3 unshipped" are the same sentence once written down
+— so nothing in the text marks which kind it is, and the derived one inherits the authority of
+the measured one. Every instance above was written by someone who had just done real
+measurement nearby.
+
+**The principle it violates already exists.** §8.1: a rule taken from memory or documentation
+is a PREDICTION, and the RUNBOOK already carries *"Half a measured rule is a prediction"*. What
+neither reaches is a NUMBER IN PROSE. §8.1 governs catalog rules; these are sentences in
+CHANGELOG entries, plan rows, register tables and code comments — the places this project keeps
+its evidence, and the places nothing checks.
+
+**Per §13.8 this is a rule with no reach rather than an implementer's slip**, and the fix is a
+mechanism rather than another correction. Two ratchets already exist for the narrow cases where
+a figure has a machine-checkable referent — `test_shipped_counts.py` for catalog totals,
+`test_source_citations.py` for `file.py:NNN` — and both were themselves written after this
+class had already recurred. Neither reaches a percentage, a timing, or a count of tests.
+
+**Raised rather than settled here**, which is what §13.8 step 3 requires: a rule already
+written, already agreed and broken this many times is not fixed by writing it again.

@@ -75,6 +75,13 @@ from sextant.domain.symbols import bare_descriptor, package_path
 _MEDIA_BLOCK = "media_from_config"
 _FORMAT_FROM = "format_from"
 
+# The one key a `json_default_markers` MAPPING entry may carry (2O design §7).
+# A closed word rather than "any single-key mapping", the `_PATH_FALLBACKS`
+# precedent: a typo read as "some other marker form" would be a marker that
+# silently answers nothing, and rung 5 answering nothing is indistinguishable
+# from the converter genuinely being absent.
+_COORDINATE = "coordinate"
+
 # What rung 4 is allowed to say. A `declared_shape`'s `schema_format` names
 # the SCHEMA LANGUAGE that described the payload (D00 §5), and only some
 # schema languages are also wire formats: protobuf and Avro define an
@@ -431,36 +438,110 @@ def _serializer_candidates(
 
 
 def _present_default_marker(workspace: Workspace, catalogs: list[Catalog]) -> str | None:
-    """Rung 5's presence test: the first declared marker package that any
-    annotation in the module comes from, or `None`.
+    """Rung 5's presence test: the first declared marker the module answers,
+    or `None`.
 
     Presence, not usage. The question is whether the default converter is on
     the classpath at all — that is what makes it the framework's default for
-    every payload, including the ones that carry none of its annotations —
-    and an annotation from its package family is proof that it is, since the
-    package could not have been resolved at compile time otherwise.
+    every payload, including the ones that carry none of its annotations.
 
-    **Determinism comes from the ANNOTATION ordering, not from the markers.**
-    This walks annotations in the `annotations` named query's own total order
-    (`target, annotation`) and returns on the first hit, so a module carrying
-    two marker families names the same one on every run because the
-    annotations are ordered — sorting the markers only makes the tie-break
-    within a single annotation stable, which is a much smaller claim. Either
-    way the choice changes nothing but the recorded trail: every marker in
-    this list means the same format.
+    **Three sources, in order, and the order is the evidence's own strength
+    as EVIDENCE OF PRESENCE, not a preference between markers** (2O design §7;
+    every marker in the list means the same format, so which one answers
+    changes nothing but the recorded trail):
+
+    1. *Annotations* — today's rule. A marker family's annotation could not
+       have been resolved at compile time unless the family was there.
+    2. *Any other fqn the module names* — the call-site owners it invokes.
+       The design has always described these markers as package families whose
+       PRESENCE ANYWHERE in the module is the evidence; reading annotations
+       alone made a module that uses the converter's API and none of its
+       annotations answer `unresolved`, which is the same jar and a different
+       answer.
+    3. *Recorded classpath coordinates* — the coordinate of every artifact
+       outside this module's own output that the analysis actually read (D00
+       §2's `origin`). CP-6 confirmed the framework auto-configures its JSON
+       converter from the jar's mere presence, with no annotation and no API
+       call anywhere, so the coordinate is the evidence the framework itself
+       acts on. It answers only for a dependency this run extracted — a jar
+       nobody opted into is not recorded, and silence about it is the honest
+       answer rather than a guess.
+
+    **Determinism comes from the SOURCE orderings, not from the markers.**
+    Each source is walked in its own named query's total order (`annotations`
+    by `target, annotation`, `call_sites` by `caller, ordinal`, `documents`
+    by `document_id`) and the first hit returns, so a module carrying two
+    marker families names the same one on every run; sorting the markers only
+    makes the tie-break within a single row stable, which is a much smaller
+    claim.
     """
-    markers = sorted(
-        {str(marker) for catalog in catalogs for marker in catalog.json_default_markers}
-    )
-    if not markers:
+    families, coordinates = _marker_forms(catalogs)
+    if not families and not coordinates:
         return None
-    prefixes = [(marker, package_path(marker) + "/") for marker in markers]
-    for row in workspace.query("annotations"):
-        annotation = str(row["annotation"])
+    prefixes = [(marker, package_path(marker) + "/") for marker in families]
+    for fqn in _named_fqns(workspace):
         for marker, prefix in prefixes:
-            if annotation.startswith(prefix):
+            if fqn.startswith(prefix):
                 return marker
+    for recorded in _recorded_coordinates(workspace):
+        for coordinate in coordinates:
+            if recorded == coordinate:
+                return coordinate
     return None
+
+
+def _marker_forms(catalogs: list[Catalog]) -> tuple[list[str], list[str]]:
+    """Rung 5's markers split by form — package families, classpath
+    coordinates — each sorted-distinct.
+
+    The set-union across catalogs is the one `_merged` explains for the MIME
+    table, and safe here for a reason that table's own rule does not have:
+    these are PRESENCE markers, and two of them cannot contradict each other.
+    Every marker in either list means the same format, so a second catalog
+    naming a third family adds a way to answer, never a disagreement to
+    resolve.
+    """
+    families: set[str] = set()
+    coordinates: set[str] = set()
+    for catalog in catalogs:
+        for marker in catalog.json_default_markers:
+            if isinstance(marker, dict):
+                coordinates.add(str(marker[_COORDINATE]))
+            else:
+                families.add(str(marker))
+    return sorted(families), sorted(coordinates)
+
+
+def _named_fqns(workspace: Workspace) -> list[str]:
+    """Every fqn the module NAMES, sources 1 and 2 of the presence test above,
+    in that order.
+
+    Annotations first, so a module that answered through one before this
+    widening still records the same marker and the same trail. Call-site
+    owners second: the type a call is made ON is an fqn the module could not
+    have compiled against unless the family was there, which is the same
+    proof an annotation is.
+    """
+    return [str(row["annotation"]) for row in workspace.query("annotations")] + [
+        str(row["owner"]) for row in workspace.query("call_sites") if row["owner"] is not None
+    ]
+
+
+def _recorded_coordinates(workspace: Workspace) -> list[str]:
+    """Source 3: the coordinates this analysis recorded, deduplicated in
+    `documents` order.
+
+    `origin` is NULL for the module's own output and carries the artifact's
+    `group:artifact` for everything read from outside it (D00 §2), which is
+    the same notation a `coordinate` marker is written in — no normalization
+    stands between the two, deliberately: a marker that had to be reshaped to
+    match would be a second place the notation is decided.
+    """
+    return list(
+        dict.fromkeys(
+            str(row["origin"]) for row in workspace.query("documents") if row["origin"] is not None
+        )
+    )
 
 
 def _described_shapes(workspace: Workspace) -> dict[str, dict[str, str]]:
@@ -515,6 +596,29 @@ def _validate(catalog: Catalog) -> None:
                     f"loading catalog {catalog.source}: `{name}.{key}: {value}` is not one of "
                     f"{', '.join(allowed)} — D00's closed sets are closed (NFR-5)"
                 )
+    _validate_markers(catalog)
+
+
+def _validate_markers(catalog: Catalog) -> None:
+    """Refuses a `json_default_markers` entry that is neither of rung 5's two
+    forms (2O design §7).
+
+    Checked at the same edge, and for the same reason, as the format values
+    above: a marker nothing recognizes answers nothing, and a rung that
+    answers nothing reads exactly like a converter that is genuinely absent —
+    a wrong `unresolved` no reader can tell from a right one.
+    """
+    for marker in catalog.json_default_markers:
+        if isinstance(marker, str):
+            continue
+        if isinstance(marker, dict) and set(marker) == {_COORDINATE}:
+            continue
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `json_default_markers` entry {marker!r} is "
+            f"neither a package family (a bare string) nor a dependency coordinate "
+            f"(`{{{_COORDINATE}: group:artifact}}`) — rung 5 has two forms and no third "
+            f"(2O design §7)"
+        )
 
 
 # --- the hand-off ---------------------------------------------------------

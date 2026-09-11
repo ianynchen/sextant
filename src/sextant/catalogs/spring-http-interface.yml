@@ -10,11 +10,82 @@ direction: outbound
 detect:
   coordinates: ["org.springframework:spring-web"]
 
+measured:
+  - { artifact: org.springframework:spring-web, versions: ["6.2.15"],
+      identity: reported, by: scripts/probes/cp7_http_exchange.md }
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
+      identity: reported, by: scripts/probes/cp7_http_exchange.md }
+  - { artifact: org.springframework:spring-core, versions: ["6.2.15"],
+      identity: reported, by: scripts/probes/cp7_http_exchange.md }
+  - { artifact: org.springframework:spring-web, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: org.springframework:spring-aop, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+
 requires: [annotation_args, typed_signatures]
+
+# D02 §2c. `direction` above is a DEFAULT here in a way it is on no other
+# catalog: the same annotation family declares a client to be proxied and an API
+# to be served, and which one it is depends on what else the module contains.
+#
+# MEASURED (CP-7, `scripts/probes/cp7_http_exchange.md`, spring-webmvc 6.1.6 /
+# 6.2.15 / 7.0.2 / 7.0.9): `RequestMappingHandlerMapping` builds a mapping from
+# `@HttpExchange` exactly as it does from `@RequestMapping`, through a
+# `MergedAnnotations` search with `SearchStrategy.TYPE_HIERARCHY` — so an
+# implementing class serves the interface's exchange annotations, type-level
+# prefix included, without repeating any of them.
+#
+# THE CONDITION IS THE CONTROLLER CHECK, and spec §6's
+# `owner_implemented_in_module: true` is not it. Spring dispatches to a handler
+# BEAN, and `isHandler` is one
+# `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with no
+# `@RequestMapping` disjunct on any minor measured — so a `@Service` that
+# implements an `@HttpExchange` interface is served by nothing at all, and an
+# inbound row for one would invent an endpoint (§8.1 rule 4).
+#
+# Both spellings, because `hasAnnotation` resolves meta-annotations and our own
+# composition pre-pass reaches only MODULE-LOCAL compositions: `@RestController`
+# is meta-annotated `@Controller` inside a jar this workspace does not scan, so
+# naming `@Controller` alone would match no REST controller in any real module.
+# They are the same two fqns `spring-mvc.yml` and `spring-web.yml` declare as
+# their own `type_annotation`.
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - org.springframework.stereotype.Controller
+          - org.springframework.web.bind.annotation.RestController
+      then: inbound
 
 matches:
   # No type gate: @HttpExchange at type level is optional — methods alone may
-  # carry the exchange annotations.
+  # carry the exchange annotations. That is true and it is not the whole rule,
+  # which is what `A-C1` cost: with no gate of ANY kind, a lone `@GetExchange`
+  # on a class minted a row, and where neither half named a path it minted one
+  # at the EMPTY address, claiming the module calls a service at no address at
+  # all.
+  #
+  # MEASURED (`A-C1`, CP-11 Q6, spring-web / spring-aop 6.1.6): the gate the
+  # framework does have is on the CONSTRUCT, not on an annotation.
+  # `HttpServiceProxyFactory.createClient` hands the client type to Spring
+  # AOP's `ProxyFactory.getProxy(Class, Interceptor)`, and two hops down
+  # `AdvisedSupport.addInterface` tests `Class.isInterface()` and throws
+  # otherwise. An exchange annotation on a concrete class is therefore not an
+  # HTTP-interface client, and deriving one invents an outbound dependency.
+  #
+  # As on `retrofit.yml`, this also opts the catalog into the SEI fence: an
+  # interface the module itself implements is subtracted, on the reading that
+  # an outbound interface-gated derivation claims somebody ELSE answers the
+  # call.
+  #
+  # SINCE THE `resolves.direction` RULE ABOVE, the fence YIELDS to it rather
+  # than cancelling it (ruling R12): where the implementer is a controller the
+  # row is not subtracted, it becomes the inbound row. What the fence still
+  # covers is the case the flip declines — an interface implemented by a bean
+  # the framework serves nothing through — which this module neither calls nor
+  # serves. COVERAGE §5.2's under-report is therefore closed for the
+  # controller-implemented shape and stands for that one.
+  declared_on: interface
   request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,
                   fallback: none }
   mapping:
@@ -40,23 +111,6 @@ wrappers:
   - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

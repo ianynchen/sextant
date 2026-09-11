@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from fixture_module import write_fixture_module_fact
 
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.scanner import ScanRequest
@@ -20,6 +21,29 @@ REPO = Path(__file__).parents[2]
 JAR = extractor_jar()
 FIXTURE = REPO / "fixtures" / "orders-service"
 CATALOGS = catalogs_dir()
+
+
+@pytest.fixture(scope="session")
+def fixture_facts(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The fixture module compiled and scanned once, as a FACT DIRECTORY.
+
+    Separate from `resolved_fixture` because a test that resolves the same facts
+    twice under two catalog sets cannot use a workspace someone already resolved
+    — and compiling the fixture a second time for it would double the slowest
+    step in the suite for no new evidence."""
+    facts = tmp_path_factory.mktemp("fixture_facts") / "facts"
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=FIXTURE / "target" / "classes",
+            out_dir=facts,
+        )
+    )
+    write_fixture_module_fact(facts)
+    return facts
 
 
 @pytest.fixture(scope="session")
@@ -46,6 +70,7 @@ def resolved_fixture(
             out_dir=facts,
         )
     )
+    write_fixture_module_fact(facts)
     # 2F Task 7: the read half, mirroring `stages/analyze.py` — see
     # `test_pipeline._resolved_fixture`'s own copy for why a fixture resolved
     # without its configuration answers a different question entirely once a
@@ -75,9 +100,18 @@ def resolved_fixture(
         # SAME three capabilities (`call_site`, `string_constants`,
         # `chain_reconstruction`), no new one added; `implemented_interfaces`
         # (2E-prep Task 12) gates `google-pubsub-subscriber.yml`'s own
-        # `interface_implementation` style — a real subset of what
-        # `AsmScanner.capabilities()` actually declares, the same way the
-        # other capabilities here already are.
+        # `interface_implementation` style; `superclass` (capability 9.13, 2O
+        # design §1b, Task 5) gates `grpc-java.yml`'s own `supertype_derived`
+        # style; `generic_interfaces` (capability 9.14, 2O design §2a, Task 6)
+        # gates `spring-data-rest.yml`'s own `derived_resource` style — a real
+        # subset of what `AsmScanner.capabilities()` actually declares, the
+        # same way the other capabilities here already are.
+        #
+        # Granting 9.14 rather than withholding it is deliberate: with the
+        # capability met, this fixture exercises the DEPENDENCY gate instead —
+        # the module fact written above deliberately omits Spring Data REST's
+        # coordinate (`FIXTURE_GATED_COORDINATES` says why), so the gate answers
+        # "not declared" and the skip is the check this live fixture is behind.
         {
             "annotation_args",
             "typed_signatures",
@@ -86,6 +120,23 @@ def resolved_fixture(
             "string_constants",
             "chain_reconstruction",
             "implemented_interfaces",
+            # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+            # these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+            # it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+            # degradation into a total skip), so nothing here depends on it now. Kept because the
+            # varargs reads it feeds are real and a harness that withheld it would be measuring a
+            # scanner nobody ships.*
+            "array_arguments",
+            "superclass",
+            "generic_interfaces",
+            # `nested_annotation_args` (capability 9.16, 2O design §4a, Task 8)
+            # gates `spring-scheduling.yml`'s own `scheduled_work` style.
+            # GRANTED rather than withheld, for the reason 9.14 is above: with
+            # it withheld the catalog joins the skip list and this fixture stops
+            # answering the question it exists for, while with it met the
+            # catalog RUNS against a module that schedules nothing — which is
+            # the honest zero the `scheduled_work` table should hold here.
+            "nested_annotation_args",
         },
     )
     yield workspace, report

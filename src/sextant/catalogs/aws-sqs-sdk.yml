@@ -73,49 +73,91 @@ matches:
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale). `nullability` is harvested from spring-mvc.yml. This catalog
-# sorts first alphabetically among every shipped file, so — unlike the
-# fluent HTTP trio (okhttp/webclient/restclient), which can rely on
-# spring-mvc.yml loading before them — it must carry its own nullability
-# copy to be self-sufficient for whichever shared payload type it reaches
-# first (Task 10 fix round 1, finding 1).
+# rationale). This catalog sorts first alphabetically among every shipped
+# file, so it is the one that reaches most shared payload types first and its
+# `wrappers` copy has to be self-sufficient (Task 10 fix round 1, finding 1).
+# The nullability half of that finding is no longer this file's problem: the
+# payload-type blocks are one declaration now (D02 §1b), so no catalog can
+# reach a type first with rules of its own.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02's declared SLICE (F2 §3.8). Measured (`scripts/probes/w19_catalog_surface.md`):
+# this catalog reads **1 of `SqsClient`'s 29** methods and **0 of `SqsAsyncClient`'s
+# 28** at aws-sdk sqs 2.25.31.
+#
+# **The honest summary: one request type, in one direction, on one of the two clients.**
+# `sendMessage(SendMessageRequest)` is the whole model. An SDK-level SQS consumer is
+# invisible, and so is every module using the async client.
+#
+# These methods address the wire differently from every other catalog here: the queue
+# URL is inside a `*Request` object rather than at an argument position, which is why
+# the argument-0 test the enumeration applies to the Spring templates reports zero
+# candidates for this file and a second, request-object test is what finds them.
+#
+# **One gap this slice CANNOT name, stated here because the list below would otherwise
+# read as complete.** The enumeration decides read-versus-unread by method NAME, so an
+# unread OVERLOAD of a name this catalog does read is invisible to it and cannot be
+# declared below without failing the audit's staleness check. There is one that
+# matters: every SQS operation ships a second form taking a builder lambda —
+# `sendMessage(Consumer<SendMessageRequest.Builder>)`, descriptor
+# `(Ljava/util/function/Consumer;)…` — and it is AWS's own documented idiom.
+# `sqsClient.sendMessage(b -> b.queueUrl(q).messageBody(m))` derives NOTHING, because
+# this catalog reaches `sendMessage` only as the terminal of a chain rooted at
+# `SendMessageRequest.builder()` and a lambda is not that root. So the summary above
+# is more precisely: one request type, in one direction, on one of the two clients,
+# **built one particular way**.
+slice:
+  outside:
+    - owner: software.amazon.awssdk.services.sqs.SqsClient
+      method_names: [receiveMessage]
+      why: >
+        **The entire inbound direction**, and the largest single absence in this file.
+        An SDK-level SQS consumer — `receiveMessage(ReceiveMessageRequest)` with the
+        queue URL inside the request — derives nothing, so a module that only consumes
+        looks like a module that does not touch SQS at all. G-43's headline.
+    - owner: software.amazon.awssdk.services.sqs.SqsClient
+      method_names: [sendMessageBatch]
+      why: >
+        The batch outbound form, a real send this catalog does not model. Its request
+        carries MANY entries, so one call is many wire messages to one queue — a row
+        shape this file's single-destination `sendMessage` rule does not express.
+    - owner: software.amazon.awssdk.services.sqs.SqsClient
+      method_names: [deleteMessage, deleteMessageBatch, changeMessageVisibility,
+                changeMessageVisibilityBatch]
+      why: >
+        Consumption lifecycle: acknowledging, extending a lease, discarding. Real calls
+        against a named queue, but each is only meaningful alongside a `receiveMessage`
+        that is itself outside this slice. They would follow it in, not lead.
+    - owner: software.amazon.awssdk.services.sqs.SqsClient
+      method_names: [purgeQueue, createQueue, deleteQueue, getQueueUrl, getQueueAttributes,
+                setQueueAttributes,
+                listQueues, listQueuesPaginator, listQueueTags, tagQueue, untagQueue,
+                addPermission, removePermission, listDeadLetterSourceQueues,
+                listDeadLetterSourceQueuesPaginator, listMessageMoveTasks,
+                startMessageMoveTask, cancelMessageMoveTask]
+      why: >
+        Control-plane administration — creating, describing, tagging and permissioning
+        queues, and moving messages between them. These manage the wire rather than
+        speak on it, so they are outside by design rather than by omission. Named
+        individually anyway, so that a release adding a data-plane method to this
+        client cannot arrive disguised as more administration.
+    - owner: software.amazon.awssdk.services.sqs.SqsAsyncClient
+      method_names: [sendMessage, sendMessageBatch, receiveMessage, deleteMessage,
+                deleteMessageBatch, changeMessageVisibility, changeMessageVisibilityBatch,
+                purgeQueue, createQueue, deleteQueue, getQueueUrl, getQueueAttributes,
+                setQueueAttributes, listQueues, listQueuesPaginator, listQueueTags,
+                tagQueue, untagQueue, addPermission, removePermission,
+                listDeadLetterSourceQueues, listDeadLetterSourceQueuesPaginator,
+                listMessageMoveTasks, startMessageMoveTask, cancelMessageMoveTask]
+      why: >
+        **The whole client, unread — including `sendMessage`, which this catalog DOES
+        model on the synchronous client.** `SqsAsyncClient` is a second terminal owner
+        that `matches.terminal` never names, so a module built on the async client
+        derives nothing even for the one call this file exists to read. That asymmetry
+        is the finding: the same code, written against the async client, is invisible.

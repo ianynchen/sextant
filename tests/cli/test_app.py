@@ -8,17 +8,28 @@ import pytest
 from click.testing import CliRunner
 
 from sextant.application.ports.progress import NullProgress
-from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.ports.scanner import ScannerProvenance, ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
 from sextant.cli.app import cli
 from sextant.domain.factfile import read_fact_tree
 from sextant.domain.symbols import bare_descriptor, owner_of
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
@@ -72,7 +83,35 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     # + 2: the prefix-seam controllers — `GET /v1/seam/owners/{ownerId}` and
     # `POST /chat`, one route each. Both were already derivable; what the
     # `path_separator` fix changed is the ADDRESS each derives, not the count.
-    assert metadata["endpoints"]["inbound"]["http"] == 34
+    # + 8: 2O Task 6's Spring Data REST surface. `CatalogRepository`
+    # declares no path, no verb and no HTTP anything, and the framework
+    # serves six CRUD routes for it plus two `/search/` routes (one renamed
+    # by `@RestResource(path = "by-customer")`). `SecretRepository`
+    # (`exported = false`) and `OrderRepository` (which extends the
+    # fixture's OWN `Repository<T, ID>` stand-in, not a Spring Data
+    # contract) each derive nothing — the live near-miss beside the live
+    # match.
+    # + 1 (OI-47): `GET /api/orders/{id}`. The mapping is declared on the
+    # interface and reachable only through javac's bridge, since the covariant
+    # override's descriptor is not the interface's — it used to be discarded
+    # with the bridge, and is now carried across to the real override.
+    # + 1 (OI-48): `POST /v1/orders/scoped`. `ScopedRequest` was referenced by
+    # nothing, so no endpoint rooted it and the package-scope nullability rule was
+    # never exercised in the pipeline — only in a hand-built unit test.
+    # + 4 (W26): `/v1/paged/totals`, `/orders`, `/slice` and `/wrapped`. `totals` is a
+    # payload type whose wire contract is in its ACCESSORS — an interface, so it has no
+    # fields at all — and the three paged ones are the boundary beside it: `Page` and
+    # `Slice` live in a jar this fixture names in no `extract_libraries`, so their shapes
+    # stay open with zero fields and the types are reported as ones nothing could expand.
+    # + 3 (W28): `RoutingConditionsController`'s three handlers on one path and verb,
+    # separated by `params` and by `headers`. Spring registers all three — they are
+    # different mappings — and they are here because six repositories contained no use of
+    # either attribute, so nothing else exercises the discriminators the conflict
+    # detector reads.
+    # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`) — inbound
+    # http rows like any other, derived by the combinator engine rather than an
+    # annotation.
+    assert metadata["endpoints"]["inbound"]["http"] == 54
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -120,7 +159,47 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     # file inside `com.example:orders-soap-client`, and a class file is a
     # document wherever it was read from (D00 §2) — this is the count moving
     # because a jar was scanned, which is the point of the feature.
-    assert metadata["coverage"]["documents"] == 106
+    # + 2: 2O Task 3's generic-superinterface fixture — `Repository<T, ID>` and
+    # `OrderRepository`, each its own class file, one document each.
+    # + 1: 2O Task 6's `module` fact (D00 §5), which the detector's own
+    # conclusions now travel as. Its document is SYNTHESIZED rather than read
+    # from a file — the stage may not touch the filesystem — so it is the one
+    # document here that is not a class file or a resource; the count moves
+    # because the fact tree genuinely gained a record, which is what this test
+    # is for.
+    # + 2: the same task's Data REST fixture — `CatalogRepository` and
+    # `SecretRepository`, one class file each.
+    # + 7: 2Q `G3`'s dispatch fixture (`com/acme/orders/trace/`) — one caller
+    # and one call per dispatch form the JVM has, which needs an interface with
+    # ONE implementation, an interface with TWO, and a subclass that hides a
+    # static rather than overriding it: `Refiner`, `SoleRefiner`,
+    # `StrictRefiner`, `Splitter`, `FirstSplitter`, `SecondSplitter`,
+    # `TraceProbe`. Unannotated and unreferenced, so they move this count and
+    # nothing else.
+    # + 2 (OI-48): `springscoped/SpringScopedDetail` and its `package-info`, a
+    # package declaring itself non-null in SPRING's spelling rather than
+    # JSpecify's — the one a Spring codebase actually writes, and the one
+    # `shape-models/json.yml` did not declare.
+    # + 3: that entry's own review — `apiscoped/package-info` declaring
+    # `@NonNullApi` ALONE (which scopes parameters and returns, never fields) plus
+    # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    # + 3: W21's `com/acme/orders/model/` — `BaseEntity`, `Customer` and
+    # `CustomerRegistry`, giving the always-on corpus the superclass-call shape it
+    # scored ZERO of, so Wave 3's resolution work has somewhere to fail.
+    # + 2 (W26): `contracts/OrderTotals`, the fieldless interface whose accessors carry
+    # its wire contract, and the `PayloadShapeController` that returns it beside the
+    # three paged responses no jar here can expand.
+    # + 1 (W28): `RoutingConditionsController`.
+    # + 1 (W43): `ws/OrderStompPublisher`, the outbound half of the STOMP surface — the
+    # module received STOMP and sent none, so `G-33`'s asymmetry had no live instance here.
+    # + 2 (W44): `mvcroutes/MvcInvoiceRoutes` and its handlers — Spring MVC functional
+    # routing, `G-29`, which this fixture likewise had no instance of.
+    # + 1 (W45): `ws/StompBrokerConfig`, which registers the URL a STOMP client opens —
+    # `G-42`: the destinations derived and the transport endpoint did not exist.
+    # + 1 (W46): `ws/OrderFeedClient`, which opens one — `G-32`'s absent direction.
+    assert metadata["coverage"]["documents"] == 135
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
@@ -453,8 +532,7 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
             tmp_path / "metadata.json",
             result.module,
             result.report,
-            "asm",
-            "9.7",
+            SCANNERS,
             "deadbeef",
         )
     finally:
@@ -608,7 +686,12 @@ def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path
     The workspace here is a stand-in — the overlay is read BEFORE the database
     is opened, so a render that refuses one never touches it. That ordering is
     the point: an overlay that cannot be validated is not a document to render
-    half of."""
+    half of.
+
+    The stand-in carries the three version stamps a real `metadata.json` does
+    (OI-24, D01 §7): the read gate compares them before the overlay is read at
+    all, so a stand-in without them is refused as a workspace from another
+    build and this test would pin that refusal instead of the overlay one."""
     module = tmp_path / "module"
     module.mkdir()
     (module / ".sextant-enrichment.json").write_text(
@@ -617,7 +700,16 @@ def test_a_malformed_overlay_is_reported_as_a_message_not_a_stack_trace(tmp_path
     workspace = tmp_path / "ws"
     workspace.mkdir()
     (workspace / "metadata.json").write_text(
-        json.dumps({"module": {"id": "a:module", "kind": "service", "languages": ["java"]}}),
+        json.dumps(
+            {
+                "module": {"id": "a:module", "kind": "service", "languages": ["java"]},
+                "schema_version": GRAPH_SCHEMA_VERSION,
+                "provenance": {
+                    "sextant_version": SEXTANT_VERSION,
+                    "fact_schema_version": FACT_SCHEMA_VERSION,
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (workspace / "workspace.duckdb").write_bytes(b"")

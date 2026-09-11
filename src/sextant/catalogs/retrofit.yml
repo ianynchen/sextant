@@ -7,11 +7,44 @@ direction: outbound
 detect:
   coordinates: ["com.squareup.retrofit2:retrofit"]
 
+# `identity: assumed` — the retrofit jar writes no version into its manifest,
+# ships no `pom.properties` and declares no version constant, so CP-11 and
+# CP-12 both label their column `assumed` rather than `yes`. The bytecode was
+# read; the version string beside it is the coordinate that resolved the jar.
+measured:
+  - { artifact: com.squareup.retrofit2:retrofit, versions: ["2.11.0"],
+      identity: assumed, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: com.squareup.retrofit2:retrofit, versions: ["2.11.0"],
+      identity: assumed, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:
   # No type gate and no prefix: a Retrofit interface is its method
   # annotations, and the base URL lives in builder code (call-site phase).
+  #
+  # MEASURED (`A-C6`, CP-11 Q4, retrofit 2.11.0): `Retrofit.create` calls
+  # `validateServiceInterface`, whose first act is `Class.isInterface()` and
+  # whose else-branch is an unconditional
+  # `throw new IllegalArgumentException("API declarations must be
+  # interfaces.")`. Retrofit therefore proxies interfaces and nothing else, so
+  # a `@GET`-annotated method on a CONCRETE CLASS is not a Retrofit call site:
+  # it is a hand-written class in a codebase that also uses Retrofit, or a test
+  # double. Without this key such a method published `(http, outbound, GET,
+  # /orders, resolved, compiler)` — a plausible-looking outbound dependency
+  # that does not exist, which is the worst kind, because nothing downstream
+  # can tell a plausible fabricated address from an observed one.
+  #
+  # It also opts this catalog into the SEI fence (`derive_endpoints.sql`): an
+  # interface THIS MODULE IMPLEMENTS is subtracted, because an outbound
+  # interface-gated derivation is claiming "somebody else answers this". For
+  # Retrofit that is a stated under-report rather than a mirror — `create()`
+  # proxies the interface whether or not a local class also implements it — and
+  # it is accepted because the shape it costs (a Retrofit service interface
+  # with a local implementation in MAIN sources) is rarer than the shape it
+  # fixes. Stated in COVERAGE §5.2; it stops being the right trade if a module
+  # ships local fallbacks for its Retrofit services.
+  declared_on: interface
   request_body: { annotation: retrofit2.http.Body, fallback: none }
   mapping:
     path_from: [value]
@@ -19,25 +52,63 @@ matches:
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
     prefix_annotation: null
     prefix_from: []
+    # MEASURED, against the jar Maven resolved for retrofit **2.11.0** — which
+    # is a COORDINATE and not a self-report, and the distinction is §5.4's own
+    # (CP-12 Q5, `scripts/probes/cp12_sweep_round1b.md`). Retrofit's archive
+    # states a version nowhere in its own bytes, so CP-12's identity row prints
+    # `assumed` for that column alone where every other column reads `yes`. The
+    # OBSERVATION is evidence about the jar that ran; the label beside it is
+    # evidence about what was asked for. This comment previously read "MEASURED,
+    # at retrofit 2.11.0" with no such qualification, which is the intention
+    # recorded as the measurement — CP-5's failure in one word.
+    # `retrofit2.http` holds eight
+    # annotations that name a request method — read as the intersection of two
+    # facts the jar states: `@Target(METHOD)`, and tested for by
+    # `RequestFactory$Builder`, the class that turns a method's annotations
+    # into a request. Seven declare a scalar `String value()` holding the path;
+    # `@HTTP` declares `method()`/`path()`/`hasBody()`. The three other
+    # method-targeted members — `@Headers`, `@Multipart`, `@FormUrlEncoded` —
+    # are modifiers, and `@Headers` is told apart by its `value()` being a
+    # `String[]` of header lines rather than a scalar path.
+    #
+    # This list held six (`A-M5`): `@OPTIONS` derived nothing at all, silently
+    # and with no COVERAGE row.
     annotations:
-      - { fqn: retrofit2.http.GET,    method: [GET] }
-      - { fqn: retrofit2.http.POST,   method: [POST] }
-      - { fqn: retrofit2.http.PUT,    method: [PUT] }
-      - { fqn: retrofit2.http.DELETE, method: [DELETE] }
-      - { fqn: retrofit2.http.PATCH,  method: [PATCH] }
-      - { fqn: retrofit2.http.HEAD,   method: [HEAD] }
+      - { fqn: retrofit2.http.GET,     method: [GET] }
+      - { fqn: retrofit2.http.POST,    method: [POST] }
+      - { fqn: retrofit2.http.PUT,     method: [PUT] }
+      - { fqn: retrofit2.http.DELETE,  method: [DELETE] }
+      - { fqn: retrofit2.http.PATCH,   method: [PATCH] }
+      - { fqn: retrofit2.http.HEAD,    method: [HEAD] }
+      - { fqn: retrofit2.http.OPTIONS, method: [OPTIONS] }
+      # `retrofit2.http.HTTP` is the eighth and is DELIBERATELY ABSENT, stated
+      # in COVERAGE §5.2 rather than left silent — and the reason is the engine,
+      # not the framework. Two of this grammar's fields are one-per-catalog and
+      # `@HTTP` needs both of them different:
+      #
+      #   * its path is in `path`, not `value`, and `path_from` above is one
+      #     list for every annotation in the file. Adding `path` to it would
+      #     make every OTHER annotation read a `path` attribute none of them
+      #     has — harmless today, and a rule nobody measured.
+      #   * its verb is a plain `String`, and `$method_from`'s read in
+      #     `derive_endpoints.sql` is
+      #     `regexp_extract(v, '#([A-Za-z0-9_]+)\.$')`, because every framework
+      #     this grammar serves holds its verb in an ENUM constant whose symbol
+      #     ends that way. On `@HTTP(method = "REPORT")` that extract returns
+      #     the EMPTY STRING, so the row would ship carrying a verb no evidence
+      #     supports — the exact fabrication §8 forbids, arrived at by deriving
+      #     on half a rule (§8.1 rule 4).
+      #
+      # `tests/application/test_endpoints.py` pins this boundary: a test asserts
+      # `@HTTP` derives nothing, so adding the row without the engine change
+      # goes red rather than quiet. It closes when `method_from` can name a
+      # plain-string attribute and `path_from` can be declared per annotation.
 
 # Shipped Jackson-converter-shaped (the common Spring Boot configuration);
 # Gson/Moshi naming annotations are a later catalog addition.
 wrappers:
   - { type: retrofit2.Call, payload_arg: 0, semantics: async }
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

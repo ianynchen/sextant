@@ -21,7 +21,6 @@ masked value still counts as present, compares equal across runs, and greps.
 import hashlib
 import json
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from sextant.domain.config_keys import normalize_key
@@ -66,22 +65,40 @@ BUILTIN_KEY_PATTERNS = (
 # a REFERENCE to a value, never the value, and there is no secret inside it.
 _USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
 
+# What a NAME looks like, for the paired rule `Redactor._masked` applies. A header
+# name, a query-parameter name or a form-field name is one token — letters,
+# digits and the three separators a name may carry — and never prose.
+#
+# The constraint is the whole reason the paired rule is safe. `redact_value`'s
+# substring match is right for a configuration key, where every key is already
+# a name; against arbitrary strings read out of bytecode it also matches log
+# formats ("Changed password for User: {}") and SQL ("UPDATE users SET
+# password=:password ..."), and the argument after either of those is not a
+# credential. Requiring the token shape separates them: measured over the
+# 6,185 call sites of `orders-service`, `jhipster-sample-app` and
+# `spring-petclinic-rest`, it pairs on exactly one string — an `Authorization`
+# header — and on none of the five prose and SQL strings a bare substring
+# match pairs on.
+_KEY_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
+
 
 class RedactionError(ValueError):
     """A redaction rule that cannot be honoured as written."""
 
 
-def _mapped_strings(node: object, apply: Callable[[str], str]) -> object:
-    """`node` with `apply` over every string leaf, structure untouched. Keys
-    are not leaves — an object key is a schema, and rewriting one would change
-    what a document MEANS rather than what it discloses."""
-    if isinstance(node, str):
-        return apply(node)
-    if isinstance(node, list):
-        return [_mapped_strings(item, apply) for item in node]
-    if isinstance(node, dict):
-        return {key: _mapped_strings(value, apply) for key, value in node.items()}
-    return node
+def _string_literal(node: object) -> str | None:
+    """One ARGUMENT-GRAMMAR entry's own string literal, or None for anything
+    else. The grammar is `{"kind": "string", "value": "..."}` — the shape
+    `call_sites.arguments`, `return_flows.value` and `method_returns.value`
+    carry, and the shape a `call_site` fact's payload nests under
+    `arguments`."""
+    if (
+        isinstance(node, dict)
+        and node.get("kind") == "string"
+        and isinstance(node.get("value"), str)
+    ):
+        return str(node["value"])
+    return None
 
 
 @dataclass(frozen=True)
@@ -193,16 +210,36 @@ class Redactor:
 
     def redact_json(self, text: str) -> str:
         """A JSON document with every STRING LEAF passed through
-        `redact_text` — userinfo stripping and the value patterns, never the
-        key-based rule.
+        `redact_text` — userinfo stripping and the value patterns — **plus the
+        one paired case where a literal NAMES the literal beside it.**
 
-        For the bundle exit's carried JSON columns (`call_sites.arguments`,
-        `annotations.args`): a call argument is not a configuration key, and
-        the path and URL literals in one are the wire identities the linking
-        tier matches services on. Key-based masking there would gut the bundle
-        to remove a secret that is not in it; what those strings DO carry, when
-        they carry anything, is an address with a credential in front of it —
-        which is exactly what `redact_text` takes out.
+        A call argument is not a configuration key, and applying the key rule
+        to every string here would mask the path and URL literals that ARE the
+        wire identities the linking tier matches services on (2K Task 1 review,
+        ruled). That ruling stands and this does not disturb it: no string is
+        masked for what it contains.
+
+        What the ruling did not cover is a NAME/VALUE PAIR, which is how a
+        credential actually reaches this grammar — `.header("Authorization",
+        "Bearer …")`, `.queryParam("api_key", …)`. W29 established that such a
+        header carries a credential and masks it into `endpoint_metadata` by
+        exactly this rule; the same bytes then shipped verbatim in
+        `call_sites.arguments` and in the `call_site` fact's payload, in the
+        same bundle, so the mask accomplished nothing. Measured on the
+        `orders-service` fixture before this existed: `Bearer
+        sk-live-fixture-secret` in two `graph/*.parquet` files in the clear.
+
+        So a string literal that IS a credential name — the token shape
+        `_KEY_TOKEN` requires, matched against the effective key set — masks
+        the literals of the argument that FOLLOWS it. Position is the only
+        evidence available: the grammar records an argument list, not a map,
+        and `.header(name, value)` is where the pairing lives.
+
+        **The boundary is the grammar.** Only `{"kind": "string"}` entries pair
+        and only within one list, so `annotations.args` — plain JSON with no
+        such entries — is untouched, and two adjacent bare strings are not
+        read as a pair. A credential passed as anything but a literal beside
+        its literal name is not reached here.
 
         Walks the parsed document rather than the raw text so the result is
         always valid JSON. Object KEYS are left alone: they are a schema, not
@@ -215,10 +252,70 @@ class Redactor:
         exported byte would move for nothing.
         """
         parsed = json.loads(text)
-        masked = _mapped_strings(parsed, self.redact_text)
+        masked = self._masked(parsed)
         if masked == parsed:
             return text
         return json.dumps(masked, ensure_ascii=False)
+
+    def _masked(self, node: object) -> object:
+        """`redact_json`'s walk: `redact_text` over every string leaf, and the
+        paired rule over every list."""
+        if isinstance(node, list):
+            masked: list[object] = []
+            names_the_next = False
+            for index, item in enumerate(node):
+                if names_the_next:
+                    names_the_next = False
+                    masked.append(self._masked_whole(item))
+                    continue
+                literal = _string_literal(item)
+                names_the_next = (
+                    literal is not None and self._names_a_secret(literal) and index + 1 < len(node)
+                )
+                masked.append(self._masked(item))
+            return masked
+        if isinstance(node, dict):
+            return {key: self._masked(value) for key, value in node.items()}
+        if isinstance(node, str):
+            return self.redact_text(node)
+        return node
+
+    def _masked_whole(self, node: object) -> object:
+        """One argument with every string literal in it replaced by the
+        marker, and its structure left exactly as it was.
+
+        Only the `value` of a `{"kind": "string"}` entry is replaced, never the
+        `kind` beside it — a walk that masked every string leaf would rewrite
+        the grammar's own discriminators and produce an argument list nothing
+        could read. The nesting is real: a varargs header value arrives as
+        `{"kind": "array", "elements": [...]}`, which is where the fixture's
+        `Bearer` token sits.
+        """
+        if isinstance(node, dict):
+            if _string_literal(node) is not None:
+                return {key: REDACTED if key == "value" else value for key, value in node.items()}
+            return {key: self._masked_whole(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._masked_whole(item) for item in node]
+        if isinstance(node, str):
+            return self.redact_text(node)
+        return node
+
+    def _names_a_secret(self, text: str) -> bool:
+        """Whether one string literal is a credential's NAME.
+
+        Two tests, and the token shape is the load-bearing one. `redact_value`
+        matches its key set as a substring, which is right where every input is
+        already a key; these inputs are arbitrary strings read out of bytecode,
+        where a substring match also fires on prose and SQL that merely mention
+        a credential — and the argument after "Changed password for User: {}"
+        is a username, not a secret. `_KEY_TOKEN` says the string is a name
+        rather than a sentence.
+        """
+        if _KEY_TOKEN.match(text) is None:
+            return False
+        normalized = normalize_key(text)
+        return any(pattern in normalized for pattern in self._key_patterns)
 
     def redact_text(self, text: str) -> str:
         """Free text — an address expression, a rendered line, a tool result —

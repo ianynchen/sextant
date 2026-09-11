@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
@@ -20,13 +21,32 @@ KNOWN_GAPS = [
     "http_exchange_inbound_use_not_detected",
     "computed_base_addresses_not_traced",
     "config_as_code_not_read",
-    "sequence_diagrams_pending_call_graph",
+    # *Two gaps retired BY NAME here (spec ruling I3), and five narrower ones
+    # took their place.* `sequence_diagrams_pending_call_graph` and
+    # `call_graph_not_implemented` both said the call graph does not exist;
+    # `## Traces` renders one per root, with a sequence diagram apiece, so
+    # keeping either would be the catalog lying in the opposite direction from
+    # usual. What is still true is smaller and more specific, and each of the
+    # five names exactly one thing a reader can act on.
+    "traces_are_reachability_not_execution",
     "structure_diagram_limited_to_contracts",
-    "call_graph_not_implemented",
-    "maven_parent_and_profile_resolution_not_implemented",
+    # *Renamed in W31 (spec ruling I3: a gap that NARROWS gets a narrower name).* W30
+    # narrowed the BEHAVIOUR and left this key and its sentence alone; both change here.
+    # Terminals
+    # are classified now — `Reaches` says `persistence (database)` where a JDK call says
+    # `unresolved` — so "terminals are unclassified" stopped being true. What is still
+    # true is the half W30 did not touch: a sibling build module's body exists somewhere
+    # and reads `boundary` here exactly like a third-party jar.
+    "cross_module_stops_look_third_party",
+    "a_method_is_expanded_once_per_trace",
+    "roots_are_declared_handlers_only",
+    # *Renamed by F1 (spec ruling I3: a gap that closes retires BY NAME).*
+    # Parent inheritance, `<dependencyManagement>`, imported BOMs and `${…}`
+    # interpolation ARE resolved now; profiles and transitives are not, and
+    # the name says only what is still true.
+    "maven_profile_and_transitive_resolution_not_implemented",
     "catalog_module_matching_not_implemented",
     "module_classification_evidence_incomplete",
-    "merged_endpoints_keep_only_the_handlers_contract",
     "shape_rules_unscoped_to_the_producing_catalog",
     "reactive_flow_not_traced",
     "payload_parsed_beyond_horizon",
@@ -38,8 +58,7 @@ def write_metadata(
     path: Path,
     module: ModuleModel,
     report: ResolveReport,
-    scanner_id: str,
-    scanner_version: str,
+    scanners: Sequence[ScannerProvenance],
     commit: str,
     uncovered: tuple[str, ...] = (),
     resolved_config: Sequence[dict[str, object]] = (),
@@ -50,9 +69,12 @@ def write_metadata(
 ) -> None:
     """Written as the final act of analyze (D05 §3), so it exists whenever the
     workspace does and always describes the graph beside it."""
-    # A `both` row (D02 §3) is a wire identity this module both exposes and
-    # calls, so it counts on both sides — bucketing on direction alone would
-    # drop it from whichever side is not its literal `direction` value.
+    # A `both` row is a wire identity this module both exposes and calls, so it counts
+    # on both sides — bucketing on direction alone would drop it from whichever side is
+    # not its literal `direction` value. **No pass produces one today** (F5 §6.1, W27):
+    # a module that serves and calls one identity keeps two rows and
+    # `resolve/self_exchange.py` files the question. The arm stays because `both` stays
+    # in D00 §4 for the linking tier, which is where the claim can be justified.
     inbound: dict[str, int] = {}
     outbound: dict[str, int] = {}
     for endpoint in report.endpoints:
@@ -69,12 +91,62 @@ def write_metadata(
             "id": module.module_id,
             "kind": module.kind,
             "languages": sorted(module.languages),
+            # What this module builds against, with the version each
+            # coordinate resolved to (F1). Here rather than only in the
+            # `module` fact because it is the one place a reader — a person, a
+            # later phase, or 2K's seat — can see the CONDITIONS every
+            # framework rule in this run was applied under: a rule is true of a
+            # version, and the estate has had no way to say which.
+            #
+            # A coordinate the resolution could not settle a version for is
+            # absent from this map and named, with why, in
+            # `dependencies_not_resolved` below. Sorted by the detector
+            # (NFR-1); the key is always present, empty where nothing was
+            # recorded, so it never reads as "no dependencies" by omission.
+            "dependencies": dict(module.dependency_versions),
+            # F8 §9.3 (W35). Where this module's sources live, RELATIVE TO ITS
+            # ROOT — whatever directories the build declares as source.
+            #
+            # A `document`'s `relative_path` is a package path
+            # (`com/macro/mall/OmsOrderController.<ext>`), which is relative to
+            # one of these and openable against nothing on its own. The index
+            # joins the two, and it is recorded here because `export` reads
+            # what `analyze` left and never re-detects (M08) — so a root the
+            # detector found at analyze time has to be written down then or it
+            # is gone.
+            #
+            # Relative and POSIX-spelled, so a bundle moved to another machine
+            # still resolves: an absolute path names a directory that exists on
+            # exactly one computer, which is not what a portable bundle can
+            # carry. Sorted for NFR-1, and empty for a module whose build
+            # declares none rather than defaulted to a convention nobody read.
+            "source_roots": sorted(
+                root.relative_to(module.root).as_posix()
+                for root in module.source_roots
+                if root.is_relative_to(module.root)
+            ),
         },
         "provenance": {
             "commit": commit,
             "sextant_version": SEXTANT_VERSION,
             "fact_schema_version": FACT_SCHEMA_VERSION,
-            "scanners": [{"id": scanner_id, "version": scanner_version}],
+            # EVERY facility that produced a document, not the one the class
+            # scanner happened to report. This field has always been a LIST and
+            # was always handed a single entry, so `sextant-config-reader` and
+            # `sextant-detector` — which between them wrote 11 of a fixture
+            # module's 117 documents — were absent from a bundle's provenance.
+            #
+            # `libraries` is present only where a facility runs THIRD-PARTY
+            # code that can move without Sextant moving — each backend reports
+            # its own, and which they are is that adapter's business
+            # (ARCHITECTURE §10). Omitted, not written empty, for a facility
+            # that ships inside the wheel: its version is `sextant_version`
+            # beside it, and a second copy of that number is what this change
+            # removes.
+            "scanners": [
+                {"id": one.id, **({"libraries": list(one.libraries)} if one.libraries else {})}
+                for one in scanners
+            ],
         },
         "coverage": report.coverage,
         # The profiles this module resolved (D06 §3 "environments" — the
@@ -111,6 +183,14 @@ def write_metadata(
         # the scanner failing on an archive it did find (the file is corrupt).
         "libraries_not_resolved": list(module.libraries_not_resolved),
         "libraries_not_scanned": list(libraries_not_scanned),
+        # F1's own gap list, carried for the same FR-17 reason and read the
+        # same way: a coordinate whose VERSION this analysis could not settle,
+        # and every ancestor pom or imported BOM it could not open. It is what
+        # makes `module.dependencies` an honest map rather than a silently
+        # short one — a reader comparing the two can see exactly which
+        # dependencies have no version and why, which is the difference
+        # between "this rule does not apply" and "nobody could tell".
+        "dependencies_not_resolved": list(module.dependencies_not_resolved),
         "endpoints": {"inbound": inbound, "outbound": outbound},
         # The count says how much was expanded; the list says what was not, by
         # name. Both, because a reader who only knows how many shapes exist

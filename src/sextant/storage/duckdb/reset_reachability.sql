@@ -1,0 +1,20 @@
+-- Clears F8 §9.4's reachability for one resolve.
+--
+-- Runs from the PASS rather than from the pipeline, the reset_roots.sql
+-- precedent and for the same reason: `reachability` has exactly one writer,
+-- `resolve/reachability.py`, so reset and insert belong together there.
+--
+-- **W37 shipped without one, and it was the only insert in the whole
+-- derivation map that had no reset beside it.** `load_facts` clears
+-- `raw_facts` and every other derived table clears itself, so a second
+-- `analyze` over one workspace left `reachability` alone doubled: 190 rows
+-- became 380 with 190 duplicated (root, symbol) pairs, and they shipped in the
+-- exported parquet. Re-running `analyze` on a workspace is the ordinary act —
+-- it is what `_refuse_if_unanalyzed` tells a reader to do when the build stamps
+-- go stale — and every consumer asking what a handler reaches would have
+-- silently got twice the answer, then three times.
+--
+-- The table is never dropped: schema.sql pre-declares it so the export query
+-- still succeeds on a module with no roots at all. Unconditional, so a resolve
+-- that walks nothing leaves an empty table rather than the previous run's rows.
+DELETE FROM reachability;

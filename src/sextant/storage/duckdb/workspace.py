@@ -80,6 +80,28 @@ _NAMED_QUERIES = {
     # so a field written by more than one constructor overload reads its
     # candidates together, `from_parameter` breaking the tie (NFR-1).
     "field_writes": "SELECT field, from_parameter FROM field_writes ORDER BY field, from_parameter",
+    # D00 §5's `method_return` (capability 9.18): what each method hands back,
+    # one row per return instruction. 2Q's `G3` — cross-method return
+    # propagation — is its consumer, and the first one: OI-15 recorded the
+    # gap between the fact shipping and a reader existing, and this query is
+    # half of closing it.
+    #
+    # `value` stays JSON and is parsed by the caller, exactly as
+    # `call_sites.arguments` is: it is an entry of D00 §5's argument grammar,
+    # and a void return's explicit JSON `null` says something a
+    # `{"kind":"unresolved"}` does not. Ordered by `method, ordinal` so a
+    # method with two `return` statements reads its two answers in
+    # instruction order, twice (NFR-1) — the same total ordering
+    # `call_sites` takes for the same reason.
+    "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    # 2Q `G3`'s own derived table. Ordered so a site's candidate callees and
+    # each callee's several returns read in one fixed order (NFR-1); `caller,
+    # ordinal` alone is not total, since a site whose dispatch narrowed to
+    # two implementations contributes a row per implementation.
+    "return_flows": """
+        SELECT caller, ordinal, result, callee, return_ordinal, value, resolution, evidence
+        FROM return_flows ORDER BY caller, ordinal, callee, return_ordinal
+    """,
     # D00 §5a's PTR carrier: every declared type's own generic supertype
     # reference, keyed by the type's own (module-prefixed) symbol — the
     # `single_call` engine strips the prefix itself, the same way
@@ -94,6 +116,7 @@ _NAMED_QUERIES = {
         SELECT payload ->> 'symbol' AS symbol, payload -> 'supertype' AS supertype
         FROM raw_facts
         WHERE kind = 'symbol' AND json_type(payload -> 'supertype') NOT IN ('NULL')
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
     # `implemented_interfaces`: every class symbol's own declared interfaces,
@@ -110,7 +133,63 @@ _NAMED_QUERIES = {
         SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
         FROM raw_facts
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
+          AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
+    """,
+    # Capability 9.13's own erased-superclass carrier (2O design §1b, Task 5):
+    # every class symbol that declares one, keyed by the class's own
+    # (module-prefixed) symbol, its `superclass` alongside it — unlike
+    # `interfaces` above, both sides arrive ALREADY module-prefixed in the
+    # real emitted fact (`ClassScanner`'s `erasedSuperclassJson` writes the
+    # full symbol form directly, not the bare descriptor `interfaces`
+    # entries carry), so no strip-then-reprefix step is needed at either
+    # side of a join against `symbols`/`superclasses` itself. A plain TEXT
+    # field, not a JSON one — `payload ->> 'superclass'` alone already
+    # excludes an absent key (SQL NULL) the way `supertype`'s own
+    # `json_type(...) NOT IN ('NULL')` guard has to spell out, because
+    # `superclass` was never given a `null`-writing Python default the way
+    # `supertype`'s PTR carrier was (D00 §5a). `supertype_derived`'s own
+    # "the extends target is itself in the module's facts" test reads this
+    # alongside `declared_symbols`. The parens around `(payload ->>
+    # 'superclass')` are load-bearing, not stylistic: this DuckDB build binds
+    # `AND` tighter than a bare `->>` immediately after it, so
+    # `kind = 'symbol' AND payload ->> 'superclass' IS NOT NULL` parses as
+    # `(kind = 'symbol' AND payload) ->> 'superclass' IS NOT NULL` and fails
+    # casting the JSON `payload` column to a boolean — reproduced directly
+    # against `raw_facts` before this fix landed, not a guess.
+    "superclasses": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'superclass' AS superclass
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'superclass') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
+    # Every declared method's own enclosing type and visibility (2O design
+    # §1b, Task 5): `method_declarations` above carries `signature` instead,
+    # which this join has no use for, and `method_symbols` carries neither
+    # `enclosing` nor `visibility` at all — `supertype_derived`'s own
+    # `overridden_public_methods` evidence needs both, to tell an
+    # implementer's own override from an unrelated same-named method
+    # elsewhere in the module AND to gate it on visibility (D00 §5a: `public`
+    # or `other`, the same column `mapping.members: public_methods` already
+    # reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
+    # share the module-prefixed coordinate space `effective_annotations.py`'s
+    # own `method_declarations` join already relies on. Ordered by symbol for
+    # the same reason every other declaration-level query here is.
+    #
+    # `static` comes through for the same reason it does on `fields` above —
+    # the declaring language is the only thing that can say it, and a reader
+    # enumerating an interface's exposed members has to tell a member bound to
+    # the TYPE from one bound to an instance. `derived_resource` is that reader
+    # (fix round 3, I-3): a `static` helper on a Spring Data repository is not
+    # a query method, and deriving a `/search/` route for one publishes a URL
+    # the framework does not serve. False where a scanner reports no modifiers
+    # at all — an absent answer is not a claim that the method is static.
+    "method_visibility": """
+        SELECT symbol, enclosing, visibility,
+               coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static"
+        FROM symbols
+        WHERE construct_kind = 'method' ORDER BY symbol
     """,
     # Every `declared_shape` fact (2G design §3), keyed by its own `symbol` —
     # the generated class a compiled schema type travels as, or the schema's
@@ -131,15 +210,29 @@ _NAMED_QUERIES = {
     # `schema_operations` engine (D02 §2, 2H design §3): the operation root a
     # type serves, where its schema names one — re-added here WITH a consumer,
     # which is the rule the 2G trim enforced, and read by nothing else.
-    # `schema_name`/`origin` stay unselected — DR-4 precedence is settled
-    # upstream, in `analyze`'s `_prefer_compiled`, before a fact reaches this
-    # table.
+    # `operation` (2O design §1a) is that same engine's consumer, one role
+    # later: the `{input_ref, output_ref, client_streaming, server_streaming}`
+    # sub-record a `role == "operation"` shape carries, SQL NULL for every
+    # other shape (the amendment added the key; it did not fill it
+    # retroactively). `schema_name`/`origin` stay unselected — DR-4 precedence
+    # is settled upstream, in `analyze`'s `_prefer_compiled`, before a fact
+    # reaches this table.
     "declared_shapes": """
         SELECT payload ->> 'symbol'        AS symbol,
                payload ->> 'evidence'      AS evidence,
                payload ->> 'schema_format' AS schema_format,
                payload ->> 'role'          AS role,
-               payload ->  'fields'        AS fields
+               payload ->  'operation'     AS operation,
+               payload ->  'fields'        AS fields,
+               -- F4 §5.2 (W24). `schema_operations` mints rows with NO handler and no
+               -- caller — its own docstring's "the schema names no code" — so
+               -- `drop_borrowed_endpoints.sql` has nothing on such a row to key on.
+               -- The tier is projected here instead, and that engine filters its own
+               -- roots: a dependency's `.proto` describes the DEPENDENCY's service,
+               -- and publishing its operations as this module's API is the same
+               -- fabrication by a route the delete cannot reach.
+               (SELECT d.origin_tier FROM documents d
+                 WHERE d.document_id = raw_facts.document_id) AS origin_tier
         FROM raw_facts WHERE kind = 'declared_shape'
         ORDER BY symbol, document_id
     """,
@@ -167,8 +260,16 @@ _NAMED_QUERIES = {
     # meta-annotations are followed at all — the jar half (D02 §7) never
     # does. `method_symbols` above cannot serve this; a composing type is
     # never a method.
+    # BOTH kinds, and `annotation` is the one this exists for: an `@interface`
+    # reported `construct_kind: "interface"` until W7 read `ACC_ANNOTATION`, which
+    # is why the query is named for the kind it was never really about. Dropping
+    # `annotation` here loses every composed mapping — measured on the fixture,
+    # `@ApiGet` and `@OrderTopicListener` took `GET /api/composed`, `GET /composed`
+    # and the `composed-orders` listener with them. Plain interfaces stay in the
+    # set because they were always in it and nothing measured says they should go.
     "interface_symbols": """
-        SELECT symbol FROM symbols WHERE construct_kind = 'interface' ORDER BY symbol
+        SELECT symbol FROM symbols
+        WHERE construct_kind IN ('interface', 'annotation') ORDER BY symbol
     """,
     # Every declared method's own enclosing type and signature JSON,
     # module-prefixed exactly as the fact wrote them (D00 §5a) — checkpoint
@@ -187,9 +288,59 @@ _NAMED_QUERIES = {
     # has none — there is no hierarchy for it to inherit through, so
     # widening this query to `IN ('method', 'function')` would only ever add
     # rows this pass's own `enclosing IS NULL` guard immediately drops.
+    # `modifiers` carries D00 §5a's `synthetic`, which folds in `ACC_BRIDGE`
+    # because javac sets the two together. The effective-annotations walk needs
+    # it to tell a method a human wrote from the forwarder javac generates
+    # beside it — a distinction it used to infer from the two having the same
+    # name and different return types, which sees a covariant bridge and is
+    # blind to a generic-parameter one.
     "method_declarations": """
-        SELECT symbol, enclosing, signature FROM symbols
+        SELECT symbol, enclosing, signature, modifiers FROM symbols
         WHERE construct_kind = 'method' ORDER BY symbol
+    """,
+    # F4 §5.2 (W26). The same method rows as `method_declarations` above PLUS
+    # `visibility`, for shape expansion's bean-accessor fallback: a payload type whose
+    # fields yield no wire contract is described from its public accessors instead, and
+    # "public" is the half neither existing query carries beside a signature.
+    # `method_declarations` has the signature and no visibility; `method_visibility` has
+    # the visibility and no signature. Joining the two in Python would make the accessor
+    # set depend on two queries agreeing about which rows exist, which is a second place
+    # for the answer to be wrong. Widening `method_declarations` itself would change what
+    # its existing readers select, the reason `declared_symbols_with_documents` was added
+    # beside `declared_symbols` rather than replacing it.
+    # Narrowed here rather than in Python because these three are the ACCESSOR's own
+    # definition, not one shape model's opinion: a `serialization.accessors` entry
+    # constrains the method NAME and optionally its return's wire type, so it can narrow
+    # this set further but can never make a private, parameterised or `void` method an
+    # accessor. Pushing them down is what keeps the pass from parsing the `signature`
+    # JSON of every method in the workspace — on `mall-admin` that is tens of thousands
+    # of rows, and this runs once per catalog.
+    #
+    # **The no-value test is on `wire_type`, not on the key's presence**, and the first
+    # version got that wrong (W26 review). `json_type(... -> 'returns') NOT IN ('NULL')`
+    # reads as "the scanner omitted the key for a method that returns nothing", and no
+    # scanner does that: `returns` is ALWAYS written, and a no-value one is a JSON OBJECT
+    # like any other. Six such methods passed this filter on the fixture, and one named
+    # `getNothing` would have reached `shape_fields` as a field called `nothing` with
+    # `wire_type: ''` — a value outside D00 §5b's vocabulary, in the export.
+    #
+    # `wire_type = ''` is the projection's own answer for "reaches no wire type at all",
+    # and it covers both the no-value return and the uninstantiable placeholder TYPE
+    # beside it, which a test on the type's own name would have let through. Asking the
+    # projection rather than the name is also what keeps a language's spelling out of
+    # this layer (`test_language_confinement`).
+    #
+    # `visibility` is in the WHERE and NOT in the SELECT: the narrowing is this query's
+    # whole contribution over `method_declarations`, and no reader wants the value back.
+    # It was projected until W26's review, which read the comment above as saying the
+    # column travels to the caller.
+    "accessor_declarations": """
+        SELECT symbol, enclosing, signature, modifiers FROM symbols
+        WHERE construct_kind = 'method'
+          AND visibility = 'public'
+          AND coalesce(signature -> 'returns' ->> 'wire_type', '') <> ''
+          AND coalesce(json_array_length(signature -> 'parameters'), 0) = 0
+        ORDER BY symbol
     """,
     # Every declared constructor's own enclosing type and signature JSON —
     # the field ladder's rung 2 (2F design §4). A `field_write` fact names
@@ -213,10 +364,95 @@ _NAMED_QUERIES = {
     # One column, because existence is the whole question. Ordered by symbol
     # for NFR-1, like every other projection here.
     "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
+    # W4b: JVMS 4.7.28's `NestHost` — the TOP-LEVEL type whose nest a nested type
+    # belongs to, which three engines had been deriving by splitting a binary name
+    # on `$`. Only a nested type above a certain class-file version carries it, so
+    # this is a partial map by construction and its reader falls back rather than
+    # treating an absent row as "already top-level".
+    "nest_hosts": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'nest_host' AS nest_host
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'nest_host') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
+    # Every declared INTERFACE with the three things a supertype-shaped match
+    # asks of it (2O design §2a, Task 6): its own visibility, its erased
+    # superinterfaces, and capability 9.14's parameterized references to them.
+    # Read from `raw_facts` rather than the `symbols` view because that view
+    # projects neither list — and both are needed together: `interfaces` is
+    # what the closure walk follows, `generic_interfaces` the only place a
+    # superinterface's TYPE ARGUMENTS survive (`interfaces` erases
+    # `CrudRepository<Order, Long>` to a bare symbol), and joining two queries
+    # on symbol would only rebuild this row.
+    #
+    # `generic_interfaces` is SQL NULL for a class the extractor found nothing
+    # generic on — the emitter writes the key only when it has one — which is
+    # a different absence from an empty array and is read as the same "nothing
+    # parameterized here" by the caller.
+    "interface_declarations": """
+        SELECT payload ->> 'symbol'            AS symbol,
+               payload ->> 'visibility'        AS visibility,
+               payload -> 'interfaces'         AS interfaces,
+               payload -> 'generic_interfaces' AS generic_interfaces
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'construct_kind') = 'interface'
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
+    # D00 §5's `module` fact, as the one question a catalog asks of it today
+    # (2O design §2a, ruling R9): which `groupId:artifactId` coordinates this
+    # module's build declares. The JSON array is projected whole and parsed by
+    # the reader, the same way `implementations` hands `interfaces` over —
+    # unnesting it here would need a second column to keep the ordering
+    # deterministic, and the list is small enough that the reader's own set is
+    # cheaper. NO ROW AT ALL is the honest answer for a workspace whose facts
+    # predate the module fact, or one a test built by hand, and it is a
+    # DIFFERENT answer from an empty array (a build that declares nothing) —
+    # which is why the gate distinguishes them.
+    # `dependency_versions` rides the same row (F1): the version each of those
+    # coordinates resolved to, projected whole for the same reason the
+    # coordinates are. A coordinate ABSENT from the map is a version this
+    # analysis could not read, which is a different answer from a dependency
+    # with no version — so a reader scoping a rule to a version must treat the
+    # absence as unanswerable, exactly as the gate treats a missing row.
+    "module_dependencies": """
+        SELECT payload ->> 'module_id'            AS module_id,
+               payload -> 'dependency_coordinates' AS dependency_coordinates,
+               payload -> 'dependency_versions'    AS dependency_versions
+        FROM raw_facts WHERE kind = 'module'
+        ORDER BY module_id
+    """,
     "coverage": """
         SELECT count(*) AS documents,
                sum(CASE WHEN partial THEN 1 ELSE 0 END) AS partial_documents
         FROM documents
+    """,
+    # FR-17 clause 3 (F8 §9.5, W38). How much was UNDERSTOOD, beside how many files were
+    # opened. Three GROUP BYs on columns that already exist, composed into `coverage` by
+    # `resolve/pipeline.py` — the vocabulary is D00's closed sets and folding rows into a
+    # summary is Python's job, not a CASE expression's.
+    "resolution_distribution": """
+        SELECT resolution AS bucket, count(*) AS edges
+        FROM call_edges GROUP BY 1 ORDER BY 1
+    """,
+    # The number the one above cannot give. `resolution` says whether DISPATCH settled a
+    # call; it reads 100% `resolved` on two of the four measured corpora, because naming a
+    # target the compiler wrote is easy and reading its BODY is the hard part. This says
+    # how often the body was there: `mall-admin` 78%, and 32% on the three that depend
+    # heavily on libraries nobody scanned.
+    "reach_distribution": """
+        SELECT CASE WHEN callee IS NULL THEN 'boundary' ELSE 'body_read' END AS bucket,
+               count(*) AS edges
+        FROM call_edges GROUP BY 1 ORDER BY 1
+    """,
+    # WHY a body was not reached, which is what makes the reach rate actionable: an owner
+    # in an unscanned jar is a scanning decision, `no_declaration_found` is a defect.
+    # Keyed per (class, name, descriptor) rather than per edge — that is the grain the
+    # lookup itself answers at (JVMS 5.4.3.3, F3 §4.2).
+    "method_resolution_distribution": """
+        SELECT reason AS bucket, count(*) AS methods
+        FROM method_resolution GROUP BY 1 ORDER BY 1
     """,
     # `resolve/config.py`'s own input: every config_entry, in declaration
     # order within its document (`config_entries.seq`, D00 §5c) and its
@@ -350,37 +586,160 @@ _NAMED_QUERIES = {
         WHERE d.origin IS NOT NULL
         ORDER BY symbol
     """,
+    # The two NON-WIRE tables (2O design §4). Ordered on their whole content
+    # rather than on a key, for the reason `open_questions` above states: these
+    # rows carry no wire identity to order by, and an ordering with ties is one
+    # that can change between runs (NFR-1). Two `@Scheduled` methods sharing a
+    # trigger and an expression are two real rows — nothing but the handler
+    # tells them apart — so the handler leads, and `catalog_id` closes the tie
+    # a second catalog claiming the same annotation would otherwise leave open.
+    "scheduled_work": """
+        SELECT handler, trigger, expression, resolution, evidence, catalog_id
+        FROM scheduled_work
+        ORDER BY handler, trigger, expression, resolution, evidence, catalog_id
+    """,
+    # `scope` is cast to text in the ORDER BY for the reason `open_questions`
+    # casts `candidates`: it is a JSON document, DuckDB has no ordering for
+    # one, and it is the column that differs between two rows agreeing on
+    # everything to its left.
+    "error_handlers": """
+        SELECT handler, advice, declared_by, scope, exception, status,
+               response_shape, resolution, evidence, catalog_id
+        FROM error_handlers
+        ORDER BY advice, handler, exception, status, response_shape,
+                 declared_by, scope::VARCHAR, resolution, evidence, catalog_id
+    """,
+    # 2Q `I1`'s root set — the methods a trace starts at, with the kind of
+    # thing that starts it and the wire address that reaches it. Ordered on the
+    # whole row because that is all there is: `handler` alone is not total (one
+    # method can be both the target of a request and the target of a clock,
+    # which is two rows and two different answers, and one handler can serve
+    # three addresses, which is three rows `roots_of` collapses back into one
+    # root), and an ordering with ties is one that can change between runs
+    # (NFR-1) — the `scheduled_work` reasoning, one table on.
+    "roots": """
+        SELECT handler, root_kind, protocol, method, path
+        FROM roots
+        ORDER BY handler, root_kind, protocol, method, path
+    """,
+    # F8 §9.4's reachability (W37). The pass that WRITES this table has no need to read it
+    # back, so it shipped with an export query and no named one — which meant nothing
+    # in-process could see it and every check on its content had to open the parquet.
+    # Ordered `root, depth, symbol` rather than the pass's own `root, symbol`: depth is
+    # what a reader slices on ("what does this handler call directly"), and it is total
+    # with `symbol` behind it because one (root, symbol) is one row by construction.
+    "reachability": """
+        SELECT root, symbol, depth, terminal
+        FROM reachability
+        ORDER BY root, depth, symbol
+    """,
+    # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
+    # dispatch narrowed to two bodies is two rows — so `target` and `callee`
+    # close it; `callee` is last because it is the column those two rows differ
+    # in, and NULLs sort together at one end rather than interleaving (NFR-1).
+    #
+    # Ordered by `ordinal` within a caller and NOT by anything else first,
+    # because that order is the answer: it is the control-flow position the
+    # statements were written in, and it is what gives a walk over these rows
+    # its nesting.
+    # F3 §4.2's two resolution tables. Ordered by their own search order rather than
+    # alphabetically: `position` is what decides which ancestor answered, so a reader
+    # sorting these rows any other way is reading them wrong.
+    # F4 §5.2 (W25). The formal type parameters a generic declaration introduces, in
+    # DECLARATION ORDER — which is what binds them to a reference's own `arguments`:
+    # `CommonResult<T>` seen as `CommonResult<UmsAdmin>` binds `T` to `UmsAdmin` by
+    # position, and a list that lost its order would bind the wrong one silently.
+    # Emitted only where a declaration HAS parameters (`ClassScanner`'s "nothing
+    # generic, nothing captured" rule), so an absent row means a non-generic type.
+    # A declared symbol with the document that declared it, so a consumer can ask where
+    # a type came from (W25's `shapes.origin_tier`). `declared_symbols` answers the
+    # symbol alone, and widening it would change what every existing reader gets.
+    "declared_symbols_with_documents": ("SELECT symbol, document_id FROM symbols ORDER BY symbol"),
+    # F8 §9.3 (W35). Everything the index needs to PLACE a symbol, in one query: the
+    # symbol, the document that declared it, its kind and enclosing type, and the line
+    # extent `LineNumberTable` gave it.
+    #
+    # Its own query rather than widening `declared_symbols_with_documents`, whose two
+    # readers want exactly two columns — the reason `declared_symbols_with_documents` was
+    # added beside `declared_symbols` rather than replacing it.
+    #
+    # `line_start`/`line_end` are 0 where the class file states none, which for a TYPE or a
+    # FIELD is always: neither carries a `LineNumberTable`. The index turns that 0 into a
+    # NULL, because "the class file does not say" and "line zero" are different things.
+    # F8 §9.3 (W35). Every document's path AND where its class file was read from, which
+    # is what lets the index reach a SIBLING module's sources: the sibling's own root is
+    # the parent of its `target/classes`, and nothing else in the workspace names it.
+    "located_documents": """
+        SELECT document_id, relative_path, origin_entry FROM documents ORDER BY document_id
+    """,
+    # F8 §9.3 (W36 review). The annotation view WITH its document, which is what places an
+    # annotation whose target is not a symbol: a package declaration
+    # (`…/package-info#`) has no symbol row of its own, so `NullMarked` — a scope rule
+    # covering every type in the package — came out of the index with `file: null`.
+    "located_annotations": """
+        SELECT target, annotation, document_id FROM annotations
+        ORDER BY target, annotation, document_id
+    """,
+    "located_symbols": """
+        SELECT symbol, document_id, construct_kind, enclosing, line_start, line_end
+        FROM symbols ORDER BY symbol
+    """,
+    "type_parameters": """
+        SELECT payload ->> 'symbol'         AS symbol,
+               payload ->  'type_parameters' AS type_parameters
+        FROM raw_facts
+        WHERE kind = 'symbol'
+          AND json_type(payload -> 'type_parameters') NOT IN ('NULL')
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
+    "type_hierarchy": "SELECT * FROM type_hierarchy ORDER BY child, position, ancestor",
+    # F5 §6.2 (W29). Ordered on the whole row because nothing shorter is total: one call
+    # may carry several headers, and two callers may reach one address with different ones
+    # — so the endpoint columns alone tie, and `kind, name` ties for a repeated header
+    # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
+    "endpoint_metadata": """
+        SELECT protocol, direction, method, path, caller, kind, name, value,
+               resolution, evidence
+        FROM endpoint_metadata
+        ORDER BY protocol, direction, method, path, caller, kind, name, value,
+                 resolution, evidence
+    """,
+    "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
+    "call_edges": """
+        SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence,
+               terminal_kind, target_kind
+        FROM call_edges ORDER BY caller, ordinal, target, callee
+    """,
     # A cheap read of what `analyze` already loaded — for `render`, which
     # queries the workspace instead of reloading fact files from disk.
     "facts": "SELECT count(*) AS facts FROM raw_facts",
+    # Which documents survived multi-release selection (W3c). Its own named
+    # query so the export and any reader ask the same question, ordered so the
+    # answer is stable between runs (NFR-1).
+    "selected_documents": "SELECT * FROM selected_documents ORDER BY document_id",
+    # D00 §5's `constant` (W4), which had no producer until `ConstantValue` was
+    # read. Ordered on the symbol, which is unique per field.
+    "constants": "SELECT * FROM constants ORDER BY symbol",
 }
 
-# The tables a bundle carries (D06 §5). `documents`, `endpoints`,
-# `resolved_config`, `shapes`, `shape_fields`, `call_sites` and
-# `open_questions` (2G Task 8) export through their named query, so the row
-# order is the one NFR-1 already fixed; `symbols` and `annotations` export
-# through their own ordered SELECT below, for the same reason — `symbols` has
-# no whole-row named query to reuse (`declared_symbols` above projects the one
-# column existence checking needs, not the table). Sorted by name so the
-# manifest's contents list is deterministic too.
-_EXPORTED_TABLES = (
-    "annotations",
-    "call_sites",
-    "documents",
-    "endpoints",
-    "open_questions",
-    "resolved_config",
-    "shape_fields",
-    "shapes",
-    "symbols",
-)
-
-# What the export PROJECTION masks (2K design §1) — five tables plus the fact
-# stream, each named where its own query below says why: `endpoints.path`/
-# `.peer` and `open_questions.path` (the address columns), `resolved_config`'s
-# `value` (the key-pattern rule), the JSON in `call_sites.arguments` and
-# `annotations.args` (userinfo over every string leaf), and `config_entry` fact
-# payloads on their way into the bundle's parquet (`_stage_fact_redactions`).
+# What the export PROJECTION masks (2K design §1), each named where its own
+# query below says why. THREE MAPS, one per rule, because the rule is the thing
+# that must not be duplicated — not the column:
+#
+#   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`
+#   the grammar  `call_sites.arguments`, `annotations.args`,
+#                `return_flows.value`, `method_returns.value`
+#   config       `resolved_config.value`, `config_entries.value`, and
+#                `config_entry` fact payloads (`_stage_fact_redactions`, joined
+#                by BOTH the `facts/*.parquet` stream and `graph/raw_facts`)
+#
+# A column joins the map its VALUE belongs to, never one chosen per table:
+# `roots.path` is carried column-for-column from the endpoint that named the
+# handler, so a root masked by a different map would name a different thing;
+# and all four grammar columns are built from the same string constants read
+# out of bytecode, so a hardcoded `https://user:pass@host` reaches a bundle
+# through any of them.
 # The masking is here and only here: the workspace itself keeps verbatim values,
 # because analysis needs them — peer resolution substitutes real addresses —
 # and the user's own disk is not the trust boundary. The bundle is.
@@ -396,7 +755,35 @@ _REDACTED_CONFIG_VALUES = "redacted_config_values"
 _REDACTED_ADDRESSES = "redacted_addresses"
 _REDACTED_JSON = "redacted_json"
 _REDACTED_PAYLOADS = "redacted_payloads"
+# `config_entries` is the RAW half of what `resolved_config` holds resolved —
+# the same values, before the resolver joined them — so it masks by the same
+# rule through the same `Redactor.redact_value`, keyed on the entry's own
+# `key_path` exactly as `redact_config_entry_line` keys it. Its own map rather
+# than `_REDACTED_CONFIG_VALUES` because the two are keyed on different key
+# spellings: a raw entry's `key_path` and a resolved row's `key` are not
+# always the same string, and a join across them would silently miss.
+_REDACTED_ENTRY_VALUES = "redacted_entry_values"
 
+# One query per table and view IN THE SCHEMA — all of them, with no exclusion
+# class. The ratchet runs the direction that catches the defect: an object in
+# `schema.sql` with no query here is a TEST FAILURE
+# (`tests/storage/test_workspace.py`), not a quiet omission.
+#
+# It used to be eleven hand-listed names, and the SEVEN they omitted —
+# `raw_facts`, `call_edges` (1,393 rows on `mall-admin`), `return_flows` (444),
+# `roots` (79), and the three views `config_entries`, `field_writes` and
+# `method_returns` — were dropped from every bundle with nothing saying so. A
+# consumer could read a rendered trace and had no way to recompute or check
+# what it asserted. Ruled by the user: **nothing is dropped on export.**
+# Parquet, DuckDB and the indices exist so an agent or a program can query
+# fast, and making a consumer re-derive what we already hold is the friction
+# the format removes.
+#
+# `_EXPORTED_TABLES` is DERIVED from this dict rather than restated beside it,
+# so adding a table asks its author exactly two questions and neither can be
+# skipped: *does it export?* — write the query or the ratchet fails — and *does
+# analysis read its values?* — yes keeps the real value and redacts here, no
+# redacts at the origin instead (§6.2). There is no third answer to either.
 _EXPORT_QUERIES = {
     "documents": _NAMED_QUERIES["documents"],
     # `path` and `peer` are the columns that can carry a whole address (D01
@@ -436,6 +823,17 @@ _EXPORT_QUERIES = {
     """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
+    # The two non-wire tables export through their named query verbatim, and
+    # the reason is that NEITHER carries a masked column. `_REDACTED_ADDRESSES`
+    # exists for the columns that can hold a whole URL — `endpoints.path`/
+    # `.peer` and the ledger's `path` — and neither of these tables has one: a
+    # trigger expression is a cron string or a delay, a scope attribute is a
+    # package or a type, and a status is a status. `_REDACTED_CONFIG_VALUES`
+    # keys on `resolved_config`'s own (key, value) pairs, which nothing here
+    # holds either. Stated rather than left to inference, because "this table
+    # is exported unmasked" is the claim a reviewer has to be able to check.
+    "scheduled_work": _NAMED_QUERIES["scheduled_work"],
+    "error_handlers": _NAMED_QUERIES["error_handlers"],
     # `arguments` and `args` carry JSON the analysis read out of code, and a
     # hardcoded `https://user:pass@host` literal lands in one whole. They pass
     # `redact_json` — userinfo stripping over every string leaf — and NOT the
@@ -457,13 +855,134 @@ _EXPORT_QUERIES = {
         LEFT JOIN {_REDACTED_JSON} j ON j.original = a.args::VARCHAR
         ORDER BY a.target, a.annotation, a.type_path, a.args
     """,
+    # ---- The six a bundle used to drop, plus the fact table itself (C10) ----
+    #
+    # The fact stream ALSO travels as `facts/<document_id>.parquet`, one file
+    # per document, which is the shape a reader wanting ONE document's facts
+    # needs. This is the other shape: the whole table, queryable in a single
+    # scan beside the derived tables it explains. Same rows, same mask, same
+    # `_REDACTED_PAYLOADS` map — `export_facts` and this cannot disagree,
+    # because there is one map and one redactor behind both.
+    #
+    # `rowid` is the order the facts were loaded in, which is the order the
+    # fact files declare them in (D00 §7) — the same ordering `export_facts`
+    # already ships on, reused rather than invented.
+    "raw_facts": f"""
+        SELECT f.kind, f.document_id, coalesce(m.masked::JSON, f.payload) AS payload
+        FROM raw_facts f
+        LEFT JOIN {_REDACTED_PAYLOADS} m ON m.original = f.payload::VARCHAR
+        ORDER BY f.rowid
+    """,
+    # Carries a whole address in `path` — copied column-for-column from the
+    # `endpoints` row that named the handler — so it masks through the SAME
+    # address map those columns and `open_questions.path` use. A root masked
+    # differently from the endpoint it was carried from would name two
+    # different things.
+    #
+    # Ordering is the named query's, which is total where `handler` alone is
+    # not: one method can be both a request target and a clock target, and one
+    # handler can serve three addresses.
+    # F8 §9.4 (W37). The alternate orderings. Their masking is their base table's, applied
+    # again here rather than referenced: `roots.path` is an address, and a second file of
+    # the same rows that skipped the mask would be the leak the index bundle just had.
+    "call_edges_by_callee": (
+        "SELECT * FROM call_edges_by_callee ORDER BY callee, caller, ordinal, target"
+    ),
+    "roots_by_address": f"""
+        SELECT r.handler, r.root_kind, r.protocol, r.method,
+               coalesce(a.masked, r.path) AS path
+        FROM roots_by_address r
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
+        ORDER BY r.protocol, r.method, r.path, r.handler, r.root_kind
+    """,
+    # F8 §9.4 (W37). No masked column: every value is a symbol, an integer or a boolean.
+    # The ROOT here is a handler, not an address — `roots` carries the address, and this
+    # table joins to it on the handler rather than repeating a column the redactor would
+    # then have to reach in two places.
+    "reachability": _NAMED_QUERIES["reachability"],
+    "roots": f"""
+        SELECT r.handler, r.root_kind, r.protocol, r.method,
+               coalesce(a.masked, r.path) AS path
+        FROM roots r
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = r.path
+        ORDER BY r.handler, r.root_kind, r.protocol, r.method, r.path
+    """,
+    # No masked column, and stated rather than left to inference (the
+    # `scheduled_work`/`error_handlers` precedent above): every column here is
+    # a symbol, a descriptor, a dispatch form, an integer or a closed-set
+    # value. There is nowhere in it for an address, a config value or a string
+    # constant out of bytecode to be.
+    "call_edges": _NAMED_QUERIES["call_edges"],
+    # F3 §4.2. Both carry only symbols, a closed-set value and an integer — no address,
+    # config value or bytecode string — so redaction has nothing to reach here, the same
+    # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
+    # in the schema and absent from the export is a test failure.
+    "type_hierarchy": ("SELECT * FROM type_hierarchy ORDER BY child, position, ancestor"),
+    # F5 §6.2 (W29): exported WHOLE and unmasked here, which is the one place that reads
+    # differently from every other value column in this map. `value` was already redacted
+    # by the pass that wrote it — nothing in this system reads a metadata value, so there
+    # is no analysis to break by masking early and no second chance to forget. A mask
+    # applied here as well would be the redactor run twice over its own output.
+    "endpoint_metadata": _NAMED_QUERIES["endpoint_metadata"],
+    "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
+    "field_writes": "SELECT * FROM field_writes ORDER BY document_id, field, from_parameter",
+    # Worth carrying rather than recomputable: without it a consumer sees the
+    # tagged copies in `documents` and cannot tell which one the derived rows
+    # were built from.
+    "selected_documents": _NAMED_QUERIES["selected_documents"],
+    # A constant IS a string read out of bytecode, which is the exact
+    # population `_REDACTED_JSON`'s userinfo rule exists for — the same rule
+    # `call_sites.arguments` takes. Exporting it clear while `raw_facts` ships
+    # the same literal masked would put both spellings in one bundle.
+    "constants": f"""
+        SELECT c.document_id, c.symbol, coalesce(j.masked::JSON, c.value) AS value
+        FROM constants c
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = c.value::VARCHAR
+        ORDER BY c.symbol
+    """,
+    # `value` is an entry of the ARGUMENT grammar — the same JSON shape
+    # `call_sites.arguments` carries, produced from the same string constants
+    # in bytecode — so it takes the same `redact_json` pass, over userinfo in
+    # every string leaf. Its rows are staged alongside the call-site and
+    # annotation JSON in `_stage_redactions`, one map for one grammar.
+    "return_flows": f"""
+        SELECT rf.caller, rf.ordinal, rf.result, rf.callee, rf.return_ordinal,
+               coalesce(j.masked::JSON, rf.value) AS value, rf.resolution, rf.evidence
+        FROM return_flows rf
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = rf.value::VARCHAR
+        ORDER BY rf.caller, rf.ordinal, rf.callee, rf.return_ordinal
+    """,
+    "method_returns": f"""
+        SELECT mr.document_id, mr.method, mr.ordinal,
+               coalesce(j.masked::JSON, mr.value) AS value
+        FROM method_returns mr
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = mr.value::VARCHAR
+        ORDER BY mr.document_id, mr.method, mr.ordinal
+    """,
+    # The raw half of `resolved_config` — a configuration value as the file
+    # declared it, before the resolver joined profiles and placeholders. It is
+    # therefore exactly as disclosing as the resolved column beside it, and
+    # exporting it in the clear beside a masked `resolved_config` would mask
+    # nothing at all.
+    "config_entries": f"""
+        SELECT c.document_id, c.key_raw, c.key_path,
+               coalesce(m.masked, c.value) AS value, c.doc_index, c.seq
+        FROM config_entries c
+        LEFT JOIN {_REDACTED_ENTRY_VALUES} m
+               ON m.key_path = c.key_path AND m.value = c.value
+        ORDER BY c.document_id, c.doc_index, c.seq
+    """,
 }
+
+# Derived, never restated (see the note above `_EXPORT_QUERIES`): the exported
+# list IS the set of queries, so the two cannot fall out of step. Sorted, so
+# the manifest's `contents.tables` is deterministic too.
+_EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
-    "endpoints_merge": "merge_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
     "shapes": "derive_shapes.sql",
     "shape_fields": "derive_shape_fields.sql",
@@ -472,12 +991,48 @@ _NAMED_DERIVATIONS = {
     "resolved_config_insert": "insert_resolved_config.sql",
     "stamp_media": "stamp_media.sql",
     "stamp_declared_response": "stamp_declared_response.sql",
+    "stamp_declared_request": "stamp_declared_request.sql",
     "stamp_format": "stamp_format.sql",
     "bind_request_shape": "bind_request_shape.sql",
     "reclassify_protocol": "reclassify_protocol.sql",
     "reclassify_open_questions": "reclassify_open_questions.sql",
     "open_questions_reset": "reset_open_questions.sql",
     "open_questions_insert": "insert_open_questions.sql",
+    # 2O design §4's two non-wire families. Each is a reset/insert PAIR for the
+    # reason `open_questions` is: the reset runs once per resolve from the
+    # pipeline, the insert once per catalog from the engine.
+    "scheduled_work_reset": "reset_scheduled_work.sql",
+    "scheduled_work_insert": "insert_scheduled_work.sql",
+    "error_handlers_reset": "reset_error_handlers.sql",
+    "error_handlers_insert": "insert_error_handlers.sql",
+    # 2Q `G3`. A reset/insert pair like the two above, but reset and insert
+    # BOTH run from the one pass that writes here — there is exactly one
+    # writer, and the pipeline-owned reset those two need exists only because
+    # more than one catalog writes to them.
+    "return_flows_reset": "reset_return_flows.sql",
+    "return_flows_insert": "insert_return_flows.sql",
+    # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
+    # `return_flows` above is and for the same reason.
+    "roots_reset": "reset_roots.sql",
+    "roots_insert": "insert_roots.sql",
+    # F8 §9.4 (W37): the trace walk's own reachability, kept. Reset BESIDE the insert —
+    # this was the one insert in this map without one, and a second `analyze` over a
+    # workspace doubled every row.
+    "reachability_reset": "reset_reachability.sql",
+    "reachability": "insert_reachability.sql",
+    # 2Q `G4`. A reset/insert pair owned by its one writing pass, as above.
+    # F4 §5.2 (W24). Runs from inside `derive_endpoints`, immediately before the merge
+    # — see the statement's own header for why that ordering is load-bearing.
+    "borrowed_endpoints_drop": "drop_borrowed_endpoints.sql",
+    "borrowed_error_handlers_drop": "drop_borrowed_error_handlers.sql",
+    "call_edges_reset": "reset_call_edges.sql",
+    "call_edges_insert": "insert_call_edges.sql",
+    "type_hierarchy_reset": "reset_type_hierarchy.sql",
+    "type_hierarchy_insert": "insert_type_hierarchy.sql",
+    "method_resolution_reset": "reset_method_resolution.sql",
+    "method_resolution_insert": "insert_method_resolution.sql",
+    "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
+    "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
 }
 
 
@@ -488,7 +1043,55 @@ class DuckDbWorkspace:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = duckdb.connect(str(path))
-        self._connection.execute((_SQL_DIR / "schema.sql").read_text(encoding="utf-8"))
+        schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
+        self._connection.execute(schema)
+        self._add_columns_the_schema_has_gained(schema)
+
+    def _add_columns_the_schema_has_gained(self, schema: str) -> None:
+        """Adds any column `schema.sql` declares that an EXISTING workspace file does
+        not have.
+
+        `schema.sql` is all `CREATE TABLE IF NOT EXISTS`, which does exactly nothing to
+        a table that already exists — so every column added to it since a workspace file
+        was written is missing from that file, and the first statement to select it dies
+        with `Binder Error: Table "shapes" does not have a column with name
+        "origin_tier"`. That is not a hypothetical: re-running `analyze` over the
+        fixture's own `.sextant` directory did it, and the message names a column rather
+        than the thing a reader can act on.
+
+        **Adding is the whole migration, and it is enough because these tables are
+        derived.** Everything but `raw_facts` is rebuilt from the facts on each
+        `analyze`, and `raw_facts` itself is emptied and reloaded — so a column that
+        arrives empty here is filled by the run that added it. Nothing is dropped or
+        retyped: a column the schema no longer declares is left alone rather than
+        deleted, because deleting data to satisfy a shape is the destructive direction
+        and no shipped change has needed it.
+
+        The expected shape comes from DuckDB's own parse of the same text, in a throwaway
+        in-memory database, rather than from a regex over the DDL or a list maintained
+        beside it — the two ways this could disagree with `schema.sql` while looking
+        right.
+        """
+        reference = duckdb.connect(":memory:")
+        try:
+            reference.execute(schema)
+            expected = reference.execute(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'main' ORDER BY table_name, ordinal_position"
+            ).fetchall()
+        finally:
+            reference.close()
+        held = {
+            (str(table), str(column))
+            for table, column in self._connection.execute(
+                "SELECT table_name, column_name FROM information_schema.columns "
+                "WHERE table_schema = 'main'"
+            ).fetchall()
+        }
+        for table, column, data_type in expected:
+            if (str(table), str(column)) in held:
+                continue
+            self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {data_type}")
 
     def load_facts(self, fact_root: Path) -> int:
         """One bulk statement over the whole tree. Per-row insertion is a
@@ -521,6 +1124,10 @@ class DuckDbWorkspace:
         graph = destination / "graph"
         graph.mkdir(parents=True, exist_ok=True)
         self._stage_redactions(redactor)
+        # `raw_facts` exports here as well as through `export_facts`, and both
+        # join the same payload map — so it is staged for both rather than
+        # owned by either.
+        self._stage_fact_redactions(redactor)
         try:
             for name in _EXPORTED_TABLES:
                 sql = _EXPORT_QUERIES[name]
@@ -529,8 +1136,42 @@ class DuckDbWorkspace:
                     [str(graph / f"{name}.parquet")],
                 )
         finally:
-            self._drop_staged(_REDACTED_CONFIG_VALUES, _REDACTED_ADDRESSES, _REDACTED_JSON)
+            self._drop_staged(
+                _REDACTED_CONFIG_VALUES,
+                _REDACTED_ADDRESSES,
+                _REDACTED_JSON,
+                _REDACTED_ENTRY_VALUES,
+                _REDACTED_PAYLOADS,
+            )
         return list(_EXPORTED_TABLES)
+
+    def schema_objects(self) -> list[str]:
+        """Every table and view `schema.sql` created, from DuckDB's own
+        catalog rather than from a list beside it — a list would be the very
+        thing the export ratchet exists to stop being hand-maintained.
+
+        Read by `tests/storage/test_workspace.py`, whose assertion runs the
+        direction that catches the defect: an object HERE with no export query
+        fails the build. Eleven names were hand-listed for four phases and the
+        seven they omitted left every bundle quietly incomplete.
+
+        Staged redaction tables are excluded by name — they are temp tables
+        this class creates and drops inside one export, never part of the
+        schema.
+        """
+        rows = self._connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?) "
+            "ORDER BY table_name",
+            [
+                _REDACTED_CONFIG_VALUES,
+                _REDACTED_ADDRESSES,
+                _REDACTED_JSON,
+                _REDACTED_ENTRY_VALUES,
+                _REDACTED_PAYLOADS,
+            ],
+        ).fetchall()
+        return [str(name) for (name,) in rows]
 
     def _drop_staged(self, *names: str) -> None:
         """Dropped rather than left behind: these hold the very values the
@@ -571,10 +1212,15 @@ class DuckDbWorkspace:
         # `open_questions` is unioned in with the endpoint columns because it
         # is keyed on a wire identity and carries the same `path` — one map,
         # so a question and the row it asks about cannot mask differently.
+        # `roots` joins for the same reason and is not merely redundant: its
+        # `path` is CARRIED from the endpoint that named the handler, so the
+        # values overlap today, but a map built from endpoints alone would
+        # leave any future root address unmasked with nothing saying so.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
-            "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL"
+            "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_ADDRESSES,
@@ -586,10 +1232,18 @@ class DuckDbWorkspace:
             ],
         )
 
+        # One map for one GRAMMAR: `call_sites.arguments`, `annotations.args`,
+        # `return_flows.value` and `method_returns.value` are all entries of
+        # D00 §5's argument shape, built from the same string constants read
+        # out of bytecode — so one hardcoded `https://user:pass@host` reaches
+        # a bundle through any of the four, and all four take the same pass.
         json_rows = self._connection.execute(
             "SELECT DISTINCT arguments::VARCHAR AS original FROM call_sites "
             "WHERE arguments IS NOT NULL "
-            "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL"
+            "UNION SELECT DISTINCT args::VARCHAR FROM annotations WHERE args IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM return_flows WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
+            "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -598,6 +1252,23 @@ class DuckDbWorkspace:
                 (str(original), masked)
                 for (original,) in json_rows
                 if (masked := redactor.redact_json(str(original))) != str(original)
+            ],
+        )
+
+        # Keyed on `key_path` and masked by `redact_value`, which is the SAME
+        # call `domain/factfile.redact_config_entry_line` makes on the same
+        # field of the same fact — not a second expression of the rule, the
+        # same one, reached from the column instead of from the payload text.
+        entry_rows = self._connection.execute(
+            "SELECT DISTINCT key_path, value FROM config_entries WHERE value IS NOT NULL"
+        ).fetchall()
+        self._stage_map(
+            _REDACTED_ENTRY_VALUES,
+            "key_path VARCHAR, value VARCHAR, masked VARCHAR",
+            [
+                (str(key_path), str(value), masked)
+                for key_path, value in entry_rows
+                if (masked := redactor.redact_value(str(key_path), str(value))) != str(value)
             ],
         )
 
@@ -658,6 +1329,26 @@ class DuckDbWorkspace:
         matches, and that is not a URL with userinfo — survives into the
         bundle. Closing that means value patterns, which is what `.sextant.yml`
         gives a repository that knows the shape of its own secrets."""
+        # EVERY fact payload, not only `config_entry`. The bundle masks
+        # `call_sites.arguments`, `annotations.args`, `return_flows.value` and
+        # `method_returns.value` — and then shipped `raw_facts`, which contains
+        # those very facts, verbatim in the same directory. A consumer
+        # recomputing a derived table from the fact stream got different values
+        # and could not tell a redaction from a defect.
+        #
+        # Two rules, applied in order, because they answer different questions:
+        # a `config_entry`'s value is masked by its own KEY (the pattern rule),
+        # and every payload's string leaves then pass the userinfo strip that
+        # `call_sites` and the rest already take.
+        grammar = self._connection.execute(
+            "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
+            "WHERE kind <> 'config_entry'"
+        ).fetchall()
+        staged_grammar: list[tuple[str, ...]] = [
+            (str(original), masked)
+            for (original,) in grammar
+            if (masked := redactor.redact_json(str(original))) != str(original)
+        ]
         entries = self._connection.execute(
             "SELECT DISTINCT payload::VARCHAR AS original FROM raw_facts "
             "WHERE kind = 'config_entry' "
@@ -669,9 +1360,12 @@ class DuckDbWorkspace:
         staged: list[tuple[str, ...]] = [
             (str(original), masked)
             for (original,) in entries
-            if (masked := redact_config_entry_line(str(original), redactor)) != str(original)
+            if (masked := redactor.redact_json(redact_config_entry_line(str(original), redactor)))
+            != str(original)
         ]
-        self._stage_map(_REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged)
+        self._stage_map(
+            _REDACTED_PAYLOADS, "original VARCHAR, masked VARCHAR", staged + staged_grammar
+        )
 
     def close(self) -> None:
         self._connection.close()

@@ -1,0 +1,14 @@
+-- Clears 2Q `I1`'s root set for one resolve.
+--
+-- Runs from the PASS rather than from the pipeline, the reset_return_flows.sql
+-- precedent and for the same reason: `roots` has exactly one writer,
+-- `resolve/roots.py`, so reset and insert belong together there. The two
+-- non-wire tables need a pipeline-owned reset only because more than one
+-- CATALOG contributes rows to each, and a reset owned by the writer would
+-- empty the table once per catalog and leave only whichever ran last.
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the "roots"
+-- query still succeeds on a module that exposes nothing and schedules nothing.
+-- Unconditional, so a resolve that finds no root at all leaves an empty table
+-- rather than the previous run's rows.
+DELETE FROM roots;

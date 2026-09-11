@@ -48,7 +48,7 @@ finding fewer endpoints.
 | Capability | Gates |
 |---|---|
 | `annotation_args` | Every annotation-driven framework |
-| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a) |
+| `typed_signatures` | Structured parameter and return types — the field a body-parameter or `response_arg` join reads instead of a positional guess ([D00](D00-fact-schema.md) §5a). **Completed in W5**: a parameter's type now comes from the `Signature` attribute where the method has one, as the return type and a field's type already did, so `List<String>` keeps `String` at a parameter position and a type variable stays `T` instead of arriving as its erasure |
 | `type_annotations` | `nullable` on contract fields, per reference — never `required`, which comes from presence machinery ([D00](D00-fact-schema.md) §5b) |
 | `string_constants` | Topic and URL literals |
 | `invokedynamic` | Lambdas, and therefore functional routing |
@@ -58,21 +58,78 @@ finding fewer endpoints.
 | `kotlin_metadata` | Nullability and data-class shapes |
 | `call_site` | Every call-site-driven engine — [D02](D02-catalog-schema.md)'s `single_call` and `fluent` both |
 | `implemented_interfaces` | The `interface_implementation` style — matching a registered receiver's own type against an interface a catalog names |
+| `generic_interfaces` | Capability 9.14 — the parameterized superinterface references `implemented_interfaces` erases. `derived_resource` reads it for a repository's entity type |
+| `superclass` | Capability 9.13 — a class symbol fact's erased direct superclass, read regardless of whether its signature is generic. [D00](D00-fact-schema.md) §4's `relationship_kind: extends`, made real |
+| `array_arguments` | Capability 9.15 — a call-site argument produced by an array construction reads as `{kind: array, elements: […]}` rather than one opaque `unresolved`. Every `String...` API in the estate depends on it |
+| `nested_annotation_args` | Capability 9.16 — an annotation-valued annotation argument reads as a nested `{annotation, args}` use of its own, recursively, rather than being dropped with no key at all ([D00](D00-fact-schema.md) §5) |
+| `lambda_body` | Capability 9.17 — a `dynamic` call site carries `implementation`, the symbol of the lambda body its dispatch will run, where `target` names only the bootstrap factory. A traversal that follows call targets reaches a lambda's statements instead of stopping at `LambdaMetafactory` |
+| `annotation_default` | JVMS 4.7.22 — what an annotation element falls back to when a use omits it. **NO CONSUMER, and W4a went looking for the one this row used to name.** It said "a catalog reading the real default instead of a number typed in from documentation". No shipped catalog does that: every `default` in the estate is a config KEY (`spring.cloud.stream.default-binder`), a framework media type (`application/hal+json`), a strategy NAME, a Spring config convention, or a COMPUTED rule (`namespace_default: reversed_package`, which the runtime derives from the package — reading `AnnotationDefault` there answers `""`). So the vocabulary W4a would have added is a catalog key with no reader, which is `detect.coordinates`'s own defect — declared by 41 catalogs and read by nothing. **This is §2.3's "read, no consumer yet" and it is now stated with what would end it**: a catalog needing an element's declared default, which none does today. **Falsified by** a framework whose meaningful default is a literal on the annotation type rather than a rule its runtime computes |
+| `concat_template` | A `StringConcatFactory` site's recipe, so an address the code ASSEMBLES reads as a template (`/api/{}/orders`) rather than as `unresolved`. Consumer: the outbound address a catalog reads, and — once a matching tier exists — the server route it lines up with |
+| `constant_value` | JVMS 4.7.2 — a compile-time constant field's value, which gives D00 §5's `constant` fact its first producer. Consumer: topic and URL resolution, where `static final String TOPIC = "orders"` is how a great many real listeners name their destination |
+| `enclosing_class` | JVMS 4.7.6/4.7.7 — the class file's own statement of what encloses a nested class, including the enclosing METHOD for an anonymous one. Consumer: **W4b**, which replaces deriving nesting by splitting a binary name on `$` |
+| `class_file_version` | The class-file major each document was read from (JVMS 4.1), taken from the bytes rather than from ASM's constants so it is available even for a class the reader refused. Consumers: the accepted-range test, multi-release selection's target fallback, and language labelling |
+| `type_parameters` | W5 — the formal type parameters a class or method declares, with their bounds, in declaration order ([D00](D00-fact-schema.md) §5a). The name and the position are what a generic substitution binds, and `typed_signatures` can now emit a bare type variable that would otherwise be attached to nothing. **No consumer yet, deliberately**: **W25** is where substitution reads it — §2.3's legitimate "read, no consumer yet", as against "declared, never read" |
+| `source_file` | W6 — JVMS 4.7.10, the NAME of the file a class was compiled from, as the class file states it rather than as its own path implies. It replaces a derivation that was javac's conventions in code (`.java`, everything from the first `$` cut off), under which every Kotlin class named a `.java` file that does not exist. Consumer: `relative_path`, which is what an index hands a reader who wants to OPEN a declaration |
+| `line_numbers` | W6 — JVMS 4.7.12, the source lines a method's code came from, as `line_start`/`line_end`. **Every line number in the estate was 0** (measured: mall-admin, 1,428 symbols), so Sextant could say what exists and never where. 0 still means "not stated" — a class carries no such table, and neither does an abstract method. Consumer: **W35**, the index |
+| `local_variable_names` | W6 — JVMS 4.7.13, the names a source file gave a method's locals, which cover its parameters. Fills a parameter name only where `MethodParameters` stated none: measured on spring-web 6.1.6 (1,117 classes), 1,048 of 9,164 names come from here and nowhere else |
+| `method_returns` | Capability 9.18 — a `method_return` fact per return instruction, naming the value the method hands back ([D00](D00-fact-schema.md) §5). The last link in a round trip: a returned call result joins by `source` to the site that produced it |
 
-**Eight of the scanner's now-eleven designed capabilities are shipped.** `annotation_args`,
-`typed_signatures`, `type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`,
-`string_constants` and `chain_reconstruction` from Phase 2C's dataflow pass (below);
-`implemented_interfaces` from a class symbol fact's own `interfaces` list, in declaration
-order ([D00](D00-fact-schema.md) §5a).
+**Twenty-three of the scanner's now-twenty-six designed capabilities are shipped**, and the shipped
+set is **`Capabilities.ALL` in the extractor jar** — the scanner DECLARES what it can read,
+and the caller asks it (`--capabilities`), which is what a catalog's `requires:` is checked
+against. *It was `ingress/extract/jvm/scanner.py`'s `_CAPABILITIES`, a Python-side list
+making an unverified claim about a subprocess built by a separate step; that constant is
+gone (W1).* `annotation_args`, `typed_signatures`,
+`type_annotations` and `kotlin_metadata` since Phase 2A/2B; `call_site`, `string_constants`
+and `chain_reconstruction` from Phase 2C's dataflow pass (below); `implemented_interfaces`
+from a class symbol fact's own `interfaces` list, in declaration order
+([D00](D00-fact-schema.md) §5a); `superclass`, `generic_interfaces`, `array_arguments`
+and `nested_annotation_args` — capabilities 9.13, 9.14, 9.15 and 9.16 — from Phase 2O; and
+`lambda_body` and `method_returns` — capabilities 9.17 and 9.18 — from 2Q.
+*The four 2O capabilities were absent from this table until the 2O documentation sweep,
+which is the §5.1 failure of documenting a schema in one file and shipping it in another.*
+
+**A capability with no consumer is a half-shipped feature (GUIDELINES §2), so name the
+consumers.** 9.13's `superclass` is read by `resolve/shapes/parse_binding.py`'s ancestry
+walk and by `error_advice`'s throwable-root walk; 9.14's `generic_interfaces` by
+`engines/derived_resource.py`. **9.15's `elements` has three consumers, all wired in 2O
+Task 13** — `engines/combinator.py`'s `media_values` predicate (through
+`shapes/arguments.py::_expanded_arguments`), `all_strings`
+(`shapes/arguments.py::_all_string_channels`), and `shapes/arguments.py::channels_of`, the
+array-aware sibling of `channel_of`. **9.16 has exactly one**: `engines/scheduled_work.py`'s
+`_folded`, which reads a repeatable container's array of annotations so that a method
+carrying two `@Scheduled` yields both schedules. **No consumer reads a nested annotation's
+own ATTRIBUTE as an address**, and that is a refusal rather than an omission: giving
+`@RabbitListener` a `path_from: [bindings]` would publish a `@QueueBinding`'s JSON text as
+a queue name. `docs/COVERAGE.md` carries that boundary and the condition that closes it.
+
+**9.17 and 9.18 both have a consumer now, and each names a different one.** 9.18's
+`method_return` is read by `resolve/return_flow.py`, which joins it to `call_sites` to link
+a callee's returned value to the caller's own `result` id (2Q's `G3`, closing OI-15), and
+again by `resolve/dispatch.py`, whose "did we read a body" test is the presence of the
+fact. 9.17's `implementation` is read by `resolve/call_edges.py`, which makes an
+`invokedynamic` site an edge into the **lambda body it creates** rather than into the
+bootstrap factory its own target names (2Q's `G4`, closing OI-14) — without which every
+lambda in a module is a platform terminal and a `forEach(x -> mapper.insert(x))` reports
+`forEach` and never the persistence. Measured on `macrozheng/mall`'s `mall-admin`: fifteen
+bodies reached this way, seven of them holding a terminal no other path reaches.
+*Both were listed here as having no consumer until 2Q's `G3` and `G4` shipped, which is the
+state this file's own rule — a capability with no consumer is a half-shipped feature —
+exists to make visible while it lasts.*
+
 **`chain_reconstruction` means exactly this: receiver and result value ids are present on
 `call_site` facts** ([D00](D00-fact-schema.md) §5) — a `fluent` catalog's steps are a join
-over those links, nothing more. `invokedynamic` stays undeclared: an indy call site is
-still recorded — a `call_site` fact exists for it — but its arguments are honestly
-`unresolved` rather than decompiled (Java 9+ string concatenation compiles to indy, and
-refusing to guess it is the point); a lambda's own bootstrap handle is captured separately,
-through the `lambda` argument kind ([D00](D00-fact-schema.md) §5), wherever a lambda or
-method reference is passed as an argument. `constant_propagation` and `control_flow` remain
-unshipped, each for the reason recorded below.
+over those links, nothing more. `invokedynamic` stays undeclared as a general capability, but **string
+concatenation is no longer among its unread cases** (W4): a `StringConcatFactory` site
+carries a RECIPE holding the literal parts, so `"/api/" + version + "/orders"` reads as the
+template `/api/{}/orders` rather than as `unresolved`. That is reading what the class file
+states, not decompiling — the hole stays a hole. Every other bootstrap's arguments remain
+honestly `unresolved`; a lambda's own bootstrap handle is captured separately,
+through the `lambda` argument kind ([D00](D00-fact-schema.md) §5) wherever a lambda or
+method reference is passed as an argument, and — since 9.17 — through the site's own
+`implementation`, which does not need the lambda to reach an argument slot at all.
+`constant_propagation` and `control_flow` remain unshipped, each for the reason recorded
+below.
 
 ## Inputs
 
@@ -88,7 +145,7 @@ Facts as JSONL, one file per **source file**, plus the uncovered-source list.
 ### The JVM scanner
 
 ASM over class files. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1 for why this rather
-than a source indexer. Two of its eleven capabilities are hard, and the rest are
+than a source indexer. Two of its fifteen capabilities are hard, and the rest are
 straightforward.
 
 **Two forms of class input, one answer.** The scan is pointed either at a directory tree of
@@ -271,3 +328,44 @@ One decision formerly here was closed by Phase 2C's approved design (2026-08-29)
   the derivation's job, a join the `fluent` engine performs over facts already on disk.
   Module size stays bounded on the extractor side because there is nothing left to grow
   there: one dataflow pass, not a graph walk.
+
+## How a scanner declares its capabilities, and what that costs
+
+**Over the subprocess contract, as a command-line question**: the JVM extractor
+answers `--capabilities` with `{"capabilities": [...]}` on stdout, the same
+channel it answers a scan on, and repeats the list inside every scan report so
+what a workspace records and what its catalogs were gated on cannot disagree.
+It is asked once per scanner instance and cached. *This said "before any scan"
+until a review checked it: `analyze` asks at the point it needs the answer, which is when
+it hands the set to `resolve` — after the module scan and every library scan. Nothing turns
+on the order, because the jar's answer does not depend on having scanned; the claim was
+simply not true.* Capabilities
+decide which catalogs run. Measured at 0.02s — the JVM starts and exits without
+opening a class file.
+
+Chosen over a jar-manifest attribute for two reasons. A manifest is **JVM-only**,
+and `capabilities()` is on the port every backend implements, so it would make
+the JVM a special case. And Gradle writes the manifest, so the capability list
+would have to live in `build.gradle.kts` as well as in the Java that implements
+it — the duplication this whole change removes. (Library *versions* are the
+opposite case and do go in the manifest: Gradle is the thing that resolves them,
+so it genuinely owns them.)
+
+### The consequence, stated: every scanner needs something we build
+
+**A command-line protocol assumes we control the scanner's entry point.** A
+third-party analyzer we did not write will not answer `--capabilities`, so
+adopting one means writing a WRAPPER for it — a thin executable that declares
+what that analyzer can read and translates its output into the fact stream.
+That is a real cost per backend and it is accepted deliberately, not overlooked:
+
+- The alternative — inferring capabilities from a version string — is what
+  Sextant did until Step 1, and it is why a field named for a library version
+  held `"9.18"`, a capability number. **A version cannot be interrogated**; you
+  can only look it up in a table someone maintains by hand, which is a second
+  copy of the declaration with none of its authority.
+- A wrapper is needed regardless. A third-party analyzer does not emit D00 facts,
+  so something must already stand between it and the workspace; declaring
+  capabilities is one more line in a component that has to exist anyway.
+- It keeps the rule uniform. Every scanner answers the same question the same
+  way, whoever built it, and no backend gets a private mechanism.

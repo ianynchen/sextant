@@ -7,6 +7,24 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-webflux"]
 
+measured:
+  - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
+# **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
+# Withhold the capability and re-resolve on facts where every `array` argument arrives as one
+# opaque `unresolved`: this catalog's row count is UNCHANGED and only its media column goes
+# NULL. `spring-stomp-endpoint.yml` is the one that declares it, because there a two-path
+# registration collapses into one boundary and a registered URL disappears.
+#
+# D02 §1's doctrine is that `requires` keeps degradation visible and that "silently finding
+# fewer endpoints is the failure this prevents" — a row present and honestly `unresolved`,
+# or a column NULL where nothing was read, is not that failure.
+#
+# *W46 declared it here and W46's review reverted it on a rule — "`requires` names a
+# capability without which a catalog derives NOTHING" — that is false of the thirty catalogs
+# declaring `string_constants`, whose rows all survive its absence with a NULL address. The
+# rule is narrowed to what the measurement supports; the wider convention is `OI-78`.*
 requires: [call_site, string_constants, chain_reconstruction]
 
 # D02 §2's `combinator` style, both DSLs Spring WebFlux ships for functional
@@ -23,6 +41,16 @@ matches:
     # (checkpoint (1a)). `nest` is ALSO declared as a `prefixes` rule below —
     # dispatch there wins, so this entry's own `handler_arg` is read only for
     # `route`; `nest` never reaches it.
+    #
+    # NO `descriptor` HERE, and that is a ruling rather than an omission
+    # (descriptor sweep, out of scope). `methods` in a `combinator` entry is a
+    # bare list of NAMES, matched by `engines/combinator.py` on owner and name
+    # alone — a different grammar from `single_call`'s `methods` rows, whose
+    # `descriptor` key pins a row to one overload's erased signature. This
+    # engine has no such key to declare, so closing the same overload question
+    # here is an engine change, not a catalog edit. It stops being theoretical
+    # the day `RouterFunctions` declares a `route` or `nest` overload whose
+    # position 1 is not the handler; `javap -p -s RouterFunctions` is the check.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
       methods: [route, nest]
       handler_arg: 1
@@ -38,8 +66,31 @@ matches:
       body_arg: 0
 
   vocabulary:
+    # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12,
+    # `scripts/probes/cp12_sweep_round1b.md`): `RequestPredicates` and
+    # `CoRouterFunctionDsl` EACH declare seven per-verb factories, identical at
+    # both minors — read off the jars as "declared on the type and spelled in
+    # upper case", which is the framework's own way of marking a verb factory
+    # apart from `all`, `path`, `accept`, `headers`, `contentType` and the two
+    # generic `method`/`methods` forms.
+    #
+    # This list held GET/POST/HEAD for Java and GET/POST for Kotlin, and those
+    # are EXACTLY the verbs `fixtures/orders-service/.../routes/OrderRoutes.java`
+    # and `KotlinOrderRoutes.kt` declare (`A-M9`). The comment above says the
+    # standard this file was built to — "exactly what 2E's checkpoint froze
+    # against a real scan… nothing here is invented past that" — and that
+    # standard, applied to a fixture rather than to the framework, produces
+    # §8.1 rule 1's failure in as many words: the encoded rule was a projection
+    # of the examples in front of the author.
+    # `RouterFunctions.route(RequestPredicates.PUT("/orders/{id}"), h::update)`
+    # is an entirely ordinary WebFlux route and derived no verb and no address.
+    #
+    # `method(HttpMethod)`/`methods(HttpMethod...)` stay OUT and are a stated
+    # COVERAGE boundary: their verb is an enum constant argument rather than the
+    # method's own name, and this grammar reads a verb only as a literal
+    # declared beside the owner.
     verbs:
-      # Java: `RequestPredicates.GET/POST/HEAD("/x")` are one-argument
+      # Java: `RequestPredicates.GET/HEAD/POST/…("/x")` are one-argument
       # predicates with no handler of their own — a route only once some
       # `RouterFunctions.route` attaches a handler to the predicate they
       # produce (checkpoint (1a)'s full call sequence).
@@ -48,28 +99,94 @@ matches:
         verb: GET
         path_arg: 0
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
         method: POST
         verb: POST
         path_arg: 0
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
-        method: HEAD
-        verb: HEAD
+        method: PUT
+        verb: PUT
         path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: OPTIONS
+        verb: OPTIONS
+        path_arg: 0
+      # **THE TWO-ARGUMENT `(String, handler)` FORM ONLY**, and `CoRouterFunctionDsl.GET`
+      # declares FOUR — `javap -p -s` at **spring-webflux** 6.1.6, which is where this
+      # class ships; the first version of this note said three and cited spring-webmvc,
+      # where `javap` answers "class not found":
+      #   `(String, Function2)V`                     the one this row reads
+      #   `(RequestPredicate, Function2)V`           a predicate, NO path
+      #   `(String, RequestPredicate, Function2)V`   path, predicate, handler
+      #   `(String)RequestPredicate`                 a predicate FACTORY, returns rather
+      #                                              than declares
+      # This grammar matches on owner and name alone — no `descriptor` key — so `path_arg:
+      # 0` is read against whichever overload a caller wrote. On the second that
+      # argument is a PREDICATE, not a path, and on the third the handler sits
+      # at position 2 while `handler_arg: 1` reads the predicate. `KotlinOrderRoutes.kt` is the one live
+      # Kotlin router here and it writes the two-argument form throughout.
+      #
+      # Not in `slice.outside`, because the slice is for methods a catalog does not read
+      # and these are read. It is an OVERLOAD gap, the same engine work `route`/`nest` need.
       # Kotlin: the builder's own two-argument form — `GET("/x") { handler
       # }`/`POST("/x") { handler }` declare a whole route in one call
       # (checkpoint (1b), the `…$1$1$1#`/`…$1$1$2#` call sites). One
-      # vocabulary, two arities: the Java rows above and these two rows are
+      # vocabulary, two arities: the Java rows above and these rows are
       # the same verbs, read off two different owners because the DSL
       # receiver (`ALOAD 0`) carries no chain to fold a bare predicate
       # through (checkpoint (1b) ruling 3).
+      #
+      # Each Kotlin verb has FOUR overloads (CP-12 Q12) and this grammar
+      # matches on owner and name alone, with no `descriptor` key to declare —
+      # the same engine gap the `entries` comment above already states for
+      # `route`/`nest`. So one row per verb covers all four, and the
+      # `path_arg: 0`/`handler_arg: 1` positions are the two-argument
+      # `(String, handler)` form's. That is unchanged by this edit and is why
+      # widening the verb list does not widen the exposure.
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: GET
         verb: GET
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: POST
         verb: POST
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: PUT
+        verb: PUT
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
         path_arg: 0
         handler_arg: 1
 
@@ -112,30 +229,54 @@ matches:
       - owner: org.springframework.web.reactive.function.server.RequestPredicates
         method: contentType
         fills: consumes
-      # Kotlin only declares `accept` (checkpoint (1b)'s one media call site);
-      # no `contentType` call exists anywhere in the checkpoint's Kotlin scan,
-      # so none is declared here.
+      # BOTH. *This block held `accept` alone, on the stated reason that "Kotlin only
+      # declares `accept`… no `contentType` call exists anywhere in the checkpoint's
+      # Kotlin scan". The second half is true and is about a FIXTURE; the first half is
+      # about the framework and is false — `CoRouterFunctionDsl` declares `contentType`
+      # too, two overloads, at spring-webflux 6.1.6 (`javap -p`). That is §8.1 rule 1's
+      # failure: the examples in front of the author encoded as the framework's rule.
+      # Found in W44 while measuring the servlet twin rather than copying it.*
+      #
+      # No live instance in any fixture or corpus, so nothing published was wrong — a
+      # Kotlin reactive route guarded by `contentType(JSON)` simply read NULL `consumes`.
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
         method: accept
         fills: produces
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: contentType
+        fills: consumes
 
     # 2E checkpoint (3)/F1, frozen ruling: every `accept`/`contentType` call
     # in the fixture — Java and Kotlin alike — is a vararg
     # (`([Lorg/springframework/http/MediaType;)…`), and the extractor's
-    # `MethodFlow.argumentJson` has no case for the `ANEWARRAY` that produces
-    # a vararg array argument, so every media predicate reaches the facts as
+    # `MethodFlow.argumentJson` had no case for the `ANEWARRAY` that produces
+    # a vararg array argument, so every media predicate reached the facts as
     # a bare `{"kind":"unresolved"}` with no `source` and no `symbol` — this
-    # table has NOTHING to read against the 2E fixture, and every
-    # predicate-derived media column comes back NULL (row resolution
+    # table had NOTHING to read against the 2E fixture, and every
+    # predicate-derived media column came back NULL (row resolution
     # untouched: the verb and path are the wire identity and both are known).
     # Declared anyway, at the one member the checkpoint confirms the fixture
     # actually carries — `MediaType.APPLICATION_JSON`, seen only by accident
     # on an unrelated Kotlin null-check fact — because `MediaType` is a real,
     # stable enum and this is the table the extractor's own varargs case
-    # reads against the day it exists. Until then this block is
-    # specified-but-unused, proven by a synthetic-facts unit test
-    # (`test_combinator_engine.py`) rather than by anything the live fixture
-    # exercises.
+    # reads against the day it exists.
+    #
+    # **That day is here.** Extractor capability 9.15 emits
+    # `{"kind":"array","elements":[{"kind":"enum","symbol":"…/MediaType#APPLICATION_JSON."}]}`
+    # for exactly these calls, and 2O Task 13 taught the combinator engine to
+    # read that slot's own `elements` (`_media_constraints`). This block is
+    # LIVE against the fixture: `GET /fn/orders` and `GET /kt/rich` carry
+    # `produces` and `POST /fn/orders` carries `consumes`, all
+    # `application/json`, pinned in `tests/application/test_pipeline.py`.
+    #
+    # Only the one member is declared, and that is still deliberate: the
+    # checkpoint confirms only `APPLICATION_JSON` in the fixture, and a member
+    # nobody declared contributes nothing rather than leaking its own symbol
+    # fragment into a media column (pinned by the near-miss beside the
+    # positive in `test_combinator_engine.py`). A route declaring
+    # `MediaType.APPLICATION_XML` here therefore reads NULL — an under-report
+    # this table closes one measured member at a time, never by guessing that
+    # a constant's name is its wire value.
     media_values:
       owner: org.springframework.http.MediaType
       values:
@@ -163,11 +304,21 @@ matches:
       path_arg: 0
       subtree_arg: 1
     - { name: and, owner: org.springframework.web.reactive.function.server.RouterFunction }
+    # `andOther` merges a router whose response type differs, and it merges a whole router along `and`'s exact signature —
+    # `(LRouterFunction;)LRouterFunction;` on this same interface. **Undeclared, a merged
+    # router still derives at TOP LEVEL** — an unclaimed continuation consumes neither its
+    # receiver nor its argument, so both `route(...)` calls stay root candidates. What is
+    # lost is a PREFIX: under `nest(path("/p"), a.andOther(b))` the routes come out at
+    # `/a` and `/b` instead of `/p/a` and `/p/b`, with one extra handler-less `unresolved`
+    # row beside them. Measured by driving the engine with and without the declaration.
+    # No live instance here; found by reading the interface rather than the fixture.
+    - { name: andOther, owner: org.springframework.web.reactive.function.server.RouterFunction }
 
 # Harvest compatibility (Task 9 ruling): copied verbatim from spring-web.yml
 # rather than re-declared, so an outbound-shapes join never has to reconcile
-# two catalogs describing the same wrapper/nullability/serialization surface
-# two different ways.
+# two catalogs describing the same wrapper surface two different ways. The
+# nullability and serialisation surfaces are no longer copied at all — they
+# are one declaration this file names (D02 §1b).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: reactor.core.publisher.Mono,             payload_arg: 0, semantics: async }
@@ -186,23 +337,110 @@ wrappers:
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# D02's declared SLICE (F2 §3.8), and it is the one a reader is most likely to be
+# surprised by. Measured (`scripts/probes/w19_catalog_surface.md`): this catalog reads
+# **0 of the 20** methods `RouterFunctions$Builder` declares at spring-webflux 6.1.6.
+#
+# **`RouterFunctions.route()` — the BUILDER DSL — derives nothing at all.** That has
+# been the reference documentation's recommended Java shape since Spring 5.2, so it is
+# plausibly the majority of real functional routers. What this catalog reads is the
+# other two forms: the argument-rooted `RouterFunctions.route(predicate, handler)` and
+# Kotlin's `coRouter { }`.
+#
+# The distinction is structural, not an oversight about names: this grammar roots a
+# route at an ARGUMENT or in a lambda BODY, and a builder verb sits on a RECEIVER
+# returned by an argument-less `route()`. There is no word for that here, which is why
+# closing it is engine work and not a catalog addition.
+slice:
+  outside:
+    - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+      method_names: [add, and, invoke, not, or, path, pathExtension, queryParam, resource, resources, withAttribute]
+      why: >
+        The methods this catalog does not read, and what each actually is — measured with
+        `javap -p`, because a first version described them from their names and got three
+        wrong. `path`, `queryParam` and `pathExtension` each declare a HANDLER-taking void overload, so `path("/x") { … }` DECLARES a route rather than
+        nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
+        reason. `add` and `resource` attach or declare routes too. All six are the
+        receiver-rooted shape `G-37` names, which is engine work rather than a catalog
+        line, and routes written any of those ways derive NOTHING. `and`/`or`/`not` compose
+        predicates INSIDE the DSL, where this file's `composers` block is keyed on the Java
+        `RequestPredicate` owner and so reads none of them. `resources` serves static
+        resources and `withAttribute` attaches metadata. The enumeration admits six of
+        these by `route declaration` rather than by a `String` at argument 0.
+    - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
+      method_names: [plus]
+      why: >
+        Kotlin's `+` operator on two whole routers — `andOther`'s DSL spelling, and the same
+        under-report it was. Undeclared, a merged router still derives at top level and
+        loses any prefix it sits under. Named rather than declared because a rule no
+        fixture exercises is a rule nobody checks, and no corpus here supplies a Kotlin one.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [route]
+      why: >
+        The ARGUMENT-LESS `route()` — the builder DSL's entry point, which returns a
+        `RouterFunctions$Builder` for every method in the block below. This catalog reads
+        the two-argument `route(predicate, handler)` at the same name and cannot read
+        this one, because a builder verb sits on a RECEIVER rather than in an argument or
+        a lambda body. `G-37`, and engine work.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [resource, resources, resourceLookupFunction]
+      why: >
+        Serve static resources under a pattern or a lookup function. Served routes, and
+        arguably boundaries — but each names a resource LOCATION rather than a handler,
+        and this analysis has no row shape for "these bytes are served here". Left
+        outside deliberately, the same ruling the builder's own `resources` takes.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [changeParser]
+      why: >
+        Swaps the `PathPatternParser` a whole router tree matches with. It changes how
+        addresses are PARSED rather than declaring one, and it appears in the enumeration
+        only because it takes a router as its first argument.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions
+      method_names: [toHttpHandler, toWebHandler]
+      why: >
+        Adapt a whole router into the reactive server's own handler types. They declare
+        no address and serve nothing new — they are how an assembled tree is MOUNTED —
+        and they appear in the enumeration only because their first argument is a router.
+        The servlet package declares neither.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+      why: >
+        The builder DSL's seven verbs (four overloads each, `javap` at 6.1.6). Every
+        route declared this way derives NOTHING — not a partial row and not a question.
+        A module using `RouterFunctions.route().GET("/orders", handler).build()` has its
+        whole functional routing surface absent. This is G-37, and it is engine work:
+        the verb call sits on a receiver this grammar cannot root a walk at.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [path]
+      why: >
+        Nests a builder under a path prefix, so it composes an address the same way an
+        HTTP class-level mapping does. Outside for the same reason as the verbs, and it
+        compounds them: a prefix nobody reads makes every nested route's address wrong
+        as well as absent, were the verbs read without it.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [route, nest, add, resource]
+      why: >
+        The builder's four remaining route-declaring forms, and they address the wire
+        through a `RequestPredicate` object rather than through a path string — so
+        neither of the enumeration's first two tests could see them, and for one run
+        they sat outside the slice AND outside the enumeration, which is the one place
+        a reader could not have found them. `route(predicate, handler)` and
+        `nest(predicate, …)` declare and group routes; `add` attaches a whole
+        `RouterFunction` built elsewhere; `resource` serves one resource under a
+        predicate. All derive nothing, for the same structural reason as the verbs.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [resources]
+      why: >
+        Serves static resources under a pattern. A served route, and arguably a
+        boundary — but it names a resource location rather than a handler, and this
+        analysis has no row shape for "these bytes are served here". Left outside
+        deliberately.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+      method_names: [withAttribute]
+      why: >
+        Attaches metadata to the route being built. Names no address and serves nothing;
+        it appears in the enumeration only because its first parameter is a `String`.

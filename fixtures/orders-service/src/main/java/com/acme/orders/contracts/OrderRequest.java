@@ -45,6 +45,14 @@ public class OrderRequest {
     // no payload. The symbol fact is still emitted — somebody declared it — and
     // carries the modifier the shape pass filters on.
     public static final String SOURCE = "web";
+
+    /** Non-finite constants, so the strict-JSON guard has something to catch.
+     *  RFC 8259 has no NaN or Infinity literal, and writing one unquoted makes
+     *  the whole fact file invalid for a conforming reader — a defect that was
+     *  invisible because no fixture carried a float or double at all. */
+    public static final double NO_TIMEOUT = Double.NaN;
+
+    public static final float UNBOUNDED = Float.POSITIVE_INFINITY;
     // The same claim, declared outright rather than implied by staticness.
     public transient String cachedSummary;
 }

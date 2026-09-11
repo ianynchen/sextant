@@ -1,6 +1,7 @@
 package com.acme.orders;
 
 import com.acme.orders.contracts.OrderRequest;
+import com.acme.orders.scoped.ScopedRequest;
 import com.acme.orders.contracts.OrderView;
 import com.example.orders.proto.OrderProtos;
 import java.util.List;
@@ -22,6 +23,16 @@ public class OrderController {
     @PostMapping
     public OrderResult create(@RequestBody OrderCommand command) {
         return service.place(command);
+    }
+
+    // The package-scope case, reachable at last: `ScopedRequest` lives in a
+    // `@NullMarked` package and declares no annotation on its own field, so the
+    // only thing that can make `code` not-null is the scope rule (D02 §2e).
+    // Nothing referenced this type before, so no endpoint rooted it, so the shape
+    // was never expanded and the rule was exercised only by a hand-built test.
+    @PostMapping("/scoped")
+    public OrderResult scoped(@RequestBody ScopedRequest request) {
+        return service.place(new OrderCommand());
     }
 
     @GetMapping(value = "/{id}", produces = "application/json")

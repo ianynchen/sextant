@@ -19,7 +19,12 @@ from collections.abc import Sequence
 from google.protobuf import descriptor, descriptor_pb2, descriptor_pool
 from google.protobuf.message import DecodeError
 
-from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, EmbeddedDescriptorFact
+from sextant.domain.facts import (
+    DeclaredFieldFact,
+    DeclaredShapeFact,
+    EmbeddedDescriptorFact,
+    OperationRecord,
+)
 from sextant.ingress.interpret.wire import (
     GeneratedNaming,
     Origin,
@@ -111,8 +116,11 @@ def _pool_shapes(
     shapes: list[DeclaredShapeFact] = []
     for name in sorted(added):
         document_id = parsed[name][1].document_id
-        for message in pool.FindFileByName(name).message_types_by_name.values():
+        file = pool.FindFileByName(name)
+        for message in file.message_types_by_name.values():
             shapes.extend(_message_shapes(message, origin, document_id, naming))
+        for service in file.services_by_name.values():
+            shapes.extend(_service_shapes(service, origin, document_id))
     return shapes, failed
 
 
@@ -179,6 +187,52 @@ def _message_shapes(
     ]
     for nested in message.nested_types:
         shapes.extend(_message_shapes(nested, origin, document_id, naming))
+    return shapes
+
+
+def _service_shapes(
+    service: descriptor.ServiceDescriptor, origin: Origin, document_id: str
+) -> list[DeclaredShapeFact]:
+    """One `declared_shape` per RPC method (2O design §1a): the operation IS
+    the shape, the same ruling `wsdl_xsd.py` already applies to a SOAP input
+    wrapper element — so there is no per-message-field iteration here, only
+    one shape per method the `service` block itself declares.
+
+    Unlike a message, whose generated class IS what `symbol` names for a
+    compiled origin, an RPC method travels as no class of its own — the
+    `<Service>Grpc` stub CP-4/Task 5 names is per-language codegen knowledge
+    this interpreter does not have (ARCHITECTURE §10's confinement rule), and
+    naming it is Task 5's to do, from bytecode. `symbol` is therefore the
+    schema's own full identity for every origin, exactly `schema_name`'s own
+    value — the same identity `wsdl_xsd.py`'s `_add_shape` already gives a
+    schema-only fact, because there is no second naming for `schema_name` to
+    bridge here either.
+
+    `input_ref`/`output_ref` are the descriptor's own fully-qualified message
+    names — `full_name` never carries a leading `.`, so there is no FQN
+    spelling to strip — an intra-descriptor join to the SAME file's message
+    shapes, the ones `_message_shapes` above derives from this exact pool
+    (2O design §1a: never a guess across universes)."""
+    shapes = []
+    for method in service.methods:
+        identity = f"{service.full_name}/{method.name}"
+        shapes.append(
+            DeclaredShapeFact(
+                document_id=document_id,
+                symbol=identity,
+                schema_name=identity,
+                schema_format="protobuf",
+                origin=origin,
+                evidence=evidence_for(origin),
+                role="operation",
+                operation=OperationRecord(
+                    input_ref=str(method.input_type.full_name),
+                    output_ref=str(method.output_type.full_name),
+                    client_streaming=method.client_streaming,
+                    server_streaming=method.server_streaming,
+                ),
+            )
+        )
     return shapes
 
 

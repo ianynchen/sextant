@@ -263,13 +263,22 @@ def _matches(site: dict[str, Any], entry: "_ParseCall", facts: "_Facts") -> bool
 
 def _reaches(symbol: str, targets: tuple[str, ...], facts: "_Facts") -> bool:
     """Whether a type's declared ancestry reaches any of `targets`, following
-    both the generic-supertype references and the implemented interfaces the
-    facts carry (D00 §5a), transitively, within what was scanned.
+    the erased superclass edge, the generic-supertype references AND the
+    implemented interfaces the facts carry (D00 §5a), transitively, within
+    what was scanned.
 
-    Both, not one: a plain `extends` is NOT in the fact stream at all
-    (`supertype` is emitted only for a GENERIC superclass), so for a generated
-    message the interface chain is the only path that exists — while a
-    generated builder's own supertype IS generic and does name its marker.
+    All three, and the third one used to be missing (`A-M12`). The sentence
+    that stood here said *"a plain `extends` is NOT in the fact stream at all
+    (`supertype` is emitted only for a GENERIC superclass)"* — true when it
+    was written, and **falsified by capability 9.13**, whose
+    `ClassScanner.erasedSuperclassJson` writes a `superclass` field for every
+    non-`Object` superclass. `supertype` really is the generic-arguments
+    carrier and really does miss a plain `extends`; the error was reading it
+    as the class-inheritance edge when a second field carries exactly that,
+    which is `A-C4`'s invented rule in a second engine. A payload whose only
+    route to a protobuf marker is `extends GeneratedMessage` bound nothing:
+    an under-report, not a wrong type, and silent.
+
     A type outside the module has no ancestry fact and simply ends the walk,
     which is why the markers are compared by name rather than followed into.
     """
@@ -347,7 +356,9 @@ def _bytes_parameter(
     if found is None:
         return None
     index, parameter = found
-    symbol = parameter["type"].get("symbol")
+    # The descriptor's answer: `bytes_payloads` is catalog-declared type names, and a
+    # type variable's name is scoped to its own declaration and matches none of them.
+    symbol = parameter.get("erased_symbol") or parameter["type"].get("symbol")
     return index if symbol in vocabulary.bytes_payloads else None
 
 
@@ -478,7 +489,7 @@ def _vocabulary(catalogs: list[Catalog]) -> _Vocabulary:
                 f"loading catalog {catalog.source}: `parse_calls` must be a mapping of "
                 f"`bytes_payloads` and `calls`, got {declared!r}"
             )
-        payloads.update(type_descriptor(str(name)) for name in declared.get("bytes_payloads") or [])
+        payloads.update(type_descriptor(name) for name in declared.get("bytes_payloads") or [])
         for entry in declared.get("calls") or []:
             calls.append(_parse_call(entry, catalog))
     return _Vocabulary(bytes_payloads=frozenset(payloads), calls=tuple(calls))
@@ -509,7 +520,7 @@ def _parse_call(entry: Any, catalog: Catalog) -> _ParseCall:
         )
     return _ParseCall(
         owner=type_descriptor(owner) if isinstance(owner, str) else None,
-        hierarchy=tuple(type_descriptor(str(name)) for name in hierarchy or []),
+        hierarchy=tuple(type_descriptor(name) for name in hierarchy or []),
         method=str(entry["method"]),
         # An entry with no declared bytes position names a parse whose payload
         # TYPE is readable and whose BYTES arrive somewhere else entirely (a
@@ -586,6 +597,17 @@ def _facts(workspace: Workspace) -> _Facts:
     for row in workspace.query("implementations"):
         ancestry.setdefault(bare_descriptor(str(row["symbol"])), []).extend(
             bare_descriptor(str(entry)) for entry in json.loads(str(row["interfaces"]))
+        )
+    # Capability 9.13's ERASED superclass edge (`A-M12`), added beside the two
+    # above rather than replacing either: `supertypes` carries the
+    # parameterised-type reference a generic `extends` produces, which this
+    # walk still wants, and `superclass` carries the edge itself — emitted for
+    # every non-`Object` superclass, generic or not. Reading only the first
+    # gave `class Order extends GeneratedMessage` no route to its marker at
+    # all, which is `A-C4`'s rule in this engine.
+    for row in workspace.query("superclasses"):
+        ancestry.setdefault(bare_descriptor(str(row["symbol"])), []).append(
+            bare_descriptor(str(row["superclass"]))
         )
     methods: dict[tuple[str, str], list[tuple[str, int]]] = {}
     for row in workspace.query("method_declarations"):

@@ -190,6 +190,12 @@ The derivation joins two facts per registration call site:
 scanned code derives nothing — implementing an interface is not an endpoint. This is
 stated in D02 to prevent the phantom-endpoint failure mode, and it is why the style
 needs no execute-terminal: binding a receiver to a subscription is intent in a way a
+*[CORRECTED — `OI-64`, F2. This reasoning was wrong for Google Pub/Sub: binding a
+receiver to a subscription is NOT sufficient intent, because `Subscriber` delivers
+nothing until `startAsync()` runs, and the catalog derived live endpoints from
+construction alone. `registration.started_by` now declares the activation chain.
+Left in place rather than rewritten, because this document records what was decided
+then; the note is here so a reader does not carry the conclusion forward.]*
 built-but-unlogged HTTP request is not (the OkHttp `terminal_via_argument` reasoning,
 resolved the other way for this evidence shape, deliberately).
 

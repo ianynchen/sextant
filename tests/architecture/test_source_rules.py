@@ -97,6 +97,17 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     not a JVM implementation detail leaking out of the extractor, so it is
     recorded here for the same reason rather than smuggled past the check.
 
+    `ingress/detect/maven.py` joins them on the same standard (W3b): it reads
+    the property key `java.version` because that is what MAVEN calls the
+    setting, and Spring Boot's parent pom sets that one and nothing else. It is
+    a wire key, not a language branch — the detector's behaviour does not vary
+    by language, and the file goes out of its way to say so ("this detector is
+    keyed by build system, so it has no business naming one"). Dropping the key
+    instead was measured and rejected: the commonest Boot module in the estate
+    would then report no declared release at all, and multi-release selection
+    would fall back to the class-file major — a worse answer than the pom
+    actually states.
+
     `api.py` was the composition-root exception (2N Task 5, §5b): the
     reactor-walk/scan composition that used to live inline in `cli/app.py`'s
     own command bodies — the one place allowed to name
@@ -119,11 +130,17 @@ def test_jvm_names_stay_in_the_jvm_extractor():
         if not any(str(path.relative_to(SRC)).startswith(prefix) for prefix in allowed)
     ]
 
-    found = offenders(files, JVM_NAMES)
-    known_leak = {"domain/facts.py", "ingress/detect/gradle.py"}
+    # A MAPPING, not a file set plus a blanket name check: each recorded file
+    # is pinned to the exact name it may carry, so a file allowed `classpath`
+    # cannot start carrying `java` without this failing.
+    known_leak = {
+        "domain/facts.py": {"classpath"},
+        "ingress/detect/gradle.py": {"classpath"},
+        "ingress/detect/maven.py": {"java"},
+    }
 
-    assert {str(path) for path in found} == known_leak, found
-    assert all(hits == {"classpath"} for hits in found.values())
+    found = offenders(files, JVM_NAMES)
+    assert {str(path): hits for path, hits in found.items()} == known_leak, found
 
 
 def test_a_language_extension_namespace_is_read_only_by_its_own_adapter():

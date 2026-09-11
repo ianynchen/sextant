@@ -1,0 +1,81 @@
+id: spring-scheduling
+displayName: Spring scheduling (@Scheduled)
+style: scheduled_work
+
+# NO `protocol` AND NO `direction`, and their absence is a claim rather than an
+# omission (2O design §4). This catalog derives into `scheduled_work`, a table
+# with no protocol, no address and no direction: work started on a clock speaks
+# no wire. `resolve/endpoints.py` refuses either key on a catalog that MINTS NO
+# ENDPOINT ROWS, and refuses their absence on one that mints them — so the
+# absence here is checked rather than merely written. *That check asked about
+# the STYLE until OI-1 re-keyed it on what the catalog derives; this file
+# answers identically under both readings.*
+
+detect:
+  coordinates: ["org.springframework:spring-context"]
+
+# `nested_annotation_args` (capability 9.16) as well as `annotation_args`, and
+# the second is not optional hardening. Two or more `@Scheduled` on one method
+# are folded by javac into a single `@Schedules` whose `value` is an ARRAY OF
+# ANNOTATIONS, so on a scanner that cannot read a nested annotation such a
+# method carries no readable trigger at all — while its single-schedule
+# neighbour carries its own. Requiring the capability makes that scanner skip
+# this catalog VISIBLY (M04, FR-17) instead of reporting part of a module's
+# scheduled surface and staying silent about the rest.
+requires: [annotation_args, nested_annotation_args]
+
+matches:
+  annotation: org.springframework.scheduling.annotation.Scheduled
+  # The container javac folds a repeated `@Scheduled` into. Named explicitly
+  # rather than derived from the annotation's own `@Repeatable`, which is a
+  # fact of a class file in a jar this analysis does not scan.
+  container: org.springframework.scheduling.annotation.Schedules
+
+  # WHICH ATTRIBUTES NAME A SCHEDULE, and what the framework calls each kind.
+  # This is an ALIAS SET, not the annotation's attribute list: `@Scheduled`
+  # also carries `initialDelay`, `initialDelayString`, `zone`, `timeUnit` and
+  # `scheduler`, and not one of them is a schedule. `initialDelay` is the
+  # sharpest — it is a duration, it sits beside a rate, and reading it would
+  # publish the delay before the FIRST run as the interval between every run.
+  #
+  # The `String` spellings map to the same kind as their numeric twins because
+  # they ARE the same schedule declared in another notation; the difference is
+  # that a string may hold a `${...}` placeholder, which the engine carries
+  # verbatim and marks `unresolved`.
+  triggers:
+    cron: cron
+    fixedDelay: fixedDelay
+    fixedDelayString: fixedDelay
+    fixedRate: fixedRate
+    fixedRateString: fixedRate
+
+  # THE VALUES THAT MEAN "NEVER", per trigger attribute — `OI-2`, measured by
+  # CP-14 rather than remembered.
+  #
+  # The framework declares this one itself, as `@Scheduled.CRON_DISABLED`, and
+  # its post-processor compares `cron()` against it immediately before
+  # `ScheduledTaskRegistrar.scheduleCronTask` and before nothing else (CP-14
+  # rows 1-3, byte-identical at spring-context 6.1.6, 6.2.19 and 7.0.9). So a
+  # declaration writing it registers NO task, and a `scheduled_work` row for it
+  # would be work the framework will never do.
+  #
+  # `cron` ALONE, and that is measured rather than chosen: CP-14 row 3
+  # enumerates every string comparison in the post-processor and finds exactly
+  # one. A rate or a delay is withdrawn by being absent, which this catalog
+  # already derives nothing for.
+  #
+  # Two boundaries this key does NOT cross, both stated because a reader would
+  # otherwise assume them. (a) The comparison happens AFTER Spring resolves
+  # `${...}`, so a placeholder whose deployed value is `-` is disabled too —
+  # §8.2 keeps this repository out of that, and such a row stays `unresolved`,
+  # which is what it already was. (b) The sentinel does not stop the
+  # declaration from COUNTING as a schedule: CP-14 rows 4-5 show the flag
+  # written before the comparison and asserted on after it, so
+  # `@Scheduled(cron = "-", fixedDelay = 1000)` is a declaration the container
+  # refuses to start while we still publish its `fixedDelay` row (`OI-34`).
+  disabled:
+    cron: "-"
+
+measured:
+  - { artifact: org.springframework:spring-context, versions: ["6.1.6", "6.2.19", "7.0.9"],
+      identity: reported, by: scripts/probes/cp14_schedule_sentinel.md }

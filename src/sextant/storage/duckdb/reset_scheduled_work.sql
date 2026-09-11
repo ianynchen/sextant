@@ -1,0 +1,12 @@
+-- Clears the scheduled-work table for one resolve. Mirrors
+-- reset_open_questions.sql, and for the same reason rather than by analogy:
+-- MORE THAN ONE catalog will write here (2O design §4a's "Quartz: later
+-- catalog, same table"), so a reset owned by the engine would empty the table
+-- once per catalog and leave only whichever ran last — `derive_endpoints`'s
+-- own stated defect (`resolve/endpoints.py`).
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the
+-- "scheduled_work" query still succeeds on a module that schedules nothing.
+-- Unconditional, so a resolve in which every catalog is skipped still leaves
+-- an empty table rather than the previous run's rows.
+DELETE FROM scheduled_work;

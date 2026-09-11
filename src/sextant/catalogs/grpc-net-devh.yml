@@ -1,0 +1,42 @@
+id: grpc-net-devh
+displayName: gRPC client (net.devh @GrpcClient injection)
+style: injected_client
+protocol: grpc
+direction: outbound
+
+detect:
+  coordinates: ["net.devh:grpc-client-spring-boot-starter"]
+
+# W53 (`G-91`). The FQN below was a PREDICTION until this probe: no `net.devh`
+# artifact resolved in either local repository when A2 audited it, and a wrong
+# FQN in an `injected_client` catalog is SILENT — the annotation never matches,
+# nothing is derived, and no skip or gap row says a name was wrong. Opened:
+# `net/devh/boot/grpc/client/inject/GrpcClient.class` is in the starter jar.
+measured:
+  - { artifact: net.devh:grpc-client-spring-boot-starter, versions: ["3.1.0.RELEASE"],
+      identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
+
+requires: [call_site, string_constants, annotation_args, typed_signatures]
+
+matches:
+  # D02 §2's `injected_client` style (2O design §1c). net.devh's own
+  # `@GrpcClient` is the one field-injection spelling this task ships —
+  # Spring gRPC's own client wiring is not (task-5-report.md states why).
+  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient
+  # Same CP-8(b) call-site-argument read `grpc-java.yml`'s own
+  # `supertype_marker.service_name_call` uses, applied to the injected
+  # field's own declared stub TYPE instead of a supertype — R11, and
+  # `shapes/identity_calls.py`'s own module docstring for why it is a
+  # call-site read rather than a `constant: SERVICE_NAME` field-value one.
+  # `{owner, method}`, not a single `Owner.Fqn#method` string —
+  # `grpc-java.yml`'s own comment states why. No `method_name_call` here:
+  # this style derives at the SERVICE level only (`method` always NULL) —
+  # per-method outbound rows wait on 2Q's call graph (2O design §1c).
+  identity_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`/`format_fixed`
+# — `grpc-java.yml`'s own identical omission and reasoning, restated here
+# rather than pointed at: this style's own row carries no payload
+# (`request_shape`/`response_shape` NULL, a service-level row links to no
+# method yet) and `grpc-schema.yml` already owns `{grpc: protobuf}`.

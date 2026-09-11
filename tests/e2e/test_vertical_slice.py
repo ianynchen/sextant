@@ -44,6 +44,26 @@ def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
     _run(first)
     _run(second)
     assert _fingerprint(first) == _fingerprint(second)
+    # NFR-1 over the two non-wire tables (2O design §4, Task 8 step 5). The
+    # fingerprint above already globs every `.parquet` in the workspace, so
+    # both files were compared — but "compared" and "present" are different
+    # claims, and a table that stopped being exported would make the first
+    # hold vacuously while the second failed. Named here so the coverage is a
+    # claim rather than a glob's side effect.
+    #
+    # This fixture schedules nothing and declares no advice, so both exports
+    # are EMPTY, and that is what is being pinned: the empty file must be
+    # byte-identical too. A pre-declared table that shipped no parquet at all
+    # would leave a bundle consumer unable to tell "this module runs no
+    # background work" from "this bundle does not carry that answer".
+    exported = {
+        path.name for workspace in (first, second) for path in workspace.rglob("graph/*.parquet")
+    }
+    for table in ("scheduled_work", "error_handlers"):
+        assert f"{table}.parquet" in exported, (
+            f"`{table}` did not reach the bundle, so the byte-identity comparison above "
+            f"held over a file that was never written"
+        )
 
 
 def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
@@ -167,6 +187,51 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     assert (
         "Unresolved endpoint derivation: `spring-stomp` — caller "
         "`com/example/orders/ws/OrderStompController#board(sig_26be7569).`."
+    ) in document
+    # F8 §9.5 (W38), and the half that had NO test: `coverage_of` is called on the RENDER
+    # path as well as the resolve one, because `render` reads the workspace back rather
+    # than re-resolving — so a summary composed only in `resolve/pipeline.py` reached
+    # `metadata.json` and never the document a person opens. Reverting that call to
+    # `workspace.query("coverage")[0]` passed 348 tests across `tests/api`, `tests/e2e`,
+    # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
+    # unit tests that exist hand-build the coverage dict and cannot see the composition.
+    # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
+    assert "Calls whose callee body this workspace read: 468 of 1474 (32%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1472." in document
+    assert (
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
+        "inherited 2, owner_not_scanned 339."
+    ) in document
+
+    # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
+    # its messaging surface was missing with nothing saying which half. The destination
+    # resolves from the call's own string literal even though the descriptor types it
+    # `Object` — `convertAndSend` is declared on `MessageSendingOperations<D>` and `D`
+    # erases, which is why a rule mirrored from `KafkaTemplate.send(String, V)` would
+    # have matched nothing at all.
+    # Two columns moved with `OI-77`, and they are different questions. The FORMAT reads
+    # `json (assumed)` because the payload is handed through from `announce`'s own
+    # parameter, so the row carries `OrderView` and the ladder has a declared type to
+    # answer off. The row's own RESOLUTION reads `resolved` because both captures this row
+    # declares were read — the destination from its string literal, the payload's type from
+    # the caller's signature. It answered `unresolved` while the payload column was NULL,
+    # which was then the only place that fact could be stated.
+    assert (
+        "`websocket /topic/order-announced` | unresolved | "
+        "`com/example/orders/ws/OrderStompPublisher#announce(sig_7cebbae5).` | "
+        "json (assumed) | resolved |"
+    ) in document
+    # The default-destination overload takes no destination argument at all, so the
+    # boundary is published with its address stated as unresolved rather than dropped —
+    # `KafkaTemplate.sendDefault`'s own answer, one framework along.
+    # And the default-destination row stays `unresolved`, which is the pair that makes the
+    # distinction legible: it takes NO destination argument at all, so a capture really did
+    # fail here — the template's configuration carries the address and nothing in this
+    # module states it.
+    assert (
+        "`websocket (unresolved)` | unresolved | "
+        "`com/example/orders/ws/OrderStompPublisher#announceToDefault(sig_7cebbae5).` | "
+        "json (assumed) | unresolved |"
     ) in document
     # 2H Task 6: an SSE row is the first VERBED, protocol-qualified row whose
     # verb is an ordinary HTTP method — `sse GET /events/stream`, not the
@@ -400,26 +465,65 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # an operation declared in a jar and in no source file here. `soap`
     # outbound becomes 2; inbound is untouched, because a stub declares calls
     # and never a service.
+    # 2O Task 4 (`grpc-schema.yml`, `schema_operations`'s gRPC analog of 2H
+    # Task 4's `graphql-schema.yml` and 2I Task 4's `wsdl-schema.yml`): +2 grpc
+    # inbound — `sextant.orders.OrderService/GetOrder` (unary) and
+    # `sextant.orders.OrderService/StreamOrders` (server-streaming), the two
+    # methods `order.proto`'s new `service OrderService` block declares. A NEW
+    # protocol bucket — the fifth D00's closed set gains live in this fixture
+    # (`graphql`, `sse`, `websocket`, `soap`, now `grpc`) — and nothing
+    # outbound: no annotation catalog implements either method here, so
+    # neither row has a bytecode twin to merge with or a caller to derive.
+    # `soap` stays 6/2; `grpc` is new at 2/0.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
         "graphql": 12,
-        "http": 34,
+        "grpc": 2,
+        # + 8: 2O Task 6's Spring Data REST rows (`test_app.py`'s own note
+        # carries the breakdown).
+        # 43 since OI-47: the covariant inherited mapping
+        # (`GET /api/orders/{id}`) that used to be lost with the bridge it was
+        # reachable through. The bundle answers what the workspace answers, so
+        # this moves with `tests/cli/test_app.py`'s own count.
+        # 44 since OI-48: `POST /v1/orders/scoped`, which roots the package-scope
+        # nullability case the fixture previously declared and never reached.
+        # 48 since W26: the four `/v1/paged/*` routes — `/totals`, whose payload is an
+        # interface described from its bean accessors, and three paged ones whose
+        # envelope lives in a jar this fixture opts into scanning nowhere.
+        # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
+        # verb, which Spring registers because `params`/`headers` separate them.
+        # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
+        "http": 54,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
         "soap": 6,
         "sqs": 4,
         "sse": 2,
-        "websocket": 3,
+        # 6 since W45: the three connect URLs `addEndpoint` registers.
+        "websocket": 6,
     }
     assert metadata["endpoints"]["outbound"] == {
-        "http": 23,
+        # 25 since W29: `InventoryWebClient#tagged`, whose three headers are the fixture's
+        # `endpoint_metadata` rows, and `#searched`, whose url is built inside a
+        # `uri(Function)` lambda and therefore derives with `path` NULL and
+        # `resolution: unresolved` — the call recorded, its address honestly unread
+        # (`OI-73`).
+        # 29 since W27's review: four second callers the outbound dedup had been
+        # deleting outright (F5 §6.1 rule 1).
+        "http": 29,
         "jms": 3,
-        "kafka": 10,
+        "kafka": 11,
         "pubsub": 4,
-        "soap": 2,
+        # 3: `BillingSoapClient#placeAt` calls a DIFFERENT host with the same payload
+        # QName, and was being dropped as a duplicate of `#place`.
+        "soap": 3,
         "sqs": 3,
-        "websocket": 2,
+        # 4 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
+        # calls beside the two `@SendTo`/dynamic replies `spring-stomp` already derived.
+        # Before it the module was published receiving STOMP and never sending any.
+        # 7 since W46: the three client connects that close `G-32`.
+        "websocket": 7,
     }
     # 2F Task 9: metadata.json's own "environments" (D06 §3), populated from
     # `resolved_config`'s distinct environments — the fixture's own
@@ -563,7 +667,38 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # appears here only because `.sextant.yml` names the library — outbound
     # 40 + 1 = 41 — the 125-endpoint total (6 + 78 + 41 = 125). Nothing merges:
     # `stubCharge` is an operation nothing in this module serves.
-    assert rows == [("both", 6), ("inbound", 78), ("outbound", 41)]
+    # 2O Task 4 (`grpc-schema.yml`): +2 inbound grpc — `order.proto`'s new
+    # `service OrderService` block (comment above, `metadata["endpoints"]`) —
+    # inbound 78 + 2 = 80 — the 127-endpoint total (6 + 80 + 41 = 127).
+    # Nothing outbound and nothing `both`: the catalog is `direction: inbound`
+    # with no reply mechanism, and a grpc row cannot merge with anything else
+    # in the fixture — wire identity is protocol-scoped (D01 §3), and no
+    # annotation catalog implements either method here.
+    # 2O Task 6 (`spring-data-rest.yml`): +8 inbound http — the CRUD and search
+    # routes `CatalogRepository` earns, derived from a framework rule rather
+    # than from any declaration in this module — inbound 80 + 8 = 88. Nothing
+    # merges: no controller in this fixture serves `/orderViews`.
+    # OI-47: +1 inbound http — `GET /api/orders/{id}`, the covariant inherited
+    # mapping that used to be discarded along with the bridge it was reachable
+    # through — 88 + 1 = 89, for a 136-endpoint total (6 + 89 + 41 = 136).
+    # OI-48: +1 inbound http — `POST /v1/orders/scoped` — 89 + 1 = 90, for a
+    # 137-endpoint total (6 + 90 + 41 = 137).
+    # W27 (F5 §6.1): the six `both` rows are gone, and each is two rows again — 94 + 6
+    # inbound is 100, 41 + 6 outbound is 47, for a 147-endpoint total. Nothing new is
+    # derived here; six deletions stopped happening, and two of the six were joining a
+    # served operation to a call at a different address.
+    # W28: +3 inbound — 100 + 3 = 103. W29: +2 outbound — 47 + 2 = 49, for a
+    # 152-endpoint total.
+    # 55 outbound since W27's review: six second callers the dedup had been deleting
+    # (F5 §6.1 rule 1). Inbound is untouched — that key always carried the handler.
+    # W43: +2 outbound — 57 — the two `SimpMessagingTemplate.convertAndSend` calls
+    # that close G-33's asymmetry.
+    # W44: +3 inbound — 106 — the three `/mvcfn` Spring MVC functional routes that close
+    # G-29.
+    # W45: +3 inbound — 109 — the three STOMP connect URLs that close G-42.
+    # W46: +3 OUTBOUND — 60 — the three client connects that close G-32, for a
+    # 169-endpoint total.
+    assert rows == [("inbound", 109), ("outbound", 60)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -599,9 +734,14 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
             for row in workspace.query("endpoints")
             if row["path"] is not None and str(row["path"]).startswith("parsed-")
         }
+        # This test is about the PARSE binding's questions. `self_exchange` (W27, F5
+        # §6.1) files six of its own against this fixture — the identities it both
+        # serves and calls — and they are pinned in `test_self_exchange.py` and in the
+        # rendered-document test below rather than here.
         questions = [
             (str(row["path"]), str(row["question"]), json.loads(str(row["candidates"])))
             for row in workspace.query("open_questions")
+            if str(row["question"]) == "payload_binding"
         ]
     finally:
         workspace.close()
@@ -761,6 +901,77 @@ def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_anal
     )
 
 
+def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_path: Path):
+    """2O Task 6, live and whole, through the REAL command — the only path that
+    builds the module fact the gate reads, so this is the only place the whole
+    chain runs: the POM declares `spring-data-rest-core`, the detector records
+    that coordinate, the analyze stage writes it as a `module` fact, the gate
+    reads it back, and the engine derives a REST API from three interfaces that
+    declare no path, no verb and no HTTP anything.
+
+    Three claims, and the two that DECLINE matter at least as much as the one
+    that fires — this style mints an entire API from ordinary-looking code, so
+    a suite that only proved it can fire would not tell us it declines
+    correctly (GUIDELINES §10):
+
+    * `CatalogRepository` derives eight routes: the six-route CRUD table plus
+      `/search/findByStatus` and `/search/by-customer` (renamed by
+      `@RestResource`). It carries NO `@RepositoryRestResource` at all, which
+      is the case §2 exists for;
+    * `SecretRepository` is `exported = false` and derives NOTHING — not even a
+      collection route;
+    * `OrderRepository` extends the fixture's OWN `Repository<T, ID>`
+      stand-in, which is not one of the Spring Data contracts the catalog
+      enumerates, and derives NOTHING either. Real bytecode, shipped catalog,
+      ordinary generic interface: the near-miss that a synthetic test can only
+      approximate.
+    """
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        rows = [
+            row for row in workspace.query("endpoints") if row["catalog_id"] == "spring-data-rest"
+        ]
+        every_path = {str(row["path"]) for row in workspace.query("endpoints")}
+    finally:
+        workspace.close()
+
+    assert {(str(row["method"]), str(row["path"])) for row in rows} == {
+        ("GET", "/orderViews"),
+        ("POST", "/orderViews"),
+        ("GET", "/orderViews/{id}"),
+        ("PUT", "/orderViews/{id}"),
+        ("PATCH", "/orderViews/{id}"),
+        ("DELETE", "/orderViews/{id}"),
+        ("GET", "/orderViews/search/findByStatus"),
+        ("GET", "/orderViews/search/by-customer"),
+    }
+    # The entity's own name, uncapitalized in its first character and then
+    # pluralized by the ported Evo Inflector rules — never the repository's.
+    assert not any("catalog" in path.lower() for path in every_path)
+    # `exported = false` and the non-Spring-Data supertype: nothing, from
+    # either.
+    assert not any("orderRequest" in path for path in every_path)
+    assert not any("orderResult" in path for path in every_path)
+
+    by_identity = {(str(row["method"]), str(row["path"])): row for row in rows}
+    crud = by_identity[("GET", "/orderViews")]
+    search = by_identity[("GET", "/orderViews/search/findByStatus")]
+    # D02's `default_produces`, live: the framework serves HAL and does not
+    # negotiate its own representation.
+    assert crud["produces"] == '["application/hal+json"]'
+    assert (crud["resolution"], crud["evidence"]) == ("resolved", "declared")
+    # No code in this module serves the CRUD route; the query method DOES serve
+    # its own search route, and that is the difference the handler column
+    # carries.
+    assert crud["handler"] is None
+    assert str(search["handler"]).endswith("CatalogRepository#findByStatus(sig_b9c62fe1).")
+
+
 def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     """The same row at the document a reader actually sees. `none recorded`
     rather than `unresolved`: the schema addressed this operation outright and
@@ -816,8 +1027,13 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
+        # Keyed on the DIRECTION as well as the path since W27 (F5 §6.1):
+        # `{...}placeOrderRequest` is two rows — the operation this module serves, and
+        # `BillingSoapClient`'s call to `${soap.billing.uri}` — where the merge used to
+        # leave one. Keyed on the path alone, whichever row came second would silently
+        # replace the other.
         soap = {
-            str(row["path"]): row
+            (str(row["path"]), str(row["direction"])): row
             for row in workspace.query("endpoints")
             if row["protocol"] == "soap"
         }
@@ -833,18 +1049,22 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     # task's one schema-first row, and — since Task 6 — the one operation that
     # reaches the graph from a jar rather than from a source file.
     assert set(soap) == {
-        "{http://orders.example.com/ws}placeOrderRequest",
-        "{http://orders.example.com/ws}quoteOrderRequest",
-        "http://orders.example.com/action/cancelOrder",
-        "{http://billing.example.com/ws}chargeOrder",
-        "{http://billing.example.com/ws}refund",
-        "{http://billing.example.com/ws}stubCharge",
-        "{http://soap.orders.example.com/}legacyCharge",
+        ("{http://orders.example.com/ws}placeOrderRequest", "inbound"),
+        # W27: the call `BillingSoapClient#place` makes to `${soap.billing.uri}`. It was
+        # merged into the served row above on the strength of a shared QName — which the
+        # two compose from the same payload TYPE, not from a shared identity.
+        ("{http://orders.example.com/ws}placeOrderRequest", "outbound"),
+        ("{http://orders.example.com/ws}quoteOrderRequest", "inbound"),
+        ("http://orders.example.com/action/cancelOrder", "inbound"),
+        ("{http://billing.example.com/ws}chargeOrder", "inbound"),
+        ("{http://billing.example.com/ws}refund", "inbound"),
+        ("{http://billing.example.com/ws}stubCharge", "outbound"),
+        ("{http://soap.orders.example.com/}legacyCharge", "inbound"),
     }
-    schema_first = [path for path, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
-    assert schema_first == ["{http://orders.example.com/ws}quoteOrderRequest"]
+    schema_first = [key for key, row in soap.items() if row["catalog_id"] == "wsdl-schema"]
+    assert schema_first == [("{http://orders.example.com/ws}quoteOrderRequest", "inbound")]
 
-    quote = soap["{http://orders.example.com/ws}quoteOrderRequest"]
+    quote = soap[("{http://orders.example.com/ws}quoteOrderRequest", "inbound")]
     assert (quote["method"], quote["direction"]) == (None, "inbound")
     assert (quote["evidence"], quote["resolution"]) == ("declared", "resolved")
     assert quote["handler"] is None and quote["caller"] is None
@@ -857,13 +1077,18 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     }
     assert quote["response_shape"] is None
     # None of the request shape's own FIELDS derives a row of its own.
-    assert not {"sku", "count", "status", "cancelledAt"} & set(soap)
+    assert not {"sku", "count", "status", "cancelledAt"} & {path for path, _ in soap}
 
     # The annotated identity kept the annotation's row — the handler symbol
     # is the thing only that side knows.
-    place = soap["{http://orders.example.com/ws}placeOrderRequest"]
+    place = soap[("{http://orders.example.com/ws}placeOrderRequest", "inbound")]
     assert place["catalog_id"] == "spring-ws"
     assert place["handler"] is not None
+    # And the call keeps its own provenance, which the merge discarded with the row it
+    # deleted: `catalog_id` names the catalog whose rules produced THIS row (D01 §3).
+    called = soap[("{http://orders.example.com/ws}placeOrderRequest", "outbound")]
+    assert called["catalog_id"] == "spring-ws-template"
+    assert called["caller"] is not None and called["handler"] is None
 
     # The shape `request_shape` self-references, expanded from the schema's
     # own field declarations (2I Task 3) — pinned once more here as the live
@@ -876,7 +1101,7 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
     ]
 
 
-def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its_address(
+def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_its_address(
     tmp_path: Path,
 ):
     """2I Task 5 (`spring-ws-template.yml`), live and whole through the real
@@ -900,9 +1125,14 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
       expression. It lands in `peer` whole — a SOAP address is not the wire
       identity here, and half of an expression is not an address — where the
       per-environment join resolves it to a real URL per profile.
-    * THE MERGE. The module both serves and calls that operation, so D02 §3's
-      merge fires: one row, `direction: both`, the handler's own row surviving
-      with the caller and peer carried onto it and the outbound twin deleted.
+    * THE TWO ROWS, and this claim used to read "THE MERGE". The module serves that
+      QName and also calls it, and the two used to fold into one `direction: both` row
+      carrying `peer: ${soap.billing.uri}` — the module's own served operation and a call
+      to the BILLING service, published as one endpoint. They compose the same QName from
+      the same payload TYPE, which is not identity, and the merge could not tell because
+      `peer` is not part of endpoint identity (RC-5). Since W27 (F5 §6.1) both rows stand,
+      each keeping its own handler-or-caller, contract and `catalog_id`, and
+      `resolve/self_exchange.py` files the question a reader answers.
     * `jakarta-jws-client.yml` derives nothing FROM THIS MODULE'S OWN CODE,
       which is what `declared_on` is for: every `@WebService` written in this
       fixture is a CLASS, so the stub catalog claims none of them and no
@@ -921,9 +1151,23 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     # "Selected and derived nothing" is a different claim from "never
     # selected", and only this distinguishes them: a catalog whose `requires`
     # were unmet would be reported here by name, and the assertion below would
-    # then be proving nothing about `declared_on`.
+    # then be proving nothing about `declared_on`. Asserted EXACTLY, not
+    # emptily, since 2O Task 9: this fixture's build declares no Spring
+    # Integration, so the dependency gate skips that catalog by name — which
+    # is the gate working and leaves every claim below unaffected.
+    #
+    # `spring-rsocket` joins it in F2 §3.6, for the same reason one framework
+    # over: this fixture's POM declares `spring-websocket` and no RSocket
+    # library, so the catalog that would publish its `@MessageMapping` methods on
+    # `rsocket` is skipped and the one that publishes them on `websocket` runs.
+    # Before W16 neither was gated on anything that could tell them apart — the
+    # annotation belongs to both frameworks, and Spring's own handlers scan for
+    # it with the same predicate — so these rows were `websocket` on no evidence.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
-    assert metadata["skipped_catalogs"] == []
+    assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
+        "spring-rsocket",
+        "spring-integration",
+    ]
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
@@ -944,25 +1188,42 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     stubbed = [row for row in soap if row["catalog_id"] == "jakarta-jws-client"]
     assert [row["path"] for row in stubbed] == ["{http://billing.example.com/ws}stubCharge"]
     assert all("com.example/orders-soap-client" in str(row["caller"]) for row in stubbed)
-    # Exactly one soap row written IN THIS MODULE carries a caller, and it is
-    # the merged one.
+    # TWO soap rows written in this module carry a caller, and until W27's review there
+    # was one. `BillingSoapClient` calls `marshalSendAndReceive` twice — `place()` on the
+    # template's default URI, `placeAt()` on a literal `http://billing.example.com/ws/
+    # direct` — same payload QName, DIFFERENT HOSTS. The outbound dedup keyed on wire
+    # identity without `caller` or `peer`, so `placeAt` was dropped outright: a call to
+    # another host, gone from the bundle with nothing saying so. F5 §6.1 rule 1 is one row
+    # per (caller, target), and `peer` is what makes the target of an outbound row.
     called = [
         row
         for row in soap
         if row["caller"] is not None and "com.acme/orders-service" in str(row["caller"])
     ]
-    assert len(called) == 1
-    [place] = called
+    assert len(called) == 2
+    assert sorted(str(row["peer"]) for row in called) == [
+        "${soap.billing.uri}",
+        "http://billing.example.com/ws/direct",
+    ]
+    [place] = [row for row in called if row["peer"] == "${soap.billing.uri}"]
     assert place["path"] == "{http://orders.example.com/ws}placeOrderRequest"
-    assert place["direction"] == "both"
+    assert place["direction"] == "outbound"
     assert place["method"] is None
     assert place["resolution"] == "resolved"
-    # The handler survives the merge and the caller is carried onto it.
-    assert str(place["handler"]).endswith(
-        "com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7)."
-    )
     assert str(place["caller"]).endswith(
         "com/example/orders/soap/BillingSoapClient#place(sig_b5d0d855)."
+    )
+    assert place["handler"] is None
+    # The served operation is its own row, and the two are asked about rather than
+    # joined (W27, F5 §6.1).
+    [served] = [
+        row
+        for row in soap
+        if row["path"] == "{http://orders.example.com/ws}placeOrderRequest"
+        and row["direction"] == "inbound"
+    ]
+    assert str(served["handler"]).endswith(
+        "com/example/orders/soap/OrderSoapEndpoint#placeOrder(sig_fd19bfc7)."
     )
     # `peer` is the expression whole, never split: `${soap.billing.uri}` has
     # no authority half to take.
@@ -975,11 +1236,22 @@ def test_the_soap_client_call_merges_with_the_operation_it_calls_and_carries_its
     # (`jakarta-jws-client.yml` says so in as many words), so there is no
     # expression for the join to substitute — which is a different thing from
     # an expression it substituted nothing into. It sorts first on `path`.
+    # `placeAt`'s literal peer rides along in BOTH environments unchanged, which is what
+    # a literal means: there is no expression for the join to substitute. It was invisible
+    # here until W27's review, dropped as a duplicate of `place` on wire identity alone.
+    #
+    # It sorts AFTER the resolved one though its value sorts before — `resolved_peers`
+    # orders on the raw `peer` column, where `${soap.billing.uri}` beats
+    # `http://billing.example.com/ws/direct` on the leading `$`. Written out rather than
+    # sorted here, because the ordering is the query's promise (NFR-1) and a test that
+    # re-sorted would stop checking it.
     assert peers == [
         ("default", None, None),
         ("default", "http://billing.internal.example.com/ws", None),
+        ("default", "http://billing.example.com/ws/direct", None),
         ("prod", None, None),
         ("prod", "http://billing.prod.internal.example.com/ws", None),
+        ("prod", "http://billing.example.com/ws/direct", None),
     ]
 
 
@@ -1133,10 +1405,14 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     bundle = Path(result.output.strip())
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert "open_questions" in manifest["contents"]["tables"]
+    # Two `payload_binding` questions and, since W27 (F5 §6.1), six `self_exchange` ones
+    # — the identities this module both serves and calls, which used to be merged into a
+    # single row that asked nothing.
     rows = duckdb.sql(
-        f"SELECT count(*) FROM read_parquet('{bundle / 'graph' / 'open_questions.parquet'}')"
-    ).fetchone()
-    assert rows == (2,)
+        "SELECT question, count(*) FROM read_parquet("
+        f"'{bundle / 'graph' / 'open_questions.parquet'}') GROUP BY 1 ORDER BY 1"
+    ).fetchall()
+    assert rows == [("payload_binding", 2), ("self_exchange", 6)]
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
@@ -1188,7 +1464,38 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
         f"'{bundle / 'graph' / 'documents.parquet'}') GROUP BY origin ORDER BY origin"
     ).fetchall()
     assert (COORDINATE, 1) in origins
-    assert (None, 105) in origins
+    # 105 + 2: 2O Task 3's generic-superinterface fixture (`Repository<T, ID>`,
+    # `OrderRepository`) — module-output documents, same reason `test_app.py`'s
+    # count moved.
+    # + 1: 2O Task 6's `module` fact document (D00 §5), the detector's own
+    # conclusions travelling as facts; it carries no `origin`, like every other
+    # document this module produced itself. + 2: the same task's Data REST
+    # repositories (`CatalogRepository`, `SecretRepository`).
+    # + 7: 2Q `G3`'s dispatch fixture (`com/acme/orders/trace/`) — `Refiner`,
+    # `SoleRefiner`, `StrictRefiner`, `Splitter`, `FirstSplitter`,
+    # `SecondSplitter`, `TraceProbe`, one class file and one document each.
+    # Annotated by nothing and referenced by nothing, so they move this count
+    # and no other row in this test.
+    # + 2: OI-48's `com/acme/orders/springscoped/` — `SpringScopedDetail` and its
+    # `package-info`, a package declaring itself non-null in SPRING's spelling.
+    # + 3: that entry's own review — `apiscoped/package-info` declaring
+    # `@NonNullApi` ALONE (which scopes parameters and returns, never fields) plus
+    # its `ApiScopedDetail`, and `springscoped/nested/NestedScopedDetail`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    # + 3: W21's `com/acme/orders/model/` — `BaseEntity`, `Customer` and
+    # `CustomerRegistry`, which give the always-on corpus the superclass-call shape it
+    # scored ZERO of. `spring-petclinic-rest` makes 96 such calls and this fixture made
+    # none, so the suite could pass while Wave 3's resolution work had nowhere to fail.
+    # + 2: W26's `contracts/OrderTotals` and `PayloadShapeController` — a payload type
+    # with no fields at all, and the controller that returns it beside three paged
+    # responses whose envelope nothing here can expand.
+    # + 1: W28's `RoutingConditionsController`.
+    # + 1: W43's `ws/OrderStompPublisher` — the outbound half of the STOMP surface.
+    # + 2: W44's `mvcroutes/` pair — Spring MVC functional routing.
+    # + 1: W45's `ws/StompBrokerConfig` — the URL a STOMP client opens.
+    # + 1: W46's `ws/OrderFeedClient` — the client direction, which opens one.
+    assert (None, 134) in origins
 
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"

@@ -1,0 +1,77 @@
+id: spring-advice
+displayName: Spring error handling (@ControllerAdvice, @ExceptionHandler)
+style: error_advice
+
+# NO `protocol` AND NO `direction`, for the reason `spring-scheduling.yml`
+# states in full (2O design §4): this catalog derives into `error_handlers`,
+# which has no protocol, no address and no direction. An error handler is not a
+# boundary anyone can address — it is what happens inside one that already
+# exists — and giving these rows a wire identity would invent a route the
+# framework does not serve.
+
+detect:
+  coordinates: ["org.springframework:spring-web"]
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  handler_annotation: org.springframework.web.bind.annotation.ExceptionHandler
+
+  # THE TWO CONTAINER KINDS, and they are different claims. An advice class
+  # applies to controllers OTHER than itself — to every controller in the
+  # application when it narrows nothing — while a controller's own handler
+  # methods answer for that controller alone. `error_handlers.declared_by`
+  # records which of the two a row came from, because a single NULL scope
+  # cannot tell them apart.
+  #
+  # `@RestControllerAdvice` is meta-annotated with `@ControllerAdvice` and is
+  # named here anyway: the composition lives in a jar this analysis does not
+  # scan, so following it would need `extract_libraries`. Naming both spellings
+  # is the hand-copied half D02 §7 already describes; the engine's own
+  # composition pre-pass covers the other half, a stereotype THIS MODULE
+  # declares.
+  advice_annotations:
+    - org.springframework.web.bind.annotation.ControllerAdvice
+    - org.springframework.web.bind.annotation.RestControllerAdvice
+  controller_annotations:
+    - org.springframework.stereotype.Controller
+    - org.springframework.web.bind.annotation.RestController
+
+  # WHICH ADVICE ATTRIBUTES NARROW ITS REACH, and nothing else. The annotation
+  # also carries `value` — an alias for `basePackages` — which is deliberately
+  # absent: reading it verbatim under its own name would record the same scope
+  # twice under two keys and make two identical declarations compare unequal.
+  # The consequence is stated rather than hidden: an advice narrowed only by
+  # the bare `value` form records no scope, which reads as "every controller"
+  # and is the WIDER claim, so it can never under-report a handler's reach.
+  scope_from: [annotations, basePackages, basePackageClasses, assignableTypes]
+
+  status_annotation: org.springframework.web.bind.annotation.ResponseStatus
+  # An ALIAS ORDER, not a set: `code` and `value` are the same attribute under
+  # two names, so the first one written is the one the declaration means.
+  status_from: [code, value]
+
+  # WHAT PROVES A PARAMETER IS AN EXCEPTION, for the half of the framework's
+  # rule that reads the parameter list because the annotation named no type.
+  # The framework asks whether the parameter is assignable to `Throwable`; this
+  # workspace can answer that only where the chain is readable, so the roots
+  # are named here and the engine walks each scanned class's own `superclass`
+  # edges up to one of them. The JDK's own hierarchy above these four is never
+  # scanned, which is exactly why all four are listed rather than `Throwable`
+  # alone: a module exception extending `RuntimeException` reaches its root in
+  # one hop, and would reach nothing at all if only the top were named.
+  exception_roots:
+    - java.lang.Throwable
+    - java.lang.Exception
+    - java.lang.RuntimeException
+    - java.lang.Error
+
+# The envelopes a handler's return type may be wrapped in, so the response
+# shape is the type on the wire rather than the container carrying it (D02
+# §2a). An envelope NOBODY declares is never unwrapped past — the engine
+# records no response shape rather than guessing what an unfamiliar generic
+# holds.
+wrappers:
+  - type: org.springframework.http.ResponseEntity
+    payload_arg: 0
+    semantics: http_envelope

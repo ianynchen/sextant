@@ -41,6 +41,32 @@ CONFIG_FILE = ".sextant.yml"
 # than being ignored — see the module docstring.
 _KEYS = frozenset({"extract_libraries", "redact", "enrich"})
 
+# The keys `docs/components/D04-config-and-exclusion.md` §2 specifies for two
+# OTHER files — a repository-root `sextant.yml` and `~/.sextant/config.yml`.
+# **Neither file is ever opened by anything** (`A-C9`, principles sweep §3.2):
+# nothing in `src/` names either path, the catalog set is hard-wired to the
+# package's own directory (`ingress/catalogs/yaml_source.py`), `scanners.pin`
+# has no parameter to reach, and `tools.helm` has no reader. So this list is
+# not a list of keys that belong somewhere else — it is a list of keys that
+# belong nowhere, and it exists purely so the refusal below can say which
+# mistake the author made.
+#
+# It matters because the repository file's documented name is one character
+# from this one's, and in a single-module repository the two roots coincide.
+# A reader who follows D04 §2 writes these keys HERE, all four commands share
+# this reader, and the run is refused — with a message that (before this)
+# said only "read nowhere", which is equally true of a typo and points at
+# nothing. A user following the documentation is not degraded, they are
+# stopped, and the least this can do is tell them why.
+#
+# It shrinks to nothing the day D04 §2 is retired or built. Retiring is the
+# roadmap's standing ruling for the `catalogs:` half (project catalogs are
+# deliberately unscheduled: they would make D02's schema a public API), and
+# the amendment recording that is in D04 §2 itself.
+_DOCUMENTED_ELSEWHERE = frozenset(
+    {"catalogs", "first_party", "modules", "output", "redaction", "scanners", "tools", "workspace"}
+)
+
 # And the only keys `redact:` may carry, closed for the same reason: a typo'd
 # `value_pattern` that read as "add no value patterns" would look exactly like
 # a module that asked for none, which is the failure this whole file exists to
@@ -102,11 +128,37 @@ def _document(module_root: Path) -> tuple[Path, dict[str, object]]:
         raise SextantConfigError(f"{path} must be a mapping, not {type(document).__name__}")
     unknown = sorted(set(document) - _KEYS)
     if unknown:
-        raise SextantConfigError(
-            f"{path} declares {', '.join(repr(key) for key in unknown)}, which Sextant "
-            f"reads nowhere — the keys it reads are {', '.join(sorted(_KEYS))}"
-        )
+        raise SextantConfigError(_unknown_key_message(path, unknown))
     return path, document
+
+
+def _unknown_key_message(path: Path, unknown: list[str]) -> str:
+    """Why this file cannot be honoured, in the terms the author will
+    recognise.
+
+    Two audiences, and one message for each. A misspelling gets the plain
+    closed-set refusal. A key `D04` §2 specifies for the repository-root
+    `sextant.yml` gets told that the file it belongs to is a DIFFERENT one and
+    that Sextant does not read it — which is the answer somebody who just
+    followed the documentation needs, and the one the plain refusal cannot
+    give (`A-C9`).
+    """
+    named = ", ".join(repr(key) for key in unknown)
+    message = (
+        f"{path} declares {named}, which Sextant reads nowhere — "
+        f"the keys it reads are {', '.join(sorted(_KEYS))}"
+    )
+    documented = sorted(set(unknown) & _DOCUMENTED_ELSEWHERE)
+    if not documented:
+        return message
+    return (
+        f"{message}. {', '.join(repr(key) for key in documented)} "
+        f"belong{'s' if len(documented) == 1 else ''} to the repository-root `sextant.yml` "
+        f"docs/components/D04-config-and-exclusion.md §2 specifies — a different file from "
+        f"this per-module `{CONFIG_FILE}`, and one Sextant does not read at all. Nothing "
+        f"opens it, so moving these keys there will not help either: see D04 §2's own "
+        f"amendment for what is supported instead"
+    )
 
 
 def read_redaction_rules(module_root: Path) -> RedactionRules:

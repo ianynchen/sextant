@@ -7,6 +7,13 @@ direction: inbound
 detect:
   coordinates: ["jakarta.jws:jakarta.jws-api", "javax.jws:javax.jws-api"]
 
+# ONE of the two reference implementations this file's prose claims. The
+# Apache CXF half is still unmeasured (`A-Mi7`), and an artifact nobody ran
+# gets no row here — that is the whole point of the block.
+measured:
+  - { artifact: com.sun.xml.ws:jaxws-rt, versions: ["4.0.2"],
+      identity: reported, by: scripts/probes/cp13_inherited_members.md }
+
 requires: [annotation_args, typed_signatures]
 
 matches:
@@ -60,9 +67,16 @@ matches:
     # CHECKPOINT FACT (Phase 2I Task 2, item 4): `operationName` arrives as a
     # plain SCALAR string (`{"operationName": "chargeOrder"}`), and a
     # `@WebMethod` that names none carries the key not at all — an annotation's
-    # declared default is never written into the class file. So "absent" is the
-    # only shape the defaulted case can take, which is exactly what
+    # declared default is never written into the annotation USE. So "absent" is
+    # the only shape the defaulted case can take, which is exactly what
     # `path_fallback` below answers.
+    #
+    # *This read "never written into the class file", which W4 made false: the
+    # default IS in the class file, on the annotation TYPE (JVMS 4.7.22
+    # `AnnotationDefault`), and the extractor has emitted it since. The
+    # distinction is the difference between "nobody can know this default" and
+    # "this USE does not carry it" — the first forecloses reading it, the second
+    # is just why `path_fallback` exists.*
     path_from: [operationName]
     prefix_from: []
     prefix_annotation: null
@@ -82,16 +96,29 @@ matches:
     # — the same bracketed token `spring-ws.yml`'s `@PayloadRoot` composes, and
     # the reason it is engine vocabulary rather than either catalog's own trick.
     qualifier_format: qname
-    # CHECKPOINT FACT (item 2, verified against BOTH reference implementations —
-    # `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
-    # independent `PackageUtils#getNamespace`, which agree character for
-    # character): a `@WebService` naming no `targetNamespace` gets `"http://"` +
-    # its package reversed and dot-joined + a trailing `"/"`. This is the
-    # framework's OWN default, defined by its spec and implemented identically
-    # twice, so deriving it is reading JAX-WS rather than guessing (DR-6) —
+    # CHECKPOINT FACT (item 2): a `@WebService` naming no `targetNamespace` gets
+    # `"http://"` + its package reversed and dot-joined + a trailing `"/"`. This
+    # is the framework's OWN default, defined by the JAX-WS specification, so
+    # deriving it is reading JAX-WS rather than guessing (DR-6) —
     # `LegacyBillingWebService` in `com.example.orders.soap` is served at
     # `http://soap.orders.example.com/`, and a row without it would carry a
     # namespace-less QName that matches no caller.
+    #
+    # **EVIDENCE TIER, stated because it was overstated (§5.4, `A-Mi7`).** This
+    # line read "verified against BOTH reference implementations —
+    # `com.sun.xml.ws.model.RuntimeModeler#getNamespace` and Apache CXF's
+    # independent `PackageUtils#getNamespace`, which agree character for
+    # character". Those two classes ARE the right places to look and the reading
+    # stands, but it was a READ of the implementations, not a RUN of either:
+    # **no version is recorded for either, and no probe is committed** — CXF in
+    # particular has never been executed by this repository. So the claim's real
+    # tier is "framework rule read, not measured", which §8.1 calls a prediction
+    # until something runs it. It stays because the spec defines the default and
+    # both implementations were read agreeing on it, and because the alternative
+    # is a namespace-less QName that matches no caller. **Falsified by** either
+    # implementation deriving a different default at a version this catalog is
+    # pointed at; the probe backlog carries "JAX-WS's exposed-member rule per
+    # RI" and this belongs beside it.
     namespace_default: reversed_package
     # DR-6, the rule that made this file wait on a vocabulary addition: a public
     # method with no `@WebMethod` at all IS exposed by JAX-WS — the annotation
@@ -106,6 +133,32 @@ matches:
     # one row per operation, never two — which is also what keeps
     # `@WebMethod(exclude = true)` withdrawn rather than quietly re-derived
     # under its construct name.
+    #
+    # **INHERITED public methods are members too, since `A-M15`.** The SQL
+    # joined the gate on `s.enclosing`, which reads "the public methods of C"
+    # as "the public methods DECLARED in C" — so a `@WebService public class
+    # BillingWebService extends AbstractBilling` published none of the base's
+    # operations, silently, and this file's own argument above made exactly
+    # that mistake one axis over. MEASURED (CP-13 Q3/Q4, jaxws-rt 4.0.2):
+    # `RuntimeModeler.processClass` walks the implementor class's
+    # `Class.getMethods()` — inherited public methods included — drops only
+    # those declared by `java.lang.Object`, and then applies
+    # `isWebMethodBySpec`. `derive_endpoints.sql`'s `gate_ancestry` is that
+    # walk, stopping at the module boundary and at `Object` (which capability
+    # 9.13 never writes a `superclass` for).
+    #
+    # ONE DIVERGENCE FROM THE RI REMAINS AND IS STATED IN COVERAGE:
+    # `isWebMethodBySpec` also excludes a `final` method, and the SQL excludes
+    # `static` and `synthetic` only. A `public final` operation is exposed by us
+    # and not by the RI. It is left rather than added because `modifiers` is
+    # written by `ClassScanner.methodModifiersJson`, which records neither
+    # `ACC_FINAL` nor `ACC_ABSTRACT` — the same missing bit `spring-data-rest`'s
+    # `default`-method boundary waits on.
+    #
+    # AND THE RI IS ONE IMPLEMENTATION. This file used to claim it was
+    # "verified against BOTH reference implementations" while naming neither
+    # (`A-Mi7`); CP-13 names and measures jaxws-rt 4.0.2. **Apache CXF is not
+    # measured**, so every rule here is scoped to the RI until it is.
     members: public_methods
     # Neither annotation declares a `method` attribute; the name is borrowed and
     # never populated (the spring-jms.yml/spring-kafka.yml precedent), which is
@@ -158,39 +211,6 @@ format_fixed:
 # `Optional`. Declaring the family every sibling inbound catalog copies would
 # peel a return type the framework marshals whole.
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

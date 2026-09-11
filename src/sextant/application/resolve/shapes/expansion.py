@@ -3,6 +3,7 @@ every field through the same wrapper rules, and the `item` descriptor is
 recursive — assembled bottom-up over a queue of shapes, which one statement
 cannot express. The derivation is handed the finished rows."""
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -12,9 +13,10 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import ancestry_of
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
-from sextant.domain.symbols import bare_descriptor, owner_of
+from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 
 
 @dataclass(frozen=True)
@@ -37,8 +39,11 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     """
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
-    declared = _declared_fields(workspace)
+    declared = _Fields(workspace=workspace)
+    accessors = _Accessors(workspace=workspace, rules=rules)
     descriptors = _declared_shapes(workspace)
+    parameters = _type_parameters(workspace)
+    tiers = _origin_tiers(workspace)
     enums = _enum_symbols(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
@@ -60,18 +65,62 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         # cached hash codes — not the wire contract the schema states, so
         # `declared.get(shape_id, [])` is never consulted once a descriptor
         # is found here.
-        descriptor = descriptors.get(shape_id)
+        # F4 §5.2 (W25). A parameterised id names a type plus its bound arguments, and
+        # everything the workspace holds is keyed on the type ALONE — its fields, its
+        # declared shape, its formal parameters. So the base is what is looked up, and
+        # the binding is applied to the fields that come back.
+        base, arguments = bindings_of(shape_id)
+        substitution = _substitution(parameters.get(base, []), arguments)
+        descriptor = descriptors.get(base)
+        # F4 §5.2 (W26). Fields first, accessors only when the fields produced NO wire
+        # contract — which keeps this purely additive: every shape that had rows before
+        # has the same rows now, and the fallback replaces an empty answer rather than
+        # competing with a real one. The trigger is the empty ROW SET rather than an
+        # absent field fact, so a type whose only fields are static or `@JsonIgnore`d
+        # falls back too; those are the same "we found no contract" as an interface's
+        # no fields at all, and a shape with neither fields nor accessors is still open.
+        #
+        # **A type whose accessors are ALL filtered out is CLOSED with zero fields**, and
+        # that is the answer rather than a hole (W26 review raised it; measured and
+        # rejected). `_rows_of`'s only filters are `static`/`transient` and the catalog's
+        # own `ignore` list, and every one of those means the member is genuinely not on
+        # the wire — a type whose every accessor carries `@JsonIgnore` serialises as `{}`,
+        # and `{}` is a complete description. It is also exactly what the FIELD path does
+        # one line up: a class whose fields are all ignored has `base in declared` and is
+        # closed too. Making the accessor half report open would leave the two halves
+        # disagreeing about one question.
+        from_accessors = False
         if descriptor is not None:
             rows = _declared_rows_of(descriptor, referenced)
         else:
             rows = _rows_of(
-                workspace, rules, scope_prefixes, declared.get(shape_id, []), enums, referenced
+                workspace,
+                rules,
+                scope_prefixes,
+                _bound(declared.of(base), substitution),
+                enums,
+                referenced,
             )
+            if not rows:
+                from_accessors = bool(accessors.of(base))
+                rows = _rows_of(
+                    workspace,
+                    rules,
+                    scope_prefixes,
+                    _bound(accessors.of(base), substitution),
+                    enums,
+                    referenced,
+                )
         pending.extend(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
-        expandable = descriptor is not None or shape_id in declared
+        # `declared.of(base)` rather than "does `base` declare a field of its own": a type
+        # that declares none and inherits all of them IS described, and asking only about
+        # its own facts reported `DetailedOrderResult extends OrderResult` unexpandable
+        # while publishing both of its inherited fields. Same shape as the mistake
+        # `_Accessors` records for accessors and `corpus_shapes.py` for resolvable calls.
+        expandable = descriptor is not None or bool(declared.of(base)) or from_accessors
         if not expandable:
             unexpanded.append(shape_id)
         shapes.append(
@@ -80,10 +129,43 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 "content_hash": _content_hash(rows),
                 # Direct, never transitive: a shape is open because a field of
                 # its own stopped, not because something further down did.
-                # A referenced type closes the field either way it can be
-                # expanded — bytecode fields or a declared shape's own.
+                # A referenced type closes the field every way it can be
+                # expanded — bytecode fields, a declared shape's own, or the bean
+                # accessors W26 reads when a type has no fields. The third had to be
+                # added here as well as at `expandable` above: `Page`'s `pageable`
+                # field holds `Pageable`, an interface expansion now describes in
+                # full, and a shape reported OPEN because of a field that is in fact
+                # described is a gap report pointing at nothing.
+                # F4 §5.2 (W25): where the declaring class file was read from. A
+                # contract whose fields came from a neighbour's compiled output reads
+                # exactly like one from this module unless the row says so.
+                "origin_tier": tiers.get(base),
                 "open": not expandable
-                or any(held not in declared and held not in descriptors for held in referenced),
+                # F4 §5.2. An UNSCANNED superclass may declare fields nobody here can
+                # see, so a subtype of one is not a complete description however many
+                # fields of its own were read. Before this, a type extending a scanned
+                # parent and one extending a vendor jar's base both read `open: false`.
+                #
+                # **Only where the fields came from BYTECODE.** A type owning a
+                # `declared_shape` takes its contract from the schema and never from its
+                # class file (the never-a-blend rule, D01 §3), so whatever its GENERATED
+                # class happens to extend says nothing about the payload — every protobuf
+                # message extends the runtime's `GeneratedMessage`, which is unscanned,
+                # and counting it opened all four of the fixture's proto shapes while the
+                # `.proto` describes them completely.
+                or (descriptor is None and declared.reaches_an_unscanned_SUPERCLASS(base))
+                or any(
+                    held not in descriptors and not declared.of(held) and not accessors.of(held)
+                    for held in referenced
+                )
+                # F4 §5.2 (W25). A field holding an UNBOUND type variable — a raw
+                # `CommonResult`'s `data`, declared `T` and bound to nothing — gets no
+                # shape id, because a variable's name means something only inside the
+                # declaration that introduced it. The field is therefore undescribed,
+                # and a shape with an undescribed field is OPEN. Without this the raw
+                # envelope reported `open: false` while saying nothing about its own
+                # payload, which is a stronger claim than the evidence supports.
+                or any(_holds_an_undescribed_object(row) for row in rows),
             }
         )
         fields.extend(
@@ -108,6 +190,12 @@ class _Rules:
     name_from: list[dict[str, str]]
     ignore: tuple[str, ...]
     default_strategy: str
+    # D02 §2f's accessor prefixes (W26), each with the `wire_type` its return must
+    # carry or None for "any". A model declaring none reads no accessor at all: the
+    # fallback exists because a shape model said which methods name properties, and
+    # inventing the prefixes here would be the same framework knowledge in code that
+    # §1b moved out of forty-two catalogs.
+    accessors: tuple[tuple[str, str | None], ...]
     # D02 §2e's three ways a catalog declares nullability, each already
     # converted at the binding seam like every other block here.
     nullable_annotations: tuple[str, ...]
@@ -115,6 +203,102 @@ class _Rules:
     # Scope annotation symbol -> the `nullable` value it implies for
     # everything the symbol it was found on claims (`_scope_prefixes`).
     scope_annotations: dict[str, bool]
+
+
+def _origin_tiers(workspace: Workspace) -> dict[str, str]:
+    """Where each declared type's class file was read from, by bare symbol (W25)."""
+    tiers = {
+        str(row["document_id"]): str(row["origin_tier"]) for row in workspace.query("documents")
+    }
+    return {
+        bare_descriptor(str(row["symbol"])): tiers[str(row["document_id"])]
+        for row in workspace.query("declared_symbols_with_documents")
+        if str(row["document_id"]) in tiers
+    }
+
+
+def _type_parameters(workspace: Workspace) -> dict[str, list[str]]:
+    """The formal type parameter NAMES each generic type declares, in declaration
+    order, keyed by bare symbol (F4 §5.2, W25).
+
+    Order is the binding: a reference's `arguments` are positional, so
+    `CommonResult<UmsAdmin>` binds the first declared name to `UmsAdmin`. Only TYPE
+    declarations are kept — a generic METHOD declares its own parameters under the same
+    key, and binding a class's argument to a method's variable of the same name would
+    substitute across two unrelated scopes.
+    """
+    found: dict[str, list[str]] = {}
+    for row in workspace.query("type_parameters"):
+        symbol = bare_descriptor(str(row["symbol"]))
+        if "(" in symbol:
+            continue
+        # A list rather than an object, so `_json_object` does not fit — the same
+        # absent-column reasoning applies and is spelled out here.
+        raw = row["type_parameters"]
+        declared = [] if raw is None else json.loads(str(raw))
+        found[symbol] = [str(entry["name"]) for entry in declared if entry.get("name")]
+    return found
+
+
+def _substitution(names: list[str], arguments: list[str]) -> dict[str, str]:
+    """`{variable name: bound shape id}`, positionally.
+
+    A reference carrying fewer arguments than the declaration has parameters — a raw
+    type — binds nothing rather than binding what it can: a partial binding would leave
+    some fields substituted and others holding a variable, which reads as a real type to
+    everything downstream.
+    """
+    if not names or len(names) != len(arguments):
+        return {}
+    return dict(zip(names, arguments, strict=True))
+
+
+def _bound(members: list[dict[str, Any]], substitution: dict[str, str]) -> list[dict[str, Any]]:
+    """`members` with the shape id's own type arguments substituted into each declared
+    type — the one operation fields and accessors both need (W25 for the first, W26 for
+    the second), written once rather than beside each caller.
+
+    **Substitution is by variable NAME, across the whole ancestry.** `Page<T>` binds its
+    own `T`, and `Slice`'s `getContent(): List<T>` is reached through the closure — so
+    the binding lands because both declarations spell the variable `T`, which is what
+    Spring's do. A hierarchy that RENAMES the variable (`interface Page<P> extends
+    Slice<T>`) leaves `getContent`'s `T` bound to nothing, and an unbound variable gets
+    no shape id at all (`_described`) — the field reads as undescribed and the shape
+    stays open. That is the safe direction to be wrong in: the answer degrades to what
+    it was before W26 rather than binding a variable to whatever sat at that position.
+    """
+    if not substitution:
+        return members
+    return [
+        {**member, "returns": _substituted(member.get("returns"), substitution)}
+        for member in members
+    ]
+
+
+def _substituted(returns: object, substitution: dict[str, str]) -> object:
+    """One field's declared type with its variables replaced by what they are bound to.
+
+    Recursive, because a variable can appear nested — `List<T>` inside `Page<T>`. The
+    replacement carries the bound id in `symbol`; the wire attributes come from the
+    variable's own reference, which is what the field's serialiser sees.
+    """
+    if not isinstance(returns, dict):
+        return returns
+    symbol = str(returns.get("symbol", ""))
+    bound = substitution.get(symbol)
+    replaced = dict(returns)
+    if bound is not None:
+        base, _ = bindings_of(bound)
+        replaced["symbol"] = base
+        replaced["arguments"] = returns.get("arguments") or []
+        # `object` is what a bound type reference is; the variable's own `wire_type`
+        # was already `object` for a class-bounded parameter, and this keeps a bound
+        # scalar honest rather than asserting a wire mapping nobody measured.
+        return replaced
+    replaced["arguments"] = [
+        _substituted(argument, substitution) for argument in (returns.get("arguments") or [])
+    ]
+    return replaced
 
 
 def _rules_of(catalog: Catalog) -> _Rules:
@@ -132,6 +316,10 @@ def _rules_of(catalog: Catalog) -> _Rules:
         # A catalog that declares no strategy renames nothing. Absence is not a
         # licence to invent one.
         default_strategy=serialization.get("default_strategy", "as_declared"),
+        accessors=tuple(
+            (str(entry["prefix"]), entry.get("wire_type"))
+            for entry in serialization.get("accessors", [])
+        ),
         nullable_annotations=tuple(
             _catalog_symbol(name) for name in nullability.get("nullable", [])
         ),
@@ -151,6 +339,124 @@ def _rules_of(catalog: Catalog) -> _Rules:
 _SCOPE_MEANINGS: dict[str, bool] = {"not_null_by_default": False}
 
 
+@dataclass
+class _Fields:
+    """Each type's wire fields — its own and its scanned ancestors' — resolved on the
+    first ask and remembered (F4 §5.2).
+
+    **A payload class extending another published only its OWN fields, and said the
+    description was CLOSED.** Measured on `mall-admin`: `dto/OmsOrderDetail extends
+    model/OmsOrder` published two fields (`orderItemList`, `historyList`) with
+    `open: false`, and the merged contract is **46** — the parent declares 45, of which
+    `serialVersionUID` is static and reaches no wire. So 2 of 46, and likewise
+    `PmsProductParam` 7 of 49 and `SmsCouponParam` 2 of 20; `jhipster-sample-app`'s
+    `ManagedUserVM` published 1 of 14. *(An earlier version of this note said 47, 50, 21
+    and 15 — the parents' DECLARED counts, one static field each above what serialises.)*
+
+    This repo's own fixture `DetailedOrderResult` published **1 of 3**: it declares
+    `detail` and inherits `orderId` and `status`. *(It was described here as "2 of 4",
+    which is not a state it was ever in — before `detail` was added it declared nothing at
+    all and came out right through the accessor fallback, which is exactly why the fixture
+    could not see this defect.)*
+
+    A wire contract missing most of the payload, published as complete, is the over-claim
+    NFR-2 rates worst, and DR-5 links services on exactly this comparison.
+
+    It is the same walk `_Accessors` already did for the accessor half, and the two
+    halves disagreeing about whether inheritance counts was the whole defect: W26 gave
+    accessors an ancestry and left fields without one.
+
+    First declaration of a field NAME wins, so a subtype shadowing an ancestor's field
+    takes precedence, and the walk order is `_closure_of`'s — the superclass chain before
+    interfaces — so which declaration that is never depends on iteration order (NFR-1).
+
+    **That order is JVMS 5.4.3.3's, which is METHOD resolution**; field resolution is
+    5.4.3.2 and searches superinterfaces BEFORE the superclass. Reusing the method walk is
+    correct here anyway, and not by luck: an interface's own fields are implicitly static,
+    `_rows_of` drops every static field, so no interface can contribute a field for the
+    two orders to disagree about. Shared with the accessor half rather than written twice,
+    which is worth more than matching a search order neither can observe. *(This note said
+    5.4.3.3 as though it were the field rule.)*
+
+    **The PUBLICATION order is child-first, and a serializer's is not.** Jackson collects a
+    superclass's fields before the subtype's, so the JSON on the wire reads `orderId,
+    status, detail` where this publishes `detail, orderId, status`. `shape_fields.ordinal`
+    is declaration order within the closure and never a claim about the order of keys in a
+    document — no consumer reads it as one, and `content_hash` is over the row SET — so it
+    is a difference from the framework rather than a divergence from it. Matching would
+    mean the accessor half diverging from the field half, or changing with it, for an
+    ordering nothing on the wire depends on.
+    """
+
+    workspace: Workspace
+    _cache: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    _read: tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]] | None = (
+        dataclasses.field(default=None)
+    )
+
+    def of(self, base: str) -> list[dict[str, Any]]:
+        """What `base` declares on the wire, its ancestors' included."""
+        remembered = self._cache.get(base)
+        if remembered is not None:
+            return remembered
+        own, ancestry = self._declared()
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for holder in _closure_of(base, ancestry):
+            for field in own.get(holder, []):
+                if field["name"] in seen:
+                    continue
+                seen.add(field["name"])
+                rows.append(field)
+        self._cache[base] = rows
+        return rows
+
+    def reaches_an_unscanned_SUPERCLASS(self, base: str) -> bool:
+        """Whether the closure above stops at a SUPERCLASS this workspace did not scan.
+
+        An unscanned superclass may declare fields nobody here can see, so a subtype of
+        one cannot claim a complete description (F7 §8.4's `<<open>>`, applied to the
+        shape rather than only to the diagram). Before this, `PmsProductParam extends
+        PmsProduct` and `SomeDto extends VendorBase` were indistinguishable in the output:
+        both read `open: false`, one correctly and one not.
+
+        **`extends` only, and the exclusion is the difference between a useful gap report
+        and a flood.** An unscanned INTERFACE cannot contribute a wire field: an
+        interface's own fields are constants, which `_rows_of` drops as `static` — so
+        implementing a MARKER interface says nothing about the payload. Counting it opened
+        30 of `mall-admin`'s 107 shapes for one such interface with no members at all,
+        which is an under-claim in the other direction.
+
+        **This rule opens ZERO shapes on every corpus measured**, and that is recorded
+        rather than implied. Across `mall-admin`, `jhipster-sample-app`,
+        `spring-petclinic-rest` and the fixture, four shapes reach an unscanned superclass
+        and all four are the fixture's protobuf messages, which the `descriptor is None`
+        guard at the call site then excludes. So it is a rule shipped against a shape no
+        corpus has — a payload extending a vendor jar's base class — declared and pinned
+        rather than deferred, the same standing `<|..` has in the class diagram.
+        *(An earlier version of this note claimed it kept "the four real unscanned-base
+        cases" from being buried. Those four are `mall-admin`'s newly-open shapes, which
+        are open because they hold an unscanned DATE type — nothing to do with this rule.)*
+        """
+        _own, ancestry = self._declared()
+        return any(
+            kind == "extends" and not is_scanned
+            for holder in _closure_of(base, ancestry)
+            for _parent, kind, is_scanned in ancestry.get(holder, [])
+        )
+
+    def _declared(
+        self,
+    ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]]:
+        """Every field each type declares ITSELF, keyed by owner, plus the ancestry to
+        walk them through. Read once per instance."""
+        if self._read is not None:
+            return self._read
+        ancestry, _scanned = ancestry_of(self.workspace)
+        self._read = (_declared_fields(self.workspace), ancestry)
+        return self._read
+
+
 def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
     """Every field fact grouped by the type that declares it, in declaration
     order — the `ordinal` source (NFR-1)."""
@@ -168,12 +474,217 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
             {
                 "symbol": symbol,
                 "name": descriptor[len(owner) :].removesuffix("."),
-                "returns": json.loads(str(row["returns"])),
+                # `_json_object`, not a bare `json.loads`: the `fields` query projects
+                # `signature -> 'returns'` with no NOT NULL predicate, so a fact that
+                # omitted it reads back as SQL NULL and `str(None)` is `"None"` — the
+                # exact crash this helper exists for, on the path that carries every
+                # field in the workspace. Left bare until W26's review pointed out that
+                # the helper was guarding the accessor path and not this one.
+                "returns": _json_object(row["returns"]),
                 "static": bool(row["static"]),
                 "transient": bool(row["transient"]),
             }
         )
     return owners
+
+
+def _json_object(value: object) -> dict[str, Any]:
+    """One optional JSON column read as a mapping, empty when the fact omitted it.
+
+    `str(None)` is `"None"`, which `json.loads` rejects — so a column a scanner left
+    unwritten took the whole expansion pass down rather than reading as "nothing was
+    said". Absence means the fact stated nothing, never that the pass should stop.
+    """
+    if value is None:
+        return {}
+    parsed = json.loads(str(value))
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _property_name(method: str, prefix: str) -> str | None:
+    """The property a bean accessor names, or None when the method names none.
+
+    Jackson's `legacyManglePropertyName`, which is what runs unless a module turns on
+    `MapperFeature.USE_STD_BEAN_NAMING` — read from jackson-databind 2.22.1's own
+    bytecode rather than from its documentation (§5.3):
+
+    * a bare `get()`/`is()` names nothing (the length-equals-offset arm returns null),
+      which is why `Streamable`'s own `get()` is not a `Slice`'s wire field;
+    * the leading RUN of upper-case letters is lowercased, not just the first, and the
+      remainder is then appended WHOLE — `getURL` is `url` and `getURLValue` is
+      `urlvalue`, not `urlValue`. Lowercasing only the first character would publish
+      `uRL`; stopping the run at the first letter of the next word would publish
+      `urlValue`. Both are names no Jackson on either side of the wire writes, and
+      `urlValue` is what this looks like it should produce, which is why it is pinned.
+      (`URLValue` is the answer under `MapperFeature.USE_STD_BEAN_NAMING`, which is off
+      by default and is a different strategy, not a different reading of this one.)
+    """
+    if not method.startswith(prefix):
+        return None
+    rest = method[len(prefix) :]
+    if not rest:
+        return None
+    if rest[0].islower():
+        return rest
+    lowered: list[str] = []
+    for index, character in enumerate(rest):
+        if character.lower() == character:
+            return "".join(lowered) + rest[index:]
+        lowered.append(character.lower())
+    return "".join(lowered)
+
+
+@dataclass
+class _Accessors:
+    """Each type's bean accessors, its own and its scanned ancestors', resolved on the
+    first ask and remembered (F4 §5.2, W26).
+
+    **Nothing is read until something asks**, and `derive_shapes` runs once per catalog,
+    so building the map eagerly scanned every method symbol and walked the whole type
+    graph forty-odd times before knowing whether any answer was wanted. Measured on
+    `mall-admin`: eager cost 15s of a 90s resolve.
+
+    The saving is in the ORDER, not in rarity — this docstring used to add "which most
+    catalogs never reach", and W26's review measured that as false. `of` is also asked
+    from the `open` computation, once per referenced type that is neither declared nor a
+    descriptor, which is the ordinary case on any corpus reporting unexpanded types. So
+    the map really is built for most catalogs; it is built at the first ask rather than at
+    construction, which is what the measurement above is about.
+
+    **Resolved per type asked about rather than per type that DECLARES an accessor**, and
+    that is why `of` walks rather than reading a prebuilt dict. A first attempt keyed the
+    map on the types that declare one, which drops the purest form of the shape: a type
+    that declares no accessor of its own and inherits every one of them — `interface
+    OrderPage extends Page<OrderView> {}` — had no entry at all, so the fallback never
+    fired for it. That is the same mistake `scripts/corpus_shapes.py` records making about
+    resolvable calls, where "the owner declares at least one method of its own" dropped
+    `PetType` and `Specialty` and understated the count by 27%. Membership in a declaring
+    set is not the question; what the type PRESENTS is.
+    """
+
+    workspace: Workspace
+    rules: "_Rules"
+    # `dataclasses.field`, qualified: `field` is the loop variable two functions below,
+    # and an unqualified import here shadows it.
+    _cache: dict[str, list[dict[str, Any]]] = dataclasses.field(default_factory=dict)
+    _read: tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]] | None = (
+        dataclasses.field(default=None)
+    )
+
+    def of(self, base: str) -> list[dict[str, Any]]:
+        """What `base` presents on the wire, in declaration order.
+
+        First declaration of a property name wins, so an override on the subtype takes
+        precedence over the ancestor it overrides — and the walk order is JVMS 5.4.3.3's
+        (superclass chain before interfaces), so which declaration that is never depends
+        on iteration order (NFR-1).
+        """
+        if not self.rules.accessors:
+            return []
+        remembered = self._cache.get(base)
+        if remembered is not None:
+            return remembered
+        own, ancestry = self._declared()
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for holder in _closure_of(base, ancestry):
+            for accessor in own.get(holder, []):
+                if accessor["name"] in seen:
+                    continue
+                seen.add(accessor["name"])
+                rows.append(accessor)
+        self._cache[base] = rows
+        return rows
+
+    def _declared(
+        self,
+    ) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[tuple[str, str, bool]]]]:
+        """Every accessor each type declares ITSELF, keyed by owner, plus the ancestry to
+        walk them through. Read once per instance.
+
+        `symbol` is the accessor METHOD's symbol, not a field's, and that is deliberate:
+        `_rows_of` looks up `annotations_of(symbol)`, and a naming or ignore annotation on
+        a payload type with no fields is written on the getter. The method is where the
+        annotation is, so the method is what is asked about.
+
+        The query already returns only public, zero-argument methods that reach a wire
+        type — the accessor's own definition, which a shape model can narrow but never
+        widen. A return that reaches NO wire type is excluded there by its empty
+        `wire_type` — the projection's own answer, which covers both the no-value return
+        and the uninstantiable placeholder type beside it; the guard that tested the
+        `returns` KEY instead let both through (W26 review). What is left here is what
+        the DECLARED prefixes decide.
+        """
+        if self._read is not None:
+            return self._read
+        ancestry, _scanned = ancestry_of(self.workspace)
+        own: dict[str, list[dict[str, Any]]] = {}
+        for row in self.workspace.query("accessor_declarations"):
+            if row["enclosing"] is None:
+                continue
+            # Optional on the fact and read back as SQL NULL when a scanner wrote none
+            # (D00 §5a) — the ASM one always writes it for a method, but a reader that
+            # assumed so crashed the whole pass on a fact that did not.
+            modifiers = _json_object(row["modifiers"])
+            # A bridge or other compiler-generated forwarder is not a method anyone wrote,
+            # and it carries the same name as the one they did.
+            if modifiers.get("static") or modifiers.get("synthetic"):
+                continue
+            returns = _json_object(row["signature"]).get("returns")
+            if not isinstance(returns, dict):
+                continue
+            descriptor = bare_descriptor(str(row["symbol"]))
+            owner = owner_of(descriptor)
+            if owner is None:
+                continue
+            method = descriptor[len(owner) :].removesuffix(".").split("(")[0]
+            for prefix, required_wire_type in self.rules.accessors:
+                if (
+                    required_wire_type is not None
+                    and returns.get("wire_type") != required_wire_type
+                ):
+                    continue
+                name = _property_name(method, prefix)
+                if name is None:
+                    continue
+                own.setdefault(owner, []).append(
+                    {
+                        "symbol": str(row["symbol"]),
+                        "name": name,
+                        "returns": returns,
+                        "static": False,
+                        "transient": False,
+                    }
+                )
+                break
+        self._read = (own, ancestry)
+        return self._read
+
+
+def _closure_of(start: str, ancestry: dict[str, list[tuple[str, str, bool]]]) -> list[str]:
+    """`start` and every ancestor above it, in JVMS 5.4.3.3's search order — the
+    superclass chain to exhaustion, THEN the interfaces breadth-first.
+
+    The order is the same one `dispatch.resolve` walks, and for the same reason W22's
+    review found the hard way: answering from a depth-1 interface while a depth-2
+    superclass holds the declaration recreates the defect one level deeper.
+    """
+    order: list[str] = []
+    seen: set[str] = set()
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        order.append(current)
+        parents = ancestry.get(current, [])
+        queue = (
+            [parent for parent, kind, _ in parents if kind == "extends"]
+            + queue
+            + [parent for parent, kind, _ in parents if kind == "implements"]
+        )
+    return order
 
 
 def _declared_shapes(workspace: Workspace) -> dict[str, dict[str, Any]]:
@@ -423,9 +934,124 @@ def _described(
         if reference["arguments"]:
             described["item"] = _described(rules, reference["arguments"][-1], enums, referenced)
     elif described["wire_type"] == "object":
-        described["shape_id"] = reference["symbol"]
-        referenced.append(reference["symbol"])
+        # F4 §5.2 (W25). The id carries the BOUND ARGUMENTS where the reference has
+        # any, so `CommonResult<UmsAdmin>` and `CommonResult<List<UmsRole>>` are two
+        # shapes rather than one envelope standing for both. Identity is the point:
+        # DR-5 gates stitching on payload equality, and one id for every
+        # parameterisation says two services exchange the same payload when they do
+        # not. Measured on `mall-admin`: 59 distinct parameterisations collapsed onto
+        # one id.
+        #
+        # A reference with NO arguments keeps the bare symbol, unchanged — 100 of
+        # `mall-admin`'s 160 handlers return raw `CommonResult`, which states no
+        # payload type, and inventing one would be the fabrication §8 forbids.
+        if not names_a_type(str(reference["symbol"])):
+            # An UNBOUND type variable. `CommonResult`'s `data` is declared `T`, and a
+            # raw `CommonResult` binds nothing — so this field holds a variable, not a
+            # type. Rooting it would publish `shape_id: "T"`, and every unrelated `T`
+            # in the module collides onto that one id: one shape claiming to describe
+            # several unrelated payloads, which is this module's own stated rule
+            # (`_body_reference`, §8.1 rule 2). The field keeps its wire type and gets
+            # no shape, which marks its owner OPEN — the honest answer, and visible.
+            #
+            # Newly reachable with W24/W25: before the module edge was crossed, a raw
+            # `CommonResult` had no fields at all, so nothing here could hold a variable.
+            return described
+        described["shape_id"] = parameterised_id(reference)
+        referenced.append(described["shape_id"])
     return described
+
+
+def parameterised_id(reference: dict[str, Any]) -> str:
+    """A shape id carrying the reference's own bound arguments (F4 §5.2).
+
+    `com/x/CommonResult#<com/x/UmsAdmin#>`, nested for a nested argument. No spaces,
+    deliberately: `bare_descriptor` splits a symbol on its last space to drop module
+    coordinates, and an id containing one would be silently truncated wherever that
+    helper is applied to a shape id.
+
+    A type VARIABLE argument contributes its own name — an unbound `CommonResult<T>`
+    is a distinct thing from `CommonResult`, and the 10 such handlers on `mall-admin`
+    should not silently join either group.
+    """
+    arguments = reference.get("arguments") or []
+    symbol = str(reference["symbol"])
+    if not arguments:
+        return symbol
+    return symbol + "<" + ",".join(parameterised_id(argument) for argument in arguments) + ">"
+
+
+def bindings_of(shape_id: str) -> tuple[str, list[str]]:
+    """A parameterised id split back into its base symbol and its arguments.
+
+    The inverse of `parameterised_id`, and it has to be a parse rather than a lookup
+    because the id is what travels: a `shapes` row, an endpoint's payload column and an
+    exported bundle carry the id and nothing beside it."""
+    if not shape_id.endswith(">") or "<" not in shape_id:
+        return shape_id, []
+    base, _, rest = shape_id.partition("<")
+    inner = rest[:-1]
+    arguments: list[str] = []
+    depth = 0
+    current = ""
+    for character in inner:
+        if character == "<":
+            depth += 1
+        elif character == ">":
+            depth -= 1
+        if character == "," and depth == 0:
+            arguments.append(current)
+            current = ""
+            continue
+        current += character
+    if current:
+        arguments.append(current)
+    return base, arguments
+
+
+def _holds_an_undescribed_object(row: dict[str, Any]) -> bool:
+    """Whether a field row holds an object this expansion could not name.
+
+    An `object` field normally carries a `shape_id` pointing at the shape holding its
+    fields. One that does not is a field whose type we have no name for — today, an
+    unbound type variable — and its owner cannot claim to be a closed description.
+
+    **Through the element chain, not only at the top.** W25 tested the row's own
+    `wire_type` alone, so a field declared `List<T>` on a raw type came out `array`
+    holding an undescribed `object` and its owner was reported CLOSED — a complete
+    description of a payload whose element type is unnamed. A generic type declaring a
+    collection of its own parameter is the ordinary source that reaches it, and W26's own
+    `Slice<T>.getContent()` is the same shape one hierarchy up. An over-claim is the direction NFR-2 rates worst, and this
+    one also hides itself: `open` is what puts a shape in the gap report at all.
+    """
+    # `_item_of` returns the descriptor itself for an object that HAS a `shape_id`, so
+    # a described object always carries an item. An `object` row with none is precisely
+    # the case where nothing could be named.
+    if row.get("wire_type") == "object" and row.get("item") is None:
+        return True
+    held = row.get("item")
+    if held is None:
+        # An ARRAY with no element descriptor is a RAW collection — `List` written with
+        # no type argument — and its element type is exactly as unnamed as the unbound
+        # variable above (W26 review). Every other `wire_type` genuinely holds nothing:
+        # a `string` or an `integer` has no element to describe and is complete as it is.
+        # Zero live instances across the fixture and the three corpora, so this closes a
+        # hole rather than changing a published answer.
+        return bool(row.get("wire_type") == "array")
+    return _describes_no_object(json.loads(str(held)))
+
+
+def _describes_no_object(described: dict[str, Any]) -> bool:
+    """Whether an `item` descriptor, or anything it holds in turn, describes no object it
+    could name — `List<List<T>>` is why this recurses rather than looking once."""
+    if described.get("wire_type") == "object" and "shape_id" not in described:
+        return True
+    held = described.get("item")
+    if held is None:
+        # The nested twin of the raw-collection case above: `List<List>` is as unnamed
+        # one level down as `List` is at the top.
+        return bool(described.get("wire_type") == "array")
+    return isinstance(held, dict) and _describes_no_object(held)
 
 
 def _item_of(described: dict[str, Any]) -> str | None:

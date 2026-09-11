@@ -1,11 +1,16 @@
+import copy
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
+from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
+from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -16,6 +21,7 @@ from sextant.domain.facts import (
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -56,14 +62,131 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
     assert "annotation_args" in spring.requires
 
 
+def test_the_loader_reads_detect_coordinates_and_the_framework_media_default():
+    """Two keys D02 declared and the loader ignored until 2O Task 6
+    (`docs/documented-not-implemented.md`, entries #1 and #6). `detect:` was
+    declared by every shipped catalog and read by nothing; `default_produces`
+    had been specified-not-used since 2E. Both are now values on the model,
+    and `spring-data-rest` is the catalog that needs each."""
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(CATALOGS).load()}
+
+    data_rest = catalogs["spring-data-rest"]
+    assert "org.springframework.boot:spring-boot-starter-data-rest" in data_rest.detect_coordinates
+    assert data_rest.default_produces == ("application/hal+json",)
+    # The three schema catalogs declare `coordinates: []` on purpose — their
+    # evidence is a file in the repository, not a dependency — and an empty
+    # tuple is what that says on the model.
+    assert catalogs["graphql-schema"].detect_coordinates == ()
+    # A catalog that declares no media default at all reads as none, never as
+    # an invented one: an undeclared Spring mapping is negotiated at runtime.
+    assert catalogs["spring-mvc"].default_produces == ()
+
+
+def test_a_catalog_whose_detect_block_is_malformed_is_refused_by_file(tmp_path: Path):
+    """The value reaches a comparison against the coordinates a module's build
+    declared, and a coordinate in the wrong shape matches nothing while looking
+    exactly like a framework that is absent."""
+    catalog = tmp_path / "invented-detect.yml"
+    catalog.write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
+        "detect:\n  coordinates: [org.springframework]\nmatches: {}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "detect.coordinates" in str(raised.value)
+    assert "invented-detect.yml" in str(raised.value)
+
+
+def _catalog_naming(model: str, extra: str = "") -> str:
+    return (
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
+        f"shape_model: {model}\nmatches: {{}}\n{extra}"
+    )
+
+
+def test_a_catalog_takes_the_shape_models_three_blocks(tmp_path: Path):
+    """D02 §1b. The blocks reach `Catalog` exactly as they used to when the file
+    declared them itself — the whole point of resolving the reference at the
+    loader is that nothing downstream of this port learns the model exists."""
+    (tmp_path / "shape-models").mkdir()
+    (tmp_path / "shape-models" / "tiny.yml").write_text(
+        "id: tiny\nserialization: {default_strategy: snake_case}\n"
+        "nullability: {nullable: [com.acme.Nullable]}\n"
+        "known_types:\n  - { type: com.acme.Money, wire: number }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "invented-model-user.yml").write_text(_catalog_naming("tiny"), encoding="utf-8")
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.serialization == {"default_strategy": "snake_case"}
+    assert catalog.nullability == {"nullable": ["com.acme.Nullable"]}
+    assert catalog.known_types == [{"type": "com.acme.Money", "wire": "number"}]
+
+
+def test_a_catalog_naming_a_shape_model_that_does_not_ship_is_refused_by_file(tmp_path: Path):
+    """A typo would silently strip the catalog of the serialisation,
+    nullability and wire-type knowledge it believes it has — which is `A-C3`
+    arriving through a misspelling instead of an omission."""
+    (tmp_path / "invented-typo.yml").write_text(_catalog_naming("jsn"), encoding="utf-8")
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "shape_model" in str(raised.value)
+    assert "invented-typo.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_a_model_and_declaring_a_block_beside_it_is_refused(tmp_path: Path):
+    """The cheapest route back to forty-two copies is adding a block to a file
+    that already references the model, and the two would then disagree with
+    nothing to say which won. Refused at the edge, naming the file and the
+    block."""
+    (tmp_path / "shape-models").mkdir()
+    (tmp_path / "shape-models" / "tiny.yml").write_text("id: tiny\n", encoding="utf-8")
+    (tmp_path / "invented-both.yml").write_text(
+        _catalog_naming("tiny", extra="known_types:\n  - { type: com.acme.Money, wire: string }\n"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "known_types" in str(raised.value)
+    assert "invented-both.yml" in str(raised.value)
+
+
+def test_a_catalog_declaring_no_model_and_no_block_still_loads(tmp_path: Path):
+    """A repository's own catalog set (D02 §6) may ship no model at all, and
+    thirteen shipped catalogs expand no shape and declare none of the three.
+    Absence stays absence rather than becoming an error."""
+    (tmp_path / "invented-bare.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\nmatches: {}\n",
+        encoding="utf-8",
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert (catalog.serialization, catalog.nullability, catalog.known_types) == ({}, {}, [])
+
+
 def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
     """D02 §2a, §2e, §2f, §2g: `spring-web` and `spring-mvc` both need these
     four blocks before payload shapes can be derived (Tasks 9-11 read them).
-    The loader does not parse them into `Catalog` — they ride along in the
-    raw file — so this reads the file directly, the same way the catalog
-    itself is the source of truth for `matches`."""
+
+    `wrappers` is still read off the raw file — it is the catalog's own, an
+    envelope type belonging to the framework that defines it. The other three
+    are read through the LOADER since F2 (D02 §1b): they come from
+    `shape-models/json.yml` now, and reading the file for them would assert
+    that a catalog holds a copy, which is exactly what F2 made impossible.
+    """
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(CATALOGS).load()}
     for name in ("spring-web", "spring-mvc"):
         raw = yaml.safe_load((CATALOGS / f"{name}.yml").read_text(encoding="utf-8"))
+        catalog = catalogs[name]
 
         wrapper_types = {w["type"] for w in raw["wrappers"]}
         assert wrapper_types == {
@@ -83,24 +206,56 @@ def test_catalog_declares_wrappers_nullability_serialization_and_known_types():
         # Kotlin compiler emits them directly onto fields as CLASS-retention
         # annotations, so they are what makes Kotlin nullability work through
         # the ordinary annotation path.
-        assert "org.jetbrains.annotations.Nullable" in raw["nullability"]["nullable"]
-        assert "org.jetbrains.annotations.NotNull" in raw["nullability"]["not_null"]
-        assert raw["nullability"]["scope"] == [
-            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"}
+        assert "org.jetbrains.annotations.Nullable" in catalog.nullability["nullable"]
+        assert "org.jetbrains.annotations.NotNull" in catalog.nullability["not_null"]
+        # Both spellings of the FIELD rule, and only those (OI-48). JSpecify's was
+        # declared alone, and Spring is the framework this reads most: 58
+        # `package-info` classes in spring-web 6.1.6 carry Spring's, and
+        # `HttpHeaders` declares 68 fields of which zero carry an annotation of
+        # their own — a scope exists so that only the exceptions are marked.
+        #
+        # `@NonNullApi` is deliberately NOT here. Spring scopes parameters and
+        # return values with it and fields with `@NonNullFields`, and this scope
+        # is applied to field symbols and to nothing else. Measured over 1,672
+        # cached jars: all 613 packages declaring `@NonNullFields` also declare
+        # `@NonNullApi`, so listing it added no field scope anywhere, while 197
+        # packages declare it ALONE and had every field wrongly resolved not-null.
+        assert catalog.nullability["scope"] == [
+            {"annotation": "org.jspecify.annotations.NullMarked", "means": "not_null_by_default"},
+            {
+                "annotation": "org.springframework.lang.NonNullFields",
+                "means": "not_null_by_default",
+            },
         ]
 
-        assert raw["serialization"]["name_from"] == [
+        assert catalog.serialization["name_from"] == [
             {"annotation": "com.fasterxml.jackson.annotation.JsonProperty", "arg": "value"}
         ]
-        assert raw["serialization"]["ignore"] == ["com.fasterxml.jackson.annotation.JsonIgnore"]
-        assert raw["serialization"]["default_strategy"] == "as_declared"
+        assert catalog.serialization["ignore"] == ["com.fasterxml.jackson.annotation.JsonIgnore"]
+        assert catalog.serialization["default_strategy"] == "as_declared"
 
-        known_types = {t["type"] for t in raw["known_types"]}
+        # The four serialiser mappings these two catalogs used to declare, plus
+        # the boxes the shared model also carries — which reached these two for
+        # the first time with F2, and are the union rather than a new claim:
+        # every one of them mirrors `WireTypes.objectLike`'s own projection
+        # (`test_known_types_mirror_the_projection.py`), so they answer for a
+        # bare `String.class` symbol and change no scanned field's reading.
+        known_types = {t["type"] for t in catalog.known_types}
         assert known_types == {
             "java.time.Instant",
             "java.time.LocalDate",
             "java.math.BigDecimal",
             "java.util.UUID",
+            "java.lang.String",
+            "java.lang.Boolean",
+            "java.lang.Byte",
+            "java.lang.Short",
+            "java.lang.Integer",
+            "java.lang.Long",
+            "java.lang.Character",
+            "java.lang.Float",
+            "java.lang.Double",
+            "java.lang.Void",
         }
 
 
@@ -289,9 +444,8 @@ def _controller_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -405,9 +559,8 @@ def _invented_listener_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -500,9 +653,8 @@ def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -526,7 +678,9 @@ def _naming_forms_facts(root: Path, type_scope: str | None = None) -> None:
         )
     # `args` mirrors what a real extractor emits: an ABSENT attribute is
     # absent from the map entirely — an annotation's declared default is
-    # never written into the class file (2H checkpoint answer 1).
+    # never written into the annotation USE (2H checkpoint answer 1). It IS in
+    # the class file since W4, on the annotation TYPE (JVMS 4.7.22); nothing
+    # reads it, and this map is what a USE carries.
     declarations = {
         "explicit": {"value": ["named"]},
         "defaulted": {},
@@ -572,12 +726,17 @@ def test_a_catalog_declaring_no_naming_forms_derives_exactly_what_it_always_did(
     lets them ship without touching the behaviour of every catalog written
     before them.
 
-    The empty paths below are the PRE-2H behaviour, recorded here rather than
-    quietly fixed: an absent attribute defaulted to `''`. That is the bug the
-    next test removes, and it is only reachable by a catalog that asks for
-    none of the vocabulary that removes it.
+    The two declarations that name nothing derive NO ROW here, and the set
+    below is exactly the two that do. That is the addresses-nothing gate
+    rather than the naming vocabulary: an absent attribute still defaults to
+    `''`, and a row whose whole composed address is empty — with no peer
+    naming an endpoint either — is an endpoint addressing nothing, so it is
+    dropped instead of published. Before the gate, this same set carried a
+    third member, the bare `''`. The next test shows the other route out —
+    `path_fallback`, which gives such a declaration a real name instead of
+    dropping it.
     """
-    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member", ""}
+    assert _paths_of(tmp_path, _naming_forms_catalog()) == {"named", "member"}
 
 
 def test_an_absent_name_attribute_falls_back_to_the_constructs_own_name(
@@ -717,11 +876,20 @@ def test_a_scope_stated_on_the_enclosing_type_reaches_a_declaration_that_names_n
     }
 
 
+@pytest.mark.pins("derive_endpoints.qualifier-scope")
 def test_a_scoped_annotation_with_no_scope_anywhere_derives_no_row_at_all(
     tmp_path: Path,
 ):
     """`requires_qualifier` — the rule that keeps a missing scope silent
     instead of wrong.
+
+    It names the qualifier-scope guard, which the `spring-rabbit` near-miss
+    used to name and does not reach — `spring-rabbit.yml` declares no
+    `requires_qualifier` at all, so the conjunct is a no-op for that catalog.
+    This input reaches it: `named` and `defaulted` would each publish a bare
+    member name the moment the conjunct is relaxed, and `Parent.member` in the
+    same assertion is the paired positive that stops this passing because the
+    rule matched nothing.
 
     An annotation that names a member OF something has no address until the
     something is known. Emitting the bare member name would publish a
@@ -818,6 +986,489 @@ def test_a_non_single_character_qualifier_separator_is_refused_by_type_and_lengt
     assert "invented-naming.yml" in str(raised.value)
 
 
+# --- the 2026-09-06 vocabulary pass, on an invented framework -------------
+#
+# Three words, three measurements, one style shared by twenty-one catalogs.
+# Deliberately NOT spelled with `@KafkaListener` or `@Query`, the discipline
+# every mechanism test in this file keeps: `container`, `path_from_siblings`
+# and the per-annotation `path_fallback` are ENGINE vocabulary, and a test
+# written against a shipped file would pin a framework rather than a mechanism
+# — and would pass or fail because somebody edited YAML.
+#
+# The invented framework below is the shape all three measurements share and
+# that the vocabulary could not express before: an annotation that may be
+# written twice on one declaration (so javac folds it into a container and the
+# class file carries no annotation at all), a name that may live on a SIBLING
+# annotation rather than on the matched one, and two annotations of one family
+# whose un-named fallback strips OPPOSITE accessor prefixes.
+
+_ON_EVENT = "com/acme/messaging/annotation/OnEvent#"
+_ON_EVENTS = "com/acme/messaging/annotation/OnEvents#"
+_ON_ACTION = "com/acme/messaging/annotation/OnAction#"
+_ALIAS = "com/acme/messaging/annotation/Alias#"
+_LATE_ALIAS = "com/acme/messaging/annotation/LateAlias#"
+
+
+def _vocabulary_catalog(**mapping: object) -> Catalog:
+    """A gateless catalog over the invented annotations above, with whatever
+    the pass's vocabulary a test layers on. Two mapping annotations, because
+    every one of the three words is about a difference BETWEEN annotations of
+    one family."""
+    return Catalog(
+        id="invented-vocabulary",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args", "nested_annotation_args"),
+        source=Path("tests/invented-vocabulary.yml"),
+        matches={
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [
+                    {"fqn": "com.acme.messaging.annotation.OnEvent"},
+                    {"fqn": "com.acme.messaging.annotation.OnAction"},
+                ],
+                **mapping,
+            }
+        },
+    )
+
+
+def _vocabulary_facts(root: Path) -> None:
+    """One class and five declarations, each the smallest input that separates
+    one of the three words from the behaviour it replaces.
+
+    `folded` is the shape javac writes for TWO uses of one repeatable
+    annotation (JLS 9.7.5): a single CONTAINER whose `value` is an array of
+    annotations, and NO `@OnMessage` fact of its own. `misfolded` is the same
+    container holding an annotation the catalog never named — the near-miss for
+    the conjunct that stops any array-valued annotation contributing
+    destinations.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/Vocabulary.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/notify/Vocabulary#"
+    folded_uses = [
+        AnnotationUse(annotation=_ON_EVENT, args={"value": ["orders.first"]}),
+        AnnotationUse(annotation=_ON_EVENT, args={"value": ["orders.second"]}),
+    ]
+    declarations: dict[str, list[tuple[str, dict[str, object]]]] = {
+        # An un-named declaration on each of the two mapping annotations,
+        # named so the accessor strip has something to bite on — and named
+        # ACROSS the two directions, so a rule that is right for one and wrong
+        # for the other cannot pass.
+        "getOrders": [(_ON_EVENT, {})],
+        "setStatus": [(_ON_ACTION, {})],
+        # Two sibling name sources present at once: the ORDER decides.
+        "renamed": [
+            (_ON_EVENT, {}),
+            (_ALIAS, {"value": "by-alias"}),
+            (_LATE_ALIAS, {"value": "by-late-alias"}),
+        ],
+        # Its own name AND a sibling carrying another: the matched annotation
+        # wins, which is the order CP-15 row 1 measured.
+        "selfNamed": [(_ON_EVENT, {"value": ["own-name"]}), (_ALIAS, {"value": "by-alias"})],
+        # The container, and a container of something else.
+        "folded": [(_ON_EVENTS, {"value": folded_uses})],
+        "misfolded": [
+            (_ON_EVENTS, {"value": [AnnotationUse(annotation=_ALIAS, args={"value": ["nope"]})]})
+        ],
+    }
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    for name, uses in declarations.items():
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.extend(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args=args),
+            )
+            for annotation, args in uses
+        )
+    write_fact_file(root / "Vocabulary.jsonl", document, facts)
+
+
+def _vocabulary_paths(tmp_path: Path, catalog: Catalog) -> set[str]:
+    _vocabulary_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace, [catalog], capabilities={"annotation_args", "nested_annotation_args"}
+    )
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_catalog_declaring_none_of_the_pass_words_derives_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin for all three words at once.
+
+    Only the declaration that spells its own name derives anything: the two
+    accessor declarations and the sibling one carry the annotation with no
+    `value`, and the two container declarations carry no mapping annotation at
+    all. So four of the five derive NOTHING — the addresses-nothing gate,
+    exactly as before this pass — and every row the tests below assert is one
+    this vocabulary ADDS rather than one it moves."""
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog()) == {"own-name"}
+
+
+@pytest.mark.pins("annotation_driven.folded-uses-are-read")
+def test_two_uses_of_one_annotation_on_one_declaration_derive_both_destinations(
+    tmp_path: Path,
+):
+    """`OI-36`, measured by CP-16 at six versions across three frameworks.
+
+    javac writes the CONTAINER and not the annotation (JLS 9.7.5), so before
+    this word the mapping join matched nothing and BOTH destinations vanished —
+    silently, beside a single-use neighbour deriving normally. That is a
+    silent under-report, the second sin and the harder of the two to notice,
+    because the row is absent rather than wrong.
+
+    Both are asserted, not one: reading only the first entry of the array would
+    be a plausible half-fix that this exact input catches."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "container": "com.acme.messaging.annotation.OnEvents",
+                },
+                {"fqn": "com.acme.messaging.annotation.OnAction"},
+            ]
+        ),
+    )
+
+    assert paths == {"orders.first", "orders.second", "own-name"}
+
+
+@pytest.mark.pins("annotation_driven.folded-entry-is-the-declared-annotation")
+def test_a_container_holding_some_other_annotation_contributes_no_destination(
+    tmp_path: Path,
+):
+    """§10 near-miss on the conjunct that makes the container read safe.
+
+    Every other condition holds: the catalog declares this container, the fact
+    is present on a method, its `value` IS an array of annotations, and each
+    entry carries a readable `value` that would compose a perfectly plausible
+    destination. The one thing that is false is that the folded annotation is
+    the one the catalog named.
+
+    A container is an ordinary annotation whose `value` happens to be an array,
+    so without this conjunct ANY array-of-annotations argument contributes
+    destinations — `misfolded` would publish `nope`, an address nothing serves,
+    at `resolved`/`compiler` where nothing downstream can tell it from an
+    observation.
+    """
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "container": "com.acme.messaging.annotation.OnEvents",
+                },
+            ]
+        ),
+    )
+
+    assert "nope" not in paths
+    assert paths == {"orders.first", "orders.second", "own-name"}
+
+
+@pytest.mark.pins("derive_endpoints.sibling-name-source-order")
+def test_the_first_sibling_source_in_the_declared_order_supplies_the_name(
+    tmp_path: Path,
+):
+    """`OI-35`, measured by CP-15 rows 1-2: the framework builds an array of
+    name sources whose indices ARE the order and takes the FIRST with a value.
+
+    `renamed` carries both sibling annotations at once, which is the only input
+    that can tell an ordered list from a set — and a set is what the vocabulary
+    had, which is why the register's close condition says "with the ORDER
+    preserved". Reversing the two entries below reverses the answer, which is
+    what the second assertion says."""
+    mapping: dict[str, object] = {
+        "path_from_siblings": [
+            {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"},
+            {"annotation": "com.acme.messaging.annotation.LateAlias", "arg": "value"},
+        ]
+    }
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog(**mapping)) == {
+        "by-alias",
+        "own-name",
+    }
+
+
+def test_reversing_the_sibling_sources_reverses_which_one_names_the_declaration(
+    tmp_path: Path,
+):
+    """The paired positive for the ordering above (§10's "a near-miss needs a
+    positive PAIRED with it"): the answer follows the catalog's order rather
+    than some incidental order of the facts, the annotations' own names, or
+    whichever the query happened to read first."""
+    mapping: dict[str, object] = {
+        "path_from_siblings": [
+            {"annotation": "com.acme.messaging.annotation.LateAlias", "arg": "value"},
+            {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"},
+        ]
+    }
+    assert _vocabulary_paths(tmp_path, _vocabulary_catalog(**mapping)) == {
+        "by-late-alias",
+        "own-name",
+    }
+
+
+def test_the_matched_annotations_own_alias_still_wins_over_every_sibling(
+    tmp_path: Path,
+):
+    """CP-15 row 1 puts the operation annotation's own `value` at index 0 of
+    the source array, ahead of all four siblings — so the sibling list is
+    consulted only where every `path_from` alias was absent, and this is that
+    order asserted rather than assumed.
+
+    `selfNamed` declares its own name AND carries a sibling naming another; the
+    name it declares is the one served, and `by-alias` appears only because
+    `renamed` — which names nothing of its own — takes it."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            path_from_siblings=[
+                {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"}
+            ]
+        ),
+    )
+
+    assert paths == {"own-name", "by-alias"}
+
+
+@pytest.mark.pins("derive_endpoints.path-fallback-is-per-annotation")
+def test_two_annotations_of_one_family_fall_back_under_opposite_accessor_rules(
+    tmp_path: Path,
+):
+    """`OI-5`, measured by CP-15 rows 3-5 with row 5 COMPILED AND RUN.
+
+    The framework's un-named-operation fallback is direction-dependent and the
+    direction is chosen by WHICH annotation matched: one strips `get`/`is`, the
+    other strips `set`. `mapping.path_fallback` was one catalog-level word, so
+    every single word made one of the two newly wrong — which is why `OI-5`
+    shipped a measured-and-wrong address rather than a plausible fix.
+
+    Both directions in one assertion, and each with the OTHER direction's
+    accessor visible in the same class: `getOrders` must not be touched by the
+    write rule and `setStatus` must not be touched by the read rule. A single
+    shared word cannot produce this set."""
+    paths = _vocabulary_paths(
+        tmp_path,
+        _vocabulary_catalog(
+            path_fallback="construct_name",
+            annotations=[
+                {
+                    "fqn": "com.acme.messaging.annotation.OnEvent",
+                    "path_fallback": "read_accessor_property",
+                },
+                {
+                    "fqn": "com.acme.messaging.annotation.OnAction",
+                    "path_fallback": "write_accessor_property",
+                },
+            ],
+        ),
+    )
+
+    # `renamed` takes the catalog-level default, which strips nothing — the
+    # inertness of the per-annotation word where no entry declares one.
+    assert paths == {"orders", "status", "renamed", "own-name"}
+
+
+@pytest.mark.parametrize(
+    ("name", "read_rule", "write_rule"),
+    [
+        # CP-15 row 5, verbatim, both columns. Each row is an edge of the
+        # measured rule rather than an illustration of it.
+        ("getOrders", "orders", "getOrders"),
+        ("isActive", "active", "isActive"),
+        ("setStatus", "setStatus", "status"),
+        ("orders", "orders", "orders"),
+        ("createOrder", "createOrder", "createOrder"),
+        ("getX", "x", "getX"),
+        # The LENGTH test: a name that is exactly the prefix is not an accessor.
+        ("get", "get", "get"),
+        # The SEAM test: no capital where the property name would start.
+        ("gettotal", "gettotal", "gettotal"),
+        # The case that tells "lowercase the remainder" from "lowercase its
+        # FIRST CHARACTER" — and it is the second. Any encoding of this rule
+        # that does not reproduce `uRL` is not this rule.
+        ("getURL", "uRL", "getURL"),
+    ],
+)
+@pytest.mark.pins("derive_endpoints.accessor-strip-is-the-measured-one")
+def test_the_accessor_strip_reproduces_every_measured_edge(
+    tmp_path: Path, name: str, read_rule: str, write_rule: str
+):
+    """CP-15 row 5's own table, run through this engine.
+
+    The probe compiled `MethodHelper.getPropertyName` against
+    smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and RAN it; these are the
+    strings that process printed. A table of names could agree with several
+    rules, which is why the three edges — too short, no capital at the seam,
+    and `getURL` — are each their own row here rather than being represented by
+    `getOrders` alone."""
+    _accessor_facts(tmp_path / "facts", name)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [
+            _vocabulary_catalog(
+                annotations=[
+                    {
+                        "fqn": "com.acme.messaging.annotation.OnEvent",
+                        "path_fallback": "read_accessor_property",
+                    },
+                    {
+                        "fqn": "com.acme.messaging.annotation.OnAction",
+                        "path_fallback": "write_accessor_property",
+                    },
+                ]
+            )
+        ],
+        capabilities={"annotation_args", "nested_annotation_args"},
+    )
+    rows = {(str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert rows == {read_rule, write_rule}
+
+
+def _accessor_facts(root: Path, name: str) -> None:
+    """One method name, declared twice — once under each of the two mapping
+    annotations, on two classes so the two rows cannot merge into one wire
+    identity when the two rules agree."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/notify/Accessors.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts: list[object] = []
+    for owner, annotation in (
+        ("com/acme/notify/Reads#", _ON_EVENT),
+        ("com/acme/notify/Writes#", _ON_ACTION),
+    ):
+        symbol = f"{owner}{name}(sig_3d92af60)."
+        facts.append(
+            SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+        )
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=symbol,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=symbol,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args={}),
+            )
+        )
+    write_fact_file(root / "Accessors.jsonl", document, facts)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # An unrecognised word, which read as "no fallback" restores the empty
+        # address the form exists to remove.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "path_fallback": "parameter_name"},
+        # A container that is not a string at all.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "container": 5},
+        # An EMPTY container, which would match no annotation and silently
+        # restore the under-report the key exists to close.
+        {"fqn": "com.acme.messaging.annotation.OnEvent", "container": ""},
+    ],
+)
+def test_a_malformed_annotation_entry_word_is_refused_by_file(
+    tmp_path: Path, declared: dict[str, object]
+):
+    """NFR-5, one level down from `mapping`. Both new entry-level words are
+    refused rather than read as absent, and the direction of the danger is
+    what makes that the right choice: an unread `path_fallback` publishes the
+    method's own name where the framework serves a stripped one, and an unread
+    `container` drops both destinations of a two-use declaration while its
+    single-use neighbour derives normally."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(annotations=[declared]))
+
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        # An empty list: a key declared and saying nothing, which reads as
+        # "consult these" while consulting none.
+        [],
+        # A bare string where a `{annotation, arg}` pair belongs — the shape
+        # `path_from` takes, written in the key that does not take it.
+        ["value"],
+        # A pair naming an annotation and no attribute of it.
+        [{"annotation": "com.acme.messaging.annotation.Alias"}],
+        # A third key: the shape is closed, so a misspelling cannot pass for
+        # one of the two.
+        [{"annotation": "com.acme.messaging.annotation.Alias", "arg": "value", "of": "x"}],
+    ],
+)
+def test_a_malformed_sibling_name_source_is_refused_by_file(tmp_path: Path, declared: object):
+    """NFR-5 again, and the same asymmetry: a `path_from_siblings` read as
+    absent leaves the operation published under a name the framework does not
+    serve it at — a wrong address, which is the failure the key exists to
+    remove, restored silently by a typo."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(tmp_path, _vocabulary_catalog(path_from_siblings=declared))
+
+    assert "path_from_siblings" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
 # --- 2I design §2: the two QName forms, on an invented framework ----------
 #
 # Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above
@@ -876,7 +1527,8 @@ def _qname_facts(
     `scope_annotated` false means the annotation is ABSENT from the type
     altogether; true with `namespace` None means it is PRESENT with the
     attribute absent — which is the only shape a bytecode-defaulted attribute
-    can take, since a declared default is never written into the class file.
+    can take, since a declared default is never written into the annotation USE
+    (it lives on the annotation TYPE, JVMS 4.7.22).
     `owner` carries the package the reversed-package derivation reads, and is
     a parameter so a class in the DEFAULT package can be spelled.
     """
@@ -886,9 +1538,8 @@ def _qname_facts(
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -1052,8 +1703,11 @@ def test_the_reversed_package_default_needs_the_scope_annotation_to_be_present(
     class that merely happens to hold a matching method.
 
     This is what lets a catalog whose gate is expressed as a qualifier scope
-    (the only way to name TWO spellings of one gate, since `type_annotation`
-    is single-valued) still gate: no scope row, no default, no address.
+    still gate: no scope row, no default, no address. (A qualifier scope used to
+    be the ONLY way to name two spellings of one gate, because `type_annotation`
+    took a single string; §3.1 widened it to a list, so that is no longer the
+    reason to reach for a scope — the reason is a scope carrying an attribute,
+    which is what this test is about.)
     """
     paths = _qname_paths(
         tmp_path,
@@ -1216,9 +1870,8 @@ def _member_facts(root: Path, gated: bool = True) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -1226,7 +1879,15 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     )
     owner = "com/acme/rpc/MemberService#"
     facts: list[object] = [
-        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=ConstructKind.CLASS)
+        SymbolFact(
+            document_id="doc_1",
+            symbol=owner,
+            construct_kind=ConstructKind.CLASS,
+            # Capability 9.13's erased edge, always written — the base's own
+            # facts are what decide whether the walk finds anything, and a
+            # superclass no document declares simply ends it (`A-M15`).
+            superclass="com/acme/rpc/AbstractMemberService#",
+        )
     ]
     if gated:
         facts.append(
@@ -1288,14 +1949,125 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     write_fact_file(root / "MemberService.jsonl", document, facts)
 
 
-def _member_paths(tmp_path: Path, catalog: Catalog, gated: bool = True) -> set[str]:
+def _member_base_facts(root: Path, base_visibility: str = "public") -> None:
+    """`A-M15`: the gated class gains a plain, UNANNOTATED superclass declaring
+    one public method of its own.
+
+    A separate fact file rather than a parameter on `_member_facts`, so every
+    test above sees exactly the facts it always did and the inheritance case
+    differs from them in one addition."""
+    document = Document(
+        document_id="doc_base",
+        relative_path="com/acme/rpc/AbstractMemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    base = "com/acme/rpc/AbstractMemberService#"
+    write_fact_file(
+        root / "AbstractMemberService.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_base", symbol=base, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_base",
+                symbol=f"{base}refund(sig_b17e0011).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=base,
+                visibility=base_visibility,
+                modifiers={},
+            ),
+        ],
+    )
+
+
+def _member_override_facts(root: Path, withdrawn: bool = False) -> None:
+    """The gated class OVERRIDES the base's `refund` — same name, same
+    parameter types, and therefore the same descriptor hash the extractor
+    writes for both (`ClassScanner.disambiguatorOf` hashes the descriptor, so
+    an override and the method it overrides share it by construction).
+
+    `withdrawn=True` puts the member-level rule's own withdrawing attribute on
+    the override, which is the shape the framework refuses to expose at all.
+
+    A third fact file rather than a parameter on `_member_facts`, for
+    `_member_base_facts`' own reason: every test written before this one sees
+    exactly the facts it always did."""
+    document = Document(
+        document_id="doc_override",
+        relative_path="com/acme/rpc/MemberService.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:d",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/rpc/MemberService#"
+    facts: list[object] = [
+        SymbolFact(
+            document_id="doc_override",
+            symbol=f"{owner}refund(sig_b17e0011).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+            visibility="public",
+            modifiers={},
+        )
+    ]
+    if withdrawn:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_override",
+                target=f"{owner}refund(sig_b17e0011).",
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Operation#", args={"skip": True}
+                ),
+            )
+        )
+    write_fact_file(root / "MemberServiceOverride.jsonl", document, facts)
+
+
+def _member_rows(
+    tmp_path: Path,
+    catalog: Catalog,
+    gated: bool = True,
+    base: str | None = None,
+    override: bool | None = None,
+) -> list[tuple[str, str]]:
+    """`(path, handler)` for every derived row, in insertion order — the pair a
+    set of paths cannot answer, since a rule that publishes ONE operation twice
+    collapses into one entry there."""
     _member_facts(tmp_path / "facts", gated)
+    if base is not None:
+        _member_base_facts(tmp_path / "facts", base)
+    if override is not None:
+        _member_override_facts(tmp_path / "facts", override)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
-    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    rows = [(str(row["path"]), str(row["handler"])) for row in workspace.query("endpoints")]
     workspace.close()
-    return paths
+    return rows
+
+
+def _member_paths(
+    tmp_path: Path,
+    catalog: Catalog,
+    gated: bool = True,
+    base: str | None = None,
+    override: bool | None = None,
+) -> set[str]:
+    return {path for path, _ in _member_rows(tmp_path, catalog, gated, base, override)}
 
 
 def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
@@ -1328,6 +2100,114 @@ def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: 
     paths = _member_paths(tmp_path, _member_catalog(members="public_methods"))
 
     assert "bare" in paths
+
+
+def test_a_gated_classes_inherited_public_method_is_an_exposed_member(tmp_path: Path):
+    """`A-M15`, the positive half. "The public methods of C" is not "the public
+    methods DECLARED in C" (JLS 8.2), and the member join asked `s.enclosing`
+    — so a gated class extending a plain base published none of the base's
+    operations, silently, with no COVERAGE row.
+
+    The catalog whose comment this contradicts is `jakarta-jws.yml`, which
+    argues at length that an unannotated public method IS an operation — "a
+    catalog that derived only the annotated methods would report a service
+    missing one of its own operations" — and the join then made exactly that
+    mistake one axis over.
+
+    Measured, not read off the specification's wording (CP-13 Q3, jaxws-rt
+    4.0.2): `RuntimeModeler.processClass` walks the implementor's
+    `Class.getMethods()`, which returns inherited public methods, and drops
+    only those declared by `java.lang.Object`.
+
+    `refund` is on the base and carries no annotation; `bare` is on the class
+    itself. Both derive, which is what says the widening ADDED the inherited
+    member rather than replacing the declared one."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="public")
+
+    assert {"bare", "refund"} <= paths
+
+
+def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_path: Path):
+    """`A-M15`'s near-miss, and the conjunct a widened join is most likely to
+    lose: the exclusions apply to an INHERITED member exactly as they do to a
+    declared one. `refund` is the same method in the same place, one cell
+    different — `visibility: other` — and it is not callable from outside the
+    type, so it is not exposed.
+
+    Identical to the positive in every other respect, so it measures the
+    visibility filter and nothing else, and it discriminates: dropping
+    `s.visibility = 'public'` from the member rule makes this fail with a
+    `refund` operation the container does not serve. The class's own `bare` is
+    asserted present in both, which is what stops this passing because the walk
+    found nothing at all."""
+    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="other")
+
+    assert "bare" in paths
+    assert "refund" not in paths
+
+
+def test_an_overridden_inherited_member_is_one_exposed_member_and_not_two(tmp_path: Path):
+    """`A-M15`'s regression, the first half. A type's members are one per
+    SIGNATURE, never one per declaration of that signature — the ancestry walk
+    enumerated both `MemberService#refund` and `AbstractMemberService#refund`
+    and published the same operation twice, the second handled by a base class
+    the framework never exposes.
+
+    JLS 8.4.8.1: an instance method with the same name and parameter types
+    OVERRIDES the one it inherits, and there is then one member. The framework
+    agrees, and it is MEASURED rather than read off that sentence (CP-13 Q5,
+    JDK 26): `Class.getMethods()` — the enumeration `RuntimeModeler.processClass`
+    walks (Q3, jaxws-rt 4.0.2) — returns exactly one `refund`, the override's,
+    for precisely this pair of classes.
+
+    The handler assertion is the load-bearing half: the count alone would still
+    pass if the walk kept the BASE's declaration and dropped the override's,
+    which is the same wrong attribution one row further down."""
+    rows = _member_rows(
+        tmp_path, _member_catalog(members="public_methods"), base="public", override=False
+    )
+
+    assert [handler for path, handler in rows if path == "refund"] == [
+        "com/acme/rpc/MemberService#refund(sig_b17e0011)."
+    ]
+
+
+@pytest.mark.pins("derive_endpoints.one-exposed-member-per-signature")
+def test_an_override_that_withdraws_itself_withdraws_the_member_it_overrides(tmp_path: Path):
+    """`A-M15`'s regression, the second half, and the worse one: the ancestry
+    walk republished an operation the framework EXPLICITLY withdraws.
+
+    `MemberService#refund` overrides `AbstractMemberService#refund` and carries
+    the member-level rule's withdrawing attribute. The override is the one
+    member (Q5 above), the rule claims it, and the rule's answer for it is
+    nothing — so the operation is not exposed at all. Before the dedup the
+    override was claimed by the annotated rule and withdrawn there, while the
+    base's own declaration walked straight past the anti-join and published the
+    withdrawn operation at `resolved`/`compiler`, attributed to the base.
+
+    `bare` is asserted present in the same run, which is what stops this passing
+    because the walk found nothing at all — the near-miss's paired positive is
+    `test_an_overridden_inherited_member_is_one_exposed_member_and_not_two`
+    above, the same input with the withdrawal removed, where the operation DOES
+    derive."""
+    paths = _member_paths(
+        tmp_path,
+        _member_catalog(
+            members="public_methods",
+            annotations=[
+                {"fqn": "com.acme.rpc.annotation.Service"},
+                {
+                    "fqn": "com.acme.rpc.annotation.Operation",
+                    "unless": {"attribute": "skip", "equals": True},
+                },
+            ],
+        ),
+        base="public",
+        override=True,
+    )
+
+    assert "bare" in paths
+    assert "refund" not in paths
 
 
 def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(
@@ -1399,10 +2279,14 @@ def test_a_withdrawn_declaration_derives_nothing_even_inside_a_gated_class(
 
 
 def test_an_absent_attribute_is_not_the_withdrawing_value(tmp_path: Path):
-    """An annotation's declared default is never written into the class file
+    """An annotation's declared default is never written into the annotation USE
     (checkpoint item 4: `@WebMethod(exclude = true)` emits the attribute,
     `@WebMethod` alone emits `{}`), so the withdrawing attribute reads NULL on
     every declaration that left it alone. Absence must therefore mean KEPT.
+
+    *The default is not unknowable — since W4 it is emitted from the annotation
+    TYPE (JVMS 4.7.22). It is simply not on the USE, which is what this rule
+    reads.*
 
     `defaulted` carries the rule with no attributes at all and still derives;
     a comparison written `<>` instead of `IS DISTINCT FROM` would have made
@@ -1559,15 +2443,22 @@ def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declar
 # the fixture, through `spring-web.yml` (`tests/e2e/test_vertical_slice.py`).
 
 
-def _seam_catalog(**mapping: object) -> Catalog:
+def _seam_catalog(protocol: str = "http", direction: str = "inbound", **mapping: object) -> Catalog:
     """A gated catalog whose type-level annotation carries a prefix and whose
     method-level annotation carries a suffix — the two halves of one seam,
-    with whatever composition vocabulary a test layers on."""
+    with whatever composition vocabulary a test layers on.
+
+    `protocol` and `direction` are parameters because 2O design §8 and ruling
+    R8 made them the canonical-address gate (`domain/paths.py::serves_urls`).
+    A composed address is canonicalized into the URL the framework serves only
+    for an INBOUND HTTP catalog, so a test about the SEAM alone — what the
+    join does and does not insert — asks one of the other three combinations.
+    """
     return Catalog(
         id="invented-seam",
         style="annotation_driven",
-        protocol="http",
-        direction="inbound",
+        protocol=protocol,
+        direction=direction,
         requires=("annotation_args",),
         source=Path("tests/invented-seam.yml"),
         matches={
@@ -1592,9 +2483,8 @@ def _seam_facts(root: Path, prefix: str, suffix: str) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -1633,14 +2523,20 @@ def _seam_facts(root: Path, prefix: str, suffix: str) -> None:
     )
 
 
-def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+def _seam_row(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> dict[str, object]:
+    """The whole derived row, for the tests that ask about a column the
+    composed path is not — `resolution`, above all."""
     _seam_facts(tmp_path / "facts", prefix, suffix)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
     [row] = workspace.query("endpoints")
     workspace.close()
-    return str(row["path"])
+    return dict(row)
+
+
+def _seam_path(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> str:
+    return str(_seam_row(tmp_path, catalog, prefix, suffix)["path"])
 
 
 @pytest.mark.parametrize(
@@ -1685,14 +2581,92 @@ def test_a_declared_separator_joins_the_two_halves_of_a_seam_with_exactly_one(
 
 def test_an_empty_half_takes_no_separator_with_it(tmp_path: Path):
     """An absent prefix leaves the suffix exactly as written — a slashless
-    name does NOT gain a leading `/` this engine would be inventing — and an
+    name does NOT gain a leading `/` the JOIN would be inventing — and an
     empty suffix (a `@KafkaHandler`, an `@OnMessage`) leaves the prefix
     alone. Both halves are real: the catalogs riding the seam include ones
-    whose method annotation carries no path attribute at all."""
-    catalog = _seam_catalog(path_separator="/")
+    whose method annotation carries no path attribute at all.
 
-    assert _seam_path(tmp_path, catalog, "", "owners") == "owners"
+    The first assertion asks a NAMED-address catalog, and that is 2O design
+    §8's doing rather than a weakening: on an HTTP catalog the composed
+    address is canonicalized afterwards into the URL the framework serves,
+    so `owners` does end up as `/owners` there (third assertion) — from the
+    canonical gate, which knows it is looking at a URL, and never from the
+    seam, which does not."""
+    catalog = _seam_catalog(path_separator="/")
+    named = _seam_catalog(protocol="kafka", path_separator="/")
+
+    assert _seam_path(tmp_path, named, "", "owners") == "owners"
     assert _seam_path(tmp_path / "b", catalog, "/v1/orders", "") == "/v1/orders"
+    assert _seam_path(tmp_path / "c", catalog, "", "owners") == "/owners"
+
+
+def _seam_rows(tmp_path: Path, catalog: Catalog, prefix: str, suffix: str) -> list[dict]:
+    """Every row the seam derived — zero of them included, which `_seam_row`'s
+    single-row unpack cannot express and which is the whole question below."""
+    _seam_facts(tmp_path / "facts", prefix, suffix)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+    return rows
+
+
+# --- Mechanism 3 (principles sweep §4, §7.7): the empty-address gate ---------
+
+
+@pytest.mark.parametrize("separator", [None, "/"])
+def test_an_empty_composed_destination_derives_nothing_whatever_the_separator(
+    tmp_path: Path, separator: str | None
+):
+    """Whether an empty address means anything is a question about the
+    PROTOCOL, and `path_separator` is a formatting property — how segments are
+    joined. The gate used to be keyed on it (`WHERE NOT ($path_separator IS
+    NULL AND d.path = '')`), which is why it protected `spring-rabbit` and not
+    its structural twin `spring-stomp`: the twin's destinations contain
+    slashes, so its author declared a separator, and declaring one switched the
+    validity gate off. Seven shipped catalogs declare one and were all
+    unguarded (§7.7); `A-C1` names three of them because three had a reachable
+    bare-annotation path, not because the other four were safe.
+
+    Parametrized over both spellings on purpose: a gate that says what it means
+    cannot give two answers to the same question about the same protocol."""
+    catalog = _seam_catalog(protocol="websocket", direction="inbound", **_separator(separator))
+
+    assert _seam_rows(tmp_path, catalog, "", "") == []
+
+
+@pytest.mark.parametrize("separator", [None, "/"])
+def test_the_same_declaration_with_a_destination_still_derives(
+    tmp_path: Path, separator: str | None
+):
+    """The paired positive, and it is not decoration: the near-miss above is
+    satisfied by a rule that derives nothing at all, and a catalog silenced
+    outright would pass it forever."""
+    catalog = _seam_catalog(protocol="websocket", direction="inbound", **_separator(separator))
+
+    [row] = _seam_rows(tmp_path, catalog, "/live", "")
+    assert (row["path"], row["resolution"], row["evidence"]) == ("/live", "resolved", "compiler")
+
+
+def test_a_served_http_root_route_is_a_real_address_and_still_derives(tmp_path: Path):
+    """The one protocol for which the empty address DOES name something, and
+    the reason the gate cannot simply be "drop the empty string" at the seam:
+    a class prefix with an empty method mapping is served at `/` (CP-1 row 5).
+
+    It survives because the canonical-address gate has already turned the
+    empty composition into `/` by the time the validity gate runs — inbound
+    HTTP is exactly `domain/paths.py::serves_urls`, so the two seams agree
+    about which protocol this is without the validity gate having to ask
+    twice."""
+    [row] = _seam_rows(tmp_path, _seam_catalog(path_separator="/"), "", "")
+
+    assert row["path"] == "/"
+    assert row["resolution"] == "resolved"
+
+
+def _separator(separator: str | None) -> dict[str, object]:
+    return {} if separator is None else {"path_separator": separator}
 
 
 def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
@@ -1703,8 +2677,266 @@ def test_a_catalog_declaring_no_separator_concatenates_exactly_as_it_always_did(
     `@KafkaListener`'s TOPIC, and a topic name has no segments to join. A `/`
     inserted between two halves of one would invent a destination no broker
     carries, so a catalog that declares no separator keeps the bare
-    concatenation every catalog had before this vocabulary existed."""
-    assert _seam_path(tmp_path, _seam_catalog(), "orders", "-retry") == "orders-retry"
+    concatenation every catalog had before this vocabulary existed.
+
+    Asked of the protocol the claim is actually about, for 2O design §8's
+    reason: a topic is not a URL, so no canonical-address gate stands between
+    the concatenation and the recorded row."""
+    assert (
+        _seam_path(tmp_path, _seam_catalog(protocol="kafka"), "orders", "-retry") == "orders-retry"
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "users",  # CP-1: Spring serves this at /users
+        "/users",
+        "/api//users",  # one separator per boundary
+        "/users/",  # Framework 6: a trailing slash is DISTINCT
+        "",
+        "https://billing.example/orders",  # a whole address, not a path half
+        "https://${billing.host}/orders",  # placeholder-bearing composition
+        "${service.base}/orders",
+        # BOTH expression notations, not one (2O Task 7 review, Critical 4).
+        # `_EXPRESSION_OPENS` lists `${` and `#{` together and the SQL's
+        # `$canonical_path` gate mirrors the pair, but with only `${` cases
+        # here the domain side could be reverted to `("${",)` and the whole
+        # suite still passed — the pin the Task 7 report claimed existed did
+        # not cover the notation Task 7 added. SpEL is what a Spring
+        # `@JmsListener(destination = "#{…}")` actually carries.
+        "#{orderProperties.topic}",
+        "#{serviceBase}/orders",
+    ],
+)
+@pytest.mark.parametrize("protocol", ["http", "kafka"])
+@pytest.mark.parametrize("direction", ["inbound", "outbound"])
+def test_the_sql_path_seam_answers_exactly_what_the_domain_seam_answers(
+    tmp_path: Path, raw: str, protocol: str, direction: str
+):
+    """The anti-drift pin `domain/paths.py` and `derive_endpoints.sql` both
+    name (2O design §8).
+
+    `annotation_driven` composes its address in SQL, from columns the domain
+    layer never sees, and `storage/` may not import a seam whose name is a
+    protocol (ARCHITECTURE §10) — so the canonicalization is stated on both
+    sides of that boundary, exactly as `_destinations_of` mirrors the SQL's
+    own alias-reading rule one level down. This asserts the two answers
+    against EACH OTHER rather than against a literal, so neither side can be
+    edited into disagreement without a failure here.
+
+    Run over all four protocol/direction combinations, because the GATE is as
+    driftable as the rule: the SQL reads a `$canonical_path` bind and the
+    domain side reads `serves_urls`, and a gate that disagreed would be
+    invisible to a test pinning only the inbound-HTTP answers. `serves_urls`
+    decides the expectation here too — deliberately, since it is the one
+    place the gate is spelled and both implementations are being pinned to
+    it.
+    """
+    catalog = _seam_catalog(protocol=protocol, direction=direction, path_separator="/")
+    rows = _seam_rows(tmp_path, catalog, "", raw)
+
+    expected = canonical_http_path(raw) if serves_urls(protocol, direction) else raw
+    if expected == "":
+        # `raw=""` on a protocol whose empty address names nothing: the two
+        # seams still agree — both compose the empty string — and the
+        # addresses-nothing gate then withholds the row (mechanism 3, §4).
+        # Asserting emptiness IS the comparison's observable form here; the
+        # inbound-HTTP row of the same parametrization is the paired positive,
+        # where `serves_urls` makes the same composition the root route `/`.
+        assert rows == []
+    else:
+        assert [row["path"] for row in rows] == [expected]
+
+
+def test_a_client_side_http_path_keeps_the_separator_the_declaration_wrote(tmp_path: Path):
+    """Ruling R8's boundary, pinned on its own so nobody "fixes" the
+    inconsistency later.
+
+    A CLIENT declaration is not a served URL. Retrofit's `@GET("legacy/
+    invoices")` is resolved against the configured `baseUrl`'s own PATH, while
+    `@GET("/legacy/invoices")` is root-relative: against a base of
+    `https://host/v1/` the two name `https://host/v1/legacy/invoices` and
+    `https://host/legacy/invoices`, which are different URLs on different
+    services. Prefixing the first would therefore REWRITE an address rather
+    than normalize a spelling — the approximation DR-6 forbids, reached by
+    applying evidence about Spring's server side (CP-1) to client
+    composition.
+
+    §8's purpose is unharmed: it asks for one identity per route the module
+    SERVES, so that dedup, the path-keyed anchors and L's cross-service joins
+    agree. An outbound row's identity is a composed address the peer join
+    governs, and it keeps the half the declaration actually wrote.
+    """
+    outbound = _seam_catalog(direction="outbound", path_separator="/")
+
+    assert _seam_path(tmp_path, outbound, "", "legacy/invoices") == "legacy/invoices"
+    # A client declaration that names NO path and no service either addresses
+    # nothing at all, and derives no row (mechanism 3, §4). What the boundary
+    # claims is that a client path is not canonicalized — never that an empty
+    # one is an address — and the assertion above is where that is pinned. A
+    # client whose type-level annotation DOES name the service keeps its
+    # empty-path row: the peer is what makes the base address real.
+    assert _seam_rows(tmp_path / "b", outbound, "", "") == []
+    # And the inbound twin of the very same declaration IS canonicalized —
+    # the pair is what makes the boundary a boundary rather than an omission.
+    inbound = _seam_catalog(path_separator="/")
+    assert _seam_path(tmp_path / "c", inbound, "", "legacy/invoices") == "/legacy/invoices"
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix", "composed"),
+    [
+        # A SpEL expression on the method annotation. The live shape:
+        # `@RabbitListener(queues = "#{ordersQueue.name}")`, where the queue's
+        # real name is a bean property this workspace never sees.
+        ("", "#{ordersQueue.name}", "#{ordersQueue.name}"),
+        # A property placeholder — the same claim, a different notation.
+        ("", "${orders.queue}", "${orders.queue}"),
+        # On the PREFIX half, which is the same defect one level out: a
+        # class-level annotation whose destination is an expression.
+        ("#{prefixBean.name}", "", "#{prefixBean.name}"),
+        # An expression EMBEDDED in an otherwise literal address. The address
+        # is unknown as a whole, not merely decorated, so the whole row is
+        # unresolved rather than resolved-with-a-hole.
+        ("", "orders.#{env.suffix}", "orders.#{env.suffix}"),
+    ],
+)
+def test_an_annotation_derived_path_carrying_an_expression_is_published_unresolved(
+    tmp_path: Path, prefix: str, suffix: str, composed: str
+):
+    """§8: never assert what the evidence does not support.
+
+    An annotation-derived row used to be stamped `resolved`/`compiler`
+    unconditionally, so a destination the author wrote as an expression —
+    a SpEL `#{…}`, a property `${…}` — was published as though the characters
+    of the expression WERE the address. Nothing downstream can tell such a row
+    from an observation, which is the confidently-wrong-address failure the
+    composed-path guards already exist to prevent, reached by the one column
+    those guards do not set.
+
+    The expression is carried VERBATIM rather than dropped or resolved:
+    unresolved is an answer, and the expression is the only true thing known
+    about the address. Resolving it is not this pass's job and not any pass's
+    job today — the config ladder is a call-site mechanism this engine never
+    invokes, and its product is an expression rather than a value.
+    """
+    row = _seam_row(tmp_path, _seam_catalog(protocol="amqp"), prefix, suffix)
+
+    assert row["path"] == composed
+    assert row["resolution"] == "unresolved"
+    # The row is still evidence that this method listens on something: the
+    # handler, the protocol and the direction are all read, and only the
+    # address is unknown. Dropping it would lose all four.
+    assert row["evidence"] == "compiler"
+    assert row["handler"] is not None
+
+
+def test_an_expression_bearing_path_is_never_canonicalized_into_a_url(tmp_path: Path):
+    """The verbatim half of the rule above, on the one catalog shape that
+    would otherwise rewrite it.
+
+    An INBOUND HTTP catalog canonicalizes its composed address into the URL
+    the framework serves (2O design §8), and that rewrite must not touch an
+    expression: `#{…}` is a whole address nobody has resolved yet, so
+    prefixing a separator onto it would publish an address that is neither
+    what was written nor what will be served. `${…}` was already left alone
+    where the seam is stated; `#{…}` is the same claim in the other notation,
+    and the two are spelled together so neither can drift from the other.
+    """
+    http = _seam_catalog(path_separator="/")
+
+    assert _seam_path(tmp_path, http, "", "#{routeBean.path}") == "#{routeBean.path}"
+    assert _seam_path(tmp_path / "b", http, "", "${route.path}") == "${route.path}"
+    # The control: an ordinary address on the very same catalog IS
+    # canonicalized, so the two assertions above pin a boundary rather than a
+    # gate that has quietly stopped firing at all.
+    assert _seam_path(tmp_path / "c", http, "", "orders") == "/orders"
+
+
+def test_an_ordinary_annotation_derived_path_stays_resolved(tmp_path: Path):
+    """The inertness pin for the gate above: an address with no expression in
+    it is exactly as resolved as it always was. Without this, a gate that
+    matched too widely — every path, say — would look like a passing suite."""
+    row = _seam_row(tmp_path, _seam_catalog(protocol="amqp"), "", "orders.created")
+
+    assert row["path"] == "orders.created"
+    assert row["resolution"] == "resolved"
+
+
+@pytest.mark.parametrize(
+    ("constant", "prefix", "suffix", "composed"),
+    [
+        # The shipped shape: no type-level prefix at all, the whole address is
+        # the framework's fixed base plus the name the declaration states.
+        ("/actuator", "", "health", "/actuator/health"),
+        # Either half spelling the separator still composes exactly one — the
+        # constant is joined by the SAME deduping seam a type-level prefix is,
+        # rather than by a concatenation of its own.
+        ("/actuator/", "", "/health", "/actuator/health"),
+        # A type-level prefix as well: the constant goes in FRONT of it, and
+        # both seams dedupe.
+        ("/actuator", "/admin/", "/health", "/actuator/admin/health"),
+        # A declaration carrying no name of its own contributes nothing, and
+        # takes no separator with it.
+        ("/actuator", "/admin", "", "/actuator/admin"),
+    ],
+)
+def test_a_constant_prefix_joins_the_front_of_every_address_the_catalog_composes(
+    tmp_path: Path, constant: str, prefix: str, suffix: str, composed: str
+):
+    """A framework whose whole surface is served under one fixed base states
+    that base nowhere on the declaration — there is no annotation attribute to
+    read it from — so it is catalog data. Without it the derived address is
+    the bare id, which is a URL the framework does not serve (CP-5 row 5:
+    `/probe` is a 404 while `/actuator/probe` is a 200)."""
+    catalog = _seam_catalog(path_separator="/", path_prefix=constant)
+
+    assert _seam_path(tmp_path, catalog, prefix, suffix) == composed
+
+
+def test_a_catalog_declaring_no_constant_prefix_composes_exactly_what_it_always_did(
+    tmp_path: Path,
+):
+    """The inertness pin. Every catalog written before this word declares no
+    `path_prefix`, and the seam must reduce to the expression it was — a
+    parameter that changed the answer for a catalog that never asked for it
+    would move forty shipped files' addresses at once."""
+    catalog = _seam_catalog(path_separator="/")
+
+    assert (
+        _seam_path(tmp_path, catalog, "/api/gateway", "owners/{id}") == "/api/gateway/owners/{id}"
+    )
+    assert _seam_path(tmp_path / "b", catalog, "", "owners") == "/owners"
+
+
+@pytest.mark.parametrize("declared", ["", 5, True, ["/actuator"]])
+def test_a_constant_prefix_that_is_not_a_non_empty_string_is_refused_by_file(
+    tmp_path: Path, declared: object
+):
+    """The value is bound straight into every address this catalog composes,
+    so an unusable one prefixes characters nobody wrote — a wrong address
+    rather than a missing one, published at `resolved`/`compiler`. An
+    explicitly EMPTY prefix is refused rather than silently doing what
+    omitting the key already does, the `path_separator` precedent."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_separator="/", path_prefix=declared), "", "health")
+
+    assert "path_prefix" in str(raised.value)
+    assert "invented-seam.yml" in str(raised.value)
+
+
+def test_a_constant_prefix_without_a_separator_is_refused_rather_than_concatenated_bare(
+    tmp_path: Path,
+):
+    """`/actuator` + `health` is `/actuatorhealth` — an address the framework
+    does not serve, and the confidently-wrong-address class again. The two
+    words are declared together or not at all."""
+    with pytest.raises(CatalogError) as raised:
+        _seam_path(tmp_path, _seam_catalog(path_prefix="/actuator"), "", "health")
+
+    assert "path_prefix" in str(raised.value)
+    assert "path_separator" in str(raised.value)
 
 
 def test_a_multi_character_separator_is_refused_by_file(tmp_path: Path):
@@ -1902,9 +3134,8 @@ def _scalar_path_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2032,9 +3263,8 @@ def test_a_mapping_naming_two_paths_and_two_methods_derives_all_four_identities(
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2107,9 +3337,8 @@ def _media_reading_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2201,9 +3430,8 @@ def _one_method_two_annotations_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2271,9 +3499,8 @@ def _content_negotiation_sibling_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2354,9 +3581,8 @@ def _client_facts(root: Path, type_args: dict[str, object]) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2453,9 +3679,8 @@ def _orders_controller_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2513,9 +3738,8 @@ def _orders_client_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2569,17 +3793,31 @@ def _two_direction_workspace(tmp_path: Path):
     return workspace
 
 
-def test_a_path_the_module_both_exposes_and_calls_is_one_endpoint_with_both(tmp_path):
-    """D02 §3: inbound runs first so the merged row keeps the server's handler
-    and gains the client's caller — appearing twice would make every consumer
-    re-implement the merge."""
+def test_a_path_the_module_both_exposes_and_calls_stays_two_endpoints(tmp_path):
+    """F5 §6.1 (W27). This used to be one row with `direction: both`, keeping the
+    server's handler and gaining the client's caller.
+
+    That row asserted the thing called IS the thing served — a claim about the far end of
+    a call, which a module's own bytecode cannot show — and it was reached by comparing
+    `(protocol, method, path)` alone, because `peer` is not part of endpoint identity
+    (RC-5). So a path this module serves collided with the same path anywhere in the
+    world. Measured on the shipped fixture, two of six merged rows were exactly that: a
+    SOAP operation merged with a call to `${soap.billing.uri}`, and `POST /v1/orders`
+    merged with a call to `orders-loop`.
+
+    The two rows now stand, each keeping its own side, and `resolve/self_exchange.py`
+    files the question (`test_self_exchange.py`). `Direction.BOTH` stays in D00 §4 for
+    the linking tier, where a schema match or a person can justify the claim.
+    """
     workspace = _two_direction_workspace(tmp_path)
     rows = [e for e in workspace.query("endpoints") if e["path"] == "/v1/orders"]
-    assert len(rows) == 1
-    [merged] = rows
-    assert merged["direction"] == "both"
-    assert merged["handler"] is not None and merged["caller"] is not None
     workspace.close()
+
+    assert sorted(str(row["direction"]) for row in rows) == ["inbound", "outbound"]
+    [inbound] = [row for row in rows if row["direction"] == "inbound"]
+    [outbound] = [row for row in rows if row["direction"] == "outbound"]
+    assert inbound["handler"] is not None and inbound["caller"] is None
+    assert outbound["caller"] is not None and outbound["handler"] is None
 
 
 def _legacy_facts(root: Path) -> None:
@@ -2591,9 +3829,8 @@ def _legacy_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2683,9 +3920,8 @@ def _gateless_implementer_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2774,9 +4010,8 @@ def _inventory_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2884,9 +4119,8 @@ def _sendtouser_facts(root: Path) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -2896,6 +4130,17 @@ def _sendtouser_facts(root: Path) -> None:
     notify = "com/acme/ws/StompUserHandler#notify(sig_11112222)."
     facts = [
         SymbolFact(document_id="doc_1", symbol=handler_type, construct_kind=ConstructKind.CLASS),
+        # `@Controller`, because Spring STOMP's own handler test is
+        # `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)`
+        # (CP-11 Q5) and `spring-stomp.yml` gates on it since `A-C1`. These
+        # facts described a class the container would never dispatch to, which
+        # is exactly the shape the sweep found in the catalog.
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler_type,
+            retention="runtime",
+            use=AnnotationUse(annotation="org/springframework/stereotype/Controller#", args={}),
+        ),
         SymbolFact(
             document_id="doc_1",
             symbol=notify,
@@ -2938,6 +4183,11 @@ def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_n
     tmp_path: Path,
 ):
     _sendtouser_facts(tmp_path / "facts")
+    # `spring-stomp` carries `detect.required` since F2 §3.6 — `@MessageMapping`
+    # cannot say whether a `@Controller` serves STOMP or RSocket, so the build is
+    # the only thing that can. This test is about `@SendToUser`, not about the
+    # gate, so it declares the coordinate and moves on.
+    write_fixture_module_fact_with(tmp_path / "facts", ("org.springframework:spring-websocket",))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(
@@ -2975,6 +4225,131 @@ def test_an_sendtouser_handler_derives_the_same_honest_unresolved_reply_row_as_n
     assert reply["method"] is None
     assert reply["resolution"] == "unresolved"
     assert reply["request_shape"] is not None
+
+
+# --- 2O Task 2, ruling R8: the reply row is OUTBOUND whatever its catalog is
+# --------------------------------------------------------------------------
+def _http_reply_facts(root: Path) -> None:
+    """One inbound-HTTP-shaped handler carrying a slashless mapping AND a
+    reply annotation naming a slashless destination — the contrast pair the
+    test below turns on."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/rest/ReplyController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    controller = "com/acme/rest/ReplyController#"
+    handle = "com/acme/rest/ReplyController#handle(sig_33334444)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handle,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+            signature=Signature(
+                parameters=[],
+                returns=TypeRef(symbol="java/lang/String#", wire_type="string"),
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(annotation="com/acme/rest/annotation/Api#"),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/annotation/Route#", args={"value": "orders"}
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=handle,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/rest/annotation/Answer#", args={"value": "reply-dest"}
+            ),
+        ),
+    ]
+    write_fact_file(root / "ReplyController.jsonl", document, facts)
+
+
+def _http_reply_catalog() -> Catalog:
+    """An INBOUND HTTP catalog that also declares a `reply` block. No shipped
+    catalog is shaped this way today — the four with `reply` blocks are kafka
+    and websocket — which is exactly why this is invented: R8's rule about the
+    reply row must hold because of what the ROW is, not because of which
+    catalogs happen to exist."""
+    return Catalog(
+        id="invented-http-reply",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-http-reply.yml"),
+        matches={
+            "type_annotation": "com.acme.rest.annotation.Api",
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.rest.annotation.Route"}],
+            },
+            "reply": {
+                "annotation": "com.acme.rest.annotation.Answer",
+                "destination_from": "value",
+                "payload": "return",
+            },
+        },
+    )
+
+
+def test_a_reply_row_is_never_canonicalized_however_its_catalog_is_declared(tmp_path: Path):
+    """Ruling R8, at the one minting site whose direction is a LITERAL.
+
+    `_reply_row` writes `"direction": "outbound"` outright — a reply is always
+    a client-side send, whatever direction its catalog declares — so the seam
+    must not reach it. Asking the CATALOG's direction here would canonicalize
+    an outbound address the moment an inbound HTTP catalog declared a `reply`
+    block, which is precisely the rewrite R8 forbids.
+
+    The contrast is the whole test: one handler, two rows, both addresses
+    written without a leading separator. The INBOUND row is a route this
+    module serves and becomes `/orders`; the OUTBOUND reply row keeps
+    `reply-dest` exactly as the annotation wrote it.
+    """
+    _http_reply_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [_http_reply_catalog()],
+        capabilities={"annotation_args", "typed_signatures"},
+    )
+    assert skipped == []
+    rows = list(workspace.query("endpoints"))
+    workspace.close()
+
+    [inbound] = [e for e in rows if e["direction"] == "inbound"]
+    assert inbound["path"] == "/orders"
+
+    [reply] = [e for e in rows if e["direction"] == "outbound"]
+    assert reply["path"] == "reply-dest"
+    assert reply["resolution"] == "resolved"
 
 
 _UNKNOWN_STYLE_CATALOG = """id: invented
@@ -3161,9 +4536,8 @@ _GATE_DOCUMENT = Document(
     module_id="com.acme:orders-service",
     language="java",
     sextant_version="0.1.0",
-    fact_schema_version="1.0.0",
+    fact_schema_version=2,
     scanner_id="asm",
-    scanner_version="9.7",
     content_hash="sha256:a",
     origin_entry="target/classes",
     origin_tier=OriginTier.MODULE_OUTPUT,
@@ -3407,3 +4781,2835 @@ def test_the_soap_template_catalog_skips_visibly_without_annotation_arguments(
     workspace.close()
 
     assert skipped == [SkippedCatalog("spring-ws-template", ("annotation_args",))]
+
+
+# --- 2O Task 7: the messaging and annotation catalogs, proved against the
+# REAL shipped files (no fixture module carries any of these annotations yet
+# — the 2H Task 5 precedent for `spring-websocket.yml`).
+#
+# Every catalog here is paired: one test that the rule FIRES, and one §10
+# near-miss per matcher asserting that NOTHING is derived. The near-miss is
+# derived from the rule's own conjuncts — an input satisfying every condition
+# but one — because a suite where every fixture demonstrates the rule firing
+# cannot tell you the rule declines correctly. This phase's worst defect was
+# exactly that shape: an engine fabricated an endpoint out of an ordinary
+# `extends` pair, and the golden fixture missed it by luck.
+
+_TASK_7_CAPABILITIES = frozenset(
+    {
+        "annotation_args",
+        # Capability 9.16, and required by the three listener catalogs since
+        # they learned to name their repeatable container (`OI-36`): a folded
+        # use reaches the class file only as a nested annotation. Without it
+        # here those catalogs would be SKIPPED rather than run, which is the
+        # visible failure the `requires` entry is for.
+        "nested_annotation_args",
+        "type_annotations",
+        "typed_signatures",
+        "call_site",
+        "string_constants",
+        "implemented_interfaces",
+        "superclass",
+        "generic_interfaces",
+        "chain_reconstruction",
+        "resolved_config",
+    }
+)
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+
+
+def _annotated_facts(
+    root: Path,
+    class_symbol: str,
+    method_symbol: str,
+    class_annotations: dict[str, dict] | None = None,
+    method_annotations: dict[str, dict] | None = None,
+) -> None:
+    """One class, one method on it, and whatever annotations each carries.
+
+    Annotations are keyed by the SCIP symbol form the facts carry (D00 §5a) —
+    the same form `_seam_facts` writes — so a test states the fqn once and the
+    catalog's own `_catalog_symbol` conversion is what has to agree with it.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/task7/Subject.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=class_symbol, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=method_symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=class_symbol,
+            visibility="public",
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+    ]
+    for target, declared in (
+        (class_symbol, class_annotations or {}),
+        (method_symbol, method_annotations or {}),
+    ):
+        for annotation, args in declared.items():
+            facts.append(
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=target,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=annotation, args=args),
+                )
+            )
+    write_fact_file(root / "Subject.jsonl", document, facts)
+
+
+def _rows_from(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[dict[str, object]]:
+    _annotated_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, catalogs, capabilities=set(_TASK_7_CAPABILITIES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return rows
+
+
+_LISTENER_CLASS = "com/acme/task7/Subject#"
+_LISTENER_METHOD = "com/acme/task7/Subject#onMessage(sig_7a1)."
+_RABBIT_LISTENER = "org/springframework/amqp/rabbit/annotation/RabbitListener#"
+_RABBIT_HANDLER = "org/springframework/amqp/rabbit/annotation/RabbitHandler#"
+
+
+def test_a_rabbit_listener_derives_one_inbound_amqp_row_per_declared_queue(tmp_path: Path):
+    """The queue names arrive as a `String[]` on `queues` (javap, spring-rabbit
+    3.1.4), and a multi-queue listener is that many wire identities — one
+    method serving two queues is two destinations, not one."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_RABBIT_LISTENER: {"queues": ["orders.q", "orders.dlq"]}},
+    )
+
+    assert {(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows} == {
+        ("amqp", "inbound", None, "orders.q"),
+        ("amqp", "inbound", None, "orders.dlq"),
+    }
+    assert {r["handler"] for r in rows} == {_LISTENER_METHOD}
+
+
+def test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler(tmp_path: Path):
+    """The polymorphic shape: the class-level `@RabbitListener` carries no
+    method of its own to map, so it doubles as the prefix, and a
+    `@RabbitHandler` — which declares no queue attribute at all — reaches a
+    destination only through it. The queue name is composed BARE, with no
+    separator: a queue name has no segments, and a `/` here would invent a
+    destination no broker carries."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_RABBIT_LISTENER: {"queues": ["orders.q"]}},
+        method_annotations={_RABBIT_HANDLER: {}},
+    )
+
+    assert [(r["protocol"], r["path"], r["handler"]) for r in rows] == [
+        ("amqp", "orders.q", _LISTENER_METHOD)
+    ]
+
+
+@pytest.mark.declines("spring-rabbit")
+@pytest.mark.pins("derive_endpoints.addresses-nothing")
+def test_a_rabbit_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the polymorphic matcher, negating its second
+    conjunct: the method is annotated exactly as a real handler is, and the
+    enclosing class carries no `@RabbitListener`.
+
+    `@RabbitHandler` states no destination of its own, so the only thing such
+    a row could carry is the EMPTY address — a resolved endpoint addressing
+    nothing, which is mechanism 3's addresses-nothing gate. Spring itself
+    derives nothing here: `@RabbitHandler` outside a class-level
+    `@RabbitListener` is never registered with any container.
+
+    **It names the addresses-nothing gate, and it used to name the qualifier
+    scope.** `spring-rabbit.yml` declares no `requires_qualifier` at all, so
+    that conjunct is a no-op for this catalog and the guard name was simply
+    false — the same correction the harness forced on two of its own names.
+    Measured both ways by `scripts/guard_check.py`: disabling the
+    addresses-nothing gate ALONE fails this test; disabling the qualifier gate
+    alone does not.
+
+    Paired positive:
+    `test_a_class_level_rabbit_listener_gives_its_queue_to_every_rabbit_handler`
+    — the same `@RabbitHandler`, under a class that names the queue.
+    """
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_RABBIT_HANDLER: {}},
+    )
+
+    assert rows == []
+
+
+_PULSAR_LISTENER = "org/springframework/pulsar/annotation/PulsarListener#"
+
+
+def test_a_pulsar_listener_derives_one_inbound_pulsar_row_per_declared_topic(tmp_path: Path):
+    """`topics` is a `String[]` and `topicPattern` a scalar `String` (javap,
+    spring-pulsar 1.2.11) — the `@KafkaListener` shape, so the same
+    scalar-or-array, first-alias-wins read serves both."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_PULSAR_LISTENER: {"topics": ["persistent://public/default/orders"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("pulsar", "inbound", "persistent://public/default/orders")
+    ]
+
+
+@pytest.mark.declines("spring-pulsar")
+@pytest.mark.pins("derive_endpoints.handler-is-a-method")
+def test_a_type_level_pulsar_listener_alone_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the Pulsar matcher, negating the conjunct that the
+    annotation sits on a METHOD. `@PulsarListener` is
+    `@Target({TYPE, METHOD, ANNOTATION_TYPE})`, but the framework ships no
+    class-level handler annotation for it to dispatch to, so a type-level use
+    registers no listener and names no destination for any method of the
+    class. A row here would give every method of an annotated class the
+    class's own topic — endpoints nobody serves."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_PULSAR_LISTENER: {"topics": ["persistent://public/default/orders"]}},
+    )
+
+    assert rows == []
+
+
+_PULSAR_LISTENERS = "org/springframework/pulsar/annotation/PulsarListeners#"
+_PULSAR_READER = "org/springframework/pulsar/annotation/PulsarReader#"
+
+
+@pytest.mark.pins("spring-pulsar.container-is-the-frameworks-own")
+def test_two_pulsar_listeners_held_in_the_container_derive_both_topics(tmp_path: Path):
+    """`OI-38`. CP-17 rows 3a/3b read
+    `org.springframework.pulsar.annotation.PulsarListeners` out of spring-pulsar
+    1.2.11 and 2.0.7 declaring `value(): PulsarListener[]`, and rows 6a/6b show
+    the post-processor adding every member of it to the listener set. Before
+    the container was named, a method declaring its topics this way derived
+    NOTHING — beside a single-listener neighbour deriving normally, which is
+    the shape that makes an under-report hard to notice."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            _PULSAR_LISTENERS: {
+                "value": [
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("pulsar", "orders.v1"),
+        ("pulsar", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-pulsar.container-is-the-frameworks-own")
+def test_a_pulsar_container_beside_a_direct_listener_derives_the_union(tmp_path: Path):
+    """**The case that cannot exist for a `@Repeatable` annotation**, and the
+    reason this catalog's `container` entry means something slightly different
+    from `spring-kafka.yml`'s. CP-17 rows 2a/2b measured NO `@Repeatable` on
+    `@PulsarListener`, so javac never folds and a declaration may legally carry
+    both a direct `@PulsarListener` AND a hand-written `@PulsarListeners`. Rows
+    6a/6b are what say the framework registers the union of the two rather than
+    one instead of the other:
+
+        PulsarListener ann = findMergedAnnotation(method, PulsarListener.class);
+        if (ann != null) { listeners.add(ann); }
+        PulsarListeners anns = findAnnotation(method, PulsarListeners.class);
+        if (anns != null) { listeners.addAll(...anns.value()...); }
+
+    Three topics served, so three rows — the direct annotation's row survives
+    beside the synthesized ones because the unfolding pass ADDS and never
+    replaces."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            _PULSAR_LISTENER: {"topics": ["orders.direct"]},
+            _PULSAR_LISTENERS: {
+                "value": [
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_PULSAR_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            },
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("pulsar", "orders.direct"),
+        ("pulsar", "orders.v1"),
+        ("pulsar", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-pulsar.reader-is-a-second-inbound-surface")
+def test_a_pulsar_reader_derives_one_inbound_pulsar_row_per_declared_topic(tmp_path: Path):
+    """`OI-39`. `@PulsarReader` is a second inbound surface of the same
+    framework and this catalog named it nowhere. CP-17 rows 1c/1d read
+    `topics(): java.lang.String[]` off its own class file at spring-pulsar
+    1.2.11 and 2.0.7; rows 5c/5d show `PulsarReaderAnnotationBeanPostProcessor`
+    reading `PulsarReader.topics()` and feeding
+    `MethodPulsarReaderEndpoint.setTopics([Ljava/lang/String;)` before
+    registering the endpoint. Every reader in a scanned module was absent from
+    the export."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_PULSAR_READER: {"topics": ["persistent://public/default/audit"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("pulsar", "inbound", "persistent://public/default/audit")
+    ]
+
+
+@pytest.mark.declines("spring-pulsar")
+@pytest.mark.pins("derive_endpoints.handler-is-a-method")
+def test_a_type_level_pulsar_reader_alone_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the reader entry above, negating the conjunct that the
+    annotation sits on a METHOD. `@PulsarReader` is
+    `@Target({TYPE, METHOD, ANNOTATION_TYPE})` (CP-17 rows 2c/2d) and its
+    discovery method takes a `Method` and nothing else (rows 6c/6d), so a
+    type-level use registers no reader. A row here would give every method of
+    an annotated class the class's own topic."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-pulsar")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_PULSAR_READER: {"topics": ["persistent://public/default/audit"]}},
+    )
+
+    assert rows == []
+
+
+_LEGACY_SPRING_SQS = "org/springframework/cloud/aws/messaging/listener/annotation/SqsListener#"
+_LEGACY_AWSPRING_SQS = "io/awspring/cloud/messaging/listener/annotation/SqsListener#"
+_CURRENT_SQS = "io/awspring/cloud/sqs/annotation/SqsListener#"
+
+
+@pytest.mark.parametrize("annotation", [_LEGACY_SPRING_SQS, _LEGACY_AWSPRING_SQS])
+def test_both_legacy_sqs_spellings_derive_the_same_inbound_row(tmp_path: Path, annotation: str):
+    """The annotation moved package twice and kept its shape: both legacy
+    spellings declare exactly `value()` as `String[]` and `deletionPolicy()`
+    and nothing else (CP-17 rows 1g/1h, at
+    org.springframework.cloud:spring-cloud-aws-messaging 2.2.6.RELEASE and
+    io.awspring.cloud:spring-cloud-aws-messaging 2.4.4). That is why the file
+    is pure data — one more `annotations` entry, no engine word.
+
+    Rows 5g/5h are what make `value` the destination rather than an attribute
+    that resembles one: `QueueMessageHandler` reads `value()` and
+    `deletionPolicy()` and no third attribute, in either generation."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs-legacy")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={annotation: {"value": ["orders-queue"]}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["path"]) for r in rows] == [
+        ("sqs", "inbound", "orders-queue")
+    ]
+
+
+@pytest.mark.declines("spring-sqs-legacy")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+def test_the_legacy_sqs_catalog_declines_the_current_annotation(tmp_path: Path):
+    """§10 near-miss for the legacy matchers: the CURRENT 3.x annotation is
+    the same simple name, the same `value` attribute and the same protocol —
+    everything but the package. `spring-sqs.yml` is the file that describes
+    it, and it is a different dependency coordinate; a legacy catalog that
+    also matched it would claim a module declares an artifact it does not,
+    and would double every current listener's row once the two catalogs
+    both ran."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs-legacy")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_CURRENT_SQS: {"value": ["orders-queue"]}},
+    )
+
+    assert rows == []
+
+
+def test_a_controller_nested_inside_another_class_derives_its_route(tmp_path: Path):
+    """`G-110` (W54). `COVERAGE.md` carries *"Nested / inner classes ... read as
+    ordinary class files, so `@RestController`/`@Controller` resolve the same
+    nested or not"* as ✅ SHIPPED, and nothing derived a route from one.
+
+    The phase-1 scanner skipped nested classes outright; 2C lifted that, and the
+    claim since is that nothing downstream treats them specially. Nothing is the
+    hard part to test — there is no nested-class branch to point at, so the
+    assertion is that an ordinary route comes back from a symbol whose binary
+    name carries a `$`.
+
+    A route on an inner controller is not exotic: a `@RestController` nested in a
+    configuration class or a test fixture is ordinary Java, and if the `$` ever
+    stopped resolving, the failure would be silence — the class's whole surface
+    absent, with nothing saying so."""
+    nested = "com/acme/task7/Outer$Inner#"
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-web")],
+        class_symbol=nested,
+        method_symbol=f"{nested}list(sig_7a1).",
+        class_annotations={"org/springframework/web/bind/annotation/RestController#": {}},
+        method_annotations={
+            "org/springframework/web/bind/annotation/GetMapping#": {"value": ["/orders"]}
+        },
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("http", "inbound", "GET", "/orders")
+    ]
+
+
+@pytest.mark.declines("spring-web")
+@pytest.mark.declines("spring-mvc")
+@pytest.mark.declines("spring-cloud-openfeign")
+@pytest.mark.declines("spring-graphql")
+@pytest.mark.declines("netflix-dgs")
+@pytest.mark.declines("spring-ws")
+@pytest.mark.declines("jakarta-jws")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+@pytest.mark.parametrize(
+    ("catalog_id", "class_annotation", "method_annotation", "arguments"),
+    [
+        pytest.param(
+            "spring-web",
+            "org/springframework/web/bind/annotation/RestController#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-web",
+        ),
+        pytest.param(
+            "spring-mvc",
+            "org/springframework/stereotype/Controller#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-mvc",
+        ),
+        pytest.param(
+            "spring-cloud-openfeign",
+            "org/springframework/cloud/openfeign/FeignClient#",
+            "com/acme/own/GetMapping#",
+            {"value": ["/orders"]},
+            id="spring-cloud-openfeign",
+        ),
+        pytest.param(
+            "spring-graphql",
+            "org/springframework/stereotype/Controller#",
+            "com/acme/own/QueryMapping#",
+            {"value": ["orders"]},
+            id="spring-graphql",
+        ),
+        pytest.param(
+            "netflix-dgs",
+            "com/netflix/graphql/dgs/DgsComponent#",
+            "com/acme/own/DgsQuery#",
+            {"field": ["orders"]},
+            id="netflix-dgs",
+        ),
+        pytest.param(
+            "spring-ws",
+            "org/springframework/ws/server/endpoint/annotation/Endpoint#",
+            "com/acme/own/PayloadRoot#",
+            {"localPart": ["GetOrder"]},
+            id="spring-ws",
+        ),
+        # `jakarta-jws` declares no `type_annotation`: `@WebService` on the CLASS
+        # is its gate, and that is the FQN varied here. Its client twin is NOT
+        # here, and the measurement is why — see the note below the test.
+        pytest.param(
+            "jakarta-jws",
+            "com/acme/own/WebService#",
+            "jakarta/jws/WebMethod#",
+            {"operationName": ["getOrder"]},
+            id="jakarta-jws",
+        ),
+    ],
+)
+def test_an_annotation_with_the_right_simple_name_in_another_package_derives_nothing(
+    tmp_path: Path,
+    catalog_id: str,
+    class_annotation: str,
+    method_annotation: str,
+    arguments: dict,
+):
+    """§10 near-miss for SEVEN `annotation_driven` catalogs at once (W54), and it
+    measures the fully-qualified NAME alone.
+
+    Every other conjunct holds: the class carries the stereotype the catalog
+    gates on, the method carries an annotation of the right simple name with the
+    right address attribute holding a real address, and the capability set is
+    whole. Only the PACKAGE differs — `com.acme.own.GetMapping` rather than
+    Spring's.
+
+    That shape is ordinary rather than contrived. `GetMapping`, `QueryMapping`,
+    `WebService` and `PayloadRoot` are names a project writes for itself, and two
+    frameworks in one estate routinely ship annotations that differ only in
+    package — `jakarta.jws` and `javax.jws` are in this very catalog, and telling
+    them apart is the whole reason the match is on the FQN. Without that conjunct
+    every one of these catalogs would publish a boundary for an annotation its
+    framework never sees, at `resolved`/`compiler`, where nothing downstream can
+    tell it from an observation.
+
+    Parametrised because the finding is about the SET: each catalog spells its
+    own annotation list, and a per-catalog test passes while another file's list
+    is still matched on a simple name."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped(catalog_id)],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={class_annotation: {}},
+        method_annotations={method_annotation: arguments},
+    )
+
+    assert rows == [], f"{catalog_id} matched an annotation from another package"
+
+
+_SQS_HANDLER = "io/awspring/cloud/sqs/annotation/SqsHandler#"
+
+
+@pytest.mark.pins("spring-sqs.class-level-listener-is-the-prefix")
+def test_a_class_level_sqs_listener_gives_its_queue_to_every_sqs_handler(tmp_path: Path):
+    """`OI-40`. spring-cloud-aws-sqs **4.1.1** widened `@SqsListener`'s
+    `@Target` from `{METHOD}` to `{METHOD, TYPE}` and shipped `@SqsHandler`
+    (CP-17 rows 2e/2f and 4e/4f), and its post-processor grew the branch that
+    builds a `MultiMethodSqsEndpoint` from the CLASS-level annotation's own
+    `value()` and dispatches to every `@SqsHandler` method (row 6f, against row
+    6e's same method at 3.1.1 which has no such branch at all).
+
+    So this is the `spring-kafka.yml` polymorphic shape one framework over, and
+    the catalog said in as many words that SQS has none — true at 3.1.1, false
+    at 4.1.1, and every `@SqsHandler` method in a 4.x module was absent from the
+    export. The queue name is composed BARE, with no separator: a queue name has
+    no segments, and a `/` here would invent a destination no broker carries."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_CURRENT_SQS: {"value": ["orders-queue"]}},
+        method_annotations={_SQS_HANDLER: {}},
+    )
+
+    assert [(r["protocol"], r["path"], r["handler"]) for r in rows] == [
+        ("sqs", "orders-queue", _LISTENER_METHOD)
+    ]
+
+
+@pytest.mark.declines("spring-sqs")
+@pytest.mark.pins("derive_endpoints.addresses-nothing")
+def test_an_sqs_handler_on_a_class_carrying_no_listener_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the polymorphic matcher above, negating its second
+    conjunct: the method is annotated exactly as a real handler is, and the
+    enclosing class carries no `@SqsListener`.
+
+    `@SqsHandler` declares `isDefault(): boolean` and nothing else (CP-17 row
+    4f/1n), so the only thing such a row could carry is the EMPTY address — a
+    resolved endpoint addressing nothing. The framework derives nothing here
+    either: row 6f registers the multi-method endpoint only under
+    `hasClassLevelListeners`, so a handler with no class-level listener above it
+    reaches no container at all.
+
+    Paired positive:
+    `test_a_class_level_sqs_listener_gives_its_queue_to_every_sqs_handler`."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-sqs")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_SQS_HANDLER: {"isDefault": True}},
+    )
+
+    assert rows == []
+
+
+_ENDPOINT = "org/springframework/boot/actuate/endpoint/annotation/Endpoint#"
+_READ_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/ReadOperation#"
+_WRITE_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/WriteOperation#"
+_DELETE_OPERATION = "org/springframework/boot/actuate/endpoint/annotation/DeleteOperation#"
+
+
+@pytest.mark.parametrize(
+    ("operation", "verb"),
+    [(_READ_OPERATION, "GET"), (_WRITE_OPERATION, "POST"), (_DELETE_OPERATION, "DELETE")],
+)
+def test_an_actuator_operation_is_served_under_the_constant_prefix_with_its_own_verb(
+    tmp_path: Path, operation: str, verb: str
+):
+    """CP-5 rows 1-3, confirmed live on Boot 3.5.10 and 4.1.1: the address is
+    `/actuator/<id>` and the verb is the operation annotation's own. The id
+    lives on the TYPE and the verb on the METHOD, so neither half alone is an
+    endpoint — which is exactly why the catalog gates on both."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_ENDPOINT: {"id": "probe"}},
+        method_annotations={operation: {}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("http", "inbound", verb, "/actuator/probe")
+    ]
+
+
+def test_an_endpoint_class_with_no_operation_annotation_derives_nothing(tmp_path: Path):
+    """CP-5 row 6 measured rather than assumed: an `@Endpoint` class whose
+    methods carry no operation annotation serves nothing — `GET
+    /actuator/empty` was a 404 on both versions probed, and the endpoint did
+    not appear in the discovery document at all.
+
+    **It carries NO `declines` or `pins` marker, and that is a finding rather
+    than an omission.** Its emptiness has two independent causes and pins
+    neither. Making `@Endpoint` a mapping annotation of its own — the
+    "class-level rule" this used to say it negated — mints a declaration whose
+    target is a CLASS, and `@Endpoint` is `@Target(TYPE)` so it can sit nowhere
+    else; every such declaration is dropped by the
+    `construct_kind IN ('method', 'function')` join regardless of what the
+    catalog says. So no single guard's absence makes a row appear here, and a
+    marker would have declared coverage nothing verifies — which the guard
+    harness measured and this docstring now records.
+
+    `spring-actuator`'s declining coverage is
+    `test_an_actuator_operation_outside_an_endpoint_class_derives_nothing`,
+    which negates the other conjunct and does discriminate."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_ENDPOINT: {"id": "empty"}},
+    )
+
+    assert rows == []
+
+
+@pytest.mark.declines("spring-actuator")
+@pytest.mark.pins("derive_endpoints.type-annotation-gate")
+def test_an_actuator_operation_outside_an_endpoint_class_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the other conjunct: the operation annotation is
+    present and the class gate is not. The operation annotations carry no
+    address at all, so such a row could only ever be `/actuator` itself —
+    the discovery document, which this method does not serve."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-actuator")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_READ_OPERATION: {}},
+    )
+
+    assert rows == []
+
+
+_KAFKA_LISTENER = "org/springframework/kafka/annotation/KafkaListener#"
+_JMS_LISTENER = "org/springframework/jms/annotation/JmsListener#"
+
+
+@pytest.mark.declines("spring-kafka")
+@pytest.mark.pins("spring-kafka.path-from-is-the-topic-attributes")
+def test_a_kafka_listener_declaring_only_a_group_id_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the alias set, `spring-scheduling`'s `initialDelay`
+    shape one framework over. `groupId` is a real `@KafkaListener` attribute, a
+    `String` exactly as `topicPattern` is, and CP-16 row 4 measures the
+    post-processor reading it at spring-kafka 3.1.4 and 4.1.1 — but it names
+    the CONSUMER GROUP a service joins, not a topic it consumes. Reading it
+    would publish `orders-consumers` as a Kafka destination: an address no
+    broker carries, at `resolved`/`compiler`, indistinguishable downstream from
+    a topic somebody wrote.
+
+    Every other conjunct holds — the shipped annotation, spelled in full, on a
+    method, with an argument this pass can read."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-kafka")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_KAFKA_LISTENER: {"groupId": "orders-consumers"}},
+    )
+
+    assert rows == []
+
+
+@pytest.mark.declines("spring-jms")
+@pytest.mark.pins("spring-jms.path-from-is-the-destination-attribute")
+def test_a_jms_listener_declaring_only_a_subscription_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the alias set. `subscription` is a real `@JmsListener`
+    attribute, it is a `String` exactly as `destination` is, it sits directly
+    beside it in the annotation, and CP-16 row 4 measures the post-processor
+    reading both at spring-jms 6.1.6 and 7.0.9. It names the DURABLE
+    SUBSCRIPTION a consumer registers under, not the queue or topic a message
+    arrives on — so reading it publishes a name the broker does not route to.
+
+    `@JmsListener` declares six attributes and exactly one is an address (CP-16
+    row 1), which is what makes the other five the near-miss set rather than
+    one chosen example."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-jms")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_JMS_LISTENER: {"subscription": "orders-durable"}},
+    )
+
+    assert rows == []
+
+
+# --- `OI-36`: the repeatable container, against the three shipped catalogs --
+#
+# javac writes the CONTAINER and not the annotation when one is used twice on a
+# declaration (JLS 9.7.5), so the class file below carries no listener
+# annotation at all — which is why these read as "two destinations from a fact
+# that mentions neither". CP-16 rows 2 and 4 measured the container and the
+# post-processor's read of it at six versions across the three frameworks.
+
+
+def _folded_use(annotation: str, args: dict[str, object]) -> AnnotationUse:
+    return AnnotationUse(annotation=annotation, args=args)
+
+
+@pytest.mark.pins("spring-kafka.container-is-the-frameworks-own")
+def test_two_kafka_listeners_on_one_method_derive_both_topics(tmp_path: Path):
+    """CP-16 rows 2a/2b and 4a/4b: `@KafkaListener` is
+    `@Repeatable(KafkaListeners.class)` at 3.1.4 and 4.1.1, and the
+    post-processor calls `KafkaListeners.value()`. So the framework registers
+    both listeners while this repository saw nothing at all — a silent
+    under-report beside a single-listener neighbour deriving normally, which is
+    the shape that makes it hard to notice."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-kafka")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/kafka/annotation/KafkaListeners#": {
+                "value": [
+                    _folded_use(_KAFKA_LISTENER, {"topics": ["orders.v1"]}),
+                    _folded_use(_KAFKA_LISTENER, {"topics": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("kafka", "orders.v1"),
+        ("kafka", "orders.dlq"),
+    }
+
+
+@pytest.mark.pins("spring-jms.container-is-the-frameworks-own")
+def test_two_jms_listeners_on_one_method_derive_both_destinations(tmp_path: Path):
+    """CP-16 rows 2c/2d and 4c/4d: `@JmsListener` is
+    `@Repeatable(JmsListeners.class)` at 6.1.6 and 7.0.9, and the post-processor
+    calls `getMergedRepeatableAnnotations(element, JmsListener, JmsListeners)` —
+    naming BOTH classes, which is the framework saying in its own words that the
+    container is part of the rule."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-jms")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/jms/annotation/JmsListeners#": {
+                "value": [
+                    _folded_use(_JMS_LISTENER, {"destination": "orders.queue"}),
+                    _folded_use(_JMS_LISTENER, {"destination": "orders.retry"}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("jms", "orders.queue"),
+        ("jms", "orders.retry"),
+    }
+
+
+@pytest.mark.pins("spring-rabbit.container-is-the-frameworks-own")
+def test_two_rabbit_listeners_on_one_method_derive_both_queues(tmp_path: Path):
+    """CP-16 rows 2e/2f and 4e: `@RabbitListener` is
+    `@Repeatable(RabbitListeners.class)` at 3.1.4 and 4.1.1, and 3.1.4's
+    post-processor streams `RabbitListener` out of a `MergedAnnotations` view,
+    which is the container-aware read."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("spring-rabbit")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={
+            "org/springframework/amqp/rabbit/annotation/RabbitListeners#": {
+                "value": [
+                    _folded_use(_RABBIT_LISTENER, {"queues": ["orders.q"]}),
+                    _folded_use(_RABBIT_LISTENER, {"queues": ["orders.dlq"]}),
+                ]
+            }
+        },
+    )
+
+    assert {(str(r["protocol"]), str(r["path"])) for r in rows} == {
+        ("amqp", "orders.q"),
+        ("amqp", "orders.dlq"),
+    }
+
+
+_GRAPHQL_API = "org/eclipse/microprofile/graphql/GraphQLApi#"
+_MP_QUERY = "org/eclipse/microprofile/graphql/Query#"
+_MP_MUTATION = "org/eclipse/microprofile/graphql/Mutation#"
+_MP_NAME = "org/eclipse/microprofile/graphql/Name#"
+
+
+def test_a_microprofile_query_naming_its_own_operation_derives_that_name(tmp_path: Path):
+    """The half CP-15 leaves untouched, and the reason `path_fallback` was
+    carried rather than dropped: an operation that NAMES itself is read from
+    its own `value` and reaches the same address SmallRye serves —
+    `getOperationName` consults the operation annotation's value first, before
+    every other source and before any transformation (CP-15 rows 1 and 3, at
+    smallrye-graphql-schema-builder 2.0.0 and 2.18.5)."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {"value": "orders"}},
+    )
+
+    assert [(r["protocol"], r["direction"], r["method"], r["path"]) for r in rows] == [
+        ("graphql", "inbound", "query", "orders")
+    ]
+
+
+@pytest.mark.pins("microprofile-graphql.fallback-direction-is-per-annotation")
+def test_a_microprofile_operation_falls_back_to_the_name_smallrye_serves(tmp_path: Path):
+    """**This assertion used to be the defect** (`OI-5`). It read
+    `== ["getOrders"]` and was named
+    `..._publishes_the_wrong_address`: a characterisation test of a known-wrong
+    output, written so the defect was a fact in the suite rather than a
+    paragraph in a register, with the register saying "the day the grammar can
+    say it, this assertion is what changes". This is that day.
+
+    CP-15 row 5 compiled `MethodHelper.getPropertyName` against both measured
+    SmallRye jars and RAN it: `getOrders -> OUT orders`, `setStatus -> IN
+    status`. And the direction is chosen by WHICH annotation matched — `@Query`
+    takes `OUT`, `@Mutation` takes `IN` (row 3) — which is why both are asserted
+    here together, on two methods whose names are each the OTHER direction's
+    accessor. A catalog carrying one word for both cannot produce this pair: it
+    publishes `getOrders` or `setStatus` unchanged, whichever way it leans."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#getOrders(sig_mp1).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {}},
+    )
+    mutations = _rows_from(
+        tmp_path / "mutation",
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#setStatus(sig_mp2).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_MUTATION: {}},
+    )
+
+    assert [r["path"] for r in rows] == ["orders"]
+    assert [r["path"] for r in mutations] == ["status"]
+
+
+@pytest.mark.pins("microprofile-graphql.name-sources-are-the-measured-annotations")
+def test_a_microprofile_operation_renamed_by_a_sibling_annotation_takes_that_name(
+    tmp_path: Path,
+):
+    """`OI-35`. `getOperationName` consults five sources in order and takes the
+    first with a value (CP-15 rows 1-2), and the specification's own renaming
+    annotation — `@Name` — is the second. So
+    `@Query @Name("allOrders") List<Order> orders()` is SERVED as `allOrders`,
+    while this catalog published `orders` until it could name a sibling source.
+
+    The `@Query` here carries NO value of its own, which is what puts the
+    sibling in play at all: CP-15 row 1 puts the matched annotation's own value
+    first, and `test_a_microprofile_query_naming_its_own_operation_derives_that_name`
+    above is the other half of that order."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol="com/acme/task7/Orders#",
+        method_symbol="com/acme/task7/Orders#getOrders(sig_mp1).",
+        class_annotations={_GRAPHQL_API: {}},
+        method_annotations={_MP_QUERY: {}, _MP_NAME: {"value": "allOrders"}},
+    )
+
+    assert [r["path"] for r in rows] == ["allOrders"]
+
+
+@pytest.mark.declines("microprofile-graphql")
+@pytest.mark.pins("derive_endpoints.type-annotation-gate")
+def test_a_microprofile_query_outside_a_graphql_api_class_derives_nothing(tmp_path: Path):
+    """§10 near-miss on the conjunct this catalog rests on. `@Query` carries no
+    address of its own beyond a name, and `@GraphQLApi` on the enclosing type
+    is the only thing separating an operation SmallRye scans from a method that
+    merely borrowed the annotation's simple name — the sweep ranks this catalog
+    in tier 3 for exactly that reason.
+
+    Every other conjunct holds: the operation annotation is present, spelled in
+    full, on a method, with a value it could publish. Without the type gate
+    this class's method becomes a resolved GraphQL operation at `orders` that
+    no schema declares."""
+    rows = _rows_from(
+        tmp_path,
+        [_shipped("microprofile-graphql")],
+        class_symbol=_LISTENER_CLASS,
+        method_symbol=_LISTENER_METHOD,
+        method_annotations={_MP_QUERY: {"value": "orders"}},
+    )
+
+    assert rows == []
+
+
+def test_a_web_filter_derives_nothing_from_any_shipped_catalog(tmp_path: Path):
+    """§10 near-miss for the STATED BOUNDARY rather than for one matcher.
+
+    `@WebFilter` is a servlet-container registration carrying `urlPatterns` —
+    an annotation that looks exactly like an address-bearing inbound mapping
+    and is not one: a filter intercepts URLs that other components serve, and
+    publishing its patterns as endpoints would invent a service surface out of
+    cross-cutting plumbing. No shipped catalog claims it, and this asserts that
+    against EVERY shipped catalog at once rather than against the one that
+    might have — the check that would have caught this phase's worst defect,
+    where an engine fabricated an endpoint out of an ordinary `extends` pair
+    and the golden fixture missed it by luck.
+
+    Servlet registration is Task 7b's subject, and `@WebFilter` is not in it.
+    """
+    rows = _rows_from(
+        tmp_path,
+        YamlCatalogSource(CATALOGS).load(),
+        class_symbol="com/acme/task7/AuditFilter#",
+        method_symbol="com/acme/task7/AuditFilter#doFilter(sig_7b2).",
+        class_annotations={
+            "jakarta/servlet/annotation/WebFilter#": {"urlPatterns": ["/api/*"]},
+        },
+    )
+
+    assert rows == []
+
+
+# --- `A-C7` (principles sweep §3.2): the handler gate is a predicate --------
+
+
+def _stereotype_facts(root: Path, *, meta_annotated: bool) -> None:
+    """A module-local stereotype and one controller wearing it.
+
+    `@MyApi` is an ordinary annotation type this module compiles, so its own
+    `@Controller` — or, in the near-miss, its absence — is sitting in the
+    `annotations` facts like any other annotation-on-a-type row. The controller
+    itself carries NO framework stereotype at all, which is the whole point:
+    Spring's handler test is a predicate over the composition, so `@MyApi`
+    alone makes this a handler.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/api/OrderApi.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    stereotype = "com/acme/api/MyApi#"
+    controller = "com/acme/api/OrderApi#"
+    list_ = "com/acme/api/OrderApi#list(sig_08c5be17)."
+    facts: list = [
+        # An annotation type is an interface in bytecode, which is what puts it
+        # in `interface_symbols` — the module-local half of the composition
+        # rule (a stereotype living in a jar is out of reach, D02 §7).
+        SymbolFact(document_id="doc_1", symbol=stereotype, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(document_id="doc_1", symbol=controller, construct_kind=ConstructKind.CLASS),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=list_,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=controller,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=controller,
+            retention="runtime",
+            use=AnnotationUse(annotation=stereotype, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=list_,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="org/springframework/web/bind/annotation/GetMapping#",
+                args={"value": ["/orders"]},
+            ),
+        ),
+    ]
+    if meta_annotated:
+        facts.insert(
+            3,
+            AnnotationFact(
+                document_id="doc_1",
+                target=stereotype,
+                retention="runtime",
+                use=AnnotationUse(annotation="org/springframework/stereotype/Controller#", args={}),
+            ),
+        )
+    write_fact_file(root / "OrderApi.jsonl", document, facts)
+
+
+def _stereotype_rows(tmp_path: Path, *, meta_annotated: bool) -> list[tuple]:
+    _stereotype_facts(tmp_path / "facts", meta_annotated=meta_annotated)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(workspace, [catalog], capabilities={"annotation_args", "type_annotations"})
+    rows = [(r["method"], r["path"]) for r in workspace.query("endpoints")]
+    workspace.close()
+    return rows
+
+
+def test_a_module_local_stereotype_meta_annotated_controller_is_a_handler(tmp_path: Path):
+    """`A-C7`. Spring's server-side handler test is
+    `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — a
+    four-instruction body, identical across spring-webmvc 6.1.6, 6.2.15, 7.0.2
+    and 7.0.9 (CP-11 Q2) — and `AnnotatedElementUtils.hasAnnotation` is
+    meta-annotation aware. The catalogs encoded string equality against one
+    FQN over the type's own direct annotations, so a controller wearing a
+    module-local `@MyApi` composed from `@RestController` matched nothing and
+    **every endpoint of that controller disappeared from the export**: a
+    silent drop of a whole HTTP surface, which is the failure §8's second
+    clause names.
+
+    The composition pre-pass already answered exactly this question for
+    METHOD-level mapping annotations and its own docstring said so. The type
+    gate simply was never widened with it."""
+    assert _stereotype_rows(tmp_path, meta_annotated=True) == [("GET", "/orders")]
+
+
+def test_a_module_local_annotation_composed_from_nothing_is_not_a_handler(tmp_path: Path):
+    """The paired near-miss, and the reason widening the gate is safe: the
+    same controller wearing the same annotation, with the annotation's own
+    `@Controller` removed, derives NOTHING. What makes the class a handler is
+    the composition, never the fact that some module-local annotation is on
+    it — a gate that matched any annotated class would publish every
+    `@Component`, `@Service` and home-grown marker in the module as a
+    controller."""
+    assert _stereotype_rows(tmp_path, meta_annotated=False) == []
+
+
+# --- `A-C1` / `A-C6`: the gates that say which declaration is real ----------
+
+
+def _gate_facts(
+    root: Path,
+    *,
+    owner_kind: ConstructKind,
+    type_annotations: dict[str, dict],
+    method_annotation: str,
+    method_args: dict,
+) -> None:
+    """One type of the given construct kind carrying the given type-level
+    annotations, and one method on it carrying one mapping annotation.
+
+    Deliberately generic: the four gates below differ only in which of those
+    three knobs the framework's own rule turns, and writing four near-identical
+    fact builders is how a near-miss ends up differing from its positive in
+    more than the one conjunct under test."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/gate/Subject.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    owner = "com/acme/gate/Subject#"
+    handler = "com/acme/gate/Subject#onMessage(sig_5a5a5a5a)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=owner_kind),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=handler,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=owner,
+            # A void return, spelled rather than omitted: a catalog with a
+            # `reply` block reads the handler's own signature, and a method
+            # fact carrying none is a shape the extractor never emits.
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type="")),
+        ),
+    ]
+    facts += [
+        AnnotationFact(
+            document_id="doc_1",
+            target=owner,
+            retention="runtime",
+            use=AnnotationUse(annotation=fqn, args=args),
+        )
+        for fqn, args in type_annotations.items()
+    ]
+    facts.append(
+        AnnotationFact(
+            document_id="doc_1",
+            target=handler,
+            retention="runtime",
+            use=AnnotationUse(annotation=method_annotation, args=method_args),
+        )
+    )
+    write_fact_file(root / "Subject.jsonl", document, facts)
+
+
+def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
+    _gate_facts(tmp_path / "facts", **facts)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    # A catalog carrying `detect.required` needs the module fact its gate reads
+    # (F2 §3.6). These tests are about a catalog's own MATCHING rules, so the
+    # coordinate is written from the catalog's own declaration rather than
+    # hard-coded — a test asserting what `spring-stomp` matches should not also
+    # be asserting which coordinate gates it, and the test that IS about the gate
+    # varies it explicitly.
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["protocol"], r["direction"], r["method"], r["path"])
+        for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+_ON_MESSAGE = "jakarta/websocket/OnMessage#"
+_SERVER_ENDPOINT = "jakarta/websocket/server/ServerEndpoint#"
+_CLIENT_ENDPOINT = "jakarta/websocket/ClientEndpoint#"
+_MESSAGE_MAPPING = "org/springframework/messaging/handler/annotation/MessageMapping#"
+_CONTROLLER = "org/springframework/stereotype/Controller#"
+_GET_EXCHANGE = "org/springframework/web/service/annotation/GetExchange#"
+_RETROFIT_GET = "retrofit2/http/GET#"
+
+
+def test_a_generated_client_stub_derives_its_operation(tmp_path: Path):
+    """The positive `jakarta-jws-client`'s near-miss below is paired with. The
+    two JWS catalogs partition `@WebService` by CONSTRUCT KIND — `declared_on:
+    class` for the service, `declared_on: interface` for the generated stub —
+    so the stub's shape is an interface, and an outbound row is what it earns.
+
+    The address is a SOAP QName rather than a bare operation name: JAX-WS derives
+    the target namespace from the declaring package when the annotation states
+    none, which is what puts `{http://gate.acme.com/}` in front of it."""
+    assert _gate_rows(
+        tmp_path,
+        "jakarta-jws-client",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={"jakarta/jws/WebService#": {"name": "OrderPort"}},
+        method_annotation="jakarta/jws/WebMethod#",
+        method_args={"operationName": "getOrder"},
+    ) == [("soap", "outbound", None, "{http://gate.acme.com/}getOrder")]
+
+
+@pytest.mark.declines("jakarta-jws-client")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+def test_a_client_stub_annotation_from_another_package_derives_nothing(tmp_path: Path):
+    """§10 near-miss for `jakarta-jws-client` (W54), and it needed measuring
+    rather than assuming.
+
+    This catalog was almost folded into the seven-way parametrised near-miss
+    above on a CLASS — as an eighth parameter. It survived the mutation there — because it declines a
+    class for its CONSTRUCT KIND (`declared_on: interface`), not for the
+    annotation's package, so the marker would have claimed coverage the test did
+    not carry. `scripts/guard_check.py` reports a survivor as a failure, and that
+    is what caught it.
+
+    On an INTERFACE, where the positive above derives, the only thing left to
+    vary is the package."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-jws-client",
+            owner_kind=ConstructKind.INTERFACE,
+            type_annotations={"com/acme/own/WebService#": {"name": "OrderPort"}},
+            method_annotation="jakarta/jws/WebMethod#",
+            method_args={"operationName": "getOrder"},
+        )
+        == []
+    )
+
+
+def test_a_websocket_client_endpoint_is_not_an_inbound_server_endpoint(tmp_path: Path):
+    """`A-C1`, and the worst row in it: a `@ClientEndpoint` class — one that
+    DIALS OUT — carrying the `@OnMessage` callback was published as an INBOUND
+    WebSocket endpoint at the empty address. Direction inverted and address
+    invented in one row.
+
+    `@OnMessage` cannot mint anything on its own: it is `@Target(METHOD)`, it
+    carries no address, and it ships in the CLIENT api jar, so it is the
+    message callback for both kinds of endpoint (CP-11 Q3). `@ServerEndpoint`
+    is what makes a class served.
+
+    **Deliberately carries no `declines` marker, and W54 measured why.** This is
+    a real near-miss with a paired positive below it, and `G-112` read it as an
+    entry the backlog over-states — a test needing only the marker. It is not:
+    the marker obliges a `pins` naming exactly ONE guard the test fails without,
+    and this test fails without neither `derive_endpoints.type-annotation-gate`
+    nor `derive_endpoints.addresses-nothing` alone. Measured by disabling each
+    (both SURVIVED under `scripts/guard_check.py`) and then both together, where
+    it fails.
+
+    The two are inseparable for THIS catalog and not by accident: the address is
+    `prefix_from: [value]` on `@ServerEndpoint`, which is the same annotation
+    `type_annotation` gates on. Any input missing the gate is also missing the
+    address. Constructing one that misses only the gate would mean giving
+    `@OnMessage` a `value` element the real annotation does not have — synthetic
+    input that cannot occur, which is the "broken in an unrelated way" failure
+    the guard harness exists to catch."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-websocket",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={_CLIENT_ENDPOINT: {"value": "ws://billing/live"}},
+            method_annotation=_ON_MESSAGE,
+            method_args={},
+        )
+        == []
+    )
+
+
+def test_a_websocket_server_endpoint_still_derives_its_destination(tmp_path: Path):
+    """The paired positive. One annotation different from the near-miss above,
+    and the row the container really does serve comes back — which is what
+    stops the gate from being a rule that declines everything."""
+    assert _gate_rows(
+        tmp_path,
+        "jakarta-websocket",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={_SERVER_ENDPOINT: {"value": "/live"}},
+        method_annotation=_ON_MESSAGE,
+        method_args={},
+    ) == [("websocket", "inbound", None, "/live")]
+
+
+def test_a_stomp_mapping_on_a_class_that_is_not_a_controller_derives_nothing(tmp_path: Path):
+    """`A-C1`. With no type gate, a lone `@MessageMapping` minted a declaration
+    — and with no class-level annotation to prefix it, at the empty
+    destination. Spring dispatches to `@Controller` beans and nothing else
+    (CP-11 Q5, the same predicate MVC runs)."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-stomp",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_MESSAGE_MAPPING,
+            method_args={"value": ["/place"]},
+        )
+        == []
+    )
+
+
+def test_a_stomp_mapping_on_a_controller_still_derives_its_destination(tmp_path: Path):
+    """The paired positive: the same handler on a `@Controller`."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-stomp",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={_CONTROLLER: {}},
+        method_annotation=_MESSAGE_MAPPING,
+        method_args={"value": ["/place"]},
+    ) == [("websocket", "inbound", None, "/place")]
+
+
+def test_an_http_exchange_annotation_on_a_class_derives_no_outbound_call(tmp_path: Path):
+    """`A-C1`. `HttpServiceProxyFactory` proxies through Spring AOP's
+    `ProxyFactory`, which refuses a non-interface (CP-11 Q6), so an exchange
+    annotation on a concrete class is not a client at all and the outbound row
+    published for one was a dependency the module does not have."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-http-interface",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_GET_EXCHANGE,
+            method_args={"value": ["/orders"]},
+        )
+        == []
+    )
+
+
+def test_an_http_exchange_annotation_on_an_interface_still_derives(tmp_path: Path):
+    """The paired positive: one construct kind different."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-http-interface",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_GET_EXCHANGE,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "GET", "/orders")]
+
+
+def test_a_retrofit_annotation_on_a_concrete_class_derives_nothing(tmp_path: Path):
+    """`A-C6`. `Retrofit.create` throws `IllegalArgumentException("API
+    declarations must be interfaces.")` on anything else (CP-11 Q4), so a
+    `@GET`-annotated method on a concrete class is a hand-written class in a
+    codebase that also uses Retrofit, or a test double — never a call site.
+    The row published for one was a plausible-looking outbound dependency that
+    does not exist, which is the worst kind: nothing downstream can tell a
+    plausible fabricated address from an observed one."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "retrofit",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_RETROFIT_GET,
+            method_args={"value": ["/orders"]},
+        )
+        == []
+    )
+
+
+def test_a_retrofit_annotation_on_an_interface_still_derives(tmp_path: Path):
+    """The paired positive: one construct kind different, and the real
+    Retrofit shape comes back."""
+    assert _gate_rows(
+        tmp_path,
+        "retrofit",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_RETROFIT_GET,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "GET", "/orders")]
+
+
+# --- `A-M5` / `A-M8`: the annotation sets that were shorter than the framework's
+
+
+_RETROFIT_OPTIONS = "retrofit2/http/OPTIONS#"
+_RETROFIT_HTTP = "retrofit2/http/HTTP#"
+_SQS_LISTENER = "io/awspring/cloud/sqs/annotation/SqsListener#"
+
+
+@pytest.mark.declines("retrofit")
+@pytest.mark.pins("retrofit.declared-request-methods")
+def test_retrofits_generic_http_annotation_derives_nothing_and_that_is_stated(tmp_path: Path):
+    """`A-M5`'s stated boundary, pinned so it cannot be half-implemented.
+
+    `@HTTP(method = "REPORT", path = "/x")` is a real Retrofit request method
+    (CP-12 Q5) and this catalog does not declare it, for a reason the engine
+    makes unavoidable: `$method_from`'s read in `derive_endpoints.sql` runs
+    `regexp_extract(v, '#([A-Za-z0-9_]+)\\.$')` over the attribute's value,
+    because every other framework in scope holds its verb in an ENUM constant
+    whose symbol ends that way. `@HTTP.method` is a plain `String`, so the
+    extract returns the empty string and the row would ship with `method: ''` —
+    a verb no evidence supports, which is the fabrication this whole sweep is
+    about. Its path is in `path` rather than `value` as well, and `path_from`
+    is one list for the whole catalog.
+
+    So the honest answer is to derive nothing and say so in COVERAGE §5.2
+    rather than derive half of it. This test is what stops the entry being
+    added without the engine change: it goes red the moment `@HTTP` starts
+    matching, which is the point at which somebody has to look at the verb.
+
+    It stops being right when `method_from` can name a plain-string attribute
+    and `path_from` can be declared per annotation."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "retrofit",
+            owner_kind=ConstructKind.INTERFACE,
+            type_annotations={},
+            method_annotation=_RETROFIT_HTTP,
+            method_args={"method": "REPORT", "path": "/orders"},
+        )
+        == []
+    )
+
+
+def test_retrofits_options_annotation_derives_the_call_it_names(tmp_path: Path):
+    """`A-M5`, the positive half, and the paired control for the near-miss
+    above: the SAME interface, the same shape of attribute, one annotation
+    different. `retrofit2.http.OPTIONS` is one of Retrofit's eight
+    request-method annotations, declares a scalar `String value()` exactly as
+    `@GET` does (CP-12 Q5), and derived nothing — silently, with no COVERAGE
+    row."""
+    assert _gate_rows(
+        tmp_path,
+        "retrofit",
+        owner_kind=ConstructKind.INTERFACE,
+        type_annotations={},
+        method_annotation=_RETROFIT_OPTIONS,
+        method_args={"value": ["/orders"]},
+    ) == [("http", "outbound", "OPTIONS", "/orders")]
+
+
+def test_an_sqs_listener_naming_its_queue_the_way_aws_documents_it_derives(tmp_path: Path):
+    """`A-M8`, the positive half. `@SqsListener` declares `value()` and
+    `queueNames()`, and `queueNames` carries
+    `@AliasFor(value = "value")` — Spring's own statement that they are ONE
+    attribute under two spellings (CP-12 Q10, spring-cloud-aws-sqs 3.1.1). The
+    catalog read `value` alone, so `queueNames` — the spelling AWS's own
+    documentation uses — read as absent, the composed destination was empty,
+    and the addresses-nothing gate withheld the row entirely.
+
+    That is a silent under-report and not the fabrication `docs/COVERAGE.md`
+    used to describe: the listener was ABSENT from the export, not present with
+    a blank address, which is the harder of the two for a reader to notice
+    (sweep §7.7)."""
+    assert _gate_rows(
+        tmp_path,
+        "spring-sqs",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={},
+        method_annotation=_SQS_LISTENER,
+        method_args={"queueNames": ["orders"]},
+    ) == [("sqs", "inbound", None, "orders")]
+
+
+@pytest.mark.declines("spring-sqs")
+@pytest.mark.pins("spring-sqs.path-from-is-the-destination-aliases")
+def test_an_sqs_listener_naming_no_destination_at_all_still_derives_nothing(tmp_path: Path):
+    """`A-M8`'s near-miss, and it is what keeps the alias pair from becoming
+    "read any attribute". `maxConcurrentMessages` is a real `@SqsListener`
+    attribute (CP-12 Q10) and it is not the destination under any spelling, so
+    a listener declaring only that names no queue and must derive nothing.
+
+    It discriminates: adding `maxConcurrentMessages` to `path_from` makes this
+    fail with a row whose `path` is a thread count."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "spring-sqs",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={},
+            method_annotation=_SQS_LISTENER,
+            method_args={"maxConcurrentMessages": "10"},
+        )
+        == []
+    )
+
+
+# --- 2O Task 10: the `@HttpExchange` direction flip -------------------------
+#
+# `@HttpExchange` is the one annotation family in the estate whose DIRECTION is
+# not a property of the annotation. The same interface is an outbound client
+# when a proxy is built from it and an inbound API when a controller implements
+# it — measured, CP-7: `RequestMappingHandlerMapping` builds a mapping from
+# `@HttpExchange` through a `SearchStrategy.TYPE_HIERARCHY` search, so an
+# implementing class inherits the interface's exchange annotations without
+# repeating them.
+#
+# The condition is the CONTROLLER check, not "the module implements it". Spring
+# serves a bean, and `isHandler` is one
+# `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call with no
+# `@RequestMapping` disjunct on any minor in scope (CP-7 Q1), so a `@Service`
+# implementation is served by nothing and an inbound row for one would invent an
+# endpoint (§8.1 rule 4).
+#
+# Proved against the REAL shipped catalogs, the Task 7 precedent: the flip's
+# condition names Spring's own stereotype annotations, which are catalog data on
+# `spring-mvc.yml` and `spring-web.yml`, and a test spelled with an invented
+# framework could not show that the two files agree.
+
+
+# MODULE-PREFIXED throughout, unlike most fixtures in this file, and the flip is
+# the mechanism that makes it matter: it joins a declaring method to the method
+# implementing it ACROSS a coordinate boundary — an interface scanned out of an
+# opted-in dependency jar carries that jar's coordinates while the class
+# implementing it carries the module's — so every comparison it makes is on the
+# BARE descriptor and the published symbol is the prefixed one. A fixture
+# spelled bare could not tell a correct join from one comparing two prefixed
+# strings that happen to match, and the first version of this code got that
+# exactly wrong (`handlers` keyed on the prefixed symbol, joined against a bare
+# one: the handler silently fell back to the interface's own method on every
+# real module and on no test here).
+_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+_EXCHANGE_INTERFACE = _MODULE + "com/acme/api/OrderApi#"
+_EXCHANGE_METHOD = _MODULE + "com/acme/api/OrderApi#list(sig_0a1)."
+_IMPLEMENTER = _MODULE + "com/acme/api/OrderController#"
+_IMPLEMENTER_METHOD = _MODULE + "com/acme/api/OrderController#list(sig_0a1)."
+# A SECOND implementer of the same interface, whose symbol sorts BEFORE
+# `OrderController` — `A` < `O` — so which one wins is observable rather than
+# whichever the fact file happens to list first (W54, `G-110`).
+_ALT_IMPLEMENTER = _MODULE + "com/acme/api/AltOrderController#"
+_ALT_IMPLEMENTER_METHOD = _MODULE + "com/acme/api/AltOrderController#list(sig_0a1)."
+_LOCAL_STEREOTYPE = _MODULE + "com/acme/api/ApiController#"
+# The same type as a USE site names it. An annotation fact records its
+# annotation as a bare fqn descriptor and its target as a module-prefixed
+# symbol (D00 §5a), so a module-local stereotype appears in the facts under
+# both spellings at once — which is the shape the composition pre-pass
+# resolves and a bare-everywhere fixture cannot show.
+_LOCAL_STEREOTYPE_FQN = "com/acme/api/ApiController#"
+_HTTP_EXCHANGE = "org/springframework/web/service/annotation/HttpExchange#"
+_REST_CONTROLLER = "org/springframework/web/bind/annotation/RestController#"
+_GET_MAPPING = "org/springframework/web/bind/annotation/GetMapping#"
+_SERVICE = "org/springframework/stereotype/Service#"
+
+
+def _flip_facts(
+    root: Path,
+    *,
+    implementer_annotations: dict[str, dict] | None,
+    overrides: bool = True,
+    implementer_method_annotations: dict[str, dict] | None = None,
+    stereotype_meta: str | None = None,
+    second_implementer: bool = False,
+) -> None:
+    """One `@HttpExchange` interface declaring one exchange operation, and
+    optionally a local class implementing it.
+
+    Every knob is one conjunct of the flip's own rule, so a near-miss differs
+    from its positive in exactly one of them: WHETHER a local class implements
+    the interface (`implementer_annotations=None`), WHAT that class is annotated
+    with, whether it OVERRIDES the operation or inherits a `default`, and
+    whether its stereotype is a module-local annotation composed from a
+    framework one.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/api/OrderApi.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    void = Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type=""))
+    facts: list = [
+        SymbolFact(
+            document_id="doc_1", symbol=_EXCHANGE_INTERFACE, construct_kind=ConstructKind.INTERFACE
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_EXCHANGE_METHOD,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_EXCHANGE_INTERFACE,
+            signature=void,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EXCHANGE_INTERFACE,
+            retention="runtime",
+            use=AnnotationUse(annotation=_HTTP_EXCHANGE, args={"value": "/orders"}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EXCHANGE_METHOD,
+            retention="runtime",
+            use=AnnotationUse(annotation=_GET_EXCHANGE, args={"value": "/list"}),
+        ),
+    ]
+    if stereotype_meta is not None:
+        # An annotation type is an interface in bytecode, which is what puts it
+        # in `interface_symbols` and makes the composition pre-pass follow it.
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_LOCAL_STEREOTYPE,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=_LOCAL_STEREOTYPE,
+                retention="runtime",
+                use=AnnotationUse(annotation=stereotype_meta, args={}),
+            ),
+        ]
+    if implementer_annotations is not None:
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_IMPLEMENTER,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_EXCHANGE_INTERFACE],
+            )
+        )
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=_IMPLEMENTER,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in implementer_annotations.items()
+        ]
+        if overrides:
+            facts.append(
+                SymbolFact(
+                    document_id="doc_1",
+                    symbol=_IMPLEMENTER_METHOD,
+                    construct_kind=ConstructKind.METHOD,
+                    enclosing=_IMPLEMENTER,
+                    signature=void,
+                )
+            )
+            facts += [
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=_IMPLEMENTER_METHOD,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=fqn, args=args),
+                )
+                for fqn, args in (implementer_method_annotations or {}).items()
+            ]
+    if second_implementer:
+        # The same annotations and the same overriding method, on a class whose
+        # symbol sorts first. Spring itself refuses to start an application with
+        # two such beans — they register one mapping — so this exists to pin the
+        # DETERMINISM of what we say about a module we cannot run (NFR-1), not to
+        # claim the shape works.
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_ALT_IMPLEMENTER,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_EXCHANGE_INTERFACE],
+            )
+        )
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=_ALT_IMPLEMENTER,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in (implementer_annotations or {}).items()
+        ]
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_ALT_IMPLEMENTER_METHOD,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_ALT_IMPLEMENTER,
+                signature=void,
+            )
+        )
+    write_fact_file(root / "OrderApi.jsonl", document, facts)
+
+
+def _flip_rows(tmp_path: Path, catalogs: list[Catalog], **facts: object) -> list[tuple]:
+    _flip_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, catalogs, capabilities=set(_TASK_7_CAPABILITIES)) == []
+    rows = sorted(
+        (
+            str(row["direction"]),
+            row["method"] and str(row["method"]),
+            str(row["path"]),
+            row["handler"] and str(row["handler"]),
+            row["caller"] and str(row["caller"]),
+        )
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_an_http_exchange_interface_a_controller_implements_is_served_inbound(tmp_path: Path):
+    """The defect this closes, in one row. A locally-implemented
+    `@HttpExchange` interface published an OUTBOUND call — the module reported
+    calling a service it actually serves — and its inbound routes were missed
+    entirely; the SEI fence later turned the fabrication into silence, which is
+    honest and still an under-report of a whole HTTP surface.
+
+    Spring serves it (CP-7 Q2: the mapping builder accepts `@HttpExchange`
+    through a type-hierarchy search), so the row is inbound, at the composed
+    address, with the IMPLEMENTING class's method as handler and no caller."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+@pytest.mark.declines("spring-http-interface")
+@pytest.mark.pins("annotation_driven.flip-implementer-is-a-controller")
+def test_an_http_exchange_interface_a_plain_bean_implements_derives_nothing(tmp_path: Path):
+    """The near-miss for the flip's SECOND conjunct, and the reason spec §6's
+    `owner_implemented_in_module: true` could not ship: one annotation
+    different from the positive above, and Spring serves nothing at all.
+
+    `isHandler` is `AnnotatedElementUtils.hasAnnotation(beanType,
+    Controller.class)` and carries no `@RequestMapping` disjunct on any minor
+    CP-7 measured, so a `@Service` implementing an `@HttpExchange` interface is
+    dispatched to by nothing. An inbound row here would invent an endpoint
+    (§8.1 rule 4); the outbound row the SEI fence already subtracts stays
+    subtracted, because the module does not call what it implements."""
+    assert (
+        _flip_rows(
+            tmp_path,
+            [_shipped("spring-http-interface")],
+            implementer_annotations={_SERVICE: {}},
+        )
+        == []
+    )
+
+
+@pytest.mark.pins("derive_endpoints.direction-flip-is-owner-scoped")
+def test_an_unimplemented_http_exchange_interface_still_derives_outbound(tmp_path: Path):
+    """The near-miss for the flip's FIRST conjunct: the same interface with no
+    local implementation at all is an ordinary HTTP-interface client, and must
+    keep deriving exactly the outbound row it always did — caller intact,
+    handler absent.
+
+    A flip keyed on the catalog's rule rather than on the OWNER would rewrite
+    every `@HttpExchange` client in the estate into an inbound endpoint, which
+    is the largest fabrication available in this file."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations=None,
+    ) == [("outbound", "GET", "/orders/list", None, _EXCHANGE_METHOD)]
+
+
+def test_a_default_method_the_controller_never_overrides_is_still_served(tmp_path: Path):
+    """CP-7 Q3, and the reason the flip is keyed on the OWNER rather than on
+    the method join. `MethodIntrospector.selectMethods` walks the target type's
+    own interfaces as well as the type itself, so a `default` method the
+    controller never overrides IS mapped and served — by the interface's own
+    method, which is the only method symbol there is.
+
+    A flip that required a matching method on the implementing class would have
+    dropped exactly those routes, silently."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+        overrides=False,
+    ) == [("inbound", "GET", "/orders/list", _EXCHANGE_METHOD, None)]
+
+
+def test_a_module_local_stereotype_composed_from_a_controller_flips_the_interface(tmp_path: Path):
+    """`A-C7`'s rule, applied to the flip's own condition. Spring's handler
+    test is a PREDICATE over the composition, so a controller wearing a
+    module-local `@ApiController` meta-annotated `@Controller` is a handler —
+    and a flip encoded as string equality against two framework FQNs would
+    leave that module's whole implemented API published as an outbound
+    dependency it does not have."""
+    assert _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_LOCAL_STEREOTYPE_FQN: {}},
+        stereotype_meta=_CONTROLLER,
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+@pytest.mark.parametrize("declared_first", ["spring-web", "spring-http-interface"])
+def test_a_doubly_declared_route_merges_into_one_row_handled_by_the_class(
+    tmp_path: Path, declared_first: str
+):
+    """Ruling R12's merge precedence, and it needs no collision detector —
+    there is none in `src/`, and none is added here.
+
+    A controller that implements an `@HttpExchange` interface AND writes its
+    own `@GetMapping` for the same route derives that route twice: once from
+    `spring-web`, once from the flipped `spring-http-interface` row. The two
+    share `(protocol, direction, method, path)`, so the existing dedup folds
+    them into ONE — and the survivor is handled by the implementing class's
+    method, not the interface's.
+
+    **What this test can and cannot show.** The catalogs' run order is not the
+    caller's to choose: `resolve/endpoints.py` sorts them, and an
+    inbound-DECLARED catalog runs before an outbound-declared one whatever
+    order the list arrives in — which is why both parameters here produce the
+    same answer, and why it is worth pinning that they do. So the surviving row
+    is `spring-web`'s in both, and this test proves the merge and the
+    ORDER-INDEPENDENCE rather than the flip's own handler rebind. That rebind
+    is proved where it is the only source of a row at all —
+    `test_an_http_exchange_interface_a_controller_implements_is_served_inbound`
+    above, where the controller writes no mapping of its own and the handler on
+    the one surviving row can only have come from the flip.
+
+    The address is the thing that has to agree for any of this to happen, and
+    it only does because a flipped row is canonicalized as the server-side row
+    it became: composed one way it is `/orders/list`, composed the other it is
+    the same string, and two spellings of one URL would have shipped as two
+    endpoints."""
+    order = ["spring-web", "spring-http-interface"]
+    catalogs = [_shipped(c) for c in (order if declared_first == "spring-web" else order[::-1])]
+    assert _flip_rows(
+        tmp_path,
+        catalogs,
+        implementer_annotations={_REST_CONTROLLER: {}},
+        implementer_method_annotations={_GET_MAPPING: {"value": ["/orders/list"]}},
+    ) == [("inbound", "GET", "/orders/list", _IMPLEMENTER_METHOD, None)]
+
+
+def test_two_controllers_implementing_one_exchange_interface_derive_one_row(tmp_path: Path):
+    """`G-110` (W54). `COVERAGE.md` states this boundary as *"one row, handled by
+    the lexicographically first implementer — a deterministic tie-break (NFR-1)
+    for an application the framework itself will not run"*, and nothing tested
+    it. The tie-break is ACTIVE: `resolve/engines/annotation_driven.py` sorts
+    `implementations` by symbol and `setdefault`s the handler, so the first
+    implementer in symbol order wins.
+
+    An untested determinism claim is the one kind that decays silently. Sorting
+    is easy to lose — a `set` where a sorted list was, a dict rebuild, a query
+    without an `ORDER BY` — and nothing about the output would look wrong
+    afterwards. It would simply differ between runs, which is the one property
+    NFR-1 forbids and no reader can check from a bundle.
+
+    `AltOrderController` sorts before `OrderController`, and the assertion names
+    it: a test asserting only "one row" would pass whichever won."""
+    rows = _flip_rows(
+        tmp_path,
+        [_shipped("spring-http-interface")],
+        implementer_annotations={_REST_CONTROLLER: {}},
+        second_implementer=True,
+    )
+
+    assert rows == [("inbound", "GET", "/orders/list", _ALT_IMPLEMENTER_METHOD, None)]
+
+
+def _flip_catalog(**resolves: object) -> Catalog:
+    """An invented outbound catalog carrying a `resolves` block — the engine
+    vocabulary on its own, deliberately not Spring, for the reason every other
+    invented catalog in this file is not: a refusal test spelled with
+    `@HttpExchange` in it would pin a framework rather than the check."""
+    return Catalog(
+        id="invented-two-faced",
+        style="annotation_driven",
+        protocol="http",
+        direction="outbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-two-faced.yml"),
+        matches={
+            "declared_on": "interface",
+            "mapping": {
+                "path_from": ["value"],
+                "prefix_from": ["value"],
+                "method_from": "method",
+                "all_methods": ["GET"],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": "com.acme.rpc.Call", "method": ["GET"]}],
+            },
+        },
+        resolves=dict(resolves),
+    )
+
+
+def _flip_refusal(tmp_path: Path, catalog: Catalog) -> str:
+    _flip_facts(tmp_path / "facts", implementer_annotations=None)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities={"annotation_args"})
+    workspace.close()
+    return str(raised.value)
+
+
+def test_a_resolves_block_naming_a_key_that_did_not_ship_is_refused(tmp_path: Path):
+    """D02 §2c names `format` beside `direction` and says in the same section
+    that the format half did NOT ship — it is answered by a late pass over the
+    finished table instead. A catalog writing one here would be declaring a
+    rule nothing runs, and silence about it is how a document becomes evidence
+    for a mechanism that does not exist (§5.3)."""
+    refusal = _flip_refusal(
+        tmp_path, _flip_catalog(format=[{"when": {"whatever": True}, "then": "protobuf"}])
+    )
+    assert "format" in refusal and "invented-two-faced.yml" in refusal
+
+
+def test_a_second_direction_rule_is_refused_rather_than_silently_dropped(tmp_path: Path):
+    """D02 §2c's first-match-wins over several conditions is the section's
+    stated semantics and is unimplemented. An engine honouring one rule while
+    accepting a list of them would drop every rule after the first — a catalog
+    author's second condition evaluating to nothing, with nothing saying so."""
+    rule = {"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "inbound"}
+    refusal = _flip_refusal(tmp_path, _flip_catalog(direction=[rule, rule]))
+    assert "exactly one" in refusal and "invented-two-faced.yml" in refusal
+
+
+def test_a_condition_the_engine_cannot_honour_is_refused(tmp_path: Path):
+    """The closed vocabulary (NFR-5). Spec §6's own
+    `owner_implemented_in_module: true` is the value this refuses by name, and
+    the reason it must be refused rather than ignored: a condition read as "no
+    rule" leaves a served API published as an outbound dependency, which is the
+    exact defect the flip exists to close."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_in_module": True}, "then": "inbound"}]
+        ),
+    )
+    assert "owner_implemented_by_type_annotated" in refusal
+
+
+def test_a_resolved_direction_outside_the_closed_set_is_refused(tmp_path: Path):
+    """D00's closed sets are closed, and this value reaches `endpoints.direction`
+    on every flipped row — a typo there is published as a wire fact."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "inound"}]
+        ),
+    )
+    assert "inound" in refusal
+
+
+def test_a_rule_resolving_to_the_catalogs_own_direction_is_refused(tmp_path: Path):
+    """A rule that resolves nothing is a file claiming a flip it does not
+    perform. Accepted as a no-op it would read, to anyone auditing the catalog,
+    as the two-faced case being handled."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[
+                {"when": {"owner_implemented_by_type_annotated": ["a.B"]}, "then": "outbound"}
+            ]
+        ),
+    )
+    assert "resolves nothing" in refusal
+
+
+def test_a_condition_naming_no_annotations_at_all_is_refused(tmp_path: Path):
+    """An empty list is a condition that never holds — the catalog would
+    declare a flip and never perform one, which reads exactly like a rule that
+    works on a module where nothing happens to match."""
+    refusal = _flip_refusal(
+        tmp_path,
+        _flip_catalog(
+            direction=[{"when": {"owner_implemented_by_type_annotated": []}, "then": "inbound"}]
+        ),
+    )
+    assert "non-empty list" in refusal
+
+
+# --- W9/W10 review, M2/M3: `catalog_symbols` is the one function §3.1 added and
+# nothing tested it directly. Its callers were tested through the shipped
+# catalogs, which all happen to be well-formed, so every refusal branch in it was
+# unreached.
+
+
+def test_catalog_symbols_accepts_one_name_and_a_list_of_them():
+    """A scalar stays valid — this is a widening, not a migration, and 42 shipped
+    catalogs write scalars — and a list means ONE library under several names."""
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    assert catalog_symbols("org.springframework.jms.core.JmsTemplate") == (
+        "org/springframework/jms/core/JmsTemplate#",
+    )
+    assert catalog_symbols(
+        ["org.springframework.jms.core.JmsTemplate", "org.springframework.jms.core.JmsOperations"]
+    ) == (
+        "org/springframework/jms/core/JmsTemplate#",
+        "org/springframework/jms/core/JmsOperations#",
+    )
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        pytest.param(None, id="null"),
+        pytest.param(7, id="a number"),
+        pytest.param({"owner": "a.B"}, id="a mapping"),
+        pytest.param([], id="an empty list"),
+    ],
+)
+def test_catalog_symbols_refuses_a_shape_that_is_not_a_name(declared):
+    """Every one of these is a well-formed YAML value, so the loader admits it.
+    The refusal has to name the FILE and the KEY: a reader holding 42 catalogs
+    cannot act on "a catalog site must name a type"."""
+    from sextant.application.ports.catalogs import CatalogError
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    with pytest.raises(CatalogError) as refusal:
+        catalog_symbols(declared, "spring-jms-template.yml: matches.owner")
+    assert "spring-jms-template.yml: matches.owner" in str(refusal.value)
+
+
+def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
+    """The list form across every shipped catalog, checked as a set rather than
+    one catalog at a time: a repeated entry is a name that can never match twice
+    and a typo is a name that can never match at all, and both are silent —
+    `_matching_method` simply finds no call site with that owner.
+
+    The measurement that these names EXIST in the libraries is CP-10's; this asks
+    only that the catalog spells each one once and that it converts."""
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    listed = 0
+    for catalog in YamlCatalogSource(CATALOGS).load():
+        declared = catalog.matches.get("owner") if isinstance(catalog.matches, dict) else None
+        if not isinstance(declared, list):
+            continue
+        listed += 1
+        symbols = catalog_symbols(declared, f"{catalog.source}: matches.owner")
+        assert len(set(symbols)) == len(symbols), f"{catalog.source} repeats an owner: {symbols}"
+        assert all(symbol.endswith("#") for symbol in symbols), symbols
+    # §3.1 was applied to eight catalogs — seven, plus W43's `spring-stomp-template`,
+    # whose `SimpMessagingTemplate`/`SimpMessageSendingOperations` pair is the same
+    # class-and-interface shape the rule exists for. A test that silently found none would
+    # pass forever once the key was renamed.
+    assert listed == 8, f"expected eight catalogs with an owner list, found {listed}"
+
+
+def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_path):
+    """W9/W10 review M1. The conversion lives in the call-site engine, which runs
+    AFTER `endpoints_reset`, so a malformed `owner` raised with the previous run's
+    rows already gone and none written — a broken file half-emptying the table,
+    the exact outcome `derive_endpoints` resolves every style up front to
+    prevent. The pre-flight refusal is what puts it back in front of the reset."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.derive("endpoints_reset")
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, path) VALUES ('jms', 'outbound', '/prior')"
+        )
+        broken = next(
+            catalog
+            for catalog in YamlCatalogSource(CATALOGS).load()
+            if catalog.style == "single_call"
+        )
+        object.__setattr__(broken, "matches", {**broken.matches, "owner": 7})
+
+        with pytest.raises(CatalogError) as refusal:
+            derive_endpoints(workspace, [broken], set())
+
+        assert "matches.owner" in str(refusal.value)
+        # The row the previous run wrote is still there: nothing was emptied.
+        assert [row["path"] for row in workspace.query("endpoints")] == ["/prior"]
+    finally:
+        workspace.close()
+
+
+def test_a_type_annotation_written_as_a_list_gates_on_every_spelling(tmp_path: Path):
+    """§3.1 at the one widened key that reaches SQL rather than Python.
+
+    `$type_annotation` was compared with `=` inside `derive_endpoints.sql`, so
+    widening it meant changing the SQL too (`list_contains`), which no Python-level
+    test would have exercised. The real annotation is put SECOND in the list on
+    purpose: a comparison that still read the parameter as one string would match
+    nothing, and putting it first would let a first-element read pass by accident.
+
+    The pair here is a realistic one — Spring gates on `@Controller` and
+    `@RestController`, and a codebase writes either — but the assertion is the
+    mechanism, not the pair.
+    """
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    scalar = spring.matches["type_annotation"]
+    listed = Catalog(
+        **{
+            **vars(spring),
+            "matches": {
+                **spring.matches,
+                "type_annotation": ["org.springframework.stereotype.Controller", scalar],
+            },
+        }
+    )
+
+    derive_endpoints(workspace, [listed], capabilities={"annotation_args", "type_annotations"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {(r["method"], r["path"]) for r in rows} == {
+        ("POST", "/v1/orders"),
+        ("GET", "/v1/orders/{id}"),
+        ("GET", "/v1/orders"),
+    }
+
+
+def test_catalog_symbols_returns_every_name_a_list_declares(tmp_path: Path):
+    """`catalog_symbols` returns ALL of them, in order, and a one-element list is
+    the same tuple as the bare scalar.
+
+    This does NOT exercise any engine — it names no catalog and derives no row. It
+    was called `..._a_field_annotation_written_as_a_list_matches_either_spelling`,
+    which claimed coverage of `injected_client`'s key that it does not have; the
+    end-to-end coverage each widened key does or does not have is OI-55.
+    """
+    from sextant.application.resolve.shapes.rooting import catalog_symbols
+
+    both = catalog_symbols(["com.acme.First", "com.acme.Second"], "test: field_annotation")
+    assert both == ("com/acme/First#", "com/acme/Second#")
+    # A one-element list and the bare scalar are the same tuple: the widening adds
+    # a spelling, never a second behaviour for the singular case.
+    assert catalog_symbols(["com.acme.First"], "test") == catalog_symbols("com.acme.First", "test")
+
+
+def test_a_prefix_annotation_written_as_a_list_gates_on_every_spelling(tmp_path: Path):
+    """The second widened key that reaches SQL rather than Python.
+
+    `$prefix_annotation` is compared with `list_contains` in
+    `derive_endpoints.sql` exactly as `$type_annotation` is, and had no test:
+    changing that one comparison back to `a.annotation = $prefix_annotation[1]`
+    left 1,423 tests passing. The real annotation goes SECOND for the same reason
+    as in the test above — a comparison reading the parameter as one string, or
+    reading only its first element, matches nothing.
+
+    The prefix is what makes these paths `/v1/orders` rather than `/orders`, so
+    the assertion is on the composed path and not merely on the row's existence.
+    """
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    scalar = spring.matches["mapping"]["prefix_annotation"]
+    listed = Catalog(
+        **{
+            **vars(spring),
+            "matches": {
+                **spring.matches,
+                "mapping": {
+                    **spring.matches["mapping"],
+                    "prefix_annotation": ["com.acme.rest.NoSuchMapping", scalar],
+                },
+            },
+        }
+    )
+
+    derive_endpoints(workspace, [listed], capabilities={"annotation_args", "type_annotations"})
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert {(r["method"], r["path"]) for r in rows} == {
+        ("POST", "/v1/orders"),
+        ("GET", "/v1/orders/{id}"),
+        ("GET", "/v1/orders"),
+    }
+
+
+def test_every_widened_key_a_shipped_catalog_declares_honours_a_second_spelling(
+    tmp_path: Path, fixture_facts: Path
+):
+    """§3.1 across every key at once, on the real fixture and the real catalogs.
+
+    Sixteen of the twenty widened keys had no test that would fail if the
+    widening were reverted at the CONSUMER: mutating `catalog_symbols` to return
+    only its first element failed four tests out of 2,407, and two of those four
+    were unit tests of `catalog_symbols` itself. Writing sixteen near-identical
+    end-to-end tests would test one mechanism sixteen times; this drives the
+    mechanism once, over whatever the shipped catalogs actually declare.
+
+    Every widened key in every shipped catalog is rewritten from `X` to
+    `[<a name nothing declares>, X]` — the real name SECOND, so a consumer that
+    reads one element, or reads the first, matches nothing — and the fixture is
+    resolved twice. The endpoint rows must be identical.
+
+    `_WIDENED_KEYS` is `endpoints.py`'s own list, the same one the pre-flight
+    walks, so a key added there without a consumer that iterates lands here
+    automatically rather than needing this test to be remembered.
+    """
+    from sextant.application.resolve.endpoints import _WIDENED_KEYS, _at
+
+    # A DISTINCT absent name per occurrence. One shared name made two `fluent`
+    # steps that previously had distinct owners collide, and `_validate_steps`
+    # refused the catalog — its overlap rule working exactly as intended, and
+    # not the question this test asks.
+    minted = iter(f"com.acme.no.such.Type{n}" for n in range(10_000))
+
+    def widened(value: object) -> object:
+        """The real name in the MIDDLE, absent names either side.
+
+        Prepending alone left the real name last, so a consumer reading only the
+        LAST element still passed; appending alone has the mirror hole. Wrapping
+        it catches both ends, which is what "reads every element" actually means.
+        """
+        return [next(minted), value, next(minted)]
+
+    def rewrite(holder: object, path: tuple[str, ...]) -> None:
+        """Rewrites in place, mirroring `_at`'s own walk so the two cannot drift."""
+        if not path:
+            return
+        key, rest = path[0], path[1:]
+        if key == "[]":
+            if isinstance(holder, list):
+                for element in holder:
+                    rewrite(element, rest)
+            return
+        if not isinstance(holder, dict) or key not in holder:
+            return
+        if rest:
+            rewrite(holder[key], rest)
+        elif isinstance(holder[key], list):
+            # WRAP, never skip. Seven shipped catalogs already write a list at
+            # `matches.owner`, and `spring-ws-template.yml` writes one at the SOAP
+            # identity key — skipping those left the very keys §3.1 was applied to
+            # as the ones this test did not drive.
+            holder[key] = [next(minted), *holder[key], next(minted)]
+        elif holder[key] is not None:
+            holder[key] = widened(holder[key])
+
+    shipped = YamlCatalogSource(CATALOGS).load()
+    listed = []
+    touched = 0
+    for original in shipped:
+        matches = copy.deepcopy(original.matches)
+        for path in _WIDENED_KEYS:
+            before = len(_at(matches, path))
+            rewrite(matches, path)
+            touched += before
+        listed.append(Catalog(**{**vars(original), "matches": matches}))
+
+    # The test is worthless if it rewrote nothing — which is what a renamed key
+    # would silently produce.
+    # 19 of the 20 keys in `_WIDENED_KEYS`, measured: `media_values.owner` is
+    # declared by NO shipped catalog and so cannot be reached from here — the one
+    # key whose consumer this test does not drive (OI-55). The floor is on
+    # occurrences, not keys, and is deliberately well under the ~55 the shipped
+    # catalogs currently hold: it fails a rename that silently rewrites nothing
+    # without failing every time a catalog is added or removed.
+    assert touched >= 40, f"only {touched} widened key occurrences found across the catalogs"
+
+    def rows(catalogs: list[Catalog]) -> set:
+        workspace = DuckDbWorkspace(tmp_path / f"ws{len(catalogs)}{id(catalogs)}.duckdb")
+        workspace.load_facts(fixture_facts)
+        derive_endpoints(workspace, catalogs, capabilities=FIXTURE_CAPABILITIES)
+        found = {
+            (r["catalog_id"], r["protocol"], r["direction"], r["method"], r["path"], r["peer"])
+            for r in workspace.query("endpoints")
+        }
+        workspace.close()
+        return found
+
+    scalar_rows = rows(shipped)
+    assert scalar_rows, "the fixture derived nothing; this test would pass on any change"
+    assert rows(listed) == scalar_rows
+
+
+# --- F2 §3.5's relationship conjunct (W14/W15) -----------------------------
+
+_KAFKA_LISTENER = "org/springframework/kafka/annotation/KafkaListener#"
+_KAFKA_HANDLER = "org/springframework/kafka/annotation/KafkaHandler#"
+
+
+def _kafka_class_facts(root: Path, class_topic: str | None, members: tuple) -> None:
+    """A class carrying an optional class-level `@KafkaListener`, plus one method
+    per `(annotation, topic)`."""
+    owner = "com/acme/orders/Orders#"
+    facts: list = [
+        SymbolFact(document_id="doc_k", symbol=owner, construct_kind=ConstructKind.CLASS)
+    ]
+    if class_topic is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_k",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_KAFKA_LISTENER, args={"topics": [class_topic]}),
+            )
+        )
+    for index, (annotation, topic) in enumerate(members):
+        method = f"{owner}onEvent{index}(sig_{index})."
+        facts.append(
+            SymbolFact(
+                document_id="doc_k",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="V")),
+            )
+        )
+        facts.append(
+            AnnotationFact(
+                document_id="doc_k",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation=annotation, args={} if topic is None else {"topics": [topic]}
+                ),
+            )
+        )
+    write_fact_file(
+        root / "Orders.jsonl",
+        Document(
+            document_id="doc_k",
+            relative_path="com/acme/orders/Orders.java",
+            module_id="com.acme:orders-service",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=2,
+            scanner_id="asm",
+            content_hash="sha256:a",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:b",
+        ),
+        facts,
+    )
+
+
+def _kafka_paths(tmp_path: Path, class_topic: str | None, members: tuple) -> set[str]:
+    root = tmp_path / "facts"
+    _kafka_class_facts(root, class_topic, members)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    kafka = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-kafka")
+    derive_endpoints(
+        workspace,
+        [kafka],
+        capabilities={"annotation_args", "typed_signatures", "nested_annotation_args"},
+    )
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_a_class_and_a_method_listener_are_two_registrations_not_a_composed_one(tmp_path: Path):
+    """F2 §3.5, and the row it exists to change.
+
+    A class-level `@KafkaListener(topics="orders")` and a method-level
+    `@KafkaListener(topics="payments")` are TWO independent registrations —
+    measured in `scripts/probes/w14_listener_registration.md`: the annotation is
+    `@Target(TYPE, METHOD)`, declares `topics` at both levels, and Spring's
+    registrar declares two paths (one taking a `Class`, one a `Method`) with
+    neither excluding the other.
+
+    Composed, they published **`orderspayments`** — a topic no broker carries —
+    at `resolved`. Two readable destinations became one unreadable one.
+
+    The THREE-member shape is the one asserted, not the two-member one: a class
+    listener, a `@KafkaHandler` serving it, and a method listener of its own.
+    That is what distinguishes "the class topic is no longer composed onto the
+    method's" from "the class topic is gone" — the silent loss §3.5 rejects as
+    firmly as it rejects the fabrication.
+    """
+    assert _kafka_paths(
+        tmp_path, "orders", ((_KAFKA_HANDLER, None), (_KAFKA_LISTENER, "payments"))
+    ) == {"orders", "payments"}
+
+
+def test_a_kafka_handler_still_takes_the_class_level_topic(tmp_path: Path):
+    """The paired positive, and the reason the conjunct is a rule rather than a
+    special case: a `@KafkaHandler` declares exactly one attribute, `isDefault()`,
+    and NO destination — so it names none of its own and takes the class's under
+    either value of `class_level`. `sibling` distinguishes "this member names a
+    destination" from "this member names none", which is the distinction the
+    framework itself makes; it does not distinguish Kafka from HTTP."""
+    assert _kafka_paths(tmp_path, "orders", ((_KAFKA_HANDLER, None),)) == {"orders"}
+
+
+def test_an_http_class_level_mapping_still_composes(tmp_path: Path):
+    """The other half: `prefix` is the default and HTTP still composes. A rule
+    that silenced composition everywhere would pass both tests above."""
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+    derive_endpoints(workspace, [spring], capabilities={"annotation_args", "type_annotations"})
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    # `/v1` on the class, `/orders` on the methods — composed, as they must be.
+    assert paths == {"/v1/orders", "/v1/orders/{id}"}
+
+
+def test_a_catalog_declaring_an_unknown_class_level_value_is_refused(tmp_path: Path):
+    """The vocabulary is closed. A typo (`siblings`, `PREFIX`) would otherwise
+    fall through to the default and compose silently — the failure the conjunct
+    exists to stop, reintroduced by a spelling mistake.
+
+    Refused in `derive_endpoints`'s PRE-FLIGHT, not inside the engine, and the
+    capabilities passed here are what proves it: they are deliberately too few
+    for `spring-kafka` to run at all. A check inside the engine would not fire
+    for a skipped catalog, so a typo would sit unnoticed until the day the
+    capability arrived — and would then raise after `endpoints_reset`, taking
+    the previous run's rows with it."""
+    kafka = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-kafka")
+    broken = Catalog(
+        **{
+            **vars(kafka),
+            "matches": {
+                **kafka.matches,
+                "mapping": {**kafka.matches["mapping"], "class_level": "siblings"},
+            },
+        }
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.derive("endpoints_reset")
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, path) VALUES ('kafka','inbound','/prior')"
+        )
+        with pytest.raises(CatalogError) as refusal:
+            derive_endpoints(workspace, [broken], capabilities=set())
+        assert "class_level" in str(refusal.value)
+        # Refused BEFORE the reset: the previous run's row is still there.
+        assert [row["path"] for row in workspace.query("endpoints")] == ["/prior"]
+    finally:
+        workspace.close()
+
+
+# --- F2 §3.6: RSocket versus STOMP, told apart by the build ------------------
+
+_MESSAGE_MAPPING = "org/springframework/messaging/handler/annotation/MessageMapping#"
+_SPRING_CONTROLLER = "org/springframework/stereotype/Controller#"
+
+
+_CONNECT_MAPPING = "org/springframework/messaging/rsocket/annotation/ConnectMapping#"
+
+
+def _messaging_controller_facts(root: Path, method_annotation: str = _MESSAGE_MAPPING) -> None:
+    """A `@Controller` with one `@MessageMapping("/place")` method — the shape
+    BOTH frameworks scan, with the same predicate, and which therefore says
+    nothing about which of them serves it.
+
+    `method_annotation` varies for the one case where the annotation DOES say
+    which framework serves it: `@ConnectMapping` is RSocket's and STOMP ships no
+    counterpart (F2 §3.6, `detect.satisfied_by`)."""
+    owner = "com/acme/orders/LiveController#"
+    method = f"{owner}place(sig_p)."
+    document = Document(
+        document_id="doc_ws",
+        relative_path="com/acme/orders/LiveController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        root / "LiveController.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_ws", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_ws",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="V")),
+            ),
+            AnnotationFact(
+                document_id="doc_ws",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_SPRING_CONTROLLER, args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_ws",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation=method_annotation, args={"value": ["/place"]}),
+            ),
+        ],
+    )
+
+
+def _messaging_rows(
+    tmp_path: Path,
+    coordinates: tuple[str, ...] | None,
+    method_annotation: str = _MESSAGE_MAPPING,
+) -> set:
+    root = tmp_path / "facts"
+    _messaging_controller_facts(root, method_annotation)
+    if coordinates is not None:
+        write_fixture_module_fact_with(root, coordinates)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = [
+        c for c in YamlCatalogSource(CATALOGS).load() if c.id in ("spring-stomp", "spring-rsocket")
+    ]
+    derive_endpoints(workspace, catalogs, capabilities={"annotation_args", "typed_signatures"})
+    found = {(str(row["protocol"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+    return found
+
+
+@pytest.mark.declines("spring-rsocket")
+@pytest.mark.pins("dependencies.detect-required-is-a-conjunct")
+def test_a_message_mapping_controller_in_a_websocket_module_is_not_an_rsocket_row(
+    tmp_path: Path,
+):
+    """F2 §3.6's near-miss, and it is the discriminator itself.
+
+    EVERY conjunct of `spring-rsocket.yml`'s rule holds — the class carries
+    `@Controller`, the method carries `@MessageMapping`, and Spring's own RSocket
+    handler would scan exactly this class, because its bean predicate is
+    `hasAnnotation(beanType, Controller.class)`, byte for byte STOMP's
+    (`scripts/probes/w16_rsocket_versus_stomp.md`, section 1).
+
+    Only the BUILD differs. That is the whole finding: no fact about the class
+    separates an RSocket controller from a STOMP one, so the rule cannot be a
+    conjunct over evidence and has to be a conjunct over the module's
+    dependencies.
+    """
+    assert _messaging_rows(tmp_path, ("org.springframework:spring-websocket",)) == {
+        ("websocket", "/place")
+    }
+
+
+@pytest.mark.declines("spring-stomp")
+@pytest.mark.pins("dependencies.detect-required-is-a-conjunct")
+def test_the_same_controller_in_an_rsocket_module_is_not_a_websocket_row(tmp_path: Path):
+    """The mirror, and the row this wave exists to stop. Before W16 this module
+    derived `websocket` — a wrong-PROTOCOL fabrication, and `protocol` is identity,
+    so DR-5 linked it in another consumer's graph to endpoints this module never
+    speaks to."""
+    assert _messaging_rows(tmp_path, ("io.rsocket:rsocket-core",)) == {("rsocket", "/place")}
+
+
+def test_both_starters_present_derives_both_rows(tmp_path: Path):
+    """§3.6: "Both present → two rows. Both handlers scan the same beans; the
+    method really does serve both. This is a correct answer, not an ambiguity."
+
+    Nothing implements it — the two catalogs are independently gated and neither
+    suppresses the other — which is why it is asserted rather than assumed."""
+    assert _messaging_rows(
+        tmp_path,
+        ("org.springframework:spring-websocket", "io.rsocket:rsocket-core"),
+    ) == {("websocket", "/place"), ("rsocket", "/place")}
+
+
+@pytest.mark.pins("dependencies.satisfied-by-answers-the-gate")
+def test_a_connect_mapping_derives_rsocket_whatever_the_build_says(tmp_path: Path):
+    """F2 §3.6: "`@ConnectMapping` anywhere is positive RSocket evidence
+    regardless of the build."
+
+    The build here says the OPPOSITE of the annotation — `spring-websocket`
+    declared, no RSocket coordinate anywhere — and the annotation wins, because
+    it names one framework and the build's silence names none. `@ConnectMapping`
+    lives in `messaging/rsocket/annotation`, STOMP ships no counterpart, and
+    `spring-stomp.yml` does not claim it
+    (`scripts/probes/w16_rsocket_versus_stomp.md` section 2).
+
+    Until `detect.satisfied_by` shipped this sentence was unreachable: the gate
+    answers before any matching runs, so this exact module derived NOTHING and
+    asked nothing — silent, in the one case the sentence was written for.
+    """
+    assert _messaging_rows(
+        tmp_path, ("org.springframework:spring-websocket",), _CONNECT_MAPPING
+    ) == {("rsocket", "/place")}
+
+
+@pytest.mark.pins("dependencies.satisfied-by-answers-the-gate")
+def test_a_connect_mapping_derives_rsocket_with_no_module_fact_at_all(tmp_path: Path):
+    """ "Regardless of the build" includes a build that recorded nothing — the
+    ordinary Maven case, where a starter's own transitives never reach the
+    module fact. `spring-stomp` is still skipped here, because nothing answers
+    ITS question; the point is that RSocket's is answered by evidence."""
+    assert _messaging_rows(tmp_path, None, _CONNECT_MAPPING) == {("rsocket", "/place")}
+
+
+def test_a_message_mapping_is_not_satisfied_by_an_annotation(tmp_path: Path):
+    """The paired near-miss, and the reason `detect.satisfied_by` is a DECLARED
+    list rather than "any annotation this catalog names". `@MessageMapping` is on
+    `spring-rsocket.yml`'s `mapping.annotations` exactly as `@ConnectMapping` is,
+    and it must not answer the gate: it is the annotation both frameworks share,
+    which is the whole reason the gate exists."""
+    assert _messaging_rows(tmp_path, ("org.springframework:spring-websocket",)) == {
+        ("websocket", "/place")
+    }
+
+
+def test_a_build_that_records_nothing_earns_a_question_rather_than_a_guess(tmp_path: Path):
+    """§3.6's last clause: "Neither resolvable (parent-POM inheritance, a stated
+    refusal that survives F1) → open question, not a guess."
+
+    A module whose build records NO coordinates cannot be asked whether it
+    declares `spring-websocket` or `rsocket-core` — and F1 does not resolve
+    transitives, so a starter would not settle it either. Both catalogs decline,
+    so no row is derived on either protocol; without a question the module's
+    messaging surface would vanish silently, which is the same absence a module
+    with no handlers at all produces.
+
+    The guess this refuses is the one that stood until W16: whichever catalog
+    claimed `@MessageMapping` first published the class on ITS protocol, and
+    `spring-stomp` claimed it, so every RSocket controller in the estate read as
+    `websocket`.
+    """
+    root = tmp_path / "facts"
+    _messaging_controller_facts(root)
+    # No module fact at all — the case the gate calls unanswerable, as distinct
+    # from a build that records coordinates and names neither library.
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = [
+        c for c in YamlCatalogSource(CATALOGS).load() if c.id in ("spring-stomp", "spring-rsocket")
+    ]
+    derive_endpoints(workspace, catalogs, capabilities={"annotation_args", "typed_signatures"})
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, catalogs)
+    rows = workspace.query("endpoints")
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert rows == []
+    # One per catalog: each says its own framework could not be confirmed, and a
+    # reader closing either closes the question for both.
+    assert {q["question"] for q in questions} == {"handler_protocol"}
+    assert {str(q["path"]) for q in questions} == {"com/acme/orders/LiveController#"}
+    assert all(q["protocol"] is None for q in questions)
+
+
+# --- F2 §3.7 (G-38): a WebFlux `@Controller`. ---------------------------------
+_WEBFLUX_COORDINATE = "org.springframework:spring-webflux"
+_WEBMVC_COORDINATE = "org.springframework:spring-webmvc"
+
+
+def _webflux_controller_facts(root: Path) -> None:
+    """`@Controller` on the class, `@GetMapping("/orders")` on a method — the
+    plainest HTTP controller there is, and the one shape both Spring web stacks
+    serve identically."""
+    owner = "com/acme/orders/OrderController#"
+    method = f"{owner}list()."
+    document = Document(
+        document_id="doc_flux",
+        relative_path="com/acme/orders/OrderController.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    write_fact_file(
+        root / "OrderController.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_flux", symbol=owner, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_flux",
+                symbol=method,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=owner,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="Ljava/lang/String;")),
+            ),
+            AnnotationFact(
+                document_id="doc_flux",
+                target=owner,
+                retention="runtime",
+                use=AnnotationUse(annotation=_SPRING_CONTROLLER, args={}),
+            ),
+            AnnotationFact(
+                document_id="doc_flux",
+                target=method,
+                retention="runtime",
+                use=AnnotationUse(annotation=_GET_MAPPING, args={"value": ["/orders"]}),
+            ),
+        ],
+    )
+
+
+def _controller_rows(
+    tmp_path: Path, coordinates: tuple[str, ...], catalog: Catalog | None = None
+) -> set:
+    root = tmp_path / "facts"
+    _webflux_controller_facts(root)
+    write_fixture_module_fact_with(root, coordinates)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    catalogs = (
+        [c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc"]
+        if catalog is None
+        else [catalog]
+    )
+    derive_endpoints(workspace, catalogs, capabilities=FIXTURE_CAPABILITIES)
+    found = {(str(row["method"]), str(row["path"])) for row in workspace.query("endpoints")}
+    workspace.close()
+    return found
+
+
+def test_a_controller_in_a_webflux_module_derives_its_routes(tmp_path: Path):
+    """F2 §3.7's acceptance, and the run that says G-38 predicted a bug the code
+    does not have.
+
+    G-38 read `spring-mvc.yml`'s `detect.coordinates: [spring-webmvc]` and
+    concluded a WebFlux module derives nothing. THIS catalog's coordinates are
+    read by nothing — `DEPENDENCY_GATED` holds two other styles, and it sets no
+    `detect.required` — so the gate G-38 described has never existed and the row
+    derives. (Style is not what decides it: `spring-stomp` and `spring-rsocket`
+    are `annotation_driven` too and their coordinates ARE read, because they set
+    `detect.required`.)
+
+    The coordinate list is now TRUE as well as inert: both stacks ship a
+    `RequestMappingHandlerMapping` whose bean predicate is
+    `hasAnnotation(beanType, Controller.class)`, byte for byte the same in each at
+    6.1.6 and 7.0.2 (`scripts/probes/w17_webflux_controller.md` section 1). This
+    test is what fails if someone narrows it back and sets `detect.required` —
+    the one-line change that would have made G-38's prediction true.
+    """
+    assert _controller_rows(tmp_path, (_WEBFLUX_COORDINATE,)) == {("GET", "/orders")}
+
+
+def test_the_same_controller_in_an_mvc_module_derives_the_same_routes(tmp_path: Path):
+    """The paired positive (GUIDELINES §10). Identical facts, the other stack's
+    coordinate: the two builds are not merely both non-empty, they derive the SAME
+    row, which is what "WebFlux's handler gate is byte-for-byte identical" means
+    for output rather than for bytecode."""
+    assert _controller_rows(tmp_path, (_WEBMVC_COORDINATE,)) == {("GET", "/orders")}
+
+
+def test_the_shipped_coordinate_list_names_both_web_stacks():
+    """What the widening actually pins, asserted offline against the shipped file.
+
+    The two tests above pass whatever this list says, because nothing reads it for
+    this catalog — so neither of them pins its CONTENT, and a review found the
+    design claiming they did. This one does: the list is a statement about which
+    builds serve `@Controller`, both stacks serve it (measured, byte for byte, at
+    two versions each — `scripts/probes/w17_webflux_controller.md` section 1), and
+    a list naming one of them is false whether or not anything reads it.
+    """
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    assert set(catalog.detect_coordinates) == {_WEBMVC_COORDINATE, _WEBFLUX_COORDINATE}
+
+
+def test_narrowing_the_list_and_gating_on_it_is_what_would_lose_the_webflux_rows(
+    tmp_path: Path,
+):
+    """The near-miss (GUIDELINES §10), and the one-line change it guards against.
+
+    G-38's prediction was not true of any tree that ever shipped, but it is one
+    line from being true: `detect.required` (F2 §3.6) is a key a catalog author
+    can add, and adding it to a list naming only `spring-webmvc` deletes every
+    WebFlux `@Controller` route in the estate. Both halves are needed and this
+    asserts exactly that pair — the shipped list with the gate on still derives,
+    the narrowed list with the gate on derives NOTHING.
+
+    Built by replacing the two fields on the shipped catalog rather than by
+    editing the file, so what is under test is the shipped rule with one field
+    changed, not a catalog invented here.
+    """
+    shipped = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-mvc")
+    gated = replace(shipped, detect_required=True)
+    narrowed = replace(shipped, detect_required=True, detect_coordinates=(_WEBMVC_COORDINATE,))
+    assert _controller_rows(tmp_path / "widened", (_WEBFLUX_COORDINATE,), gated) == {
+        ("GET", "/orders")
+    }
+    assert _controller_rows(tmp_path / "narrowed", (_WEBFLUX_COORDINATE,), narrowed) == set()
+
+
+# --- F2 §3.8 (W19): `slice.outside` refuses a slice that says nothing. -------
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        pytest.param("slice: []\n", "must be a mapping", id="not a mapping"),
+        pytest.param("slice:\n  outside: []\n", "non-empty list", id="outside is empty"),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, method_names: [x]}\n",
+            "declares no why",
+            id="no reason given",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, why: because}\n",
+            "must declare exactly one of",
+            id="no kind of name given",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n"
+            "    - {owner: a.B, method_names: [x], annotation_names: [y], why: because}\n",
+            "must declare exactly one of",
+            id="two kinds of name given",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, method_names: x, why: because}\n",
+            "must be a list of names",
+            id="methods not a list",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, annotation_names: [1], why: because}\n",
+            "`annotation_names` must be a list of names",
+            id="annotations not names",
+        ),
+        pytest.param(
+            "slice:\n  outside:\n    - {owner: a.B, type_names: x, why: because}\n",
+            "`type_names` must be a list of names",
+            id="types not a list",
+        ),
+    ],
+)
+def test_a_slice_that_states_nothing_is_refused(tmp_path: Path, block: str, expected: str):
+    """Each refusal in `_slice_outside`, exercised — the review that added this file
+    found all four unreached, and the review of the NEXT change found the two rules
+    that replaced them unreached as well (§10, twice).
+
+    The "exactly one of" rule is the one that needs both arms. Zero kinds means the
+    entry names nothing and is unverifiable; two kinds means the audit cannot tell
+    which enumeration to check it against — a method, an annotation and a repository
+    contract are measured by different probes.
+
+    The `why` is the one worth spelling out. A slice entry without it records that
+    a method is unread and not WHY, and "this is not a boundary" and "this is a
+    boundary we do not model" are different claims — a reader deciding whether this
+    catalog covers their code needs to know which. Defaulting it would let the
+    cheaper of the two answers be the silent one.
+    """
+    directory = _catalog_dir(tmp_path, _VALID_CATALOG + block)
+
+    with pytest.raises(CatalogError) as failure:
+        YamlCatalogSource(directory).load()
+
+    assert expected in str(failure.value)
+    assert "invented.yml" in str(failure.value)

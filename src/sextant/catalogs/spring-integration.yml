@@ -1,0 +1,178 @@
+id: spring-integration
+displayName: Spring Integration (channel endpoints)
+style: config_join
+
+# WHAT THIS CATALOG SHIPS, stated first because it is unusual: it declares no
+# `key`, so it derives NO endpoint rows at all. It enumerates the channels this
+# module's code names and files each one as a `channel_destination` open
+# question (2O design §5). That is the honest whole of what bytecode plus
+# in-repo configuration can say here, and the reason is measured rather than
+# assumed — see the block above `channels` below.
+#
+# **THEREFORE IT DECLARES NO `protocol` AND NO `direction`, and the absence is
+# a claim (OI-1).** A Spring Integration channel is an in-process pipe; which
+# broker it reaches, if any, is precisely what the question below asks, so this
+# file has no wire identity to state. `resolve/endpoints.py` requires the pair
+# of a catalog that MINTS ENDPOINT ROWS and refuses it on one that mints none —
+# keyed on what the catalog derives rather than on what its style is nominally
+# called, which is the rule Task 8 agreed read one level finer.
+#
+# *This file declared `protocol: amqp` from Task 9 until that re-keying. It was
+# the one value the probe measured a channel join against end to end
+# (`scripts/probes/spring-integration-destinations.md`, Q3 — `@ServiceActivator`
+# fed by an `AmqpInboundChannelAdapter`), and a Kafka- or JMS-fed channel filed
+# its question under `amqp` too. The questions now carry no protocol at all,
+# which is the true answer: nobody has read one.*
+
+# `spring-integration-core` declares the annotations below; the Boot starter is
+# how a real module usually reaches it, and the core artifact is then the
+# starter's own transitive — which no recorded set carries — so a build that
+# names the starter and never the core artifact must not read as a build with
+# no Spring Integration (`resolve/dependencies.py`).
+detect:
+  coordinates:
+    - org.springframework.integration:spring-integration-core
+    - org.springframework.boot:spring-boot-starter-integration
+
+# `resolved_config` is the PIPELINE-declared capability every `config_join`
+# catalog needs — this one derives nothing without a `key`, but the style's
+# engine reads the table for the binder lookup and for `gaps`'s own answer, and
+# a catalog that quietly ran against a table pass 2 never filled would be the
+# silent degradation the gate exists to prevent (M04, FR-17).
+requires: [resolved_config, annotation_args]
+
+matches:
+  address_from_config:
+    # NO `key`, and its absence is the deliverable rather than an omission.
+    #
+    # Spring Integration defines no standard configuration key for a channel's
+    # destination. Real applications wire destinations in BEAN DEFINITIONS — an
+    # `AmqpInboundChannelAdapter` bean, a `SimpleMessageListenerContainer` — and
+    # any key template written here would be a PROJECT convention, which D02
+    # places in a repo's own catalog and never in a built-in. A template
+    # invented here would resolve nothing in every module that does not share
+    # the convention, and would silently address the wrong key in one that
+    # spells it differently.
+    #
+    # **What the destinations ARE readable in, and why that is not this join
+    # (§5.3).** Since extractor capability 9.15 the adapter's own destination
+    # reaches the fact stream: `Amqp.inboundAdapter(cf, String...)` and
+    # `setQueueNames(String...)` now emit
+    # `{"kind":"array","elements":[{"kind":"string","value":"…"}]}` rather than
+    # one opaque `unresolved` (the probe's "Re-run after extractor capability
+    # 9.15" section — its one-line headline says the opposite and is corrected
+    # in place). Those elements are CALL-SITE arguments. This engine's address
+    # input is `resolved_config` and nothing else
+    # (`application/resolve/engines/config_join.py`, `_config_values`), and
+    # `resolved_config` is built from `config_entries` alone
+    # (`application/resolve/config.py:107`) — configuration FILES, never a call
+    # site. So the destination a 9.15 element carries cannot reach this join,
+    # and reading it is engine work in a style that reads call sites. Stated in
+    # `docs/COVERAGE.md` as a boundary with a readable fact behind it, which is
+    # a different and better-placed gap than an unreadable one.
+    binding:
+      from: annotation_value
+      # WHICH ANNOTATION ARGUMENTS NAME A CHANNEL, and what each one means.
+      #
+      # This is an attribute SET, not the annotations' attribute lists.
+      # `@ServiceActivator` also carries `adviceChain`, `autoStartup`, `phase`,
+      # `poller`, `reactive`, `requiresReply`, `sendTimeout` and `order`, and
+      # not one of them is a channel. `sendTimeout` is the sharpest: it is a
+      # `String` like the two below, so reading it would file a question about
+      # a channel called `3000` — a name nobody wrote, in the ledger a human is
+      # asked to answer.
+      #
+      # Both annotations and all three attributes were MEASURED reaching the
+      # fact stream verbatim, keyed by attribute name, against Spring
+      # Integration 6.2.4 under the Spring Boot 3.2.5 BOM, javac release 21
+      # (`scripts/probes/spring-integration-destinations.md`, Q2 — which also
+      # records that a constant-valued attribute arrives INLINED as its value,
+      # and a `${...}` placeholder verbatim and unresolved). The direction each
+      # attribute means is the framework's own: a service activator SUBSCRIBES
+      # to its `inputChannel` and SENDS its return value to its
+      # `outputChannel`, and an inbound channel adapter is a message SOURCE
+      # that publishes what its method returns onto `channel`.
+      channels:
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: outputChannel, direction: outbound }
+        - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
+            arg: channel, direction: outbound }
+        # `@InboundChannelAdapter("orders")` — the SHORTHAND, and the form most code
+        # uses. Measured at 6.2.4: `value()` and `channel()` are `@AliasFor` each
+        # other, so only the one the author typed reaches the class file, and reading
+        # `channel` alone meant the shorthand filed NO question at all. This is
+        # `A-M8`'s `@SqsListener(queueNames)` defect one framework over, in the same
+        # shape COVERAGE already records as fixed there. Two rows rather than alias
+        # resolution, because `resolve/effective_annotations.py` states that explicit
+        # cross-name aliasing is out of scope; Spring refuses a conflicting pair, so
+        # at most one of these two is ever present.
+        - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
+            arg: value, direction: outbound }
+
+# D02's declared SLICE (F2 §3.8, G-47). Measured
+# (`scripts/probes/w19b_type_and_annotation_surface.md` §1): Spring Integration ships
+# ELEVEN annotations that declare a channel in a named attribute, and this catalog
+# reads TWO. Two more carry their channel in a bare `value()`, so thirteen in all.
+#
+# **The cost is bounded, and saying so is part of being honest about it.** This catalog
+# mints no endpoint rows — it files `channel_destination` questions — so eight unread
+# annotations are an under-reported QUESTION list, not eight wrong rows. That is why
+# G-47's severity is capped and why this is a declared slice rather than a defect.
+# **G-47's other half is NOT closed here, and is stated rather than left implied.**
+# The gap analysis says this catalog reads "2 of ~12 channel-declaring annotations AND
+# NO CONTAINERS". Measured at 6.2.4: `@ServiceActivator` and `@InboundChannelAdapter` —
+# both annotations this catalog DOES read — are `@Repeatable`, with containers
+# `@ServiceActivators` and `@InboundChannelAdapters`. Two `@ServiceActivator`s on one
+# method compile to the container, and `config_join` has no `container` word at all
+# (`annotation_driven` has one; five catalogs use it), so BOTH channels drop.
+# Recorded as `OI-66` rather than fixed: it is engine vocabulary, not a catalog line.
+slice:
+  outside:
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Aggregator, Filter, Splitter, Transformer]
+      why: >
+        Endpoint annotations this catalog does NOT read, each declaring `inputChannel`
+        and `outputChannel` (and `discardChannel` for `@Aggregator` and `@Filter`) —
+        the same attributes `@ServiceActivator` carries and this catalog already reads.
+        A module wiring its integration flow through these has those channels absent
+        from its question list, so a reader sees fewer unanswered destinations than
+        the module really has.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Gateway, MessagingGateway]
+      why: >
+        The gateway pair, which name a request AND a reply channel
+        (`requestChannel`/`replyChannel`, and `defaultRequestChannel`/
+        `defaultReplyChannel`). Unread, and they are the shape most likely to matter:
+        a messaging gateway is the boundary between an application's own interface and
+        the flow behind it, so it is exactly where a reader looks for a destination.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Router]
+      why: >
+        Declares `inputChannel`, `defaultOutputChannel` AND `channelMappings` — NOT
+        `outputChannel`, which is why it is its own entry rather than grouped with the
+        endpoint annotations above. `channelMappings` is the interesting one: it holds
+        a routing table of channel names, so one unread annotation hides several
+        destinations rather than one.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Poller]
+      why: >
+        Declares `errorChannel`, and it is the annotation an eight-name attribute list
+        missed entirely — it appeared only once the enumeration measured "any attribute
+        the framework named for a channel" instead. A poller's error channel is a real
+        destination that messages reach.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [Publisher]
+      why: >
+        Declares the channel a method's return value is published to, in a `channel`
+        attribute — the same attribute name `@InboundChannelAdapter` uses and this
+        catalog reads. Unread.
+    - owner: org.springframework.integration.annotation
+      annotation_names: [BridgeFrom, BridgeTo]
+      why: >
+        Both name a channel, and both carry it in a bare `value()` rather than in an
+        attribute the framework named for a channel — so the enumeration's
+        attribute-name test cannot see them and reports ten where the real count is
+        twelve. Declared here so the two the measurement cannot reach are still on the
+        record, which is the whole reason a slice is written down.

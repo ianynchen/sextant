@@ -18,10 +18,12 @@
 --
 -- Parameters:
 --   $shapes -- {shape_id, content_hash, open} rows, one per type reached
-INSERT INTO shapes (shape_id, content_hash, open)
-SELECT s.shape_id, s.content_hash, s."open"
+INSERT INTO shapes (shape_id, content_hash, open, origin_tier)
+SELECT s.shape_id, s.content_hash, s."open", s.origin_tier
 FROM (SELECT UNNEST(
-    $shapes::STRUCT(shape_id VARCHAR, content_hash VARCHAR, "open" BOOLEAN)[]
+    $shapes::STRUCT(
+        shape_id VARCHAR, content_hash VARCHAR, "open" BOOLEAN, origin_tier VARCHAR
+    )[]
 ) AS s)
 WHERE NOT EXISTS (
     SELECT 1 FROM shapes existing WHERE existing.shape_id = s.shape_id

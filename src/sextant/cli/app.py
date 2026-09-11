@@ -99,7 +99,10 @@ def module_analyze(path: Path, workspace_dir: Path | None, allow_resolve: bool) 
 def module_render(path: Path, workspace_dir: Path | None) -> None:
     """Reads the workspace `analyze` left behind — it never re-detects,
     re-scans, or re-resolves (M00 "no analysis"; the workspace persists
-    precisely so render is a cheap read)."""
+    precisely so render is a cheap read).
+
+    It takes no display flag: one module, one document, and that document is
+    the complete one (GUIDELINES §8.4)."""
     try:
         result = api._render(path, workspace_dir=workspace_dir)
     except api.SextantError as refused:

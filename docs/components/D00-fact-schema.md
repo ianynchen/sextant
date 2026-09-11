@@ -63,15 +63,18 @@ Written once per class file. Every fact points at one.
 | `module_id` | From [M02](M02-detector.md) |
 | `language` | The language of this document |
 | `sextant_version` | **The tool that produced these facts** |
-| `fact_schema_version` | **The version of this document's schema** |
-| `scanner_id` | Which scanner produced these facts |
-| `scanner_version` | |
+| `fact_schema_version` | **The version of this document's schema** — a single monotonically increasing INTEGER, not semver (Step 0). Compared for equality and nothing else; it is never parsed or ordered, so the dotted form carried two extra numbers that meant nothing and let four producers of the stamp disagree unnoticed |
+| `scanner_id` | **Which FACILITY produced these facts** — never the library it used. There is no `scanner_version` beside it: a facility Sextant ships moves with `sextant_version` above, and the third-party libraries that CAN move on their own (ASM, kotlin-metadata-jvm) are recorded once per workspace in `metadata.json`, not repeated on every document one scanner wrote |
+| `class_release` | **Which COPY of an overlaid class this is** (JEP 238): `base` for the archive root — and for anything that is not a class in a multi-release jar — or the release its `META-INF/versions/N/` prefix declares. A TAG, never a selection: which copy actually loads depends on the release the DEPENDING module targets, so one scan of a jar serves modules targeting different ones and the choice is made downstream |
+| `annotation_default` | **What an annotation type's element falls back to** when a use omits it (JVMS 4.7.22). A `LiteralValue` — the same grammar an annotation's arguments use, because a default can be an array, an enum reference or a nested annotation. Present only on such an element and only where it has a default; absent everywhere else, and an absent key must not read as "defaults to nothing" |
+| `class_name` | **The class file's own name with any overlay prefix removed** — what the JVM knows the class by, and the key two copies of one class are recognised as copies on. `relative_path` cannot serve: it is the SOURCE path, and a nested class shares its outer's |
 | `content_hash` | Of the source of truth this was read from |
 | `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
 | `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
 | `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
-| `partial` | True when the file was analysed incompletely, with a reason |
+| `partial` | True when the file was analysed incompletely, with a reason. **Real since Step 1** — the JVM extractor wrote the literal strings `false`/`null` with no code path able to set either, so every class document claimed a complete analysis whether or not it had one. Three producers: an ARCHIVE ENTRY that could not be read, a class this build cannot parse, and a class whose language-metadata a newer compiler wrote in a form it cannot decode (scanned, facts emitted, nullability missing) |
+| `class_major` | **The class-file format version this document was read from** (JVMS 4.1's `major_version`, bytes 6-7). Read from the FILE, never from ASM's constant set — that set runs ahead of the reader shipped beside it, so it would answer for a class this build cannot parse, which is the one case this field exists to describe. `0` where the source is not a class file: the format starts at 45, so 0 cannot be mistaken for a real version |
 
 **One class file is one document — a nested or anonymous class's own `.class` file
 included.** `document_id` stays the sha256 of the **class-relative path**
@@ -114,6 +117,23 @@ archive — and deliberately not `first_party` or `third_party`, which answer a 
 question (*whose* dependency) from the group patterns [D04](D04-config-and-exclusion.md)
 §2 declares and nothing yet implements. A tier is a factual origin; it is never a trust
 guess.
+
+**A version is recorded only where the thing can move INDEPENDENTLY of Sextant** (Step 1).
+`sextant-config-reader` and `sextant-detector` ship inside the wheel, so they carry no
+version of their own — `sextant_version` beside them is it, and the `"0.1.0"` each used to
+stamp was a hand-maintained copy of that number which had never once differed from it. The
+JVM extractor is the exception that proves the rule: it runs ASM and kotlin-metadata-jvm in
+a subprocess, those move on someone else's release cycle, and their RESOLVED coordinates are
+what `metadata.json` records. The field that used to sit here read `"9.18"` — capability 9.18
+wearing a library version's name, while the pinned ASM was 9.10.1 — which is exactly what a
+version field means when it names something that cannot independently move.
+
+**What a scanner can READ is likewise declared by the scanner, never by the caller**
+([D02](D02-catalog-schema.md) §3). The JVM extractor answers `--capabilities` over the same
+subprocess contract it answers a scan on, so a jar built by an older `./gradlew build`
+reports fewer capabilities and the catalogs needing them are reported skipped — the visible
+degradation [M04](M04-resolver.md) already defines — instead of running against fact kinds
+that jar never emitted.
 
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different
@@ -165,7 +185,14 @@ goes in `ext`, never into a widened set.
 `di_container`, `dynamic_proxy`, `config_placeholder`, `unindexed_dependency`,
 `scanner_gap`
 
-**`construct_kind`** — `class`, `interface`, `struct`, `trait`, `protocol`, `enum`,
+**`method_resolution`** — `declared_here`, `inherited`, `ancestor_not_scanned`,
+`owner_not_scanned`, `no_declaration_found`. Why a call site's target does or does not
+reach a body (JVMS 5.4.3.3, F3 §4.2). Distinct from `unresolved_reason` above, which
+says why a TRACE stopped; this says what the method lookup itself found. One word used
+to do the first four jobs at once, and the third of them — a method declared on a
+superclass the workspace HAS scanned — was false rather than imprecise.
+
+**`construct_kind`** — `class`, `interface`, `annotation`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
 
 **`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
@@ -178,30 +205,114 @@ an observation, never a trust judgement.
 
 **`relationship_kind`** — `extends`, `implements`, `type_of`
 
-**`root_kind`** — `http_inbound`, `soap_inbound`, `grpc_inbound`, `message_inbound`,
-`scheduled`, `cli_entry`
+**`root_kind`** — `inbound_endpoint`, `scheduled`, `entry_point`. What kind of thing a
+trace starts from, and the set is `CONTEXT.md`'s own three: "an inbound endpoint, a
+scheduled job, or a program entry point". Produced by `application/resolve/roots.py` into
+[D01](D01-graph-schema.md) §3's `roots` since 2Q's `I1` — before which this set had no
+producer at all and was entry #7 of
+[documented-not-implemented.md](../documented-not-implemented.md).
+
+*It read `http_inbound`, `soap_inbound`, `grpc_inbound`, `message_inbound`, `scheduled`,
+`cli_entry` until `I1`, and four of those six were one member spelled once per protocol.*
+**Protocol is a property of an endpoint, not a second kind of root** (`CONTEXT.md`): an
+inbound `endpoints` row already carries it, so a per-protocol root kind is the same value
+in two places with nothing keeping them equal — and it does not even cover the set, since
+`message_inbound` names a `message` protocol family this schema **retired**, leaving a
+broker listener's root kind naming nothing in `protocol` at all. `cli_entry` became
+`entry_point` because a `main` is a program entry point whether or not anything about it
+is a command-line interface, and `cli` claimed a surface no producer measured.
+
+**`entry_point` has no producer, and that is stated rather than left to a reader.** Which
+signature starts a program is a fact about a LANGUAGE, and [ARCHITECTURE](../ARCHITECTURE.md)
+§10 keeps language knowledge out of the language-blind half — so its producer is a catalog,
+and none declares one (`docs/open-issues.md`, OI-22). The member stays in the set because
+the traversal that reads `roots` branches on no kind at all: a root of this kind traces
+exactly as the other two do the day something writes one.
 
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`
 
+> **PRODUCED SINCE W30** (F7 §8.2), on `call_edges`. This note said "nothing produces a
+> `terminal_kind`" for two phases and gave the right reason: the set CLASSIFIES what a call
+> reaches, and `persistence` in particular "is `persistence` only to something that knows
+> the callee is one". That framework knowledge is now catalog data
+> ([D02](D02-catalog-schema.md) §2j) — an owner type, a supertype the owner implements, or
+> the packages a scan annotation registers — so the classification is READ rather than
+> guessed, which is what §5.3's second corollary asked for.
+>
+> **NULL and `unresolved` are different answers.** NULL means the edge is not a terminal at
+> all: its callee's body was read and the walk expanded it. `unresolved` means this IS a
+> terminal, it was examined, and no catalog claimed it — which on the measured corpora is
+> 94-96% of them, almost all `StringBuilder`, `Object` and `List`.
+>
+> **Still not `TraceStop`.** That vocabulary (`domain/closed_sets.TraceStop`,
+> [D01](D01-graph-schema.md) §3's Traces) answers why the WALK stopped and is decided
+> entirely from what the walk did. One edge carries both and they say different things:
+> `boundary` because this workspace read no body, `persistence` because a catalog knows
+> what the callee is. **Six of the eight have no producer, for two different reasons**
+> (`OI-75`): `outbound_call`, `throws` and `async_handoff` are one catalog rule away and
+> none is declared, while `cycle`, `returns` and `ends_silently` are unreachable by any
+> rule — a cyclic edge has a non-NULL `callee` so the classification is NULL for it, and
+> the other two describe how a BODY exits while every catalog route is a predicate on the
+> callee's TYPE.
+
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
-splitting it later is a rendering choice rather than a re-index.
+splitting it later is a rendering choice rather than a re-index. Measured on `mall-admin`:
+199 `database` terminals and 41 `cache` ones, the second being `RedisTemplate` — which is
+the distinction the sub-field exists to make, and the question "does this call hit a
+database or a cache" could not be asked without it.
+
+**`direction`** — `inbound`, `outbound`, `both`. Which way a wire identity is used:
+served here, called from here, or both. **Twelve citations pointed at this entry before it
+existed** — the set lived only in `domain/closed_sets.py`, and W27's review found every
+"stays in D00 §4 for the linking tier" reference dangling.
+
+**`both` has no producer, and that is stated rather than left to a reader** (§5.3, the
+`entry_point` precedent below). W27 deleted `merge_endpoints.sql`, the only pass that ever
+wrote it: that merge folded a declaration this module can fully see together with an
+observation it fundamentally cannot, and a module serving an address it also calls is now
+two rows plus a `self_exchange` question. `both` stays in the set because the LINKING tier
+is where a schema match or a human can justify one — a claim about two modules, made where
+both are visible, which is exactly what a single module's analysis cannot make.
 
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
-`websocket`, `sse`. `message` is
+`websocket`, `sse`, `amqp`, `pulsar`, `rsocket`. `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
 The broker family is the protocol because linking gates on protocol equality (DR-5), and
 a Kafka topic can never be answered by an SQS queue.
 
-**The last three are HTTP-ADJACENT and are still their own protocols, not flavours of
-`http`** (Phase 2H). [D01](D01-graph-schema.md) §3's wire identity is protocol-scoped,
-and none of the three *is* an HTTP route: a GraphQL schema is N boundaries behind one
+**`graphql`, `websocket` and `sse` are HTTP-ADJACENT and are still their own protocols,
+not flavours of `http`** (Phase 2H). [D01](D01-graph-schema.md) §3's wire identity is
+protocol-scoped, and none of the three *is* an HTTP route: a GraphQL schema is N boundaries behind one
 POST path, a WebSocket connection fans into N destinations, and an SSE stream is a route
 whose return type turned it into something a request/response comparison cannot match
 against. They were declared in one edit because the set is closed (NFR-5) and all three
 are live today: `graphql` from the annotation and schema catalogs, `websocket` from the
 WebSocket/STOMP catalogs, `sse` only ever by RECLASSIFICATION — no catalog derives an
 `sse` row, `protocol_hint` moves one there ([D02](D02-catalog-schema.md) §2).
+
+**`amqp` and `pulsar` were added in one edit** (Phase 2O Task 1, `domain/closed_sets.py`),
+for the reason the three HTTP-adjacent members above were: the set is closed (NFR-5), so a
+member a later task needs costs one line now and a schema change if it arrives alone. Each
+is its own protocol on the same DR-5 argument — an AMQP exchange can never be answered by a
+Pulsar topic, and neither is a JMS queue, which is why Spring Cloud Stream's `rabbit: jms`
+stopgap migrated to `rabbit: amqp` in the same phase. Both are live: `amqp` from
+`@RabbitListener` and `RabbitTemplate`, `pulsar` from `@PulsarListener`. *This list omitted
+both from Task 1 until the 2O documentation sweep — a §5.1 violation, recorded rather than
+quietly corrected, because the code shipped the members and the schema document did not say
+so.*
+
+**`rsocket` was added alone** (F2 §3.6), which the paragraph above says costs a schema
+change: this is it, and the member, this list, [D06](D06-bundle-format.md)'s verbless table
+and `docs/COVERAGE.md` moved in one edit. Its DR-5 argument is the same — an RSocket route
+can never be answered by a STOMP destination — and until it existed, an RSocket controller
+was published as `websocket`, a wrong-PROTOCOL fabrication `docs/COVERAGE.md` had stated in
+place since `A-C1`. What kept it open was that **Spring does not distinguish the two on the
+class at all**: measured
+(`scripts/probes/w16_rsocket_versus_stomp.md`), `SimpAnnotationMethodMessageHandler.isHandler`
+and the reactive handler's default bean predicate both test `@Controller`, so no fact about
+the class could ever separate them. The fact that does is which handler auto-configuration
+would register, which is a dependency fact.
 
 **`control_flow_kind`** — `sequential`, `conditional`, `alternative`, `loop`, `handler`
 
@@ -235,7 +346,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | Constructor symbol, the assigned field's symbol, the source parameter's ordinal | The field resolution ladder (2F) |
-| `constant` | Symbol, value | Topic and URL resolution |
+| `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
 | `config_entry` | `key_raw`, `key_path`, `value`, source document, `doc_index` (§5c) | Configuration resolution |
 | `dependency` | Coordinates, scope, tier | Classpath tiering, library identity |
@@ -257,7 +368,9 @@ its own. (The SCIP parameter descriptor exists for the rare case of naming one f
 outside — a curation, say — and is deferred until something needs it.)
 
 **A field symbol also carries the declaration modifiers that decide whether it reaches a
-payload at all**, as `modifiers.static` and `modifiers.transient` — a value bound to the type
+payload at all**, as `modifiers.static` and `modifiers.transient` — joined in W7 by
+`modifiers.final` and `modifiers.volatile`, which say whether the value can change at all
+and whether the language was asked to publish that change across threads — a value bound to the type
 rather than to an instance, and a declaration the language marks as not serialized. Neither
 is visibility and neither is nullability: a public constant is as public as any field and is
 on no payload, so a shape pass filtering on what it already had would have to guess. Both
@@ -266,8 +379,16 @@ scanner that does not report the modifier. **A compiler-synthesized field is not
 declaration and produces no fact at all** — a modifier would say "somebody wrote this and it
 stays off the wire", where the truth is that no source file contains it.
 
-**A method symbol carries the same `modifiers` slot with a different pair of keys** —
-`modifiers.static` and `modifiers.synthetic` — because the two constructs do not share a
+**A method symbol carries the same `modifiers` slot with a different set of keys** —
+`modifiers.static` and `modifiers.synthetic`, and from W7 `abstract`, `varargs`, `final`,
+`native` and `synchronized`. Two of those answer questions nothing could ask before:
+`abstract` tells an interface's `default` method from its declared ones, which emitted
+IDENTICAL modifiers until it existed; and `varargs` is the only thing separating
+`f(String...)` from `f(String[])`, which compile to one descriptor — so a call passing three
+strings and one passing an array read as the same declaration. `native` is not `abstract`:
+both mean "no body here", one says the code is elsewhere in this language and the other
+outside it. **A TYPE symbol carries the slot too**, with `abstract` and `final`. The pairs
+differ because the constructs do not share a vocabulary — because the two constructs do not share a
 vocabulary. `transient` is deliberately absent: its class-file bit is `ACC_VARARGS` on a
 method, so writing it would report every varargs method as not-serialized. The pair answers
 one question, asked by any rule that enumerates a class's EXPOSED members (D02's
@@ -300,6 +421,79 @@ knowledge, so unwrapping is catalog data ([D02](D02-catalog-schema.md)) applied 
 deliberately small role set — `read`, `write`, `import`, `generated`, `type_use` — for
 body-level uses only; signature-level type uses come from the structured signatures.
 
+**A symbol fact's `line_start` and `line_end` are the extent of its CODE, and `0` means the
+class file states no line.** They come from `LineNumberTable` (JVMS 4.7.12), which maps
+bytecode offsets to source lines — so the first line a method can state is its first
+STATEMENT, with its signature and any annotations above it. A construct with no code states
+nothing: a class carries no such table, an abstract or native method has no `Code` attribute
+to hold one, and a field has neither. Source lines are numbered from 1, so `0` can never
+collide with a real answer. Deriving a class's line from the minimum over its members would
+land on whichever member sorts first rather than on the declaration, and is not done — though
+a compiler that maps a class's IMPLICIT constructor to its declaration line, as javac does,
+makes the answer reachable through that constructor.
+
+**A parameter's `name` is whatever the class file states, and absent when nothing does.** Two
+attributes can state it and they are not equals: `MethodParameters` (JVMS 4.7.24) describes
+PARAMETERS and wins, while `LocalVariableTable` (4.7.13) describes every local and happens to
+cover them, so it fills only what the first left empty. A local's slot is not a parameter
+index — a `long` or `double` takes two slots (JVMS 2.6.1) and an instance method's slot 0 is
+the receiver — and a slot is reused once a variable leaves scope, so the entry taken is the
+one whose scope begins at the method's first instruction, which only a parameter's does.
+
+**A parameter's type reference comes from the `Signature` attribute wherever the
+declaration has one**, exactly as a return type's and a field's already did. The erased
+descriptor has lost every type argument and every type variable by the time it is read:
+`accept(List<String> names, T item)` is written `(Ljava/util/List;Ljava/lang/Comparable;)V`,
+where the elements are gone and `T` has become its own bound. The attribute is the only
+place either survives, so a parameter reads from it and falls back to the descriptor for a
+declaration that carries no attribute at all — which is precisely a declaration with nothing
+generic to lose. A type reference's `symbol` may therefore be a bare **type variable** (`T`),
+which is not a class and is recorded by the name the signature gives it, never resolved to
+its bound; the return position has always been able to yield one.
+
+**The descriptor's own symbol is kept beside the signature's, as `erased_symbol`.** The two
+differ only for a type VARIABLE: the signature names the variable, which is what a generic
+substitution binds, while the descriptor names what it erases to. **A type variable's name is
+scoped to the declaration that introduced it** — an interface may call it `E` where its
+implementation calls it `T`, for one method — so it can never be compared BETWEEN two
+declarations, and every consumer that keys or looks a type up by a parameter reads
+`erased_symbol` instead. It is written on every parameter rather than only where the two
+differ, because a JSON path wildcard drops elements whose key is absent and a shorter list
+silently misaligns against the parameters it describes.
+
+**The two lists are matched by the class file's own parameter flags, never by counting.**
+JVMS 4.7.9.1 permits a signature to omit parameters that are implicitly declared, and a
+compiler may also omit ones it synthesised — so the two lists can be different lengths, and
+**the difference in length does not say which entries are missing**. Measured: an inner
+class's constructor carries the enclosing instance FIRST and an enum's constructor carries
+its name and ordinal FIRST, but a local class that captures carries its captures LAST, all
+against a signature naming only what was written in source. Any rule based on the counts
+alone is right for two of those and wrong for the third — and wrong there in the worst way,
+putting a collection's element type onto an `int` in a fact that is perfectly well formed.
+
+`MethodParameters` (JVMS 4.7.24) is what distinguishes them: the signature's entries go to
+the slots flagged neither `ACC_MANDATED` nor `ACC_SYNTHETIC`, in order. **The flags are
+evidence, not a definition** — `ACC_MANDATED` means *implicitly declared*, which is not the
+same as *omitted from the tables*: a record's COMPACT canonical constructor flags every slot
+mandated and omits nothing, so where the flags account for no slot at all they are saying
+nothing rather than saying the method has no parameters.
+The signature's entries are laid onto the slots flagged as neither, in order. **Where that
+attribute is absent, or where the flags do not account for the difference, every parameter
+keeps its erased type** — less specific, never wrong. A local class declared inside a static
+method is the real case: it has captures at the end and no `MethodParameters` at all.
+
+**A class or method symbol fact carries the formal type parameters it declares, as
+`type_parameters`** — each an ordered `{name, bounds}` entry, the bounds being type
+references like any other. The name and the position are what a generic substitution binds a
+variable by: without them the `T` a parameter or return type now names refers to nothing.
+Bounds are recorded exactly as the signature states them, `java.lang.Object` included —
+javac writes `T:Ljava/lang/Object;` for a parameter declared `<T>`, so there is no
+distinction between `<T>` and `<T extends Object>` to preserve, and an empty bound list would
+otherwise mean either "unbounded" or "the scanner did not read it". Multiple bounds stay
+multiple, in declaration order. **Emitted only where the declaration has any** — the same
+"nothing generic, nothing captured" rule the generic supertype follows below, since most
+classes and nearly every method declare none.
+
 **A class symbol fact also carries its generic supertype reference, when the superclass
 signature is generic.** `new ParameterizedTypeReference<List<OrderView>>() {}` compiles to
 an anonymous class whose signature names that parameterized supertype, and the fact records
@@ -310,6 +504,34 @@ field rather than through the anonymous class's own declared type, which names n
 ordinary, non-generic superclass carries no such field — there is nothing generic to
 capture, and the relationship is still stated once, at `relationship_kind: extends` (§4).
 This also pre-feeds `inherits` edges ([D01](D01-graph-schema.md)).
+
+**A nested type carries `nest_host`, and a nest host carries `nest_members`** (JVMS
+4.7.28/4.7.29). `nest_host` is not `enclosing`: for `A$B$C` the immediate encloser is `A$B`
+and the nest host is `A`, and both are real answers to different questions. The top-level one
+matters because `$` is a legal identifier character, so splitting a binary name on it reports
+a top-level class genuinely named `Foo$Bar` as nested inside a `Foo` that does not exist.
+
+**A type carries `unread_attributes`** — the names of attributes this scanner SAW and did not
+read, a vendor's or one from a newer class-file version. By name only: reading the bytes would
+mean guessing at a layout nobody published. It exists so "seen and not read" can be
+distinguished from "not present", which is the distinction §2.3's ledger is built on.
+
+**Two reserved file classes produce no type symbol.** `module-info.class` and
+`package-info.class` have a class file's shape and a `this_class` naming no type any source
+declares, so emitting a symbol for either put a phantom into the graph. `module-info` is not
+read at all — module identity comes from the build's own coordinates, and `requires`/`exports`
+say less than the build file already does. `package-info` IS still read, because it is where a
+compiler puts a package's ANNOTATIONS and a package-level nullability scope (D02 §2e) is
+declared through exactly that target; only its invented symbol is dropped.
+
+**A SEALED type carries `permits`** — the complete set of types the language allows to
+extend it (JVMS 4.7.31), emitted only where the declaration is sealed. It is the one place
+"every implementation of this" is a closed answer rather than whatever a scan happened to
+reach, which is what every other implementation question here is.
+
+**A method's signature carries `throws`** — the types it DECLARES it can fail with (JVMS
+4.7.5), in declaration order, and inside the signature rather than beside it because it is
+part of what a caller must handle in order to call it. Omitted where a method declares none.
 
 **A class symbol fact also carries the erased symbols of every interface it implements, in
 declaration order, as `interfaces` — emitted only when non-empty** (the `implemented_interfaces`
@@ -380,6 +602,31 @@ behind an extension read boundary.
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
 what lets a catalog's `response_arg: 2` on `postForObject(url, req, OrderResponse.class)`
 resolve to a real shape root.
+
+**An annotation is a literal value too** (capability 9.16). An annotation-valued argument
+carries **its own `annotation` and its own `args`, recursively** — the same
+`{annotation, args}` shape the enclosing use has, rather than a second vocabulary beside
+it — so `@InboundChannelAdapter(poller = @Poller(fixedDelay = "1000"))` keeps the poller,
+and `@RabbitListener(bindings = @QueueBinding(value = @Queue("orders")))` keeps the queue
+name two levels down. It composes with arrays in both directions: an array of annotations
+is how a `@Repeatable` annotation arrives at all, because **two or more of one repeatable
+annotation on the same declaration are folded by the compiler into a single container
+annotation holding an array of them** (JLS 9.7.5). `@Scheduled` twice on a method is one
+`@Schedules({…, …})`, so before 9.16 a method with one schedule was readable and a method
+with two carried no trigger at all.
+
+The recursion is **bounded**, and says so where it stops. The language bounds it already —
+javac rejects a cyclic annotation element type, so a chain cannot revisit a type — but a
+class file need not have come from javac, and an unbounded descent is a stack overflow
+mid-scan rather than a fact. The JVM mapping (capability 9.16) allows **five levels of
+nesting below the outermost annotation**, comfortably past the deepest shape in the estate
+(`@RabbitListener` → `@QueueBinding` → `@Queue` → `@Argument`, depth 3). Past it the value
+is `{annotation: <fqn>, unresolved: "depth_limit"}`: the type was read off the descriptor
+and is real, the arguments were never read and get **no `args` key** — an empty `args`
+would be indistinguishable from an annotation genuinely written with none, which is the
+silent truncation §8 forbids. Strictly additive: an engine that does not consult a nested
+use sees exactly the keys it saw before, since a nested value previously produced no key
+at all.
 
 ### 5b. The wire-type vocabulary
 
@@ -508,6 +755,25 @@ Each such fact carries, beside its `fields`:
   and not a derivation because a schema may *rename* its roots, so which type holds the
   role cannot be recovered from the type's own name by anything downstream — and only the
   interpreter may read a schema format at all.
+- **`operation`** — optional, populated only where `role` is `operation`: `{input_ref,
+  output_ref, client_streaming, server_streaming}`. A gRPC descriptor `service` method
+  fills every field, `input_ref`/`output_ref` naming the SAME descriptor's message shapes
+  by their own `schema_name` (an intra-descriptor join, never a guess across universes);
+  a WSDL operation (2I) leaves it NULL today, its output side unrecorded until a later
+  task fills it. **Amendment (2O Task 4, `fact_schema_version` 1.0.0 → 1.1.0):** this
+  field is new. The estate cost is re-analysis of every already-scanned workspace to gain
+  it — accepted pre-gate, because every fact file already on disk still validates
+  unchanged, with the field simply absent (D01 §7's cache-key rule already treats a
+  `fact_schema_version` change as one reason a cached result may no longer be reused).
+
+  **Correction (Step 0).** That bump was applied to ONE of the stamp's four producers —
+  `domain/version.py`, which stamps `metadata.json` — and this field is written by
+  `ingress/read/*`, which was left at `1.0.0`. So every `.proto`, WSDL, Avro and GraphQL
+  document written since carries `operation` while stamping the version that predates it,
+  and nothing detected the disagreement because the staleness gate reads `metadata.json`
+  and never the documents. Step 0 removes the cause rather than the symptom: the stamp
+  becomes an integer, the Java copy is deleted (the extractor is HANDED the value as a
+  required option), and the two Python restatements import the one constant that owns it.
 
 Per field: the schema's own `name` and the encoded `wire_name` (a protobuf `json_name`,
 **read from the descriptor, never computed** — protoc puts the computed default and an
@@ -546,6 +812,29 @@ another machine. A stage resumed with `--from-stage` never runs the detector at 
 
 So the detector's conclusions are facts like any other, and travel like any other.
 
+**What is CONSTRUCTED today, since Phase 2O Task 6** (before it, this record was defined
+and written nowhere): the module's identity, kind, languages, source roots, output
+directories, and **`dependency_coordinates`** — the `groupId:artifactId` coordinates the
+module's build declares, which is what a catalog whose framework rule is conditional on a
+library reads ([D02](D02-catalog-schema.md) §1's `detect.coordinates`). **Classpath
+TIERING is still not written**: `classpath`'s own `ClasspathEntry` names a resolved
+archive per entry, which the Gradle report carries and a parsed POM does not, and filling
+it from Maven would mean inventing a path. The coordinate half is its own field for that
+reason, rather than a half-filled entry list.
+
+The two build systems also differ in REACH, and the difference is carried rather than
+smoothed over: Gradle reports the resolved compile classpath, transitives included; Maven
+reports the POM's direct declarations only. A coordinate absent from this list means "not
+declared here", never "not on the classpath" — and an ABSENT module fact (an older
+workspace) is a third answer again, which is why a gate reading it distinguishes empty
+from missing.
+
+The module fact's own `document` record is SYNTHESIZED rather than read from a file: the
+stage that writes it may not touch the filesystem, so its `content_hash` is the hash of
+the module identity it records and its `origin_entry` is the module's own coordinates
+(never a machine path — §2's portability rule, which a filesystem root would break for two
+checkouts of one module).
+
 ### `call_site` is the load-bearing one
 
 The full shape, verbatim:
@@ -571,6 +860,34 @@ owner** — `LambdaMetafactory`, `StringConcatFactory` — because that is the t
 what the site means, where the instruction's own name and descriptor describe only the call
 site's signature. A `dynamic` site is recorded like any other: skipping it would leave every
 `source` pointing at it dangling, and a string concatenation is a real producer.
+
+**`implementation` is the optional symbol of the function this site's DISPATCH will run,
+written only where the target does not already name it** (capability 9.17). It is the
+canonical cross-language answer to "the call site names a mechanism, not the code" — a JVM
+`invokedynamic`, and whatever another language's extractor finds in the same position. The
+JVM mapping: an indy bootstrapped by `LambdaMetafactory` (`metafactory` or
+`altMetafactory` — the gate is the OWNER) carries the implementation handle in
+`bootstrapMethodArguments[1]`, and that handle's owner, name and descriptor become the
+lambda body's symbol. It is a **bare** descriptor path, exactly like the `lambda` argument
+kind and for the same §1 stability reason: a method reference is very often into a library,
+and stamping the caller's coordinates onto `java/lang/String` would mint a different symbol
+for `String::trim` in every module. **An in-module body therefore joins to its own method
+fact by stripping that fact's module prefix**, which is the join every consumer of these
+symbols already performs.
+
+Absent on every other call site, and that is a claim rather than a shrug: a
+`StringConcatFactory` site's bootstrap arguments are a format recipe, not a method, so
+there is no implementation to name and writing one would assert a call to code that does
+not exist. Strictly additive — an engine that does not read `implementation` sees exactly
+the facts it saw before 9.17.
+
+**Why it is a field and not a better `target`.** Overwriting `target` with the handle would
+make one column mean two things — a real method at a lambda site, a bootstrap class and a
+call-site signature at a concat site — so a consumer joining `target` to method symbols
+would silently match the first and silently miss the second. The bootstrap owner is also
+load-bearing in its own right (it is what says the site is a lambda at all), and the SAM
+name and descriptor on the instruction are the only record of the interface being
+implemented. Both are kept; the body is added beside them.
 
 **`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
 five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
@@ -606,7 +923,9 @@ recovered later. Kinds:
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
 | `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
+| `array` | an array construction reaching the slot (JVM: `ANEWARRAY`/`NEWARRAY` plus its `xASTORE`s) | `elements` carries one entry per element, each an argument of this same grammar. **One slot, not N** — a varargs call passes one array |
 | `null` | ACONST_NULL | |
+| `concat` | invokedynamic via `StringConcatFactory` | **an address the code ASSEMBLES rather than states.** `"/api/" + version + "/orders"` is not built in the bytecode: javac emits one instruction plus a RECIPE holding the literal parts with a marker per runtime value. `value` is the template — `/api/{}/orders` — and the hole is deliberately UNNAMED: a path variable's name was never part of the address (a server routes `/api/owners/42` to `/api/owners/{ownerId}` by POSITION and may rename the variable freely), so `{}` is what both sides share and naming it would invent one the class file often does not carry. What FILLS the hole is the concat site's own call-site fact, reached by `source` → `result` |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 
 **`<init>` is the canonical constructor call-site name every extractor normalizes to** —
@@ -639,6 +958,77 @@ it is deliberately **not** the local slot: a `long` parameter occupies two slots
 index and slot diverge, and a slot is a JVM detail no other language shares. Strictly
 additive: an engine that does not consult `parameter` must treat it exactly as it always
 treated `unresolved` — the value is still unread, only its origin is now stated.
+
+**`array` is the canonical cross-language kind for "this argument is an array built
+here"** — a varargs call in any language that has one, and an explicitly written array
+literal, which are the same call. `elements` carries the element arguments, each of them
+an entry of this same grammar, so an element reads exactly as it would have read as a
+single argument in the same position: a literal is `string`, a `@Value` field is `field`,
+an unreadable expression is `unresolved` **with its `source`**. The shape is deliberately
+**self-describing rather than unpacked**: one argument that happens to be an array, never
+N arguments — unpacking would renumber every slot after it and make arity unreadable, the
+same reason `unresolved` is an answer rather than an absence.
+
+The JVM mapping (capability 9.15): an argument slot whose producing instruction is an
+`ANEWARRAY`/`NEWARRAY` reads its `xASTORE`s and becomes `{kind: array, elements: […]}`.
+It fires **only where the whole construction is readable** — a constant length, every
+index a distinct constant, every index written, no store outside the window between the
+construction and this invoke, and the array reaching no other invoke that might mutate it.
+An array built in a loop, populated on a branch, left partly unwritten, or handed to
+another method first is `unresolved` with no element list at all; an array arriving from
+elsewhere keeps the `parameter`/`field`/`unresolved` answer its own producer gives it.
+A **zero-length** varargs call is `{kind: array, elements: []}` — the empty list is the
+fact, and it is the one place in this grammar where an empty value says something an
+absent key would not, because "called with no values" is a different statement from "the
+array could not be read". A **varargs call and an explicitly written array are reported
+identically**, deliberately: javac erases the sugar at the call site and the callee's
+`ACC_VARARGS` flag lives on a class the pass has not read, so they are the same call and
+`elements` states what the callee receives either way. Strictly additive: an engine that
+does not consult `array` treats it exactly as it always treated `unresolved`, which is
+what every varargs slot read as before 9.15.
+
+**`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
+what a method hands back:
+
+```json
+{"kind": "method_return", "document_id": "…", "method": "<method symbol>",
+ "ordinal": 0, "value": {"kind": "unresolved", "source": 13}}
+```
+
+It is the last link in a round trip whose every other hop was already extracted. An
+argument carries the `source` id of the call that produced it, so
+`OmsOrderService#list` → `CommonPage#restPage` → `CommonResult#success` is a chain of
+facts today; nothing said that `success`'s result is the value the METHOD returns.
+`method` is the returning method's own symbol, spelled exactly as `call_site.caller` is —
+**module-prefixed**, because it names a declaration this module made, where the bare
+spelling is reserved for references that must be identical across modules.
+
+**`value` is an entry of §5's argument grammar**, not a bare value id, and the two answers
+that shape keeps apart are the reason:
+
+| What the bytecode does | `value` |
+|---|---|
+| returns nothing (a `void` return pops nothing) | `null` — an ANSWER, not a failure |
+| returns something this pass cannot name | `{"kind": "unresolved"}` |
+| returns another call's result | `{"kind": "unresolved", "source": N}` — the join |
+| returns a literal, a field, a parameter, a lambda, a constructed value | that kind, exactly as it would read in an argument slot in the same position |
+
+A bare id would have collapsed the first two into one absence. The declared return type is
+read alongside the value for the same reason a call site reads its argument types: a
+boolean and an int both arrive as `ICONST_*`, and only the descriptor tells them apart.
+
+**Several returns are several facts, and are not collapsed.** A method with two `return`
+statements has two possible answers and no single one, distinguished by `ordinal` — the
+return's index among this method's returns, in instruction order. Picking one would be a
+fact about code that may never run, the same refusal §5 makes for a value merged on a
+branch. The JVM mapping covers all six return opcodes; `ATHROW` is deliberately **not** one
+of them — it leaves the method without handing a value back, and putting an exception where
+a caller reads a returned value would be a wrong answer rather than a missing one.
+
+**Its consumer does not exist yet.** The reader is 2Q's cross-method propagation, which
+joins a `method_return` to the caller's own `result` id; the fact ships ahead of it because
+that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
+carries it as `OI-15`.
 
 **`field_write` is a fact of its own, constructors only, direct traces only** — a
 constructor assigns parameter N directly to field F. The JVM mapping: a PUTFIELD inside

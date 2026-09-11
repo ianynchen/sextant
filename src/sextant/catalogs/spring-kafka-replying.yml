@@ -7,6 +7,10 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+measured:
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants]
 
 matches:
@@ -19,13 +23,23 @@ matches:
   # CHECKPOINT FACT: `sendAndReceive(ProducerRecord<K, V>)` is arity 1, the
   # record wrapper the only source for its channel and payload — exactly
   # like `KafkaTemplate.send(ProducerRecord)`. `sendAndReceive(Message<?>)`
-  # is ALSO arity 1 — not exercised by the fixture, and not given a second
-  # `sendAndReceive arity: 1` row for the same reason `spring-kafka-
-  # template.yml`'s own `send(Message<?>)` sibling isn't: `_matching_method`
-  # matches by name+arity alone, first row wins, so a second row at the same
-  # arity is unreachable dead data, never a second answer. It shares this
-  # SAME `record_arg` row, degrading honestly to `path` NULL, `resolution:
-  # unresolved` (a `Message` symbol names no `record_wrappers` entry).
+  # is ALSO arity 1, and it now has ITS OWN ROW (descriptor sweep R3).
+  # **The note that stood here said a second `sendAndReceive arity: 1` row was
+  # "unreachable dead data" — that was true of arity matching and is false
+  # now**: each row declares its own erased JVM `descriptor` and each overload
+  # reaches its own row. The two are trivially separable because they even
+  # differ in RETURN type — `RequestReplyFuture` against
+  # `RequestReplyMessageFuture` — which the erased descriptor carries.
+  #
+  # The `Message` row declares NO capture keys at all
+  # (`spring-sqs-template.yml`'s precedent), and that preserves today's answer
+  # exactly: before the split a `Message` call reached the `record_arg` row and
+  # `_record_arguments` degraded honestly to `(None, None)` — `path` NULL,
+  # `resolution: unresolved` — because a `Message` symbol names no
+  # `record_wrappers` entry. Without the row, the `ProducerRecord` descriptor
+  # would claim arity 1 and the call would derive NOTHING; an honest empty row
+  # is the answer this file already gives, and closing an ambiguity is not a
+  # reason to spend recall.
   # `sendAndReceive(ProducerRecord, Duration)`, `(Message, Duration)`,
   # `(Message, ParameterizedTypeReference<P>)` and `(Message, Duration,
   # ParameterizedTypeReference<P>)` are the further, arity-2/3 overloads;
@@ -37,51 +51,22 @@ matches:
   # all — `response_shape` is NULL by design, not a capture failure (D02
   # §3: "No overload exposes the reply type... stated, not hedged").
   methods:
-    - { name: sendAndReceive, arity: 1, record_arg: 0 }
+    - { name: sendAndReceive, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Lorg/springframework/kafka/requestreply/RequestReplyFuture;",
+        record_arg: 0 }
+    - { name: sendAndReceive, arity: 1,
+        descriptor: "(Lorg/springframework/messaging/Message;)Lorg/springframework/kafka/requestreply/RequestReplyMessageFuture;" }
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale). `nullability` is harvested from spring-mvc.yml.
+# rationale).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

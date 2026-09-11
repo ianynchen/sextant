@@ -1,16 +1,24 @@
 import json
+import re
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from sextant.application.ports.scanner import ScanRequest
+from sextant.domain.factfile import read_fact_file
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import extractor_jar
 
 REPO = Path(__file__).parents[2]
 JAR = extractor_jar()
 CLASSES = REPO / "fixtures" / "orders-service" / "target" / "classes"
+# Mirrored from `Main.ACCEPTED_MAJOR_MIN`/`MAX`, which
+# `extractor-jvm/src/test/java/dev/sextant/extractor/ClassFileVersionTest.java`
+# asserts against real bytes — so the range is measured in one place and this
+# side only has to agree with it.
+ACCEPTED_MAJOR_MIN = 45
+ACCEPTED_MAJOR_MAX = 71
 
 
 def test_scanner_accepts_java_and_kotlin_but_not_python():
@@ -37,9 +45,13 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
         "ApiGet.jsonl",
+        "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
+        # W21's `com/acme/orders/model/` — the superclass-call shape the always-on
+        # corpus scored zero of (`tests/e2e/test_corpus_shapes.py`).
+        "BaseEntity.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
         "BillingClients.jsonl",
@@ -47,6 +59,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -55,11 +68,14 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
+        "CustomerRegistry.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
+        "FirstSplitter.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
@@ -73,12 +89,16 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcInvoiceRoutes.jsonl",
+        "MvcRouteHandlers.jsonl",
+        "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
         "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderFeedClient.jsonl",
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
@@ -99,6 +119,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
         "OrderRelay.jsonl",
+        "OrderRepository.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -107,14 +128,17 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
+        "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
+        "OrderTotals.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
@@ -124,11 +148,28 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "Refiner.jsonl",
+        "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
+        "RoutingConditionsController.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
+        "SecondSplitter.jsonl",
+        "SecretRepository.jsonl",
+        "SharedPathClients.jsonl",
         "ShipmentsSqsListener.jsonl",
+        "SoleRefiner.jsonl",
+        "Splitter.jsonl",
+        "SpringScopedDetail.jsonl",
+        "StompBrokerConfig.jsonl",
+        "StrictRefiner.jsonl",
+        "TraceProbe.jsonl",
+        "package-info.jsonl",
+        # Three now: `scoped` (JSpecify's `@NullMarked`), `springscoped` (Spring's
+        # `@NonNullApi` AND `@NonNullFields`) and `apiscoped` (`@NonNullApi` alone,
+        # which scopes no field — the half `springscoped` cannot exercise).
+        "package-info.jsonl",
         "package-info.jsonl",
     ]
     # 77 + 3: 2G Task 7's `messaging/parse` package — the listeners plus the
@@ -143,7 +184,41 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # + 5: 2I Task 1's SOAP surfaces — `OrderSoapEndpoint`, `BillingWebService`,
     # `LegacyBillingWebService`, `BillingSoapClient` and the `PlaceOrderRequest`
     # payload, each its own class file.
-    assert report.documents == 94
+    # + 2: 2O Task 3's generic-superinterface fixture — `OrderRepository` and
+    # the `Repository<T, ID>` contract it extends, each its own class file.
+    # 96 + 2: 2O Task 6's Data REST fixture (`CatalogRepository`,
+    # `SecretRepository`), one class file each.
+    # 98 + 7: 2Q `G3`'s dispatch fixture (`com/acme/orders/trace/`) —
+    # `Refiner`, `SoleRefiner`, `StrictRefiner`, `Splitter`, `FirstSplitter`,
+    # `SecondSplitter` and `TraceProbe`, one class file each. One caller and
+    # one call per dispatch form the JVM has needs an interface with ONE
+    # implementation, an interface with TWO, and a subclass that HIDES a
+    # static rather than overriding it, which is what makes it seven.
+    # 107 since OI-48: `springscoped/SpringScopedDetail` and its `package-info`,
+    # a package declaring itself non-null in SPRING's spelling — the one a Spring
+    # codebase writes, and the one `shape-models/json.yml` did not declare.
+    # 110 since that entry's own review: `apiscoped` (a `package-info` declaring
+    # `@NonNullApi` ALONE, which scopes parameters and returns and says nothing
+    # about fields) plus its `ApiScopedDetail`, and `springscoped/nested`, a
+    # SUBpackage of a scoped package, which inherits no scope from its parent.
+    # Both fields must come out nullable, and both were coming out not-null.
+    # 113 since W21:  give the always-on
+    # corpus the superclass-call shape it scored zero of.
+    # 115 since W26: `contracts/OrderTotals`, a fieldless interface whose wire contract
+    # is in its accessors, and the `PayloadShapeController` that returns it.
+    # 116 since W28: `RoutingConditionsController`, three handlers on one path and verb
+    # separated by `params` and `headers` — the case no corpus here had.
+    # 117 since W27's review: `SharedPathClients`, two callers hitting ONE address at two
+    # hosts. The fixture had no such pair, which is why an outbound dedup that dropped the
+    # second caller outright sat here undetected.
+    # 118 since W43: `OrderStompPublisher`, the outbound half of the STOMP surface, which
+    # `G-33` names and this fixture had no instance of.
+    # 120 since W44: `MvcInvoiceRoutes` and `MvcRouteHandlers`, the servlet functional
+    # routing surface — `G-29`, and likewise absent here before.
+    # 121 since W45: `StompBrokerConfig`, which registers the URL a STOMP client opens.
+    # 122 since W46: `OrderFeedClient`, which OPENS one — the direction `G-32` names, and
+    # the one this fixture had no instance of at all.
+    assert report.documents == 122
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -165,9 +240,13 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
         "ApiGet.jsonl",
+        "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
         "AuditEvent.jsonl",
         "AuditJmsListener.jsonl",
+        # W21's `com/acme/orders/model/` — the superclass-call shape the always-on
+        # corpus scored zero of (`tests/e2e/test_corpus_shapes.py`).
+        "BaseEntity.jsonl",
         "BillingClient.jsonl",
         "BillingClients$BillingProperties.jsonl",
         "BillingClients.jsonl",
@@ -175,6 +254,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
         "CommonProtos$Money$Builder.jsonl",
@@ -183,11 +263,14 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "CommonProtos.jsonl",
         "ComposedController.jsonl",
         "ComposedListener.jsonl",
+        "Customer.jsonl",
         "CustomerGraphqlController.jsonl",
         "CustomerRef.jsonl",
+        "CustomerRegistry.jsonl",
         "DetailedOrderResult.jsonl",
         "DgsOrderFetcher.jsonl",
         "EventProducers.jsonl",
+        "FirstSplitter.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
         "KotlinOrder.jsonl",
@@ -201,12 +284,16 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcInvoiceRoutes.jsonl",
+        "MvcRouteHandlers.jsonl",
+        "NestedScopedDetail.jsonl",
         "NotificationsSubscriber.jsonl",
         "OrderCommand.jsonl",
         "OrderController.jsonl",
         "OrderEvent.jsonl",
         "OrderEventsController.jsonl",
         "OrderEventsListener.jsonl",
+        "OrderFeedClient.jsonl",
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
@@ -227,6 +314,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderProtos$OrderRequestOrBuilder.jsonl",
         "OrderProtos.jsonl",
         "OrderRelay.jsonl",
+        "OrderRepository.jsonl",
         "OrderRequest.jsonl",
         "OrderResult$Detail.jsonl",
         "OrderResult.jsonl",
@@ -235,14 +323,17 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderSoapEndpoint.jsonl",
         "OrderStatus.jsonl",
         "OrderStompController.jsonl",
+        "OrderStompPublisher.jsonl",
         "OrderStreamBindings.jsonl",
         "OrderTopicListener.jsonl",
+        "OrderTotals.jsonl",
         "OrderView.jsonl",
         "OrdersApi.jsonl",
         "OrdersApiController.jsonl",
         "OrdersLoopClient.jsonl",
         "OrdersRestClient.jsonl",
         "ParsedPayloadListeners.jsonl",
+        "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
@@ -252,11 +343,28 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "RawPubSubSubscribers.jsonl",
         "RawSqsClientSender.jsonl",
         "ReceiptView.jsonl",
+        "Refiner.jsonl",
+        "Repository.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
+        "RoutingConditionsController.jsonl",
         "ScopedRequest.jsonl",
         "SeamController.jsonl",
+        "SecondSplitter.jsonl",
+        "SecretRepository.jsonl",
+        "SharedPathClients.jsonl",
         "ShipmentsSqsListener.jsonl",
+        "SoleRefiner.jsonl",
+        "Splitter.jsonl",
+        "SpringScopedDetail.jsonl",
+        "StompBrokerConfig.jsonl",
+        "StrictRefiner.jsonl",
+        "TraceProbe.jsonl",
+        "package-info.jsonl",
+        # Three now: `scoped` (JSpecify's `@NullMarked`), `springscoped` (Spring's
+        # `@NonNullApi` AND `@NonNullFields`) and `apiscoped` (`@NonNullApi` alone,
+        # which scopes no field — the half `springscoped` cannot exercise).
+        "package-info.jsonl",
         "package-info.jsonl",
     ]
 
@@ -358,6 +466,121 @@ def test_scanner_declares_the_implemented_interfaces_capability():
     catalog to key off of once the scanner that wrote it says it produces
     them."""
     assert "implemented_interfaces" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_generic_interfaces_capability():
+    """A class symbol fact's `generic_interfaces` field (capability 9.14) is
+    only trustworthy for Spring Data REST's entity-type read once the scanner
+    that wrote it says it produces them."""
+    assert "generic_interfaces" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_superclass_capability():
+    """A class symbol fact's `superclass` field (capability 9.13, D00 §4's
+    `relationship_kind: extends` made real) is only trustworthy for a
+    hierarchy-walking catalog once the scanner that wrote it says it produces
+    it."""
+    assert "superclass" in AsmScanner(JAR).capabilities()
+
+
+def _scan(tmp_path: Path) -> Path:
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    return tmp_path
+
+
+def _class_symbol(path: Path) -> dict:
+    """The class-level `symbol` fact in a scanned `.jsonl` file — the one
+    `visit` emits before any member's, so it carries no `enclosing`. Filtered
+    rather than indexed: a class with members has more `symbol` lines after
+    it, and indexing past the document line would break the moment one grew
+    a field or a method."""
+    for line in path.read_text().splitlines():
+        fact = json.loads(line)
+        if fact.get("kind") == "symbol" and fact.get("enclosing") is None:
+            return fact
+    raise AssertionError(f"no class symbol found in {path}")
+
+
+def test_a_generic_superinterface_records_its_type_arguments(tmp_path: Path):
+    """Capability 9.14 — D00 §5a's PTR-carrier rule, extended one level over
+    to `implements`: `interfaces` alone erases `Repository<OrderResult, Long>`
+    to a bare symbol, and Spring Data REST cannot derive a repository's entity
+    type from that alone (2O design §2a). `generic_interfaces` is the only
+    place the entity and id types survive, kept as full type references
+    exactly like `supertype`."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "data" / "OrderRepository.jsonl")
+    assert fact["generic_interfaces"] == [
+        {
+            "symbol": "com/acme/orders/data/Repository#",
+            "arguments": [
+                {
+                    "symbol": "com/acme/orders/OrderResult#",
+                    "arguments": [],
+                    "wire_type": "object",
+                    "wire_format": "",
+                    "nullable": True,
+                    "nullable_resolution": "resolved",
+                },
+                {
+                    "symbol": "java/lang/Long#",
+                    "arguments": [],
+                    "wire_type": "integer",
+                    "wire_format": "int64",
+                    "nullable": True,
+                    "nullable_resolution": "resolved",
+                },
+            ],
+            "wire_type": "object",
+            "wire_format": "",
+            "nullable": True,
+            "nullable_resolution": "resolved",
+        }
+    ]
+
+
+def test_a_non_generic_interface_carries_no_generic_reference(tmp_path: Path):
+    """Symmetry with D00's generic-superclass rule: nothing generic, nothing
+    captured — the erased `interfaces` list already states the relationship
+    for a plain interface like `MessageReceiver`."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(
+        out / "com" / "acme" / "orders" / "messaging" / "raw" / "RawPubSubReceiver.jsonl"
+    )
+    assert "generic_interfaces" not in fact
+
+
+def test_a_plain_class_records_its_erased_superclass_symbol(tmp_path: Path):
+    """Capability 9.13 — D00 §4's `relationship_kind: extends`, made real. CP-3
+    found no fact anywhere naming a plain superclass: `interfaces` erases
+    every implemented type, and `supertype` only fires when the signature is
+    generic. `DetailedOrderResult extends OrderResult` carries no `Signature`
+    attribute at all — neither class is generic — so `superclass`, read
+    straight off the class file's own `super_class` entry, is the only place
+    the relationship survives."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "openapi" / "DetailedOrderResult.jsonl")
+    assert (
+        fact["superclass"] == "sextant-jvm maven com.acme/orders 1.0.0 com/acme/orders/OrderResult#"
+    )
+
+
+def test_a_root_class_carries_no_superclass_reference(tmp_path: Path):
+    """Null for `java.lang.Object`: every class with no declared superclass
+    gets this same constant-pool entry implicitly, so writing it would put a
+    superclass reference on nearly every class in a module and say nothing
+    with any of them."""
+    out = _scan(tmp_path)
+    fact = _class_symbol(out / "com" / "acme" / "orders" / "OrderResult.jsonl")
+    assert "superclass" not in fact
 
 
 def _jar_of(target: Path, entries: dict[str, bytes]) -> Path:
@@ -515,3 +738,596 @@ def test_a_scan_records_its_origin_coordinate_only_when_one_was_asked_for(tmp_pa
         tmp_path / "without" / "com" / "acme" / "orders" / "contracts" / "OrderView.jsonl"
     ).read_text(encoding="utf-8")
     assert "origin" not in json.loads(plain.splitlines()[0])
+
+
+def _call_sites(path: Path, name: str) -> list[dict]:
+    """Every `call_site` fact in a scanned file whose target method has this
+    name — filtered by name rather than indexed, for the same reason
+    `_class_symbol` filters: an ordinal is a property of the method body and
+    moves the moment the fixture grows a statement."""
+    return [
+        fact
+        for line in path.read_text().splitlines()
+        if (fact := json.loads(line)).get("kind") == "call_site" and fact["target"]["name"] == name
+    ]
+
+
+def test_a_varargs_argument_carries_its_elements_rather_than_one_unresolved(tmp_path: Path):
+    """Capability 9.15 against real compiled bytecode. `RequestPredicates
+    .accept(MediaType...)` is the shape `spring-webflux-router.yml`'s own
+    `media_values` table was written for and could never read: the value
+    reaching the slot is the array the `ANEWARRAY` produced, so before this
+    capability every media predicate was a bare `{"kind": "unresolved"}` with
+    no `source` and no `symbol`, and `MediaType.APPLICATION_JSON` was absent
+    from the fact stream entirely.
+
+    The element keeps the `enum` kind it would have carried as a single
+    argument — which is the whole point: the probe's control arm showed a
+    single-`String` sink discriminating eight destination spellings while the
+    varargs sink collapsed them to one byte-identical `unresolved`
+    (`scripts/probes/spring-integration-destinations.md`)."""
+    out = _scan(tmp_path)
+    accepts = _call_sites(
+        out / "com" / "acme" / "orders" / "routes" / "OrderRoutes.jsonl", "accept"
+    )
+    assert accepts, "the WebFlux router fixture declares an accept predicate"
+    assert accepts[0]["arguments"] == [
+        {
+            "kind": "array",
+            "elements": [
+                {"kind": "enum", "symbol": "org/springframework/http/MediaType#APPLICATION_JSON."}
+            ],
+        }
+    ]
+
+
+def test_a_zero_length_varargs_argument_is_an_empty_element_list(tmp_path: Path):
+    """`uri(String, Object...)` called with no URI variables — the ordinary
+    WebClient spelling — compiles to an empty `ANEWARRAY`. The empty list is
+    the fact: "called with no URI variables" is a different statement from
+    "the array could not be read", and it is what makes the argument's arity
+    readable at all. The slot count is the assertion beside it: an array is
+    ONE argument, and unpacking it would have renumbered the path literal's
+    neighbour out of position."""
+    out = _scan(tmp_path)
+    uris = _call_sites(
+        out / "com" / "acme" / "orders" / "clients" / "InventoryWebClient.jsonl", "uri"
+    )
+    assert uris, "the WebClient fixture declares a uri call"
+    assert uris[0]["arguments"] == [
+        {"kind": "string", "value": "/v2/inventory/levels"},
+        {"kind": "array", "elements": []},
+    ]
+
+
+def test_an_argument_that_is_not_an_array_carries_no_elements_key(tmp_path: Path):
+    """The near miss on the emission side: `elements` belongs to the `array`
+    kind alone, so every other argument in the estate must be byte-identical
+    to what it was before 9.15. A key written on every argument would change
+    every fact file in the fixture and every assertion pinned to one."""
+    out = _scan(tmp_path)
+    for line in (
+        (out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl")
+        .read_text()
+        .splitlines()
+    ):
+        fact = json.loads(line)
+        if fact.get("kind") != "call_site":
+            continue
+        for argument in fact["arguments"]:
+            assert ("elements" in argument) == (argument["kind"] == "array"), argument
+
+
+def test_scanner_declares_the_array_arguments_capability():
+    """A call-site argument's `elements` (capability 9.15) is only trustworthy
+    for a catalog reading a `String...` destination once the scanner that
+    wrote it says it produces them — the same gate `generic_interfaces` and
+    `superclass` pass through."""
+    assert "array_arguments" in AsmScanner(JAR).capabilities()
+
+
+def test_a_returned_lambdas_body_is_named_by_the_site_that_creates_it(tmp_path: Path):
+    """Capability 9.17 against real framework code. `OrderStreamBindings`'
+    four `@Bean` methods each RETURN a lambda, so the body fills no argument
+    slot and the `lambda` argument kind — the only thing that named a body
+    before — never fires. The site itself now carries it, which is what makes
+    a Spring Cloud Stream handler's code reachable from the bean that declares
+    it rather than an orphaned synthetic method."""
+    out = _scan(tmp_path)
+    facts = [
+        json.loads(line)
+        for line in (out / "com" / "acme" / "orders" / "streams" / "OrderStreamBindings.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    sites = [fact for fact in facts if fact.get("kind") == "call_site"]
+    dynamic = [site for site in sites if site["invoke_kind"] == "dynamic"]
+    assert len(dynamic) == 4, "four @Bean methods, each returning one lambda"
+    # The trailing counter in `lambda$method$N` is javac's, not the class
+    # file format's, and the two JDKs this project is built with disagree
+    # about it. MEASURED on four methods each returning one lambda:
+    # javac 21 numbers per CLASS (`$0 $1 $2 $3`) and javac 26 numbers per
+    # METHOD (`$0 $0 $0 $0`). Pinning either spelling makes this test assert
+    # the compiler's private bookkeeping, and it green on one JDK and red on
+    # the other — which is exactly how it reached CI red while passing here.
+    #
+    # Everything this test is ABOUT survives the normalisation: the owning
+    # class, which enclosing method each body belongs to, the signature
+    # disambiguator, and the order. Only the counter is dropped.
+    assert [re.sub(r"\$\d+\(", "$N(", site["implementation"]) for site in dynamic] == [
+        "com/acme/orders/streams/OrderStreamBindings#lambda$handleOrder$N(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$auditTap$N(sig_7f15bbda).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$orphanConsumer$N(sig_b2a754d9).",
+        "com/acme/orders/streams/OrderStreamBindings#lambda$unselectedBean$N(sig_b2a754d9).",
+    ]
+    # The near-miss on the emission side, and the reason it is checked here
+    # too: `implementation` belongs to a bootstrap that names a method, so the
+    # constructor's plain `invokespecial` beside these four must be
+    # byte-identical to what it was before 9.17.
+    assert all("implementation" not in site for site in sites if site["invoke_kind"] != "dynamic")
+
+
+def test_a_lambda_body_is_bare_where_the_method_it_names_is_module_prefixed(tmp_path: Path):
+    """OI-4, proven on a MODULE-PREFIXED scan rather than on a fixture that
+    spells everything bare. One identity, two spellings: a method's own symbol
+    fact carries the full SCIP form and `implementation` carries the bare
+    descriptor path, deliberately — D00 §1 requires `String::trim` to be one
+    symbol in every module, which stamping the caller's coordinates on it
+    would break.
+
+    So the join is bare-against-stripped, and this test states it as a
+    measurement rather than an assumption: on the orders-service fixture the
+    direct join matches **nothing at all**, which is exactly the failure mode
+    OI-4 records — six green tests and no match on any real module."""
+    out = _scan(tmp_path)
+    methods: set[str] = set()
+    bodies: set[str] = set()
+    for path in out.rglob("*.jsonl"):
+        for line in path.read_text().splitlines():
+            fact = json.loads(line)
+            if fact.get("kind") == "symbol" and fact.get("construct_kind") == "method":
+                methods.add(fact["symbol"])
+            if fact.get("kind") == "call_site" and fact.get("implementation"):
+                bodies.add(fact["implementation"])
+    assert bodies, "the fixture declares lambdas"
+    assert all(symbol.startswith("sextant-jvm maven com.acme/orders 1.0.0 ") for symbol in methods)
+    assert not (bodies & methods), "the direct join is the OI-4 trap and must match nothing"
+    assert bodies <= {symbol.split(" ")[-1] for symbol in methods}
+
+
+def test_a_returned_call_result_names_the_site_that_produced_it(tmp_path: Path):
+    """Capability 9.18 against real compiled bytecode, and the link it exists
+    to close. `BillingRestTemplate#getBalance` returns what `RestTemplate
+    #getForObject` produced; every other hop of that round trip was already a
+    fact, and nothing said which of this method's call results the method
+    hands back. The join is one number — the return's `source` against the
+    site's own `result` — and it is asserted as a join here rather than as two
+    separate values, because a fact that named a value id joining to nothing
+    is the failure this is meant to be checked against."""
+    out = _scan(tmp_path)
+    path = out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl"
+    facts = [json.loads(line) for line in path.read_text().splitlines()]
+    method = next(
+        fact["method"]
+        for fact in facts
+        if fact.get("kind") == "method_return" and "#getBalance(" in fact["method"]
+    )
+    returns = [fact for fact in facts if fact.get("kind") == "method_return"]
+    balance = [fact for fact in returns if fact["method"] == method]
+    assert len(balance) == 1, "one return statement, one fact"
+    produced = balance[0]["value"]["source"]
+    producer = next(
+        fact
+        for fact in facts
+        if fact.get("kind") == "call_site"
+        and fact["caller"] == method
+        and fact.get("result") == produced
+    )
+    assert producer["target"]["name"] == "getForObject"
+    # `updateSettlement` returns nothing, and that is an answer: a `void`
+    # return pops nothing, so its `value` is null rather than an `unresolved`
+    # standing in for a value that was never there.
+    void = [fact for fact in returns if "#updateSettlement(" in fact["method"]]
+    assert void and all(fact["value"] is None for fact in void)
+
+
+def test_a_method_return_names_its_method_the_way_a_call_site_names_its_caller(
+    tmp_path: Path,
+):
+    """OI-4 again, on the other new symbol. `method_return.method` is a
+    DECLARATION this module made, so it carries the module-prefixed spelling —
+    the same one `call_site.caller` uses, and the same one the method's own
+    `symbol` fact uses. Asserted as an equality against the caller spelling
+    rather than as a prefix check alone: the failure mode OI-4 records is two
+    spellings of one identity that never meet, and the way to pin it is to
+    show the join succeeds."""
+    out = _scan(tmp_path)
+    path = out / "com" / "acme" / "orders" / "clients" / "BillingRestTemplate.jsonl"
+    facts = [json.loads(line) for line in path.read_text().splitlines()]
+    callers = {fact["caller"] for fact in facts if fact.get("kind") == "call_site"}
+    # `constructor` alongside `method`: a `<init>` body ends in a void RETURN
+    # like any other, so it has a `method_return` too, and its own symbol fact
+    # carries the other construct kind. Narrowing this to `method` made the
+    # assertion fail on the constructor, which is how the pair got noticed.
+    methods = {
+        fact["symbol"]
+        for fact in facts
+        if fact.get("kind") == "symbol" and fact.get("construct_kind") in {"method", "constructor"}
+    }
+    returned_by = {fact["method"] for fact in facts if fact.get("kind") == "method_return"}
+    assert returned_by
+    assert all(
+        symbol.startswith("sextant-jvm maven com.acme/orders 1.0.0 ") for symbol in returned_by
+    )
+    assert returned_by <= methods
+    assert returned_by & callers
+
+
+def test_scanner_declares_the_method_returns_capability():
+    """Capability 9.18 passes the same gate. `method_return` is a fact KIND an
+    older jar does not write at all, so a consumer reading none of them from a
+    stale scan would conclude the module's methods return nothing — the
+    silent degradation capability gating exists to make visible."""
+    assert "method_returns" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_lambda_body_capability():
+    """Capability 9.17 passes the same gate as 9.15 and 9.16. A traversal that
+    followed `implementation` against an older extractor would find the key
+    absent on every site and conclude the module contains no lambdas — the
+    silent degradation capability gating exists to make visible."""
+    assert "lambda_body" in AsmScanner(JAR).capabilities()
+
+
+def test_scanner_declares_the_nested_annotation_args_capability():
+    """Capability 9.16 passes the same gate. A catalog reading `@Poller` inside
+    `@InboundChannelAdapter`, or a `@Scheduled` folded into a `@Schedules`
+    array, is reading a key that simply did not exist in an older extractor's
+    output — absent, not wrong — so the declaration is what tells the two
+    apart. The extractor-side evidence is
+    `extractor-jvm/src/test/java/dev/sextant/extractor/NestedAnnotationScanTest.java`
+    against `NestedAnnotated`, and the real-bytecode arm is
+    `fixtures/spring-integration-probe/…/NestedAnnotationShapes.java`."""
+    assert "nested_annotation_args" in AsmScanner(JAR).capabilities()
+
+
+def test_one_unreadable_class_is_skipped_and_the_rest_of_the_scan_survives(tmp_path: Path):
+    """Critical 1's half that lasts. `Main`'s scan loop was wrapped whole in
+    `catch (Exception)` and exited 1, so a SINGLE class file from a JDK ahead of
+    our ASM destroyed every other class in the module — measured on
+    `byte-buddy-1.18.11.jar`: exit 1 and zero fact files.
+
+    A newer ASM raises the ceiling; it does not make a refusal visible. Both
+    halves had to ship or the next ceiling is silent again, which is why this
+    test rewrites the two `major_version` bytes JVMS 4.1 fixes at offset 6
+    rather than waiting for a JDK we cannot read yet: the ceiling is reachable
+    on demand, at any ASM version, forever.
+    """
+    classes = tmp_path / "classes" / "com" / "acme"
+    classes.mkdir(parents=True)
+    (classes / "Good.class").write_bytes(
+        (CLASSES / "com/acme/orders/OrderService.class").read_bytes()
+    )
+    refused = bytearray((CLASSES / "com/acme/orders/OrderResult.class").read_bytes())
+    refused[6], refused[7] = 0, ACCEPTED_MAJOR_MAX + 1
+    (classes / "TooNew.class").write_bytes(bytes(refused))
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=tmp_path / "classes",
+            out_dir=tmp_path / "out",
+        )
+    )
+
+    # The scan SURVIVES, and the good class is fully read.
+    assert report.documents == 2
+    assert report.facts > 0
+    # The refusal is a finding about ONE class, named on the channel findings
+    # already ride (FR-17), carrying ASM's own words rather than a message of
+    # ours predicting them.
+    assert len(report.uncovered) == 1
+    assert "TooNew.class" in report.uncovered[0]
+    assert "major version" in report.uncovered[0]
+
+    # And the document is still WRITTEN. A class that vanishes silently is the
+    # failure FR-17 exists to prevent: its id, path, hash and class-file major
+    # are all knowable without parsing it.
+    document, facts = read_fact_file(tmp_path / "out" / "com" / "acme" / "TooNew.jsonl")
+    assert facts == []
+    assert document.partial is True
+    assert document.partial_reason is not None and "major version" in document.partial_reason
+    # Read off the BYTES, which is why it is available for a class ASM refused.
+    assert document.class_major == ACCEPTED_MAJOR_MAX + 1
+
+    good, good_facts = read_fact_file(tmp_path / "out" / "com" / "acme" / "Good.jsonl")
+    assert good_facts and good.partial is False and good.partial_reason is None
+    assert ACCEPTED_MAJOR_MIN <= good.class_major <= ACCEPTED_MAJOR_MAX
+
+
+def _jar(path: Path, entries: dict[str, bytes], *, multi_release: bool) -> Path:
+    """A jar built here rather than taken from a cache, so the test states its
+    own inputs and needs no network or local repository."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = "Manifest-Version: 1.0\n"
+    if multi_release:
+        manifest += "Multi-Release: true\n"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/MANIFEST.MF", manifest + "\n")
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return path
+
+
+def test_a_jar_without_the_manifest_attribute_does_not_scan_its_overlays(tmp_path: Path):
+    """JEP 238's gate, and the reason it is a gate rather than a preference.
+
+    Without `Multi-Release: true` the JVM never searches `META-INF/versions/`,
+    so those entries sit at a path no loader will look in: they are unreachable
+    code, and scanning them mints symbols that COLLIDE with the reachable base
+    copies. Not "treat them as ordinary classes" — treat them as absent.
+
+    Measured on the real case this protects against: `testcontainers-2.0.5.jar`
+    carries 1,218 versioned `.class` entries under a manifest holding only
+    `Manifest-Version` and `Implementation-Version`. Every one was scanned
+    before this gate.
+    """
+    payload = (CLASSES / "com/acme/orders/OrderResult.class").read_bytes()
+    jar = _jar(
+        tmp_path / "plain.jar",
+        {"com/acme/A.class": payload, "META-INF/versions/21/com/acme/A.class": payload},
+        multi_release=False,
+    )
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=jar,
+            out_dir=tmp_path / "out",
+        )
+    )
+    assert report.documents == 1, "the overlay is unreachable and must not be scanned"
+    assert not list((tmp_path / "out").rglob("META-INF/**/*.jsonl"))
+
+
+def test_a_multi_release_jar_tags_every_copy_and_drops_none(tmp_path: Path):
+    """Tag, do not drop (Fork 4). Both copies are kept and LABELLED, because
+    which one loads depends on the release the DEPENDING module targets — one
+    scan of a jar serves modules targeting different ones, so selecting here
+    would force a re-scan per consumer and put a config-derived judgement inside
+    the fact layer, which records and never decides.
+
+    The versioned-only case is why "keep base copies only" is the wrong shape
+    for the eventual filter: 626 names across the cached corpus exist ONLY under
+    `META-INF/versions/`, and dropping them would assert they do not load.
+    """
+    payload = (CLASSES / "com/acme/orders/OrderResult.class").read_bytes()
+    jar = _jar(
+        tmp_path / "mr.jar",
+        {
+            "com/acme/A.class": payload,
+            "META-INF/versions/21/com/acme/A.class": payload,
+            "META-INF/versions/24/com/acme/OnlyNew.class": payload,
+        },
+        multi_release=True,
+    )
+    AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=jar,
+            out_dir=tmp_path / "out",
+        )
+    )
+    releases = {}
+    for written in (tmp_path / "out").rglob("*.jsonl"):
+        document, _ = read_fact_file(written)
+        releases[str(written.relative_to(tmp_path / "out"))] = (
+            document.class_release,
+            document.relative_path,
+        )
+    assert len(releases) == 3, "every copy is kept"
+    assert releases["com/acme/A.jsonl"][0] == "base"
+    assert releases["META-INF/versions/21/com/acme/A.jsonl"][0] == "21"
+    assert releases["META-INF/versions/24/com/acme/OnlyNew.jsonl"][0] == "24"
+
+    # And the overlay's `relative_path` names a source file that can exist. It
+    # read `META-INF/versions/21/com/acme/A.java` before, which names no file in
+    # any repository: an overlay is a different COMPILATION of the same source,
+    # not a different source.
+    #
+    # The FILE NAME is the class file's own `SourceFile` (W6), no longer the
+    # entry name with `.java` stuck on it — and this jar is built by copying one
+    # real class under three invented entry names, so all three state the donor's
+    # source. That is the scanner reporting what the class says rather than what
+    # the archive implies, which is the point of reading the attribute; a jar any
+    # compiler actually produces has the two agreeing. What this row asserts is
+    # the version prefix, which is what it was written for.
+    overlay = releases["META-INF/versions/21/com/acme/A.jsonl"][1]
+    assert not overlay.startswith("META-INF/versions/")
+    assert overlay == "com/acme/OrderResult.java"
+
+
+def test_every_fact_line_is_strict_json(tmp_path: Path):
+    """A bundle is published FOR other consumers, so their parser is the one
+    that matters — not ours.
+
+    Found by review, not by a test: a `double` constant that is `NaN` or an
+    infinity was written as a BARE TOKEN (`"value":NaN`), which RFC 8259 has no
+    literal for. Nothing caught it because Python's `json` accepts those by
+    default and DuckDB tolerates them, so the whole pipeline stayed green while
+    emitting a fact file a conforming reader refuses.
+
+    `parse_constant` is what makes this strict: it fires on exactly those three
+    tokens, so the assertion is about JSON validity rather than about whether
+    our own stack happens to cope.
+    """
+
+    def strict(line: str) -> None:
+        json.loads(line, parse_constant=lambda token: pytest.fail(f"bare {token} is not JSON"))
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    assert report.documents > 0
+    for written in tmp_path.rglob("*.jsonl"):
+        for line in written.read_text(encoding="utf-8").splitlines():
+            strict(line)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["annotation_default", "constant_value", "enclosing_class", "concat_template"],
+)
+def test_the_scanner_declares_each_capability_w4_added(capability: str):
+    """A catalog cannot ask for a fact it has no NAME for — `requires:` matches
+    on these strings — so reading an attribute without declaring one leaves it
+    unreachable however correctly it was read.
+
+    W4 read four new things and named none of them, which meant no catalog could
+    ever require any of them. Every capability from 9.13 onwards has an
+    assertion like this; these four had none, so deleting one from the jar
+    failed nothing.
+    """
+    assert capability in AsmScanner(JAR).capabilities()
+
+
+def test_the_scanner_declares_the_type_parameters_capability_w5_added():
+    """W5's own name. The formal type parameters a class or method declares —
+    with their bounds, in declaration order — are what a generic substitution
+    binds a type variable by, and `typed_signatures` can now emit a bare
+    variable (`T`) at a parameter position that would otherwise be a string
+    attached to nothing.
+
+    No catalog requires it yet, on purpose: W25 is where substitution reads it.
+    That is the legitimate "read, no consumer yet" of the design's §2.3, and the
+    name has to exist first or a catalog could never ask.
+    """
+    assert "type_parameters" in AsmScanner(JAR).capabilities()
+
+
+def test_a_kotlin_class_names_its_own_kt_source_file(tmp_path: Path):
+    """W6, and a fact that was WRONG rather than absent.
+
+    `relative_path` was derived from the class's own path: `.class` swapped for
+    `.java`, everything from the first `$` cut off. That is javac's own
+    conventions written into the scanner, and every other compiler on the JVM
+    defeats it — measured on this repository's fixtures, `KotlinOrder.class` was
+    reported as `com/acme/orders/contracts/KotlinOrder.java`, naming a file that
+    exists in no module, and every `KotlinOrderRoutes$…` lambda class named the
+    same non-existent file.
+
+    JVMS 4.7.10 `SourceFile` states the name outright. Only the directory is
+    ours to supply, and it is the class's own.
+    """
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=CLASSES,
+            out_dir=tmp_path,
+        )
+    )
+    assert report.documents > 0
+    paths = {
+        json.loads(line)["relative_path"]
+        for written in tmp_path.rglob("*.jsonl")
+        for line in written.read_text(encoding="utf-8").splitlines()
+        if '"kind":"document"' in line
+    }
+
+    assert "com/acme/orders/contracts/KotlinOrder.kt" in paths
+    assert "com/acme/orders/routes/KotlinOrderRoutes.kt" in paths
+    # And nothing gained a `.kt` that is not Kotlin: the Java half of the module
+    # states `.java` in the very same attribute, so this is not a rename rule.
+    assert "com/acme/orders/OrderResult.java" in paths
+    assert not any(
+        path.endswith("Kotlin") or path.endswith(".java") and "Kotlin" in path for path in paths
+    )
+
+
+def test_the_scanner_declares_the_source_file_capability_w6_added():
+    """W6's own name. `relative_path` is what an index hands a reader who wants
+    to OPEN a declaration, so a catalog or a consumer has to be able to ask
+    whether the scanner states it or derives it."""
+    assert "source_file" in AsmScanner(JAR).capabilities()
+
+
+@pytest.mark.parametrize("capability", ["line_numbers", "local_variable_names"])
+def test_the_scanner_declares_each_capability_w6_added(capability: str):
+    """W6's other two names. A catalog reaches a fact kind by NAME, and a
+    consumer that wants `file:line` has to be able to ask whether this scanner
+    states lines or reports 0 for everything — which is what it did."""
+    assert capability in AsmScanner(JAR).capabilities()
+
+
+def test_a_module_descriptor_is_not_scanned_at_all(tmp_path: Path):
+    """`module-info.class` is not a class (W7).
+
+    It has a class file's shape and its `this_class` reads `module-info`, so
+    scanning it minted a `class` symbol by that name — a type no source file
+    declares and that a consumer could look for forever (G-61).
+
+    Skipped rather than read-and-filtered, because nothing here wants a module
+    descriptor: module identity comes from the build's own coordinates, and
+    `requires`/`exports` say less about dependencies than the build file already
+    does. Not reading it is cheaper than reading it and discarding the result.
+    """
+    writer = _module_info_bytes()
+    (tmp_path / "in").mkdir()
+    (tmp_path / "in" / "module-info.class").write_bytes(writer)
+
+    report = AsmScanner(JAR).scan(
+        ScanRequest(
+            module_id="com.acme:orders",
+            coordinates="com.acme/orders",
+            version="1.0.0",
+            classes_dir=tmp_path / "in",
+            out_dir=tmp_path / "out",
+        )
+    )
+
+    # The document IS written and counted — the skip is not a deletion. Matching by
+    # FILE NAME was, and it silently dropped any class whose file ended that way with
+    # nothing in `uncovered` to say so. A real descriptor states `ACC_MODULE`, which
+    # is what the scanner reads now, so the file is seen, counted, and yields no
+    # symbol because it declares no type.
+    assert report.documents == 1, "a module descriptor should still be seen and counted"
+    written = [
+        line
+        for path in (tmp_path / "out").rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert all('"kind":"document"' in line for line in written), (
+        f"a module descriptor produced a symbol: {written}"
+    )
+
+
+def _module_info_bytes() -> bytes:
+    """A minimal `module-info.class`, built because compiling one needs a whole
+    module and no fixture here is modular."""
+    # A hand-built class file is more trouble than it is worth; borrow one from a
+    # cached jar instead, and skip the test when the corpus has none.
+    import zipfile
+    from pathlib import Path as _Path
+
+    for jar in sorted(_Path.home().glob(".m2/repository/**/*.jar"))[:400]:
+        try:
+            with zipfile.ZipFile(jar) as archive:
+                if "module-info.class" in archive.namelist():
+                    return archive.read("module-info.class")
+        except (zipfile.BadZipFile, OSError):
+            continue
+    pytest.skip("no cached jar carries a module-info.class")
+    raise AssertionError("unreachable")  # pragma: no cover - satisfies the type checker

@@ -1,0 +1,58 @@
+id: grpc-java
+displayName: gRPC (generated service implementations)
+style: supertype_derived
+protocol: grpc
+direction: inbound
+
+# Framework-neutral, `grpc-schema.yml`'s own precedent restated one layer
+# down: protoc compiles the generated `<Service>Grpc$<Service>ImplBase` class
+# INTO the module's own output regardless of which server framework (plain
+# `io.grpc.Server`, Spring gRPC, net.devh) ends up registering the bean, so
+# the evidence this catalog names — extending the generated base, CP-8(b)/(d)'s
+# own identity-building call sites on it — needs no framework coordinate at
+# all. `grpc-spring.yml`/`grpc-net-devh.yml` (where shipped) ride this same
+# supertype match; their own `@GrpcService`-shaped annotations corroborate,
+# never mint (2O design §1b).
+detect:
+  coordinates: ["io.grpc:grpc-stub", "io.grpc:grpc-protobuf"]
+
+requires: [call_site, string_constants, superclass]
+
+matches:
+  # D02 §2's `supertype_derived` style, and all of it (2O design §1b, R11).
+  # `service_name_call`/`method_name_call` are `{owner, method}` markers —
+  # `interface_implementation.yml`-style catalogs' own `registration`
+  # two-key shape, not a single `Owner.Fqn#method` string, because
+  # `test_catalogs_use_one_fqn_notation` (`tests/architecture`) refuses any
+  # catalog value carrying `#`. `shapes/identity_calls.py` reads the FIRST's
+  # own first argument
+  # (`ServiceDescriptor.newBuilder("<protoPackage>.<Service>")`, CP-8(b)) once
+  # per generated class, and the SECOND's own second argument
+  # (`MethodDescriptor.generateFullMethodName(SERVICE_NAME, "<Method>")`,
+  # CP-8(d)) once per RPC method it builds a descriptor for — never a
+  # `constant: SERVICE_NAME` field-value read, which D00 §5's `constant` fact
+  # kind has no producer for anywhere in this codebase
+  # (`scripts/probes/cp3_cp8_grpc_facts.md`).
+  supertype_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+    method_name_call: { owner: io.grpc.MethodDescriptor, method: generateFullMethodName }
+  # The one word this style's `members` vocabulary carries today (2O design
+  # §1b): an implementing class's own PUBLIC override of a method the
+  # generated base itself declares — "the registration is the evidence"
+  # restated for a style reached by `extends` rather than a framework
+  # registration call.
+  members: overridden_public_methods
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`
+# (`grpc-schema.yml`'s identical omission, same reason): this style's own
+# rows carry no payload of their own — `request_shape`/`response_shape` stay
+# NULL, contributed instead by `grpc-schema.yml`'s descriptor-derived row at
+# the SAME wire identity where one exists (2O design §1, the redundancy this
+# phase is built on) — so nothing here ever reaches a JVM type these blocks
+# would describe.
+#
+# No `format_fixed` either: `grpc-schema.yml` already declares
+# `{grpc: protobuf}`, and `resolve/format.py`'s own `_merged` unions the
+# block across every LOADED catalog regardless of which one's rows actually
+# fired — restating it here would only risk a second copy silently drifting
+# out of step with the first.

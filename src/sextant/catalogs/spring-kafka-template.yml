@@ -7,52 +7,127 @@ direction: outbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+measured:
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.springframework.kafka.core.KafkaTemplate
+  # The interface a codebase declares its field as (§3.1). A call site's
+  # owner is the DECLARED type, so a field typed by the interface carried
+  # an owner this catalog did not name and matched nothing.
+  # Measured: org.springframework.kafka:spring-kafka 3.1.4 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.springframework.kafka.core.KafkaTemplate
+    - org.springframework.kafka.core.KafkaOperations
   # CHECKPOINT FACT (real javap descriptors, spring-kafka 3.1.4):
   # `send(String, V)` arity 2, `send(String, K, V)` arity 3 — the payload
   # moves from arg 1 to arg 2 once the key joins the call, so `arity` tells
   # the two overloads apart (Task 6). `send(ProducerRecord<K, V>)` carries
   # both identity and payload in the record's own constructor — Task 7's
-  # `record_arg` / `record_wrappers` below. `send(Message<?>)` is ALSO
-  # arity 1 (a third `send` overload, alongside `send(ProducerRecord<K,V>)`)
-  # — not exercised by the fixture, and NOT given a second `send arity: 1`
-  # row: `_matching_method`'s first match wins by name+arity alone, never by
-  # argument type, so a second row at the same arity would simply never be
-  # reached (dead catalog data), never a second answer. It shares this SAME
-  # `record_arg` row instead: a `Message` argument's own symbol names no
-  # `record_wrappers` entry, so `_record_arguments` degrades honestly to
-  # `(None, None)` — `path` NULL, `resolution: unresolved` — rather than
-  # crashing or mis-reading the record wrapper's own ctor rule against a
-  # type it was never declared for. `sendDefault(V)` targets the
+  # `record_arg` / `record_wrappers` below.
+  #
+  # `send(Message<?>)` is ALSO arity 1, and it now has ITS OWN ROW (descriptor
+  # sweep R3). **The note that stood here said a second `send arity: 1` row
+  # "would simply never be reached (dead catalog data)" — that was true of
+  # arity matching and is false now**: each row declares its own erased JVM
+  # `descriptor`, so each overload reaches its own row. That row declares NO
+  # capture keys at all, following `spring-sqs-template.yml`'s own precedent,
+  # and the reason is that it preserves today's answer EXACTLY. Before the
+  # split, a `Message` call reached the `record_arg` row and `_record_arguments`
+  # degraded honestly to `(None, None)` — `path` NULL, `resolution:
+  # unresolved` — because a `Message` symbol names no `record_wrappers` entry.
+  # A capture-less row derives the same honest empty row. Without it, the
+  # `ProducerRecord` descriptor would claim arity 1 and a `Message` call would
+  # derive NOTHING, which is a recall loss this sweep has no reason to take:
+  # `spring-kafka-message.yml`'s fluent chain resolves that call's TOPIC and
+  # this row's sibling stands beside it carrying a NULL path — two honestly
+  # different facts about one call, which is that file's own documented
+  # duplicate-row ruling and is verified end-to-end over real bytecode by
+  # `test_the_messagebuilder_kafka_chain_resolves_its_topic_but_not_its_bare_payload`.
+  # `sendDefault(V)` targets the
   # config-borne default topic: no channel argument at the call site at all,
   # so no `channel_arg` is declared for it — `path` NULL, `resolution:
-  # unresolved` (I1), verified live. `sendDefault` has three further
-  # overloads (`(K, V)`, `(Integer, K, V)`, `(Integer, Long, K, V)`) the
-  # fixture never calls; only the exercised arity is declared.
+  # unresolved` (I1), verified live.
+  #
+  # MEASURED, at spring-kafka 3.1.4 (CP-12 Q8,
+  # `scripts/probes/cp12_sweep_round1b.md`): `KafkaTemplate` declares TEN
+  # `send`/`sendDefault` overloads and this list held FIVE. The five that were
+  # missing are the partition-carrying forms — `send(String, Integer, K, V)`,
+  # `send(String, Integer, Long, K, V)` — and three of `sendDefault`'s four,
+  # and the note that stood here said of them "the fixture never calls; only
+  # the exercised arity is declared" (`A-M6`). That is the fixture's own
+  # vocabulary encoded as the framework's, §8.1 rule 1's shape: a call to any
+  # of them derived NOTHING, because `_matching_method` filters on arity before
+  # descriptors, while COVERAGE listed this catalog "✅ shipped" with no arity
+  # qualification.
+  #
+  # Every `send` overload takes its topic at argument 0 and its payload LAST,
+  # which is what makes the four new rows a mirror rather than a guess: the
+  # partition and timestamp arguments sit between them and are read by nothing.
+  # The three new `sendDefault` rows keep their sibling's rule — no
+  # `channel_arg`, because the destination is config-borne — so each derives an
+  # honest `path: NULL` at `unresolved` rather than vanishing.
+  # Every row states its own erased JVM `descriptor` (descriptor sweep R2/R3),
+  # because Java identifies a method by name and parameter types in order and
+  # never by argument count (GUIDELINES §8.1's language rule). Arities 2 and 3
+  # are each a single overload here, so their claims cost nothing today and buy
+  # silence rather than a misread position the day spring-kafka adds a sibling;
+  # arity 1 is genuinely two overloads and is two rows. `sendDefault`'s three
+  # further overloads are arities 2, 3 and 4 and are declared BELOW, in this
+  # same commit — the sentence that stood here said they "remain undeclared, so
+  # they match no row at all", which the rows underneath it contradicted.
+  # Re-running `scripts/probes/cp10_catalog_descriptors/run.sh` is the check on
+  # all ten.
   methods:
-    - { name: send, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: send, arity: 3, channel_arg: 0, body_arg: 2 }
-    - { name: send, arity: 1, record_arg: 0 }
-    - { name: sendDefault, arity: 1, body_arg: 0 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 2 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/CompletableFuture;",
+        record_arg: 0 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/springframework/messaging/Message;)Ljava/util/concurrent/CompletableFuture;" }
+    - { name: send, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 3 }
+    - { name: send, arity: 5,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0, body_arg: 4 }
+    - { name: sendDefault, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 0 }
+    - { name: sendDefault, arity: 2,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 1 }
+    - { name: sendDefault, arity: 3,
+        descriptor: "(Ljava/lang/Integer;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 2 }
+    - { name: sendDefault, arity: 4,
+        descriptor: "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        body_arg: 3 }
   # `ReplyingKafkaTemplate.sendAndReceive` gets its own file
-  # (`spring-kafka-replying.yml`): `matches.owner` is single-valued, and it
-  # is a different owner type from `KafkaTemplate` (checkpoint ruling).
+  # (`spring-kafka-replying.yml`). The reason used to be that `matches.owner` is
+  # single-valued; W9 made that false, so the real one: it is a DIFFERENT
+  # request/reply shape, not another name for this one. An alternate names one
+  # library reachable under two names and derives the same row; `sendAndReceive`
+  # derives a different row, so it stays a separate file (checkpoint ruling).
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }
 
-# Copied verbatim from spring-resttemplate.yml, for the same reason
-# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
-# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
+# *global*, insert-if-absent pass keyed on the type symbol alone
 # (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
 # the one that expands it, and every later catalog finds it already there.
-# Whichever catalog that turns out to be, ITS
-# `wrappers`/`serialization`/`known_types` are the rules that describe the
-# type for everyone, regardless of protocol or direction — so a file whose
-# copy disagreed would make the answer depend on catalog sort order (Task 10
+# Whichever catalog that turns out to be, ITS `wrappers` are the rules that
+# describe the type for everyone, regardless of protocol or direction — so a
+# file whose copy disagreed would make the answer depend on catalog sort order (Task 10
 # fix round 1, finding 1). Endpoint-level ownership is a different question
 # and is NOT this reason: `_owns` reads a row's own `catalog_id` (2E-prep
 # design §1a), so a catalog's rules describe only the rows it derived
@@ -65,39 +140,6 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

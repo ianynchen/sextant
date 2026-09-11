@@ -81,8 +81,9 @@ subclass per refusal site:
   root was asked for a single `--workspace`, or one module inside a reactor
   walk failed (named, the walk stopped).
 - `NotAnalyzedError` — `render`/`enrich`/`export`, pointed at a workspace
-  `analyze` never wrote to, or at a multi-module root instead of one of its
-  modules.
+  `analyze` never wrote to, at a multi-module root instead of one of its
+  modules, or at one whose recorded stamps say a different Sextant build
+  derived it (D01 §7's re-derivation rule, enforced at the read gate).
 - `ConfigurationError` — Sextant's own on-disk artifacts written wrong: a
   malformed `.sextant.yml` (`redact:`, `enrich:`), a malformed
   `.sextant-enrichment.json` overlay, or a `redact:` rule that breaks a
@@ -124,8 +125,9 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
+from sextant.application.query.trace import traces_of
 from sextant.application.resolve.endpoints import SkippedCatalog
-from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.pipeline import ResolveReport, coverage_of
 from sextant.application.stages import enrich as enrich_stage
 from sextant.application.stages.analyze import AnalyzeResult as _StageAnalyzeResult
 from sextant.application.stages.analyze import analyze as _analyze_stage
@@ -133,6 +135,8 @@ from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_o
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import RedactionError, Redactor
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.egress.export.index import write_index
 from sextant.egress.export.manifest import write_manifest
 from sextant.egress.render.document import (
     AssembledDocument,
@@ -177,7 +181,10 @@ class DetectionError(SextantError):
 
 class NotAnalyzedError(SextantError):
     """`render`/`enrich`/`export` were pointed at a workspace `analyze`
-    never wrote, or at a multi-module root instead of one of its modules."""
+    never wrote, at a multi-module root instead of one of its modules, or at
+    one a DIFFERENT Sextant build wrote (OI-24, D01 §7) — all three are the
+    same answer to the caller: there is no analysis here this build can
+    read, run `analyze`."""
 
 
 class ConfigurationError(SextantError):
@@ -316,13 +323,17 @@ def _root_relative(root: Path, target: Path) -> str:
 
 def _skip_reason(module: ModuleModel) -> str | None:
     """Why a module is skip-listed rather than analyzed, or `None` when it
-    should be analyzed (2M design §2, ruled amendment). `library`
-    (Gradle-only — Maven never returns it) and a leaf
-    `<packaging>pom</packaging>` are the only two KNOWN-not-a-service
-    shapes; everything else, `kind == "undetermined"` included, is
-    analyzed."""
-    if module.kind == "library":
-        return "kind is library"
+    should be analyzed (2M design §2, amended by the 2026-09-04 user ruling).
+
+    **A leaf `<packaging>pom</packaging>` is now the only skip**, and it is
+    not a judgement about the module's purpose: Maven's own declaration that
+    the module produces no jar means there is provably nothing to scan. The
+    former `kind == "library"` skip is gone with the publishing inference that
+    fed it (see `GradleDetector._classify`) — no detector returns `library`
+    any more. Everything with code is analyzed, `undetermined` included: a
+    module nothing references simply yields facts nobody links to, which
+    costs a little time and risks nothing, while skipping one that IS
+    referenced loses its outbound clients and shapes entirely."""
     if module.packaging == "pom":
         return "packaging is pom"
     return None
@@ -405,9 +416,20 @@ def _module_commit_of(path: Path) -> str:
 
 
 def _catalog_hash(catalogs: Path) -> str:
+    """The identity of the framework knowledge a run was produced with.
+
+    `shape-models/` is walked as well as the catalogs themselves (D02 §1b).
+    Since F2, `serialization`, `nullability` and `known_types` live there and
+    in no catalog at all — so a hash over `catalogs/*.yml` alone would say two
+    runs used the same knowledge while one of them read a different wire-type
+    table, which is precisely the drift the hash exists to make visible. The
+    path is included, not just the filename, so a model and a catalog of the
+    same name cannot collide.
+    """
     digest = hashlib.sha256()
-    for catalog in sorted(catalogs.glob("*.yml")):
-        digest.update(catalog.name.encode("utf-8"))
+    files = sorted(catalogs.glob("*.yml")) + sorted((catalogs / "shape-models").glob("*.yml"))
+    for catalog in files:
+        digest.update(str(catalog.relative_to(catalogs)).encode("utf-8"))
         digest.update(catalog.read_bytes())
     return "sha256:" + digest.hexdigest()
 
@@ -416,16 +438,73 @@ def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
     return workspace_dir or (path / ".sextant")
 
 
+def _stale_stamps(metadata: dict[str, Any]) -> tuple[str, ...]:
+    """Which of the three stamps `metadata.json` carries disagree with the
+    build now running — empty for a workspace this build could have written
+    (OI-24, D01 §7).
+
+    **The rule was documentation until here.** D01 §7 says every result
+    records what produced it and *"any Sextant version change re-derives,
+    because derivation logic may have changed and there is no cheap way to
+    know"*, and its table gives `graph_schema_version` (derived tables) and
+    `fact_schema_version` (facts, and everything after) their own
+    invalidation costs. All three were WRITTEN — by `egress/render/metadata.py`
+    — and read back for comparison by nothing, so the gate below checked only
+    that two files exist.
+
+    **Compared, never repaired.** A mismatch is answered by a refusal naming
+    the stamp, not by a silent re-analysis: re-deriving inside a `render`
+    would make the verb that promises to read what `analyze` left behind
+    (M00's "no analysis" rule) the one that quietly re-runs the pipeline. The
+    reader is told which stamp moved and what to run.
+
+    An ABSENT stamp is a mismatch, not an exemption. `write_metadata` has
+    always written all three, so a document missing one was written by
+    something else — and treating `None` as "close enough" is exactly the
+    silent acceptance this exists to stop.
+    """
+    provenance = metadata.get("provenance", {})
+    recorded = (
+        # `schema_version` at the top level, not under `provenance`:
+        # `write_metadata` puts the graph stamp there, and D01 §7's table
+        # calls it the workspace's own rather than a document's.
+        ("graph_schema_version", metadata.get("schema_version"), GRAPH_SCHEMA_VERSION),
+        ("sextant_version", provenance.get("sextant_version"), SEXTANT_VERSION),
+        ("fact_schema_version", provenance.get("fact_schema_version"), FACT_SCHEMA_VERSION),
+    )
+    return tuple(
+        f"{name} is {found!r}, this build is {running!r}"
+        for name, found, running in recorded
+        if found != running
+    )
+
+
 def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
     """The `no analysis found` refusal `render`/`enrich`/`export` share
     (M00's "no analysis" rule). Widened for a multi-module root (2M design
     §2): `modules.json`'s presence with no per-module workspace at
     `workspace_dir` means the caller pointed at the reactor root rather than
     at one of the modules it names, so the refusal reads out that list
-    instead of the generic message."""
+    instead of the generic message.
+
+    **And widened again for a STALE one** (OI-24). A workspace whose stamps
+    do not match this build is refused here rather than read: its derived
+    tables were built by different derivation logic, and a table this build
+    added is simply absent from it — which reads as a module that has none,
+    not as a workspace that predates the table. `## Traces` is the first
+    section where that becomes a wrong answer a reader would act on rather
+    than a silence nobody could see.
+    """
     metadata_path = workspace_dir / "metadata.json"
     db_path = workspace_dir / "workspace.duckdb"
     if metadata_path.is_file() and db_path.is_file():
+        stale = _stale_stamps(json.loads(metadata_path.read_text(encoding="utf-8")))
+        if stale:
+            raise NotAnalyzedError(
+                f"the analysis at {workspace_dir} was produced by a different Sextant "
+                f"build ({'; '.join(stale)}), so its derived tables are a different "
+                f"vintage from this one — re-run `sextant module analyze {path}`."
+            )
         return
     modules_path = _modules_json_path(path)
     if modules_path.is_file():
@@ -492,10 +571,19 @@ def _run_analyze(
     workspace_dir: Path,
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
+    ignore_root: Path | None = None,
 ) -> _StageAnalyzeResult:
     """One module, analyzed into one workspace, and its `metadata.json`
     written — the body every `analyze` invocation shares, whether `path` is
-    a single-module root or one module inside a just-walked reactor."""
+    a single-module root or one module inside a just-walked reactor.
+
+    `ignore_root` is the root a `.sextantignore` sits at and every pattern in
+    it is written against (D04 §3, `A-M16`). It is the module's own root for a
+    single-module repository — where the two coincide, which is the case D04
+    describes — and the REACTOR root for a submodule, which is the case that
+    was wrong: a reactor-root ignore file reached no submodule at all, and a
+    pattern written relative to the reactor root would not have matched if it
+    had. Defaulted to `path` so every existing caller is unchanged."""
     render_dir = workspace_dir / "render"
     if render_dir.is_dir():
         shutil.rmtree(render_dir)
@@ -510,13 +598,13 @@ def _run_analyze(
                 progress,
                 [_KnownModuleDetector(module, notes)],
                 allow_resolve=allow_resolve,
+                ignore_root=ignore_root or path,
             )
         write_metadata(
             workspace_dir / "metadata.json",
             result.module,
             result.report,
-            result.scanner_id,
-            result.scanner_version,
+            result.scanners,
             _commit_of(path),
             result.uncovered,
             resolved_config=workspace.query("resolved_config"),
@@ -537,6 +625,7 @@ def _analyzed(
     progress: Progress,
     detectors: Sequence[Detector],
     allow_resolve: bool = False,
+    ignore_root: Path | None = None,
 ) -> _StageAnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message
     a user reads: a malformed `.sextant.yml` is Sextant's own input written
@@ -553,6 +642,7 @@ def _analyzed(
             readers=READERS,
             interpret=_JvmDescriptorInterpreter(),
             allow_resolve=allow_resolve,
+            ignore_root=ignore_root,
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
@@ -589,7 +679,18 @@ def _analyze_reactor(
         workspace_dir = _workspace_dir_of(module.root, None)
         try:
             stage_result = _run_analyze(
-                module.root, module, model.notes, workspace_dir, allow_resolve, progress_factory
+                module.root,
+                module,
+                model.notes,
+                workspace_dir,
+                allow_resolve,
+                progress_factory,
+                # `A-M16`: the reactor root, not the submodule's. D04 §3 is
+                # emphatic — "One file, at the repository root, and every
+                # pattern in it is matched against a path made relative to
+                # THAT root" — and loading at `module.root` meant a
+                # reactor-root `.sextantignore` reached no submodule at all.
+                ignore_root=path,
             )
         except Exception as failure:  # deliberately broad, see below
             # A batch run's own failure must name WHICH module failed — left
@@ -706,9 +807,19 @@ def _reconstructed_report(
     report = ResolveReport(
         facts_loaded=cast(int, workspace.query("facts")[0]["facts"]),
         endpoints=workspace.query("endpoints"),
-        coverage=workspace.query("coverage")[0],
+        # F8 §9.5 (W38). The DISTRIBUTIONS too, not just the document counts: `render`
+        # reads the workspace back rather than re-resolving, so a summary composed only in
+        # `resolve/pipeline.py` reached `metadata.json` and never the document a person
+        # opens — which is the reader the standing instrument exists for.
+        coverage=coverage_of(workspace),
         skipped_catalogs=skipped_catalogs,
         shapes=workspace.query("shapes"),
+        # Read back off the workspace, exactly as `endpoints` and `shapes` are,
+        # so `render` shows the two non-wire sections without re-resolving
+        # (M00's "no analysis" rule). Not from `metadata.json`: these are rows,
+        # and the workspace is where rows live.
+        scheduled_work=workspace.query("scheduled_work"),
+        error_handlers=workspace.query("error_handlers"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report
@@ -723,7 +834,13 @@ def _assembled_sections(
     stale: frozenset[int],
 ) -> tuple[AssembledDocument, str]:
     """One assembly, called by both `render` and `enrich` (2K design §8:
-    "the same code path, so the two can never disagree")."""
+    "the same code path, so the two can never disagree").
+
+    It passes no display choice down at all: there is one document, the
+    complete one, for the person and for the model alike. `render --brief`
+    was the one exception and was deleted rather than repaired (GUIDELINES
+    §8.4's audit list) — it drew a prefix of `## Traces` in table order, which
+    is an arbitrary cut presented as a reduced document."""
     reconstructed, report = _reconstructed_report(path, workspace, metadata)
     sections = assemble_module_document(
         reconstructed,
@@ -731,6 +848,7 @@ def _assembled_sections(
         _commit_of(path),
         tuple(metadata.get("uncovered", [])),
         shape_fields=workspace.query("shape_fields"),
+        type_hierarchy=workspace.query("type_hierarchy"),
         resolved_config=workspace.query("resolved_config"),
         open_questions=workspace.query("open_questions"),
         library_symbols=workspace.query("library_symbols"),
@@ -738,6 +856,17 @@ def _assembled_sections(
         redactor=redactor,
         overlay=overlay,
         stale=stale,
+        # The walk runs HERE, at the composition root, and its answer is
+        # handed to the renderer as data (2Q `G4`/`I3`). `traces_of` reads the
+        # workspace once for all roots — the three projections it builds are
+        # the expensive part and the walk itself is not — and `egress` never
+        # sees a workspace at all, which is what keeps "Egress is read-only"
+        # true of a section whose whole content is a graph traversal.
+        #
+        # Not "re-analysis" in M00's sense: `roots`, `call_edges` and
+        # `return_flows` are rows `analyze` already derived, and this reads
+        # them exactly as `endpoints` and `shapes` are read back above.
+        traces=traces_of(workspace),
     )
     return sections, reconstructed.module_id
 
@@ -768,7 +897,10 @@ def _stale_of(
 def _render(path: Path, *, workspace_dir: Path | None) -> RenderResult:
     """`render`'s own composition, shared by the public `render()` and
     `cli/app.py`'s `module_render`. Reads the workspace `analyze` left
-    behind — it never re-detects, re-scans, or re-resolves (M00)."""
+    behind — it never re-detects, re-scans, or re-resolves (M00).
+
+    It takes no display flag: there is one document and it is the complete
+    one (GUIDELINES §8.4)."""
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
     _refuse_if_unanalyzed(path, resolved_workspace_dir)
     metadata_path = resolved_workspace_dir / "metadata.json"
@@ -799,7 +931,10 @@ def render(path: Path) -> RenderResult:
     """Renders the workspace `analyze` left at `path` — the library
     equivalent of `sextant module render`. Raises `NotAnalyzedError` where
     the CLI would refuse for the same reason, `ConfigurationError` for a bad
-    `.sextant.yml`/overlay."""
+    `.sextant.yml`/overlay.
+
+    There is one document and it is the complete one: this function carries
+    no display parameter, and `## Traces` draws every trace."""
     return _render(path, workspace_dir=None)
 
 
@@ -1229,6 +1364,25 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
     try:
         tables = workspace.export_tables(bundle, redactor)
         facts_files = workspace.export_facts(bundle, redactor)
+        # F8 §9.3 (W35). A third projection beside `graph/` and `render/`: the same rows,
+        # joined to a file and a line, in the shape a machine reader greps. Derived from
+        # the tables inside the same open workspace, so the index and the dataset it
+        # indexes can never be two different runs.
+        index_files = write_index(
+            bundle,
+            symbols=workspace.query("located_symbols"),
+            documents=workspace.query("located_documents"),
+            call_edges=workspace.query("call_edges"),
+            implementations=workspace.query("implementations"),
+            annotations=workspace.query("located_annotations"),
+            endpoints=workspace.query("endpoints"),
+            roots=workspace.query("roots"),
+            shapes=workspace.query("shapes"),
+            shape_fields=workspace.query("shape_fields"),
+            source_roots=[str(root) for root in metadata["module"].get("source_roots", [])],
+            module_root=path,
+            redactor=redactor,
+        )
     finally:
         workspace.close()
 
@@ -1254,6 +1408,7 @@ def _export(path: Path, *, workspace_dir: Path | None, out_dir: Path | None = No
         tables=tables,
         facts_files=facts_files,
         render=shipped_render,
+        index=index_files,
     )
     return ExportResult(bundle=bundle)
 

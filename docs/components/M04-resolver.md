@@ -123,6 +123,17 @@ Java's own resolution rules have to be respected: the superclass chain before in
 default methods, bridge methods so a generic override is not missed, package-private
 methods overridden only within a package.
 
+**None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
+narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the
+`edges` layer it would sit beside. What DOES exist is 2Q `G3`'s subset
+(`resolve/return_flow.py`): the same opcode table above, applied per call site to answer
+which method a returned value came from, with the two tiers this repository's closed set
+already has (`resolved` for one candidate, `narrowed` for several) and **no rapid type
+analysis** — a candidate is not filtered by whether the program constructs its type
+anywhere. So its `narrowed` sets are wider than this pass's would be, never narrower, and
+the difference is over-report rather than a wrong answer. It is a duplicate of this rule
+the day the designed pass lands, and is recorded as one (`docs/open-issues.md`, OI-16).
+
 ### 5. Endpoints, in two halves
 
 **The halves exist because shapes and endpoints depend on each other**, and the naive
@@ -131,8 +142,9 @@ types are shapes until endpoints are found — but an endpoint is not complete u
 shapes are attached.
 
 **5a. Find the boundaries.** Catalog engines run in a fixed order: inbound, then outbound,
-then reclassification. Inbound precedes outbound so that a path a module both exposes and
-calls merges into one endpoint with direction `both` rather than appearing twice. Each
+then reclassification. A path a module both exposes and calls keeps TWO rows (F5 §6.1,
+W27) — merging them asserted that the thing called is the thing served — and a
+`self_exchange` question names each side and its address so a reader can settle it. Each
 endpoint records its protocol, wire identity, handler and/or caller, and the **type
 references** of its request and response — not yet their contents.
 
@@ -156,7 +168,12 @@ catalog.
 **5b. Expand the shapes**, rooted at exactly those type references — after **unwrapping
 envelopes by catalog rule** ([D02](D02-catalog-schema.md) §2a): `Mono<ResponseEntity<T>>`
 roots at `T`, and the `semantics` peeled on the way there (`async`, `optional`,
-`http_envelope`) are what settle presence, protocol reclassification and the FR-14 findings.
+`http_envelope`) are what settle presence and protocol reclassification. They are also what
+a consumer reads to judge structural performance risk — the scenario formerly numbered FR-14,
+which W51 moved out of the requirements because Sextant reports the structure and never ranks
+it. The paragraph beginning **"No findings are computed here, and none ever were"**, forty-odd
+lines below, states that correction in full — cited by its own words rather than by a line
+number, which is what this wave's ratchet was written to encourage.
 That chain is consumed where it is produced rather than stored on the endpoint: it describes
 the route to the payload, not the contract, and everything it decides already has a column of
 its own — a second copy could only ever disagree with them. An undeclared wrapper is left
@@ -200,9 +217,12 @@ that added this sentence found three.
 branching. It stops at a terminal — and `cycle` is a terminal detected during the walk, a
 correctness requirement rather than a limit.
 
-Findings are computed here rather than in the renderer, so [M09](M09-query.md) can serve
-them too. Refactor findings, design findings, and structural performance risk — hop counts,
-services involved, an endpoint reached twice in one trace, a persistence call inside a loop.
+**No findings are computed here, and none ever were** (W51). This paragraph read *"Findings
+are computed here rather than in the renderer, so M09 can serve them too — refactor findings,
+design findings, and structural performance risk"*, and nothing in `src/` computes any of
+them. They were FR-11 … FR-14, and the user has ruled they are not requirements of Sextant at
+all: they are things a consumer DERIVES from what Sextant reports. `REQUIREMENTS.md` states
+them as usage scenarios now, each naming what it waits on.
 
 **A symbol is reported unreachable only where no `unresolved` call site exists in the scope
 searched.** Otherwise the finding is withheld and the unresolved site reported instead. A

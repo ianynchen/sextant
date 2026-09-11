@@ -30,6 +30,8 @@ from sextant.application.resolve.shapes.arguments import (
     address_argument,
     argument_descriptor,
     channel_of,
+    channels_of,
+    declared_parameters_of,
     field_facts,
     linked_channels,
     parameter_index,
@@ -39,9 +41,14 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import (
+    _catalog_symbol,
+    catalog_symbols,
+    names_a_type,
+)
 from sextant.domain.closed_sets import Direction
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.paths import canonical_http_path, serves_urls
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of, parameter_types
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -66,6 +73,152 @@ _IDENTITY_FORMATS = frozenset({"qname"})
 _DEFAULT_ADDRESS = "default_address"
 _DEFAULT_ADDRESS_KEYS = frozenset({"method", "arg"})
 
+# 2O Task 7's PAIRED destination (D02 §2's single_call style). Some protocols
+# name a destination with TWO values at the call, neither of which is the
+# identity on its own — AMQP's wire identity is the exchange AND the routing
+# key, and a row publishing either alone names a different destination from
+# the one the call reaches. `address_arg_2` is the second capture's position,
+# declared on the row beside `channel_arg`; `address_separator` is the single
+# character the framework's own rendering of the pair puts between them, and
+# it is CATALOG data rather than row data because how a protocol spells its
+# composite identity is a property of the protocol, not of one overload.
+_ADDRESS_ARG_2 = "address_arg_2"
+# `OI-74` (W57). A row whose whole send is handed over as ONE builder lambda:
+# the argument at `lambda_arg` is that lambda, and `lambda_steps` names the
+# methods called INSIDE it and which of their arguments carry what.
+_LAMBDA_ARG = "lambda_arg"
+_LAMBDA_STEPS = "lambda_steps"
+
+
+def _channel_declared(method: dict[str, Any]) -> bool:
+    """Whether this row's destination is a CHANNEL — an opaque identity kept
+    whole — rather than a URL for CP-2's peer/path split.
+
+    Asks the `lambda_steps` too, because a row reading its destination inside a
+    lambda declares `channel_arg` on the STEP and not on itself. Reading it with
+    `url_of` instead would turn an SQS queue name into a fabricated peer plus a
+    truncated path, which is the mistake the alias exists to prevent.
+    """
+    return "channel_arg" in method or any(
+        "channel_arg" in step for step in method.get(_LAMBDA_STEPS, ())
+    )
+
+
+def _lambda_arguments(
+    method: dict[str, Any],
+    arguments: list[dict[str, Any]],
+    bare_callers: dict[str, set[str]],
+    by_caller: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    """The destination and payload read from inside a builder lambda, and the
+    SYMBOL of the frame they belong to.
+
+    `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))` derived
+    an outbound SQS row with NO destination until W57 — `path` NULL,
+    `resolution: unresolved` — and the queue name was a string literal sitting in
+    the lambda's own synthetic method the whole time.
+
+    **This is reading, not guessing**, which is the objection the earlier
+    behaviour was written against — the fixture's own comment called the empty row
+    "an honest unresolved row, not a fabricated `shipments-lambda` path". The
+    lambda is ONE argument of ONE call and the fact stream names the synthetic
+    method it compiled to, so there is no ambiguity about whose builder this is.
+
+    **Three conjuncts keep it reading, and W57's review found the first version
+    carried only one of them.** A site in the body is read when its OWNER is one
+    the step declares, its NAME is the step's, and its receiver is a value the
+    body itself produced. Name alone was not enough: measured on the shipped
+    catalog, a body containing `metricsRecorder.queue("internal-metrics")` beside
+    `to.payload(event)` published `internal-metrics` as an SQS queue at
+    `resolved`, and so did a `queue(...)` on a receiver handed in from outside.
+    `fluent._captures_of_body` — the precedent these docstrings cite — gates on
+    all three, and this now matches it.
+
+    **One hop, and no chain walking.** Unlike `fluent`, this does not link sites
+    by `result → receiver` into a chain: a `single_call` row reads declared
+    POSITIONS off named methods, and that is what happens here, one step per name.
+    A lambda reached from inside a lambda is not followed, for the same reason
+    `fluent` stops at one hop — each hop is a place the argument could belong to
+    something else.
+
+    **Two sites matching one step is LAST-WINS, and that is a decision.** A
+    builder's own semantics are last-wins for straight-line code, which is what a
+    lambda body almost always is. A body that sets a destination in both arms of a
+    branch would publish the second arm as fact; that shape is not in any corpus
+    here and the honest alternative — refusing both — would lose the ordinary case
+    to protect against one nobody has seen. Stated rather than left to be found.
+
+    Returns `(None, None, None)` for anything it cannot read: an argument that is
+    not a lambda, a body the facts do not carry (the method compiled into a
+    container this scan never saw), a bare name two callers share, or a body
+    naming none of the declared steps. The row then derives exactly what it
+    derived before the key existed, which is an honest unresolved row.
+    """
+    argument = _arg_at(arguments, method[_LAMBDA_ARG])
+    if argument is None or argument.get("kind") != "lambda":
+        return None, None, None
+    symbol = argument.get("symbol")
+    if symbol is None:
+        return None, None, None
+    # A call argument's `symbol` carries no module coordinates and `call_sites.caller`
+    # does (D00 §5a), so the join is on the bare descriptor — the detail
+    # `fluent._captures_of_body` records as the one that costs a cycle if missed. Where
+    # two full callers share a bare name the body is NOT read: a merged frame would let
+    # another module's literal answer for this one.
+    callers = bare_callers.get(bare_descriptor(str(symbol)), set())
+    if len(callers) != 1:
+        return None, None, None
+    caller = next(iter(callers))
+    sites = by_caller.get(caller, [])
+    steps = {str(step["method"]): step for step in method[_LAMBDA_STEPS]}
+    # Every value this body made, and the ONE it was handed. The builder a lambda
+    # configures is its own PARAMETER — `to` in `to -> to.queue(…)` — so the first
+    # call on it has a receiver the body never produced, and a rule admitting only
+    # produced receivers would reject exactly the call that carries the
+    # destination. A rule admitting any unproduced receiver would be no rule at
+    # all, so: at most ONE unproduced receiver is the seed, and two mean two
+    # builders in one body, which this does not guess between.
+    produced = {site["result"] for site in sites if site["result"] is not None}
+    owned = [
+        site
+        for site in sites
+        if (step := steps.get(str(site["name"]))) is not None
+        and str(site["owner"]) in step["owners"]
+    ]
+    seeds = {
+        site["receiver"]
+        for site in owned
+        if site["receiver"] is not None and site["receiver"] not in produced
+    }
+    if len(seeds) > 1:
+        return None, None, None
+    reachable = produced | seeds
+    url_argument: dict[str, Any] | None = None
+    body_argument: dict[str, Any] | None = None
+    for site in owned:
+        step = steps[str(site["name"])]
+        if site["receiver"] is not None and site["receiver"] not in reachable:
+            continue
+        if "channel_arg" in step:
+            url_argument = _arg_at(site["arguments"], step["channel_arg"])
+        if "body_arg" in step:
+            body_argument = _arg_at(site["arguments"], step["body_arg"])
+    return url_argument, body_argument, caller
+
+
+_ADDRESS_SEPARATOR = "address_separator"
+
+# 2O Task 7 review, Critical 1: the OVERLOAD DISCRIMINATOR. `name` + `arity`
+# cannot tell `convertAndSend(String routingKey, Object message)` from
+# `convertAndSend(Object message, MessagePostProcessor after)` — both are
+# `convertAndSend` at arity 2 on the same owner — so a row declaring an
+# address position read the SECOND call's payload as its destination. The
+# call site already carries the one value that separates them, the target's
+# own erased JVM descriptor (`storage/duckdb/schema.sql:243`, projected onto
+# every `call_sites` row), and a row declaring `descriptor` is matched on it
+# exactly.
+_DESCRIPTOR = "descriptor"
+
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per matching call site, via `call_endpoints`
@@ -81,13 +234,21 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     forwards it, and `direction` is the catalog's own declared field unless
     the matched row overrides it."""
     matches = catalog.matches
-    owner = _catalog_symbol(matches["owner"])
+    # A catalog may name ONE library under several names (§3.1): `JmsTemplate`
+    # and the `JmsOperations` interface a codebase more often declares its field
+    # as, or a type under its old package. A scalar stays valid and every shipped
+    # catalog still writes one, so this is a widening rather than a migration.
+    owners = catalog_symbols(matches["owner"], f"{catalog.source}: matches.owner")
     # A list, not a dict-by-name (Task 6): `arity` lets two rows share a
     # `name` — `send(topic, payload)` and `send(topic, key, payload)` — and a
     # dict keyed by name would let the second overwrite the first.
     # `_matching_method` scans it per call site instead.
     methods = list(matches["methods"])
     _validate_methods(methods, catalog)
+    # Read once per run, beside `_validate_methods`, because it is checked
+    # against the rows: a separator with no paired row, or a paired row with
+    # no separator, is a file that cannot be honoured either way.
+    address_separator = _address_separator(matches, methods, catalog)
     # `channel_via`'s declared `owner`s converted to the SCIP symbol form
     # once, at run start, rather than once per matched call site — the
     # `record_wrapper_args` precedent below, and the same binding-seam
@@ -106,10 +267,45 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             **row,
             _IDENTITY: {
                 **row[_IDENTITY],
-                "annotation": _catalog_symbol(row[_IDENTITY]["annotation"]),
+                # A LIST or a scalar (§3.1). `annotations` plural, so a consumer
+                # still doing a single dict lookup fails rather than looking up a
+                # tuple and finding nothing. This key is NOT one of F2 §3.1's
+                # twenty-one — the design's list missed it, the same way it missed
+                # `matches.steps[].owner` — and it is the one the javax/jakarta
+                # SOAP gap needed: `spring-ws-template.yml` reads the operation
+                # off `@XmlRootElement`, which moved packages, and a codebase on
+                # the old spelling got a SOAP endpoint with no operation on it
+                # (W11, `scripts/probes/w11_javax_jakarta.md` finding 3).
+                "annotations": catalog_symbols(
+                    row[_IDENTITY]["annotation"],
+                    f"{catalog.source}: {_IDENTITY}.annotation",
+                ),
             },
         }
         if _IDENTITY in row
+        else row
+        for row in methods
+    ]
+    # `lambda_steps[].owner` converted to the SCIP symbol form once, at run start — the
+    # `channel_via` treatment above and the same binding-seam discipline. A step comparing
+    # a dotted FQN against a call site's slash-and-hash symbol would match NOTHING,
+    # silently, which is what D02 §1's conversion rule exists against. Copied rows, never
+    # the catalog's own dicts: `matches` is the loaded file.
+    methods = [
+        {
+            **row,
+            _LAMBDA_STEPS: [
+                {
+                    **step,
+                    "owners": catalog_symbols(
+                        step["owner"],
+                        f"{catalog.source}: {row['name']}.{_LAMBDA_STEPS}[].owner",
+                    ),
+                }
+                for step in row[_LAMBDA_STEPS]
+            ],
+        }
+        if _LAMBDA_STEPS in row
         else row
         for row in methods
     ]
@@ -140,6 +336,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # design §4) — None for a catalog declaring no `field_sources` block, in
     # which case no address argument ever consults the field ladder.
     field_sources = field_facts(workspace, catalog)
+    # `OI-77`. Read once per run beside `field_sources`, and separately from it: a catalog
+    # with no `field_sources` block gets `None` above, and a payload handed through from
+    # the caller's signature has nothing to do with the field ladder.
+    caller_parameters = declared_parameters_of(workspace)
     # `arguments` is parsed once, here, rather than once per reader: the
     # `call_sites` query returns it as raw JSON text, and both the matching
     # loop below and the `call_wrappers` one-hop (over a *different* call
@@ -150,8 +350,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for site in workspace.query("call_sites")
     ]
     by_caller: dict[str, list[dict[str, Any]]] = {}
+    # A SECOND index, keyed by BARE descriptor, for `lambda_arg` (`OI-74`, W57).
+    # `call_sites.caller` carries the module coordinates a fact writes (D00 §5a)
+    # and a `lambda` argument's `symbol` does not — a call argument never repeats
+    # them — so a lookup on the raw strings misses every time, silently. That is
+    # the detail `fluent._captures_of_body` records as the one that costs a cycle
+    # if missed, and it costs the same cycle here.
+    # Bare descriptor -> the FULL caller symbols that reduce to it. A set of
+    # names, not a merged site list: two callers differing only in module
+    # coordinates would otherwise have their BODIES merged, and a literal from
+    # the wrong module could win by position. Where the bare name is ambiguous
+    # the body is not read at all — an unresolved row is the honest answer and a
+    # merged frame is not (W57 review).
+    bare_callers: dict[str, set[str]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
+        bare_callers.setdefault(bare_descriptor(str(site["caller"])), set()).add(
+            str(site["caller"])
+        )
     # Both read once per run, the `field_facts`/`_rules_of` precedent, and
     # both empty-and-inert for every catalog declaring neither word.
     identity_facts = (
@@ -163,7 +379,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_endpoint_shapes keeps for its own `referenced` accumulator.
     referenced: list[str] = []
     configured_addresses = _configured_addresses(
-        owner, default_address, call_sites, by_caller, field_sources, supertypes
+        owners, default_address, call_sites, by_caller, field_sources, supertypes
     )
     rows: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here: two calls whose paths
@@ -172,12 +388,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # unresolved-is-an-answer). The key is the identity columns, never the
     # `resolution` column — a row can be `unresolved` because some OTHER
     # declared capture failed (I1) and still dedup on the path it did read.
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
     for site in call_sites:
-        if site["owner"] != owner:
+        if site["owner"] not in owners:
             continue
         arguments = site["arguments"]
-        method = _matching_method(methods, site["name"], arguments)
+        method = _matching_method(methods, site["name"], site[_DESCRIPTOR], arguments)
         if method is None:
             continue
         # A row declaring neither `http_method` nor `method_arg` is verbless
@@ -201,6 +417,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             supertypes=supertypes,
             caller_call_sites=by_caller.get(caller, []),
             referenced=referenced,
+            caller_parameters=caller_parameters.get(caller, ()),
         )
         if "record_arg" in method:
             # `record_arg` names an argument whose *linked constructor*
@@ -224,6 +441,46 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
             body_argument = _arg_at(arguments, method.get("body_arg"))
             body_declared = method.get("body_arg") is not None
+            if _LAMBDA_ARG in method:
+                # THE DESTINATION IS INSIDE THE ARGUMENT (`OI-74`, W57).
+                # `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`
+                # hands the whole send over as one builder lambda, so every
+                # position this row could name at the call site is the lambda
+                # itself. The queue name is a string literal in the synthetic
+                # method that lambda compiled to, and the fact stream records it
+                # there under the symbol the argument names.
+                lambda_url, lambda_body, lambda_caller = _lambda_arguments(
+                    method, arguments, bare_callers, by_caller
+                )
+                if lambda_url is not None:
+                    url_argument = lambda_url
+                if lambda_body is not None:
+                    body_argument = lambda_body
+                body_declared = body_declared or any(
+                    "body_arg" in step for step in method[_LAMBDA_STEPS]
+                )
+                # AND THE FRAME MOVES WITH THEM (W57 review, Critical 1). Every
+                # value these arguments refer to — a `parameter` INDEX, a `source`
+                # VALUE ID — is scoped to the SYNTHETIC METHOD and not to the
+                # method that wrote the lambda. Read against the enclosing
+                # caller's frame, `parameter` 0 resolved to the ENCLOSING method's
+                # first parameter, and the send published a payload contract it
+                # never carries at `resolved`. The two frames line up only by
+                # luck: javac makes captured locals the synthetic method's LEADING
+                # parameters, so the fixture's own case agrees and a method with
+                # one unrelated parameter in front does not.
+                #
+                # Swapping the frame WHOLESALE is sound because a `lambda_arg` row
+                # reads nothing at the call site at all: `_validate_methods`
+                # refuses it beside every outer position, so no argument left here
+                # belongs to the enclosing frame.
+                if lambda_caller is not None:
+                    facts = CallFacts(
+                        supertypes=supertypes,
+                        caller_call_sites=by_caller.get(lambda_caller, []),
+                        referenced=referenced,
+                        caller_parameters=caller_parameters.get(lambda_caller, ()),
+                    )
         # 2I design §4, form 2: a row that names no address position at all
         # takes the one this client type was CONFIGURED with — the address is
         # a property of the receiver, set once, and the call carrying none is
@@ -231,12 +488,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # word AND the row names no position of its own: a declared position
         # is the call's own answer and always wins.
         configured = default_address is not None and not (
-            {"url_arg", "channel_arg", "record_arg"} & method.keys()
+            {"url_arg", "channel_arg", "record_arg", _LAMBDA_ARG} & method.keys()
         )
         if configured:
             declaring = _declaring_type(caller)
             url_argument = None if declaring is None else configured_addresses.get(declaring)
-        address_declared = configured or bool({"url_arg", "channel_arg"} & method.keys())
+        address_declared = configured or bool(
+            {"url_arg", "channel_arg", _LAMBDA_ARG} & method.keys()
+        )
         # `channel_arg` aliases `url_arg` in the grammar but not in the
         # READER (final review, IMPORTANT): a destination is an opaque
         # expression, never a URL to split. SQS's canonical destination is a
@@ -277,7 +536,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # untouched and this is the pre-2F path unchanged.
         url_argument = address_argument(url_argument, field_sources, facts, caller)
         destinations: Sequence[tuple[str | None, str | None, str]]
-        read_destination = channel_of if "channel_arg" in method else url_of
+        read_destination = channel_of if _channel_declared(method) else url_of
         # 2I design §4, form 1: THE IDENTITY IS NOT AT THE CALL. Some
         # protocols name the operation on the payload rather than in the
         # address — the declared type of the argument the call hands over
@@ -297,6 +556,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 not address_declared or address_resolution == "resolved"
             )
             destinations = [(peer, path, "resolved" if resolved else "unresolved")]
+        elif _ADDRESS_ARG_2 in method:
+            # THE PAIRED DESTINATION. `_validate_methods` already refused this
+            # row alongside `url_arg`, `record_arg` and `channel_via`, so the
+            # first half is always `channel_arg`'s verbatim read and the
+            # second is read the same way — a routing key is an opaque
+            # destination fragment exactly as an exchange is, and CP-2's
+            # peer/path split has nothing to say about either.
+            destinations = [
+                _paired_destination(
+                    read_destination(url_argument),
+                    address_argument(
+                        _arg_at(arguments, method[_ADDRESS_ARG_2]), field_sources, facts, caller
+                    ),
+                    str(address_separator),
+                )
+            ]
         elif "channel_via" in method:
             literal = read_destination(url_argument)
             forms = method["channel_via"]
@@ -305,7 +580,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             else:
                 destinations = [literal]
         else:
-            destinations = [read_destination(url_argument)]
+            # A `channel_arg` slot may hold a whole ARRAY of destinations —
+            # `addHandler(handler, String... paths)` registers one handler at
+            # several dispatch paths in one call — and since extractor
+            # capability 9.15 that array carries its own `elements` (2O Task
+            # 13). `channels_of` reads them, one destination tuple per
+            # registered path, and answers `channel_of`'s single verbatim
+            # tuple for every slot that is not an array; the loop below
+            # already mints one row per tuple.
+            #
+            # `url_arg` deliberately does NOT get the same treatment: an
+            # address is one URL per call in every catalog shipped, no
+            # `url_arg` position is varargs, and CP-2's peer/path split has no
+            # meaning applied element-wise to an array nobody has measured.
+            destinations = (
+                channels_of(url_argument)
+                if _channel_declared(method)
+                else [read_destination(url_argument)]
+            )
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
@@ -341,6 +633,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # declared reply destinations) — every row shares the same verb/body
         # /response captures; only the destination itself varies.
         for peer, path, url_resolution in destinations:
+            # 2O design §8: identity is the URL the framework serves, so the
+            # path is canonicalized HERE — before the dedup key below is built
+            # from it, and before the row is written. `domain/paths.py` states
+            # the rule, what it refuses to touch (a whole address, a
+            # placeholder-bearing composition), and why the gate is INBOUND
+            # `http` alone (ruling R8).
+            #
+            # `row_direction`, never `catalog.direction`: a `methods` row may
+            # override its catalog's direction (above, and live vocabulary —
+            # `jakarta-jms.yml` declares both in one file, `spring-pubsub.yml`
+            # makes `subscribe` inbound inside an outbound catalog), and the
+            # direction this row is WRITTEN with is the one R8 rules on. The
+            # column below and the dedup key both read `row_direction`; a gate
+            # reading anything else would answer about a different row than
+            # the one being minted.
+            if path is not None and serves_urls(catalog.protocol, row_direction):
+                path = canonical_http_path(path)
             # Checkpoint ruling I1: any DECLARED capture that failed to
             # resolve drops the *row's* resolution, even when the url itself
             # read fine — `path` still carries the known template regardless
@@ -357,8 +666,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 "resolved"
                 if (verb is not None or verbless)
                 and url_resolution == "resolved"
-                and _capture_resolved(body_declared, body_argument)
-                and _capture_resolved(method.get("response_arg") is not None, response_argument)
+                # The descriptors are what these captures PRODUCED, and passing them is
+                # what stops a row claiming a read failure over a column that was read
+                # (`OI-77`, W43's review).
+                and _capture_resolved(body_declared, body_argument, request_shape)
+                and _capture_resolved(
+                    method.get("response_arg") is not None, response_argument, response_shape
+                )
                 else "unresolved"
             )
             # Only a *whole* resolved wire identity dedups, so an unreadable
@@ -375,7 +689,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # no shipped row declares its own `direction`, so `row_direction`
             # is always `catalog.direction` there too.
             if path is not None and (verb is not None or verbless):
-                key = (catalog.protocol, row_direction, verb or "", path)
+                # F5 §6.1 rule 1 (W27 fix): `caller` and `peer` are IN the key. Without
+                # them `seen` spans the whole module, so a second caller reaching one
+                # path was dropped outright — measured on a two-caller probe, two hosts
+                # (`alpha.internal`, `bravo.internal`) and one path derived ONE row with
+                # `bravo` gone: no row, no peer, no gap, no question. That is the RC-5
+                # defect W27 removed from the inbound/outbound merge, in this engine, and
+                # with a worse failure mode — the merge at least carried the caller onto
+                # the surviving row.
+                #
+                # "Collapse only within one caller, where both sides are observable"
+                # (§6.1): one method calling one target twice is still one row, because
+                # the caller and the peer are equal there.
+                key = (catalog.protocol, row_direction, verb or "", path, caller, peer)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -403,24 +729,75 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
 
 def _matching_method(
-    rows: list[dict[str, Any]], name: str, arguments: list[dict[str, Any]]
+    rows: list[dict[str, Any]], name: str, descriptor: Any, arguments: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """The one `methods` row matching a call site's own name and argument
-    count (D02 §2's `arity`) — first match wins. A row without `arity`
-    matches every overload, so the shipped 2C catalogs (none of which
-    declare it) parse unchanged; a catalog that needs to tell
-    `send(topic, payload)` from `send(topic, key, payload)` apart writes one
-    row per arity instead, and this is the scan that replaces the old
-    dict-by-name (`:40` before Task 6), which could only ever keep one row
-    per name."""
-    for row in rows:
-        if row["name"] != name:
-            continue
-        arity = row.get("arity")
-        if arity is not None and arity != len(arguments):
-            continue
-        return row
-    return None
+    """The one `methods` row matching a call site's own name, argument count
+    (D02 §2's `arity`) and, where any candidate row declares one, the target's
+    own JVM `descriptor` — first match wins. A row without `arity` matches
+    every overload, which is what kept the 2C catalogs parsing unchanged when
+    the key arrived. *No shipped catalog relies on that any more: every
+    `matches.methods` row declares both `arity` and `descriptor` — 96 declared
+    descriptors across the 14 catalogs that declare any, recounted by F2 §4.1's own
+    collision sweep (this said "75 rows across the 55 shipped catalogs", which was
+    stale in the count and wrong in the denominator: descriptors have never appeared
+    in more than a quarter of the catalogs), and
+    `tests/architecture/test_catalog_descriptor_coverage.py` is the ratchet that
+    keeps it so. This sentence claimed the opposite until the 2O documentation
+    sweep (`A-Mi13`). The ratchet reaches this grammar only; the other
+    call-matching grammars are `A-Mi19`.* The permissive branch stays because a
+    hand-built catalog in a test may still omit the key; a catalog that needs to
+    tell `send(topic, payload)` from `send(topic, key, payload)` apart writes
+    one row per arity instead, and
+    this is the scan that replaces the old dict-by-name (`:40` before Task 6),
+    which could only ever keep one row per name.
+
+    **Arity alone cannot separate same-arity overloads, and where it cannot,
+    an unmatched call derives NOTHING** (2O Task 7 review, Critical 1).
+    `RabbitTemplate.convertAndSend` overloads at arity 2 as both
+    `(String routingKey, Object message)` and `(Object message,
+    MessagePostProcessor after)`; first-match-wins on name+arity handed the
+    second call's PAYLOAD to a row declaring `channel_arg: 0`, publishing a
+    message body as a destination at `resolved`/`compiler`. So once ANY
+    candidate row for this name and arity declares `descriptor`, that arity is
+    CLAIMED: a call whose own descriptor matches none of them falls through to
+    no row at all rather than to a descriptor-less sibling, because falling
+    through is exactly the fabrication the key exists to stop. The cost is a
+    stated under-report — the unclaimed overloads derive nothing where they
+    used to derive an `unresolved` row — which is §8's honest direction and a
+    `docs/COVERAGE.md` boundary, not a silent miss.
+
+    `descriptor`'s PARAMETER PORTION is compared against the call's own
+    `target.descriptor` (`storage/duckdb/schema.sql:243`), which is the ERASED
+    JVM descriptor: it discriminates the declared parameter types of an
+    overload, never the payload's own type (`_IdentityFacts` below reads the
+    caller's signature for that, and says why). *This said "compared verbatim"
+    until F2 §4.1 — the return type is in the descriptor and is NOT part of
+    method identity (JLS 8.4.2), and comparing it tied every row to a library
+    version by accident.*"""
+    candidates = [
+        row for row in rows if row["name"] == name and row.get("arity") in (None, len(arguments))
+    ]
+    # PARAMETER TYPES only, not the whole descriptor (F2 §4.1, JLS 8.4.2). A method is
+    # identified by its name and parameter types; the return type is in the JVM
+    # descriptor and is not part of the signature. Comparing whole descriptors made
+    # every row version-dependent by accident — a library changing a return type changes
+    # nothing in its callers' source and the descriptor entirely, which is why every
+    # Spring Kafka 2.x producer derived NOTHING: ten rows here declare
+    # `CompletableFuture`, the 3.x return, and 2.x returns `ListenableFuture`.
+    #
+    # Measured before the change, over all 96 declared descriptors in the 14 catalogs
+    # that declare any: dropping the return type creates **zero** collisions — no two
+    # rows share a catalog, owner, name and parameter list while differing only in what
+    # they return. A covariant-return bridge does put two such methods in one class
+    # file, but call sites are disambiguated by OWNER, which is already part of this
+    # match, and both are semantically one method because the bridge delegates.
+    wanted = parameter_types(str(descriptor)) if descriptor is not None else None
+    for row in candidates:
+        if _DESCRIPTOR in row and parameter_types(str(row[_DESCRIPTOR])) == wanted:
+            return row
+    if any(_DESCRIPTOR in row for row in candidates):
+        return None
+    return candidates[0] if candidates else None
 
 
 def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
@@ -461,6 +838,78 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 f"`url_arg` and `channel_arg` — they name the same capture (D02 §2's "
                 f"single_call style)"
             )
+        # `lambda_arg`/`lambda_steps` (`OI-74`, W57) are one declaration in two
+        # halves: WHICH argument is the builder lambda, and WHAT to read inside
+        # it. Either alone is a row that says it reads a destination somewhere and
+        # never names the place, which derives an unresolved row while LOOKING
+        # like it declares an address — the shape `address_declared` would then
+        # count as declared and the reader would never fill.
+        if (_LAMBDA_ARG in row) != (_LAMBDA_STEPS in row):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_LAMBDA_ARG}` without `{_LAMBDA_STEPS}` or the reverse — one names the "
+                f"argument that IS the builder lambda and the other what to read inside it, "
+                f"and a row carrying only one of them names no readable position at all "
+                f"(D02 §2, `OI-74`)"
+            )
+        # The lambda IS the whole call, so nothing is left at the call site for an
+        # outer position to name — and the engine relies on that: it swaps the whole
+        # resolution FRAME to the lambda's, which would silently misresolve any
+        # argument still belonging to the enclosing method (W57 review, Critical 1).
+        outer = {
+            "url_arg",
+            "channel_arg",
+            "body_arg",
+            "record_arg",
+            "response_arg",
+            "channel_via",
+            _ADDRESS_ARG_2,
+        } & row.keys()
+        if _LAMBDA_ARG in row and outer:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_LAMBDA_ARG}` beside {sorted(outer)} — a builder lambda IS the whole "
+                f"call, so every position is read inside it, and the values inside belong "
+                f"to a different frame from the ones outside (D02 §2, `OI-74`)"
+            )
+        if _LAMBDA_STEPS in row and not row[_LAMBDA_STEPS]:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares an EMPTY "
+                f"`{_LAMBDA_STEPS}` — the row then says it reads a position inside the "
+                f"lambda and names none, which is the shape the paired-key refusal above "
+                f"exists to prevent (D02 §2, `OI-74`)"
+            )
+        for step in row.get(_LAMBDA_STEPS, ()):
+            if "owner" not in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: a `{_LAMBDA_STEPS}` entry on "
+                    f"`{row['name']}` names no `owner` — a step matched on NAME alone "
+                    f"reads any call in the body that happens to share it, on any type, "
+                    f"which publishes an unrelated literal as this row's destination "
+                    f"(D02 §2, `OI-74`; W57 review)"
+                )
+            if "method" not in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: a `{_LAMBDA_STEPS}` entry on "
+                    f"`{row['name']}` names no `method` — a step is matched by the name of "
+                    f"the builder method called inside the lambda, and one without a name "
+                    f"matches every call in the body (D02 §2, `OI-74`)"
+                )
+            if not {"channel_arg", "body_arg"} & step.keys():
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: the `{_LAMBDA_STEPS}` entry "
+                    f"`{step['method']}` on `{row['name']}` declares neither `channel_arg` "
+                    f"nor `body_arg` — a step that reads nothing is a name with no consumer "
+                    f"(D02 §2, `OI-74`)"
+                )
+            if "url_arg" in step:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: the `{_LAMBDA_STEPS}` entry "
+                    f"`{step['method']}` on `{row['name']}` declares `url_arg` — a "
+                    f"destination read inside a builder lambda is an opaque CHANNEL, kept "
+                    f"whole, and CP-2's peer/path split has nothing to say about it. Use "
+                    f"`channel_arg` (D02 §2, `OI-74`)"
+                )
         if "channel_via" in row and "channel_arg" not in row and "url_arg" not in row:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{row['name']}` declares `channel_via` "
@@ -488,9 +937,67 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                     f"`channel_via` entry that must be `{{owner, method, "
                     f'arg: int|"all_strings"}}`, got {entry!r}'
                 )
+        if _ADDRESS_ARG_2 in row:
+            # The second half of a PAIR, so it means nothing without the
+            # first. Read as "no pair", a stray `address_arg_2` would publish
+            # the exchange alone as the whole identity — a destination the
+            # broker does not route to, at `resolved` where nothing downstream
+            # can tell it from an observation.
+            if "channel_arg" not in row:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares "
+                    f"`{_ADDRESS_ARG_2}` without `channel_arg` — it names the SECOND half of a "
+                    f"composite destination, never a position on its own (D02 §2's single_call "
+                    f"style)"
+                )
+            # `url_arg` asks for CP-2's peer/path split and `channel_via` for a
+            # linked-call read; neither has an answer for half of a pair, so a
+            # row declaring either with this one states two incompatible
+            # readers for one destination. Refused rather than resolved by a
+            # precedence nobody wrote down — the `channel_via`/`url_arg`
+            # precedent above, for the same reason.
+            paired_conflicts = [key for key in ("url_arg", "channel_via") if key in row]
+            if paired_conflicts:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{row['name']}` declares "
+                    f"`{_ADDRESS_ARG_2}` together with {', '.join(paired_conflicts)} — a paired "
+                    f"destination is read verbatim on both halves, and neither of those readers "
+                    f"can answer for half of one (D02 §2's single_call style)"
+                )
+        if _DESCRIPTOR in row and not (
+            isinstance(row[_DESCRIPTOR], str)
+            and row[_DESCRIPTOR].startswith("(")
+            # `)` as well as `(` since F2 §4.1: the match now PARSES the parameter
+            # portion out, so a value with no `)` raises where it used to merely fail
+            # to match — and it would raise from `domain/symbols.py`, naming neither
+            # the catalog nor the row. A load-time refusal names both.
+            and ")" in row[_DESCRIPTOR]
+        ):
+            # Checked rather than trusted, because the failure is INVISIBLE:
+            # a `descriptor` that no call site can ever equal claims its arity
+            # all the same (`_matching_method` above), so the whole overload
+            # set silently derives nothing. A target descriptor always opens
+            # its parameter list with `(`, which is the cheapest check that
+            # separates a real one from a source-level signature someone wrote
+            # from memory.
+            #
+            # The MESSAGE names no language, deliberately (ARCHITECTURE §10,
+            # and `test_jvm_names_stay_in_the_jvm_extractor` enforces it on
+            # string literals): `descriptor` is whatever the extractor for the
+            # module's own language records at `target.descriptor`, and this
+            # engine may not assume which one that is.
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{row['name']}` declares "
+                f"`{_DESCRIPTOR}: {row[_DESCRIPTOR]!r}`, which is not a method "
+                f"descriptor — its parameter portion is compared against a call site's own "
+                f"`target.descriptor`, so it must be spelled the way the extractor "
+                f"records one, opening with `(` (D02 §2's single_call style)"
+            )
         if "record_arg" in row:
             conflicts = [
-                key for key in ("url_arg", "channel_arg", "body_arg", "response_arg") if key in row
+                key
+                for key in ("url_arg", "channel_arg", _ADDRESS_ARG_2, "body_arg", "response_arg")
+                if key in row
             ]
             if conflicts:
                 raise CatalogError(
@@ -589,11 +1096,35 @@ def _argument_type_identity(
     parameters = facts.signatures.get(caller, {}).get("parameters") or []
     if index >= len(parameters):
         return None, None
-    symbol = (parameters[index].get("type") or {}).get("symbol")
+    # The DESCRIPTOR's symbol: this looks annotations up ON the named type, and a
+    # type variable names no type. `<T extends OrderEvent> handle(T)` resolves
+    # through `OrderEvent` — its erasure, a real type carrying real annotations —
+    # where `T` resolves through nothing.
+    symbol = parameters[index].get("erased_symbol") or (parameters[index].get("type") or {}).get(
+        "symbol"
+    )
     if not symbol:
         return None, None
     payload_type = bare_descriptor(str(symbol))
-    args = facts.annotations.get((payload_type, str(rule["annotation"])))
+    # FIRST match, not a merge: a list is several spellings of ONE annotation
+    # (§3.1), and merging two would invent a declaration nobody made.
+    #
+    # "At most one is ever written" is the ordinary case, not an invariant — a
+    # half-migrated Boot 2-to-3 module can legally carry both
+    # `@jakarta.xml.bind.annotation.XmlRootElement` and its `javax` spelling on
+    # one type, with different `name`s. This takes the one the catalog lists
+    # first, so the answer is deterministic and the catalog's order decides it.
+    # Deliberate rather than accidental: the alternative is refusing the type
+    # outright, which loses a readable operation over a shape that is itself a
+    # migration artefact.
+    args = next(
+        (
+            found
+            for name in rule["annotations"]
+            if (found := facts.annotations.get((payload_type, name))) is not None
+        ),
+        None,
+    )
     if args is None:
         return None, None
     name = _attribute(args, str(rule["name_from"]))
@@ -642,7 +1173,7 @@ def _declaring_type(caller: str) -> str | None:
 
 
 def _configured_addresses(
-    owner: str,
+    owners: tuple[str, ...],
     setup: dict[str, Any] | None,
     call_sites: list[dict[str, Any]],
     by_caller: dict[str, list[dict[str, Any]]],
@@ -671,7 +1202,7 @@ def _configured_addresses(
         return {}
     candidates: dict[str, set[str | None]] = {}
     for site in call_sites:
-        if site["owner"] != owner or site["name"] != setup["method"]:
+        if site["owner"] not in owners or site["name"] != setup["method"]:
             continue
         caller = str(site["caller"])
         declaring = _declaring_type(caller)
@@ -729,6 +1260,79 @@ def _default_address(matches: dict[str, Any], catalog: Catalog) -> dict[str, Any
     return dict(declared)
 
 
+def _address_separator(
+    matches: dict[str, Any], methods: list[dict[str, Any]], catalog: Catalog
+) -> str | None:
+    """The character joining the two halves of a PAIRED destination, checked
+    against the rows that need it — the `_validate_methods` discipline, and
+    the same stakes `annotation_driven.py::_validate_naming` names for
+    `path_separator`.
+
+    Declared with no row naming `address_arg_2` is a key this catalog never
+    reads, refused rather than ignored: a file whose author believed they had
+    asked for a composite identity would otherwise get the first half alone,
+    with nothing saying so. Declared as anything but exactly one STRING
+    character is refused for `path_separator`'s reason — a YAML int or bool
+    coerces to text and would join two halves with a character nobody wrote,
+    composing a destination the broker does not route to.
+    """
+    declared = matches.get(_ADDRESS_SEPARATOR)
+    if not any(_ADDRESS_ARG_2 in row for row in methods):
+        if declared is not None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{_ADDRESS_SEPARATOR}: {declared!r}` is "
+                f"declared with no `methods` row naming `{_ADDRESS_ARG_2}` — it describes how a "
+                f"composite destination composes, and this catalog reads none (D02 §2's "
+                f"single_call style)"
+            )
+        return None
+    if not isinstance(declared, str) or len(declared) != 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{_ADDRESS_SEPARATOR}: {declared!r}` is not a "
+            f"single character — what joins the two halves of a composite destination is catalog "
+            f"data, and a value that isn't exactly one character would compose a destination "
+            f"nothing routes to (D02 §2's single_call style)"
+        )
+    return declared
+
+
+def _paired_destination(
+    head: tuple[str | None, str | None, str],
+    tail_argument: dict[str, Any] | None,
+    separator: str,
+) -> tuple[str | None, str | None, str]:
+    """One destination from the TWO captures a composite identity needs.
+
+    Both halves must read, or the row is `unresolved` with no path at all —
+    and that is the rule rather than a conservatism. Half of a composite
+    identity is not a partial answer, it is a DIFFERENT destination: an
+    exchange published without its routing key names everything bound to that
+    exchange, and a routing key published without its exchange names whatever
+    the default exchange routes it to. Either would be a confidently-wrong
+    address at `resolved`/`compiler`, which is the one failure D02 §2's
+    unresolved-is-an-answer exists to prevent.
+
+    An EMPTY first half is the composite's own degenerate spelling, and the
+    identity is then the second half alone — the framework mirroring §8.1
+    rule 1 asks for, rather than the approximation `'' + separator + tail`
+    would be. This holds as long as the protocols reaching here treat an empty
+    first half as "the default routing", which AMQP's default exchange does;
+    a protocol whose empty first half means something else needs its own rule
+    here rather than this one widened.
+
+    `peer` is unconditionally NULL, `channel_of`'s contract: a destination
+    fragment is an opaque expression the broker resolves, never a URL with an
+    authority to split off.
+    """
+    _, first, first_resolution = head
+    _, second, second_resolution = channel_of(tail_argument)
+    if first_resolution != "resolved" or second_resolution != "resolved":
+        return None, None, "unresolved"
+    if first == "":
+        return None, second, "resolved"
+    return None, f"{first}{separator}{second}", "resolved"
+
+
 def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
     """Refuses a form 1 rule whose shape the resolution cannot honour — the
     `_validate_methods` discipline, and the same stakes `annotation_driven.py::
@@ -753,20 +1357,35 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
             f"together with `record_arg` — the record IS the payload source, so the two "
             f"name one capture twice (D02 §2's single_call style)"
         )
+    if "body_arg" in row:
+        # The same collision as `record_arg`, and it became reachable with `OI-77`
+        # (W44's review). The identity rule resolves the payload from the argument's
+        # DECLARED TYPE, and the run loop falls back to it whenever `body_arg` read
+        # nothing — so a row declaring both would hand that fallback descriptor to
+        # `_capture_resolved` and answer `resolved` over a body capture that genuinely
+        # failed. No shipped catalog declares the pair; refusing it at load is what
+        # keeps that true, rather than a comment asking the next author to know.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` "
+            f"together with `body_arg` — the identity rule already resolves the payload "
+            f"from the argument's declared type, so the two name one capture twice and "
+            f"the row would report a failed body capture as resolved (D02 §2)"
+        )
     keys = set(rule) if isinstance(rule, dict) else set()
     valid = (
         isinstance(rule, dict)
         and _IDENTITY_REQUIRED <= keys <= (_IDENTITY_REQUIRED | _IDENTITY_OPTIONAL)
         and isinstance(rule.get("arg"), int)
         and not isinstance(rule.get("arg"), bool)
-        and isinstance(rule.get("annotation"), str)
+        and names_a_type(rule.get("annotation"))
         and isinstance(rule.get("name_from"), str)
         and isinstance(rule.get("qualifier_from", ""), str)
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {catalog.source}: `{row['name']}` declares `{_IDENTITY}` that "
-            f"must name `arg` (int), `annotation` and `name_from`, optionally "
+            f"must name `arg` (int), `annotation` (a type or a list of them) and "
+            f"`name_from`, optionally "
             f"`qualifier_from` and `format`, got {rule!r} (2I design §4)"
         )
     fmt = rule.get("format")

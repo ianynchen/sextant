@@ -16,6 +16,10 @@ detect:
 # case: there the annotation read is a fallback rung under a literal, here it
 # is the whole identity. `typed_signatures` for the same reason one rung
 # further: the payload type is read off the caller's declared signature.
+measured:
+  - { artifact: org.springframework.ws:spring-ws-core, versions: ["4.1.4"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
 requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 # A SECOND FILE beside `spring-ws.yml`, not a second block inside it, and the
@@ -66,6 +70,24 @@ matches:
     # is the point: a caller and a handler of one operation meet on one
     # identity string.
     #
+    # BOTH JAXB SPELLINGS (§3.1, W12). `@XmlRootElement` moved from `javax.xml.bind`
+    # to `jakarta.xml.bind`, and a Spring Boot 2 codebase is on the old one.
+    # `jaxb-api 2.3.1` is the last GA release under that coordinate — Maven
+    # Central's own metadata reports `2.4.0-b180830.0359` as the latest, a beta
+    # build, and it is not what Boot 2 manages. (This comment first said 2.3.1
+    # was the last release outright, which the metadata contradicts.)
+    # This read is the whole identity, so the missing spelling did not produce
+    # silence: measured (`scripts/probes/w11_javax_jakarta.md` finding 3), the SOAP
+    # row was still minted, addressed to the right peer, with `path` NULL at
+    # `unresolved` — which reads as "the operation was unreadable" when it was
+    # never looked for in that spelling. That is F2 §3.3's *partial data published*
+    # mode, and it is worse than the silence the JMS gap produced.
+    #
+    # Two names, not two catalogs: this is ONE annotation under two spellings, and
+    # `spring-ws-core` itself never moved. The descriptors are identical either way
+    # — an annotation attribute returns `java.lang.String` in both — so unlike
+    # `javax-jms.yml` nothing here needed re-measuring beyond the name.
+    #
     # ABSENT ATTRIBUTES DERIVE NOTHING. JAXB defaults `name` to the
     # decapitalized class name and `namespace` to the schema's own — neither is
     # written into the class file (Phase 2I Task 2, checkpoint item 4), and the
@@ -75,37 +97,88 @@ matches:
     # it is what a `@XmlRootElement` naming neither attribute derives here
     # (DR-6's refusal-to-default).
     #
-    # `marshalSendAndReceive(Object)` — no URI: the template's own default.
+    # `marshalSendAndReceive(Object)` — no URI: the template's own default. The
+    # only arity-1 overload, and it declares its descriptor all the same
+    # (descriptor sweep R2): the language identifies a method by name and
+    # parameter types in order, a unique overload's descriptor can only ever
+    # equal what a matching call carries — so nothing derived today changes —
+    # and a future one-argument sibling then derives NOTHING rather than having
+    # its own argument 0 read as a payload type. Re-running
+    # `scripts/probes/cp10_catalog_descriptors/run.sh` is the check.
     - { name: marshalSendAndReceive, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;",
         path_from_argument_type: { arg: 0,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
     # `marshalSendAndReceive(String uri, Object payload)` — the URI-literal
-    # overload. Deliberately NO `body_arg`: the payload argument is a bare
-    # `parameter`, which names no value (`arguments._UNREAD_KINDS`), so a
-    # declared body capture would fail on exactly the rows whose payload the
-    # identity rule DID read (checkpoint ruling I1). The rule supplies both.
+    # overload. NO `body_arg`, and the reason has changed under it: the payload
+    # argument is a bare `parameter`, and a declared body capture over one used
+    # to FAIL, dropping the row's `resolution` on exactly the rows whose payload
+    # the identity rule DID read (checkpoint ruling I1). `OI-77` removed that —
+    # a body capture reading a parameter now resolves to the type the caller's
+    # own signature declares, and `_capture_resolved` asks what the capture
+    # produced rather than what kind it read. So declaring `body_arg` here would
+    # work today; it stays undeclared because the identity rule already supplies
+    # both, and a second source for one column is a second answer to reconcile.
     #
-    # ARITY IS NOT A DISCRIMINATOR HERE, and the cost is stated rather than
-    # hidden: `marshalSendAndReceive` also declares `(Object, WebServiceMessage
-    # Callback)` at arity 2 and `(String, Object, WebServiceMessageCallback)`
-    # at arity 3, and the fact stream identifies a call by owner, name and
-    # argument COUNT (`single_call._matching_method`). A callback-form call
-    # therefore reads its address where the payload is and its payload where
-    # the callback is — and both reads then fail, because a payload instance is
-    # not a string address and a callback type carries no `@XmlRootElement`. So
-    # the collision costs RECALL (that call's real identity is missed) and
-    # never publishes a wrong row, which is the direction this file is willing
-    # to fail in.
-    - { name: marshalSendAndReceive, arity: 2, url_arg: 0,
+    # THE OVERLOAD COLLISION, CLOSED (descriptor sweep R1) — and the comment
+    # that stood here was FALSE, which is worse than the bug it described.
+    # It said the collision "costs RECALL … and never publishes a wrong row".
+    # Arity 2 is TWO overloads (javap -p -s, spring-ws-core 4.1.4):
+    #   `(String uri, Object payload)`     — what this row means
+    #   `(Object payload, WebServiceMessageCallback after)`
+    # and a callback-form call is written with a LAMBDA, because javac rejects
+    # a typed callback variable beside a `String` literal as ambiguous while a
+    # lambda is not compatible with the other overload's `Object` parameter. So
+    # `marshalSendAndReceive("PAYLOAD", message -> {...})` resolves to the
+    # second form, and this row read its position 0 — the SOAP request BODY —
+    # as the address. Because the row also declares `path_from_argument_type`,
+    # that address is read by `peer_of` rather than `url_of`
+    # (`single_call.py`'s identity branch), so the message payload was
+    # published WHOLE as `peer`: the remote SOAP service this module calls,
+    # at `evidence: compiler`, which the system tier later resolves against
+    # `participants`. Reproduced end-to-end, not reasoned about.
+    #
+    # So the row states its own erased JVM `descriptor`, which
+    # `_matching_method` compares verbatim against the call site's own
+    # `target.descriptor`.
+    #
+    # THE CONSEQUENCE, which replaces the false claim above: the descriptor
+    # CLAIMS arity 2, so a `(Object, WebServiceMessageCallback)` call now
+    # derives NOTHING where it used to derive a row carrying a fabricated
+    # peer. Under-reporting a stated boundary is honest; publishing a payload
+    # as a peer is not. Recorded in docs/COVERAGE.md, and it stops being right
+    # if a future spring-ws-core release re-types either parameter of
+    # `(String, Object)` — `javap -p -s WebServiceTemplate` is the check, and
+    # `scripts/probes/cp10_catalog_descriptors.md` is where the run that read
+    # it is recorded.
+    #
+    # ARITY 3 IS NOT PART OF THE COLLISION, and the old comment was wrong about
+    # that too: `(String, Object, WebServiceMessageCallback)` is the ONLY
+    # arity-3 overload in this jar, so the next row's `url_arg: 0` /
+    # payload-at-1 positions are exactly right for it and it needs no
+    # discriminator. That stops being true the day spring-ws-core declares a
+    # second three-argument `marshalSendAndReceive`.
+    - { name: marshalSendAndReceive, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;",
+        url_arg: 0,
         path_from_argument_type: { arg: 1,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
-    - { name: marshalSendAndReceive, arity: 3, url_arg: 0,
+    # Arity 3 is `(String, Object, WebServiceMessageCallback)` and nothing else,
+    # and it declares its descriptor for the same R2 reason: the claim costs
+    # nothing while it is unique, and buys silence rather than a misread
+    # position the day a second three-argument overload appears.
+    - { name: marshalSendAndReceive, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;",
+        url_arg: 0,
         path_from_argument_type: { arg: 1,
-                                   annotation: jakarta.xml.bind.annotation.XmlRootElement,
+                                   annotation: [jakarta.xml.bind.annotation.XmlRootElement,
+                                                 javax.xml.bind.annotation.XmlRootElement],
                                    name_from: name, qualifier_from: namespace,
                                    format: qname } }
   # DELIBERATELY NOT CLAIMED: `sendAndReceive`'s four callback overloads
@@ -140,36 +213,6 @@ format_fixed:
 # outbound HTTP catalogs' `{ResponseEntity, Optional}` pair would peel a type
 # this framework hands back whole.
 
-# The three describing blocks below are IDENTICAL to `spring-ws.yml`'s, and
-# that is load-bearing rather than tidy: a payload type is expanded by
-# whichever catalog reaches it first, and `PlaceOrderRequest` is reached from
-# both the handler side and the call side. Two different rule sets would
-# describe one type two ways depending on catalog order.
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

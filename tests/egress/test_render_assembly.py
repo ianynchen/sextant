@@ -18,8 +18,11 @@ from test_render import MODULE, REPORT
 
 from sextant.application.enrich.validate import stale_claims, validate_overlay
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport
+from sextant.application.resolve.roots import Root, RootIdentity
+from sextant.domain.closed_sets import Resolution, RootKind, TraceStop
 from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import (
@@ -34,6 +37,7 @@ from sextant.egress.render.document import (
     StaleNoticeSection,
     _Anchors,
     _code,
+    _contract_nodes,
     _disambiguated_shape_names,
     _interleave,
     _runs,
@@ -351,6 +355,35 @@ GOLDEN_REPORT = ResolveReport(
     shapes=[{"shape_id": "com/example/golden/OrderView#", "content_hash": "md5:0", "open": False}],
     unexpanded_types=("com/example/golden/Opaque#",),
     skipped_catalogs=[SkippedCatalog("a-catalog", ("a-capability",))],
+    # The two non-wire tables (2O design §4), one row each, chosen so the
+    # golden pins both of the answers their columns can carry: a schedule the
+    # analysis READ, and one it could not because a placeholder stands where
+    # the expression will be; a handler whose status and response shape are
+    # both declared, beside the em dash a NULL renders as.
+    scheduled_work=[
+        {
+            "handler": "s maven c 1 com/example/golden/Sweeper#sweep().",
+            "trigger": "cron",
+            "expression": "${orders.sweep.cron}",
+            "resolution": "unresolved",
+            "evidence": "compiler",
+            "catalog_id": "spring-scheduling",
+        }
+    ],
+    error_handlers=[
+        {
+            "handler": "s maven c 1 com/example/golden/Advice#notFound().",
+            "advice": "com/example/golden/Advice#",
+            "declared_by": "org/springframework/web/bind/annotation/ControllerAdvice#",
+            "scope": None,
+            "exception": "com/example/golden/OrderNotFound#",
+            "status": "org/springframework/http/HttpStatus#NOT_FOUND.",
+            "response_shape": "com/example/golden/ErrorBody#",
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "catalog_id": "spring-advice",
+        }
+    ],
 )
 GOLDEN_SHAPE_FIELDS = [
     {
@@ -367,6 +400,115 @@ GOLDEN_SHAPE_FIELDS = [
 ]
 
 
+# One trace, hand-built rather than walked, covering every shape `## Traces`
+# has a rule for: an interface hop that resolved into a different body (so the
+# `Call` cell renders both descriptors and the diagram's arrow is redirected),
+# a third-party terminal, a SIBLING-MODULE terminal that reads identically to
+# it, a `dynamic` step naming a lambda body, and a `revisited` step whose
+# subtree is shown at its first occurrence. The golden is a byte pin over the
+# regions the assembler cuts at, so a region it never renders is a region
+# nothing pins.
+GOLDEN_TRACES = [
+    Trace(
+        root=Root(
+            handler="s maven c 1 com/example/golden/Api#list().",
+            kind=RootKind.INBOUND_ENDPOINT,
+            # Two addresses on ONE root, so the golden pins the collapse as
+            # well as the naming: a handler mapped twice is one walk, one
+            # block and one diagram, listing both ways in (2Q close, defect 1).
+            identities=(
+                RootIdentity(protocol="http", method="GET", path="/orders"),
+                RootIdentity(protocol="http", method="GET", path="/v1/orders"),
+            ),
+        ),
+        steps=(
+            Step(
+                depth=1,
+                caller="s maven c 1 com/example/golden/Api#list().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderService#list().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                result=7,
+                resolution=Resolution.RESOLVED,
+                stop=None,
+                returns=((0, '{"kind":"unresolved","source":3}'),),
+            ),
+            Step(
+                depth=2,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderMapper#selectAll().",
+                callee=None,
+                result=3,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.BOUNDARY,
+                # W30. A terminal always carries a kind, and this one is the case the
+                # feature exists for: the renderer used to say a JDK call and a mapper
+                # call "both read `boundary`… the distinction is the reader's to make".
+                # Both columns are set here so the golden shows what a reader sees rather
+                # than a state the pipeline cannot produce.
+                terminal_kind="persistence",
+                target_kind="database",
+            ),
+            Step(
+                depth=2,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                ordinal=1,
+                invoke_kind="dynamic",
+                target="com/example/golden/OrderServiceImpl#lambda$list$0().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#lambda$list$0().",
+                result=None,
+                resolution=Resolution.RESOLVED,
+                stop=None,
+            ),
+            Step(
+                depth=3,
+                caller="s maven c 1 com/example/golden/OrderServiceImpl#lambda$list$0().",
+                ordinal=0,
+                invoke_kind="interface",
+                target="com/example/golden/OrderService#list().",
+                callee="s maven c 1 com/example/golden/OrderServiceImpl#list().",
+                result=None,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.REVISITED,
+            ),
+            Step(
+                depth=1,
+                caller="s maven c 1 com/example/golden/Api#list().",
+                ordinal=1,
+                invoke_kind="static",
+                target="com/example/common/api/CommonResult#success().",
+                callee=None,
+                result=12,
+                resolution=Resolution.RESOLVED,
+                stop=TraceStop.BOUNDARY,
+                # The control beside the mapper above. This one is the golden's
+                # SIBLING-MODULE terminal (see the block comment at the top of this
+                # trace), and that is the sharper point: `unresolved` says the terminal
+                # was examined and no catalog claimed it, and it says exactly the same
+                # for a third-party jar and for the JDK. `Reaches` does not separate
+                # them — the `Call` column's full descriptor does. 94-96% of real
+                # terminals read this.
+                terminal_kind="unresolved",
+            ),
+        ),
+        response=((0, '{"kind":"unresolved","source":12}'),),
+    ),
+    Trace(
+        root=Root(
+            # No address, and the golden is where that renders as words rather
+            # than as the em dash "nothing recorded" means everywhere else.
+            handler="s maven c 1 com/example/golden/Sweeper#sweep().",
+            kind=RootKind.SCHEDULED,
+        ),
+        steps=(),
+        response=((0, "null"),),
+    ),
+]
+
+
 def _golden_document() -> str:
     return render_module_document(
         GOLDEN_MODULE,
@@ -375,6 +517,7 @@ def _golden_document() -> str:
         ("com/example/golden/Newer.class: metadata unreadable",),
         shape_fields=GOLDEN_SHAPE_FIELDS,
         open_questions=OPEN_QUESTIONS,
+        traces=GOLDEN_TRACES,
     )
 
 
@@ -973,3 +1116,164 @@ def test_a_detail_entry_with_neither_a_body_nor_a_table_is_still_allowed():
     """The header entry every `MachineDetail` opens with — a bare title,
     deliberately neither — must not trip the new refusal."""
     DetailEntry(_code("GET /v1/orders"), None, None)
+
+
+# ---------------------------------------------------------------------------
+# Inheritance in the contract class diagram (F7 §8.4, W33).
+#
+# `type_hierarchy` holds EVERY supertype, and drawing every one buries the
+# diagram: 30 of `mall-admin`'s 34 shape ancestors are one marker interface, and
+# four of this repo's fixture's are a protobuf runtime base with four generated
+# builder interfaces beside them. So the rule is what an ancestor CONTRIBUTES,
+# and these pin each half of it.
+# ---------------------------------------------------------------------------
+
+
+def _shape(shape_id: str, *, open: bool = False) -> dict[str, object]:
+    return {"shape_id": shape_id, "open": open, "content_hash": "", "origin_tier": None}
+
+
+def _hierarchy(child: str, ancestor: str, kind: str, scanned: bool) -> dict[str, object]:
+    return {"child": child, "ancestor": ancestor, "kind": kind, "scanned": scanned, "position": 0}
+
+
+def test_an_ancestor_that_is_itself_a_contract_gets_an_inheritance_arrow():
+    """Two payloads, one extending the other — the live shape on all three corpora that
+    have any: `PmsProductParam <|-- PmsProductResult`, `AdminUserDTO <|-- ManagedUserVM`,
+    and the fixture's `OrderResult <|-- DetailedOrderResult`."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Base#"), _shape("a/Derived#")],
+        (),
+        [_hierarchy("a/Derived#", "a/Base#", "extends", True)],
+    )
+
+    assert [(e.source, e.target, e.kind) for e in edges] == [("a/Derived#", "a/Base#", "extends")]
+    assert [n.name for n in nodes] == ["a/Base#", "a/Derived#"]
+
+
+def test_an_implemented_contract_interface_draws_the_dotted_arrow():
+    """The second arrow kind. Unmeasured on the four corpora — none has a payload
+    implementing an interface that is itself a payload — but `Page<T>`/`Slice<T>` is
+    exactly that shape and W26 made such an interface expandable, so the rule is declared
+    and pinned rather than left until something ships it."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#"), _shape("a/Page#")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert [(e.target, e.kind) for e in edges] == [("a/Slice#", "implements")]
+
+
+def test_an_unscanned_superclass_of_an_open_shape_is_drawn_as_open():
+    """Where the rest of the contract lives. An unscanned superclass may declare fields
+    nobody read — which is why the subtype is `open` — so it gets an arrow and a node of
+    its own carrying no fields and the `<<open>>` stereotype."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Derived#", open=True)],
+        (),
+        [_hierarchy("a/Derived#", "vendor/Base#", "extends", False)],
+    )
+
+    assert [(e.target, e.kind) for e in edges] == [("vendor/Base#", "extends")]
+    ancestor = next(n for n in nodes if n.name == "vendor/Base#")
+    assert ancestor.open is True and ancestor.fields == ()
+
+
+def test_an_unscanned_INTERFACE_gets_no_arrow():
+    """An interface's own fields are constants, so an unscanned one explains no part of
+    the payload. Counting it drew 30 arrows to one marker interface on `mall-admin`."""
+    nodes, edges = _contract_nodes(
+        [_shape("a/Derived#", open=True)],
+        (),
+        [_hierarchy("a/Derived#", "java/io/Serializable#", "implements", False)],
+    )
+
+    assert edges == []
+    assert [n.name for n in nodes] == ["a/Derived#"]
+
+
+def test_a_CLOSED_shapes_unscanned_superclass_gets_no_arrow():
+    """The arrow and the stereotype beside it can never disagree, because both are read
+    from the shape's own `open` flag.
+
+    A type whose contract comes from a SCHEMA takes nothing from its class file, so it is
+    closed however exotic its generated superclass is. Every protobuf message extends the
+    runtime's unscanned `GeneratedMessage`, and drawing that arrow put four `<<open>>`
+    boxes above four shapes the `.proto` describes completely.
+    """
+    nodes, edges = _contract_nodes(
+        [_shape("a/Message#", open=False)],
+        (),
+        [_hierarchy("a/Message#", "runtime/GeneratedMessage#", "extends", False)],
+    )
+
+    assert edges == []
+    assert [n.name for n in nodes] == ["a/Message#"]
+
+
+def test_a_parameterised_shape_finds_its_own_types_ancestors():
+    """The hierarchy is keyed on the TYPE; a shape id names a type plus its bound
+    arguments. `CommonResult#<OrderView#>` must look up `CommonResult#`, exactly as the
+    field and accessor passes do."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Base#"), _shape("a/CommonResult#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/CommonResult#", "a/Base#", "extends", True)],
+    )
+
+    assert [(e.source, e.target) for e in edges] == [("a/CommonResult#<a/OrderView#>", "a/Base#")]
+
+
+def test_a_scanned_ancestor_that_is_not_a_contract_gets_no_arrow(tmp_path: Path):
+    """The row of the rule that nothing pinned (W33 review), and it is the one with the
+    live consequence: without it `mall-admin` gains three arrows and the fixture four
+    dotted ones to generated builder interfaces.
+
+    `dto/OmsOrderDetail extends model/OmsOrder` is the case. The parent's 45 fields are
+    already IN the child's own list — the field pass walks the ancestry — so the contract
+    on the diagram is complete and an arrow would point at a box with nothing in it. JSON
+    has no inheritance; the flattening is what the wire carries, and this diagram draws the
+    wire.
+    """
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Child#")],
+        (),
+        [_hierarchy("a/Child#", "a/Parent#", "extends", True)],
+    )
+
+    assert edges == []
+
+
+def test_a_parameterised_contract_ancestor_is_found_under_its_binding(tmp_path: Path):
+    """`Page<T>`/`Slice<T>` — the case the `<|..` rule is shipped FOR, and which it could
+    not draw (W33 review).
+
+    The hierarchy names a TYPE (`a/Slice#`) while a shape id names a type plus its bound
+    arguments (`a/Slice#<a/OrderView#>`), so a plain membership test missed every
+    parameterised contract ancestor. The child's own binding is preferred, because a
+    generic type that extends another usually passes its parameter straight through.
+    """
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#<a/OrderView#>"), _shape("a/Page#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert [(e.source, e.target, e.kind) for e in edges] == [
+        ("a/Page#<a/OrderView#>", "a/Slice#<a/OrderView#>", "implements")
+    ]
+
+
+def test_an_ancestor_described_only_under_another_binding_is_not_guessed(tmp_path: Path):
+    """The near-miss for the rule above. Where `Slice` is described only as
+    `Slice#<Other#>`, the erased hierarchy fact does not say whether THIS child extends
+    that binding — so there is no edge, rather than an arrow asserting a relationship
+    between two payloads that may carry different types."""
+    _nodes, edges = _contract_nodes(
+        [_shape("a/Slice#<a/Other#>"), _shape("a/Page#<a/OrderView#>")],
+        (),
+        [_hierarchy("a/Page#", "a/Slice#", "implements", True)],
+    )
+
+    assert edges == []

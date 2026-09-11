@@ -1,0 +1,96 @@
+id: javax-servlet
+displayName: Javax Servlet (@WebServlet on an HttpServlet subclass, pre-Jakarta)
+style: supertype_dispatch
+protocol: http
+direction: inbound
+
+# THE SAME RULE UNDER THE OTHER PACKAGE SPELLING, and a separate file because
+# `matches.supertype` names one type. `jakarta-servlet.yml` is where the
+# reasoning behind every block below is written out; this file records only
+# what is different, which is the package name and nothing else.
+#
+# It is not shipped on the assumption that the two behave alike (§5.4 would
+# forbid that): CP-9 was extended with a third column, Apache Tomcat 9.0.121
+# (Servlet 4.0), which is the container this spelling actually runs on, and
+# measured every one of its 33 rows against it. All 33 are identical to the
+# two `jakarta` columns modulo the spelling — the same registration, the same
+# verb dispatch, the same implicit HEAD/OPTIONS/TRACE, the same 405 for a
+# same-named member with other parameter types, the same fact shapes with
+# `javax/servlet/...` where the others read `jakarta/servlet/...`
+# (`scripts/probes/cp9_servlet_shapes.md`, rows 25-28 and 30).
+#
+# Legacy modules are the population that uses this spelling, so a
+# jakarta-only pair of catalogs would under-serve exactly the estate the style
+# exists for. Every boundary `jakarta-servlet.yml` states applies here
+# unchanged, `metadata-complete="true"` included; docs/COVERAGE.md states them
+# once, for both.
+detect:
+  coordinates: ["javax.servlet:javax.servlet-api"]
+
+# `call_site` for `bypassed_by`, exactly as the jakarta twin declares it and
+# for the same reason: a delegating `service()` override is told from a
+# replacing one by a call, and by nothing else.
+measured:
+  - { artifact: org.apache.tomcat.embed:tomcat-embed-core, versions: ["9.0.121"],
+      identity: reported, by: scripts/probes/cp9_servlet_shapes.md }
+
+requires: [annotation_args, call_site, type_annotations, typed_signatures, superclass]
+
+matches:
+  supertype: javax.servlet.http.HttpServlet
+
+  # An ALIAS SET: exactly one spelling per declaration, or no row. CP-9 rows
+  # 21-22 measured both keys reaching the fact stream in their own right on
+  # this container too.
+  address:
+    annotation: javax.servlet.annotation.WebServlet
+    args: [urlPatterns, value]
+
+  members: overridden_dispatch_methods
+
+  # Seven entries, matched on name AND parameter types in order (§8.1's
+  # language rule; CP-9 row 18 measured the 405 a name-only selector would
+  # publish). `doTrace` carries the same stated connector dependency as its
+  # jakarta twin — CP-9 row 31 measured 200 on 9.0.121 over a connector with
+  # `allowTrace="true"`, and row 13 the connector default refusing it.
+  dispatch:
+    - name: doGet
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: GET
+    - name: doPost
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: POST
+    - name: doPut
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: PUT
+    - name: doDelete
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: DELETE
+    - name: doHead
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: HEAD
+    - name: doOptions
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: OPTIONS
+    - name: doTrace
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+      method: TRACE
+
+  # Both overloads, because they are two different methods and overriding
+  # either replaces the dispatch the table above describes — UNLESS THE
+  # OVERRIDE DELEGATES back through `super.service(...)` (CP-9 rows 14-15,
+  # 35-40 and 41-43, all three containers and both signatures: no `doXxx` at
+  # all serves every verb alike; delegating serves GET/POST and refuses PUT;
+  # NOT delegating serves PUT too). `jakarta-servlet.yml` carries the full
+  # reasoning; it applies here unchanged, under the other package spelling,
+  # and CP-9's `javax` column measures this spelling rather than inheriting
+  # the other's answer — including row 44's `special javax/servlet/http/
+  # HttpServlet#.service`.
+  bypassed_by:
+    - name: service
+      parameters: [javax.servlet.http.HttpServletRequest, javax.servlet.http.HttpServletResponse]
+    - name: service
+      parameters: [javax.servlet.ServletRequest, javax.servlet.ServletResponse]
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`, for the reason
+# `jakarta-servlet.yml` ends with: this style's rows carry no payload at all.

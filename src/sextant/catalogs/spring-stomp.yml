@@ -4,8 +4,57 @@ style: annotation_driven
 protocol: websocket
 direction: inbound
 
+# THE GATE THAT SEPARATES THIS FROM RSOCKET (F2 §3.6, W16).
+#
+# `spring-messaging` is the WRONG coordinate to gate on and was the only one here
+# until W16: RSocket needs it too, and `@MessageMapping` is RSocket's routing
+# annotation as much as STOMP's — so every RSocket controller in a scanned module
+# was published by this file as `websocket`, a wrong-PROTOCOL fabrication
+# `docs/COVERAGE.md` had stated in place since `A-C1`.
+#
+# What kept it open is that **Spring does not distinguish the two on the class at
+# all**. Measured (`scripts/probes/w16_rsocket_versus_stomp.md`, section 1):
+# `SimpAnnotationMethodMessageHandler.isHandler` tests `@Controller`, and the
+# reactive handler RSocket builds on defaults its bean predicate to a lambda
+# testing `@Controller`. Identical. No fact about the class could ever separate
+# them, which is why `A-C1`'s type gate did not.
+#
+# The fact that DOES separate them is which handler auto-configuration would
+# register (section 3): STOMP's is `@ConditionalOnClass(WebSocketMessageBrokerConfigurer)`,
+# which ships in `spring-websocket` (section 4). That is a dependency fact, and
+# `detect.coordinates` already reads one — the mechanism existed, and this file
+# simply named a coordinate both frameworks carry.
+#
+# `spring-websocket` ALONE, and `spring-messaging` is deliberately gone from this
+# list. The gate is satisfied by ANY declared coordinate
+# (`resolve/dependencies.py` tests `isdisjoint`), so listing both would admit a
+# module carrying only `spring-messaging` — the RSocket case — exactly as before.
+# Naming the one coordinate RSocket does not carry is what makes the gate
+# discriminate.
+#
+# A module holding `spring-websocket` for plain WebSocket and no STOMP passes the
+# gate and finds no `@MessageMapping`, deriving nothing. That is the right failure
+# direction: a gate that admits and finds nothing costs a scan, while one that
+# declines wrongly loses a real boundary.
+#
+# THE STARTER IS NAMED BESIDE THE LIBRARY, and that is not belt-and-braces. F1
+# does not resolve transitives, so a module declaring `spring-boot-starter-websocket`
+# records the STARTER and not `spring-websocket` — the exact trap
+# `Catalog.detect_coordinates`'s own comment names for `spring-boot-starter-web`
+# and `spring-mvc.yml`. A gate gated on the library alone would decline real STOMP
+# applications. Where NEITHER is recorded, this catalog and its RSocket sibling
+# both decline and the module earns an open question rather than a guess (§3.6).
 detect:
-  coordinates: ["org.springframework:spring-messaging"]
+  required: true
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
+
+measured:
+  - { artifact: org.springframework:spring-messaging, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/w16_rsocket_versus_stomp.md }
 
 requires: [annotation_args, typed_signatures]
 
@@ -19,6 +68,20 @@ matches:
   # ever fires for it and it derives no request shape.
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated }
+  # THE TYPE GATE (`A-C1`). This catalog declared none, so a lone
+  # `@MessageMapping`/`@SubscribeMapping` method on a class carrying nothing
+  # minted a declaration — and with no class-level annotation to prefix it, at
+  # the EMPTY destination, `resolved`/`compiler`.
+  #
+  # MEASURED (CP-11 Q5, spring-messaging 6.1.6):
+  # `SimpAnnotationMethodMessageHandler.isHandler` is
+  # `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — byte
+  # for byte the same predicate `RequestMappingHandlerMapping.isHandler` runs
+  # (Q2), so this is spring-mvc's gate applied to the same stereotype rather
+  # than a rule chosen for this file. A module-local stereotype composed from
+  # `@Controller` reaches it through the composition pre-pass, as it does for
+  # MVC (`A-C7`).
+  type_annotation: org.springframework.stereotype.Controller
   mapping:
     # CHECKPOINT FACT (Phase 2H Task 2, checkpoint answer 5): class-level
     # `@MessageMapping("/orders")`, method-level `@MessageMapping("/place")`
@@ -114,39 +177,6 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

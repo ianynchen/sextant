@@ -143,4 +143,60 @@ class ClassScannerTest {
             line.contains("\"construct_kind\":\"class\"") && line.contains("\"interfaces\"")),
             String.join("\n", scanSelf()));
     }
+
+    /** Capability 9.14: D00 §5a's PTR-carrier rule, applied one level over to
+     *  `implements`. `interfaces` alone erases {@code Keyed<String, Long>} to a bare
+     *  symbol — Spring Data REST cannot read a repository's entity type from that
+     *  alone (2O design §2a) — so `generic_interfaces` is the only place the type
+     *  arguments survive, kept as full type references exactly like `supertype`. */
+    @Test
+    void keeps_generic_interface_arguments_on_the_class_symbol() throws Exception {
+        assertTrue(scan("GenericInterfaceSample").stream().anyMatch(line ->
+            line.contains("\"construct_kind\":\"interface\"")
+                && line.contains("\"generic_interfaces\":[{\"arguments\":[{\"arguments\":[],"
+                    + "\"nullable\":true,\"nullable_resolution\":\"resolved\","
+                    + "\"symbol\":\"java/lang/String#\",\"wire_format\":\"\",\"wire_type\":\"string\"},"
+                    + "{\"arguments\":[],\"nullable\":true,\"nullable_resolution\":\"resolved\","
+                    + "\"symbol\":\"java/lang/Long#\",\"wire_format\":\"int64\",\"wire_type\":\"integer\"}],"
+                    + "\"nullable\":true,\"nullable_resolution\":\"resolved\","
+                    + "\"symbol\":\"dev/sextant/extractor/Keyed#\",\"wire_format\":\"\",\"wire_type\":\"object\"}]")),
+            String.join("\n", scan("GenericInterfaceSample")));
+    }
+
+    /** Symmetry with D00's generic-superclass rule: an interface list with nothing
+     *  generic in it captures nothing — the erased `interfaces` list already states
+     *  the relationship, and an absent key means "none" the same way it does there. */
+    @Test
+    void omits_generic_interfaces_when_none_is_generic() throws Exception {
+        assertFalse(scan("InterfaceSample").stream().anyMatch(line ->
+            line.contains("\"generic_interfaces\"")),
+            String.join("\n", scan("InterfaceSample")));
+    }
+
+    /** Capability 9.13: CP-3 found no fact anywhere naming a plain superclass —
+     *  `interfaces` erases every implemented type, and `supertype` captures a
+     *  superclass only when its signature is generic, so `PlainSubclassSample`, whose
+     *  class file carries no `Signature` attribute at all, produced nothing naming
+     *  `PlainSuperclass`. `superclass` is read straight off the class file's own
+     *  `super_class` entry instead. */
+    @Test
+    void keeps_the_erased_superclass_symbol_on_the_class_symbol() throws Exception {
+        assertTrue(scan("PlainSubclassSample").stream().anyMatch(line ->
+            line.contains("\"construct_kind\":\"class\"")
+                && line.contains("\"superclass\":\"sextant-jvm maven com.acme/orders 1.0.0 "
+                    + "dev/sextant/extractor/PlainSuperclass#\"")),
+            String.join("\n", scan("PlainSubclassSample")));
+    }
+
+    /** Null for `java.lang.Object`: JVMS 4.1 gives every interface this same
+     *  constant-pool entry though no interface "extends" it, and every class with no
+     *  declared superclass gets it implicitly — writing it here would put a
+     *  superclass reference on nearly every class and interface in a module and say
+     *  nothing with any of them. */
+    @Test
+    void omits_superclass_when_it_is_plain_object() throws Exception {
+        assertFalse(scanSelf().stream().anyMatch(line ->
+            line.contains("\"construct_kind\":\"class\"") && line.contains("\"superclass\"")),
+            String.join("\n", scanSelf()));
+    }
 }

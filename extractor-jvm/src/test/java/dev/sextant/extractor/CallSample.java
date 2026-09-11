@@ -217,6 +217,21 @@ public final class CallSample {
         values.forEach(this::sink);
     }
 
+    /** The shape capability 9.17 exists for: a lambda that fills **no argument
+     *  slot at all**, so the {@code lambda} argument kind never fires and the
+     *  body javac lifted out was named nowhere. The synthetic method's own
+     *  symbol and call sites are facts already; nothing pointed at them.
+     *
+     *  <p>Returning it is the cheapest spelling of that shape, and it is not a
+     *  contrived one — {@code OrderStreamBindings#handleOrder} in the
+     *  orders-service fixture is a {@code @Bean} that does exactly this, and
+     *  Spring Cloud Stream's whole functional model is written this way. A
+     *  lambda parked in a field or invoked through its own interface is the
+     *  same gap. */
+    public java.util.function.Supplier<String> returnedLambda() {
+        return () -> url;
+    }
+
     /** A method reference into the JDK, which is the common case: the symbol
      *  names a class no module declares, and every module that writes
      *  {@code String::trim} must produce the same one (D00 §1). */
@@ -239,8 +254,151 @@ public final class CallSample {
         sink("order-" + name);
     }
 
+    /** Capability 9.15's happy path: javac erases the varargs sugar into
+     *  {@code ICONST_2; ANEWARRAY String; DUP; ICONST_0; LDC; AASTORE; …}, so
+     *  the value reaching the slot is the array and every literal is invisible
+     *  without the array branch. Two elements rather than one, because a
+     *  one-element array cannot tell an element list from an accidental
+     *  single-value read. */
+    public void varargsLiterals() {
+        destinations("orders.queue", "orders.retry.queue");
+    }
+
+    /** The element list must carry the SAME kind a single-`String` parameter in
+     *  the same position would — that is the whole point of the capability, and
+     *  the probe's control arm is exactly this comparison. A field, a
+     *  parameter and an unreadable call result, in one array. */
+    public void varargsMixedProducers(String supplied) {
+        destinations(this.url, supplied, source());
+    }
+
+    /** Zero-length varargs: `foo()` compiles to `ICONST_0; ANEWARRAY`, and the
+     *  empty element list is the fact — "called with no destinations", which is
+     *  a different statement from "the array could not be read". */
+    public void varargsEmpty() {
+        destinations();
+    }
+
+    /** A primitive varargs array — {@code NEWARRAY} rather than {@code
+     *  ANEWARRAY}, and {@code IASTORE} rather than {@code AASTORE}, which is
+     *  the other half of the two creation opcodes and the other end of the
+     *  eight store opcodes. */
+    public void varargsPrimitives() {
+        counts(1, 2);
+    }
+
+    /** The element type comes from the descriptor, and it is load-bearing one
+     *  level down exactly as it is at the top level: {@code ICONST_1} is both
+     *  the int 1 and the flag {@code true}, and only {@code boolean...}'s own
+     *  element type tells them apart. Without it every flag in a varargs array
+     *  would read as an int. */
+    public void varargsBooleans() {
+        flags(true, false);
+    }
+
+    /** An explicitly written array against the same varargs parameter. javac
+     *  emits byte-identical bytecode for this and for {@link
+     *  #varargsLiterals}'s sugar — the ACC_VARARGS flag is on the callee, not
+     *  the call site — so the two MUST read the same, and this test exists to
+     *  state that rather than to leave it discovered later. */
+    public void explicitArray() {
+        destinations(new String[] {"orders.queue", "orders.retry.queue"});
+    }
+
+    /** NEAR MISS — an array filled by a loop. The creation is an
+     *  {@code ANEWARRAY} and the stores are {@code AASTORE}s, so the shape
+     *  passes every syntactic test; the index is the loop counter, which is
+     *  not a constant, and there is no element list to report. */
+    public void varargsFilledInALoop(java.util.List<String> supplied) {
+        String[] queues = new String[supplied.size()];
+        for (int i = 0; i < queues.length; i++) {
+            queues[i] = supplied.get(i);
+        }
+        destinations(queues);
+    }
+
+    /** NEAR MISS — a conditionally populated array. Constant length, constant
+     *  indices, every slot written: only the *branch* separates it from
+     *  {@link #varargsLiterals}, and each element has two producing stores, so
+     *  reporting either would assert a path that may never run — the same
+     *  merge rule a plain conditional argument already obeys. */
+    public void varargsPopulatedConditionally(boolean fast) {
+        String[] queues = new String[1];
+        if (fast) {
+            queues[0] = "fast.queue";
+        } else {
+            queues[0] = "slow.queue";
+        }
+        destinations(queues);
+    }
+
+    /** NEAR MISS — a partially populated array: constant length 2, one
+     *  constant store, the other element left null. Reporting the written half
+     *  as the whole would claim an arity the call does not have. */
+    public void varargsPartiallyPopulated() {
+        String[] queues = new String[2];
+        queues[0] = "orders.queue";
+        destinations(queues);
+    }
+
+    /** NEAR MISS — an array reference handed in from elsewhere. Its producer is
+     *  not an array creation at all, so it never reaches the array branch and
+     *  keeps the `parameter` kind it already had. The point is that 9.15 does
+     *  not turn every array-typed slot into an element list. */
+    public void varargsFromAnArrayParameter(String[] supplied) {
+        destinations(supplied);
+    }
+
+    /** NEAR MISS — the array escapes to another method between construction and
+     *  the call that consumes it. Every element is a constant store at a
+     *  constant index, so the array reads perfectly at the moment it is built;
+     *  what a within-method pass cannot see is whether {@code shuffle} rewrote
+     *  it, and an element list here would be a claim about the wrong instant. */
+    public void varargsMutatedElsewhere() {
+        String[] queues = new String[] {"orders.queue"};
+        shuffle(queues);
+        destinations(queues);
+    }
+
+    /** NEAR MISS — an array stored into after the call that consumes it. The
+     *  callee holds the reference for the rest of its life, so the elements
+     *  this slot would claim are not the ones the callee ultimately sees. */
+    public void varargsMutatedAfterTheCall() {
+        String[] queues = new String[] {"orders.queue"};
+        destinations(queues);
+        queues[0] = "rewritten.queue";
+    }
+
     void sink(String value) {
         record(value);
+    }
+
+    /** The varargs sink capability 9.15's cases call. `String...`, the shape
+     *  every AMQP/Kafka inbound destination in Spring Integration takes. */
+    void destinations(String... queues) {
+        for (String queue : queues) {
+            record(queue);
+        }
+    }
+
+    /** A primitive varargs sink: `NEWARRAY`/`IASTORE` rather than
+     *  `ANEWARRAY`/`AASTORE`. */
+    void counts(int... values) {
+        record(String.valueOf(values.length));
+    }
+
+    /** A `boolean...` sink: {@code BASTORE} into a {@code NEWARRAY boolean}, so
+     *  the elements arrive as the same {@code ICONST_*} an int would. */
+    void flags(boolean... values) {
+        record(String.valueOf(values.length));
+    }
+
+    /** A method that receives the array and could rewrite it — what makes
+     *  {@link #varargsMutatedElsewhere} an escape rather than a read. */
+    static void shuffle(String[] queues) {
+        if (queues.length > 1) {
+            queues[0] = queues[1];
+        }
     }
 
     void numbers(int count, long total, boolean enabled) {
@@ -261,6 +419,47 @@ public final class CallSample {
 
     String source() {
         return BASE;
+    }
+
+    /** The link capability 9.18 exists for, in its smallest honest form: the
+     *  value handed back is another call's result, so the return names the site
+     *  that produced it and a caller can be joined to it one hop later. */
+    String returnsCallResult() {
+        return source();
+    }
+
+    /** A primitive return, and the reason the declared RETURN type is read
+     *  alongside the value: {@code true} and {@code 1} are the same
+     *  {@code ICONST_1}, and only the method descriptor tells them apart —
+     *  exactly as an argument slot's own declared type does. */
+    boolean returnsPrimitive() {
+        return true;
+    }
+
+    /** Two {@code return} statements are two facts, not one. A method with a
+     *  branch has two possible answers and no single one; collapsing them
+     *  would assert whichever the pass happened to read last as the value the
+     *  method returns. */
+    String returnsOnTwoBranches(boolean flag) {
+        if (flag) {
+            return "first";
+        }
+        return "second";
+    }
+
+    /** The other half of the void/unreadable pair: a value that reaches the
+     *  return from two branches has two producers and therefore no single
+     *  answer, so it reads {@code unresolved} — a real value this pass cannot
+     *  name, which a void return's "no value at all" must stay distinct from. */
+    String returnsAMergedValue(boolean flag) {
+        return flag ? "first" : source();
+    }
+
+    /** The value handed back is the caller's own parameter — knowable only
+     *  where THIS method was called, which is precisely what the cross-method
+     *  propagation this fact feeds will resolve. */
+    String returnsParameter(String supplied) {
+        return supplied;
     }
 
     void hold(Holder held) {

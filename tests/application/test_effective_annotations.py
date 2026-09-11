@@ -15,7 +15,6 @@ from sextant.application.resolve.effective_annotations import composed_mapping_r
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
-from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -185,9 +184,8 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -221,7 +219,8 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         protocol="http",
         direction="inbound",
         type_annotation=None,
-        prefix_annotation="com/acme/rest/Mapping#",
+        prefix_annotation=["com/acme/rest/Mapping#"],
+        class_level="prefix",
         mapping_annotations=[{"fqn": "com/acme/rest/Get#", "methods": ["GET"]}],
         path_from=["value"],
         prefix_from=["value"],
@@ -245,6 +244,10 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # 2H Task 2's two naming forms, inert — this regression is about the
         # PREFIX join, so both stay at the values every pre-2H catalog has.
         path_fallback=None,
+        # The 2026-09-06 vocabulary pass's two query-side words, inert for the
+        # same reason.
+        path_from_siblings=[],
+        path_fallback_prefixes=[],
         qualifier_from=[],
         qualifier_separator=None,
         # 2I Task 2's two QName forms and its member rule, inert for the
@@ -253,8 +256,11 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         namespace_template=None,
         members=None,
         # Inert for the same reason: this regression is about WHETHER a
-        # prefix joins at all, not what joins it.
+        # prefix joins at all, not what joins it — and 2O Task 7's constant
+        # prefix is inert on the same grounds, at the value every catalog
+        # declaring none binds.
         path_separator=None,
+        path_prefix=None,
         # 2I Task 5's construct gate, inert — this regression's own facts
         # declare no enclosing type at all, and NULL applies the rules to
         # every construct exactly as every pre-2I catalog gets.
@@ -262,6 +268,18 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
         # 2I Task 5's SEI fence, inert for the same reason — this regression's
         # catalog is inbound and gates on no construct kind.
         locally_implemented=[],
+        # 2O Task 2's canonical-address gate, at the value this catalog's own
+        # declared protocol and direction imply (inbound http). Inert against
+        # the assertion below either way: `/plain` is already the URL it is
+        # served at, and a leaked prefix would still fail the same equality.
+        canonical_path=True,
+        # 2O Task 10's direction resolution, inert — this regression's catalog
+        # declares none, so the flip predicate is false for every row and the
+        # direction, handler and canonical answers are the ones it always had.
+        flip_direction=None,
+        flip_owners=[],
+        flip_handlers=[],
+        flip_canonical_path=False,
     )
     rows = workspace.query("endpoints")
     workspace.close()
@@ -293,11 +311,13 @@ def _implements(symbol: str, interfaces: list[str]) -> dict:
     return {"symbol": symbol, "interfaces": interfaces}
 
 
-def _extends(symbol: str, supertype_symbol: str) -> dict:
-    # The `supertypes` fact's own inner `symbol` is bare even for a
-    # module-local ancestor (2E checkpoint item (4)) — see
-    # `inherited_rows`'s docstring.
-    return {"symbol": symbol, "supertype": {"symbol": bare_descriptor(supertype_symbol)}}
+def _extends(symbol: str, superclass_symbol: str) -> dict:
+    # Capability 9.13's `superclass` field, module-prefixed on BOTH sides
+    # (`ClassScanner.erasedSuperclassJson` writes it through `symbolOf`), and
+    # emitted for every non-`Object` superclass whether or not it is generic
+    # — see `inherited_rows`'s docstring, and `A-C4` for the `supertypes`
+    # edge this replaced.
+    return {"symbol": symbol, "superclass": superclass_symbol}
 
 
 def test_an_interface_methods_mapping_lands_on_the_unannotated_implementing_method():
@@ -312,7 +332,7 @@ def test_an_interface_methods_mapping_lands_on_the_unannotated_implementing_meth
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -334,7 +354,7 @@ def test_the_implementing_methods_own_annotation_wins_outright_no_synthesis():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -359,7 +379,7 @@ def test_two_interfaces_mapping_the_same_method_resolve_to_declaration_order():
     implementation_rows = [_implements(_C, [_I, _I2])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -391,7 +411,7 @@ def test_a_direct_interfaces_own_ancestor_is_reached_before_the_next_direct_inte
     implementation_rows = [_implements(_C, [_I, _I2]), _implements(_I, [_IX])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -441,7 +461,7 @@ def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
         supertype_rows,
         method_rows,
         _MAPPING_FQNS,
-        _REQUEST_MAPPING,
+        [_REQUEST_MAPPING],
     )
 
     assert result == [
@@ -454,6 +474,109 @@ def test_superclass_resolution_loses_to_interfaces_and_reaches_transitively():
     ]
 
 
+# --- `A-C4` (principles sweep §3.2): a plain `extends` is an edge -----------
+
+
+def test_a_type_level_prefix_is_inherited_across_a_plain_extends(tmp_path: Path):
+    """`A-C4`. A class had a superclass edge only where a `supertype` fact
+    existed, and that fact is emitted only when the superclass carries type
+    ARGUMENTS — so `class Child extends Base` produced no inheritance edge at
+    all, and the walk reached for the field that happened to be in the row
+    rather than for JLS 8.1.4/8.2, which gives every class exactly one direct
+    superclass whose members it inherits.
+
+    The consequence is a confidently wrong ADDRESS, not a missing row:
+    `derive_endpoints.sql`'s `LEFT JOIN prefixes` composes an absent prefix as
+    `''`, so `OrderController#get` published `/{id}` where the framework serves
+    `/api/orders/{id}`.
+
+    The edge the fact stream has carried since capability 9.13 is the erased
+    `superclass` field, written for every non-`Object` superclass whether or
+    not it is generic, and module-prefixed on both sides — which is why it
+    needs no bare-to-prefixed lookback and why taking it also retires the "a
+    scanned ancestor always declares a method" assumption (`A-M11`).
+    """
+    del tmp_path
+    annotation_rows = [
+        {"target": _B, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/orders"]}}
+    ]
+    method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
+    )
+
+    assert result == [
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/orders"]}}
+    ]
+
+
+def test_a_mapping_on_a_plain_extends_base_reaches_the_overriding_method(tmp_path: Path):
+    """`A-C4`'s other direction, and the one that drops a whole row rather
+    than mis-addressing one: a non-generic base declaring `@GetMapping("/ping")`
+    on a method the child overrides synthesized nothing, so `GET /base/ping`
+    was absent from the export entirely. The identical GENERIC pair
+    synthesized both, which is what made the defect look like a hierarchy
+    subtlety rather than a missing edge."""
+    del tmp_path
+    base_ping = _B + "ping()."
+    child_ping = _C + "ping()."
+    annotation_rows = [
+        {"target": base_ping, "annotation": _GET_MAPPING, "args": {"value": ["/ping"]}}
+    ]
+    method_rows = [_method(base_ping, _B), _method(child_ping, _C)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
+    )
+
+    assert result == [
+        {"target": child_ping, "annotation": _GET_MAPPING, "args": {"value": ["/ping"]}}
+    ]
+
+
+def test_an_ancestor_that_declares_no_method_at_all_still_carries_its_prefix(tmp_path: Path):
+    """`A-M11`, closed by `A-C4`'s edge rather than separately. The bare-to-
+    prefixed lookback the `supertypes` edge needed could only recover an
+    ancestor's symbol from somewhere ELSE it appeared — as an interface, an
+    implementer, or some method's `enclosing` — so an abstract base whose only
+    purpose is to carry a type-level `@RequestMapping` was unreachable. JLS
+    8.1.6: a class body may declare no methods at all, and the default
+    constructor (8.8.9) is not one.
+
+    The `superclass` edge carries the ancestor's full symbol on both sides, so
+    there is nothing to look back through and nothing to be missing."""
+    del tmp_path
+    annotation_rows = [
+        {"target": _B, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/items"]}}
+    ]
+    method_rows = [_method(_C + "get().", _C)]
+
+    result = inherited_rows(
+        annotation_rows, [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
+    )
+
+    assert result == [
+        {"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api/items"]}}
+    ]
+
+
+def test_a_plain_extends_of_a_base_that_maps_nothing_synthesizes_nothing(tmp_path: Path):
+    """The near-miss for `A-C4`'s new edge. Widening an inheritance walk is
+    exactly the change that can start synthesizing rows nobody declared, so
+    the edge must carry a mapping across and nothing else: the same plain
+    `extends` pair as above with the base's annotations removed derives no row
+    at all — not a prefix, not an empty one, nothing."""
+    del tmp_path
+    method_rows = [_method(_C + "get().", _C), _method(_B + "helper().", _B)]
+
+    result = inherited_rows(
+        [], [], [_extends(_C, _B)], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
+    )
+
+    assert result == []
+
+
 def test_a_type_level_prefix_is_inherited_from_the_interface_when_the_class_has_none():
     """(v), first half: `_C` carries no own `@RequestMapping`; `_I`'s own
     type-level one is synthesized onto `_C`."""
@@ -461,7 +584,7 @@ def test_a_type_level_prefix_is_inherited_from_the_interface_when_the_class_has_
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [{"target": _C, "annotation": _REQUEST_MAPPING, "args": {"value": ["/api"]}}]
@@ -477,7 +600,7 @@ def test_a_type_level_prefix_is_not_inherited_when_the_class_carries_its_own():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], [], _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == []
@@ -506,7 +629,7 @@ def test_a_type_level_prefix_applies_to_both_an_inherited_and_an_own_mapped_meth
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     # `_C`'s own `list` is left alone (its own real mapping already covers
@@ -518,15 +641,20 @@ def test_a_type_level_prefix_applies_to_both_an_inherited_and_an_own_mapped_meth
     ]
 
 
-def test_a_covariant_override_and_its_bridge_both_miss_honestly():
-    """(vi): checkpoint item (4)'s frozen bytecode shape — the bridge
-    (`find(sig_a)`, the interface's exact descriptor) and the real override
-    (`find(sig_b)`, the covariant `DetailedOrderResult` return) are BOTH
-    declared on `_C`. The bridge's descriptor is what the join actually
-    hits, so it is the one that would synthesize without the structural
-    exclusion; the real override's descriptor never matches the interface's
-    at all, so it was already missing honestly on its own. Neither may end
-    up with a row."""
+def test_a_covariant_override_and_its_bridge_both_miss_without_modifiers():
+    """The FALLBACK, and only the fallback (OI-47).
+
+    None of these method rows carries `modifiers`, which is true of every
+    hand-built fact in this file and of any scanner that reports none. With
+    nothing saying which method the compiler generated, the structural rule is
+    all there is — same class, same name, same parameters, different return —
+    and it cannot tell which of the pair is the bridge, so neither gets a row.
+
+    The bridge (`find(sig_a)`, the interface's exact descriptor) is what the join
+    actually hits; the real override (`find(sig_b)`, covariant return) never
+    matches the interface's descriptor at all. A REAL scanned fact says which is
+    which and the mapping lands on the real override — see
+    `test_a_covariant_overrides_mapping_lands_on_the_method_someone_wrote`."""
     interface_method = _I + "find(sig_a)."
     bridge_method = _C + "find(sig_a)."
     override_method = _C + "find(sig_b)."
@@ -561,7 +689,332 @@ def test_a_covariant_override_and_its_bridge_both_miss_honestly():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
+    )
+
+    assert result == []
+
+
+def test_a_generic_covariant_override_and_its_bridge_still_match_as_a_pair():
+    """W5's parameter types made this pair stop matching, and this is the pin.
+
+    The rule below recognises a bridge by "same class, same name, same
+    parameters, different return". W5 made a parameter's `type` come from the
+    `Signature` attribute — so the real override, which carries one, reads the
+    symbol `T`, while the bridge javac ships beside it carries no signature and
+    still reads the erasure. Measured on javac 26: `Sub<T> extends Base<T>` with
+    `String get(T)` gives `(TT;)Ljava/lang/String;` for the override and no
+    signature at all for `(Object)Object`.
+
+    Compared on `type.symbol` the two are `T` and `java/lang/Object#`, they do
+    not match, and the SYNTHETIC bridge stops being excluded from the walk.
+    `erased_symbol` — the descriptor's own answer, which is what the two actually
+    share — is what both sides are compared on, so the pair holds.
+    """
+    interface_method = _I + "find(sig_a)."
+    bridge_method = _C + "find(sig_a)."
+    override_method = _C + "find(sig_b)."
+    # The override states the type VARIABLE and the erasure; the bridge has only
+    # the erasure, because a bridge carries no `Signature` attribute at all.
+    generic_param = [{"type": {"symbol": "T"}, "erased_symbol": "java/lang/Object#"}]
+    erased_param = [{"type": {"symbol": "java/lang/Object#"}, "erased_symbol": "java/lang/Object#"}]
+    annotation_rows = [
+        {
+            "target": interface_method,
+            "annotation": _GET_MAPPING,
+            "args": {"value": ["/orders/{id}"]},
+        }
+    ]
+    method_rows = [
+        _method(
+            interface_method,
+            _I,
+            {"parameters": erased_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            bridge_method,
+            _C,
+            {"parameters": erased_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _method(
+            override_method,
+            _C,
+            {
+                "parameters": generic_param,
+                "returns": {"symbol": "com/acme/orders/DetailedOrderResult#"},
+            },
+        ),
+    ]
+
+    result = inherited_rows(
+        annotation_rows,
+        [_implements(_C, [_I])],
+        [],
+        method_rows,
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert result == []
+
+
+_DECLARED = {"static": False, "synthetic": False}
+_GENERATED = {"static": False, "synthetic": True}
+
+
+def _scanned_method(
+    symbol: str, enclosing: str, signature: dict, *, generated: bool = False
+) -> dict:
+    """A method row as the JVM scanner really writes it — `modifiers` included.
+
+    `_method` above omits them, and every test predating OI-47 uses it: those
+    exercise the structural fallback, these exercise the shipped path."""
+    return {
+        "symbol": symbol,
+        "enclosing": enclosing,
+        "signature": signature,
+        "modifiers": _GENERATED if generated else _DECLARED,
+    }
+
+
+def _covariant_pair(*, generated_bridge: bool = True) -> list[dict]:
+    """`_C implements _I`, overriding `find(long)` with a covariant return.
+
+    javac emits TWO methods: the real override (`sig_b`, the narrowed return)
+    and a bridge (`sig_a`, the interface's exact descriptor) that forwards to it.
+    Only the bridge's descriptor matches the interface's, so only the bridge can
+    resolve the interface's mapping — and it is not the method anyone wrote."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    return [
+        _scanned_method(
+            _I + "find(sig_a).",
+            _I,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+        ),
+        _scanned_method(
+            _C + "find(sig_a).",
+            _C,
+            {"parameters": long_param, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+            generated=generated_bridge,
+        ),
+        _scanned_method(
+            _C + "find(sig_b).",
+            _C,
+            {
+                "parameters": long_param,
+                "returns": {"symbol": "com/acme/orders/DetailedOrderResult#"},
+            },
+        ),
+    ]
+
+
+def _mapped_interface() -> list[dict]:
+    return [
+        {
+            "target": _I + "find(sig_a).",
+            "annotation": _GET_MAPPING,
+            "args": {"value": ["/orders/{id}"]},
+        }
+    ]
+
+
+def test_a_covariant_overrides_mapping_lands_on_the_method_someone_wrote():
+    """OI-47's first half: a mapping that used to be LOST.
+
+    The interface's `@GetMapping` is reachable only through the bridge, because
+    the ancestor join is by name AND descriptor and a covariant override's
+    descriptor is by definition not its ancestor's. Excluding the bridge
+    therefore threw the mapping away — and publishing it on the bridge would
+    name compiler machinery as the handler. It is carried across instead, to the
+    method the bridge forwards to."""
+    result = inherited_rows(
+        _mapped_interface(),
+        [_implements(_C, [_I])],
+        [],
+        _covariant_pair(),
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert [row["target"] for row in result] == [_C + "find(sig_b)."]
+    assert result[0]["annotation"] == _GET_MAPPING
+
+
+def test_a_generic_overrides_mapping_stops_naming_the_bridge():
+    """OI-47's second half, and the one the structural rule could not see at all.
+
+    A class implementing `Api<String>` gets a bridge that differs from the real
+    method in its PARAMETER types, not its return type — so "same name, same
+    parameters, different return" never matched, the bridge was never excluded,
+    and the row was published naming a method nobody wrote. Publishing the
+    compiler's forwarder as the handler is a fabrication, not an under-report."""
+    obj = [{"type": {"symbol": "java/lang/Object#"}, "erased_symbol": "java/lang/Object#"}]
+    string = [{"type": {"symbol": "java/lang/String#"}, "erased_symbol": "java/lang/String#"}]
+    void = {"symbol": "void#"}
+    result = inherited_rows(
+        [{"target": _I + "find(sig_a).", "annotation": _GET_MAPPING, "args": {"value": ["/x"]}}],
+        [_implements(_C, [_I])],
+        [],
+        [
+            _scanned_method(_I + "find(sig_a).", _I, {"parameters": obj, "returns": void}),
+            _scanned_method(
+                _C + "find(sig_a).", _C, {"parameters": obj, "returns": void}, generated=True
+            ),
+            _scanned_method(_C + "find(sig_b).", _C, {"parameters": string, "returns": void}),
+        ],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert [row["target"] for row in result] == [_C + "find(sig_b)."]
+
+
+def test_a_bridge_with_two_same_named_real_overloads_resolves_nothing():
+    """The arm that stops the redirect from guessing. A bridge stands for ONE
+    method, and with two same-named methods a human wrote there is nothing in
+    the fact saying which — §8: produce nothing rather than pick one."""
+    string = [{"type": {"symbol": "java/lang/String#"}, "erased_symbol": "java/lang/String#"}]
+    result = inherited_rows(
+        _mapped_interface(),
+        [_implements(_C, [_I])],
+        [],
+        [
+            *_covariant_pair(),
+            # A second, unrelated `find` a human wrote.
+            _scanned_method(
+                _C + "find(sig_c).",
+                _C,
+                {"parameters": string, "returns": {"symbol": "com/acme/orders/OrderResult#"}},
+            ),
+        ],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert result == []
+
+
+def test_a_redirected_mapping_never_lands_on_a_method_declaring_its_own():
+    """The candidate loop skips a method that carries its own mapping, but the
+    BRIDGE forwarding to it carries none of its own to skip on. Without this the
+    real method would end up with two mappings — the one it declares and the one
+    inherited through its bridge."""
+    result = inherited_rows(
+        [
+            *_mapped_interface(),
+            {
+                "target": _C + "find(sig_b).",
+                "annotation": _GET_MAPPING,
+                "args": {"value": ["/its-own"]},
+            },
+        ],
+        [_implements(_C, [_I])],
+        [],
+        _covariant_pair(),
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert result == []
+
+
+def test_two_ancestors_mapping_one_method_resolve_nothing_rather_than_one_of_them():
+    """Finding I1, restated as a rule instead of a side effect.
+
+    A class overriding one method covariantly against BOTH a mapped interface and
+    a mapped superclass grows two bridges, one matching each ancestor's
+    descriptor, and both now redirect to the same real method. Which mapping the
+    framework serves depends on its own annotation search order, which this pass
+    does not read — so a method with two different answers gets none.
+
+    The outcome matches what the old blanket exclusion produced. The difference
+    is that it is now the stated rule for an ambiguity, rather than a consequence
+    of discarding every bridge."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    result = inherited_rows(
+        [
+            *_mapped_interface(),
+            {
+                "target": _B + "find(sig_x).",
+                "annotation": _GET_MAPPING,
+                "args": {"value": ["/from-the-superclass"]},
+            },
+        ],
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            *_covariant_pair(),
+            _scanned_method(
+                _B + "find(sig_x).",
+                _B,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+            ),
+            _scanned_method(
+                _C + "find(sig_x).",
+                _C,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+                generated=True,
+            ),
+        ],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
+    )
+
+    assert result == []
+
+
+def test_a_bridge_forwarding_into_a_superclass_redirects_to_nothing():
+    """A bridge does not always forward to a method in its OWN class, and the
+    redirect must not reach for the nearest same-named one when it does.
+
+    Measured, javac 26 — `class Sub extends Base implements IGet<String>` where
+    `Base` declares `get()` and `Sub` declares only an unrelated `get(int)`:
+
+        Sub:  public String get(int)   (I)Ljava/lang/String;   ACC_PUBLIC
+              public Object get()      ()Ljava/lang/Object;    ACC_BRIDGE, ACC_SYNTHETIC
+
+    The bridge forwards to `Base.get()`, which is not in this class at all. Its
+    only same-named sibling here is `get(int)`, which has nothing to do with the
+    mapping — publishing there swaps one fabrication for another, and a worse
+    one: the old code at least named a method of the right arity.
+
+    A bridge always carries its target's arity, so the arity is what refuses it.
+    The mapping is then lost rather than misplaced, which is the §8 direction —
+    a bridge whose target is inherited is a boundary, recorded in COVERAGE.
+    """
+    no_args: list[dict] = []
+    int_arg = [{"type": {"symbol": "int#"}, "erased_symbol": "int#"}]
+    result = inherited_rows(
+        [{"target": _I + "get(sig_a).", "annotation": _GET_MAPPING, "args": {"value": ["/thing"]}}],
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            _scanned_method(
+                _I + "get(sig_a).",
+                _I,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/Object#"}},
+            ),
+            # The bridge: arity 0, forwarding to `_B`'s method, not to anything here.
+            _scanned_method(
+                _C + "get(sig_a).",
+                _C,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/Object#"}},
+                generated=True,
+            ),
+            # The only same-named method this class declares, and unrelated.
+            _scanned_method(
+                _C + "get(sig_int).",
+                _C,
+                {"parameters": int_arg, "returns": {"symbol": "java/lang/String#"}},
+            ),
+            _scanned_method(
+                _B + "get(sig_b).",
+                _B,
+                {"parameters": no_args, "returns": {"symbol": "java/lang/String#"}},
+            ),
+        ],
+        _MAPPING_FQNS,
+        [_REQUEST_MAPPING],
     )
 
     assert result == []
@@ -599,7 +1052,7 @@ def test_a_same_name_overload_with_different_parameters_is_not_a_bridge():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [
@@ -630,7 +1083,7 @@ def test_a_composed_interface_side_row_inherits_onto_the_implementation():
     implementation_rows = [_implements(_C, [_I])]
 
     result = inherited_rows(
-        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, _REQUEST_MAPPING
+        annotation_rows, implementation_rows, [], method_rows, _MAPPING_FQNS, [_REQUEST_MAPPING]
     )
 
     assert result == [

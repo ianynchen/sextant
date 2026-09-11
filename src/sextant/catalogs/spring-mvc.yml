@@ -1,11 +1,41 @@
 id: spring-mvc
-displayName: Spring MVC (server-rendered controllers)
+# Not "server-rendered controllers": `@Controller` is served by WebFlux too, and
+# this catalog derives a reactive controller's routes exactly as it derives a
+# servlet one's (F2 §3.7, measured — `scripts/probes/w17_webflux_controller.md`
+# section 3).
+displayName: Spring `@Controller`
 style: annotation_driven
 protocol: http
 direction: inbound
 
 detect:
-  coordinates: ["org.springframework:spring-webmvc"]
+  # BOTH web stacks, because both serve this annotation. Each ships a
+  # `RequestMappingHandlerMapping` whose bean predicate decides what it scans, and
+  # the two `isHandler` implementations are IDENTICAL — four instructions,
+  # `hasAnnotation(beanType, Controller.class)`, byte for byte at 6.1.6 and 7.0.2
+  # in both artifacts (`scripts/probes/w17_webflux_controller.md` section 1).
+  #
+  # G-38 read this list when it named only `spring-webmvc` and concluded that a
+  # WebFlux `@Controller` derives nothing. It does derive — coordinates are read
+  # for the two styles in `resolve/dependencies.py`'s `DEPENDENCY_GATED` and for
+  # any catalog setting `detect.required`, and THIS catalog is neither, so its
+  # list was inert and the prediction was made from a key with no consumer here
+  # rather than from a run. (Two `annotation_driven` catalogs DO have their
+  # coordinates read — `spring-stomp` and `spring-rsocket`, which set
+  # `detect.required` — so "annotation_driven means inert" would be the same
+  # class of wrong claim in the other direction.)
+  #
+  # But the SENTENCE was false whether or not anything read it, and
+  # `detect.required` is a key a catalog can set: one line would have turned that
+  # false sentence into G-38's bug for real, in a file whose author had every
+  # reason to think the list was already right.
+  coordinates: ["org.springframework:spring-webmvc", "org.springframework:spring-webflux"]
+
+measured:
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/w17_webflux_controller.md }
 
 requires: [annotation_args, type_annotations]
 
@@ -27,6 +57,28 @@ matches:
     consumes_from: [consumes]
     produces_from: [produces]
     method_from: method
+    # F5 §6.1 (W28). Spring does not choose between two identical mappings — it throws
+    # `IllegalStateException` at startup, so the application does not run.
+    # `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping` keys its
+    # registry on the mapping object and refuses a second, different handler under an
+    # equal one (spring-webmvc 6.1.6 bytecode, read directly).
+    #
+    # Declared here and NOT in the messaging catalogs, which is the whole point of it
+    # being catalog data: `@KafkaHandler` dispatches by payload type, so several handlers
+    # on one topic is ordinary there and reporting it would be a rule mirrored onto a set
+    # it does not describe.
+    duplicate: conflict
+    # The two conditions `RequestMappingInfo.equals` compares that are NOT already
+    # columns on the endpoint row. Class-level and method-level values UNION
+    # (`ParamsRequestCondition.combine` adds one expression set to the other), so two
+    # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
+    # other and not with a method outside it.
+    discriminators: [params, headers]
+    # The seventh condition, and the one no class file states: a custom `RequestCondition`
+    # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
+    # module declaring one is left alone entirely rather than told about a conflict it
+    # does not have.
+    custom_condition: org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org.springframework.web.bind.annotation.RequestMapping
     annotations:
@@ -57,26 +109,9 @@ wrappers:
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
 # 2H design §6 — see `spring-web.yml`'s own block for the full rule. `protocol`
 # and `hint_media` are the duplicated half (an HTTP media declaration, carried

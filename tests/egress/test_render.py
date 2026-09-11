@@ -1,12 +1,24 @@
+import dataclasses
 import json
 from dataclasses import replace
 from pathlib import Path
 
 from sextant.application.ports.detector import ModuleModel
+from sextant.application.ports.scanner import ScannerProvenance
 from sextant.application.resolve.pipeline import ResolveReport
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.render.document import _GAPS, render_module_document
 from sextant.egress.render.metadata import KNOWN_GAPS, write_metadata
+
+# The facilities a fixture workspace's documents claim (D02 §3: capabilities and
+# provenance are SCANNER-declared). One entry with libraries, one without, so a
+# test exercises both shapes: only a facility running third-party code that can
+# move independently of Sextant records versions at all.
+SCANNERS = (
+    ScannerProvenance("sextant-detector"),
+    ScannerProvenance("sextant-jvm-extractor", ("org.ow2.asm:asm:9.10.1",)),
+)
+
 
 MODULE = ModuleModel(
     module_id="com.acme:orders-service",
@@ -38,7 +50,7 @@ REPORT = ResolveReport(
 
 
 def test_metadata_records_the_commit_so_staleness_is_visible(tmp_path: Path):
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["provenance"]["commit"] == "a3f91c"
     assert written["coverage"]["documents"] == 4
@@ -57,8 +69,7 @@ def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: P
         tmp_path / "metadata.json",
         MODULE,
         REPORT,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         resolved_config=resolved_config,
     )
@@ -67,7 +78,7 @@ def test_metadata_environments_are_resolved_configs_own_distinct_set(tmp_path: P
 
 
 def test_metadata_environments_are_empty_when_pass_2_resolved_nothing(tmp_path: Path):
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["environments"] == []
 
@@ -80,7 +91,7 @@ def test_metadata_detect_notes_are_written_sorted_regardless_of_call_order(tmp_p
     to happen HERE, at the write, not merely look sorted by accident because
     every caller so far has passed it in order."""
     write_metadata(
-        tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", detect_notes=("b", "a")
+        tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c", detect_notes=("b", "a")
     )
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["detect_notes"] == ["a", "b"]
@@ -89,7 +100,7 @@ def test_metadata_detect_notes_are_written_sorted_regardless_of_call_order(tmp_p
 def test_metadata_names_every_type_expansion_could_not_open(tmp_path: Path):
     """The count says how much was expanded; only the names say what was not,
     and a count cannot be acted on (FR-17, the same rule as `uncovered`)."""
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["shapes"]["count"] == 1
     assert written["shapes"]["unexpanded_types"] == ["org/example/Opaque#"]
@@ -112,7 +123,7 @@ def test_an_unread_source_reaches_both_the_metadata_and_the_gap_list(tmp_path: P
     Kotlin class whose `@Metadata` a newer compiler wrote still travels this
     path, and a channel nothing exercises is a channel that rots."""
     unread = ("com/acme/orders/Newer.class: kotlin metadata unreadable (2.9)",)
-    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, "asm", "9.7", "a3f91c", unread)
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c", unread)
     assert json.loads((tmp_path / "metadata.json").read_text())["uncovered"] == list(unread)
 
     text = render_module_document(MODULE, REPORT, "a3f91c", unread)
@@ -176,7 +187,7 @@ def test_metadata_buckets_outbound_and_both_endpoints_into_both_sums(tmp_path: P
         ],
         coverage={"documents": 1, "partial_documents": 0},
     )
-    write_metadata(tmp_path / "metadata.json", MODULE, report, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", MODULE, report, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     # 3 rows, but the merged `both` row counts on both sides: 2 inbound
     # (GET + the merged POST), 2 outbound (billing + the merged POST) — the
@@ -577,8 +588,40 @@ def test_messaging_gap_retires_and_both_lists_rotate_together():
     # parse-binding pass refuses to cross — a payload parsed past the
     # one-hop horizon, and a payload reaching two different parses — each
     # arrive with their own sentence in the same position. Nothing retired.
-    assert len(KNOWN_GAPS) == 14
-    assert len(_GAPS) == 14
+    #
+    # Fourteen became seventeen when `## Traces` landed, and this is the
+    # first ROTATION the rule was written for rather than a widening: TWO
+    # keys retired by name — `sequence_diagrams_pending_call_graph` and
+    # `call_graph_not_implemented`, both of which said the call graph does
+    # not exist — and FIVE narrower ones took their place, because what is
+    # still true of a trace is five separate things a reader can act on.
+    assert "sequence_diagrams_pending_call_graph" not in KNOWN_GAPS
+    assert "call_graph_not_implemented" not in KNOWN_GAPS
+    assert not any("await the call graph" in gap for gap in _GAPS if "Reactive" not in gap)
+    # Seventeen became sixteen with W27 (F5 §6.1), a retirement with nothing taking its
+    # place: `merged_endpoints_keep_only_the_handlers_contract` said a path the module
+    # both exposes and calls keeps only the handler's declared contract. There is no
+    # merge to discard the client's any more — the two rows stand and each keeps its
+    # own — so the gap is gone rather than narrowed.
+    assert "merged_endpoints_keep_only_the_handlers_contract" not in KNOWN_GAPS
+    assert not any("keeps only the handler" in gap for gap in _GAPS)
+    # Sixteen became fifteen with W31 (F7 §8.1), and this is a RETIREMENT with nothing
+    # taking its place: `trace_depth_is_bounded` said a trace stops at 64 edges, which
+    # FR-6 says it should not. The walk is an explicit stack now and stops where the
+    # evidence does — measured before removing it, the deepest trace across three real
+    # repositories is 9 edges and none was ever truncated.
+    assert "trace_depth_is_bounded" not in KNOWN_GAPS
+    assert not any("bounded at 64" in gap for gap in _GAPS)
+    # And one NARROWED rather than retiring: W30 classified terminals and left the key
+    # alone, so the rename lands here in W31. Terminals are classified now, so
+    # "trace terminals are unclassified" stopped being true while the sibling-module half
+    # of the same sentence did not.
+    assert "trace_terminals_are_unclassified_and_cross_module_stops_look_third_party" not in (
+        KNOWN_GAPS
+    )
+    assert "cross_module_stops_look_third_party" in KNOWN_GAPS
+    assert len(KNOWN_GAPS) == 15
+    assert len(_GAPS) == 15
     assert not any("Messaging endpoints" in gap for gap in _GAPS)
 
 
@@ -846,7 +889,7 @@ def test_metadata_names_every_library_that_resolved_to_nothing(tmp_path: Path):
     coordinate that resolved to nothing would otherwise vanish from the
     document it was recorded for."""
     module = replace(MODULE, libraries_not_resolved=("com.example:missing-client",))
-    write_metadata(tmp_path / "metadata.json", module, REPORT, "asm", "9.7", "a3f91c")
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
     written = json.loads((tmp_path / "metadata.json").read_text())
     assert written["libraries_not_resolved"] == ["com.example:missing-client"]
 
@@ -941,8 +984,7 @@ def test_metadata_keeps_the_two_library_gap_lists_apart(tmp_path: Path):
         tmp_path / "metadata.json",
         module,
         REPORT,
-        "asm",
-        "9.7",
+        SCANNERS,
         "a3f91c",
         libraries_not_scanned=("com.example:broken: unreadable",),
     )
@@ -1029,3 +1071,136 @@ def test_a_repo_value_pattern_reaches_the_rendered_addresses_too():
     redactor = Redactor.from_rules(RedactionRules(value_patterns=(r"ACME_[A-Z0-9]{4}",)))
     text = render_module_document(MODULE, report, "a3f91c", redactor=redactor)
     assert f"`GET /v1/invoices?key={REDACTED}`" in text
+
+
+def test_metadata_records_what_the_module_builds_against_and_which_release(tmp_path: Path):
+    """F1. `metadata.json` is the one place a reader can see the CONDITIONS
+    every framework rule in this run was applied under — a rule is true of a
+    version, and until F1 the estate had no way to say which. The two keys are
+    read together: `dependencies` is what resolved, and
+    `dependencies_not_resolved` is why the rest did not, so a short map is
+    never mistaken for a short build."""
+    module = replace(
+        MODULE,
+        dependency_coordinates=("com.acme:unmanaged", "org.springframework:spring-web"),
+        dependency_versions={"org.springframework:spring-web": "6.1.6"},
+        dependencies_not_resolved=("com.acme:unmanaged: no version on the declaration",),
+    )
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["dependencies"] == {"org.springframework:spring-web": "6.1.6"}
+    assert written["dependencies_not_resolved"] == [
+        "com.acme:unmanaged: no version on the declaration"
+    ]
+
+
+def test_metadata_writes_both_dependency_keys_even_when_nothing_was_recorded(tmp_path: Path):
+    """The key never depends on whether this run had anything to put in it: an
+    absent key reads as "no dependencies", which is a different and stronger
+    claim than "none recorded" (the same distinction the dependency gate keeps
+    between an empty list and no module fact at all)."""
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["dependencies"] == {}
+    assert written["dependencies_not_resolved"] == []
+
+
+def test_metadata_records_where_the_sources_live_so_the_index_can_open_one(tmp_path: Path):
+    """F8 §9.3 (W35). The whole basis of placement, and it had no test at all: replacing
+    the field with `[]` left 1,840 tests green while every `file` in every index quietly
+    became null.
+
+    A `document`'s `relative_path` is a package path, openable against nothing on its own;
+    these are what it is relative TO. Recorded at analyze time because `export` reads what
+    `analyze` left and never re-detects (M08), so a root the detector found then has to be
+    written down then or it is gone.
+
+    RELATIVE and POSIX-spelled, because a bundle travels: an absolute path names a
+    directory that exists on exactly one computer.
+    """
+    module = dataclasses.replace(
+        MODULE,
+        source_roots=(
+            Path("fixtures/orders-service/src/main/kotlin"),
+            Path("fixtures/orders-service/src/main/java"),
+        ),
+    )
+
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    # Sorted (NFR-1), relative to the module root, forward slashes.
+    assert written["module"]["source_roots"] == ["src/main/java", "src/main/kotlin"]
+
+
+def test_a_module_declaring_no_source_root_records_an_empty_list(tmp_path: Path):
+    """`[]`, never an absent key — the `render`/`index` precedent one file over. An absent
+    key would make "this build declares none" indistinguishable from "this metadata
+    predates the field", and the index would read both as "place nothing"."""
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["source_roots"] == []
+
+
+def test_a_source_root_outside_the_module_is_dropped_rather_than_made_absolute(
+    tmp_path: Path,
+):
+    """The one way a declared root is lost, stated rather than left to be discovered.
+
+    A build may point a source root outside the module — a generated tree beside it, a
+    shared directory — and there is no relative spelling of that which a bundle can carry
+    portably. It is dropped, so the index simply does not place what lives there.
+    """
+    module = dataclasses.replace(
+        MODULE,
+        source_roots=(Path("fixtures/orders-service/src/main/java"), Path("/elsewhere/src")),
+    )
+
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    written = json.loads((tmp_path / "metadata.json").read_text())
+
+    assert written["module"]["source_roots"] == ["src/main/java"]
+
+
+def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_path: Path):
+    """FR-17 clause 3 (F8 §9.5, W38). `coverage` carried `{documents, partial_documents}` —
+    how many files were OPENED — and nothing about how much of the call graph was read.
+
+    **The reach rate leads and the dispatch distribution follows**, because the second
+    alone misleads: `resolution` reads 100% `resolved` on two of the four measured corpora,
+    since naming the target a compiler wrote is easy and reading its BODY is the work. A
+    reader shown only that would take a blind analysis for a complete one.
+    """
+    report = dataclasses.replace(
+        REPORT,
+        coverage={
+            "documents": 4,
+            "partial_documents": 0,
+            "reach": {"body_read": 465, "boundary": 968},
+            "resolution": {"resolved": 1431, "narrowed": 2},
+            "method_resolution": {"declared_here": 191, "owner_not_scanned": 318},
+        },
+    )
+
+    text = render_module_document(MODULE, report, "a3f91c")
+
+    assert "Calls whose callee body this workspace read: 465 of 1433 (32%)" in text
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1431." in text
+    assert "Method lookup, by outcome (methods): declared_here 191, owner_not_scanned 318." in text
+
+
+def test_a_module_with_no_call_graph_reports_no_percentage_of_nothing(tmp_path: Path):
+    """Absent, not `0 of 0`. A module with no edges has nothing to be understood, and a
+    percentage of nothing reads as a failure — NFR-7's "looked and found nothing" is for
+    things that were looked FOR."""
+    report = dataclasses.replace(
+        REPORT, coverage={"documents": 4, "partial_documents": 0, "reach": {}}
+    )
+
+    text = render_module_document(MODULE, report, "a3f91c")
+
+    assert "Calls whose callee body" not in text
+    assert "Documents analysed: 4" in text

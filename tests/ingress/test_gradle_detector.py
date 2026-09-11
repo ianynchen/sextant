@@ -172,13 +172,47 @@ def test_classes_dirs_come_from_the_capture_as_output_dirs():
     )
 
 
-def test_publishing_evidence_makes_the_kind_library_the_gradle_only_deviation():
-    """2M design §2: `library` is unreadable from a POM alone, so Maven never
-    returns it — Gradle CAN read publishing evidence from the evaluated
-    model, and this fixture pins that deviation."""
+def test_dependency_coordinates_come_from_the_resolved_compile_classpath():
+    """2O design §2a, ruling R9. Unlike the Maven side — which reads the poms
+    a module declares and inherits, and no transitives — the init script
+    already walks the RESOLVED compile classpath, transitives included, so
+    this is the reach a dependency gate gets on Gradle. Entries
+    Gradle gave no component id (an inter-project dependency, a `files()`
+    entry) carry no coordinate and contribute none: inventing one would name
+    an artifact nobody published."""
+    model = _repository_model(CAPTURE)
+    module = next(m for m in model.modules if m.module_id.endswith("service-app"))
+
+    assert "org.springframework:spring-core" in module.dependency_coordinates
+    assert list(module.dependency_coordinates) == sorted(set(module.dependency_coordinates))
+    assert all(":" in coordinate for coordinate in module.dependency_coordinates)
+
+
+def test_a_project_whose_classpath_resolves_nothing_reports_no_coordinates():
+    model = _repository_model(
+        {
+            "projects": [_minimal_project(classes_dirs=["/repo/thing/build/classes"])],
+            "includedBuilds": [],
+        }
+    )
+
+    assert model.modules[0].dependency_coordinates == ()
+
+
+def test_a_publishing_project_is_not_classified_library():
+    """The near-miss for the inference removed by the 2026-09-04 user ruling:
+    publishing says where artifacts GO, not what a module CONTAINS, so it is
+    never read. `pricing-lib` applies `maven-publish` and has no container
+    file — the exact shape that used to return `library` and be SKIPPED
+    outright. It must now read `undetermined` and be analyzed like anything
+    else, which is what the same repo already did under Maven, whose own
+    `_classify` refuses the identical guess ("every POM declares coordinates
+    whether anything is published or not"). Before the ruling this asserted
+    `library`; the divergence meant one repo analyzed differently under the
+    two build systems."""
     model = _repository_model(CAPTURE)
     pricing_lib = next(m for m in model.modules if m.module_id == "com.acme:pricing-lib")
-    assert pricing_lib.kind == "library"
+    assert pricing_lib.kind == "undetermined"
     assert pricing_lib.packaging == "jar"
 
 
@@ -193,11 +227,49 @@ def test_the_real_fixtures_inter_project_dependency_is_excluded_from_the_gap_lis
     Task 3 fix round 1, I3) — internal wiring Gradle resolved just fine, so
     it must not appear in `libraries_not_resolved` alongside a genuinely
     unresolved coordinate, even though nothing in this fixture names it via
-    `extract_libraries`."""
+    `extract_libraries`.
+
+    **The `library_roots` half of this changed in W55** and the gap-list half did
+    not. Until then an inter-project dependency was excluded outright and a Gradle
+    module got no sibling scanning at all, where Maven had had it since W24; now
+    the sibling IS a library root, so this asserts the root rather than its
+    absence. What the test is about — that internal wiring is not a GAP — is
+    unchanged, and is the first assertion."""
     model = _repository_model(CAPTURE)
     service_app = next(m for m in model.modules if m.module_id == "com.acme:service-app")
     assert service_app.libraries_not_resolved == ()
-    assert service_app.library_roots == ()
+    assert [(r.coordinate, r.version) for r in service_app.library_roots] == [
+        ("com.acme:pricing-lib", "1.0.0")
+    ]
+
+
+def test_a_gradle_sibling_is_named_by_its_group_and_artifact_never_by_its_project_path():
+    """W55, and the design question it had to settle first.
+
+    Gradle reports an inter-project dependency as a `ProjectComponentIdentifier`,
+    which carries a project PATH (`:pricing-lib`) and no group, name or version at
+    all. The path cannot be the coordinate: D00 §2 requires `origin` to survive
+    being read on another machine, and a project path means something only inside
+    the build that declares it. So the path is used to JOIN to that project's own
+    record, and the coordinate comes from its `group` and `name`.
+
+    That matters beyond tidiness: `sibling_coordinates` is what
+    `drop_borrowed_endpoints.sql` matches against `documents.origin`, so a
+    coordinate in a second spelling would silently match nothing and a sibling's
+    controllers would publish as this module's."""
+    model = _repository_model(CAPTURE)
+    service_app = next(m for m in model.modules if m.module_id == "com.acme:service-app")
+    pricing = next(m for m in model.modules if m.module_id == "com.acme:pricing-lib")
+
+    assert service_app.sibling_coordinates == ("com.acme:pricing-lib",)
+    # The same string the sibling module reports as its OWN id, which is what makes
+    # the two joinable at all.
+    assert service_app.sibling_coordinates == (pricing.module_id,)
+    assert not any(":" == c[0] for c in service_app.sibling_coordinates), (
+        "a project PATH reached `sibling_coordinates`"
+    )
+    # And a module depending on nothing internal names none.
+    assert pricing.sibling_coordinates == ()
 
 
 def test_a_container_file_beside_the_project_makes_it_a_service(tmp_path: Path):
@@ -779,3 +851,68 @@ def test_a_missing_init_script_is_a_named_refusal(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr(gradle_module.resources, "files", lambda package: tmp_path)
     with pytest.raises(gradle_module.MissingInitScriptError):
         gradle_module._init_script()
+
+
+# --- F1: the resolved versions beside the coordinates ------------------------
+
+
+def test_dependency_versions_come_from_the_same_resolved_report(tmp_path: Path):
+    """F1. Gradle already resolved every conflict before it reported, so the
+    version here is the one that would actually be on the classpath — a
+    stronger answer than the Maven side's, which reads versions off the poms
+    that declare them and reaches no transitive at all."""
+    project = _project(tmp_path, classpath=[_SPRING_WEB_ENTRY])
+    module = GradleDetector._module_of(tmp_path, project)
+
+    assert module.dependency_versions == {"org.springframework:spring-web": "6.1.6"}
+    # Nothing to report: Gradle carries a version for every component it
+    # named, so this list is a Maven-side answer only.
+    assert module.dependencies_not_resolved == ()
+
+
+def test_an_entry_with_no_coordinate_contributes_no_version(tmp_path: Path):
+    """The same rule the coordinates keep, one column over: a `files()` entry
+    and an inter-project dependency have no coordinate to key a version on, and
+    inventing one would name a release nobody cut."""
+    project = _project(
+        tmp_path, classpath=[_SPRING_WEB_ENTRY, _PATH_ONLY_ENTRY, _INTERNAL_PROJECT_ENTRY]
+    )
+    module = GradleDetector._module_of(tmp_path, project)
+
+    assert module.dependency_versions == {"org.springframework:spring-web": "6.1.6"}
+
+
+def test_every_recorded_coordinate_carries_a_version_on_the_capture():
+    """Against the captured report of a real Gradle build rather than a
+    hand-built project: the two maps must describe the same set, or a
+    version-scoped rule would read "unanswerable" for a dependency the report
+    answered for."""
+    model = _repository_model(CAPTURE)
+    module = next(m for m in model.modules if m.module_id.endswith("service-app"))
+
+    assert set(module.dependency_versions) == set(module.dependency_coordinates)
+    assert list(module.dependency_versions) == sorted(module.dependency_versions)
+
+
+def test_the_declared_release_comes_from_gradles_own_evaluated_model():
+    """W3b, Gradle half. Asked of GRADLE rather than parsed out of a build
+    script, because the value can come from a convention plugin, a toolchain or
+    a property, and only the evaluated model knows which one won.
+
+    The capture's values were recorded from a live run of the init script
+    against `fixtures/gradle-orders`, whose two Java projects set
+    `options.release.set(21)`. The root project applies no Java plugin and
+    reports absence — not a default, and not the 21 its children declare.
+    """
+    model = _repository_model(_load_capture())
+    assert {module.declared_release for module in model.modules} == {21}
+
+
+def test_a_project_record_predating_the_release_field_reads_as_absence(tmp_path: Path):
+    """A capture taken by an OLDER init script has no such key at all, and a
+    missing key is the same absence as a project declaring nothing — never a
+    crash, and never a default standing in for a value the build never
+    stated."""
+    project = _minimal_project(dir_=str(tmp_path))
+    project.pop("declaredRelease", None)
+    assert GradleDetector._module_of(tmp_path, project).declared_release is None

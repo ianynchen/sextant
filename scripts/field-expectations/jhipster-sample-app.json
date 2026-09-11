@@ -8,6 +8,19 @@
     },
     "outbound": {}
   },
+  "terminal_kinds": {
+    "persistence/database": 70,
+    "unresolved": 1071
+  },
+  "narrowed_sites": {
+    "in_graph": 0,
+    "reached_by_a_trace": 0
+  },
+  "contracts": {
+    "shape_fields": 66,
+    "open_shapes": 0,
+    "inheritance_edges": 1
+  },
   "routes": {
     "inbound": [
       "DELETE /api/admin/users/{login}",

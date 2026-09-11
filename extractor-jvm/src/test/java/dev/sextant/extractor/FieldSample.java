@@ -38,6 +38,13 @@ public class FieldSample {
     // The other array path: inside a generic argument the element arrives
     // through the Signature attribute instead of the descriptor.
     public List<String[]> nameGroups;
+    // `A-M10`: a TWO-dimensional array, whose descriptor is the only source
+    // javac gives (no Signature attribute is written for a plain array). Its
+    // symbol must carry BOTH dimensions and its single argument must be the
+    // one-dimensional array it holds — `Type#getElementType` returns the
+    // INNERMOST element type, so building the fact from it made this field and
+    // `alternates` byte-identical apart from the class name.
+    public FieldSampleItem[][] alternateGroups;
     // A constant bound to the type rather than to any instance. Somebody wrote
     // it, so the fact is emitted — with the modifier that lets a consumer keep
     // it off the wire, which is the only thing separating it from a payload

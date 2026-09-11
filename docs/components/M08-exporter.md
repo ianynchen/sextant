@@ -103,7 +103,9 @@ that travels.
   the archive question waits until publishing exists.
 - `--what` is **deferred**. Export always carries facts and graph — facts are what make a
   bundle re-derivable.
-- The full-text index does not travel, because none exists yet to travel.
+- The full-text index does not travel, because none exists yet to travel. (M09's, that is
+  — the LOOKUP index of F8 §9.3 does travel, as `index/*.ndjson`; the two are different
+  things and this line is about the one that still does not exist.)
 
 ## What it must not do
 

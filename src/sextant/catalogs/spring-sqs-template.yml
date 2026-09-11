@@ -7,73 +7,151 @@ direction: outbound
 detect:
   coordinates: ["io.awspring.cloud:spring-cloud-aws-sqs"]
 
+measured:
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # W57. `SqsSendOptions`'s member list is byte-identical at 3.1.1 and 4.1.1 —
+  # seven methods, `queue(String)` and `payload(T)` among them — which is what
+  # `lambda_steps` below reads, so the second version is recorded rather than
+  # only cited in a comment.
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1", "4.1.1"],
+      identity: reported, by: scripts/probes/w57_sqs_send_options.md }
+
 requires: [call_site, string_constants]
 
 matches:
-  owner: io.awspring.cloud.sqs.operations.SqsTemplate
+  # The interface a codebase more often declares its field as (§3.1). A call
+  # site's owner is the DECLARED type, so a field typed by the interface
+  # carried an owner this catalog did not name and matched nothing.
+  # Measured: io.awspring.cloud:spring-cloud-aws-sqs 3.1.1 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - io.awspring.cloud.sqs.operations.SqsTemplate
+    - io.awspring.cloud.sqs.operations.SqsOperations
   # CHECKPOINT FACT (real javap descriptors, spring-cloud-aws-sqs 3.1.1):
   # `send(String, T)` arity 2 is the covered form. `send(T)` (destination-
   # less) and `send(Consumer<SqsSendOptions<T>>)` (the queue-in-lambda
-  # builder form) are BOTH arity 1, indistinguishable by name+arity alone —
-  # the fixture only exercises the builder form (`sendShipmentViaBuilder`),
-  # but this row still has to be correct for BOTH: declaring `channel_arg: 0`
-  # (review round 1, finding 3, reproduced) would be safe for the builder
-  # form (its arg 0 is a lambda, `url_of` reads it as `unresolved`) but
-  # would FABRICATE a resolved queue name for `send(T)`'s own destination-
-  # less form the moment a caller anywhere passes a plain STRING payload —
-  # `url_of` cannot tell "the channel, resolved" from "the payload, which
-  # happens to be a string" apart by kind alone, and arg 0 there is genuinely
-  # the payload, not a destination. So this row declares NO `channel_arg` at
-  # all — `_arg_at(arguments, None)` is `None` for both overloads, `path`
-  # NULL, `resolution: unresolved` unconditionally — the call still MATCHES
-  # (name+arity) and derives an honest row rather than vanishing, but never
-  # a channel captured from the wrong argument. Verified live: the fixture's
-  # own builder-lambda row still derives identically (`path: NULL,
-  # resolution: unresolved`) with no `channel_arg` declared at all.
+  # builder form) are BOTH arity 1 — and `channel_arg: 0` would FABRICATE a
+  # resolved queue name for `send(T)`, whose argument 0 is genuinely the payload:
+  # `url_of` cannot tell "the channel, resolved" from "the payload, which happens
+  # to be a string" apart by kind alone.
+  #
+  # **That is still true, and it is no longer why the builder row reads nothing —
+  # because it reads something now** (`OI-74`, W57). This comment said the two
+  # overloads were "indistinguishable by name+arity alone" and concluded that
+  # NEITHER row could declare a capture. The premise expired: every row here
+  # declares its own erased `descriptor`, and `_matching_method` claims an arity
+  # once any candidate declares one, so `(Ljava/lang/Object;)` and
+  # `(Ljava/util/function/Consumer;)` are separated before any position is read.
+  # `send(T)` still declares no capture, for the reason above. The builder row
+  # declares `lambda_arg`/`lambda_steps` instead — not a position at the call
+  # site, which really would be unreadable, but the builder methods called INSIDE
+  # the lambda. The reasoning outlived the fact it rested on, from 2026-08-30 to W57.
+  #
+  # FOUR ROWS, ONE PER OVERLOAD (descriptor sweep R3), each declaring its own
+  # erased JVM `descriptor`, because Java identifies a method by name and
+  # parameter types in order and never by argument count (GUIDELINES §8.1's
+  # language rule). Arity 2 is `(String, T)` and `(String, Message<T>)`, both
+  # inherited from `AbstractMessagingTemplate` and both carrying the queue at 0
+  # and the payload at 1 — benign either way, so this closes the shape rather
+  # than fixing a bug. Arity 1 is `(T)` and `(Consumer<SqsSendOptions<T>>)`,
+  # and those descriptors are what separate them — which is what makes the
+  # builder row's `lambda_steps` safe and leaves `send(T)` reading nothing at all,
+  # exactly as before. Neither row reads argument 0.
+  #
+  # Every descriptor here returns `SendResult` because that is what the erasure
+  # says; `javap -p -s SqsTemplate` alone does not show three of the four,
+  # which are declared on `AbstractMessagingTemplate` — a call on a variable
+  # typed `SqsTemplate` records `SqsTemplate` as the owner all the same,
+  # because javac records the compile-time qualifying type. Re-running
+  # `scripts/probes/cp10_catalog_descriptors/run.sh`, whose check walks
+  # superclasses for exactly this reason, is what keeps that true.
   methods:
-    - { name: send, arity: 2, channel_arg: 0, body_arg: 1 }
-    - { name: send, arity: 1 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/messaging/Message;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 1,
+        descriptor: "(Ljava/lang/Object;)Lio/awspring/cloud/sqs/operations/SendResult;" }
+    # THE WHOLE SEND IN ONE LAMBDA (`OI-74`, W57).
+    # `sqsTemplate.send(to -> to.queue("q").payload(event))` is the SDK's own
+    # fluent overload, and every position this row could name at the call site
+    # is the lambda itself — so the destination is declared where it actually
+    # sits, inside the body. Measured with `javap` on
+    # `io.awspring.cloud.sqs.operations.SqsSendOptions` at **3.1.1 and 4.1.1**,
+    # the two versions this file's `measured:` block records: `queue(String)`
+    # and `payload(T)`, identical at both.
+    #
+    # Safe here and nowhere near the sibling: the arity-1 `(Ljava/lang/Object;)`
+    # row above is the destination-LESS `send(T)`, whose argument 0 genuinely IS
+    # the payload, and the two are separated by DESCRIPTOR rather than by arity —
+    # `_matching_method` claims an arity once any candidate declares one. That is
+    # what makes this declarable at all, and the block at the top of `methods`
+    # records why the older reasoning stopped applying.
+    #
+    # Each step names its OWNER as well as its method. A step matched on the name
+    # alone reads any call in the body that shares it, on any type — measured in
+    # W57's review, a body touching a metrics recorder with a `queue` method
+    # published `internal-metrics` as this module's queue.
+    - { name: send, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Lio/awspring/cloud/sqs/operations/SendResult;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsSendOptions, method: queue, channel_arg: 0 },
+                       { owner: io.awspring.cloud.sqs.operations.SqsSendOptions, method: payload, body_arg: 0 }] }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale). `nullability` is harvested from spring-mvc.yml.
+# rationale).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02's declared SLICE (F2 §3.8). Measured
+# (`scripts/probes/w19_catalog_surface.md`): this catalog reads ONE of the twelve
+# methods `SqsTemplate` OFFERS at spring-cloud-aws-sqs 3.1.1, and seven of the
+# eleven unread take the queue name at argument 0.
+#
+# **Most of that surface is inherited, and the first version of the enumeration
+# could not see it.** `SqsTemplate` declares ten methods and gets its whole
+# messaging surface from `AbstractMessagingTemplate` — which is the same fact this
+# file's own `descriptor` comment already records for three of its four `send`
+# rows. The probe ran `javap` on the named class alone, so it reported "no unread
+# method addresses a wire" for a catalog whose entire INBOUND direction is unread,
+# and COVERAGE published that zero. The probe now walks supertypes; this slice is
+# what the corrected run found.
+#
+# **The honest summary: this catalog models the synchronous, single-message SEND
+# and nothing else.** A module that receives over SQS through this template, or
+# that sends asynchronously or in batches, derives nothing.
+slice:
+  outside:
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [receive, receiveMany, receiveAsync, receiveManyAsync]
+      why: >
+        A boundary this catalog does NOT model: the entire inbound direction.
+        `receive(String, Class<T>)` and `receiveMany` take the queue name at argument
+        0 and a payload type at argument 1 — the exact shape this file already reads
+        for `send`, so the gap is a fixture and a descriptor sweep rather than a
+        design question. A module that only consumes derives nothing at all from
+        this catalog, which reads as a module that does not use SQS.
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [sendAsync, sendManyAsync, sendMany]
+      why: >
+        Outbound boundaries this catalog does NOT model, in the file that models
+        `send`. The async forms are the same wire as `send` with a different return
+        type; the `*Many` forms carry a COLLECTION of messages, so one call is many
+        wire messages to one queue — a row shape this file's single-message rule does
+        not express.
+    - owner: io.awspring.cloud.sqs.operations.SqsOperations
+      method_names: [receive, receiveMany, sendMany]
+      why: >
+        The interface `SqsTemplate` implements, carried as an owner alternate since
+        W10 so an interface-typed field derives the same rows. Its slice is its
+        implementation's slice: each method is outside for the reason given above for
+        the same name on `SqsTemplate`.

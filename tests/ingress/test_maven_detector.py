@@ -30,6 +30,38 @@ def test_detect_reports_module_coordinates_and_output_dir_when_run_on_the_fixtur
     )
 
 
+def test_dependency_coordinates_are_what_the_pom_declares_and_inherits():
+    """2O design §2a, ruling R9: the gate a `derived_resource` catalog reads
+    needs the module's dependencies in the workspace. Since F1 that is what
+    the pom declares PLUS what it inherits from every ancestor pom the
+    detector could open — this fixture has no parent, so the two are the same
+    set here and the inheritance cases have tests of their own below. What is
+    still out of reach either way is a TRANSITIVE. Sorted, because everything
+    a detector reports is (NFR-1)."""
+    module = MavenDetector().detect(FIXTURE).modules[0]
+
+    assert "org.springframework:spring-web" in module.dependency_coordinates
+    # The one the Data REST gate reads, declared by this fixture on purpose
+    # (2O Task 6's conformance fixture).
+    assert "org.springframework.data:spring-data-rest-core" in module.dependency_coordinates
+    assert list(module.dependency_coordinates) == sorted(module.dependency_coordinates)
+    # A coordinate no pom in the chain declares is absent — which the gate
+    # must read as "not declared or inherited HERE", never as "not on the
+    # classpath". Data REST pulls `evo-inflector` in transitively and no pom
+    # here names it, which is exactly the shape F1 still cannot see: reading
+    # it would mean implementing Maven's mediation, not parsing another file.
+    assert "org.atteo:evo-inflector" not in module.dependency_coordinates
+
+
+def test_a_module_declaring_no_dependencies_reports_none(tmp_path: Path):
+    """Empty and unrecorded are different answers (`resolve/dependencies.py`):
+    this is the empty one — a build that declares nothing — and it is an
+    answer, not an absence."""
+    module = MavenDetector().detect(_module(tmp_path)).modules[0]
+
+    assert module.dependency_coordinates == ()
+
+
 _BARE_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
   <groupId>com.acme</groupId>
   <artifactId>thing</artifactId>
@@ -693,3 +725,404 @@ def test_an_empty_modules_list_is_refused_by_name(tmp_path: Path):
     with pytest.raises(ValueError, match="declares <modules> but names none") as failure:
         MavenDetector().detect(reactor)
     assert str(reactor / "pom.xml") in str(failure.value)
+
+
+# --- F1: the RESOLVED dependency set, with versions --------------------------
+#
+# The measurement that motivated it: `mall-admin`, a real Spring MVC module
+# with 160 endpoints, declares five coordinates and not one of them is Spring,
+# because its starters arrive through the reactor parent. Reading the module's
+# own `<dependencies>` alone had `resolve/dependencies.py` skipping every such
+# module. Everything below is built from pom files in `tmp_path` and a local
+# repository under a monkeypatched `HOME` — no `mvn`, no network, no build.
+
+_PARENT_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>acme-parent</artifactId>
+  <version>2.3.0</version>
+  <packaging>pom</packaging>
+  <properties>
+    <stream.version>4.1.0</stream.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-web</artifactId>
+        <version>6.1.6</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId>
+      <artifactId>spring-cloud-stream</artifactId>
+      <version>${stream.version}</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+_INHERITING_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.acme</groupId>
+    <artifactId>acme-parent</artifactId>
+    <version>2.3.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>orders</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+"""
+
+
+def _reactor(tmp_path: Path, child_pom: str = _INHERITING_POM) -> Path:
+    """A parent pom and one child beside it, the ordinary shape of every
+    multi-module Maven repository."""
+    (tmp_path / "pom.xml").write_text(_PARENT_POM, encoding="utf-8")
+    child = tmp_path / "orders"
+    child.mkdir()
+    (child / "pom.xml").write_text(child_pom, encoding="utf-8")
+    return child
+
+
+def _published_pom(home: Path, coordinate: str, version: str, body: str) -> Path:
+    """One pom in the local Maven repository, at the layout a build leaves it
+    in — which is the only place a parent or a BOM from OUTSIDE the repository
+    can be read from without running Maven or reaching the network."""
+    group, _, artifact = coordinate.partition(":")
+    directory = home / ".m2" / "repository" / Path(*group.split(".")) / artifact / version
+    directory.mkdir(parents=True, exist_ok=True)
+    published = directory / f"{artifact}-{version}.pom"
+    published.write_text(body, encoding="utf-8")
+    return published
+
+
+def test_a_dependency_declared_only_by_the_parent_is_in_the_modules_set(tmp_path: Path):
+    """F1's whole point, and the live defect it closes: Maven puts a parent's
+    own `<dependencies>` on the child's classpath, so a module inheriting a
+    Spring Cloud Stream starter DEPENDS on it. Recorded as direct declarations
+    alone, that module's `config_join` catalogs were skipped — visibly, but
+    skipped — on a build that genuinely has the framework."""
+    module = MavenDetector().detect(_reactor(tmp_path)).modules[0]
+
+    assert "org.springframework.cloud:spring-cloud-stream" in module.dependency_coordinates
+    assert list(module.dependency_coordinates) == sorted(module.dependency_coordinates)
+
+
+def test_an_inherited_version_and_a_managed_one_both_resolve(tmp_path: Path):
+    """Two ladders in one module: the parent's own dependency carries a
+    `${...}` property the parent defines, and the child's own dependency
+    carries no version at all and takes the parent's
+    `<dependencyManagement>`. Neither was readable before F1."""
+    module = MavenDetector().detect(_reactor(tmp_path)).modules[0]
+
+    assert module.dependency_versions == {
+        "org.springframework:spring-web": "6.1.6",
+        "org.springframework.cloud:spring-cloud-stream": "4.1.0",
+    }
+    assert module.dependencies_not_resolved == ()
+
+
+def test_the_childs_own_declaration_beats_the_version_its_parent_manages(tmp_path: Path):
+    """Maven's precedence, kept: a version written on the declaration wins over
+    a managed one. Reading them the other way round would report a release the
+    build does not use — a wrong version is worse than none, because a
+    version-scoped rule would then apply confidently and wrongly."""
+    child = _INHERITING_POM.replace(
+        "<artifactId>spring-web</artifactId>",
+        "<artifactId>spring-web</artifactId>\n      <version>6.2.1</version>",
+    )
+    module = MavenDetector().detect(_reactor(tmp_path, child)).modules[0]
+
+    assert module.dependency_versions["org.springframework:spring-web"] == "6.2.1"
+
+
+def test_a_property_the_module_redefines_wins_over_the_parents(tmp_path: Path):
+    """Interpolation happens in the CHILD's merged property context, nearest
+    wins — the same inheritance rule the dependency maps follow, applied to the
+    values they are written in terms of."""
+    child = _INHERITING_POM.replace(
+        "<artifactId>orders</artifactId>",
+        "<artifactId>orders</artifactId>\n  <properties>"
+        "<stream.version>4.2.0</stream.version></properties>",
+    )
+    module = MavenDetector().detect(_reactor(tmp_path, child)).modules[0]
+
+    assert module.dependency_versions["org.springframework.cloud:spring-cloud-stream"] == "4.2.0"
+
+
+def test_a_parent_outside_the_repository_is_read_from_the_local_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`spring-boot-starter-parent` is not in anybody's repository, and it is
+    where most of a Boot application's versions live. A successful build —
+    M02's stated prerequisite — has already left its pom in the local
+    repository, and reading a file that is already there is neither a build
+    nor a network call."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _published_pom(
+        home,
+        "com.vendor:vendor-parent",
+        "9.9.9",
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-parent</artifactId><version>9.9.9</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context</artifactId>
+      <version>6.1.6</version>
+    </dependency>
+  </dependencies>
+</project>
+""",
+    )
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>com.vendor</groupId><artifactId>vendor-parent</artifactId><version>9.9.9</version>
+  </parent>
+  <artifactId>orders</artifactId>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_versions == {"org.springframework:spring-context": "6.1.6"}
+    assert module.dependencies_not_resolved == ()
+
+
+def test_an_imported_bom_answers_for_the_versions_it_manages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`<type>pom</type><scope>import</scope>` is how a Boot or a Spring Cloud
+    application gets almost every version it has. The BOM's own entries are
+    resolved in the BOM's property context, not the importing module's: they
+    are different namespaces, and answering one from the other would settle a
+    version on a value that never applied to it."""
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    _published_pom(
+        home,
+        "com.vendor:vendor-bom",
+        "1.2.3",
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+  <properties><jackson.version>2.17.2</jackson.version></properties>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+  </dependencies></dependencyManagement>
+</project>
+""",
+    )
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>1.0.0</version>
+  <dependencyManagement><dependencies>
+    <dependency>
+      <groupId>com.vendor</groupId><artifactId>vendor-bom</artifactId><version>1.2.3</version>
+      <type>pom</type><scope>import</scope>
+    </dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_versions == {"com.fasterxml.jackson.core:jackson-databind": "2.17.2"}
+
+
+def test_a_version_nobody_could_resolve_is_named_rather_than_guessed(tmp_path: Path):
+    """FR-17, the same discipline `libraries_not_resolved` keeps. The
+    coordinate is still in the SET — the module does depend on it, and the
+    dependency gate must see it — but it is absent from the version map, and
+    the reason says which of the two failures it was. An unexpanded
+    `${jackson.version}` written into the map would be a release nobody cut."""
+    root = tmp_path / "module"
+    root.mkdir()
+    _module(
+        root,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>1.0.0</version>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>unmanaged</artifactId></dependency>
+    <dependency>
+      <groupId>com.acme</groupId><artifactId>propertied</artifactId>
+      <version>${nobody.defines.this}</version>
+    </dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(root).modules[0]
+
+    assert module.dependency_coordinates == ("com.acme:propertied", "com.acme:unmanaged")
+    assert module.dependency_versions == {}
+    assert module.dependencies_not_resolved == (
+        (
+            "com.acme:propertied: version `${nobody.defines.this}` names a property no pom "
+            "this analysis could read defines"
+        ),
+        (
+            "com.acme:unmanaged: no version on the declaration and none managed by any pom "
+            "this analysis could read"
+        ),
+    )
+
+
+def test_a_parent_nobody_can_open_is_named_and_the_module_still_detects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A machine that never built this module has no parent pom to read, and
+    the analysis must degrade visibly rather than refuse: the module detects,
+    its own declarations are recorded, and the ancestor it could not open is
+    named — with a repository-RELATIVE location, since a path under someone's
+    home identifies nothing off the machine that wrote it (D00 §2).
+
+    `HOME` is moved to an empty directory so the assertion is about this
+    resolution and not about whatever the developer's own local repository
+    happens to hold."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    monkey = tmp_path / "module"
+    monkey.mkdir()
+    _module(
+        monkey,
+        """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <parent>
+    <groupId>com.vendor</groupId><artifactId>absent-parent</artifactId><version>9.9.9</version>
+  </parent>
+  <groupId>com.acme</groupId><artifactId>orders</artifactId><version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+      <version>6.1.6</version>
+    </dependency>
+  </dependencies>
+</project>
+""",
+    )
+
+    module = MavenDetector().detect(monkey).modules[0]
+
+    assert module.dependency_versions == {"org.springframework:spring-web": "6.1.6"}
+    [reason] = module.dependencies_not_resolved
+    assert reason.startswith("com.vendor:absent-parent:9.9.9: no parent pom on disk")
+    assert "com/vendor/absent-parent/9.9.9/absent-parent-9.9.9.pom" in reason
+    assert str(Path.home()) not in reason
+
+
+def test_a_relative_path_pointing_at_someone_elses_pom_is_not_read_as_the_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Maven checks that the pom at `<relativePath>` declares the coordinates
+    the `<parent>` element names, and so does this. An aggregator that is NOT
+    this module's parent sits at `../pom.xml` in plenty of real layouts, and
+    inheriting its properties and dependencies would be a fabrication — the
+    module would be reported as depending on something no build puts on its
+    classpath."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    child = _reactor(tmp_path, _INHERITING_POM.replace("acme-parent", "other-parent"))
+
+    module = MavenDetector().detect(child).modules[0]
+
+    # `spring-cloud-stream` is the neighbouring pom's own dependency and must
+    # not appear; the child's own declaration stays, versionless and named.
+    assert module.dependency_coordinates == ("org.springframework:spring-web",)
+    assert module.dependency_versions == {}
+    assert module.dependencies_not_resolved[0].startswith("com.acme:other-parent:2.3.0")
+
+
+def test_the_fixture_resolves_a_version_for_every_coordinate_it_declares():
+    """The committed fixture pins every version on the declaration, so the two
+    maps describe the same set — which is what makes it the control for every
+    case above: a shortfall there is the resolution's, not the fixture's."""
+    module = MavenDetector().detect(FIXTURE).modules[0]
+
+    assert set(module.dependency_versions) == set(module.dependency_coordinates)
+    assert module.dependencies_not_resolved == ()
+    assert module.dependency_versions["org.springframework:spring-web"] == "6.1.6"
+
+
+def _pom(tmp_path: Path, body: str) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<groupId>com.acme</groupId><artifactId>m</artifactId><version>1.0.0</version>"
+        f"{body}</project>",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # The modern spelling, and the one a reader should reach for.
+        ("<properties><maven.compiler.release>21</maven.compiler.release></properties>", 21),
+        # The legacy `1.x` spelling is still what older builds carry on
+        # `<target>`/`<source>`, and reading only the bare form would miss half
+        # the estate.
+        ("<properties><maven.compiler.target>1.8</maven.compiler.target></properties>", 8),
+        ("<properties><maven.compiler.source>11</maven.compiler.source></properties>", 11),
+        # Spring Boot's parent sets this one and nothing else.
+        ("<properties><java.version>17</java.version></properties>", 17),
+        # Plugin configuration WINS over the property, because
+        # `maven.compiler.release` is only the default expression for that
+        # parameter — an explicit `<release>` overrides it, and reading the
+        # property first would report a release the build does not use.
+        (
+            (
+                "<properties><maven.compiler.release>11</maven.compiler.release></properties>"
+                "<build><plugins><plugin>"
+                "<artifactId>maven-compiler-plugin</artifactId>"
+                "<configuration><release>21</release></configuration>"
+                "</plugin></plugins></build>"
+            ),
+            21,
+        ),
+        # A property nothing defines is not a release. Refusing to guess is the
+        # point: `None` sends multi-release selection to its next source
+        # (the module's own class-file major) rather than to a wrong answer.
+        ("<properties><maven.compiler.release>${jdk}</maven.compiler.release></properties>", None),
+        # A build declaring none reports absence, never a default.
+        ("", None),
+    ],
+)
+def test_the_declared_release_is_read_where_the_build_states_it(
+    tmp_path: Path, body: str, expected: int | None
+):
+    """W3b. §8.2 admits this value: it is written in the pom, so it is code
+    rather than a deployment possibility. Its consumer is multi-release
+    selection — which overlay of a dependency's class actually loads is a
+    property of the module doing the depending, and this is where that module
+    says so. Nothing read any of these keys before."""
+    [module] = MavenDetector().detect(_pom(tmp_path / "m", body)).modules
+    assert module.declared_release == expected

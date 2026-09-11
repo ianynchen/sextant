@@ -7,6 +7,10 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-web"]
 
+measured:
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
+      identity: reported, by: scripts/probes/cp7_http_exchange.md }
+
 requires: [annotation_args, type_annotations]
 
 matches:
@@ -35,6 +39,28 @@ matches:
     consumes_from: [consumes]
     produces_from: [produces]
     method_from: method
+    # F5 §6.1 (W28). Spring does not choose between two identical mappings — it throws
+    # `IllegalStateException` at startup, so the application does not run.
+    # `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping` keys its
+    # registry on the mapping object and refuses a second, different handler under an
+    # equal one (spring-webmvc 6.1.6 bytecode, read directly).
+    #
+    # Declared here and NOT in the messaging catalogs, which is the whole point of it
+    # being catalog data: `@KafkaHandler` dispatches by payload type, so several handlers
+    # on one topic is ordinary there and reporting it would be a rule mirrored onto a set
+    # it does not describe.
+    duplicate: conflict
+    # The two conditions `RequestMappingInfo.equals` compares that are NOT already
+    # columns on the endpoint row. Class-level and method-level values UNION
+    # (`ParamsRequestCondition.combine` adds one expression set to the other), so two
+    # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
+    # other and not with a method outside it.
+    discriminators: [params, headers]
+    # The seventh condition, and the one no class file states: a custom `RequestCondition`
+    # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
+    # module declaring one is left alone entirely rather than told about a conflict it
+    # does not have.
+    custom_condition: org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: org.springframework.web.bind.annotation.RequestMapping
     annotations:
@@ -65,26 +91,9 @@ wrappers:
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
 # 2H design §6: what turns one of THIS catalog's own rows (`protocol: http`,
 # above) into a row of another protocol. `resolve/protocol_hint.py` runs it
@@ -162,6 +171,11 @@ media_formats:
 json_default_markers:
   - com.fasterxml.jackson
   - tools.jackson
+  # 2O design §7 (CP-6): Boot auto-configures Jackson's converter from the
+  # jar's mere presence, so a module carrying it answers `json` even with no
+  # annotation anywhere. A coordinate marker, not a package family, because
+  # that is the evidence Boot itself acts on.
+  - coordinate: com.fasterxml.jackson.core:jackson-databind
 
 # 2G design §7's fourth vocabulary, read by
 # `resolve/shapes/parse_binding.py`: which payload parameter types mean "this
@@ -194,15 +208,28 @@ parse_calls:
     # the generated class's own name would have to know how a code generator
     # spells its output.
     #
-    # `MessageOrBuilder` is the marker that actually joins in the fact
-    # stream, and it is listed first for that reason: a generated message's
-    # `extends GeneratedMessage` is NOT emitted at all (D00 §5a keeps
-    # `supertype` for a GENERIC superclass only, and that one is not generic),
-    # while the message's own `implements ...OrBuilder`, and that interface's
-    # own `extends MessageOrBuilder`, both are. The three `GeneratedMessage*`
-    # spellings ride along for the module where a generic supertype does name
-    # one (a generated builder's does). The lite runtime reaches none of these
-    # and binds nothing — silence, never a wrong payload type.
+    # `MessageOrBuilder` is the marker that joins through the INTERFACE chain
+    # and it is listed first for that reason: a generated message's own
+    # `implements ...OrBuilder`, and that interface's own
+    # `extends MessageOrBuilder`, are both emitted.
+    #
+    # **The sentence that stood here — "a generated message's
+    # `extends GeneratedMessage` is NOT emitted at all" — was false and is
+    # corrected (`A-M12`).** `supertype` really is D00 §5a's
+    # parameterised-type carrier and really does miss a non-generic `extends`,
+    # but capability 9.13 emits a separate `superclass` field for EVERY
+    # non-`Object` superclass, and the ancestry walk in
+    # `shapes/parse_binding.py` now reads it. So the three `GeneratedMessage*`
+    # spellings are reachable by the class chain as well as by a generic
+    # builder's supertype, and a payload whose only route to a marker is a
+    # plain `extends` binds instead of silently keeping its bytes shape.
+    #
+    # Whether the LITE runtime reaches any of these is **unverified** and was
+    # already so before this correction (`A-Mi2`): no `protobuf-javalite` jar
+    # was available to the sweep. `GeneratedMessageLite` is listed, so a
+    # module whose payloads extend it binds either way; the claim this file
+    # used to make about it — that it "reaches none of these and binds
+    # nothing" — is not asserted here any more, because nothing measured it.
     - owner_hierarchy:
         - com.google.protobuf.MessageOrBuilder
         - com.google.protobuf.GeneratedMessage
@@ -250,3 +277,92 @@ config_model:
   # reason): a winning value starting with one of these names a config-server
   # import, not a value this pass can ever resolve from files alone.
   remote_prefixes: ["configserver:", "optional:configserver:"]
+
+# D02 §2j (F7 §8.2, W30). What a call REACHES, where the call is a terminal — D00 §4's
+# `terminal_kind`, which that schema declared and nothing produced for two phases. Its own
+# note said why, and the note was right: "a data-access call is `persistence` only to
+# something that knows the callee is one". This is that knowledge.
+#
+# **On this file for the reason `config_model` is** — the family's base catalog carries
+# what is true across the family. A terminals-only file cannot be a catalog (`style` and
+# `matches` are required and it declares no boundary), and every catalog is loaded
+# regardless of gating, so these rules reach every module.
+#
+# **Three routes, because three frameworks answer differently**, and each was measured on a
+# real repository before it was written. NONE is a name match: `*Mapper` and `*Repository`
+# are naming conventions, and §8.1 forbids a rule weaker than the one the framework applies.
+terminals:
+  # By OWNER — the call lands on the library type itself.
+  #
+  # Re-measured whole for W30's review, which found five published figures disagreeing:
+  # `EntityManager` is 82 of `spring-petclinic-rest`'s 102 classified terminals and 2 of
+  # `jhipster-sample-app`'s 70; `JdbcTemplate` is 3 in petclinic-rest. `RedisTemplate` is
+  # 41 on `mall-admin` and is the one rule here whose `target` is not a database — which
+  # is what the sub-field is for, and what makes "does this hit a cache or a database"
+  # answerable. The `java.sql` rules classify NOTHING on `mall-admin`, which uses MyBatis
+  # rather than raw JDBC.
+  - { owner: jakarta.persistence.EntityManager,   kind: persistence, target: database }
+  - { owner: javax.persistence.EntityManager,     kind: persistence, target: database }
+  - { owner: java.sql.Connection,                 kind: persistence, target: database }
+  - { owner: java.sql.Statement,                  kind: persistence, target: database }
+  - { owner: java.sql.PreparedStatement,          kind: persistence, target: database }
+  # `ResultSet` is ALL 17 of `spring-petclinic-rest`'s classified `java.sql` terminals and
+  # the other three above are ZERO there — reading a row back is where the JDBC calls
+  # actually are. The three are kept because a module using `JdbcTemplate` directly is
+  # ordinary and this corpus does not happen to; that they are unmeasured is stated
+  # rather than left to be inferred from their absence in the counts.
+  #
+  # **`java.sql.Date` is deliberately absent**, and it is the near-miss this list has to
+  # get right: it is 2 terminals in that same corpus, it lives in the same package, and it
+  # is a VALUE — a date that happens to be JDBC's spelling of one. Classifying it as
+  # persistence would say a call reaches a database because of the package its argument
+  # type came from. The package is not the evidence; the API is.
+  - { owner: java.sql.ResultSet,                  kind: persistence, target: database }
+  - { owner: org.springframework.jdbc.core.JdbcTemplate,        kind: persistence, target: database }
+  - { owner: org.springframework.data.redis.core.RedisTemplate, kind: persistence, target: cache }
+  - { owner: org.springframework.data.redis.core.StringRedisTemplate, kind: persistence, target: cache }
+  # By SUPERTYPE — the owner implements a declared type.
+  #
+  # **NOT read from the `type_hierarchy` table**, though this comment said so until W30's
+  # review: that table is written by the same pass that writes the edges and written
+  # AFTER them, so reading it here returned nothing at all. `resolve/terminals.py` reads
+  # the `superclasses`/`implementations` facts directly, in JVMS 5.4.3.3 order.
+  #
+  # `jhipster-sample-app`'s repositories are its OWN interfaces and carry no annotation at
+  # all; the class file says they implement `JpaRepository`, which is 68 of its 70
+  # classified terminals.
+  #
+  # **Naming only the base `Repository` classifies ZERO** — measured, and it is the reason
+  # every level a user extends is listed. The chain ends at the first UNSCANNED type: a
+  # framework's own interface has no facts here, so the walk never sees what it extends,
+  # and a catalog author must name the level a user actually writes. Transitivity still
+  # earns its keep for a user-defined intermediate — jhipster's
+  # `OperationRepositoryWithBagRelationships` is scanned and is reached through it.
+  #
+  # **Eight of the nine are unmeasured**, and that is stated rather than implied by the
+  # count above: `JpaRepository` is the only one any of the three corpora reaches. The
+  # other eight are the levels Spring Data's own documentation tells a user to extend, so
+  # they are a considered guess at the shape rather than a measured one — a module using
+  # `MongoRepository` would be the first to test it.
+  - { supertype: [org.springframework.data.repository.Repository,
+                  org.springframework.data.repository.CrudRepository,
+                  org.springframework.data.repository.ListCrudRepository,
+                  org.springframework.data.repository.PagingAndSortingRepository,
+                  org.springframework.data.repository.ListPagingAndSortingRepository,
+                  org.springframework.data.repository.reactive.ReactiveCrudRepository,
+                  org.springframework.data.jpa.repository.JpaRepository,
+                  org.springframework.data.mongodb.repository.MongoRepository,
+                  org.springframework.data.elasticsearch.repository.ElasticsearchRepository],
+      kind: persistence, target: database }
+  # By SCANNED PACKAGE — an annotation names packages and every type inside them qualifies.
+  #
+  # `mall-admin`'s mappers carry NO annotation. `@MapperScan({"com.macro.mall.mapper",
+  # "com.macro.mall.dao"})` on a config class is how MyBatis registers them, and that
+  # annotation is in the fact stream with its package list — 199 terminals, 172 in
+  # `mapper` and 27 in `dao`. Reading the
+  # scan is reading the framework's own answer; matching `*Mapper` would be guessing at it,
+  # and would also claim every unrelated type whose name happens to end that way.
+  - { scanned_by: org.mybatis.spring.annotation.MapperScan, packages_from: value,
+      kind: persistence, target: database }
+  - { scanned_by: tk.mybatis.spring.annotation.MapperScan,  packages_from: value,
+      kind: persistence, target: database }

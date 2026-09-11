@@ -31,6 +31,7 @@ instead of joining it anyway.
   facts/**/*.parquet        one partition per source file
   graph/*.parquet           the derived tables of D01
   render/                   architecture.md, architecture.html — present only when render ran
+  index/*.ndjson            the lookup projection of F8 §9.3 — always written
 ```
 
 > **Amendment (2026-09-02, Phase 2K design §6b — approved, delivered).** `render/` is new:
@@ -46,6 +47,29 @@ instead of joining it anyway.
 > `.sextant-enrichment.json`, still never travels** — §7's rule is unchanged, and this
 > subsection does not relax it: what ships is the already-assembled, already-redacted
 > DOCUMENT an overlay produced, never the program artifact that produced it.
+
+> **Amendment (F8 §9.3, W35/W36 — delivered).** `index/` is the bundle's THIRD projection,
+> and it is a projection rather than data: eight NDJSON files derived at export from the
+> tables already in `graph/`, so nothing in it is a claim the dataset does not already make.
+> What it adds is the JOIN a consumer would otherwise perform — symbol to document to source
+> root, and the reverse direction of edges the tables store one way round — and a
+> `file:line` a reader can open.
+>
+> `symbols`, `callers`, `implementors`, `annotated`, `shape_carriers` and `addresses` each
+> answer one question; `files` and `impact` assemble several. **NDJSON, ruled in §9.3**,
+> because a grep hit returns one complete self-describing record, which is what matters when
+> an agent opens the file cold with no schema and no engine — a Parquet table is not
+> greppable and a DuckDB file must be learned before it answers anything.
+>
+> **It is an EXIT, so it masks** (D04 §1): the address-bearing fields take the same
+> redactor `graph/`'s own address columns take, and a bundle whose index disagreed with its
+> tables about one address would be two answers in one directory.
+>
+> **The accepted cost, stated in the design:** the index cannot be joined against the tables
+> in DuckDB. Its job is to reach a `file:line` fast; after that the consumer opens the file,
+> or queries the tables by the exact symbol the index handed back — which is why every
+> record carries the symbol verbatim. Unlike `render/`, it is written on every export, so
+> `contents.index` is never empty for a bundle this version produced.
 
 **Parquet here, JSONL in the workspace.** In the workspace, facts are one small file per
 source file, and a columnar footer would cost more than the data. In a bundle the same
@@ -74,14 +98,20 @@ columnar need per fact kind is stated.
   "source":   { "repo": "git@github.com:acme/acme-orders.git",
                 "commit": "a3f91c…", "module_commit": "a3f91c…" },
   "producer": { "sextant_version": "0.4.0",
-                "fact_schema_version": "1.0.0",
-                "graph_schema_version": "1.0.0",
-                "scanners": [{ "id": "asm", "version": "9.7" }],
+                "fact_schema_version": 2,
+                "graph_schema_version": 2,
+                "scanners": [{ "id": "sextant-detector" },
+                  { "id": "sextant-jvm-extractor",
+                    "libraries": ["org.ow2.asm:asm:9.10.1"] }],
                 "catalog_hash": "…" },
   "environments": ["dev", "staging", "prod"],
   "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
-  "contents": { "facts": true, "graph": true, "tables": ["symbols", "edges", "endpoints",
-                                                          "shapes", "shape_fields", "dispatch", "trace_summary"],
+  "contents": { "facts": true, "graph": true, "tables": ["annotations", "call_edges", "call_sites",
+                                                          "config_entries", "documents", "endpoints",
+                                                          "error_handlers", "field_writes", "method_returns",
+                                                          "open_questions", "raw_facts", "resolved_config",
+                                                          "return_flows", "roots", "scheduled_work",
+                                                          "shape_fields", "shapes", "symbols"],
                 "facts_files": 1283,
                 "render": ["architecture.md", "architecture.html"] },
   "gaps": ["call_graph_not_implemented"],
@@ -124,7 +154,10 @@ document field.
 | `facts/*.parquet` `config_entry` payload `value` | the same, keyed by the fact's own `key_path` |
 | `graph/endpoints.parquet` `path`, `peer` | URL userinfo + value patterns |
 | `graph/open_questions.parquet` `path` | the same, through the same map — a question and the row it asks about must mask identically |
-| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args` | URL userinfo + value patterns, over every string leaf |
+| `graph/call_sites.parquet` `arguments`, `graph/annotations.parquet` `args`, `graph/return_flows.parquet` `value`, `graph/method_returns.parquet` `value` | URL userinfo + value patterns, over every string leaf — one map for one grammar, since all four are entries of D00 §5's argument shape built from the same string constants |
+| `graph/roots.parquet` `path` | the same address map as `endpoints`, because the column is carried from it — a root masked differently from the endpoint it came from would name two different things |
+| `graph/config_entries.parquet` `value` | the raw half of `resolved_config`, masked by the same `redact_value` keyed on the entry's own `key_path` |
+| `graph/raw_facts.parquet` `config_entry` payload `value` | the same map the `facts/*.parquet` stream joins, so the two shapes of one table cannot disagree |
 
 The last row is deliberately **not** key-based. A call argument is not a configuration key,
 and the path and URL literals inside one are the wire identities the linking tier matches
@@ -154,6 +187,11 @@ workspace `export` was run against before `render` ever produced anything, `["ar
 `tables`/`facts_files` are — never absent merely because nothing shipped under it — so a
 consumer checking whether a rendered document travelled reads one field rather than probing
 the bundle's own directory listing.
+
+**`contents.index` names what shipped under `index/`** (F8 §9.3), by the same rule and for
+the same reason. It differs from `render` in one way worth stating: the index is written on
+every export, so `[]` means a bundle produced before the index existed rather than a step
+somebody skipped.
 
 **`documents` carries `origin`** — the coordinate of the library a document was extracted
 from ([D00](D00-fact-schema.md) §2), NULL for the module's own output. Opting a library in
@@ -207,11 +245,47 @@ backwards from the system architecture document:
 | Naming things | `symbols` for the symbols those tables reference |
 | Honest rendering | The trust fields on every row above |
 | **The enrichment tier's inbox** | `open_questions` — what no programmatic pass could answer |
+| **The non-wire surfaces** | `scheduled_work` and `error_handlers` — what a service runs on a clock, and what it answers an exception with |
 
 **The sequence-diagram row is the one to notice.** Traces are a named query, not a table
 ([D01](D01-graph-schema.md)): they travel implicitly, as the tables `trace_of` walks over.
 If `dispatch` or the control-flow positions on `edges` do not travel, the system tier can
 draw a service map but not a sequence — so omitting them is not an optimisation.
+
+### Nothing is dropped on export
+
+**Ruled by the user (C10): every table and view in the D01 schema travels, with no exclusion
+class.** Parquet, DuckDB and the indices exist so an agent or a program can query fast, and
+making a consumer re-derive what the workspace already holds is the friction the format
+removes.
+
+For four phases the export was a hand-written list of eleven names, and the seven it omitted
+— `raw_facts`, `call_edges`, `return_flows`, `roots` and the three views `config_entries`,
+`field_writes` and `method_returns` — were dropped from every bundle with nothing saying so.
+The row above was therefore false as written: a reader could see a rendered trace and had no
+way to recompute or check what it asserted.
+
+**The ratchet runs the direction that catches the defect.** A table in the schema and absent
+from the export is a TEST FAILURE, so the list cannot be hand-maintained and cannot fall
+behind a new `CREATE TABLE`. Adding a table asks its author exactly two questions, and
+neither can be skipped: *does it export?* — automatically, and the ratchet fails the build
+otherwise; and *does analysis read its values?* — yes keeps the real value in the workspace
+and redacts at this exit, no redacts at the origin instead. There is no third answer to
+either.
+
+**`raw_facts` travels twice, and that is not an exemption.** It ships as
+`graph/raw_facts.parquet` — the whole table, queryable in one scan beside the derived tables
+it explains — and as the per-document `facts/<document_id>.parquet` stream, which is the
+shape a reader wanting one document's facts needs. Both join the same redaction map, so the
+two cannot disagree about a single value.
+
+**The cost, measured rather than assumed** (`fixtures/orders-service`, 3,588 facts across
+118 documents): `graph/` is 214 KiB over 18 files, of which `raw_facts.parquet` is **109
+KiB**; `facts/` is **410 KiB** over 118 files. So the second copy adds **21%** to a 625 KiB
+bundle — and the whole-table form is *less than a third the size* of the per-document stream
+carrying the same rows, because a parquet file's footer and column metadata are paid once
+per file. The duplication is real and small; the shape that costs the most is the one that
+was already there.
 
 ## 5a. Open questions, and how a wire format is shown
 
@@ -249,6 +323,30 @@ runs after the merge and answers every row, so the pair holds live — but the r
 is written against the column's contract rather than against today's data, which is what
 makes it still correct on the day a format is stamped before the merge.
 
+## 5a-i. The two non-wire tables
+
+**`scheduled_work` and `error_handlers` ([D01](D01-graph-schema.md) §3) travel like any
+other graph table** — `graph/scheduled_work.parquet` and `graph/error_handlers.parquet`,
+each exported through its own named query so the row order is the one NFR-1 already fixed,
+and each named in `contents.tables`. Neither is masked on the way out, and the reason is
+that neither carries a masked column: the export projections mask the columns that can hold
+a whole URL (`endpoints.path`/`.peer`, the ledger's `path`) and `resolved_config`'s values,
+and a trigger expression, a scope attribute and a status are none of those.
+
+**The rendered module document shows both as their own sections**, "Scheduled work" and
+"Error handling", below the endpoint tables. Unlike "Open questions" above, **both render
+even when empty**, with the endpoint tables' own "None found." — the difference is what an
+absent section would mean. An empty inbox is not a finding; "this service runs no
+background work" and "this service declares no error contract" both are, and a section that
+simply disappears leaves a reader unable to tell that answer from a Sextant that never
+looked.
+
+The error-handling table leads with the exception, because that is what a reader looks a
+row up by, and prints `Declared by` beside `Scope` because the two are one claim in two
+columns ([D01](D01-graph-schema.md) §3): read alone, either gets a controller's own handler
+and an application-wide advice the wrong way round. A NULL in any optional column renders
+as an em dash, never a blank cell — the same rule Media already keeps.
+
 **Declared shapes render through the existing shape tables unchanged**, with one addition:
 a field's `field_number` rides beside its wire name as `totalAmount (1)` where the format
 has one, and fields without one — every Avro field, every bytecode-derived field — render
@@ -264,7 +362,7 @@ the row's `protocol` — never by the catalog that derived it.
 | Row | Renders | Why |
 |---|---|---|
 | `http` / `grpc` | `GET /v1/orders` | the verb implies its own protocol |
-| `kafka` / `jms` / `sqs` / `pubsub` / `websocket` / `soap` | `kafka order-events`, `websocket /orders/place`, `soap {http://orders.example.com/ws}placeOrderRequest` | verbless: the protocol defines no verb, so there is none to print |
+| `kafka` / `jms` / `sqs` / `pubsub` / `amqp` / `pulsar` / `websocket` / `rsocket` / `soap` | `kafka order-events`, `amqp orders.created`, `websocket /orders/place`, `soap {http://orders.example.com/ws}placeOrderRequest` | verbless: the protocol defines no verb, so there is none to print |
 | `graphql` root operation | `graphql query orders` | verbed, and PREFIXED — a bare `query orders` names nothing in particular |
 | `graphql` resolver (`method` NULL) | `graphql Order.lines` | the NULL is an absence by design, not an unread verb |
 | `sse` | `sse GET /events/stream` | verbed with a real HTTP verb, and prefixed so it does not read as an ordinary REST route |
@@ -311,13 +409,15 @@ same columns, same resolution — and the difference is what a reader needs: the
 real, and the place to go and look is the library's source, not this module's. Three rules
 make the marking honest rather than decorative:
 
-- **It keys on the SURVIVING evidence — the handler wherever there is one, the caller only
-  where there is not.** A merged `both` row keeps the handler's own declaration
-  ([D02](D02-catalog-schema.md) §3), so a path this module HANDLES stays unmarked even when
-  the client calling it came out of a jar; marking it would attribute this module's own
-  endpoint to a library.
-- **One attribution per wire identity.** A `both` row is listed in both tables, and the same
-  finding stated twice reads as two findings.
+- **It keys on the handler wherever there is one, the caller only where there is not.**
+  So a path this module HANDLES stays unmarked even when the client calling it came out of
+  a jar; marking it would attribute this module's own endpoint to a library. *This rule
+  was written for the merged `both` row that kept the handler's own declaration; since
+  W27 (F5 §6.1) nothing merges the two directions, and the rule now simply reads whichever
+  of the two columns the row carries.*
+- **One attribution per wire identity.** A `both` row — which the linking tier may write,
+  and no pass here does — is listed in both tables, and the same finding stated twice
+  reads as two findings.
 - **A row naming neither handler nor caller is left unmarked** rather than guessed at.
 
 The coordinate itself comes back through the document a symbol was declared in — an
@@ -357,6 +457,8 @@ All three resolved for 2B:
   the archive question waits until publishing exists.
 - `--what graph` is **deferred**. Facts are what make a bundle re-derivable, so a 2B export
   always carries both (§2).
-- The full-text index does not travel, because none exists yet to travel.
+- The full-text index does not travel, because none exists yet to travel. (M09's, that is
+  — the LOOKUP index of F8 §9.3 does travel, as `index/*.ndjson`; the two are different
+  things and this line is about the one that still does not exist.)
 
 None remain open for this phase.

@@ -7,6 +7,28 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-websocket"]
 
+# 6.1.6 is the version the descriptor sweep OPENED and the jar reported, and
+# it is what the row below is bounded by. Nothing in this repository depends
+# on spring-websocket, so no run has ever exercised this rule at any other
+# version — CP-10 says so in its own version-scope paragraph.
+measured:
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+# **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
+# Withhold the capability and re-resolve on facts where every `array` argument arrives as one
+# opaque `unresolved`: this catalog's row count is UNCHANGED and only its media column goes
+# NULL. `spring-stomp-endpoint.yml` is the one that declares it, because there a two-path
+# registration collapses into one boundary and a registered URL disappears.
+#
+# D02 §1's doctrine is that `requires` keeps degradation visible and that "silently finding
+# fewer endpoints is the failure this prevents" — a row present and honestly `unresolved`,
+# or a column NULL where nothing was read, is not that failure.
+#
+# *W46 declared it here and W46's review reverted it on a rule — "`requires` names a
+# capability without which a catalog derives NOTHING" — that is false of the thirty catalogs
+# declaring `string_constants`, whose rows all survive its absence with a NULL address. The
+# rule is narrowed to what the measurement supports; the wider convention is `OI-78`.*
 requires: [call_site, string_constants]
 
 # `WebSocketHandlerRegistry.addHandler(WebSocketHandler handler, String...
@@ -18,21 +40,59 @@ requires: [call_site, string_constants]
 # shape `spring-kafka-template.yml`'s `KafkaTemplate.send` reads off a call
 # rather than an annotation.
 #
-# COVERAGE boundary (Task 5): this entry has NO live fixture surface — Task 1
-# built none (2H Task 5 brief, spec ruling) — so it is proved only by a
-# unit-level test over synthetic call facts
-# (`tests/application/test_call_engines.py`'s own pattern for an invented
-# `single_call` catalog), never by a compiled-bytecode pin. `arity: 2` and
-# `channel_arg: 1` assume the single-path call form
-# (`.addHandler(handler, "/ws")`) compiles to exactly two call-site
-# arguments — the receiver's own varargs collapsing a single trailing
-# `String` into a one-element array the way `javac` ordinarily does for a
-# literal call — unverified against real bytecode. A multi-path call
-# (`.addHandler(handler, "/ws", "/ws2")`) is a THREE-argument call this row's
-# own `arity: 2` does not match at all, so it derives no row rather than a
-# wrong one — a known limitation, not a silent guess, the same shape
-# spring-kafka.yml's own class-level `@KafkaListener` "element 0 only"
-# comment already keeps for a different multi-value case.
+# COVERAGE boundary (Task 5): this entry has NO live fixture surface — Task 1 built
+# none (2H Task 5 brief, spec ruling) — so it is proved only by unit-level tests over
+# synthetic call facts, never by a fixture pin. *The sentence here also said "no pom
+# anywhere in this repository depends on `spring-websocket` at all", which stopped being
+# true in W16: `fixtures/orders-service/pom.xml` declares it directly, which is what
+# lets `spring-stomp.yml`'s own `detect.required` gate pass on the fixture. The missing
+# thing is a CALL to `addHandler`, not the dependency (W47's review).*
+#
+# WHAT THE OLD COMMENT SAID HERE, AND WHY IT WAS WRONG (descriptor sweep R6).
+# It called the two-argument shape "unverified against real bytecode" and then
+# asserted that a multi-path call `.addHandler(handler, "/ws", "/ws2")` "is a
+# THREE-argument call this row's own `arity: 2` does not match at all". Both
+# halves are now measured, by compiling those exact two calls against
+# spring-websocket 6.1.6 and running the shipped extractor over the class file:
+#
+#   .addHandler(h, "/ws")          -> 2 arguments; argument 1 is
+#                                     {kind: array, elements: [{string "/ws"}]}
+#   .addHandler(h, "/ws", "/ws2")  -> 2 arguments; argument 1 is
+#                                     {kind: array, elements: [{"/ws"}, {"/ws2"}]}
+#
+# VARARGS COLLAPSE INTO ONE ARGUMENT. The multi-path call has always matched
+# this row; the comment's reassurance that it "derives no row rather than a
+# wrong one" was describing a mechanism that does not exist.
+#
+# THE BOUNDARY THAT STOOD HERE IS CLOSED (2O Task 13). It read: "`channel_of`
+# resolves only a `kind: "string"` argument (`shapes/arguments.py`), and
+# argument 1 is ALWAYS an `array` — for one path as much as for two. So
+# `channel_arg: 1` can never resolve a WebSocket path at all: every call,
+# single- or multi-path, derives one honest row with `path` NULL and
+# `resolution: unresolved`." Every word of that was true of the reader, and
+# the reader is what changed: `single_call` now reads a `channel_arg` slot
+# through `channels_of`, which reads an `array`'s own `elements` (extractor
+# capability 9.15) and answers one destination per element.
+#
+# So `.addHandler(h, "/ws")` derives `/ws` resolved, and
+# `.addHandler(h, "/ws", "/ws2")` derives BOTH — one row per registered path,
+# the way each `urlPatterns` entry is already its own row, because Spring
+# registers the one handler at every path named. A path element javac could
+# not fold to a constant keeps the ONE trailing unresolved row `all_strings`
+# gives, never a guess: the row count still says how many registrations there
+# are, and the unread one says so.
+#
+# Nothing about this file changed to close it; the catalog was already correct
+# for the shape the extractor emits, which is why the boundary was worth
+# stating precisely rather than working around.
+#
+# `arity: 2` is therefore right, and it now carries the erased JVM `descriptor`
+# of the one overload `WebSocketHandlerRegistry` declares — the interface has
+# exactly one method (javap -p -s, spring-websocket 6.1.6, recorded in
+# `scripts/probes/cp10_catalog_descriptors.md`). Unique today, so the claim
+# costs nothing; the day the interface gains a second two-argument
+# `addHandler`, that overload derives NOTHING rather than having its own
+# argument 1 read as a dispatch path.
 #
 # `channel_arg`, not `url_arg`: a WebSocket dispatch path is a destination
 # identity `SockJS`/plain handshake registration resolves against, never a
@@ -42,45 +102,14 @@ requires: [call_site, string_constants]
 matches:
   owner: org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
   methods:
-    - { name: addHandler, arity: 2, channel_arg: 1 }
+    - { name: addHandler, arity: 2,
+        descriptor: "(Lorg/springframework/web/socket/WebSocketHandler;[Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/WebSocketHandlerRegistration;",
+        channel_arg: 1 }
 
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

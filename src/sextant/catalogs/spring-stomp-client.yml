@@ -1,0 +1,101 @@
+id: spring-stomp-client
+displayName: Spring STOMP messaging (client connect)
+style: single_call
+protocol: websocket
+direction: outbound
+
+# THE ABSENT DIRECTION, the STOMP half (F10 §11, `G-32`, W46). The outbound twin of
+# the `addEndpoint` URL `spring-stomp-endpoint.yml` reads on the server side (W45):
+# this is a module CONNECTING to somebody else's STOMP broker, and it appeared in no
+# export at all.
+detect:
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
+
+measured:
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # ONE owner. This and `spring-websocket-client.yml` were a single file with a
+  # two-entry `owner` list for one draft, and CP-10 refused it: the probe checks
+  # every declared descriptor against every listed owner, so the file CLAIMED
+  # `execute` on this class and `connectAsync` on `WebSocketClient`, neither of
+  # which declares the other's method. An `owner` list is for one library reachable
+  # under more than one NAME; these are two clients.
+  owner: org.springframework.web.socket.messaging.WebSocketStompClient
+  # MEASURED at spring-websocket 6.1.6: `WebSocketStompClient` declares **EIGHT** connect
+  # methods — `connectAsync` and the deprecated `connect`, each in four shapes. *The first
+  # version of this file said FOUR and declared four, which was the half whose url is a
+  # bare `String`; the `StompHeaders` pair takes a String at argument 0 too and was simply
+  # unread, and the `URI` pair takes its address at argument 0 behind no headers at all
+  # (W46's review).* All eight are declared now:
+  #
+  #   `(String, handler, Object...)`                          url at 0
+  #   `(String, WebSocketHttpHeaders, handler, Object...)`    url at 0
+  #   `(String, WebSocketHttpHeaders, StompHeaders, handler, Object...)`  url at 0
+  #   `(URI, WebSocketHttpHeaders, StompHeaders, handler)`    url at 0, one hop away
+  #
+  # each in a `ListenableFuture` and a `CompletableFuture` form. The return type is what
+  # separates the pairs and `_matching_method` compares PARAMETER types alone, so each is
+  # declared at its own arity rather than relying on the return.
+  #
+  # `channel_arg` on every row, for the reason `jakarta-websocket-client.yml` states at
+  # length: the `channel_via` rung is peerless by construction, so splitting the literal
+  # rows would publish two address shapes for one boundary. Whole URL in `path`, `peer`
+  # NULL, everywhere — and this file has both kinds of row, so the consistency is its own
+  # concern rather than a borrowed argument.
+  #
+  # THE URI-VARIABLE OVERLOADS ARE NOT EXPANDED. Every `connect*` form here takes
+  # trailing `Object...` uri-variables, and the TEMPLATE is what lands in `path` —
+  # `/{id}` verbatim, never a value substituted in. That is the same answer an
+  # `@GetMapping("/orders/{id}")` row gives, and it is the address the code declares
+  # rather than one call's arguments.
+  methods:
+    - { name: connectAsync, arity: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0 }
+    - { name: connectAsync, arity: 4,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0 }
+    # The DEPRECATED `ListenableFuture` pair, declared because a Boot 2 codebase
+    # calls them and a deprecated method is still a live boundary. Their return
+    # type is what tells them apart from `connectAsync`, and the descriptor is
+    # compared on parameter types alone — so each is declared at its own arity
+    # rather than relying on the return.
+    - { name: connect, arity: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Lorg/springframework/util/concurrent/ListenableFuture;",
+        channel_arg: 0 }
+    - { name: connect, arity: 4,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Lorg/springframework/util/concurrent/ListenableFuture;",
+        channel_arg: 0 }
+    # The `StompHeaders` shape — a String url at argument 0, readable and unread until
+    # W46's review.
+    - { name: connectAsync, arity: 5,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0 }
+    - { name: connect, arity: 5,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;[Ljava/lang/Object;)Lorg/springframework/util/concurrent/ListenableFuture;",
+        channel_arg: 0 }
+    # The `URI` shape — the address at argument 0, one hop behind `URI.create` or
+    # `new URI`, exactly as `jakarta-websocket-client.yml` reads its own.
+    - { name: connectAsync, arity: 4,
+        descriptor: "(Ljava/net/URI;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;)Ljava/util/concurrent/CompletableFuture;",
+        channel_arg: 0,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+    - { name: connect, arity: 4,
+        descriptor: "(Ljava/net/URI;Lorg/springframework/web/socket/WebSocketHttpHeaders;Lorg/springframework/messaging/simp/stomp/StompHeaders;Lorg/springframework/messaging/simp/stomp/StompSessionHandler;)Lorg/springframework/util/concurrent/ListenableFuture;",
+        channel_arg: 0,
+        channel_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                      { owner: java.net.URI, method: "<init>", arg: 0 }] }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

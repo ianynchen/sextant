@@ -65,6 +65,23 @@ side effect out of a module.
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
 
+### `module render` has no display flag ([GUIDELINES](../../GUIDELINES.md) §8.4)
+
+**One module, one document, and that document is the complete one.** `render` takes a path
+and a `--workspace`; it carries nothing that changes what the document shows.
+
+There was one such flag, `--brief`, and it was deleted rather than repaired — *"deleting
+that --brief if it only cuts the first N. that's same as lying"*. It drew whole traces
+while a 500-step budget lasted, in the summary table's own order, which is an arbitrary
+prefix and not a summary; saying so in the document's own text made the omission honest
+and never made the prefix an answer. A **trimmed** document is still wanted and is
+enrichment work — *"we may want to leverage llm to produce that trimmed down version,
+that's a different story and a different ask"* — because which traces a reader can spare
+is a judgement, and a renderer cannot compute one.
+
+Volume itself stays a **navigation** problem, answered by indices and by the agents that
+read the document, never by drawing less.
+
 ### `module enrich` (2K design §3/§8)
 
 Requires a rendered workspace — refused, loudly, naming `render`, before composing anything,

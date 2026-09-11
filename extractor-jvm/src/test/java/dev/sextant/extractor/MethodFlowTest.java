@@ -1,6 +1,7 @@
 package dev.sextant.extractor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
@@ -20,19 +21,31 @@ class MethodFlowTest {
 
     private static final String OWNER = "dev/sextant/extractor/CallSample";
 
-    private static List<String> callSites(String methodName) throws Exception {
+    private static MethodNode methodNode(String methodName) throws Exception {
         ClassNode classNode = new ClassNode();
         try (InputStream in =
                 MethodFlowTest.class.getResourceAsStream("/dev/sextant/extractor/CallSample.class")) {
             new ClassReader(in.readAllBytes()).accept(classNode, ClassReader.SKIP_FRAMES);
         }
-        MethodNode method = classNode.methods.stream()
+        return classNode.methods.stream()
             .filter(candidate -> candidate.name.equals(methodName))
             .findFirst()
             .orElseThrow(() -> new AssertionError("no method named " + methodName + " on CallSample"));
-        String caller = new ClassScanner("com.acme/orders", "1.0.0")
-            .symbolOf(OWNER + "#" + methodName + "(" + ClassScanner.disambiguatorOf(method.desc) + ").");
-        return MethodFlow.callSites("doc-call-sample", caller, method);
+    }
+
+    private static String symbolOf(MethodNode method) {
+        return new ClassScanner("com.acme/orders", "1.0.0")
+            .symbolOf(OWNER + "#" + method.name + "(" + ClassScanner.disambiguatorOf(method.desc) + ").");
+    }
+
+    private static List<String> callSites(String methodName) throws Exception {
+        MethodNode method = methodNode(methodName);
+        return MethodFlow.callSites("doc-call-sample", symbolOf(method), method);
+    }
+
+    private static List<String> methodReturns(String methodName) throws Exception {
+        MethodNode method = methodNode(methodName);
+        return MethodFlow.methodReturns("doc-call-sample", symbolOf(method), method);
     }
 
     private static String last(List<String> lines) {
@@ -274,7 +287,78 @@ class MethodFlowTest {
         String line = last(callSites("lambdaArgument"));
         assertTrue(line.contains("\"name\":\"forEach\""), line);
         assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
-        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
+        assertNamesLambdaOf(line, "symbol", "lambdaArgument");
+    }
+
+    /** Capability 9.17, on the site itself rather than on a slot that happens
+     *  to hold it: a `dynamic` call site names the body its dispatch will run.
+     *  Before it, a traversal following call targets stopped at
+     *  `LambdaMetafactory` and every statement inside the lambda — a
+     *  `mapper.insert` among them — was extracted into a synthetic method that
+     *  nothing referenced. */
+    @Test
+    void names_the_lambda_body_a_dynamic_site_will_dispatch_into() throws Exception {
+        String line = callSites("lambdaArgument").get(0);
+        assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
+        assertNamesLambdaOf(line, "implementation", "lambdaArgument");
+        // The bootstrap is still recorded, and must be: it is what says this
+        // site is a lambda at all, where the body alone does not.
+        assertTrue(line.contains("\"owner\":\"java/lang/invoke/LambdaMetafactory#\""), line);
+    }
+
+    /** The gap the `lambda` argument kind cannot close, which is why 9.17 is a
+     *  field on the site rather than a wider read of arguments: a returned
+     *  lambda fills no argument slot, so nothing in this method's facts carried
+     *  its body before — the assertion below is that the `lambda` kind is
+     *  genuinely absent here, not merely elsewhere. */
+    @Test
+    void names_the_body_of_a_lambda_that_fills_no_argument_slot() throws Exception {
+        List<String> lines = callSites("returnedLambda");
+        assertEquals(1, lines.size());
+        String line = lines.get(0);
+        assertNamesLambdaOf(line, "implementation", "returnedLambda");
+        assertFalse(line.contains("\"kind\":\"lambda\""), line);
+    }
+
+    /** The near-miss, and the reason `implementationOf` asks the bootstrap
+     *  rather than the opcode: **not every invokedynamic is a lambda**. A
+     *  string concatenation's bootstrap arguments are a format recipe and its
+     *  constants — there is no implementation method, so naming one would
+     *  assert a call to code that does not exist.
+     *
+     *  <p>Paired with a positive in the same body, because a rule that matched
+     *  nothing would pass the negative half forever: the site IS a real
+     *  `dynamic` call site with a `StringConcatFactory` bootstrap, and the
+     *  lambda case above still fires. */
+    @Test
+    void names_no_body_for_an_invokedynamic_that_bootstraps_no_method() throws Exception {
+        String line = callSites("concatenated").get(0);
+        assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
+        assertTrue(line.contains("\"owner\":\"java/lang/invoke/StringConcatFactory#\""), line);
+        assertFalse(line.contains("\"implementation\""), line);
+    }
+
+    /** The other near-miss: an ordinary invoke's `target` already names its
+     *  callee, so a second field saying the same thing would be a claim
+     *  duplicated in two places that can disagree. The key is absent — not
+     *  null — on every call site but a lambda's. */
+    @Test
+    void names_no_body_for_an_ordinary_call_whose_target_already_is_one() throws Exception {
+        assertFalse(callSites("stringLiteral").get(0).contains("\"implementation\""),
+                    callSites("stringLiteral").get(0));
+    }
+
+    /** D00 §1's stability rule again, at the new field: `implementation` is the
+     *  same **bare** descriptor path the `lambda` argument kind emits, so
+     *  `String::trim` is one symbol in every module that writes it. The cost is
+     *  stated in D00 §5 rather than discovered later — an in-module body joins
+     *  to its own method fact by stripping that fact's module prefix, which is
+     *  what every consumer of these symbols already does. */
+    @Test
+    void names_a_jdk_body_without_stamping_the_callers_coordinates_on_it() throws Exception {
+        String line = callSites("jdkMethodReferenceArgument").get(0);
+        assertTrue(line.contains("\"implementation\":\"java/lang/String#trim(sig_"), line);
+        assertFalse(line.contains("com.acme/orders 1.0.0 java/lang/String"), line);
     }
 
     /** A method reference bootstraps identically and names the referenced
@@ -361,16 +445,25 @@ class MethodFlowTest {
         assertTrue(Integer.parseInt(field(line, "result")) >= 0, line);
     }
 
-    /** The chain join across an indy: the concatenated string is unresolved as
-     *  a value and still names the site that produced it. Before the indy
-     *  itself was a fact, that source id pointed at nothing. */
+    /** The chain join across an indy, and W4's change to what the value itself
+     *  says.
+     *
+     *  <p>This asserted `unresolved` until W4: the concatenation's literal parts
+     *  were in the class file, in the bootstrap's recipe, and were thrown away —
+     *  so an address assembled from pieces reached a catalog naming nothing.
+     *  The value is now the TEMPLATE, `order-{}`, with a hole where the runtime
+     *  value goes.
+     *
+     *  <p>The join is unchanged and still asserted here, because the template
+     *  says only WHERE the hole is: what fills it is the concat site's own
+     *  call-site fact, reached by `source` -> `result`. */
     @Test
     void names_the_producing_invokedynamic_when_an_argument_is_its_result() throws Exception {
         List<String> lines = callSites("concatenated");
         assertEquals(2, lines.size());
         assertTrue(lines.get(1).contains("\"name\":\"sink\""), lines.get(1));
-        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"unresolved\",\"source\":"
-            + field(lines.get(0), "result") + "}]"), lines.get(1));
+        assertTrue(lines.get(1).contains("\"arguments\":[{\"kind\":\"concat\",\"source\":"
+            + field(lines.get(0), "result") + ",\"value\":\"order-{}\"}]"), lines.get(1));
     }
 
     /** The join Task 12's terminal needs on honest code. Nobody writes
@@ -525,6 +618,163 @@ class MethodFlowTest {
         assertTrue(lines.get(0).contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), lines.get(0));
     }
 
+    /** Capability 9.15's happy path. The value reaching a `String...` slot is
+     *  the array the {@code ANEWARRAY} produced, so before this capability both
+     *  literals were absent from the fact stream entirely and the arity was
+     *  unreadable — one `unresolved` says nothing about whether a flow consumes
+     *  one queue or twenty (measured:
+     *  `scripts/probes/spring-integration-destinations.md`). */
+    @Test
+    void reads_the_elements_of_a_varargs_array_argument() throws Exception {
+        String line = last(callSites("varargsLiterals"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"string\",\"value\":\"orders.queue\"},"
+            + "{\"kind\":\"string\",\"value\":\"orders.retry.queue\"}],\"kind\":\"array\"}]"), line);
+    }
+
+    /** The element list is the point: one argument that happens to be an array,
+     *  with its contents beside it, never N arguments. A consumer reading
+     *  arity off `arguments` must still see the ONE slot the descriptor
+     *  declares — unpacking would renumber every slot after it. */
+    @Test
+    void keeps_a_varargs_array_as_one_argument_slot() throws Exception {
+        String line = last(callSites("varargsLiterals"));
+        assertTrue(line.contains("\"descriptor\":\"([Ljava/lang/String;)V\""), line);
+        assertEquals(1, line.split("\"kind\":\"array\"", -1).length - 1, line);
+    }
+
+    /** Each element carries the SAME kind a single-`String` parameter in the
+     *  same position would — a field reads `field`, a parameter reads
+     *  `parameter`, an unreadable call result reads `unresolved` WITH its
+     *  `source`. That is the whole defect this capability closes: the probe's
+     *  control arm discriminated all eight destination spellings through a
+     *  single-`String` sink while the varargs sink collapsed them to one
+     *  byte-identical `unresolved`, and the elements now discriminate the same
+     *  way. */
+    @Test
+    void gives_each_varargs_element_the_kind_a_single_argument_would_have() throws Exception {
+        List<String> lines = callSites("varargsMixedProducers");
+        String line = last(lines);
+        assertTrue(line.contains("{\"kind\":\"field\",\"symbol\":\""
+            + OWNER + "#url.\"}"), line);
+        assertTrue(line.contains("{\"kind\":\"parameter\",\"value\":0}"), line);
+        // The unreadable one keeps its instruction id, so the call that
+        // produced it is a join away — exactly what the varargs `unresolved`
+        // never had.
+        assertTrue(line.contains("{\"kind\":\"unresolved\",\"source\":"), line);
+    }
+
+    /** Zero-length varargs — `foo()` against `foo(String...)` — compiles to an
+     *  empty {@code ANEWARRAY}, and the empty list is written rather than
+     *  omitted: "called with no destinations" is a different statement from
+     *  "the array could not be read", and `unresolved` is what says the
+     *  latter. */
+    @Test
+    void reports_a_zero_length_varargs_array_as_an_empty_element_list() throws Exception {
+        String line = last(callSites("varargsEmpty"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":[],\"kind\":\"array\"}]"), line);
+    }
+
+    /** A primitive varargs array is {@code NEWARRAY}/{@code IASTORE}, the other
+     *  creation opcode and the other end of the eight store opcodes. */
+    @Test
+    void reads_the_elements_of_a_primitive_varargs_array() throws Exception {
+        String line = last(callSites("varargsPrimitives"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"int\",\"value\":1},{\"kind\":\"int\",\"value\":2}],"
+            + "\"kind\":\"array\"}]"), line);
+    }
+
+    /** The declared element type is load-bearing one level down exactly as it
+     *  is at the top level: {@code ICONST_1} is both the int 1 and the flag
+     *  `true`, and only `boolean...`'s element type tells them apart. */
+    @Test
+    void tells_a_boolean_varargs_element_from_an_int_one() throws Exception {
+        String line = last(callSites("varargsBooleans"));
+        assertTrue(line.contains("\"arguments\":[{\"elements\":["
+            + "{\"kind\":\"boolean\",\"value\":true},{\"kind\":\"boolean\",\"value\":false}],"
+            + "\"kind\":\"array\"}]"), line);
+    }
+
+    /** An explicitly written `new String[]{…}` against a varargs parameter is
+     *  byte-identical to the sugar — the ACC_VARARGS flag lives on the callee,
+     *  a class this pass has not read — so the two MUST agree. They are the
+     *  same call, and `elements` states what the callee receives. */
+    @Test
+    void reads_an_explicit_array_argument_exactly_as_it_reads_varargs_sugar() throws Exception {
+        assertEquals(last(callSites("varargsLiterals")).replace("varargsLiterals", "X"),
+                     last(callSites("explicitArray")).replace("explicitArray", "X"));
+    }
+
+    /** NEAR MISS — an array filled by a loop. Creation and stores are the same
+     *  opcodes as the happy path; the index is a loop counter rather than a
+     *  constant, so there is no element list. The assertion is that NOTHING was
+     *  produced (GUIDELINES §10) — no `elements` key at all, not a different
+     *  one. */
+    @Test
+    void produces_no_element_list_for_an_array_filled_in_a_loop() throws Exception {
+        String line = last(callSites("varargsFilledInALoop"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a conditionally populated array. Constant length, constant
+     *  index, every slot written: only the branch separates it from the happy
+     *  path, and each element then has two producing stores. Naming either
+     *  would assert a path that may never run — the merge rule a plain
+     *  conditional argument already obeys, one level down. */
+    @Test
+    void produces_no_element_list_for_a_conditionally_populated_array() throws Exception {
+        String line = last(callSites("varargsPopulatedConditionally"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a partially populated array: constant length 2, one constant
+     *  store, the second element left null. Reporting the written half as the
+     *  whole would claim an arity the call does not have. */
+    @Test
+    void produces_no_element_list_for_a_partially_populated_array() throws Exception {
+        String line = last(callSites("varargsPartiallyPopulated"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — an array handed in from elsewhere. Its producer is no array
+     *  creation, so it never reaches the array branch and keeps the
+     *  `parameter` kind it already had: 9.15 does not turn every array-typed
+     *  slot into an element list. */
+    @Test
+    void leaves_an_array_that_arrived_as_a_parameter_alone() throws Exception {
+        String line = last(callSites("varargsFromAnArrayParameter"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"parameter\",\"value\":0}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — the array reaches another method between construction and
+     *  the call that consumes it. Every element is a constant store at a
+     *  constant index, so it reads perfectly at the moment it is built; what
+     *  this pass cannot see is whether the callee rewrote it, and an element
+     *  list would be a claim about the wrong instant. */
+    @Test
+    void produces_no_element_list_for_an_array_that_escapes_to_another_call() throws Exception {
+        String line = last(callSites("varargsMutatedElsewhere"));
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
+    /** NEAR MISS — a store into the array after the call that consumes it. The
+     *  callee holds the reference, so the elements this slot would claim are
+     *  not the ones it ultimately sees. */
+    @Test
+    void produces_no_element_list_for_an_array_mutated_after_the_call() throws Exception {
+        List<String> lines = callSites("varargsMutatedAfterTheCall");
+        String line = lines.get(0);
+        assertTrue(line.contains("\"name\":\"destinations\""), line);
+        assertTrue(line.contains("\"arguments\":[{\"kind\":\"unresolved\"}]"), line);
+        assertFalse(line.contains("\"elements\""), line);
+    }
+
     /** A method with no body — an interface method, an abstract one — has no
      *  frames to walk and must not stop the scan. */
     @Test
@@ -534,5 +784,118 @@ class MethodFlowTest {
             "missing", "()V", null, null);
         assertEquals(List.of(), MethodFlow.callSites("doc", "sextant-jvm maven c v o/P#missing().",
             abstractMethod));
+        assertEquals(List.of(), MethodFlow.methodReturns("doc",
+            "sextant-jvm maven c v o/P#missing().", abstractMethod));
     }
+
+    /** Capability 9.18, and the whole point of it: the value a method hands
+     *  back is another call's result, so the return NAMES that site. The chain
+     *  a round trip needs was already extracted one hop short of this — an
+     *  argument carries the `source` of the call that produced it — and this is
+     *  the link that says which of those the method returns.
+     *
+     *  <p>The producing call's own `result` is read back rather than
+     *  hardcoded: a value id is an instruction index, and pinning one would
+     *  make the assertion about javac's label placement instead of about the
+     *  join. */
+    @Test
+    void states_the_whole_fact_for_a_returned_call_result() throws Exception {
+        String producer = callSites("returnsCallResult").get(0);
+        List<String> returns = methodReturns("returnsCallResult");
+        assertEquals(1, returns.size());
+        String line = returns.get(0);
+        assertTrue(line.contains("\"kind\":\"method_return\""), line);
+        assertTrue(line.contains("\"document_id\":\"doc-call-sample\""), line);
+        assertTrue(line.contains("\"method\":\"sextant-jvm maven com.acme/orders 1.0.0 "
+            + OWNER + "#returnsCallResult("), line);
+        assertTrue(line.contains("\"ordinal\":0"), line);
+        assertTrue(line.contains("\"value\":{\"kind\":\"unresolved\",\"source\":"
+            + field(producer, "result") + "}"), line);
+    }
+
+    /** A void return pops nothing, and that is an ANSWER rather than a failure
+     *  to read one — which is why `value` is an argument entry and not a bare
+     *  id. `null` here is a shape no value-returning form can produce, so
+     *  "returns nothing" stays distinguishable from "returns something this
+     *  pass could not name", which is `{"kind":"unresolved"}`.
+     *
+     *  <p>Paired deliberately: the same assertion pins BOTH spellings against
+     *  each other, because a reading that collapsed them would still satisfy
+     *  either one alone. */
+    @Test
+    void distinguishes_a_void_return_from_a_value_it_could_not_read() throws Exception {
+        String empty = methodReturns("stringLiteral").get(0);
+        assertTrue(empty.contains("\"value\":null"), empty);
+        assertFalse(empty.contains("\"unresolved\""), empty);
+
+        String unread = methodReturns("returnsAMergedValue").get(0);
+        assertTrue(unread.contains("\"value\":{\"kind\":\"unresolved\""), unread);
+        assertFalse(unread.contains("\"value\":null"), unread);
+    }
+
+    /** The declared RETURN type is load-bearing for the same reason an
+     *  argument's declared type is: {@code true} and {@code 1} are one
+     *  {@code ICONST_1}, and reporting a flag as an int loses the distinction
+     *  the flag exists for. */
+    @Test
+    void reads_a_primitive_return_against_the_methods_own_declared_type() throws Exception {
+        String line = methodReturns("returnsPrimitive").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"boolean\",\"value\":true}"), line);
+    }
+
+    /** Two `return` statements are two facts, told apart by `ordinal`. Modelled
+     *  rather than collapsed: a branch gives two possible answers and no single
+     *  one, and asserting either as "the" returned value would be a fact about
+     *  code that may never run — the same refusal a merged value gets. */
+    @Test
+    void records_each_return_of_a_branching_method_rather_than_one_of_them() throws Exception {
+        List<String> returns = methodReturns("returnsOnTwoBranches");
+        assertEquals(2, returns.size());
+        assertTrue(returns.get(0).contains("\"ordinal\":0"), returns.get(0));
+        assertTrue(returns.get(0).contains("\"value\":{\"kind\":\"string\",\"value\":\"first\"}"),
+                   returns.get(0));
+        assertTrue(returns.get(1).contains("\"ordinal\":1"), returns.get(1));
+        assertTrue(returns.get(1).contains("\"value\":{\"kind\":\"string\",\"value\":\"second\"}"),
+                   returns.get(1));
+    }
+
+    /** A returned parameter reads through the same grammar an argument slot
+     *  does — the value is knowable only where THIS method was called, which is
+     *  exactly what the cross-method propagation this fact feeds resolves. */
+    @Test
+    void reads_a_returned_parameter_as_the_parameter_it_is() throws Exception {
+        String line = methodReturns("returnsParameter").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"parameter\",\"value\":0}"), line);
+    }
+
+    /** A returned lambda, which is where 9.17 and 9.18 meet: the returned value
+     *  reads as the `lambda` kind naming the body, and the site that created it
+     *  carries the same symbol in `implementation`. One object, one answer from
+     *  two directions. */
+    @Test
+    void reads_a_returned_lambda_as_the_body_it_names() throws Exception {
+        String line = methodReturns("returnedLambda").get(0);
+        assertTrue(line.contains("\"value\":{\"kind\":\"lambda\",\"source\":"), line);
+        assertNamesLambdaOf(line, "symbol", "returnedLambda");
+    }
+
+    /** A synthetic lambda method named by its ENCLOSING METHOD, with javac's own
+     *  counter left unpinned.
+     *
+     *  The counter is the compiler's business and it moves: these assertions read
+     *  `lambda$returnedLambda$0` under one JDK and `$1` under another, which is how
+     *  two of them passed locally and failed in CI. The FACT under test is that the
+     *  site names the lambda's own synthetic method — never which ordinal javac
+     *  handed it. §13.8: the RUNBOOK already records "one compiler's conventions
+     *  written down as the format's rules" as a repeated class; this is that class
+     *  in a test rather than in a reader. */
+    private static void assertNamesLambdaOf(String line, String key, String method) {
+        String prefix = OWNER + "#lambda$" + method + "$";
+        assertTrue(
+            Pattern.compile(Pattern.quote("\"" + key + "\":\"" + prefix) + "\\d+" + Pattern.quote("(sig_"))
+                   .matcher(line)
+                   .find(),
+            line);
+    }
+
 }

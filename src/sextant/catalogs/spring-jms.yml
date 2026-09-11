@@ -7,7 +7,11 @@ direction: inbound
 detect:
   coordinates: ["org.springframework:spring-jms"]
 
-requires: [annotation_args, typed_signatures]
+# `nested_annotation_args` (capability 9.16): a REPEATED `@JmsListener`
+# reaches the class file only as the nested array inside `@JmsListeners`
+# (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a
+# requirement rather than a nicety.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: `@JmsListener` sits on the method directly.
@@ -16,9 +20,25 @@ matches:
   # compile-time-typed payload this catalog's rules can pull a real
   # contract out of — leaving it eligible for `sole_unannotated` would
   # describe the opaque envelope itself as if it were the payload.
+  #
+  # BOTH SPELLINGS, and this list is why F2 §3.3's two failure modes are not the
+  # whole story (W11, `scripts/probes/w11_javax_jakarta.md` finding 4). `excludes`
+  # is a NEGATIVE list: a missing spelling stops the REFUSAL rather than stopping
+  # the match. Measured before the fix — a Spring Boot 2 `@JmsListener` taking a
+  # `javax.jms.Message` had `sole_unannotated` pick that envelope and publish it
+  # AS the message contract. Not the silence a missing positive match produces,
+  # and not the hole a missing identity read produces: a wrong contract, at
+  # `resolved`. Every rule that names a type in order to REFUSE it inverts the
+  # javax/jakarta failure this way, which is why W12 swept the negative lists
+  # separately from `matches`.
+  #
+  # `@JmsListener` itself is a SPRING annotation and never moved packages; only
+  # the payload types it excludes did. So this file needs no twin, unlike
+  # `jakarta-jms.yml`, whose owner is the moved API itself.
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
-                  excludes: [jakarta.jms.Session, jakarta.jms.Message] }
+                  excludes: [jakarta.jms.Session, jakarta.jms.Message,
+                             javax.jms.Session, javax.jms.Message] }
   mapping:
     # CHECKPOINT FACT: `@JmsListener.destination` is genuinely scalar in
     # bytecode (unlike Kafka's `topics`).
@@ -31,25 +51,34 @@ matches:
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: org.springframework.jms.annotation.JmsListener }
+      # `container` names what javac writes for two `@JmsListener` on one
+      # method (`OI-36`). MEASURED: CP-16 rows 2c/2d read
+      # `@Repeatable(JmsListeners.class)` at 6.1.6 and 7.0.9, and rows 4c/4d
+      # show the post-processor calling
+      # `AnnotatedElementUtils.getMergedRepeatableAnnotations(element,
+      # JmsListener, JmsListeners)` — naming both classes, so the framework
+      # reads the container as well as the annotation.
+      - { fqn: org.springframework.jms.annotation.JmsListener,
+          container: org.springframework.jms.annotation.JmsListeners }
 
-# Copied verbatim from spring-resttemplate.yml, for the same reason
-# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
-# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
+# *global*, insert-if-absent pass keyed on the type symbol alone
 # (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
 # the one that expands it, and every later catalog finds it already there.
-# Whichever catalog that turns out to be, ITS
-# `wrappers`/`serialization`/`known_types` are the rules that describe the
-# type for everyone, regardless of protocol or direction — so a file whose
-# copy disagreed would make the answer depend on catalog sort order (Task 10
+# Whichever catalog that turns out to be, ITS `wrappers` are the rules that
+# describe the type for everyone, regardless of protocol or direction — so a
+# file whose copy disagreed would make the answer depend on catalog sort order (Task 10
 # fix round 1, finding 1). Endpoint-level ownership is a different question
 # and is NOT this reason: `_owns` reads a row's own `catalog_id` (2E-prep
 # design §1a), so a catalog's rules describe only the rows it derived
 # itself.
-# That finding is not hypothetical: it reproduced a `@NonNull` HTTP field
+# That finding was not hypothetical: it reproduced a `@NonNull` HTTP field
 # silently reading as nullable once THIS file — sorted first among inbound
 # catalogs — reached the same shared type with no nullability rules of its
-# own.
+# own. **Its nullability half is closed structurally** (D02 §1b): the rules
+# are one declaration and no catalog holds a copy. It is quoted here because
+# `wrappers` below is still a copy, and is still exposed to exactly the
+# sort-order hazard it describes.
 #
 # No broker-specific wrapper is added here: unlike Kafka's `ConsumerRecord<K,
 # V>`, a raw `jakarta.jms.Message` carries no compile-time-typed payload
@@ -58,39 +87,28 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# CP-16 measured what this file's `CHECKPOINT FACT` comment above asserted
+# without a version, and found it right: `@JmsListener` declares six attributes
+# at 6.1.6 and 7.0.9, `destination()` is the only address among them, and it is
+# genuinely scalar. The post-processor reads `destination`, `selector`,
+# `subscription`, `concurrency`, `containerFactory` and `id` — there is no
+# seventh source of a destination to have missed.
+#
+# It also measured the claim just above about there being no class-level shape:
+# `@JmsListener` is `@Target({METHOD, ANNOTATION_TYPE})`, where `@KafkaListener`
+# and `@RabbitListener` add `TYPE`. So `prefix_annotation: null` here is the
+# framework's own rule rather than a simplification of it.
+#
+# THE ONE THING CP-16 FOUND THAT THIS FILE DID NOT HANDLE IS NOW ENCODED:
+# `@JmsListener` is `@Repeatable(JmsListeners.class)` and the post-processor
+# calls `AnnotatedElementUtils.getMergedRepeatableAnnotations(element,
+# JmsListener, JmsListeners)`, naming both. Two listeners on one method are
+# folded by javac into the container, and this catalog dropped BOTH
+# destinations until it could name one (`OI-36`, closed).
+measured:
+  - { artifact: org.springframework:spring-jms, versions: ["6.1.6", "7.0.9"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }

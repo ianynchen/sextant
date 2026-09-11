@@ -68,6 +68,65 @@ class ModuleModel:
     # `.sextant.yml` — the opt-in is the file, so an empty tuple here is the
     # default state and not a failure.
     library_roots: tuple[LibraryRoot, ...] = ()
+    # Of `library_roots`, the ones that are REACTOR SIBLINGS this module declares as
+    # dependencies (F4 §5.2, W24) — scanned automatically rather than named by anybody.
+    # `extract_libraries` entries are the other kind and are deliberately not here: that
+    # file is a person saying "scan this dependency's own bytecode as well as mine", and
+    # what it opts into includes the dependency's own surface.
+    sibling_coordinates: tuple[str, ...] = ()
+    # The `groupId:artifactId` coordinates this module's BUILD declares, as
+    # the build system reports them — D00 §5's `module` fact carries them into
+    # the workspace, where a catalog whose framework rule is conditional on a
+    # dependency being present can read them (2O design §2a, ruling R9).
+    #
+    # **The two build systems answer differently, and the difference is
+    # visible rather than smoothed over.** Gradle reports the RESOLVED compile
+    # classpath, transitives included. Maven reports what the module's own POM
+    # DECLARES plus what it INHERITS — every ancestor pom the detector could
+    # open contributes its `<dependencies>`, since Maven puts those on the
+    # child's classpath too (F1). What it still does not reach is TRANSITIVES:
+    # a third-party artifact's own dependencies need Maven's mediation rules,
+    # which is a resolver rather than a parse, so a coordinate arriving only
+    # that way is absent here. A reader must therefore still treat "absent" as
+    # "not declared or inherited here", never as "not on the classpath".
+    # *Before F1 this was the POM's DIRECT declarations alone, which had the
+    # dependency gate skipping every module whose starter came from a company
+    # parent.* Empty for a module whose build declares none, and for every
+    # hand-built model in a test — which is why the gate that reads it treats
+    # empty as UNANSWERABLE rather than as absence.
+    dependency_coordinates: tuple[str, ...] = ()
+    # The VERSION each of those coordinates resolved to, for the subset that
+    # resolved (F1). Built in sorted key order, so its serialization is stable
+    # (NFR-1). A separate mapping rather than a third segment on the
+    # coordinate, because the coordinate is an IDENTITY that `detect
+    # .coordinates` matches on and a version glued to it would match nothing.
+    #
+    # **Not every coordinate is in it, and that is the honest shape.** Maven
+    # resolves a version from the declaration, from an ancestor's
+    # `<dependencyManagement>`, from an imported BOM, and through `${…}`
+    # properties — each of which needs the pom that states it to be readable,
+    # on disk or in the local Maven repository. Every coordinate that leaves
+    # unversioned is named in `dependencies_not_resolved` below. Gradle's
+    # resolved report carries a version for every entry, so on Gradle this maps
+    # the whole set.
+    dependency_versions: dict[str, str] = field(default_factory=dict)
+    # The compiler target release this module's BUILD declares — and `None`
+    # where it declares
+    # none, which is an absence rather than a default. §8.2 admits it: a value
+    # written in the pom or build script is code, not a deployment possibility.
+    #
+    # Its consumer is multi-release SELECTION: which overlay of a class in a
+    # dependency actually loads is a property of the module doing the
+    # depending, and this is where that module says so. Nothing else may read
+    # it as "the JDK this was built with" — a build can declare a release its
+    # toolchain does not match, which is the whole point of `--release`.
+    declared_release: int | None = None
+    # Why a coordinate above has no version, and which ancestor or BOM could
+    # not be opened — one sentence each, sorted (NFR-1). Carried rather than
+    # raised, exactly as `libraries_not_resolved` is: a version nobody could
+    # resolve is a gap the artifacts must name (FR-17), and an under-report
+    # this analysis can SEE is one it must state.
+    dependencies_not_resolved: tuple[str, ...] = ()
     # The coordinates it named that could NOT be resolved to an archive — a
     # dependency the build never declares a version for, or one no local
     # repository holds. Carried rather than raised: a library nobody could find

@@ -75,23 +75,46 @@ wrappers:
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# F2 §3.8, G-41 — a STATED BOUNDARY rather than a `slice.outside` entry, and the
+# outcome is real even though the mechanism first recorded for it was not.
+#
+# **What is true.** A fetcher declared on a SUPERCLASS method registers on every
+# subclass bean, and this analysis does not see it. Measured
+# (`scripts/probes/w19b_type_and_annotation_surface.md` §3): DGS builds its bean list
+# in `DgsSchemaProvider$Companion$DgsBean`, which calls
+# `ReflectionUtils.getUniqueDeclaredMethods(clazz, USER_DECLARED_METHODS)`, and
+# `ReflectionUtils.doWithMethods` walks `Class.getSuperclass()` and
+# `Class.getInterfaces()` (`javap -c`, spring-core 6.1.6). So the framework enumerates
+# the whole hierarchy's methods; we read annotations only where they are written. A
+# codebase with an abstract base fetcher and ten thin subclasses derives one fetcher's
+# worth of rows instead of ten, and nothing says a row is missing. It is `OI-37`'s
+# shape in a third framework, and it is `OI-67`.
+#
+# **What was recorded and is FALSE.** The gap analysis says `@DgsData` and `@DgsQuery`
+# are `@Inherited`, and an earlier draft of this comment concluded that "an
+# `@Inherited` annotation on a superclass METHOD registers a fetcher the subclass never
+# declares". They ARE `@Inherited` — all five are, measured at 8.7.1, which is three
+# more than the gap analysis recorded — but that bit does nothing here.
+# `java.lang.annotation.Inherited`'s own contract is that it "has no effect if the
+# annotated type is used to annotate anything other than a class", and it inherits from
+# SUPERCLASSES, never through methods. `@DgsData`, `@DgsQuery`, `@DgsMutation` and
+# `@DgsSubscription` all declare `@Target(METHOD)`, so on four of the five the
+# `@Inherited` bit is inert. The right measurement was the framework's own registration
+# code, not the annotation's meta-annotations.
+#
+# **This changes the fix.** Resolving `@Inherited` through `type_hierarchy` — the
+# remediation the earlier draft named — would close nothing for four of these five.
+# What is needed is a superclass METHOD walk: the annotations sit on methods the
+# subclass does not declare at all.
+#
+# **Why this is not `slice.outside`.** That key means "names this catalog does not
+# read", and this catalog reads every name — all five annotations are declared above.
+# The gap is a USE SITE: the same annotation, written somewhere we do not look. Filing
+# it as a slice entry would make the key mean two different things and would let a
+# reader conclude the annotations themselves are unhandled, which is the opposite of
+# true. **Falsified by** a DGS codebase with no inheritance among its fetchers, for
+# which today's rows are already complete.

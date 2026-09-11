@@ -7,7 +7,14 @@ direction: inbound
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
-requires: [annotation_args, typed_signatures]
+# `nested_annotation_args` (capability 9.16) because a REPEATED
+# `@KafkaListener` reaches the class file only as the nested array inside
+# its container (`OI-36`). Required rather than optional for
+# `spring-scheduling.yml`'s reason: a scanner that cannot read a nested
+# annotation must skip this catalog VISIBLY (M04, FR-17) instead of
+# reporting the single-listener half of a module's surface and staying
+# silent about the rest.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
 
 matches:
   # No type-level gate: a listener method carries its own `@KafkaListener`
@@ -38,10 +45,48 @@ matches:
     method_from: method
     # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
     all_methods: []
+    # F2 §3.5's relationship conjunct. A class-level `@KafkaListener` and a
+    # method-level one are TWO INDEPENDENT REGISTRATIONS, not a prefix and a
+    # suffix — measured in `scripts/probes/w14_listener_registration.md`:
+    # `@KafkaListener` is `@Target(TYPE, METHOD)`, declares `topics` at both
+    # levels, and Kafka's registrar declares two paths (one taking a
+    # `Class`, one a `Method`) with neither excluding the other. Composed, a
+    # class on `orders` and a method on `payments` published `orderspayments` —
+    # a destination no broker carries — at `resolved`.
+    #
+    # `@KafkaHandler` is unaffected and that is the point of the conjunct rather
+    # than of a special case: it declares exactly one attribute, `isDefault()`,
+    # and no destination, so it names none of its own and takes the class's
+    # under either value. The rule distinguishes "this member names a
+    # destination" from "this member names none", which is the distinction the
+    # framework itself makes.
+    class_level: sibling
     prefix_annotation: org.springframework.kafka.annotation.KafkaListener
     annotations:
       # A plain, method-level `@KafkaListener` — the ordinary listener shape.
-      - { fqn: org.springframework.kafka.annotation.KafkaListener }
+      #
+      # `container` names what javac writes when the annotation is used TWICE
+      # on one declaration (`OI-36`). MEASURED, not remembered: CP-16 rows
+      # 2a/2b read `@Repeatable(KafkaListeners.class)` off the annotation's own
+      # class file at 3.1.4 and 4.1.1 alike, and rows 4a/4b show the
+      # post-processor calling `KafkaListeners.value()` — so the framework
+      # registers BOTH listeners while the class file carries no
+      # `@KafkaListener` at all (JLS 9.7.5). Before this key both destinations
+      # were dropped, silently, beside a single-listener neighbour that derived
+      # normally.
+      - { fqn: org.springframework.kafka.annotation.KafkaListener,
+          container: org.springframework.kafka.annotation.KafkaListeners }
+      # `@KafkaHandler` declares NO container, and that is now MEASURED rather
+      # than an unmeasured silence. CP-16 row 2 asked `@Repeatable` of the
+      # LISTENER annotation only and row 3 read `@KafkaHandler`'s declaration
+      # without asking, so this entry deliberately claimed nothing (§8.1
+      # rule 4); CP-17 rows 2i/2j then asked it directly and read
+      # `@Target({METHOD, ANNOTATION_TYPE})` with NO `@Repeatable` at 3.1.4 and
+      # 4.1.1 alike, and rows 3i/3j looked for an
+      # `org.springframework.kafka.annotation.KafkaHandlers` in each jar and
+      # found none. The absence below is a claim about the framework, and it is
+      # the framework's own answer.
+      #
       # `@KafkaHandler` carries no path attribute of its own (path suffix
       # ''), and reaches a path only through the class-level prefix above —
       # the polymorphic, class-level `@KafkaListener` + `@KafkaHandler` shape.
@@ -56,23 +101,24 @@ matches:
     destination_from: value
     payload: return
 
-# Copied verbatim from spring-resttemplate.yml, for the same reason
-# `nullability` below is copied from spring-mvc.yml: shape (type) expansion
-# is a *global*, insert-if-absent pass keyed on the type symbol alone
+# Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
+# *global*, insert-if-absent pass keyed on the type symbol alone
 # (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
 # the one that expands it, and every later catalog finds it already there.
-# Whichever catalog that turns out to be, ITS
-# `wrappers`/`serialization`/`known_types` are the rules that describe the
-# type for everyone, regardless of protocol or direction — so a file whose
-# copy disagreed would make the answer depend on catalog sort order (Task 10
+# Whichever catalog that turns out to be, ITS `wrappers` are the rules that
+# describe the type for everyone, regardless of protocol or direction — so a
+# file whose copy disagreed would make the answer depend on catalog sort order (Task 10
 # fix round 1, finding 1). Endpoint-level ownership is a different question
 # and is NOT this reason: `_owns` reads a row's own `catalog_id` (2E-prep
 # design §1a), so a catalog's rules describe only the rows it derived
 # itself.
-# That finding is not hypothetical: it reproduced a `@NonNull` HTTP field
+# That finding was not hypothetical: it reproduced a `@NonNull` HTTP field
 # silently reading as nullable once `spring-jms.yml` — sorted first among
 # inbound catalogs — reached the same shared type with no nullability rules
-# of its own.
+# of its own. **Its nullability half is closed structurally** (D02 §1b): the
+# rules are one declaration and no catalog holds a copy. It is quoted here
+# because `wrappers` below is still a copy, and is still exposed to exactly
+# the sort-order hazard it describes.
 #
 # The one broker envelope type below is added to this catalog only.
 wrappers:
@@ -80,39 +126,33 @@ wrappers:
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
   - { type: org.apache.kafka.clients.consumer.ConsumerRecord, payload_arg: 1, semantics: envelope }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# CP-16 measured what this file's `CHECKPOINT FACT` comments above asserted
+# without a version, and found them right: `topics()` is `String[]`,
+# `topicPattern()` is `String`, `topicPartitions()` is `TopicPartition[]`, and
+# the post-processor reads all three and feeds them to `setTopics`,
+# `setTopicPattern` and `setTopicPartitions` — identically at 3.1.4 and 4.1.1.
+# `@KafkaHandler` declares `isDefault(): boolean` and nothing else, so it
+# really does reach a destination only through the class-level prefix.
+#
+# ONE THING CP-16 FOUND THAT THIS FILE DOES NOT HANDLE, both stated rather
+# than encoded. `@KafkaListener` is `@Repeatable(KafkaListeners.class)` and the
+# post-processor calls `KafkaListeners.value()`, so TWO listeners on one method
+# are folded by javac into the container and this catalog — which names no
+# container, a key `annotation_driven` does not have — sees no annotation at
+# all and drops BOTH destinations (`OI-36`). And the post-processor finds the
+# annotation through `AnnotatedElementUtils.findMergedAnnotation`, which
+# carries no search-strategy constant, so what it searches is Spring's contract
+# and stays unmeasured (`OI-37`'s boundary).
+measured:
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }
+  # A SECOND row rather than a widened first one: CP-16 measured the LISTENER
+  # annotation and CP-17 measured the HANDLER, and a reader of a `by:` needs to
+  # reach the probe that asked the question rather than the one that asked
+  # another. Same artifact, same two versions, different question.
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }

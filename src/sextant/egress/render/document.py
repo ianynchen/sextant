@@ -21,14 +21,28 @@ byte-identical to what this renderer produced before any of this existed.
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic import ValidationError
 
 from sextant.application.ports.detector import ModuleModel
+
+# The walk's own answer, carried in as data (2Q `G4`/`I3`). `egress` reads a
+# report and renders it; the composition root calls `traces_of` and hands the
+# result here, exactly as it already hands `shape_fields` and `open_questions`
+# — this module never reaches for a workspace, which is the import-linter
+# contract "Egress is read-only" in one line.
+from sextant.application.query.trace import Step, Trace
 from sextant.application.resolve.pipeline import ResolveReport
-from sextant.domain.closed_sets import Anchor, Protocol
+
+# The root a trace ran from, for the addresses it carries (2Q close, defect 1).
+# Imported for its TYPE and read field by field: the join from a root to the
+# addresses that reach it was made in `resolve/roots.py`, and re-making it here
+# is the derivation "Egress is read-only" exists to forbid.
+from sextant.application.resolve.roots import Root
+from sextant.domain.closed_sets import Anchor, Protocol, Resolution, TraceStop
 from sextant.domain.enrichment import (
     UNANSWERED,
     Claim,
@@ -42,9 +56,23 @@ from sextant.domain.enrichment import (
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
-from sextant.domain.symbols import bare_descriptor, method_name, owner_of, without_type_marker
-from sextant.egress.render.diagrams import class_diagram
-from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
+from sextant.domain.symbols import (
+    bare_descriptor,
+    member_name,
+    method_name,
+    owner_of,
+    without_type_marker,
+)
+from sextant.egress.render.diagrams import class_diagram, sequence_diagram
+from sextant.egress.render.viewmodel import (
+    ClassEdge,
+    ClassNode,
+    SequenceAlternatives,
+    SequenceBranch,
+    SequenceMessage,
+    SequenceParticipant,
+    simple_name,
+)
 
 _GAPS = [
     "An @HttpExchange interface implemented server-side is still reported outbound.",
@@ -57,31 +85,54 @@ _GAPS = [
         "Configuration constructed in code — a settings module, a config "
         "factory — is not read; only configuration files reach resolution."
     ),
-    "Sequence diagrams await the call graph.",
-    "The structure diagram covers contract types only: inheritance edges are not extracted.",
-    "The call graph is not implemented: there are no traces or sequence diagrams.",
     (
-        "Maven profiles and property interpolation are not resolved: the "
-        "detector reads pom.xml directly instead of asking Maven to resolve "
-        "it. Parent coordinate inheritance and reactor `<modules>` discovery "
-        "ARE read, so an ordinary parent-and-children build detects "
-        "correctly — but a coordinate behind a `${property}` or inside a "
-        "profile is misread."
+        "A trace is reachability, never execution: branches are not distinguished, "
+        "two return statements are two possible answers rather than the one that "
+        "runs, and no step is asserted to have happened."
+    ),
+    "The structure diagram covers contract types only: inheritance edges are not extracted.",
+    (
+        "A trace stops where this workspace read no body, and `Stop` says `boundary` "
+        "whether that body is a third-party library, the JDK, a data-access API or a "
+        "SIBLING BUILD MODULE. `Reaches` classifies the ones a catalog knows, so a "
+        "data-access call is no longer indistinguishable from a JDK one — but the "
+        "SIBLING MODULE is the case that under-reports and it is not separated: a body "
+        "exists somewhere, in a workspace this one does not hold, and on a multi-module "
+        "build it is where a response is composed."
     ),
     (
-        "Catalogs are not matched to modules: every catalog's `detect.coordinates` "
-        "is declared and read by nobody, so every catalog runs against every "
-        "module whether or not the module depends on that framework."
+        "A method is expanded once per trace, not once per route to it: a second "
+        "route to the same method reads `revisited` and its calls are shown at the "
+        "first, so a path through a trace is not always followable to a terminal."
+    ),
+    (
+        "A root is a handler this module exposes or schedules. A functional route "
+        "carries no handler symbol, so it produces no root and gets no trace; a "
+        "program entry point has no producer at all, so a module whose only "
+        "starting point is a batch job or a command-line tool gets none either."
+    ),
+    (
+        "Maven profiles and transitive dependencies are not resolved: the "
+        "detector reads pom.xml files instead of asking Maven to resolve them. "
+        "Parent inheritance, reactor `<modules>` discovery, "
+        "`<dependencyManagement>`, imported BOMs and `${property}` "
+        "interpolation ARE read — but a dependency declared inside a profile, "
+        "and one that reaches the module only through another artifact's own "
+        "dependencies, are absent from the recorded set."
+    ),
+    (
+        "Catalogs are matched to modules only where the framework rule is "
+        "conditional on the library being present: `detect.coordinates` is read, "
+        "and such a catalog is skipped with a reason where the module's build "
+        "declares none of them. Every other catalog still runs against every "
+        "module whether or not the module depends on that framework — and a "
+        "framework reaching a module only as another artifact's own transitive "
+        "dependency cannot be told apart from an absent one."
     ),
     (
         "Module classification reads only a container file and a declared main "
         "class: a module showing neither is reported `undetermined` rather than "
         "weighed against the rest of the evidence."
-    ),
-    (
-        "A path the module both exposes and calls keeps only the handler's "
-        "declared contract: where the client's declaration differs, that "
-        "difference is not recorded."
     ),
     (
         "Endpoint request and response contracts are scoped to the catalog "
@@ -404,9 +455,20 @@ class MachineDiagram:
 
     The markdown emitter re-fences it byte for byte, which is what the golden
     document pins.
+
+    `elides` is what this diagram leaves out, in the machine's own words, or
+    `None` for one that leaves nothing out. It is `DiagramClaim.elides`' rule
+    applied to the machine half — *"a simplified diagram that does not say it
+    is simplified is a diagram that lies about the system's size"* — and it
+    reaches both serializers exactly as the claim's does: markdown writes an
+    `Elides:` line under the fence, HTML passes it to `_diagram_html`'s
+    caption. `None` renders nothing at all, which is why `## Structure`'s
+    class diagram is byte-identical to what it was before this field existed:
+    that diagram draws every contract type there is.
     """
 
     mermaid: str
+    elides: str | None = None
 
 
 @dataclass(frozen=True)
@@ -452,7 +514,42 @@ type AssembledDocument = tuple[Section, ...]
 
 
 def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
-    """A row's wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
+    """One `endpoints`-shaped row's wire identity, through `_wire_address`.
+
+    Kept as the row-shaped entry point every caller in this file has always
+    used, so the three columns are named once here rather than at each call
+    site; `## Traces` reads the same three off a `RootIdentity` instead and
+    calls `_wire_address` directly (2Q close, defect 1). Both spellings of one
+    address therefore come out of one function — two would be two answers to
+    "what is this endpoint called" in one document.
+    """
+    return _wire_address(endpoint["protocol"], endpoint["method"], endpoint["path"], redactor)
+
+
+# The ledger questions whose NULL verb is an ABSENCE rather than a verb the
+# analysis could not read. A `routing_conflict` between two verbless
+# `@RequestMapping`s is refused at EVERY verb, and `routing_conflicts._verbs_of`
+# files it once with no verb rather than eight times — so NULL there is how one
+# row says "all of them", and `_wire_address`'s `(unresolved)` would report a
+# verb as unread that was read perfectly well. The same distinction
+# `_VERB_OPTIONAL_PROTOCOLS` draws for a GraphQL resolver, drawn on the question
+# instead of the protocol because an `http` row is verbed for every other one.
+_ANY_VERB_QUESTIONS = frozenset({"routing_conflict"})
+
+
+def _question_identity(row: dict[str, object], redactor: Redactor) -> str:
+    """One `open_questions` row's wire identity — `_wire_identity`'s reading,
+    except for the questions above, whose absent verb renders as `any`."""
+    method = row["method"]
+    if method is None and str(row["question"]) in _ANY_VERB_QUESTIONS:
+        method = "any"
+    return _wire_address(row["protocol"], method, row["path"], redactor)
+
+
+def _wire_address(
+    protocol_value: object, method_value: object, path_value: object, redactor: Redactor
+) -> str:
+    """A wire identity as one string. A protocol in `_VERBLESS_PROTOCOLS`
     defines no verb, so it renders `protocol path` with no method at all;
     every other protocol renders `method path`, prefixed by the protocol where
     its verb does not imply one. Any half of any shape may be NULL, and
@@ -465,12 +562,22 @@ def _wire_identity(endpoint: dict[str, object], redactor: Redactor) -> str:
     and a repo value pattern masks whatever else it names. A `${...}`
     expression passes through whole — it is a reference to a value, not the
     value."""
-    protocol = str(endpoint["protocol"])
-    path = endpoint["path"]
-    rendered_path = "(unresolved)" if path is None else redactor.redact_text(str(path))
+    protocol = "" if protocol_value is None else str(protocol_value)
+    rendered_path = "(unresolved)" if path_value is None else redactor.redact_text(str(path_value))
+    # NO protocol at all — the address alone, with no verb and no prefix
+    # (OI-1). Only an `open_questions` row reaches this: an `endpoints` row
+    # always carries one (`resolve/endpoints.py` refuses a catalog that mints
+    # rows and declares none), while a question filed by a catalog with no
+    # wire identity of its own carries the empty string its catalog declared.
+    # Without this arm such a row falls through to the verbed branch and
+    # renders `(unresolved) ordersIn` — a verb reported as unread, which is
+    # the exact failure `_VERBLESS_PROTOCOLS`'s own comment above names, about
+    # a row whose protocol was never going to have one either.
+    if not protocol:
+        return rendered_path
     if protocol in _VERBLESS_PROTOCOLS:
         return f"{protocol} {rendered_path}"
-    method = endpoint["method"]
+    method = method_value
     # A verbed protocol whose row carries no verb *by design*
     # (`_VERB_OPTIONAL_PROTOCOLS`, above): rendering `(unresolved)` there
     # would report a gap that does not exist. Every other verbed protocol —
@@ -610,10 +717,10 @@ def _format(endpoint: dict[str, object]) -> str:
     document carries no separate trust column. So `resolved` is the only
     marker that ever prints unhedged; every other non-NULL marker hedges,
     including `narrowed` and a value schema-valid but off today's live
-    surface like `partial`, and including the `merge_endpoints.sql` exception
-    where a merged row keeps a non-NULL format beside the WEAKER of its two
-    halves' markers (schema.sql's own note) — a merged row may read
-    `(protobuf, unresolved)`. Printing that plain would make an
+    surface like `partial`. It also covered the case where a row carries a
+    non-NULL format beside an `unresolved` marker — which `merge_endpoints.sql`
+    produced by taking the weaker of two halves' markers until W27 deleted it
+    (F5 §6.1), and which nothing writes today. Printing that plain would make an
     unresolved-trust value typographically identical to a resolved one,
     which is exactly what "an assumed format must never look observed" (2G
     design §5) forbids (task 8 review round 1)."""
@@ -668,11 +775,12 @@ def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
     already puts in its own `evidence` trail (`resolve/format.py`,
-    `resolve/shapes/parse_binding.py`) — so the fact reads the same way in
-    the trail and in this list. `payload_binding` and `format_conflict`
-    candidates carry different keys (2G design §6), so this switches on
-    `question` rather than guessing a common shape out of the JSON — the same
-    discipline `open_questions.py`'s own docstring asks of "the renderer"."""
+    `resolve/shapes/parse_binding.py`, `resolve/service_identity.py`'s three
+    engines) — so the fact reads the same way in the trail and in this list.
+    Each kind's candidates carry different keys (2G design §6, 2O design §0),
+    so this switches on `question` rather than guessing a common shape out of
+    the JSON — the same discipline `open_questions.py`'s own docstring asks
+    of "the renderer"."""
     if question == "format_conflict":
         return f"{candidate['format']} from {candidate['seen_in']} ({candidate['why']})"
     if question == "payload_binding":
@@ -680,9 +788,104 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['payload_type']} in {candidate['seen_in']} "
             f"via {candidate['why']} at {candidate['hops']} hop(s)"
         )
-    # Unreached while `open_questions.py`'s QUESTIONS stays the two-kind
-    # closed set it enforces at write time — a new kind is a schema change,
-    # never a rendering guess (NFR-5).
+    if question == "service_identity":
+        # All three writers (`resolve/engines/supertype_derived.py`,
+        # `injected_client.py`, `annotation_driven.py`'s `gaps`) file the same
+        # two keys — the flagged class and why its identity did not resolve —
+        # verified against each engine's own `candidates` line rather than
+        # trusting `open_questions.py`'s comment (2O design §1b).
+        return f"{candidate['class']}: {candidate['reason']}"
+    if question == "channel_destination":
+        # 2O §5: the channel name and the handler symbol
+        # `spring-integration.yml` flags, verified against the writer's own
+        # `candidates` line (`resolve/engines/config_join.py`). *This comment
+        # said "Task 9, not yet shipped" until the 2O documentation sweep
+        # (`A-Mi23`); Task 9 shipped the writer and left the arm's comment
+        # describing the day before.*
+        return f"{candidate['channel']} → {candidate['handler']}"
+    if question == "environment_divergence":
+        # 2O §2b: the config key and its per-environment values, filed by
+        # `resolve/engines/derived_resource.py:224` where
+        # `spring.data.rest.base-path` differs between environments — shipped
+        # in Task 6, which this comment said it was waiting for until the 2O
+        # documentation sweep (`A-Mi23`). Sorted so two runs compose the
+        # identical sentence (NFR-1), the same discipline
+        # `supertype_derived._reason` already keeps for its own composed text.
+        per_environment = ", ".join(
+            f"{env}={value}"
+            for env, value in sorted(cast(dict[str, object], candidate["values"]).items())
+        )
+        return f"{candidate['key']}: {per_environment}"
+    if question == "binder_protocol":
+        # F2 §3.4: the binding and the configured binder name
+        # `spring-cloud-stream.yml` could not map to a protocol, filed by
+        # `resolve/engines/config_join.py`'s `gaps` and verified against that
+        # writer's own `candidates` line.
+        return f"{candidate['binding']}: binder `{candidate['binder']}` maps to no protocol"
+    if question == "unselected_binding":
+        # F2 §3.4: one candidate the cardinality rule declined to choose between,
+        # and the configuration key that would say which binds. Filed by
+        # `resolve/engines/config_join.py`'s `gaps`, and verified against that
+        # writer's own `candidates` line.
+        return f"{candidate['candidate']} (set `{candidate['selected_by']}` to choose)"
+    if question == "registration_activation":
+        # `OI-64`: a registration whose framework needs a later ACTIVATION call,
+        # built and handed back rather than started here. Filed by
+        # `resolve/engines/interface_implementation.py`, and verified against that
+        # writer's own `candidates` line.
+        #
+        # The sentence names the enclosing method because that is where a reader has
+        # to look: the question is not "is this subscription real" but "does anyone
+        # call the thing this method returns, and start it". Without the method there
+        # is nothing to open.
+        return (
+            f"{candidate['registration']} in {candidate['enclosing']} is returned, not "
+            f"activated — nothing here calls {candidate['activated_by']}"
+        )
+    if question == "handler_protocol":
+        # F2 §3.6: the class, the annotation two frameworks share, and the wire
+        # ONE of them would publish it on — filed by
+        # `resolve/engines/annotation_driven.py`'s `gaps` where the build settles
+        # neither library. Verified against that writer's own `candidates` line.
+        #
+        # The protocol is what makes a candidate answerable (§3.6 review, finding
+        # 3). Both catalogs ask about one class, `service_identity._merged` folds
+        # them into a single question, and its candidates are then one line per
+        # wire — without the protocol they rendered as the same sentence twice
+        # and a verdict could only ever anchor to the first.
+        #
+        # The wire leads, because the candidates render joined on one line and it
+        # is the only part that differs between them.
+        return f"`{candidate['protocol']}` — {candidate['class']} carries {candidate['annotation']}"
+    if question == "self_exchange":
+        # F5 §6.1 (W27): one side of a wire identity this module both serves and calls,
+        # filed by `resolve/self_exchange.py` and verified against that writer's own
+        # `candidates` line.
+        #
+        # The ADDRESS is what makes a candidate answerable, and it is the whole reason
+        # these rows stopped being merged: the fixture's SOAP pair shares a payload
+        # QName while the call goes to `${soap.billing.uri}`, and a reader cannot see
+        # that in a sentence that names only the symbols. A called side with no resolved
+        # address says so rather than reading as one that reaches nowhere.
+        # A schema-first row names no method at all — its operation is declared by a
+        # `.wsdl` or a `.proto` — so the symbol may legitimately be absent on either
+        # side, and saying so beats a sentence that trails off.
+        symbol = candidate["symbol"] or "no method here"
+        if candidate["side"] == "served":
+            return f"served here by {symbol}"
+        return f"called by {symbol} at {candidate.get('peer') or 'no resolved address'}"
+    if question == "routing_conflict":
+        # F5 §6.1 (W28): one handler claiming an address another handler also claims,
+        # filed by `resolve/routing_conflicts.py` and verified against that writer's own
+        # `candidates` line. The candidates render joined on one line, and the handler is
+        # the only thing that differs between them.
+        return f"{candidate['handler']}"
+    # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
+    # (`record_open_questions` raises on anything outside it) — this arm list
+    # is the matching enforcement at RENDER time. The two are independent
+    # code paths, so this holds only as long as every kind added to QUESTIONS
+    # ships its arm here in the same change; reaching this line means that
+    # discipline slipped and the two sets have diverged (NFR-5).
     raise ValueError(f"open question `{question!r}` has no rendering rule")
 
 
@@ -692,6 +895,7 @@ def render_module_document(
     commit: str,
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
+    type_hierarchy: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
@@ -699,6 +903,7 @@ def render_module_document(
     redactor: Redactor = _DEFAULT_REDACTOR,
     overlay: EnrichmentOverlay | None = None,
     stale: frozenset[int] = frozenset(),
+    traces: Sequence[Trace] = (),
 ) -> str:
     """`architecture.md` — the markdown serialization of the assembled
     document. Kept as its own entry point because it is what every caller of
@@ -712,6 +917,7 @@ def render_module_document(
             commit,
             uncovered,
             shape_fields=shape_fields,
+            type_hierarchy=type_hierarchy,
             resolved_config=resolved_config,
             open_questions=open_questions,
             library_symbols=library_symbols,
@@ -719,6 +925,7 @@ def render_module_document(
             redactor=redactor,
             overlay=overlay,
             stale=stale,
+            traces=traces,
         )
     )
 
@@ -729,6 +936,7 @@ def assemble_module_document(
     commit: str,
     uncovered: tuple[str, ...] = (),
     shape_fields: Sequence[dict[str, object]] = (),
+    type_hierarchy: Sequence[dict[str, object]] = (),
     resolved_config: Sequence[dict[str, object]] = (),
     open_questions: Sequence[dict[str, object]] = (),
     library_symbols: Sequence[dict[str, object]] = (),
@@ -750,6 +958,15 @@ def assemble_module_document(
     # than claims because the overlay is a list written wholesale, and a
     # position is what locates one in the file a reader would go and look at.
     stale: frozenset[int] = frozenset(),
+    # One walk per row of `roots`, already performed by
+    # `application/query/trace.py` and handed in by the composition root.
+    # Carried like every other table this renderer shows and NOT re-derived
+    # here: `egress` reads and renders, and a renderer reaching for a
+    # workspace to walk a graph is derivation hiding in presentation — the
+    # thing the "Egress is read-only" import contract exists to forbid. Empty
+    # for a module that exposes nothing and schedules nothing, which renders
+    # `None found.` the way the two non-wire sections above it do.
+    traces: Sequence[Trace] = (),
 ) -> AssembledDocument:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -784,6 +1001,7 @@ def assemble_module_document(
         _runs(f"Partial documents: {report.coverage.get('partial_documents', 0)}"),
         _runs(f"Facts loaded: {report.facts_loaded}"),
     ]
+    coverage_items += _understanding_items(report.coverage)
     coverage_items += _config_coverage_items(resolved_config)
     coverage_items += _unresolved_derivation_items(report.endpoints)
     # Per-environment peer AUTHORITIES — one substituted address per
@@ -808,7 +1026,7 @@ def assemble_module_document(
 
     sections.append(MachineHeading(2, "Structure"))
     if report.shapes:
-        nodes, edges = _contract_nodes(report.shapes, shape_fields)
+        nodes, edges = _contract_nodes(report.shapes, shape_fields, type_hierarchy)
         mermaid = class_diagram(nodes, edges).rstrip("\n")
         sections.append(MachineDiagram(mermaid))
     else:
@@ -862,8 +1080,9 @@ def assemble_module_document(
             response = _descriptor_entry(
                 "Response", endpoint.get("response_shape"), fields_by_shape, shape_names
             )
+            streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
-            entries = [entry for entry in (via, request, response) if entry is not None]
+            entries = [entry for entry in (via, request, response, streaming) if entry is not None]
             identity = _wire_identity(endpoint, redactor)
             header = _detail_header(identity, _handler_identity(endpoint))
             sections.append(MachineDetail((header, *entries)))
@@ -930,6 +1149,38 @@ def assemble_module_document(
     # as a claim about the inbound ones alone.
     endpoints_end = len(sections)
 
+    # The two NON-WIRE sections (2O design §4), below the endpoint tables and
+    # above the ledger: they are module SURFACE, like the tables, and not a
+    # hand-off inbox like the questions.
+    #
+    # **Both render unconditionally, "None found." included**, which is the
+    # endpoint tables' rule rather than the `Open questions` one below. The
+    # difference is what an absent section would mean. An empty inbox is not a
+    # finding; "this service runs no background work" and "this service
+    # declares no error contract" both ARE — and a section that simply
+    # disappears leaves a reader unable to tell that answer from a Sextant that
+    # never looked, which is the silent under-report FR-17 exists to prevent.
+    # The cost is two short sections in every document, which is the cheap
+    # side of that trade.
+    sections.append(MachineHeading(2, "Scheduled work"))
+    sections.extend(_scheduled_work_sections(report.scheduled_work))
+    sections.append(MachineHeading(2, "Error handling"))
+    sections.extend(_error_handler_sections(report.error_handlers))
+
+    # BELOW both non-wire sections, and for the reason they sit where they do:
+    # a trace starts from a ROOT, and a root is an inbound endpoint OR a
+    # scheduled job (2Q `I1`/`I3`). Placing this under `## Inbound endpoints`
+    # would say the scheduled traces are endpoint traces; placing it under
+    # `## Scheduled work` would say the reverse. It goes after both, where it
+    # is a claim about everything above it.
+    #
+    # Unconditional, `None found.` included — the `Scheduled work`/`Error
+    # handling` rule rather than the `Open questions` one. "Nothing in this
+    # module starts any work" is a finding; a section that disappears leaves a
+    # reader unable to tell it from a Sextant that never walked (FR-17).
+    sections.append(MachineHeading(2, "Traces"))
+    sections.extend(_trace_sections(traces, redactor))
+
     # Rendered only when the ledger holds rows (2G design §8): a run with
     # nothing to ask leaves the section absent, the `## Catalogs skipped`
     # precedent below rather than the NFR-7 "looked and found nothing" one —
@@ -941,7 +1192,7 @@ def assemble_module_document(
             question = str(row["question"])
             candidates = json.loads(str(row["candidates"]))
             rendered = "; ".join(_candidate_line(question, c) for c in candidates)
-            item = _runs(f"`{_wire_identity(row, redactor)}` — {question}: {rendered}")
+            item = _runs(f"`{_question_identity(row, redactor)}` — {question}: {rendered}")
             # One question, one single-item `MachineList`: a `beside-open-
             # question` verdict has to land right after THIS question and no
             # other, so the question needs its own section index to anchor
@@ -977,8 +1228,20 @@ def assemble_module_document(
     # is the gap between "this shape is the contract" and "this shape is as
     # much of the contract as anyone could see", and only the name says which
     # catalog entry would close it (FR-17).
+    # F4 §5.2 (W25): the LEVER, not only the gap. A payload type nothing could open
+    # used to render as a bare statement of absence, which tells a reader that something
+    # is missing and nothing about how to get it — and the two ways to get it are both
+    # things only they can do. A type compiled in a reactor sibling arrives once that
+    # sibling is built; one compiled in a third-party jar arrives once `extract_libraries`
+    # names it. Neither is something this analysis can do on the reader's behalf, which
+    # is exactly why naming them is the whole value of the line (§8.1 rule 3).
     gap_items += [
-        _runs(f"Not expanded, so the shapes referring to it are open: `{symbol}`.")
+        _runs(
+            f"Not expanded, so the shapes referring to it are open: `{symbol}`. "
+            "Its fields arrive when the module that compiles it is built alongside this "
+            "one, or — for a type from a dependency outside the build — when "
+            "`extract_libraries` names that dependency in `.sextant.yml`."
+        )
         for symbol in report.unexpanded_types
     ]
     # Named one by one for the same reason again: a library this module asked
@@ -1014,6 +1277,813 @@ def assemble_module_document(
         stale,
         redactor,
     )
+
+
+_SCHEDULED_HEADERS = ("Handler", "Trigger", "Expression", "Resolution")
+_ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Response")
+# Never a bare blank cell, the `_MEDIA_NONE_RECORDED` precedent: an empty cell
+# reads as a formatting slip, while an em dash reads as "nothing recorded",
+# which is what a NULL in either table means.
+_NONE_RECORDED = "—"
+
+
+def _scheduled_work_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+    """The `scheduled_work` table as one machine table, or the "None found."
+    paragraph the endpoint sections use.
+
+    The expression is rendered as CODE and never reformatted: a cron string
+    re-spaced for the page names a different schedule from the one that runs.
+    `resolution` rides along because an `unresolved` expression is a
+    placeholder this analysis did not substitute, and a reader who cannot see
+    that would read `${orders.cron}` as the schedule itself.
+    """
+    if not rows:
+        return [MachineParagraph(_runs("None found."))]
+    table = tuple(
+        (
+            _code(bare_descriptor(str(row["handler"]))),
+            _text(str(row["trigger"])),
+            _code(str(row["expression"])),
+            _text(str(row["resolution"])),
+        )
+        for row in rows
+    )
+    return [MachineTable(_SCHEDULED_HEADERS, table)]
+
+
+def _error_handler_sections(rows: Sequence[dict[str, object]]) -> list[Section]:
+    """The `error_handlers` table, exception first.
+
+    Exception first because that is what a reader looks a row up BY — "what
+    does this service answer when an order is missing" — while the handler is
+    the answer. The status is rendered through `member_name` rather than
+    `simple_name`: the value is an enum REFERENCE, so the constant is the part
+    after the type marker, and `simple_name` would keep the declaring type
+    glued to it. `Declared by` and `Scope` sit together deliberately: they are
+    one claim in two columns, and reading either alone gets a controller's own
+    handler and an application-wide advice the wrong way round.
+    """
+    if not rows:
+        return [MachineParagraph(_runs("None found."))]
+    table = tuple(
+        (
+            _code(simple_name(str(row["exception"]))),
+            _text(_cell(row["status"], member_name)),
+            _code(bare_descriptor(str(row["handler"]))),
+            _text(_cell(row["declared_by"], simple_name)),
+            _text(_cell(row["scope"], str)),
+            _text(_cell(row["response_shape"], simple_name)),
+        )
+        for row in rows
+    )
+    return [MachineTable(_ERROR_HEADERS, table)]
+
+
+def _cell(value: object, render: Callable[[str], str]) -> str:
+    """One optional column, rendered or marked as not recorded. NULL keeps
+    exactly one meaning in both tables — nothing evidenced it — and never
+    becomes a guess at what the framework would have done."""
+    return _NONE_RECORDED if value is None else render(str(value))
+
+
+# --------------------------------------------------------------------------
+# `## Traces` (2Q `G4`/`I3`, FR-6/FR-7) — the walk, rendered.
+#
+# **This section renders; it does not decide.** Every column below is a field
+# `application/query/trace.py` already carries, spelled out rather than
+# summarised, and the four places a reader could be misled are stated in the
+# section's own preamble rather than fixed here by a rule this file invented:
+#
+# - **`revisited`.** A method is expanded once per trace, so a path through
+#   the table is not always followable to a terminal. The step is still a ROW
+#   — dropping it would delete the call — and its `Stop` says `revisited`,
+#   which means "this callee's own calls are drawn at its first appearance
+#   above". The renderer neither copies that subtree here (exponential on an
+#   ordinary diamond, D01's own reason for not storing traces) nor hides the
+#   call.
+# - **Reachability, never execution.** Said in the preamble, said again in
+#   every diagram's `Elides:`, and built into the diagram: there are no return
+#   arrows, because the walk records what a callee HANDS BACK and never when
+#   control comes back.
+# - **`Reaches` is read, not decided here** (W30). `terminal_kind` gained a
+#   producer — `resolve/terminals.py`, over catalog data — so this column
+#   renders what that pass wrote and classifies nothing itself. Inventing the
+#   classification here would be derivation hiding in presentation, which the
+#   import-linter contract exists to forbid; the note that used to stand here
+#   said `terminal_kind` had no producer at all, which stopped being true in
+#   the same commit that added this column.
+# - **Cross-module stops read as `boundary` too**, because no body was read in
+#   THIS workspace — which is the truth about what was measured and an
+#   under-report of what exists. Stated where the reader meets it. `Reaches`
+#   does NOT separate them either: a sibling-module call and a third-party
+#   call both read `unresolved` unless a catalog names the type, so the `Call`
+#   column's full descriptor is still what a reader tells them apart by.
+# --------------------------------------------------------------------------
+
+_TRACE_HEADERS = (
+    "Reached by",
+    "Root",
+    "Starts as",
+    "Depth",
+    "Steps",
+    "Terminals",
+    "Detail",
+)
+
+_TRACE_STEP_HEADERS = (
+    "Depth",
+    "Caller",
+    "Call",
+    "Dispatch",
+    "Resolution",
+    "Value",
+    "Returns",
+    "Stop",
+    # F7 §8.2 (W30). What the call REACHES, beside why the walk stopped — the two answer
+    # different questions and a step carries both.
+    "Reaches",
+)
+
+# What a reader has to know before the first table, in the machine's own
+# words. Every line is a property of the WALK rather than of this rendering —
+# which is why they are stated once here and not repeated per trace, and why
+# the wording matches `application/query/trace.py`'s own docstring rather than
+# paraphrasing it.
+_TRACE_PREAMBLE = (
+    (
+        "`Reached by` is the wire address a request arrives at, spelled exactly as the "
+        "inbound endpoint table above spells it, so a trace can be found by the URL a "
+        "reader knows. A handler serving several addresses is ONE trace listing all of "
+        "them — the walk is the same walk whichever address invoked it — and `no wire "
+        "address` is a root nothing on the wire reaches, a scheduled job above all. "
+        "That is an absence, not an unread value; `(unresolved)` is how this document "
+        "says a half of an address was not read."
+    ),
+    (
+        "A trace is REACHABILITY, never execution: every step is a call the compiler "
+        "recorded, branches are not distinguished, and two `return` statements are two "
+        "possible answers rather than the one that runs. No path below is asserted to "
+        "have happened."
+    ),
+    (
+        "Steps are in the walk's own depth-first order, and `Depth` counts edges from "
+        "the root — so a step's caller is named on its own row rather than left to be "
+        "inferred from indentation."
+    ),
+    (
+        "`Stop` says why a step was not expanded. `boundary` means this workspace read "
+        "no body for the callee: a third-party library, the JDK, a MyBatis mapper and a "
+        "SIBLING BUILD MODULE all read alike there, because each is a body that is not "
+        "here. **`Reaches` is the other half of that question** (W30) — what the call "
+        "reaches rather than why the walk stopped — so a data-access call now says "
+        "`persistence (database)` or `persistence (cache)` where a JDK call says "
+        "`unresolved`. `unresolved` means the terminal was examined and no catalog "
+        "claimed it, which on real repositories is most of them — 94-96% across the three "
+        "measured. It does NOT separate a sibling build module from a third-party "
+        "library: both read `unresolved` unless a catalog names the type, so the `Call` "
+        "column's full descriptor is still what tells them apart."
+    ),
+    (
+        "`revisited` means the callee was expanded ELSEWHERE in this same trace and its "
+        "own calls are shown at that first appearance: a method is expanded once per "
+        "trace, not once per route to it, so a path through one of these tables is not "
+        "always followable to a terminal. `cycle` means the callee is already on the "
+        "path from the root. There is no third reason a walk stops short of the "
+        "evidence: the depth bound retired with W31, so a trace ends where the code "
+        "does."
+    ),
+    (
+        "`Value` is the value id the call site produced and `Returns` what the callee "
+        "hands back — both LOCAL to the method on that row, so an id in a step's "
+        "`Returns` is a value inside the callee and matches its own rows, never the "
+        "caller's. `Response` is what the root method itself returns."
+    ),
+    (
+        "`Detail` says whether this trace's steps and diagram are drawn below. Every "
+        "trace is drawn, every trace is listed with its depth and its step count, and "
+        "the sentence under the table says how many were drawn. A trace is never drawn "
+        "in part: half a trace is the under-report this section exists not to be."
+    ),
+)
+
+
+def _traces_drawn_sentence(traces: Sequence[Trace]) -> str:
+    """What this section drew, in the machine's own words.
+
+    **Never absent, and never a silence.** M07: *"every reduced output states
+    that it was reduced"* — a reader who is not told how much of the section is
+    drawn cannot tell a complete one from a reduced one, and the sentence is
+    where they meet that boundary. This section reduces nothing, so it says the
+    count it drew and the count it walked, and they are the same count.
+
+    **The count is stated rather than implied by the blocks below it.** A
+    reader — or an agent — counting diagrams to check the table is doing the
+    document's work for it, and would find nothing to compare the answer
+    against.
+    """
+    return (
+        f"Every trace is rendered in full below: {len(traces)} of {len(traces)}, "
+        f"{sum(len(trace.steps) for trace in traces)} steps."
+    )
+
+
+def _trace_sections(traces: Sequence[Trace], redactor: Redactor) -> list[Section]:
+    """`## Traces`' whole body: the preamble, one summary row per root, the
+    sentence saying how much of it is drawn, then one detail block and one
+    sequence diagram per root, in `roots`' own fixed order (NFR-1).
+
+    The summary table then one block per row, in table order, is the inbound
+    endpoint section's shape reused deliberately (§13.5) — correlating a block
+    back to its row needs no identity shared between them, only the order.
+
+    **Every trace is in the summary and every trace is drawn.** A `Detail`
+    column says so per row, and no trace is ever dropped: the second cardinal
+    sin is under-reporting, and a root that vanished from this table would be a
+    walk the document denies. `render --brief` once drew a prefix of this
+    section and was deleted rather than repaired (GUIDELINES §8.4's audit list),
+    because taking the first N traces in table order is an arbitrary cut
+    presented as a reduced document, and which traces are worth keeping is not
+    a judgement this renderer can make.
+    """
+    if not traces:
+        return [MachineParagraph(_runs("None found."))]
+    sections: list[Section] = [MachineList(tuple(_runs(line) for line in _TRACE_PREAMBLE))]
+    summary = tuple(
+        (
+            _root_addresses(trace.root, redactor),
+            _code(bare_descriptor(trace.root.handler)),
+            _text(str(trace.root.kind)),
+            _text(str(trace.depth)),
+            _text(str(len(trace.steps))),
+            _text(str(len(trace.terminals))),
+            _text("below"),
+        )
+        for trace in traces
+    )
+    sections.append(MachineTable(_TRACE_HEADERS, summary))
+    sections.append(MachineParagraph(_runs(_traces_drawn_sentence(traces))))
+    for trace in traces:
+        sections.append(_trace_detail(trace, redactor))
+        participants, messages = _sequence_view(trace)
+        sections.append(
+            MachineDiagram(
+                sequence_diagram(participants, messages).rstrip("\n"),
+                elides=_trace_elision(trace),
+            )
+        )
+    return sections
+
+
+_NO_WIRE_ADDRESS = "no wire address"
+
+
+def _root_addresses(root: Root, redactor: Redactor) -> tuple[Run, ...]:
+    """Every wire address that reaches `root`, as one cell — joined, because
+    several addresses are several ways to the SAME walk and printing the first
+    would publish a coin toss (`_returns_cell`'s rule, one table on).
+
+    **Read off the root, never joined here.** `roots` carries the address on
+    its own row (2Q close, defect 1) precisely so this file does not have to
+    re-make a join against `endpoints`: `egress` reads and renders, and a join
+    performed in presentation is a derivation hiding in it, which the
+    "Egress is read-only" contract exists to forbid.
+
+    A root with no address renders the absence in words rather than an em
+    dash. The dash means "nothing recorded" everywhere else in this document,
+    and a scheduled job's missing address is not a value that went unread.
+    """
+    if not root.identities:
+        return _text(_NO_WIRE_ADDRESS)
+    return _code(
+        "; ".join(
+            _wire_address(identity.protocol, identity.method, identity.path, redactor)
+            for identity in root.identities
+        )
+    )
+
+
+def _trace_detail(trace: Trace, redactor: Redactor) -> MachineDetail:
+    """One root's block: its own header, the step table, and what the root
+    method returns.
+
+    The header names the root by its HANDLER, its kind and every address that
+    reaches it — the last so that a reader who knows only a URL can find the
+    block, which is the whole reason `roots` carries the address. A root is
+    still a METHOD: a handler serving three paths is one root, one walk and one
+    block listing three addresses, never three copies of one answer.
+    """
+    header = DetailEntry(
+        _code(bare_descriptor(trace.root.handler))
+        + _text(f" — {trace.root.kind}, reached by ")
+        + _root_addresses(trace.root, redactor),
+        None,
+        None,
+    )
+    entries = [header]
+    if trace.steps:
+        entries.append(DetailEntry(_text("Steps"), None, _trace_step_table(trace, redactor)))
+    else:
+        # A root whose body calls nothing is an answer, not an omission —
+        # `/admin/refreshToken` on `mall-admin` is pure string work — so it
+        # says so rather than showing an empty table.
+        entries.append(DetailEntry(_text("Steps"), _text("None — this root calls nothing."), None))
+    entries.append(
+        DetailEntry(_text("Response"), _text(_returns_cell(trace.response, redactor)), None)
+    )
+    return MachineDetail(tuple(entries))
+
+
+def _reaches_cell(step: Step) -> str:
+    """What one step's call REACHES (D00 §4's `terminal_kind`, F7 §8.2, W30).
+
+    `persistence (database)` where the sub-field says which store, `persistence` alone
+    where a rule named a kind and no target. A step that is not a terminal shows nothing —
+    the walk expanded it, so there is nothing to reach — and one no catalog claimed shows
+    `unresolved`, which says it was examined.
+
+    Composed here rather than derived here: both values arrive on the row (D01 §3), and
+    inventing the classification in the renderer would be derivation hiding in
+    presentation, which the import-linter contract forbids.
+    """
+    if step.terminal_kind is None:
+        return _NONE_RECORDED
+    if step.target_kind is None:
+        return step.terminal_kind
+    return f"{step.terminal_kind} ({step.target_kind})"
+
+
+def _trace_step_table(trace: Trace, redactor: Redactor) -> MachineTable:
+    """Every step of one trace, one row each, in the walk's order — never a
+    filtered or collapsed subset. A step the renderer dropped would be a call
+    the document denies, which is the under-report FR-17 exists to prevent."""
+    rows = tuple(
+        (
+            _text(str(step.depth)),
+            _code(_short_handler(bare_descriptor(step.caller))),
+            _call_cell(step),
+            _text(step.invoke_kind),
+            _text(str(step.resolution)),
+            _text(_NONE_RECORDED if step.result is None else str(step.result)),
+            _text(_returns_cell(step.returns, redactor)),
+            _text(_NONE_RECORDED if step.stop is None else str(step.stop)),
+            _text(_reaches_cell(step)),
+        )
+        for step in trace.steps
+    )
+    return MachineTable(_TRACE_STEP_HEADERS, rows)
+
+
+def _call_cell(step: Step) -> tuple[Run, ...]:
+    """The `Call` column: what the compiler WROTE at that line, and — where
+    dispatch resolved it into a different body — that body after an arrow.
+
+    Both, never one. The bare `target` is the declaration a reader finds in
+    the source; the `callee` is what the walk went on to expand, and an
+    interface call showing only the implementation would hide that the source
+    names an interface (`OmsOrderService#list → OmsOrderServiceImpl#list` is
+    the shape). Where the two are the same descriptor, or where the callee is
+    NULL because no body was read, the target alone IS the whole answer.
+
+    Full descriptors, not `_short_handler`'s spelling: this column is where a
+    reader tells `com/macro/mall/dao/OmsOrderDao#getList` from a runtime
+    library's own unboxing call, and a sibling build module's
+    `com/macro/mall/common/api/CommonResult#success` from either. The package
+    IS the entire distinction — nothing here classifies a terminal — so
+    shortening this column would delete the only evidence a reader has. The
+    `Caller` column shortens because a caller is always a method in this
+    module, already named elsewhere in the document."""
+    if step.callee is None:
+        return _code(step.target)
+    callee = bare_descriptor(step.callee)
+    if callee == step.target:
+        return _code(step.target)
+    return _code(step.target) + _text(" → ") + _code(callee)
+
+
+def _returns_cell(returns: Sequence[tuple[int, str]], redactor: Redactor) -> str:
+    """What a method hands back, as one cell: every recorded return, joined —
+    because several returns are several POSSIBLE answers and no single one,
+    and printing the first would publish a coin toss.
+
+    An empty tuple is the em dash, which here means one of three things the
+    walk deliberately does not tell apart: the callee returns nothing, its body
+    was not read, or the site is a `dynamic` one whose `result` is the lambda
+    instance rather than anything a body returned. All three are "nothing was
+    recorded", which is what `_NONE_RECORDED` says everywhere else in this
+    document."""
+    if not returns:
+        return _NONE_RECORDED
+    return "; ".join(_returned_value(json.loads(value), redactor) for _ordinal, value in returns)
+
+
+def _returned_value(value: object, redactor: Redactor) -> str:
+    """One entry of D00 §5's argument grammar as one short string.
+
+    **Presentation of a closed grammar, not interpretation of it.** Every key
+    the grammar defines is printed if the entry carries it — the kind, the
+    symbol it names, the literal it is, the value id it came from, the
+    elements of an array — and an entry whose kind this function has never
+    heard of still prints that kind rather than vanishing. There is no branch
+    here that decides an entry means something other than what it says.
+
+    A JSON `null` (as opposed to `{"kind": "null"}`) is the VOID return, which
+    is the one distinction `method_returns` keeps deliberately: a method that
+    returns nothing said something, and a method whose return value could not
+    be named said something else (`{"kind": "unresolved"}`).
+
+    A string literal passes the redactor. Nothing else in this document
+    renders a value rather than a name, and a hard-coded credential returned
+    from a method is exactly the exposure `_wire_identity` already masks in a
+    path."""
+    if value is None:
+        return "void"
+    if not isinstance(value, dict):
+        # Not a shape the grammar can produce. Printed rather than dropped:
+        # a fact this renderer cannot read is a gap a reader must see.
+        return f"unreadable {json.dumps(value)}"
+    parts = [str(value.get("kind", "unreadable"))]
+    symbol = value.get("symbol")
+    if symbol is not None:
+        parts.append(f"`{symbol}`")
+    literal = value.get("value")
+    if literal is not None:
+        rendered = json.dumps(literal)
+        parts.append(redactor.redact_text(rendered) if isinstance(literal, str) else rendered)
+    elements = value.get("elements")
+    if elements is not None:
+        # An empty list is a ZERO-LENGTH varargs call, which is a real call
+        # rather than a failure to read one (capability 9.15) — so `[]` is
+        # printed, not skipped.
+        inner = ", ".join(_returned_value(element, redactor) for element in elements)
+        parts.append(f"[{inner}]")
+    source = value.get("source")
+    if source is not None:
+        parts.append(f"value {source}")
+    return " ".join(parts)
+
+
+def _sequence_view(
+    trace: Trace,
+) -> tuple[list[SequenceParticipant], list[SequenceMessage | SequenceAlternatives]]:
+    """One trace as participants and messages — the projection, where every
+    decision about the diagram is made (M07 "The renderer adds nothing").
+
+    A participant is the OWNING TYPE of a method, not the method: a sequence
+    diagram's lifeline is the thing that holds state and receives calls, and a
+    lifeline per method would draw `OmsOrderServiceImpl` four times over on
+    `/order/list` alone. First-appearance order, root first, then each step's
+    caller before its target — the walk's own order, so the diagram and the
+    step table are the same sequence read two ways (NFR-1).
+
+    **An arrow ends at the body the walk EXPANDED, not at the type the
+    compiler named** — the `callee`, falling back to the `target` where no
+    body was read. The two differ exactly where dispatch resolved an
+    interface call into its implementation, and drawing the interface there
+    breaks the diagram outright: on `/order/list` the arrow would land on
+    `OmsOrderService`, and `OmsOrderServiceImpl` would then send four
+    messages nobody ever sent it — a lifeline appearing from nowhere, which
+    is a diagram a reader cannot follow. The declared type is not lost: the
+    message label names it (`_message_label`), and the step table's `Call`
+    column carries both descriptors in full.
+    """
+    participants: dict[str, str] = {}
+
+    def _participant(descriptor: str) -> str:
+        owner = owner_of(descriptor)
+        # A descriptor with no owner is a free function — it has no type to
+        # draw, so it is its own lifeline, keyed by the whole descriptor so
+        # two of them can never merge.
+        key = descriptor if owner is None else owner
+        if key not in participants:
+            participants[key] = f"a{len(participants)}"
+        return participants[key]
+
+    # The root's own lifeline first, before any step: a root whose body calls
+    # nothing still draws as itself rather than as an empty diagram, and the
+    # leftmost lifeline is always the thing that starts the work.
+    _participant(bare_descriptor(trace.root.handler))
+
+    def _message(step: Step) -> SequenceMessage:
+        return SequenceMessage(
+            source=_participant(bare_descriptor(step.caller)),
+            target=_participant(_reached(step)),
+            label=_message_label(step),
+        )
+
+    messages = _grouped(list(trace.steps), _message)
+    labels = _sequence_labels(participants)
+    messages = _named(messages, labels)
+    drawn = [
+        SequenceParticipant(identifier, labels[identifier]) for identifier in participants.values()
+    ]
+    return drawn, messages
+
+
+def _named(
+    messages: list["SequenceMessage | SequenceAlternatives"], labels: dict[str, str]
+) -> list["SequenceMessage | SequenceAlternatives"]:
+    """Every alternatives branch's participant ID replaced by that lifeline's display
+    label — a second pass because the labels are not known until every participant has
+    been seen (`_sequence_labels` disambiguates a colliding simple name against the whole
+    set)."""
+    return [
+        message
+        if isinstance(message, SequenceMessage)
+        else SequenceAlternatives(
+            branches=tuple(
+                SequenceBranch(
+                    label=labels[branch.label],
+                    messages=tuple(_named(list(branch.messages), labels)),
+                )
+                for branch in message.branches
+            )
+        )
+        for message in messages
+    ]
+
+
+def _grouped(
+    steps: list[Step], message: Callable[[Step], SequenceMessage]
+) -> list[SequenceMessage | SequenceAlternatives]:
+    """`steps` as messages, with each NARROWED call site's candidates folded into one
+    alternatives block (F7 §8.3, W32).
+
+    **Why this is not cosmetic.** A `narrowed` site is several candidate bodies with none
+    picked, and the walk records one step per candidate followed by that candidate's whole
+    subtree. Drawn flat they read as a sequence — `spring-petclinic-rest`'s
+    `ClinicServiceImpl#saveOwner` draws `save` to the JDBC repository and, eight arrows
+    later, `save` to the JPA one, so the diagram says the service saves twice when at most
+    one repository answers the call. 34 such sites in that corpus's `call_edges`, of which
+    **31 are reached by a trace** and therefore appear in the document — the other three
+    are in the graph and in no walk, and this sentence used to weld the two numbers
+    together.
+
+    **The ranges are already contiguous, which is what makes this possible.** The walk is
+    depth-first, so a candidate is immediately followed by everything it leads to and then
+    by the next candidate: a branch is the candidate's own step plus every following step
+    DEEPER than it. Nothing is reordered and nothing is dropped — the same messages come
+    out in the same order, inside a block that says what they are.
+
+    A group is keyed on `(caller, ordinal)`, which is the call SITE (D00 §5), and only a
+    site whose steps are `narrowed` groups: two steps sharing an ordinal is exactly the
+    shape dispatch produces when it could not pick, and one step is an ordinary call
+    however it resolved.
+    """
+    drawn: list[SequenceMessage | SequenceAlternatives] = []
+    index = 0
+    while index < len(steps):
+        step = steps[index]
+        span = _candidate_span(steps, index)
+        if span is None:
+            drawn.append(message(step))
+            index += 1
+            continue
+        branches: list[SequenceBranch] = []
+        for start, end in span:
+            first = message(steps[start])
+            branches.append(
+                SequenceBranch(
+                    # The participant ID this branch's own first arrow points at, resolved
+                    # to a display name by `_named` once `_sequence_labels` has decided
+                    # what every lifeline is called. Taken from the message rather than
+                    # spelled again here: the branch names exactly the thing its arrow
+                    # lands on, and two rules for one name would let a colliding simple
+                    # name be disambiguated on the lifeline and stay ambiguous in the
+                    # branch that names it.
+                    label=first.target,
+                    messages=(first, *_grouped(steps[start + 1 : end], message)),
+                )
+            )
+        drawn.append(SequenceAlternatives(branches=tuple(branches)))
+        index = span[-1][1]
+    return drawn
+
+
+def _candidate_span(steps: list[Step], index: int) -> list[tuple[int, int]] | None:
+    """The `(start, end)` range of each candidate of the NARROWED site beginning at
+    `index`, or None where that step is not one.
+
+    A candidate's range runs to the next step at its own depth or shallower, which is
+    where its subtree ends — the walk being depth-first is the whole of why that holds.
+
+    **The `depth` equality below is defensive and currently unreachable**, stated rather
+    than left as a clause a reader assumes is load-bearing: `_walk` expands a method once
+    per trace (`expanded`), so every step naming one caller comes from that caller's
+    single frame and shares its depth. Removing the check changes no output and fails no
+    test. It stays for the reason the `len(spans) > 1` guard stays — the invariant is the
+    walk's, not this function's — and it is the `caller`/`ordinal` equality that does the
+    real work, which `test_two_narrowed_sites_in_one_caller_are_two_blocks` pins against a
+    live shape.
+    """
+    first = steps[index]
+    if first.resolution != Resolution.NARROWED:
+        return None
+    spans: list[tuple[int, int]] = []
+    cursor = index
+    while (
+        cursor < len(steps)
+        and steps[cursor].resolution == Resolution.NARROWED
+        and (steps[cursor].caller, steps[cursor].ordinal) == (first.caller, first.ordinal)
+        and steps[cursor].depth == first.depth
+    ):
+        end = cursor + 1
+        while end < len(steps) and steps[end].depth > first.depth:
+            end += 1
+        spans.append((cursor, end))
+        cursor = end
+    # One candidate is not an alternative to anything: a `narrowed` row can stand alone
+    # where dispatch found exactly one body but could not commit to it, and a one-branch
+    # `alt` would tell a reader there is a choice where there is none.
+    return spans if len(spans) > 1 else None
+
+
+def _sequence_labels(participants: dict[str, str]) -> dict[str, str]:
+    """Each participant id's display label: the owning type's simple name, or
+    — for every member of a group whose simple names COLLIDE — the full
+    descriptor with its type marker stripped.
+
+    `_disambiguated_shape_names`' rule, applied per diagram (§13.5). Two
+    distinct types reading as one lifeline label is not cosmetic: a diagram
+    showing `Order` twice, or worse showing `com/a/Order` and `com/b/Order`
+    under one name a reader assumes is one type, asserts a call between things
+    that never touched. The fallback goes all the way to the key this dict is
+    built on, which is unique by construction."""
+    by_simple: dict[str, list[str]] = {}
+    for key in participants:
+        by_simple.setdefault(simple_name(key), []).append(key)
+    labels: dict[str, str] = {}
+    for name, colliding in by_simple.items():
+        for key in colliding:
+            labels[participants[key]] = name if len(colliding) == 1 else without_type_marker(key)
+    return labels
+
+
+def _reached(step: Step) -> str:
+    """The BARE descriptor of the body this step reaches — the `callee` where
+    the walk read one, the `target` the compiler wrote where it did not.
+
+    One function, because the diagram's arrow and the diagram's participant
+    list must agree about it: computed twice, a lifeline could be registered
+    for one descriptor and addressed by another, and mermaid would silently
+    draw an extra actor rather than fail."""
+    return step.target if step.callee is None else bare_descriptor(step.callee)
+
+
+def _message_label(step: Step) -> str:
+    """One arrow's whole text: the method called, where it was DECLARED if
+    that is not where it landed, and then what the walk did about it.
+
+    `(declared X)` is what keeps the arrow honest after it was redirected to
+    the implementing body: the source says `orderService.list(...)` and a
+    diagram silently naming `OmsOrderServiceImpl` would be a claim about
+    dispatch presented as a claim about the code. Named by simple name only —
+    the step table's `Call` column carries both descriptors in full, and a
+    package path inside an arrow label is unreadable.
+
+    `(dynamic)` is not decoration either. An `invokedynamic` step names the
+    body the site CREATES, and the lambda runs later, elsewhere, if at all —
+    an arrow reading like an ordinary call there is the one place this diagram
+    could assert something the graph does not say.
+
+    `[stop]` marks a lifeline the walk did not enter, which is where the trace
+    ends on that branch; a step with no stop was expanded, and its own calls
+    follow."""
+    label = method_name(step.target)
+    declared = owner_of(step.target)
+    landed = owner_of(_reached(step))
+    if declared is not None and landed != declared:
+        label = f"{label} (declared {simple_name(declared)})"
+    if step.invoke_kind == "dynamic":
+        label = f"{label} (dynamic)"
+    if step.stop is not None:
+        label = f"{label} [{step.stop}]"
+    return label
+
+
+def _alternative_sites(trace: Trace) -> int:
+    """How many call sites in this trace narrowed to SEVERAL bodies (F7 §8.3, W32).
+
+    One per site, not per candidate: two candidates on one site is one choice a reader
+    has to make, and counting the arrows would say two.
+    """
+    sites: set[tuple[str, int]] = set()
+    counted: dict[tuple[str, int], int] = {}
+    for step in trace.steps:
+        if step.resolution != Resolution.NARROWED:
+            continue
+        key = (step.caller, step.ordinal)
+        counted[key] = counted.get(key, 0) + 1
+        if counted[key] > 1:
+            sites.add(key)
+    return len(sites)
+
+
+def _trace_elision(trace: Trace) -> str:
+    """What this trace's diagram leaves out, counted from the trace itself.
+
+    Every step IS drawn — there is no cap and no filter, so the count is not
+    the elision. What the diagram elides is what the WALK did not enter, and
+    the counts say how much of each: a diagram whose arrows all end at
+    lifelines nobody opened looks like a complete picture of a shallow system,
+    and it is a complete picture of where we stopped looking.
+
+    Zero-count clauses are omitted rather than printed as `0`, and the
+    ordering is fixed, so the sentence is a function of the trace alone
+    (NFR-1). Each count is phrased as a noun and a number rather than as a
+    subject and a verb, so no clause has to agree with a count nobody can
+    predict — the mistake `_stale_sentence` fixes with a plural `s` and this
+    would need four of."""
+    stops = {stop: 0 for stop in TraceStop}
+    for step in trace.steps:
+        if step.stop is not None:
+            stops[step.stop] += 1
+    # F7 §8.3 (W32). Counted from the steps rather than from the built diagram, so this
+    # sentence and the arrows cannot disagree about how many choices there are.
+    alternatives = _alternative_sites(trace)
+    drawn = (
+        "This root calls nothing, so the diagram is its own lifeline and no arrow at all."
+        if not trace.steps
+        else (
+            f"All {len(trace.steps)} step{'' if len(trace.steps) == 1 else 's'} of this "
+            f"trace {'is' if len(trace.steps) == 1 else 'are'} drawn, and none is dropped"
+            + (
+                "."
+                if not alternatives
+                else (
+                    f" — but {alternatives} call site{'' if alternatives == 1 else 's'} "
+                    f"here dispatch{'es' if alternatives == 1 else ''} to SEVERAL bodies "
+                    "with none picked, and each is drawn as an `alt` block: exactly one "
+                    "branch of each runs, never all of them, and which one is a runtime "
+                    "question this analysis does not answer."
+                )
+            )
+        )
+    )
+    parts = [
+        (
+            "Reachability, not execution: an arrow is a call the compiler recorded, not "
+            "one observed to run, and branches are not distinguished — no order here is "
+            "claimed to have happened."
+        ),
+        drawn,
+    ]
+    if stops[TraceStop.BOUNDARY]:
+        parts.append(
+            "Arrows ending at a lifeline this workspace read no body for — a library, the "
+            "JDK, a mapper or a sibling build module alike — which the walk did not "
+            f"enter: {stops[TraceStop.BOUNDARY]}."
+        )
+    if stops[TraceStop.REVISITED]:
+        parts.append(
+            "Arrows naming a method already expanded earlier in this trace, whose own "
+            f"calls are drawn at that first arrow and not repeated here: "
+            f"{stops[TraceStop.REVISITED]}."
+        )
+    if stops[TraceStop.CYCLE]:
+        parts.append(
+            "Arrows whose callee is already on the path from the root — recursion, stated "
+            f"and not followed: {stops[TraceStop.CYCLE]}."
+        )
+    return " ".join(parts)
+
+
+def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
+    """FR-17 clause 3 (F8 §9.5, W38): how much of the call graph was UNDERSTOOD, beside how
+    many files were opened.
+
+    **`reach` leads and `resolution` follows, because the second alone misleads.**
+    `resolution` says whether dispatch settled a call, and it reads 100% `resolved` on two
+    of the four measured corpora — naming the target a compiler wrote is easy, and reading
+    its BODY is the work. A reader shown only that would take a blind analysis for a
+    complete one, which is the corpus blindness this line exists to instrument.
+
+    Absent where there is no call graph at all, rather than printed as `0 of 0`: a module
+    with no edges has nothing to be understood, and a percentage of nothing reads as a
+    failure (NFR-7's "looked and found nothing" is for things that were looked FOR).
+    """
+    reach = coverage.get("reach")
+    if not isinstance(reach, dict) or not reach:
+        return []
+    read = int(reach.get("body_read", 0))
+    total = read + int(reach.get("boundary", 0))
+    if total == 0:
+        return []
+    items = [
+        _runs(
+            f"Calls whose callee body this workspace read: {read} of {total} "
+            f"({round(100 * read / total)}%). The rest end at a boundary — a library, the "
+            "platform, a sibling module — which is what was measured, not what exists."
+        )
+    ]
+    for key, unit, lead in (
+        ("resolution", "call edges", "Dispatch"),
+        ("method_resolution", "methods", "Method lookup"),
+    ):
+        distribution = coverage.get(key)
+        if isinstance(distribution, dict) and distribution:
+            counted = ", ".join(f"{name} {count}" for name, count in sorted(distribution.items()))
+            items.append(_runs(f"{lead}, by outcome ({unit}): {counted}."))
+    return items
 
 
 def _config_coverage_items(
@@ -1098,15 +2168,56 @@ def _fields_by_shape(
 
 
 def _contract_nodes(
-    shapes: list[dict[str, object]], shape_fields: Sequence[dict[str, object]]
+    shapes: list[dict[str, object]],
+    shape_fields: Sequence[dict[str, object]],
+    hierarchy: Sequence[dict[str, object]] = (),
 ) -> tuple[list[ClassNode], list[ClassEdge]]:
     """`shapes`/`shape_fields` projected into the view model the emitter draws
     (M07 "Structure — contract class diagram"): one node per shape with its
     own wire fields, one edge per field whose `item` descriptor points at
-    another shape."""
+    another shape, and — since W33 — one INHERITANCE edge per ancestor that
+    explains where a contract came from (F7 §8.4).
+
+    **Which ancestors earn an arrow, measured.** Not all of them: `type_hierarchy` holds
+    every supertype, and drawing every one buries the diagram in noise that says nothing
+    about the wire. On `mall-admin` 30 of the 34 shape ancestors are one marker interface;
+    on this repo's fixture four are a protobuf runtime base and four are generated builder
+    interfaces. So the rule is what the ancestor CONTRIBUTES:
+
+    * a **scanned** ancestor that is itself a shape here — its fields were inlined into
+      this shape's own list (the field pass walks the ancestry), so the arrow is what
+      explains their presence;
+    * an **unscanned SUPERCLASS of a shape that is itself `open`** — it may declare fields
+      nobody read, which is exactly why the subtype is open, and the arrow plus an
+      `<<open>>` node is where a reader is told the rest of the contract lives;
+    * nothing else. An **unscanned interface** cannot hold instance fields (an interface's
+      own fields are constants), so it explains no part of the payload, and a scanned
+      ancestor that contributed nothing has nothing to explain either.
+
+    An unscanned superclass gets a node of its own, with no fields and `<<open>>` — D02's
+    stereotype means "the expansion stopped here", which is exactly what it is.
+
+    **Reading the shape's own `open` flag is what keeps the two halves of the diagram from
+    contradicting each other.** A type whose contract comes from a SCHEMA takes nothing
+    from its class file, so it is closed however exotic its generated superclass is — every
+    protobuf message extends the runtime's unscanned `GeneratedMessage`, and drawing that
+    arrow put four `<<open>>` boxes above four shapes the `.proto` describes completely.
+    Deciding it from the flag rather than re-deriving the reason means the arrow and the
+    stereotype can never disagree.
+
+    **A scanned ancestor that is NOT itself a shape gets no arrow**, and that is a stated
+    boundary rather than an oversight. `mall-admin`'s `dto/OmsOrderDetail extends
+    model/OmsOrder` is the case: the parent's 45 fields are IN the child's own list, since
+    the field pass walks the ancestry, so the contract on the diagram is complete and an
+    arrow would point at an empty box. JSON has no inheritance; the flattening is what the
+    wire really carries, and this diagram draws the wire.
+    """
     grouped = _fields_by_shape(shape_fields)
+    described = {str(shape["shape_id"]) for shape in shapes}
+    ancestors = _ancestors_by_child(hierarchy)
     nodes: list[ClassNode] = []
     edges: list[ClassEdge] = []
+    opened: list[str] = []
     for shape in shapes:
         shape_id = str(shape["shape_id"])
         rows = grouped.get(shape_id, [])
@@ -1119,7 +2230,66 @@ def _contract_nodes(
             target = json.loads(str(item)).get("shape_id")
             if target:
                 edges.append(ClassEdge(shape_id, str(target)))
+        # A parameterised shape id names a type plus its bound arguments; the hierarchy is
+        # keyed on the type alone, exactly as the field and accessor passes key it.
+        for ancestor, kind, scanned in ancestors.get(_unparameterised(shape_id), ()):
+            drawn_as = _described_as(ancestor, shape_id, described)
+            if scanned and drawn_as is not None:
+                edges.append(ClassEdge(shape_id, drawn_as, kind))
+            elif not scanned and kind == "extends" and bool(shape["open"]):
+                edges.append(ClassEdge(shape_id, ancestor, kind))
+                if ancestor not in described and ancestor not in opened:
+                    opened.append(ancestor)
+    # After every shape's own node, so a reader meets the module's types first and the
+    # boundary they stop at second. `open=True` and no fields is the whole of what is
+    # known about one.
+    nodes.extend(ClassNode(ancestor, (), True) for ancestor in opened)
     return nodes, edges
+
+
+def _described_as(ancestor: str, child: str, described: set[str]) -> str | None:
+    """Which shape id in the diagram IS this ancestor, or None where none is.
+
+    The hierarchy names a TYPE (`a/Slice#`) and a shape id names a type plus its bound
+    arguments (`a/Slice#<a/OrderView#>`), so a plain membership test misses every
+    parameterised contract — and `Page<T>`/`Slice<T>` is precisely the case W33 cites as
+    the reason its `<|..` rule ships at all. Measured against the shipped projection before
+    this: `Page#<OrderView#> implements Slice#` drew zero edges with both shapes described.
+
+    **The child's own binding is preferred**, because a generic type that extends another
+    usually passes its parameter straight through — `Page<T> extends Slice<T>` — so
+    `Page#<OrderView#>`'s ancestor is `Slice#<OrderView#>` and not some other `Slice`.
+    Where that exact binding is not described, the BARE ancestor is used if it is; where
+    the ancestor is described only under bindings that are not the child's, there is no
+    edge, because the erased hierarchy fact does not say which of them this child extends
+    and drawing a guess would be a claim about the source.
+    """
+    if ancestor in described:
+        return ancestor
+    arguments = child[len(_unparameterised(child)) :]
+    if arguments and (bound := ancestor + arguments) in described:
+        return bound
+    return None
+
+
+def _unparameterised(shape_id: str) -> str:
+    """A shape id with its bound type arguments dropped — `CommonResult#<OrderView#>`
+    becomes `CommonResult#`. The hierarchy is keyed on the TYPE, which is what declares a
+    supertype; the binding belongs to the reference."""
+    return shape_id.split("<", 1)[0]
+
+
+def _ancestors_by_child(
+    hierarchy: Sequence[dict[str, object]],
+) -> dict[str, list[tuple[str, str, bool]]]:
+    """`type_hierarchy` rows as `child -> [(ancestor, kind, scanned)]`, in the table's own
+    `position` order so two runs draw one order (NFR-1)."""
+    found: dict[str, list[tuple[str, str, bool]]] = {}
+    for row in hierarchy:
+        found.setdefault(str(row["child"]), []).append(
+            (str(row["ancestor"]), str(row["kind"]), bool(row["scanned"]))
+        )
+    return found
 
 
 def _inline_descriptor(descriptor: dict[str, object]) -> str:
@@ -1367,6 +2537,22 @@ def _descriptor_entry(
     return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
 
 
+def _streaming_entry(descriptor_json: object) -> DetailEntry | None:
+    """gRPC's `unary | server-streaming | client-streaming | bidi` (2O design
+    §1a), when the descriptor carries one — a typed 2M Detail line, not a new
+    `endpoints` column, `schema_operations.py`'s own ruling for exactly this
+    reason. `_grpc_operation_row` writes the word under a `streaming` key
+    beside `response_shape`'s own `shape_id`, a key no other schema format's
+    descriptor ever carries, so a bare presence check is the whole rule:
+    every non-gRPC row's `None` here is silence, not a gap."""
+    if descriptor_json is None:
+        return None
+    streaming = json.loads(str(descriptor_json)).get("streaming")
+    if streaming is None:
+        return None
+    return DetailEntry(_text("Streaming"), _text(str(streaming)), None)
+
+
 @dataclass(frozen=True)
 class _Anchors:
     """The indices into the assembled `sections` list that the four anchors of
@@ -1610,7 +2796,14 @@ def _machine_lines(section: Section, is_first: bool = False) -> tuple[str, ...] 
     if isinstance(section, MachineSection):
         return section.lines
     if isinstance(section, MachineDiagram):
-        return ("```mermaid", *section.mermaid.split("\n"), "```")
+        fence = ("```mermaid", *section.mermaid.split("\n"), "```")
+        if section.elides is None:
+            return fence
+        # The blank line is `_claim_lines`' own shape for a `DiagramClaim`,
+        # kept identical here: a line landing directly under a closing fence
+        # reads as part of the code block in some renderers, and a machine
+        # diagram's elision must be as visible as a model's.
+        return (*fence, "", f"Elides: {section.elides}")
     return None
 
 

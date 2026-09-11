@@ -5,6 +5,12 @@
 #
 #   scripts/check.sh          all gates
 #   scripts/check.sh --lint   lint only, no tests (what the pre-commit hook runs)
+#   scripts/check.sh --guards guard discrimination only — NOT part of the default
+#                             run, because it spawns a pytest per guard and its
+#                             failures mean something different from a test's:
+#                             a near-miss that no longer notices the loss of the
+#                             guard it names. `scripts/guard_check.py` has the
+#                             whole story.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -13,6 +19,14 @@ cd "$(dirname "$0")/.."
 if [ -x .venv/bin/python ]; then BIN=.venv/bin/; else BIN=""; fi
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+
+# Before the lint gates rather than after them: this answers a question about
+# the test suite, not about this tree's formatting, and somebody asking it
+# should not have to make the tree lint-clean first.
+if [ "${1:-}" = "--guards" ]; then
+    step "guard discrimination"; "${BIN}python" scripts/guard_check.py
+    exit 0
+fi
 
 step "ruff format"; "${BIN}ruff" format --check .
 step "ruff lint";   "${BIN}ruff" check .

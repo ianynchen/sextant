@@ -16,12 +16,76 @@ matches:
   mapping:
     # CHECKPOINT FACT: `@Query` and `@Mutation` declare exactly one attribute
     # each, `value()`, and it arrives SCALAR.
+    #
+    # **THE FIRST OF FIVE NAME SOURCES; the other four are `path_from_siblings`
+    # below** (`OI-35`, closed by the 2026-09-06 vocabulary pass). CP-15 rows
+    # 1-2 disassemble `OperationCreator.getOperationName` at
+    # smallrye-graphql-schema-builder 2.0.0 and 2.18.5 and find it consulting,
+    # in order and taking the first with a value: the operation annotation's
+    # own `value`, then `org.eclipse.microprofile.graphql.Name`, then
+    # `jakarta.json.bind.annotation.JsonbProperty`, then its `javax` spelling,
+    # then `com.fasterxml.jackson.annotation.JsonProperty`.
     path_from: [value]
+    # THE OTHER FOUR, in the order the framework consults them. The order is
+    # the rule rather than a presentation choice: the array's own `iconst_N`
+    # indices ARE it, and the framework returns at the FIRST source with a
+    # value — so a method carrying both `@Name` and `@JsonbProperty` is served
+    # under `@Name`'s, and a set could not say that.
+    #
+    # `arg: value` on all four is MEASURED and not inferred from
+    # `getOneOfTheseMethodAnnotationsValue`'s own name — which is exactly the
+    # §5.3 failure that rule was written for, and it would have mattered:
+    # Jackson's `@JsonProperty` declares six members. CP-15 **row 6**
+    # disassembles the loop at both versions: a source counts where the
+    # annotation is present AND `AnnotationInstance.value()` is non-null
+    # (`containsKeyAndValidValue`), and the name is read from that same
+    # no-argument `value()`.
+    #
+    # A source written EMPTY (`@Name("")`) STOPS the search rather than falling
+    # through to the next — row 6 shows the loop returning at the first
+    # non-null value and the emptiness tested afterwards — and this file
+    # reproduces that without a rule of its own: an empty attribute is a
+    # present one, so it wins here and composes an empty suffix, which is
+    # precisely the case `path_fallback` answers.
+    #
+    # Both `JsonbProperty` spellings are listed because the FRAMEWORK lists
+    # both (CP-15 row 2, at both versions). The `javax` one is not a legacy
+    # alias this file chose to carry; it is a source the schema builder still
+    # consults, and dropping it would under-report a real name.
+    path_from_siblings:
+      - { annotation: org.eclipse.microprofile.graphql.Name, arg: value }
+      - { annotation: jakarta.json.bind.annotation.JsonbProperty, arg: value }
+      - { annotation: javax.json.bind.annotation.JsonbProperty, arg: value }
+      - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
     # CHECKPOINT FACT: `@Query.value()` is declared `default ""` and the
     # default never reaches the class file — the third framework with the
     # identical shape, which is why the form is engine vocabulary rather than
     # three catalog workarounds. Rides `spring-graphql.yml`'s form with no
     # engine change of its own (2H design §1's amended acceptance test).
+    #
+    # **MEASURED, AND NOW ENCODED** (`OI-5`, closed by the 2026-09-06
+    # vocabulary pass). This key used to say the fallback was a prediction;
+    # CP-15 ran the framework, and the prediction was right about the direction
+    # and wrong about the size.
+    #
+    # What SmallRye actually does (CP-15 rows 3-5, byte-identical at 2.0.0 and
+    # 2.18.5, row 5 COMPILED AND RUN rather than read): the fallback is
+    # `MethodHelper.getPropertyName`, and which transformation it applies
+    # depends on WHICH operation annotation matched. `@Query` and
+    # `@Subscription` take `Direction.OUT`, which strips `get` and `is`;
+    # `@Mutation` takes `Direction.IN`, which strips `set` and nothing else.
+    # Measured outputs: `getOrders -> orders`, `isActive -> active`,
+    # `setStatus -> status` (mutation) but `setStatus` unchanged (query),
+    # `get -> get` (too short), `gettotal -> gettotal` (no capital at the
+    # seam), `getURL -> uRL` (the FIRST character is lowercased, not the
+    # remainder).
+    #
+    # So the word belongs on the ANNOTATION, and each of the two below carries
+    # its own. This catalog-level key is the DEFAULT for an entry that declares
+    # none, and it stays `construct_name` deliberately: that is the honest
+    # answer for an annotation whose direction nobody has measured, and it is
+    # what a third operation annotation added here would get until somebody
+    # does.
     path_fallback: construct_name
     # No qualifier: MicroProfile's non-root resolver is `@Source` on a
     # PARAMETER, which names the parent type through the parameter's own type
@@ -36,8 +100,19 @@ matches:
     all_methods: []
     prefix_annotation: null
     annotations:
-      - { fqn: org.eclipse.microprofile.graphql.Query,    method: [query] }
-      - { fqn: org.eclipse.microprofile.graphql.Mutation, method: [mutation] }
+      # THE FALLBACK DIRECTION, per annotation (`OI-5`). CP-15 row 3 switches on
+      # the operation type: `QUERY` and `SUBSCRIPTION` take `Direction.OUT`,
+      # `MUTATION` takes `Direction.IN`; row 4 is what each direction strips.
+      # These two words are that switch, said in the catalog rather than in the
+      # engine — the engine holds only which prefixes each word means.
+      #
+      # `@Subscription` is not declared here at all, and that is unchanged by
+      # this: MicroProfile GraphQL 2.0's own API artifact — the one
+      # `detect.coordinates` names — declares no such annotation.
+      - { fqn: org.eclipse.microprofile.graphql.Query,    method: [query],
+          path_fallback: read_accessor_property }
+      - { fqn: org.eclipse.microprofile.graphql.Mutation, method: [mutation],
+          path_fallback: write_accessor_property }
 
 format_fixed:
   graphql: json
@@ -61,23 +136,18 @@ wrappers:
   - { type: java.util.concurrent.CompletableFuture,  payload_arg: 0, semantics: async }
   - { type: java.util.Optional,                      payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.time.LocalDate,  wire: string, format: date }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.util.UUID,       wire: string, format: uuid }
+# The naming rule this file encodes belongs to an IMPLEMENTATION, not to the
+# API artifact `detect.coordinates` names: `microprofile-graphql-api` declares
+# the annotations and no naming rule at all. So the artifact recorded here is
+# the one the rule was READ OUT OF (D02 §1a's own contract, and
+# `spring-web.yml`'s handler gate living in `spring-webmvc` is the precedent).
+# SmallRye is ONE implementation of the specification, and every verdict CP-15
+# reaches is scoped to it — a second implementation is a second row here, not
+# an assumption.
+measured:
+  - { artifact: io.smallrye:smallrye-graphql-schema-builder, versions: ["2.0.0", "2.18.5"],
+      identity: reported, by: scripts/probes/cp15_mp_graphql_names.md }

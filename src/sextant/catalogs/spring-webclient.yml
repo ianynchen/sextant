@@ -7,16 +7,44 @@ direction: outbound
 detect:
   coordinates: ["org.springframework:spring-webflux"]
 
+measured:
+  - { artifact: org.springframework:spring-webflux, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:
+  # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q1,
+  # `scripts/probes/cp12_sweep_round1b.md`): `WebClient` declares exactly these
+  # EIGHT request-starting methods — the seven named verbs and the generic
+  # `method(HttpMethod)` — and the set is identical at both minors. This list
+  # previously held five, which was the fixture's verb vocabulary rather than
+  # the framework's (`A-M3`), and the cost is total rather than partial: a
+  # chain rooted on an undeclared starter is never rooted, so nothing reaches a
+  # terminal and NO row is derived (`fluent.py`'s own contract). Pinned by
+  # `tests/architecture/test_sweep_round1b_framework_surfaces.py` against the
+  # probe, so a ninth starter fails the suite instead of going quiet.
   roots:
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,    captures: { http_method: GET } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post,   captures: { http_method: POST } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: put,    captures: { http_method: PUT } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: delete, captures: { http_method: DELETE } }
-    - { owner: org.springframework.web.reactive.function.client.WebClient, method: patch,  captures: { http_method: PATCH } }
-  # `retrieve`/`exchange` mark the chain executable, not the walk's end:
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: get,     captures: { http_method: GET } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: head,    captures: { http_method: HEAD } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: post,    captures: { http_method: POST } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: put,     captures: { http_method: PUT } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: patch,   captures: { http_method: PATCH } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: delete,  captures: { http_method: DELETE } }
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: options, captures: { http_method: OPTIONS } }
+    # The generic starter, and the one whose verb this scanner cannot read:
+    # `method(HttpMethod)` takes an ENUM CONSTANT, and `string_constants` reads
+    # string literals. `arg0` is still the right spelling — the same grammar
+    # okhttp's `method(String, RequestBody)` uses — because it says the verb
+    # comes from the call site: reached, and unreadable. The row ships with the
+    # address it really does call and `method: NULL` at `unresolved` (ruling
+    # I1), never a verb nothing evidenced. Declaring no root at all was the
+    # alternative and it is worse: the whole call disappeared.
+    #
+    # This becomes a resolved verb, with no change to this file, the day the
+    # fact stream carries an enum constant's own name.
+    - { owner: org.springframework.web.reactive.function.client.WebClient, method: method,  captures: { http_method: arg0 } }
+  # `retrieve`/`exchange*` mark the chain executable, not the walk's end:
   # `bodyToMono`/`bodyToFlux` follow `retrieve` in every real chain, so the
   # engine keeps folding step captures past a terminal (D02 §4, Task 11).
   steps:
@@ -31,11 +59,58 @@ matches:
     # OkHttp's own `Request$Builder`.
     - { method: baseUrl,    owner: org.springframework.web.reactive.function.client.WebClient$Builder, captures: { base: arg0 } }
     - { method: uri,        captures: { url: arg0 } }
+    # F5 §6.2 (W29). `collects`, not `captures`, and the difference is the whole reason
+    # the key exists: a capture is LAST-WINS, so a chain calling `.header(...)` three
+    # times would keep the third and silently claim it was the only one. A collecting
+    # step accumulates instead.
+    #
+    # Read off `WebClient$RequestHeadersSpec` in spring-webflux 6.1.6, whose
+    # header-setting methods are `header(String, String...)` and
+    # `headers(Consumer<HttpHeaders>)`. Only the first is declared: the second takes a
+    # LAMBDA that mutates a headers object, and what it puts there is a body this engine
+    # does not walk into. Declaring it would name an entry with no readable name and no
+    # readable value, which is not an unresolved entry — it is no entry at all.
+    - { method: header,     collects: { kind: header, name: arg0, value: arg1 } }
+    # `OI-73`. `uri(Function)` hands a `UriBuilder` to a lambda, and the URL — path AND
+    # query parameters — is built inside that lambda's own synthetic method. Before this
+    # the chain derived a row with `path` NULL: the call recorded and its whole address
+    # unread, which is the identity DR-5 links on. These two steps are matched inside the
+    # lambda body, walked as its own chain (`_fold_lambda_captures`).
+    #
+    # Owner-declared, unlike the steps above, because these names are generic: `path` and
+    # `queryParam` would otherwise match any builder in any chain this catalog roots.
+    - { method: path,       owner: org.springframework.web.util.UriBuilder,
+        captures: { url: arg0 } }
+    - { method: queryParam, owner: org.springframework.web.util.UriBuilder,
+        collects: { kind: query, name: arg0, value: arg1 } }
+
     - { method: bodyValue,  captures: { body: arg0 } }
     - { method: body,       captures: { body: arg0 } }
     - { method: bodyToMono, captures: { response: arg0 } }
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
-  terminal: [retrieve, exchange]
+  # MEASURED per Spring minor, and it is the one place in this file where the
+  # two minors DISAGREE (CP-12 Q2). `WebClient$RequestHeadersSpec`'s
+  # response-obtaining methods — the ones returning anything other than the
+  # spec itself, which is the framework's own way of saying "this executes the
+  # request" — are:
+  #
+  #   spring-webflux 6.1.6  retrieve, exchangeToMono, exchangeToFlux, exchange
+  #   spring-webflux 7.0.2  retrieve, exchangeToMono, exchangeToFlux
+  #
+  # This list was `[retrieve, exchange]` and stated no version, and it was
+  # wrong in BOTH directions at once (`A-M4`): `exchangeToMono`/`exchangeToFlux`
+  # — the only exchange-style terminals at 7.0.2, and the recommended ones
+  # since 5.3 — were absent at every version, so a module using them had its
+  # whole WebClient surface missing; and `exchange` is declared at a version
+  # that does not have it.
+  #
+  # `exchange` STAYS, and the reason is that a dead entry and a missing one are
+  # not symmetric here: at 7.0.2 no call site can name a method the jar does
+  # not declare, so the entry matches nothing and costs no row, while removing
+  # it would drop every 6.1.6 module's `.exchange()` chain. It is dead data at
+  # 7.0.2, not a wrong row, and it is removable the day 6.1.6 leaves the
+  # measured scope.
+  terminal: [retrieve, exchangeToMono, exchangeToFlux, exchange]
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary
@@ -50,15 +125,16 @@ matches:
     getter_prefixes: [get, is]
 
 # Shared verbatim across every outbound catalog on purpose (not just these
-# three plus RestTemplate), for the same reason `nullability` is copied from
-# spring-mvc.yml elsewhere: shape (type) expansion is a *global*,
+# three plus RestTemplate): shape (type) expansion is a *global*,
 # insert-if-absent pass keyed on the type symbol alone (`derive_shapes`), so
 # the FIRST catalog to reach a shared payload type is the one that expands
 # it, and every later catalog finds it already there — regardless of
 # protocol or direction, including a row a *different* catalog produced
-# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's
-# wrappers/serialization/known_types must therefore agree, or the first one
-# alphabetically silently mis-describes a route it never derived.
+# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's `wrappers`
+# must therefore agree, or the first one alphabetically silently mis-describes
+# a route it never derived. **The three payload-type blocks that used to be
+# copied alongside them are one file now** (D02 §1b), which is what closed
+# this hazard for them and leaves it open only for `wrappers`.
 # Endpoint-level ownership is a different question and is NOT this reason:
 # `_owns` reads a row's own `catalog_id` (2E-prep design §1a), so a
 # catalog's rules describe only the rows it derived itself.
@@ -68,30 +144,6 @@ wrappers:
   - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
   - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

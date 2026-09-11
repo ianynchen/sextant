@@ -84,9 +84,8 @@ def _document() -> Document:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.12",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -136,9 +135,13 @@ def _parameter(index: int) -> CallArgument:
 
 def _marked(symbol: str) -> SymbolFact:
     """A payload type whose own declared interface is the catalog's marker —
-    the hierarchy the `owner_hierarchy` rule walks. A plain `extends` is not
-    in the fact stream at all, so an interface is what a real generated
-    message offers too."""
+    one of the three edges the `owner_hierarchy` rule walks, and the one a
+    real generated protobuf message offers.
+
+    It is not the only one: capability 9.13 emits a `superclass` field for
+    every non-`Object` superclass, which `_extends` below uses. This
+    docstring used to say a plain `extends` was "not in the fact stream at
+    all", which was `A-M12`'s stale premise."""
     return SymbolFact(
         document_id="doc_1",
         symbol=_MODULE + symbol,
@@ -567,6 +570,14 @@ def test_open_questions_deterministic(tmp_path: Path):
     rows sharing a real path would collapse into one before this pass ever
     saw them. Two listeners on one destination reach the same tie through
     `derive_endpoints.sql` in the live fixture.
+
+    **The seeded rows are `unresolved`, and that is what a listener whose
+    destination could not be read actually is** — `single_call` and `fluent`
+    both stamp `resolved` only where the address argument itself resolved. They
+    were `resolved` here, which `derive_call_endpoints.sql`'s addresses-nothing
+    gate now refuses: a row claiming its address was READ and that there is
+    none names no endpoint. The tie this test is about is untouched, because
+    the tie is in the path and the question kind.
     """
     facts: list[Fact] = [
         _marked(SCROLL),
@@ -591,8 +602,8 @@ def test_open_questions_deterministic(tmp_path: Path):
         workspace = _workspace(directory, *facts)
         _seed(
             workspace,
-            {"path": None},
-            {"path": None, "handler": _handler("onOther")},
+            {"path": None, "resolution": "unresolved"},
+            {"path": None, "resolution": "unresolved", "handler": _handler("onOther")},
         )
         bind_parse_calls(workspace, [_catalog()])
         return workspace.query("open_questions")
@@ -720,3 +731,71 @@ def test_an_array_type_name_reaches_the_symbol_the_facts_carry(tmp_path: Path):
     bind_parse_calls(workspace, [_catalog(bytes_payloads=["byte[]"])])
 
     assert _shapes(workspace) == {"queue": _payload(SCROLL)}
+
+
+# --- `A-M12` (principles sweep §3.3): the ancestry walk's own missing edge ---
+
+
+def _extends(symbol: str, superclass: str) -> SymbolFact:
+    """A payload type whose only route to the marker is a plain, NON-GENERIC
+    `extends` — the edge capability 9.13 emits as `superclass` and which the
+    `parse_calls` ancestry walk never read.
+
+    `_marked` above reaches the marker through an INTERFACE, and its own
+    docstring says why: "a plain `extends` is not in the fact stream at all".
+    That sentence was true when it was written and capability 9.13 falsified
+    it; this fact is the counterexample."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + symbol,
+        construct_kind=ConstructKind.CLASS,
+        superclass=_MODULE + type_descriptor(superclass),
+    )
+
+
+def test_a_payload_reaching_its_marker_by_a_plain_extends_binds(tmp_path: Path):
+    """`A-M12`, the positive half, and `A-C4`'s rule in a second engine. The
+    walk built its ancestry from `supertypes` + `implementations` and never
+    from `superclasses`, so a type whose only route to a marker is a
+    non-generic `extends` reached nothing and its parse bound nothing — the
+    endpoint kept the bytes-shaped payload its signature declared, which is
+    an under-report, not a wrong type.
+
+    `supertype` is emitted only where the superclass carries type ARGUMENTS
+    (D00 §5a's parameterised-type carrier), and `superclass` is emitted for
+    every non-`Object` superclass (capability 9.13). Reading the first as the
+    class-inheritance edge is the invented rule `A-C4` names, here in the
+    payload-binding walk instead of the annotation one."""
+    workspace = _workspace(
+        tmp_path,
+        _extends(SCROLL, MARKER),
+        _method(LISTENER, "onEvent"),
+        _call(_handler(), SCROLL, "decode", _parameter(0)),
+    )
+    _seed(workspace)
+    bind_parse_calls(workspace, [_catalog()])
+
+    assert _shapes(workspace) == {"queue": _payload(SCROLL)}
+
+
+def test_a_payload_whose_extends_reaches_no_marker_binds_nothing(tmp_path: Path):
+    """`A-M12`'s near-miss. The same shape, one cell different: the superclass
+    is an ordinary type the catalog's `owner_hierarchy` does not name. The walk
+    must reach it, find no marker, and bind NOTHING — the endpoint keeps the
+    bytes payload its own signature declared.
+
+    Without this the fix would read as "any `extends` binds", which is the
+    fabrication direction: a parse call on an unrelated receiver would replace
+    a real payload type with one no evidence names. It discriminates —
+    comparing the walk's reached set against the marker LIST rather than
+    against each target makes it fail."""
+    workspace = _workspace(
+        tmp_path,
+        _extends(SCROLL, "com.acme.serde.NotTheMarker"),
+        _method(LISTENER, "onEvent"),
+        _call(_handler(), SCROLL, "decode", _parameter(0)),
+    )
+    _seed(workspace)
+    bind_parse_calls(workspace, [_catalog()])
+
+    assert _shapes(workspace) == {"queue": BYTES_PAYLOAD}

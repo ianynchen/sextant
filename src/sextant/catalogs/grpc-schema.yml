@@ -1,0 +1,72 @@
+id: grpc-schema
+displayName: gRPC descriptor (service root operations)
+style: schema_operations
+protocol: grpc
+direction: inbound
+
+# Framework-neutral, `wsdl-schema.yml`/`graphql-schema.yml`'s own precedent
+# (one file is one catalog is one style): a `.proto` service declaration
+# belongs to no framework, and the identity it names — `<protoPackage>.
+# <Service>/<Method>` — is available from the descriptor alone, whether or
+# not any generated-stub bytecode ever reaches the workspace (2O design §1,
+# the redundancy this phase is built on: the descriptor knows it because it
+# declares it, the bytecode side Task 5 adds because protoc compiles the
+# same identity into a call-site constant).
+#
+# No `detect.coordinates`: the evidence is a schema payload the descriptor
+# interpreter already read (embedded, or a `.proto` file on disk) — not a
+# dependency the build declares. A module with no protobuf service derives no
+# rows here, which is the same answer a coordinate gate would give and the
+# only one this catalog can honestly state.
+detect:
+  coordinates: []
+
+# Nothing scanner-produced is read — the input is the `declared_shape` facts
+# the descriptor interpreter emits, which every scan produces or does not
+# regardless of its capabilities. A capability naming that would be a gate
+# with nothing behind it.
+requires: []
+
+matches:
+  # D02 §2's `schema_operations` vocabulary, and all of it. Root naming is
+  # deliberately absent, same reason `graphql-schema.yml`/`wsdl-schema.yml`
+  # state it: nothing here parses a schema format.
+  schema_operations:
+    # Which declared shapes this catalog speaks for. `role` is neutral across
+    # formats, and this is what ties the rows below to the `protocol` above:
+    # a root declared by some other schema format is some other protocol's
+    # operation, not a grpc one.
+    schema_format: protobuf
+    # A GATE, not a method table (`schema_operations.py`'s own comment beside
+    # its `operations.get` call — `wsdl-schema.yml`'s identical entry, same
+    # reason). `"operation"` cannot spell a `method` column value, because a
+    # gRPC service method names no root-operation KIND: the engine hardcodes
+    # NULL for this literal role instead (D02 §2, amended: gRPC is verbless,
+    # like every non-HTTP protocol). The value on the right is a placeholder
+    # that satisfies `_validate_matches`'s non-empty-string rule and is never
+    # read for its content; it is written as the role's own name so a reader
+    # sees what it is guarding rather than mistaking it for a spelled-out
+    # method.
+    operations:
+      operation: operation
+
+# 2G design §7, rung 1: gRPC's wire is protobuf by definition — the protocol
+# itself fixes the encoding, no handler-level declaration can make it
+# anything else — so the format is a property of the protocol rather than of
+# anything a mapping annotation states. This is rung 1's THIRD live protocol
+# (after `graphql-schema.yml`'s `json` and `wsdl-schema.yml`'s `xml`), and the
+# ladder refuses a contradiction between two catalogs rather than picking
+# one, so any later catalog owning `grpc` must carry this identical entry —
+# a schema-first gRPC service pulls in no framework-specific gRPC annotation
+# library at all, so without this entry its rows would reach rung 1 with
+# nothing declared and fall through to a later rung, where nothing describes
+# `protobuf` either (this catalog's rows carry no bytecode type for rung 4 or
+# rung 5 to read).
+format_fixed:
+  grpc: protobuf
+
+# No `wrappers`/`nullability`/`serialization`/`known_types`
+# (`wsdl-schema.yml`/`graphql-schema.yml`'s identical omission, same reason):
+# those blocks describe how a JVM type reaches the wire, and every shape this
+# catalog's rows point at is a declared one, expanded from the descriptor's
+# own message declarations without consulting a single rule of theirs.

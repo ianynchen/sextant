@@ -34,6 +34,7 @@ from sextant.domain.facts import (
     DeclaredFieldFact,
     DeclaredShapeFact,
     Document,
+    OperationRecord,
     Parameter,
     Signature,
     SymbolFact,
@@ -55,21 +56,31 @@ OTHER_FORMAT = "avro"
 # format beside `FORMAT` to gate on — `wsdl` is the one D00 actually closes
 # over, same reason `OTHER_FORMAT` above cannot be invented either.
 WSDL_FORMAT = "wsdl"
+# 2O Task 4: the gRPC shape of the same `role == "operation"` branch, gated
+# on `protobuf` — the one other real `schema_format` D00 closes over that
+# ever carries this role.
+GRPC_FORMAT = "protobuf"
 
 
-def _document(document_id: str = "doc_1", path: str = "schema/orders.invented") -> Document:
+def _document(
+    document_id: str = "doc_1",
+    path: str = "schema/orders.invented",
+    *,
+    origin_tier: OriginTier = OriginTier.MODULE_OUTPUT,
+    origin: str | None = None,
+) -> Document:
     return Document(
         document_id=document_id,
         relative_path=path,
         module_id="com.acme:orders-service",
         language="invented-sdl",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="reader",
-        scanner_version="1.0",
         content_hash="sha256:a",
         origin_entry="src/main/resources/schema",
-        origin_tier=OriginTier.MODULE_OUTPUT,
+        origin_tier=origin_tier,
+        origin=origin,
         redaction_set_hash="sha256:b",
     )
 
@@ -102,6 +113,7 @@ def _shape(
     role: str | None = None,
     schema_format: str = FORMAT,
     document_id: str = "doc_1",
+    operation: OperationRecord | None = None,
 ) -> DeclaredShapeFact:
     return DeclaredShapeFact(
         document_id=document_id,
@@ -111,7 +123,18 @@ def _shape(
         origin="source",
         evidence="declared",
         role=role,  # type: ignore[arg-type]
+        operation=operation,
         fields=list(fields),
+    )
+
+
+def _operation(name: str) -> OperationRecord:
+    """One gRPC operation, with the four fields the record requires."""
+    return OperationRecord(
+        input_ref=f"invented.{name}Request",
+        output_ref=f"invented.{name}Reply",
+        client_streaming=False,
+        server_streaming=False,
     )
 
 
@@ -140,15 +163,30 @@ def _catalog(
     )
 
 
-def _workspace(tmp_path: Path, *shapes: DeclaredShapeFact) -> DuckDbWorkspace:
+def _workspace(
+    tmp_path: Path,
+    *shapes: DeclaredShapeFact,
+    tiers: dict[str, OriginTier] | None = None,
+) -> DuckDbWorkspace:
     """A workspace holding the given declared shapes, ONE FACT FILE PER
     `document_id` — because that is what a document is: a schema split across
     two files is two documents, and a helper that flattened them into one
-    would let a test claim a multi-file schema it never built."""
+    would let a test claim a multi-file schema it never built.
+
+    `tiers` names a document's `origin_tier` where it is not the module's own output
+    (F4 §5.2, W24) — a schema compiled into a DEPENDENCY, which describes that
+    dependency's service rather than this module's."""
+    tiers = tiers or {}
     for document_id in dict.fromkeys(shape.document_id for shape in shapes):
+        tier = tiers.get(document_id, OriginTier.MODULE_OUTPUT)
         write_fact_file(
             tmp_path / "facts" / f"{document_id}.jsonl",
-            _document(document_id, f"schema/{document_id}.invented"),
+            _document(
+                document_id,
+                f"schema/{document_id}.invented",
+                origin_tier=tier,
+                origin=None if tier is OriginTier.MODULE_OUTPUT else "com.acme:orders-proto",
+            ),
             [shape for shape in shapes if shape.document_id == document_id],
         )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -177,9 +215,8 @@ def _annotated_facts(root: Path, signature: Signature | None = None) -> None:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.12",
         content_hash="sha256:c",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -896,3 +933,258 @@ def test_the_shipped_wsdl_catalog_declares_the_style_the_protocol_and_the_fixed_
         "schema_format": "wsdl",
         "operations": {"operation": "operation"},
     }
+
+
+# ---------------------------------------------------------------------------
+# 2O Task 4: gRPC's own shape of the `role == "operation"` branch — the
+# `DeclaredShapeFact.operation` sub-record is what tells this case apart from
+# WSDL's above, at the SAME literal role: where WSDL's shape self-references
+# (no sub-record, `operation is None`), a gRPC shape carries `input_ref`,
+# `output_ref` and the two streaming flags, and BOTH `request_shape` and
+# `response_shape` derive from them rather than one self-reference. `protobuf`
+# is the one real `schema_format` this ever fires for; every symbol and
+# field name below is still invented (this file's own docstring rule) — the
+# live `orders.v1`-shaped identity is pinned against the real fixture
+# elsewhere, not here.
+# ---------------------------------------------------------------------------
+
+
+def _grpc_catalog(**overrides: object) -> Catalog:
+    return _catalog(
+        operations={"operation": "operation"},
+        schema_format=GRPC_FORMAT,
+        protocol="grpc",
+        **overrides,
+    )
+
+
+def test_a_grpc_operation_role_shape_derives_both_refs_as_two_descriptors(tmp_path: Path):
+    """Unlike WSDL's self-reference, a gRPC method names TWO independent
+    types: `request_shape` and `response_shape` are two DIFFERENT
+    descriptors, each an intra-descriptor join to `operation`'s own
+    `input_ref`/`output_ref` — never a guess across universes, and never the
+    shape's own `path` the way WSDL's wrapper element is."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Orders/Get",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.GetRequest",
+                output_ref="invented.GetReply",
+                client_streaming=False,
+                server_streaming=False,
+            ),
+        ),
+    )
+    _run(workspace, _grpc_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["protocol"], row["method"], row["path"]) == ("grpc", None, "invented.Orders/Get")
+    assert (row["evidence"], row["resolution"]) == ("declared", "resolved")
+    assert row["handler"] is None and row["caller"] is None
+    assert json.loads(str(row["request_shape"])) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": "invented.GetRequest",
+    }
+    assert json.loads(str(row["response_shape"])) == {
+        "wire_type": "object",
+        "wire_format": None,
+        "nullable": False,
+        "shape_id": "invented.GetReply",
+        "streaming": "unary",
+    }
+
+
+@pytest.mark.parametrize(
+    ("client_streaming", "server_streaming", "expected"),
+    [
+        (False, False, "unary"),
+        (False, True, "server-streaming"),
+        (True, False, "client-streaming"),
+        (True, True, "bidi"),
+    ],
+)
+def test_streaming_renders_the_four_way_vocabulary(
+    tmp_path: Path, client_streaming: bool, server_streaming: bool, expected: str
+):
+    """`unary | server-streaming | client-streaming | bidi` (2O design §1a),
+    derived from the two flags a descriptor states independently — every
+    combination is a real, legal RPC shape, so all four must round-trip."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Orders/Call",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.CallRequest",
+                output_ref="invented.CallReply",
+                client_streaming=client_streaming,
+                server_streaming=server_streaming,
+            ),
+        ),
+    )
+    _run(workspace, _grpc_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert json.loads(str(rows[0]["response_shape"]))["streaming"] == expected
+
+
+def test_a_grpc_operations_fields_derive_no_rows_of_their_own(tmp_path: Path):
+    """The per-shape-not-per-field pin, gRPC's own case: two operation shapes,
+    two rows — the request/response TYPES are never iterated as if they were
+    root fields."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Orders/Get",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.GetRequest",
+                output_ref="invented.GetReply",
+                client_streaming=False,
+                server_streaming=False,
+            ),
+        ),
+        _shape(
+            "invented.Orders/Stream",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.StreamRequest",
+                output_ref="invented.StreamReply",
+                client_streaming=False,
+                server_streaming=True,
+            ),
+        ),
+    )
+    _run(workspace, _grpc_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert {str(r["path"]) for r in rows} == {"invented.Orders/Get", "invented.Orders/Stream"}
+
+
+def test_a_grpc_operation_role_shape_of_another_schema_format_derives_nothing(tmp_path: Path):
+    """The format gate runs BEFORE the `role == "operation"` branch, not
+    after it — the WSDL section's own pin, restated for gRPC's `protobuf`
+    gate: a shape carrying the literal role string `"operation"` derives no
+    row through `grpc-schema.yml` when its OWN `schema_format` is not
+    `protobuf`."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Orders/Get",
+            role="operation",
+            schema_format=WSDL_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.GetRequest",
+                output_ref="invented.GetReply",
+                client_streaming=False,
+                server_streaming=False,
+            ),
+        ),
+    )
+    _run(workspace, _grpc_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_agreement_a_pre_existing_annotation_row_blocks_the_grpc_operation_twin(tmp_path: Path):
+    """First-writer, the same insert-if-absent guard the WSDL case already
+    meets — Task 5 (2O design §1) is what this protects: a bytecode-derived
+    row at the SAME wire identity keeps its own handler, and the descriptor
+    twin this catalog would otherwise mint never lands."""
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Orders/Get",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=OperationRecord(
+                input_ref="invented.GetRequest",
+                output_ref="invented.GetReply",
+                client_streaming=False,
+                server_streaming=False,
+            ),
+        ),
+    )
+    existing = _annotation_row(None, "invented.Orders/Get", protocol="grpc", catalog_id="grpc-impl")
+    _run(workspace, _grpc_catalog(), existing)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert len(rows) == 1
+    assert rows[0]["catalog_id"] == "grpc-impl"
+    assert rows[0]["handler"] == "com/acme/orders/Resolvers#orders(sig_1)."
+
+
+def test_the_shipped_grpc_catalog_declares_the_style_the_protocol_and_the_fixed_format():
+    """The third live `schema_operations` catalog, read off the file: rung
+    1's `format_fixed` mechanism proven a third time (`graphql-schema.yml`'s
+    `json`, `wsdl-schema.yml`'s `xml`, and now `grpc-schema.yml`'s own
+    `protobuf` — COVERAGE's only certain cell, fixed by the protocol itself)."""
+    catalog = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "grpc-schema")
+
+    assert catalog.style == "schema_operations"
+    assert (catalog.protocol, catalog.direction) == ("grpc", "inbound")
+    assert catalog.requires == ()
+    assert catalog.format_fixed == {"grpc": "protobuf"}
+    assert catalog.matches["schema_operations"] == {
+        "schema_format": "protobuf",
+        "operations": {"operation": "operation"},
+    }
+
+
+# --- F4 §5.2 (W24): a dependency's schema describes the DEPENDENCY's service ---
+
+
+def test_a_dependencys_schema_operations_do_not_become_this_modules_api(tmp_path: Path):
+    """The Critical the module-edge review found, pinned here rather than beside the
+    other module-edge tests, because it is THIS engine that has to answer it.
+
+    Every other style sets a handler or a caller, so `drop_borrowed_endpoints.sql`
+    reaches its rows. This one sets NEITHER — by design, since the schema names no code
+    — so that statement has nothing to key on, and a dependency's `.proto` published its
+    service as this module's API through a route the delete could not see. The filter
+    has to be at the root, and this is what holds it there.
+
+    The two shapes are identical but for the document they were declared in.
+    """
+    workspace = _workspace(
+        tmp_path,
+        _shape(
+            "invented.Own/Get",
+            role="operation",
+            schema_format=GRPC_FORMAT,
+            operation=_operation("Own"),
+        ),
+        _shape(
+            "invented.Neighbour/Get",
+            role="operation",
+            document_id="dependency",
+            schema_format=GRPC_FORMAT,
+            operation=_operation("Neighbour"),
+        ),
+        tiers={"dependency": OriginTier.DEPENDENCY},
+    )
+
+    _run(workspace, _grpc_catalog())
+    paths = {str(row["path"]) for row in _rows(workspace)}
+    workspace.close()
+
+    assert paths == {"invented.Own/Get"}, (
+        "a dependency's schema describes the dependency's service; this engine mints "
+        "rows with no handler and no caller, so the filter cannot live downstream"
+    )

@@ -50,6 +50,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     carries_expression,
     channel_of,
+    declared_parameters_of,
     field_facts,
     linked_channels,
     split_url,
@@ -57,7 +58,10 @@ from sextant.application.resolve.shapes.arguments import (
     url_of,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.domain.paths import canonical_http_path, serves_urls
+from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.symbols import bare_descriptor
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -70,6 +74,39 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol
 # the other half of ONE address: a builder's own base address, composed with
 # the `url` capture at derive time rather than read as an address of its own.
 _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
+
+# The capture fields a catalog may spell EITHER as its own literal or as an
+# `argN` reference (`A-C2`, principles sweep §3.2). Only `http_method`, and
+# only because the framework itself offers both spellings: OkHttp names the
+# verb in the method (`.post(body)`) AND takes it as an argument
+# (`.method(verb, body)`), so a grammar that could read only the first left
+# the second as an unmatched step, passing through uncaptured while the root's
+# own `http_method: GET` default stood at `resolved`/`compiler` — a verb no
+# evidence supports. Kept apart from `_ARGUMENT_FIELDS` rather than folded
+# into it because those five are argument positions ALWAYS, which is what
+# `_validate_captures` refuses a non-`argN` value for; a verb literal is the
+# ordinary case here and must keep loading.
+_LITERAL_OR_ARGUMENT_FIELDS = ("http_method",)
+
+# F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
+# A reserved key inside `captures` rather than a second parameter threaded through
+# `_walk`: the walk already copies `captures` per branch, which is exactly the per-branch
+# independence these need, and a parallel structure would have to reimplement it.
+_COLLECTED = "\x00collected"
+
+# F5 §6.2 (W29): the BUILT-IN rule set, used where a metadata value is read.
+#
+# The built-ins are the credential names — `authorization`, `token`, `secret`, `apikey`,
+# `credential`, `password`, `passphrase`, `privatekey` — and the design's own position is
+# that they are "exactly this table's shape", so nothing needed adding.
+#
+# **A module's own `.sextant.yml` `redact:` additions do NOT widen this** (`OI-71`), and
+# that is a real limit rather than a decision: those additions reach the export's redactor
+# through the composition root, and no redactor reaches a resolve engine. Threading one
+# would widen all thirteen engines' signature for one engine's need. The direction of the
+# gap is the safe one only because the built-ins already cover credential-named headers;
+# a repository adding a pattern for a header name of its own gets no masking from it.
+_REDACTOR = Redactor.from_rules()
 
 # The two captures that are halves of one address (2F design §4's base
 # composition) — `channel`'s alternative, and what
@@ -111,7 +148,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_channel_via_entries(matches.get("steps", []), catalog)
     roots = [
         {
-            "owner": _catalog_symbol(root["owner"]),
+            # A LIST or a scalar (§3.1): one library reachable under its class name
+            # and under the interface a codebase more often declares its field as.
+            # `owners`, not `owner` — the plural name is what makes every consumer
+            # of the old singular key fail loudly rather than compare a call site's
+            # owner against a tuple and silently match nothing.
+            "owners": catalog_symbols(root["owner"], f"{catalog.source}: roots[].owner"),
             "method": root["method"],
             "captures": _merged_captures(root),
             # Carried forward (never a root's own field, D02 §2's `fluent`
@@ -129,8 +171,20 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # name for two different roles on two different types (a
             # RestClient's `body(Object)` request-setter and its
             # `body(Class)` response-extractor).
-            "owner": _catalog_symbol(step["owner"]) if "owner" in step else None,
+            "owners": (
+                catalog_symbols(step["owner"], f"{catalog.source}: steps[].owner")
+                if "owner" in step
+                else None
+            ),
             "captures": _merged_captures(step),
+            # F5 §6.2 (W29): the repeatable half. A step declaring `collects` accumulates
+            # an entry per visit instead of overwriting, because a request may carry any
+            # number of headers and last-wins would keep the final one and claim it was
+            # the only one. Carried through explicitly — this dict is REBUILT from named
+            # keys, so a key not listed here is silently dropped at load, which is exactly
+            # what happened to `collects` the first time and produced a catalog
+            # declaration that read as valid and derived nothing.
+            "collects": step.get("collects"),
             # D02 §2's `fluent` style: a step may declare a value guard on
             # another argument — None for the (default) unguarded step, read
             # by `_walk` (`_step_captures`) where `_matching_step` finds this
@@ -168,6 +222,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
+    # The same index keyed by BARE descriptor, for following a `lambda` argument into its
+    # own body (`OI-73`): a call argument names the synthetic method without the module
+    # coordinates the `caller` column carries, so the two spellings never match directly.
+    by_bare_caller: dict[str, list[dict[str, Any]]] = {}
+    for caller_symbol, caller_sites in by_caller.items():
+        by_bare_caller[bare_descriptor(caller_symbol)] = caller_sites
 
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
@@ -180,7 +240,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_call_endpoints.sql's own contract — it only guards against what
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
-    seen: set[tuple[str, str, str, str]] = set()
+    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
+    # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
+    # discipline: a per-caller insert would be one statement per method in the module.
+    caller_parameters = declared_parameters_of(workspace)
+    metadata: list[dict[str, Any]] = []
     for caller, sites in by_caller.items():
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`
         # is built fresh per caller, over that caller's own sites alone, so a
@@ -189,7 +253,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         by_receiver: dict[Any, list[dict[str, Any]]] = {}
         for site in sites:
             by_receiver.setdefault(site["receiver"], []).append(site)
-        facts = CallFacts(supertypes=supertypes, caller_call_sites=sites, referenced=referenced)
+        facts = CallFacts(
+            supertypes=supertypes,
+            caller_call_sites=sites,
+            referenced=referenced,
+            # `OI-77`, the same fix `single_call` takes: a body handed straight through
+            # from the caller's own signature names its type there and nowhere else.
+            caller_parameters=caller_parameters.get(caller, ()),
+        )
         context = _ChainContext(
             caller=caller,
             sites=sites,
@@ -203,6 +274,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             field_sources=field_sources,
             rows=rows,
             seen=seen,
+            metadata=metadata,
+            by_caller=by_bare_caller,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -221,6 +294,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             _walk(site, captures, reached_terminal=False, context=context)
 
     workspace.derive("call_endpoints", rows=rows)
+    # After the endpoints, never before: an entry names the endpoint it belongs to by that
+    # row's own columns, so the row has to exist for the pair to mean anything to a reader
+    # joining them. The RESET is the pipeline's, once per resolve, for the
+    # `open_questions` reason — several catalogs write this table and a reset owned by any
+    # one of them would erase whichever ran first.
+    if metadata:
+        workspace.derive("endpoint_metadata_insert", rows=metadata)
 
 
 @dataclass(frozen=True)
@@ -241,7 +321,17 @@ class _ChainContext:
     carrier_rules: CarrierRules
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
-    seen: set[tuple[str, str, str, str]]
+    seen: set[tuple[str, str, str, str, str | None, str | None]]
+    # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
+    # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
+    # chain may carry any number, which is why D01 gives it a side table rather than
+    # columns.
+    metadata: list[dict[str, Any]]
+    # Every caller's own call sites, so a chain can follow a `lambda`-kind argument into
+    # the synthetic method that IS that lambda (`OI-73`). Chain reconstruction stays
+    # within-method — the lambda body is walked as its own chain, not spliced into this
+    # one — and only its captures come back.
+    by_caller: dict[str, list[dict[str, Any]]]
 
 
 def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
@@ -292,7 +382,7 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
             break
         producers.append(producer)
         current = producer
-    owned = [step for step in context.steps if step["owner"] is not None]
+    owned = [step for step in context.steps if step["owners"] is not None]
     captures: dict[str, Any] = {}
     # `reversed`: `producers` was collected from the root outward, so this
     # folds the outermost producer first — real chain order, which is what
@@ -351,20 +441,41 @@ def _walk(
             # `fluent` style) reads, so the guard is evaluated here, in
             # `_resolve_captures`'s caller, rather than inside it.
             next_captures.update(_step_captures(step, next_site))
+            # F5 §6.2 (W29): a `collects` step ACCUMULATES instead, because the thing it
+            # reads is repeatable — a request may carry any number of headers, and
+            # last-wins would keep only the final one and silently claim it was the only
+            # one. Appended to a tuple rather than a list so each branch of a fork gets
+            # its own value by copy, exactly as `dict(captures)` above gives each branch
+            # its own captures.
+            collected = _step_collects(step, next_site)
+            if collected:
+                previous = next_captures.get(_COLLECTED) or ()
+                next_captures[_COLLECTED] = (*previous, *collected)
+            # `OI-73`: a step whose captured argument IS a lambda takes its captures from
+            # the lambda's own body. `uri(b -> b.path("/x").queryParam("q", term).build())`
+            # is the idiomatic way to build a URL with query parameters, and the address
+            # is the row's identity — without this the row derives with `path` NULL and a
+            # real outbound call has no address at all.
+            _fold_lambda_captures(next_captures, context)
         _walk(next_site, next_captures, reached_terminal, context)
 
 
 def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
-    verb = captures.get("http_method")
+    # A verb the catalog spelled as a literal is that literal; one it spelled
+    # as `argN` (`A-C2`) is whatever the matched call's own argument reads as a
+    # string, and None where nothing could read it — the honest gap, not the
+    # root's default.
+    declared_verb = captures.get("http_method")
+    verb = declared_verb if isinstance(declared_verb, str) else _string_value(declared_verb)
     # A chain whose root (and every step it folded through) never captured
     # `http_method` is verbless by declaration — mirroring single_call's D02
     # §2 `verbless` row (a topic has no verb, precondition commit, 2E-prep
     # Task 11): SQS's `SendMessageRequest.builder()` chain never seeds one.
     # `"http_method" not in captures` is what tells "no root ever declared
-    # one" apart from a read failure — every fluent `http_method` is the
-    # catalog's own literal (never an `argN` read, D02 §4), so it can never
-    # itself fail to resolve; the only way `verb` reads None here is that the
-    # key was never folded in at all.
+    # one" apart from a read failure, and since `A-C2` the two are genuinely
+    # different answers: a verb read off an argument CAN fail to resolve, and
+    # the row below is then `unresolved` with `method` NULL rather than
+    # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
     body_argument = captures.get("body")
     response_argument = captures.get("response")
@@ -407,6 +518,14 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
     for peer, path, url_resolution in destinations:
+        # 2O design §8, folded in from single_call: identity is the URL the
+        # framework serves, canonicalized before the dedup key below is built
+        # from it (`domain/paths.py`). Inert for every fluent catalog shipped
+        # today, all of which are outbound — R8's exclusion, stated here
+        # rather than left implicit, because a future inbound fluent catalog
+        # would need it and would otherwise have to rediscover it.
+        if path is not None and serves_urls(context.catalog.protocol, context.catalog.direction):
+            path = canonical_http_path(path)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -424,8 +543,10 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             "resolved"
             if (verb is not None or verbless)
             and url_resolution == "resolved"
-            and _capture_resolved("body" in captures, body_argument)
-            and _capture_resolved("response" in captures, response_argument)
+            # What the captures PRODUCED, the `single_call` change one engine along
+            # (`OI-77`, W43's review): a body capture that filled its column did not fail.
+            and _capture_resolved("body" in captures, body_argument, request_shape)
+            and _capture_resolved("response" in captures, response_argument, response_shape)
             else "unresolved"
         )
         if path is not None and (verb is not None or verbless):
@@ -436,15 +557,32 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             # alone exactly as the brief requires; a verbed row's own `verb` is
             # always a non-empty string, so this is unchanged for every shipped
             # fluent catalog (okhttp/webclient/restclient), none of which is
-            # verbless. `caller` never enters the key — fluent rows carry
-            # `caller`, but outbound producer rows collapse across callers on
-            # wire identity alone, single_call's own established convention
-            # (the interface engine's handler-in-key ruling is for inbound
-            # handler rows and does not apply to an outbound fluent chain).
-            key = (context.catalog.protocol, context.catalog.direction, verb or "", path)
+            # verbless.
+            #
+            # **`caller` and `peer` ARE in the key** (F5 §6.1 rule 1, W27 fix), and this
+            # comment used to say the opposite — "outbound producer rows collapse across
+            # callers on wire identity alone". They should not. Measured on a two-caller
+            # probe: two hosts and one path derived ONE row with the second caller gone —
+            # no row, no peer, no gap, no question. That is RC-5, comparing identity
+            # without `peer`, which W27 removed from the inbound/outbound merge and left
+            # standing here.
+            #
+            # "Collapse only within one caller, where both sides are observable" (§6.1):
+            # one method calling one target twice is still one row, because caller and
+            # peer are equal there.
+            key = (
+                context.catalog.protocol,
+                context.catalog.direction,
+                verb or "",
+                path,
+                context.caller,
+                peer,
+            )
             if key in context.seen:
                 continue
             context.seen.add(key)
+        for entry in captures.get(_COLLECTED) or ():
+            context.metadata.append(_metadata_row(entry, context, verb, path))
         context.rows.append(
             {
                 "protocol": context.catalog.protocol,
@@ -469,6 +607,62 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 "produces": None,
             }
         )
+
+
+def _metadata_row(
+    entry: dict[str, Any], context: "_ChainContext", verb: str | None, path: str | None
+) -> dict[str, Any]:
+    """One `endpoint_metadata` row, keyed to the endpoint this chain just derived and
+    **redacted here, where the value is read** (F5 §6.2, W29).
+
+    Nothing in this system reads a metadata value — no pass substitutes one into an
+    address the way `resolved_config.value` is substituted into a peer — so masking at the
+    origin costs no analysis and there is no export query to add for THIS column. A
+    compiled-in `Authorization: Bearer …` is realistic and the bundle is the trust
+    boundary.
+
+    **It is not the only place the value is written down**, and saying so here was wrong
+    until `redact_json` gained its paired rule. The same literal is a `call_site` fact,
+    and therefore also `call_sites.arguments` and `raw_facts.payload`; measured on this
+    repo's own fixture, `Bearer sk-live-fixture-secret` shipped verbatim in two
+    `graph/*.parquet` files of a bundle whose `endpoint_metadata` said `«redacted»`. The
+    mask that closes it is the export exit's, keyed on the same name by the same rule —
+    so the two agree because they ask the same redactor the same question, not because
+    this row is the only copy.
+
+    The redactor keys on the entry's own NAME, which is exactly the shape it was built for
+    (`redact_value(key, value)`): `BUILTIN_KEY_PATTERNS` already holds `authorization`,
+    `token`, `secret`, `apikey`, `credential`, `password`, `passphrase` and `privatekey`.
+
+    A value that is not a literal — a variable, a field, a method result — resolves to
+    None and the row is `unresolved`. That is the distinction the trust columns exist for:
+    *this call sends an `Authorization` header whose value we could not read* is a
+    materially different statement from *this call sends no such header*, and a table
+    that recorded only readable values could not tell them apart.
+    """
+    name = _string_value(entry["name"]) if entry["name"] is not None else None
+    literal = _string_value(entry["value"])
+    return {
+        "protocol": context.catalog.protocol,
+        "direction": context.catalog.direction,
+        "method": verb,
+        "path": path,
+        "caller": context.caller,
+        "kind": entry["kind"],
+        "name": name,
+        # A value whose NAME could not be read is masked WHOLE. The rule keys on the
+        # name, so an unread name is an unanswerable question — and `redact_value("")`
+        # answers it "not a secret", which is the one direction this module refuses to
+        # guess in: a header assembled from a constant field is exactly where a
+        # compiled-in credential hides. No live instance on the fixture or the corpora
+        # (zero rows carry a value with no name), so this closes a hole rather than
+        # changing an answer.
+        "value": None
+        if literal is None
+        else (REDACTED if name is None else _REDACTOR.redact_value(name, literal)),
+        "resolution": "resolved" if literal is not None else "unresolved",
+        "evidence": "compiler",
+    }
 
 
 def _address_read(argument: dict[str, Any] | None, context: _ChainContext) -> dict[str, Any] | None:
@@ -575,7 +769,7 @@ def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[st
         (
             root
             for root in roots
-            if site["owner"] == root["owner"] and site["name"] == root["method"]
+            if site["owner"] in root["owners"] and site["name"] == root["method"]
         ),
         None,
     )
@@ -596,7 +790,8 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
         (
             step
             for step in steps
-            if step["method"] == name and step["owner"] in (None, site["owner"])
+            if step["method"] == name
+            and (step["owners"] is None or site["owner"] in step["owners"])
         ),
         None,
     )
@@ -616,8 +811,19 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
     for method, group in by_method.items():
         if len(group) < 2:
             continue
-        owners = [step["owner"] for step in group]
-        if any(owner is None for owner in owners) or len(set(owners)) != len(owners):
+        # Two entries are distinguishable only when both declare owners and no
+        # owner is shared. Sets rather than values, because a list may now name
+        # several (§3.1): `[JmsTemplate, JmsOperations]` beside `[JmsOperations]`
+        # is two entries that both match a `JmsOperations` receiver, which is the
+        # same silent last-wins this refusal exists to prevent — a scalar pair
+        # could only collide by being equal.
+        owner_sets = [step["owners"] for step in group]
+        overlapping = any(
+            first is None or second is None or set(first) & set(second)
+            for index, first in enumerate(owner_sets)
+            for second in owner_sets[index + 1 :]
+        )
+        if overlapping:
             raise CatalogError(
                 f"loading catalog {catalog.source}: steps named `{method}` need distinct "
                 f"`owner`s to tell them apart (D02 §4's fluent style)"
@@ -898,22 +1104,173 @@ def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]
         if guard["value"] == when["equals"]:
             return _resolve_captures(step["captures"], site)
         return {}
-    return {field: _UNRESOLVED_ARGUMENT for field in step["captures"] if field in _ARGUMENT_FIELDS}
+    return {
+        field: _UNRESOLVED_ARGUMENT
+        for field, value in step["captures"].items()
+        if _reads_an_argument(field, value)
+    }
+
+
+def _fold_lambda_captures(captures: dict[str, Any], context: "_ChainContext") -> None:
+    """Replaces any captured value that is a LAMBDA with what that lambda's own body
+    captured, in place (`OI-73`).
+
+    `webClient.get().uri(b -> b.path("/v2/inventory/search").queryParam("q", term).build())`
+    is the idiomatic way to build a URL with query parameters, and before this the row
+    derived with `path` NULL and `resolution: unresolved` — the call recorded and its whole
+    address unread. The address IS the row's identity: DR-5 matches on the wire contract,
+    so a pathless outbound row links to nothing and tells a reader only that this method
+    calls out over HTTP.
+
+    **This is reading, not guessing**, which is the objection the earlier behaviour was
+    written against. The lambda is one argument of one call, the fact stream names the
+    synthetic method it compiled to, and that method's own call sites are a chain of their
+    own. There is no ambiguity about which builder belongs to this call — the argument says
+    so — and nothing here reaches for a literal it cannot attribute.
+
+    **Chain reconstruction stays within-method** (D00 §5). The lambda body is walked as its
+    OWN chain over its OWN sites; only the captures come back, and the two chains are never
+    spliced. One hop only: a lambda reached from inside a lambda is not followed, because
+    each hop is a place the argument could belong to something else and the discipline that
+    bounds `_prefix_captures` bounds this too.
+    """
+    for field, value in list(captures.items()):
+        if not isinstance(value, dict) or value.get("kind") != "lambda":
+            continue
+        symbol = value.get("symbol")
+        if symbol is None:
+            continue
+        folded, collected = _captures_of_body(str(symbol), context)
+        if field in folded:
+            captures[field] = folded[field]
+        if collected:
+            captures[_COLLECTED] = (*(captures.get(_COLLECTED) or ()), *collected)
+
+
+def _captures_of_body(
+    symbol: str, context: "_ChainContext"
+) -> tuple[dict[str, Any], tuple[dict[str, Any], ...]]:
+    """Everything the chain inside one lambda body captured and collected.
+
+    Its sites are found by the lambda's own symbol — the fact stream records them under it
+    as `caller`, exactly as it records any other method's — and linked by the same
+    `result → receiver` key `_walk` follows. The head is the site no other site in the body
+    feeds, so a body holding two independent chains folds both rather than guessing which
+    one the caller meant; where they disagree on one field, last-wins holds as it does
+    everywhere else.
+    """
+    # By BARE descriptor on both sides. `call_sites.caller` carries the module
+    # coordinates a fact writes (D00 §5a) and a `lambda` argument's `symbol` does not —
+    # a call argument never repeats them — so a lookup on the raw strings misses every
+    # time, silently, which is exactly what the first version of this did.
+    sites = context.by_caller.get(bare_descriptor(symbol), [])
+    if not sites:
+        return {}, ()
+    produced = {_chain_key(site) for site in sites}
+    folded: dict[str, Any] = {}
+    collected: tuple[dict[str, Any], ...] = ()
+    for site in sites:
+        # Every site in the body, in ordinal order (the `call_sites` query, NFR-1). A
+        # head-first walk would be the same order for the linear chain a builder produces,
+        # and this needs no linkage to be correct: a step matches on its own method name,
+        # and a site whose receiver came from outside the body is as much part of what the
+        # lambda did as one whose receiver came from inside it.
+        if site["receiver"] is not None and site["receiver"] not in produced:
+            # ...except a site operating on something the body did not make and the
+            # caller did not hand it, which belongs to no chain this argument names.
+            continue
+        step = _matching_step(site, context.steps)
+        if step is None:
+            continue
+        folded.update(_step_captures(step, site))
+        collected = (*collected, *_step_collects(step, site))
+    return folded, collected
+
+
+def _step_collects(step: dict[str, Any], site: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """The metadata entries one matched step contributes (F5 §6.2, W29).
+
+    A `collects` block names a KIND — the catalog's own word for what this is, `header` or
+    `query` — and the argument positions its name and value sit at:
+
+        - { method: header, collects: { kind: header, name: arg0, value: arg1 } }
+
+    `name` is optional: a Kafka partition key and an AMQP routing key have a value and no
+    name at all, and writing one in would invent a label the wire does not carry.
+
+    **The value is the RAW argument here, not a string.** Resolving it is the caller's
+    job, because whether it resolved is what the entry's own `resolution` records — an
+    entry read off a variable is present-and-unresolved, which is a different and more
+    useful answer than absent. That distinction is the whole reason D01 gives every entry
+    its own trust columns.
+    """
+    collects = step.get("collects")
+    if not collects:
+        return ()
+    arguments = site["arguments"]
+    name = _arg_at(arguments, _arg_index(collects["name"])) if "name" in collects else None
+    value = _arg_at(arguments, _arg_index(collects["value"]))
+    return tuple(
+        {"kind": str(collects["kind"]), "name": name, "value": held} for held in _held_values(value)
+    )
+
+
+def _held_values(argument: dict[str, Any] | None) -> tuple[dict[str, Any] | None, ...]:
+    """One entry's value, or each of them where the position holds several.
+
+    **A VARARGS position arrives as an array, and the elements are the answer.** Every
+    header-setting API in the measured set is varargs — spring-webflux 6.1.6 declares
+    `header(String name, String... values)`, and `header("X-Tenant", "acme")` compiles to
+    an array construction, which the scanner models as
+    `{"kind": "array", "elements": [...]}`. Reading the array itself resolves to no
+    literal, so the first version of this recorded every header as `unresolved` including
+    the ones written as literals — a table full of "present, value unreadable" for values
+    written in plain sight.
+
+    One entry per element rather than one joined entry, because that is the wire:
+    `header("Accept", "a", "b")` sends two values under one name, and the table's own
+    ordering already contemplates a repeated name as legal HTTP.
+
+    An empty array is a call that sets nothing and contributes no entry — `uri`'s own
+    trailing `Object...` arrives empty on every call that passes no template variable, so
+    this is the ordinary case rather than an edge.
+    """
+    if argument is not None and argument.get("kind") == "array":
+        elements = argument.get("elements") or []
+        return tuple(element for element in elements)
+    return (argument,)
 
 
 def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:
     """One matched row's own captured values: `url`/`body`/`response` read
     the `argN`-addressed argument off `site` itself (the raw D00 §5 argument,
     resolved later exactly as `single_call` resolves a positional one);
-    every other field (`http_method`, `response_is`) is the catalog's own
-    literal, unchanged."""
+    `http_method` reads one too where the catalog spelled `argN`, and is the
+    catalog's own literal otherwise; every other field (`response_is`) is
+    always the literal, unchanged.
+
+    The two-spelling field is decided HERE rather than at load, because
+    `argN` is a positional read and a verb literal is not: the same key means
+    "read argument 0" in one row and "the verb is DELETE" in the next, and
+    only the value itself says which."""
     resolved: dict[str, Any] = {}
     for field, value in declared.items():
-        if field in _ARGUMENT_FIELDS:
+        if _reads_an_argument(field, value):
             resolved[field] = _arg_at(site["arguments"], _arg_index(value))
         else:
             resolved[field] = value
     return resolved
+
+
+def _reads_an_argument(field: str, value: Any) -> bool:
+    """Whether one declared capture addresses a call-site position rather than
+    stating a value. Spelled once because `_resolve_captures` and
+    `_step_captures`'s guard-poisoning must agree exactly: a field poisoned in
+    one and read as a literal in the other would write the poison mapping
+    itself into the `method` column."""
+    return field in _ARGUMENT_FIELDS or (
+        field in _LITERAL_OR_ARGUMENT_FIELDS and _ARG_REFERENCE.match(str(value)) is not None
+    )
 
 
 def _arg_index(value: Any) -> int | None:

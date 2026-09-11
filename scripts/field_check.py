@@ -16,9 +16,47 @@ exactly that commit before validating, so upstream drift can never masquerade as
 regression — refreshing a pin (a new `commit`, and the counts/routes re-recorded against
 it) is a deliberate, reviewed act, not something this script does on its own.
 
+Three optional keys carry an upstream whose build is not one wrapper-script invocation at
+the repository root (`mall-admin.json` is the first to need any of them):
+
+- **`module`** — the path under the clone that `analyze`/`render` run against, and whose
+  `target/classes` decides whether a build is needed. Absent, the repository root is both,
+  which is every single-module pin.
+- **`maven`** — the Maven launcher, defaulting to the wrapper `./mvnw`. `macrozheng/mall`
+  ships no wrapper, so its pin names the system `mvn`; naming it here rather than falling
+  back silently keeps "which Maven built this" a property of the recorded pin.
+- **`jdk`** — the MAJOR Java version the upstream's build requires, checked against the one
+  Maven will actually use (its own `-v` banner) and REFUSED on a mismatch rather than left
+  to fail somewhere inside the build. `macrozheng/mall` is why: on a JDK newer than 21 its
+  Lombok annotation processor throws and the build dies several screens deep in a stack
+  trace with nothing pointing at the toolchain. Recording the identity from the run's own
+  output rather than from an environment variable is GUIDELINES §5.4.
+
 Checks, per expectation:
 
 - **Endpoint counts** — `metadata.json`'s own `endpoints` object, compared whole.
+- **`resolvable_superclass_calls`**, where the pin declares one (F3 §4.2, W21) — how many
+  calls the upstream makes onto a method declared on an ancestor it also scans. A property
+  of the upstream's SOURCE rather than of Sextant's output, checked because it is the
+  number that made adding `spring-petclinic-rest` worth doing: a drop means the shape has
+  left the corpus and the resolution work is measured against nothing, a rise means
+  upstream drift the pinned commit was supposed to prevent.
+- **`terminal_kinds`**, where the pin declares one (F7 §8.2, W30) — what the shipped
+  `terminals` rules classified on this corpus, per `kind/target`, compared whole. It is
+  the ONLY check anywhere on those twelve rules: the unit tests invent their own type
+  names on purpose, so a typo in a real one is inert rather than invalid and nothing else
+  would notice. One corpus per route — `mall-admin` for scanned packages and the `cache`
+  rule, `jhipster-sample-app` for supertypes, `spring-petclinic-rest` for owners.
+- **`narrowed_sites`**, where the pin declares one (F7 §8.3, W32) — call sites whose
+  dispatch narrowed to several bodies, as `{in_graph, reached_by_a_trace}`. Two numbers
+  because they are two claims: only the second can appear in the document. Pinned because
+  W32's plan row claimed this shape never occurred on real code and it occurs 34 times on
+  `spring-petclinic-rest`.
+- **`contracts`**, where the pin declares one (F4 §5.2, F7 §8.4) — shape fields, open
+  shapes and inheritance arrows. The inherited-field fix recovered 153 fields on
+  `mall-admin` and 17 on `jhipster-sample-app`, and the class diagram draws one arrow on
+  each corpus that has any; those figures appear in four documents and nothing re-checked
+  them.
 - **Route sets** — the wire-identity column of the rendered document's "Inbound endpoints"
   and "Outbound endpoints" tables, each sorted.
 - **Zero `<pre>`-outside-code-blocks** (2M design §5b) — every `<pre>` in
@@ -55,6 +93,14 @@ EXPECTATIONS_DIR = REPO_ROOT / "scripts" / "field-expectations"
 _TABLE_ROW = re.compile(r"^\| `([^`]+)` \|", re.MULTILINE)
 _PRE_OPEN = re.compile(r"<pre(?P<attrs>[^>]*)>")
 _BACKTICK_SPAN = re.compile(r"`[^`]*`")
+# Maven's own `-v` banner line: `Java version: 21.0.12.1, vendor: Homebrew, runtime: ...`.
+# The MAJOR component alone is captured — a pin declaring `21` is a statement about the
+# language level the upstream's build needs, never about a patch release.
+_MVN_JAVA_VERSION = re.compile(r"^Java version: (\d+)", re.MULTILINE)
+
+# The Maven launcher a pin gets when it names none: the wrapper every pin before
+# `mall-admin` had, run from the repository root.
+_DEFAULT_MAVEN = "./mvnw"
 
 
 class FieldCheckFailure(Exception):
@@ -133,7 +179,53 @@ def _checkout(repo: Path, commit: str) -> bool:
     return True
 
 
-def _ensure_compiled(repo: Path, force: bool) -> None:
+def _refused_if_wrong_jdk(repo: Path, maven: str, required_major: str) -> None:
+    """Refuse before building unless the JDK **Maven itself** reports is `required_major`.
+
+    Read from Maven's own `-v` banner rather than from `JAVA_HOME` or from whichever
+    `java` happens to be first on `PATH`, because those are what the runner INTENDED and
+    the banner is what will run (GUIDELINES §5.4: *"record identity from the run's own
+    output, never from the parameter you passed in"*). Maven resolves its JDK through
+    `JAVA_HOME`, so the two disagree exactly when it matters.
+
+    **Fatal rather than advisory**, for the same reason §5.4 gives: the failure this
+    prevents is not a missing JDK but a WRONG one, and a wrong one fails deep inside the
+    build — `macrozheng/mall` on a JDK newer than 21 dies in Lombok's annotation
+    processor, with nothing in the output naming the toolchain as the cause.
+
+    Called only for a pin that declares `jdk`, and only when a BUILD is actually about to
+    run — from inside `_ensure_compiled`, past its already-built shortcut. It was called
+    before that decision, which made it refuse a pin whose `target/classes` was already
+    compiled, at the pinned commit, by the right JDK: nothing was going to invoke Maven,
+    so there was no wrong toolchain to prevent, and the check reported a machine's missing
+    JDK as though the pin could not be validated. A pin that declares no `jdk` is
+    unchanged and runs on whatever the machine has."""
+    banner = _run([maven, "-v"], cwd=repo)
+    if banner.returncode != 0:
+        raise FieldCheckFailure(
+            f"could not read {repo}'s Maven toolchain (`{maven} -v`):\n"
+            f"{banner.stdout}\n{banner.stderr}"
+        )
+    found = _MVN_JAVA_VERSION.search(banner.stdout)
+    if found is None:
+        raise FieldCheckFailure(
+            f"`{maven} -v` in {repo} printed no `Java version:` line, so the JDK this pin "
+            f"requires ({required_major}) cannot be verified:\n{banner.stdout}"
+        )
+    if found.group(1) != required_major:
+        raise FieldCheckFailure(
+            f"{repo} pins JDK {required_major} and Maven will use {found.group(1)}; "
+            f"set JAVA_HOME to a {required_major} JDK and re-run"
+        )
+
+
+def _ensure_compiled(
+    repo: Path,
+    force: bool,
+    module: Path | None = None,
+    maven: str = _DEFAULT_MAVEN,
+    jdk: str | None = None,
+) -> None:
     """`target/classes` populated at the checked-out commit — the compiled-first reading
     `MavenDetector` requires (it never runs Maven itself). Skipped when `target/classes`
     already exists AND `force` is `False`: `_checkout` proves the tree's SOURCES are at
@@ -147,13 +239,28 @@ def _ensure_compiled(repo: Path, force: bool) -> None:
     Delete `target/` to force one by hand. Offline first (`-o`), the same posture the
     detectors themselves default to; only retried without it — reaching the network —
     when the offline attempt fails, since this script is explicitly allowed to
-    (network-using by nature, see the module docstring)."""
-    if not force and (repo / "target" / "classes").is_dir():
+    (network-using by nature, see the module docstring).
+
+    `module` is the ANALYSED module's directory on a multi-module pin, and only the
+    already-built check reads it: `target/classes` belongs to the module, while the Maven
+    launcher is the reactor's and runs from the repository root — building the whole
+    reactor rather than one module because a module's own compile needs its siblings
+    installed, which a root build gives for free. Defaults to `repo`, which is every
+    single-module pin.
+
+    `jdk`, when the pin declares one, is verified HERE rather than before the shortcut
+    above. The check exists to stop a build running on the wrong toolchain, so it belongs
+    on the path that runs one: a module already compiled at the pinned commit needs no
+    JDK at all, and refusing it there turned "this machine cannot BUILD this pin" into
+    "this pin cannot be validated", which is a different and untrue statement."""
+    if not force and ((module or repo) / "target" / "classes").is_dir():
         return
-    offline = _run(["./mvnw", "-q", "-o", "compile"], cwd=repo)
+    if jdk is not None:
+        _refused_if_wrong_jdk(repo, maven, jdk)
+    offline = _run([maven, "-q", "-o", "compile"], cwd=repo)
     if offline.returncode == 0:
         return
-    online = _run(["./mvnw", "-q", "compile"], cwd=repo)
+    online = _run([maven, "-q", "compile"], cwd=repo)
     if online.returncode != 0:
         raise FieldCheckFailure(
             f"`mvn compile` failed in {repo} even with the network allowed:\n"
@@ -161,18 +268,116 @@ def _ensure_compiled(repo: Path, force: bool) -> None:
         )
 
 
-def _analyze_and_render(repo: Path) -> None:
+def _analyze_and_render(module: Path) -> None:
+    """`render` takes no display flags, so the pin validates the only document there is,
+    which is the complete one (GUIDELINES §8.4)."""
     sextant = _sextant_bin()
-    analyze = _run([sextant, "module", "analyze", str(repo)], cwd=REPO_ROOT)
+    analyze = _run([sextant, "module", "analyze", str(module)], cwd=REPO_ROOT)
     if analyze.returncode != 0:
         raise FieldCheckFailure(
-            f"`sextant module analyze {repo}` failed:\n{analyze.stdout}\n{analyze.stderr}"
+            f"`sextant module analyze {module}` failed:\n{analyze.stdout}\n{analyze.stderr}"
         )
-    render = _run([sextant, "module", "render", str(repo)], cwd=REPO_ROOT)
+    render = _run([sextant, "module", "render", str(module)], cwd=REPO_ROOT)
     if render.returncode != 0:
         raise FieldCheckFailure(
-            f"`sextant module render {repo}` failed:\n{render.stdout}\n{render.stderr}"
+            f"`sextant module render {module}` failed:\n{render.stdout}\n{render.stderr}"
         )
+
+
+def _contracts(module: Path) -> dict[str, int]:
+    """`{"shape_fields": N, "open_shapes": M, "inheritance_edges": K}` from the workspace
+    `analyze` has just written.
+
+    `inheritance_edges` runs the renderer's OWN projection rather than counting hierarchy
+    rows, because which ancestors earn an arrow is the whole of what F7 §8.4 decided — a
+    count of `type_hierarchy` would stay green while the rule that filters it rotted.
+    """
+    import duckdb
+
+    from sextant.egress.render.document import _contract_nodes
+
+    connection = duckdb.connect(str(module / ".sextant" / "workspace.duckdb"), read_only=True)
+    try:
+        fields = connection.execute("SELECT count(*) FROM shape_fields").fetchone()
+        opened = connection.execute("SELECT count(*) FROM shapes WHERE open").fetchone()
+        shapes = [
+            {"shape_id": row[0], "open": row[1]}
+            for row in connection.execute("SELECT shape_id, open FROM shapes ORDER BY 1").fetchall()
+        ]
+        hierarchy = [
+            {"child": row[0], "ancestor": row[1], "kind": row[2], "scanned": row[3]}
+            for row in connection.execute(
+                "SELECT child, ancestor, kind, scanned FROM type_hierarchy "
+                "ORDER BY child, position, ancestor"
+            ).fetchall()
+        ]
+    finally:
+        connection.close()
+    _nodes, edges = _contract_nodes(shapes, (), hierarchy)
+    return {
+        "shape_fields": int(str(fields[0])) if fields else 0,
+        "open_shapes": int(str(opened[0])) if opened else 0,
+        "inheritance_edges": sum(1 for edge in edges if edge.kind != "holds"),
+    }
+
+
+def _narrowed_sites(module: Path) -> dict[str, int]:
+    """`{"in_graph": N, "reached_by_a_trace": M}` — call sites whose dispatch narrowed to
+    several bodies, and how many of them a walk reaches.
+
+    Two numbers because they are two claims and W32's own docstring welded them together:
+    34 sites are in `spring-petclinic-rest`'s `call_edges` and 31 of them are in a trace,
+    so only 31 can appear in the document. A single number would let either drift under
+    the other's name.
+    """
+    from sextant.application.query.trace import traces_of
+    from sextant.domain.closed_sets import Resolution
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    workspace = DuckDbWorkspace(module / ".sextant" / "workspace.duckdb")
+    try:
+        in_graph = {
+            (str(row["caller"]), int(str(row["ordinal"])))
+            for row in workspace.query("call_edges")
+            if str(row["resolution"]) == Resolution.NARROWED
+        }
+        reached: set[tuple[str, int]] = set()
+        for trace in traces_of(workspace):
+            counted: dict[tuple[str, int], int] = {}
+            for step in trace.steps:
+                if step.resolution != Resolution.NARROWED:
+                    continue
+                key = (step.caller, step.ordinal)
+                counted[key] = counted.get(key, 0) + 1
+                if counted[key] > 1:
+                    reached.add(key)
+    finally:
+        workspace.close()
+    return {"in_graph": len(in_graph), "reached_by_a_trace": len(reached)}
+
+
+def _terminal_kinds(module: Path) -> dict[str, int]:
+    """`call_edges`' classification, counted per `kind/target`, from the workspace
+    `analyze` has just written.
+
+    Reads the workspace rather than re-deriving, unlike `resolvable_superclass_calls`
+    beside it: this is a property of Sextant's OUTPUT, not of the upstream's source, so
+    the run that produced it is the thing to measure. `unresolved` is counted too — it is
+    the denominator, and a rule that stopped matching would move a classified count down
+    and this one up by the same amount, which reads very differently from a corpus that
+    simply grew.
+    """
+    import duckdb
+
+    connection = duckdb.connect(str(module / ".sextant" / "workspace.duckdb"), read_only=True)
+    try:
+        rows = connection.execute(
+            "SELECT terminal_kind, coalesce(target_kind, ''), count(*) FROM call_edges "
+            "WHERE terminal_kind IS NOT NULL GROUP BY 1, 2 ORDER BY 1, 2"
+        ).fetchall()
+    finally:
+        connection.close()
+    return {f"{kind}/{target}" if target else str(kind): int(count) for kind, target, count in rows}
 
 
 def _routes_in_section(markdown: str, heading: str) -> list[str]:
@@ -238,20 +443,25 @@ def _check_one(name: str) -> list[str]:
     expectation_path = EXPECTATIONS_DIR / f"{name}.json"
     expectation = json.loads(expectation_path.read_text(encoding="utf-8"))
     repo = EXAMPLES_DIR / expectation["repo"]
+    # The analysed module, which is the repository root on every single-module pin. `repo
+    # / "."` would be `repo` here too, but the conditional says out loud that the key is
+    # optional rather than relying on a pathlib normalisation a reader has to know.
+    module = repo / expectation["module"] if "module" in expectation else repo
     problems: list[str] = []
 
     _ensure_repo_present(repo, expectation["remote"])
+    maven = expectation.get("maven", _DEFAULT_MAVEN)
     moved_head = _checkout(repo, expectation["commit"])
-    _ensure_compiled(repo, force=moved_head)
-    _analyze_and_render(repo)
+    _ensure_compiled(repo, force=moved_head, module=module, maven=maven, jdk=expectation.get("jdk"))
+    _analyze_and_render(module)
 
-    metadata = json.loads((repo / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads((module / ".sextant" / "metadata.json").read_text(encoding="utf-8"))
     if metadata["endpoints"] != expectation["endpoints"]:
         problems.append(
             f"endpoint counts: expected {expectation['endpoints']!r}, got {metadata['endpoints']!r}"
         )
 
-    markdown = (repo / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
+    markdown = (module / ".sextant" / "render" / "architecture.md").read_text(encoding="utf-8")
     inbound = _routes_in_section(markdown, "Inbound endpoints")
     outbound = _routes_in_section(markdown, "Outbound endpoints")
     if inbound != expectation["routes"]["inbound"]:
@@ -263,7 +473,103 @@ def _check_one(name: str) -> list[str]:
             f"outbound routes: expected {expectation['routes']['outbound']!r}, got {outbound!r}"
         )
 
-    html_text = (repo / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
+    # F7 §8.2 (W30). What the shipped `terminals` rules actually classified, as
+    # `{"<kind>/<target>": count}` plus the corpus's own total, compared whole.
+    #
+    # **This is the only thing that checks a shipped terminal rule at all**, which is
+    # what W30's review found: `grep -rn terminals tests/` reaches not one of
+    # `spring-web.yml`'s twelve rows. Every unit test invents its own annotation and its
+    # own base type, deliberately — a rule read from catalog data is only proved to be
+    # read from catalog data if the data is not the real spellings — and the cost of that
+    # is exactly this gap. A typo in `org.mybatis.spring.annotation.MapperScan` or in
+    # `org.springframework.data.jpa.repository.JpaRepository` is not INVALID, so nothing
+    # refuses it; it is simply inert, with no error, no COVERAGE row and every test green.
+    # GUIDELINES §10 names that shape: "could a change to it be WRONG without being
+    # INVALID?"
+    #
+    # Here it moves a number. `mall-admin` is the pin that covers the scanned-package
+    # route and the one `cache` rule, `jhipster-sample-app` the supertype route, and
+    # `spring-petclinic-rest` the owner route — one corpus per route, which is how the
+    # routes were chosen in the first place.
+    expected_terminals = expectation.get("terminal_kinds")
+    if expected_terminals is not None:
+        counted = _terminal_kinds(module)
+        if counted != expected_terminals:
+            problems.append(
+                f"terminal kinds: expected {expected_terminals!r}, got {counted!r} — this "
+                f"is what the shipped `terminals` rules classify, and nothing else checks "
+                f"that they name types the frameworks really declare"
+            )
+
+    # F7 §8.3 (W32). How many call sites dispatch to SEVERAL bodies with none picked, and
+    # how many of them a trace actually reaches — the second being what appears in the
+    # rendered document as an `alt` block.
+    #
+    # **Pinned because the claim that was NOT pinned turned out to be wrong.** W32's plan
+    # row said this shape "has never fired on real code (four corpora, zero occurrences)";
+    # it fires 34 times on `spring-petclinic-rest`, every one a repository interface
+    # narrowing to a JDBC implementation and a JPA one, and the diagram drew them as a
+    # sequence. An unpinned corpus number in a document is a number that rots.
+    expected_narrowed = expectation.get("narrowed_sites")
+    if expected_narrowed is not None:
+        counted = _narrowed_sites(module)
+        if counted != expected_narrowed:
+            problems.append(
+                f"narrowed sites: expected {expected_narrowed!r}, got {counted!r} — this "
+                f"is the shape F7 §8.3's `alt` blocks are drawn for, and the last time it "
+                f"went unpinned a plan row claimed it never occurred"
+            )
+
+    # F4 §5.2 / F7 §8.4. What the wire contracts and the contract diagram came out as:
+    # how many shape fields, how many shapes still open, and how many inheritance arrows.
+    #
+    # **Pinned because the headline numbers of two waves were not.** The inherited-field
+    # fix recovered 153 wire fields here and 17 on `jhipster-sample-app`, and W33 draws one
+    # inheritance arrow on each corpus that has any — three figures across four documents
+    # with nothing re-checking them, which is the state W32's review called out and which
+    # `terminal_kinds` exists to prevent.
+    expected_contracts = expectation.get("contracts")
+    if expected_contracts is not None:
+        counted = _contracts(module)
+        if counted != expected_contracts:
+            problems.append(
+                f"contracts: expected {expected_contracts!r}, got {counted!r} — these are "
+                f"the wire-contract and inheritance-diagram figures four documents quote"
+            )
+
+    # F3 §4.2 (W21). OPTIONAL, because it is a property of the upstream's own source
+    # rather than of Sextant's output, and only the pin that motivated Wave 3 records
+    # one. It is checked here because it is the number that made the corpus worth
+    # adding: `spring-petclinic-rest` makes 131 calls whose OWNER it scans, naming a
+    # method that owner does not declare but a scanned ancestor does. The always-on
+    # fixture scored ZERO of them before W21, which is why the suite could pass while
+    # neither of Wave 3's Criticals had anywhere to appear.
+    #
+    # It re-scans the module rather than reading the workspace `analyze` just wrote,
+    # which is a real cost and a real caveat: a pin using `.sextant.yml` ignore rules or
+    # multi-release selection would count documents the pipeline excludes. No pinned
+    # corpus does today — `spring-petclinic-rest` ships no `.sextant.yml` — and this
+    # note is the condition under which that stops being true.
+    #
+    # A DROP here means the shape has left the corpus and the resolution work is being
+    # measured against nothing; a RISE means upstream drift the pinned commit was
+    # supposed to prevent. Either is worth stopping for.
+    expected_shape = expectation.get("resolvable_superclass_calls")
+    if expected_shape is not None:
+        # Imported HERE, not at module scope. `_sextant_bin` exists so this script
+        # shells out to the venv rather than importing the package, and the Usage line
+        # says `python scripts/field_check.py` — a top-level `import sextant` would kill
+        # that invocation outside the venv, for a check only one pin asks for.
+        from corpus_shapes import resolvable_superclass_calls
+
+        counted = len(resolvable_superclass_calls(module / "target" / "classes"))
+        if counted != expected_shape:
+            problems.append(
+                f"resolvable superclass calls: expected {expected_shape}, got {counted} "
+                f"— this is the shape F3 §4.2's resolution work is measured against"
+            )
+
+    html_text = (module / ".sextant" / "render" / "architecture.html").read_text(encoding="utf-8")
     if not _zero_pre_outside_code_blocks(html_text):
         problems.append("a <pre> outside a code block or a diagram survived in architecture.html")
     if not _first_diagram_parses(html_text):

@@ -1,0 +1,291 @@
+id: spring-data-rest
+displayName: Spring Data REST (repository-derived CRUD API)
+style: derived_resource
+protocol: http
+direction: inbound
+
+# THE API NOBODY WROTE A CONTROLLER FOR (2O design §2). Spring Data REST
+# exposes a CRUD HTTP API from a repository INTERFACE — no controller, no
+# mapping annotation, nothing in the module that mentions HTTP at all. The
+# rows this catalog derives are therefore predictions from a FRAMEWORK RULE
+# rather than readings of a declaration, which is why the style exists and
+# why every value below is evidence rather than convention.
+#
+# Every route, verb, path and override in this file was verified against a
+# LIVE Boot 4.0.1 / spring-data-rest 5.0.1 application:
+# `scripts/probes/cp2_data_rest.md`.
+
+# THE GATE (2O design §2a, ruling R9). The rule this catalog applies is
+# CONDITIONAL — *if* Spring Data REST is present, repositories are exposed at
+# these paths — so without the antecedent there is no consequent to derive.
+# `resolve/dependencies.py` states why that is not a deployment check and what
+# happens when the question cannot be answered (the catalog is SKIPPED, and
+# the manifest says so).
+#
+# All three coordinates, because a module may declare any of them directly and
+# the Maven side resolves no transitives (F1 reaches inheritance, not
+# mediation): the Boot starter is what an application writes, and the two Data
+# REST artifacts are what a non-Boot application (or a Gradle module, whose
+# resolved classpath carries all three) declares or resolves.
+detect:
+  coordinates:
+    - "org.springframework.boot:spring-boot-starter-data-rest"
+    - "org.springframework.data:spring-data-rest-webmvc"
+    - "org.springframework.data:spring-data-rest-core"
+
+# `implemented_interfaces` finds the repositories, `generic_interfaces` (9.14)
+# carries the entity type — `interfaces` alone erases `CrudRepository<Order,
+# Long>` to a bare symbol, and without the type argument there is no path to
+# derive. `annotation_args` reads `path`/`exported`.
+#
+# `resolved_config` is deliberately NOT required (2O design §2b): the base path
+# defaults to empty and the detection strategy to `default`, so a module with
+# no configuration at all derives its full route set. Requiring the capability
+# would skip this catalog on exactly those modules.
+measured:
+  - { artifact: org.springframework.data:spring-data-commons, versions: ["3.2.5", "4.1.1"],
+      identity: reported, by: scripts/probes/cp13_inherited_members.md }
+  - { artifact: org.springframework.data:spring-data-rest-core, versions: ["5.0.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
+  - { artifact: org.springframework.data:spring-data-commons, versions: ["3.2.5", "4.0.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
+  # `JpaRepository`'s row in `repositories` rests on this jar and on no other, so it
+  # is recorded rather than only cited in a comment — §3a shows what was read.
+  - { artifact: org.springframework.data:spring-data-jpa, versions: ["4.1.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
+
+requires: [annotation_args, implemented_interfaces, generic_interfaces]
+
+# D02's specified-but-unused `default_produces`, implemented here (register
+# entry #6) — a media type the FRAMEWORK enforces whenever a route declares
+# none itself, which is the shape D02 describes and which no catalog could
+# honestly declare until one arrived whose routes are entirely the framework's.
+# Spring MVC deliberately declares neither key because Spring negotiates an
+# undeclared mapping at runtime; Data REST does not negotiate its own
+# representation format, it serves HAL.
+default_produces: ["application/hal+json"]
+
+# Rung 2 of the format ladder (2G design §7). Unioned across every catalog
+# that declares a MIME table, and a conflicting duplicate is refused rather
+# than resolved — so this is the one place `application/hal+json` is spelled.
+media_formats:
+  application/hal+json: json
+
+matches:
+  # The enumerated Spring Data repository contracts, each mapped to the CRUD
+  # OPERATIONS extending it licenses — which is what decides the item routes
+  # (CP-2(b), live): since Spring Data 3, `PagingAndSortingRepository` no
+  # longer extends `CrudRepository`, and a repository extending only it serves
+  # a collection GET and NOTHING else — not even an item GET (`/boxes/1` →
+  # 405, observed).
+  #
+  # Reactive contracts (`ReactiveCrudRepository` and friends) are NOT
+  # enumerated, and the omission is deliberate rather than an oversight: Spring
+  # Data REST is built on Spring MVC and its repository inventory is the
+  # imperative one, and no probe in this checkpoint exercised a reactive store.
+  # Absent evidence, produce nothing (GUIDELINES §8) — COVERAGE carries the
+  # row, so the gap is visible rather than silent.
+  #
+  # `collection_read` is the one that was MISSING until W53, and its absence was
+  # a wrong route rather than a lost one. The collection GET carried no `needs:`
+  # at all, on the belief — written into this file — that "the collection read
+  # is the one route every exposed repository serves, whatever it extends". It
+  # is not. **Measured by opening the framework's own class files** rather than
+  # from the live probe, which never exercised a bare `Repository`:
+  # `CrudMethodsSupportedHttpMethods.getMethodsFor(COLLECTION)` in
+  # spring-data-rest-core 5.0.1 adds GET and HEAD **only** when
+  # `exposesFindAll()` is true, which resolves to
+  # `DefaultCrudMethods.selectMostSuitableFindAllMethod` — a
+  # `ReflectionUtils.findMethod` for `findAll(Pageable)` then `findAll()` on the
+  # repository interface. `Repository` declares NO METHODS AT ALL (verified with
+  # `javap` at spring-data-commons 3.2.5 and 4.0.1: the interface body is
+  # empty), so a bare `interface Foo extends Repository<Foo, Long>` exposes
+  # OPTIONS on its collection and nothing else. This file used to derive
+  # `GET /foos` for it.
+  repositories:
+    org.springframework.data.repository.Repository: []
+    org.springframework.data.repository.CrudRepository: [collection_read, item_read, save, delete]
+    org.springframework.data.repository.ListCrudRepository: [collection_read, item_read, save, delete]
+    # Both paging contracts declare `findAll(Pageable)`/`findAll(Sort)` and so
+    # DO serve the collection GET — which is what CP-2 observed live on
+    # `BoxRepository` (`/boxes` → GET, no POST) and what kept the missing
+    # `needs:` from ever showing up as a wrong row on a real repository.
+    org.springframework.data.repository.PagingAndSortingRepository: [collection_read]
+    org.springframework.data.repository.ListPagingAndSortingRepository: [collection_read]
+    # `JpaRepository extends ListCrudRepository, ListPagingAndSortingRepository`
+    # (javap, spring-data-jpa 4.1.1), so it reaches `findAll()` either way.
+    org.springframework.data.jpa.repository.JpaRepository: [collection_read, item_read, save, delete]
+
+  # §2b's route table, verb by verb, each with the operation it needs. **Every
+  # route needs one**, including the collection read — see `repositories` above
+  # for the measurement that corrected this, and `_reach` in the engine for how
+  # the operations of every contract a repository reaches are unioned.
+  routes:
+    - { method: GET, item: false, needs: collection_read }
+    - { method: POST, item: false, needs: save }
+    - { method: GET, item: true, needs: item_read }
+    - { method: PUT, item: true, needs: save }
+    - { method: PATCH, item: true, needs: save }
+    - { method: DELETE, item: true, needs: delete }
+
+  # The framework's own path words. `{id}` is the item template, spelled the
+  # way an observed `@GetMapping("/orders/{id}")` row spells it so a derived
+  # route and an observed one share an identity when they name one URL.
+  item_segment: "{id}"
+  search_segment: search
+
+  # `@RepositoryRestResource` on the interface, `@RestResource` on a query
+  # method: both optional, both carrying the same two attributes.
+  resource_annotation: org.springframework.data.rest.core.annotation.RepositoryRestResource
+  member_annotation: org.springframework.data.rest.core.annotation.RestResource
+  path_attribute: path
+  exported_attribute: exported
+  # A base repository marked with this is a template for other repositories,
+  # never a bean of its own, so it exposes nothing.
+  no_repository_bean: org.springframework.data.repository.NoRepositoryBean
+
+  # The CRUD interfaces' own method names. A method a repository declares is a
+  # QUERY method — and therefore a `/search/` route — only when it is not one
+  # of these: `BoxRepository` declares `Page<Box> findAll(Pageable)`, an
+  # override of a CRUD method, and `GET /boxes/search` is 404 (observed).
+  crud_methods:
+    - save
+    - saveAll
+    - saveAndFlush
+    - saveAllAndFlush
+    - findById
+    - findAll
+    - findAllById
+    - existsById
+    - count
+    - delete
+    - deleteById
+    - deleteAll
+    - deleteAllById
+    - deleteInBatch
+    - deleteAllInBatch
+    - deleteAllByIdInBatch
+    - flush
+    - getOne
+    - getById
+    - getReferenceById
+
+  # Read-if-present from `resolved_config`, never required. Empty by default —
+  # a config-less run derives everything at `/`.
+  base_path:
+    key: spring.data.rest.base-path
+
+  # CP-2(0), the most load-bearing half of the checkpoint: WHICH repositories
+  # are exposed is configurable, and the setting is a key this analysis already
+  # reads. Every row below was observed live, one application run per setting.
+  # An unset key is `default`.
+  detection_strategy:
+    key: spring.data.rest.detection-strategy
+    strategies:
+      # Every PUBLIC repository, honouring `exported = false`.
+      default: [public_only, honors_exported]
+      # Every repository, whatever its visibility, ignoring `exported`.
+      all: []
+      # Only annotated repositories, honouring `exported = false`.
+      annotated: [annotated_only, honors_exported]
+      # Every public repository, ignoring `exported`.
+      visibility: [public_only]
+
+# BOUNDARIES, stated (2O design §2c, COVERAGE): projections and excerpts,
+# HAL affordances, `@CrossOrigin`, event handlers and QueryDSL web support are
+# out. So are the `HEAD`/`OPTIONS` verbs Data REST also serves on every route
+# and the `/{basePath}/search` index route itself — §2b's table names neither,
+# and this catalog derives exactly that table.
+
+# D02's declared SLICE (F2 §3.8, G-45). Measured
+# (`scripts/probes/w19b_type_and_annotation_surface.md` §2): Spring Data ships 28
+# repository contracts across twelve artifacts and this roster names SIX. *The first
+# run said 24 across seven, because the artifact list was hand-picked from the gap
+# analysis's own sentence — so a store module nobody had thought of was not merely
+# uncounted, the probe's "this is a LOWER BOUND" warning could not fire for it either.*
+#
+# **Scope of every "derives nothing" below: a MODULE-LOCAL fact stream**, which is the
+# ordinary case and the one the counts above describe. `derived_resource`'s `_reach`
+# walks `_interface_declarations`, which projects interfaces out of
+# `selected_documents` — so a parent contract declared in a jar is simply not there and
+# the hop fails. A repo that declares `extract_libraries` for a Spring Data artifact
+# puts that jar's classes into the scan, and then the hop may be crossed for the
+# contracts whose parents this roster DOES name (`CassandraRepository`,
+# `ElasticsearchRepository` and `Neo4jRepository` all extend named ones). Whether
+# library symbols reach `selected_documents` in practice is NOT measured here; it is
+# named so a reader knows the boundary of the claim rather than reading it as absolute.
+#
+# **The roster is the whole rule, which is what makes this worse than an ordinary
+# gap.** A `derived_resource` match has no other evidence — a repository interface
+# mentions no HTTP anywhere — so a contract missing from the roster does not degrade a
+# row, it removes the row entirely. Every Mongo, R2DBC, Cassandra, Elasticsearch and
+# Neo4j repository in the estate derives nothing, and so does every reactive, coroutine
+# and RxJava3 one, including the ones declared in `spring-data-commons` beside the
+# contracts this roster does name.
+slice:
+  outside:
+    - owner: org.springframework.data:spring-data-commons
+      type_names: [ReactiveCrudRepository, ReactiveSortingRepository,
+                   CoroutineCrudRepository, CoroutineSortingRepository,
+                   RxJava3CrudRepository, RxJava3SortingRepository]
+      why: >
+        The reactive, coroutine and RxJava3 contracts, shipped in the SAME artifact as
+        `CrudRepository` and `ListCrudRepository` which this roster does name. Each
+        declares the same CRUD operations over a different return type, so the rule
+        that derives routes from the named ones applies unchanged — this is a roster
+        entry and a measurement of the operation names, not new engine work.
+    - owner: org.springframework.data:spring-data-commons
+      type_names: [RevisionRepository]
+      why: >
+        Spring Data Envers' revision-history contract. It declares `findRevisions` and
+        `findLastChangeRevision` rather than CRUD, so unlike the entries above it is
+        NOT a roster line plus a rerun: what routes Data REST exposes for it has never
+        been measured. Outside until it is.
+    - owner: org.springframework.data:spring-data-mongodb
+      type_names: [MongoRepository, ReactiveMongoRepository]
+      why: >
+        A boundary this catalog does NOT model, and the largest single instance: a
+        Mongo repository is an ordinary Spring Data REST resource and derives nothing.
+        Measured at 4.2.5, and the two reach DIFFERENT parents: `MongoRepository`
+        extends `ListCrudRepository` and `ListPagingAndSortingRepository`, which this
+        roster names; `ReactiveMongoRepository` extends `ReactiveCrudRepository` and
+        `ReactiveSortingRepository`, which it does not. Either way the parent is
+        reached through a jar hop the fact stream does not cross, so naming the parent
+        is not enough — the roster has to name these.
+    - owner: org.springframework.data:spring-data-r2dbc
+      type_names: [R2dbcRepository]
+      why: >
+        Same shape as the Mongo pair: a store module's own contract, reaching the
+        shared ones through a jar this analysis does not open. It extends
+        `ReactiveCrudRepository` and `ReactiveSortingRepository`, neither of which the
+        roster names either.
+    - owner: org.springframework.data:spring-data-keyvalue
+      type_names: [KeyValueRepository]
+      why: >
+        The base contract for Redis `@RedisHash` repositories, which Spring Data REST
+        exposes. It was missing from the first version of this slice because the
+        enumeration's artifact list was hand-picked and never asked for it — so it was
+        absent from the table AND from the lower-bound warning that exists to stop a
+        short list reading as an absence of gaps.
+    - owner: org.springframework.data:spring-data-ldap
+      type_names: [LdapRepository]
+      why: >
+        Same shape, and found by the same widening.
+    - owner: org.springframework.data:spring-data-couchbase
+      type_names: [CouchbaseRepository, ReactiveCouchbaseRepository]
+      why: >
+        Same shape, and found by the same widening.
+    - owner: org.springframework.data:spring-data-cassandra
+      type_names: [CassandraRepository, ReactiveCassandraRepository, MapIdCassandraRepository]
+      why: >
+        Same shape. `MapIdCassandraRepository` is a third contract the gap analysis did
+        not name — it turned up in the enumeration, which is what enumerating is for.
+    - owner: org.springframework.data:spring-data-elasticsearch
+      type_names: [ElasticsearchRepository, ReactiveElasticsearchRepository,
+                   CoroutineElasticsearchRepository]
+      why: >
+        Same shape, and three rather than the one the gap analysis named.
+    - owner: org.springframework.data:spring-data-neo4j
+      type_names: [Neo4jRepository, ReactiveNeo4jRepository]
+      why: >
+        Same shape.

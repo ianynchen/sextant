@@ -3,12 +3,17 @@ package dev.sextant.extractor;
 import java.lang.annotation.Annotation;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import kotlin.Metadata;
 import kotlin.metadata.Attributes;
+import kotlin.metadata.KmFunction;
 import kotlin.metadata.KmProperty;
+import kotlin.metadata.jvm.JvmExtensionsKt;
+import kotlin.metadata.jvm.JvmMethodSignature;
 import kotlin.metadata.jvm.KotlinClassMetadata;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.Opcodes;
@@ -24,9 +29,46 @@ public final class KotlinNullability {
     /** The one annotation the Kotlin compiler writes to every class it compiles. */
     public static final String DESCRIPTOR = "Lkotlin/Metadata;";
 
-    /** What every non-Kotlin class decodes to: no properties, so nothing overrides
-     *  Java's rule. */
-    public static final Map<String, Boolean> NONE = Map.of();
+    /** What every non-Kotlin class decodes to: no properties and no suspend
+     *  functions, so nothing overrides Java's rule. */
+    public static final Decoded NONE = new Decoded(Map.of(), Map.of(), Set.of());
+
+    /** One class's Kotlin-declared facts, as far as the scanner consumes them.
+     *
+     *  <p>{@code properties} maps a property NAME to the nullability its declared type
+     *  carries — the field projection that has shipped since M03.
+     *
+     *  <p>{@code returnNullable} maps a method's JVM {@code name + descriptor} to the
+     *  nullability of the type it DECLARES it returns — every Kotlin function, plus every
+     *  property's generated GETTER. Keyed by the full JVM signature rather than by the
+     *  Kotlin name because overloads share a name and, for a suspend function, share an
+     *  erased descriptor return as well: {@code fetch(String): Order} and
+     *  {@code maybe(String): Order?} both compile to
+     *  {@code (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;},
+     *  so nothing shorter than the signature tells two of them apart.
+     *
+     *  <p>This is {@code G-63}'s RETURN half. Before it, a Kotlin function's return
+     *  carried {@code nullable: true, nullable_resolution: "resolved"} — a certainty
+     *  marker on a value the same fact contradicts, since kotlinc writes {@code @NotNull}
+     *  on the method beside it. The remaining half is PARAMETERS: a function's and a
+     *  constructor's value parameters still take Java's rule. Stated rather than implied,
+     *  and this class is where it would be closed.
+     *
+     *  <p>{@code suspendMethods} holds the JVM {@code name + descriptor} of every function
+     *  metadata marks {@code suspend}. It is the ONLY admissible answer to "is this a
+     *  suspending function", and it exists because the structural answer — "the last
+     *  parameter is a {@code Continuation}" — is wrong on a large scale. MEASURED over
+     *  `kotlinx-coroutines-core-jvm` 1.8.0 plus `kotlin-stdlib` 2.2.0 (14,895 methods):
+     *  the structural test fires on 683 and **228 of those are not suspend functions**,
+     *  dominated by the {@code <init>} of generated state-machine classes — whose facts
+     *  would stop reporting {@code returns: void#}. A Java method declaring a
+     *  {@code Continuation} parameter, and a Kotlin {@code fun} that merely takes one,
+     *  are the same error one step further out. Metadata cannot make either mistake:
+     *  neither appears in {@code getFunctions()} as suspend. */
+    public record Decoded(
+            Map<String, Boolean> properties,
+            Map<String, Boolean> returnNullable,
+            Set<String> suspendMethods) {}
 
     /** Collects {@code @Metadata}'s elements as ASM visits them, then decodes property
      *  nullability once the annotation is fully read and hands the result to
@@ -43,7 +85,7 @@ public final class KotlinNullability {
      *  class, so every field falls back to Java's own rule — an honest fallback,
      *  not a guess dressed up as one. */
     public static AnnotationVisitor collector(
-            Consumer<Map<String, Boolean>> onDecoded, Consumer<String> onUnsupported) {
+            Consumer<Decoded> onDecoded, Consumer<String> onUnsupported) {
         int[] k = {0};
         int[][] mv = {new int[0]};
         List<String> d1 = new ArrayList<>();
@@ -79,7 +121,7 @@ public final class KotlinNullability {
                     k[0], mv[0], d1.toArray(new String[0]), d2.toArray(new String[0]),
                     xs[0], pn[0], xi[0]);
                 try {
-                    onDecoded.accept(propertyNullability(metadata));
+                    onDecoded.accept(decode(metadata));
                 } catch (IllegalArgumentException unreadable) {
                     // kotlin-metadata-jvm throws this for metadata it cannot make sense
                     // of — most commonly a compiler version newer than the library
@@ -105,14 +147,36 @@ public final class KotlinNullability {
      *  {@code property name -> nullable}. Anything other than a class facade (a file
      *  facade, a synthetic lambda class, ...) has no properties and decodes to the
      *  empty map — the Kotlin compiler writes {@code @Metadata} to those too. */
-    private static Map<String, Boolean> propertyNullability(Metadata metadata) {
+    private static Decoded decode(Metadata metadata) {
         KotlinClassMetadata parsed = KotlinClassMetadata.readStrict(metadata);
         if (!(parsed instanceof KotlinClassMetadata.Class classMetadata)) return NONE;
-        Map<String, Boolean> result = new HashMap<>();
+        Map<String, Boolean> properties = new HashMap<>();
         for (KmProperty property : classMetadata.getKmClass().getProperties()) {
-            result.put(property.getName(), Attributes.isNullable(property.getReturnType()));
+            properties.put(property.getName(), Attributes.isNullable(property.getReturnType()));
         }
-        return result;
+        Map<String, Boolean> returns = new HashMap<>();
+        Set<String> suspend = new HashSet<>();
+        for (KmFunction function : classMetadata.getKmClass().getFunctions()) {
+            // A function metadata describes but whose JVM signature it does not state
+            // cannot be joined to the method being visited. Skipped rather than keyed on
+            // the Kotlin name, which overloads share.
+            JvmMethodSignature signature = JvmExtensionsKt.getSignature(function);
+            if (signature == null) continue;
+            String key = signature.getName() + signature.getDescriptor();
+            returns.put(key, Attributes.isNullable(function.getReturnType()));
+            if (Attributes.isSuspend(function)) suspend.add(key);
+        }
+        for (KmProperty property : classMetadata.getKmClass().getProperties()) {
+            // The GETTER, not the field: `KotlinOrder#id` the field already reads
+            // correctly through `properties` above, while `getId()` is a method and took
+            // Java's rule. Same declared type, two facts, and only one of them was right.
+            JvmMethodSignature getter = JvmExtensionsKt.getGetterSignature(property);
+            if (getter == null) continue;
+            returns.put(
+                getter.getName() + getter.getDescriptor(),
+                Attributes.isNullable(property.getReturnType()));
+        }
+        return new Decoded(properties, returns, suspend);
     }
 
     /** A plain implementation of the annotation interface {@code kotlin-metadata-jvm}

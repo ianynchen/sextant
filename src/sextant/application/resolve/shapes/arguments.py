@@ -100,7 +100,9 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     return arguments[index]
 
 
-def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
+def _capture_resolved(
+    declared: bool, argument: dict[str, Any] | None, resolved_to: str | None = None
+) -> bool:
     """Whether a DECLARED capture (checkpoint ruling I1) read something the
     scanner could resolve.
 
@@ -128,21 +130,54 @@ def _capture_resolved(declared: bool, argument: dict[str, Any] | None) -> bool:
     with the string literal its expression names, so a resolved field never
     reaches this test as a `field` at all; where it does not, a payload
     column would stay NULL on a row still claiming `resolved` — the one
-    thing D01 §3's amended disambiguation exists to prevent."""
+    thing D01 §3's amended disambiguation exists to prevent.
+
+    **`resolved_to` is what the capture actually produced, and it is the whole
+    of the exception** (W43's review, after `OI-77`). The paragraph above
+    turns on "the payload column stays NULL either way, so the ROW is the only
+    place to disambiguate". Once a body capture read from a `parameter` fills
+    that column with a real descriptor, the premise is gone: the column says
+    what was read, and a row still answering `unresolved` claims a read
+    failure that did not happen. The estate proved it inconsistent in one
+    fixture — `spring-ws-template` reads a parameter payload through
+    `path_from_argument_type` and answers `resolved`, while every other
+    outbound catalog answered `unresolved` for the identical fact.
+
+    An ADDRESS capture is untouched — and by a different mechanism, which is worth
+    saying because the obvious guess is wrong. This function has four callers and
+    every one of them is a body or a response; no address capture ever reaches it.
+    A destination read from a parameter is `unresolved` because `url_of` and
+    `channel_of` resolve only a `kind: "string"` argument, which is a rule of their
+    own. `_UNREAD_KINDS` is consulted here and nowhere else, so it is now, in fact,
+    a set about body and response captures."""
     if not declared:
+        return True
+    if resolved_to is not None:
         return True
     return argument is not None and argument.get("kind") not in _UNREAD_KINDS
 
 
 # The D00 §5 argument kinds that name no value a capture could have read:
+# `concat` joins them (W4): it carries a TEMPLATE with a hole, not a
+# value, so a capture cannot read one. Leaving it out let a body argument
+# built by concatenation flip a row to `resolved` over a NULL payload —
+# which is the exact thing `_capture_resolved` exists to prevent. Every
+# kind added before it carried this rule explicitly in D00: an engine
+# that does not consult the kind treats it as it always treated
+# `unresolved`.
 # the compiler's own honest read failure, a field read whose value lives
 # wherever the field was assigned (2F design §4's ladder is the only thing
 # that can answer it), and a parameter, whose value lives in whatever called
 # this method (2G). `parameter` joined this set the day the kind existed: it
-# is the same fact `unresolved` used to state less precisely, so a row it
-# feeds must keep the resolution it has always had rather than start claiming
-# `resolved` over a NULL payload column.
-_UNREAD_KINDS = ("unresolved", "field", "parameter")
+# is the same fact `unresolved` used to state less precisely.
+#
+# **Read only by `_capture_resolved`, and therefore only about BODY and RESPONSE
+# captures.** An address capture never consults this set: `url_of`/`channel_of`
+# resolve a `kind: "string"` argument and nothing else, which is their own rule.
+# A body capture reading a parameter no longer fails, and that is not a change to
+# this set either — it is `_capture_resolved`'s `resolved_to`, which asks what the
+# capture PRODUCED rather than what kind it read.
+_UNREAD_KINDS = ("unresolved", "field", "parameter", "concat")
 
 
 def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
@@ -168,6 +203,76 @@ def channel_of(argument: dict[str, Any] | None) -> tuple[None, str | None, str]:
     ):
         return None, str(argument["value"]), "resolved"
     return None, None, "unresolved"
+
+
+def _array_elements(argument: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """The element arguments an `array`-kind slot carries (extractor
+    capability 9.15's `elements`), or None for every other argument — the
+    signal "this slot is not an array, read it as itself".
+
+    ONE argument that happens to be an array, never N positional ones: the
+    extractor deliberately does not unpack a varargs array, because unpacking
+    would renumber every slot after it and make the call's own arity
+    unreadable (`domain/facts.py`'s `array` kind). So the reading has to
+    happen here, at the consumer, and this is the one place that decides a
+    slot is one.
+
+    **The `array` kind is the whole conjunct, and it is load-bearing.** An
+    array the extractor could not read end to end never reaches this kind at
+    all — it stays a bare `unresolved` (9.15's five rejection rules), so an
+    `elements` list is always the array's COMPLETE contents and never a
+    partial one. Reading `elements` off anything else would be reading a
+    completeness claim the extractor did not make; an argument that is not an
+    `array` therefore reads as itself, which is exactly what it is. The empty
+    list is a real answer here rather than a missing one — a zero-length
+    varargs call is a call — and stays distinct from the None above.
+    """
+    if argument is None or argument.get("kind") != "array":
+        return None
+    elements = argument.get("elements")
+    return elements if isinstance(elements, list) else []
+
+
+def _expanded_arguments(arguments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`arguments` with every `array` slot replaced, in place, by its own
+    elements — the shape a reader that wants VALUES rather than SLOTS needs.
+
+    One level only, and that is the extractor's own bound rather than a
+    choice made here: 9.15 never expands a nested array's elements, so an
+    element that is itself an `array` carries no `elements` of its own and
+    reads as the unreadable value it is.
+    """
+    expanded: list[dict[str, Any]] = []
+    for argument in arguments:
+        elements = _array_elements(argument)
+        expanded.extend([argument] if elements is None else elements)
+    return expanded
+
+
+def channels_of(argument: dict[str, Any] | None) -> list[tuple[None, str | None, str]]:
+    """`channel_of` over a slot that may hold a whole ARRAY of destinations
+    (2O Task 13) — a varargs registration call, where one argument names
+    several destinations at once.
+
+    `WebSocketHandlerRegistry.addHandler(handler, String... paths)` is the
+    shipped case: the paths collapse into ONE `array` argument for a
+    single-path call as much as for a multi-path one (measured, descriptor
+    sweep R6, spring-websocket 6.1.6), so `channel_of` alone — which resolves
+    a `string` kind and nothing else — answered `unresolved` for every call
+    anyone could write. Each registered path is its own destination and so
+    its own row, the way each `urlPatterns` entry already is.
+
+    A slot that is NOT an array reads exactly as it did before: one tuple,
+    `channel_of`'s own verbatim answer. An array reads through
+    `_all_string_channels`, so the partially-readable case degrades the same
+    way `all_strings`' does — one tuple per readable element, plus one
+    trailing unresolved tuple where any element could not be read, never one
+    per failure.
+    """
+    elements = _array_elements(argument)
+    if elements is None:
+        return [channel_of(argument)]
+    return _all_string_channels(elements)
 
 
 def peer_of(argument: dict[str, Any] | None) -> tuple[str | None, str]:
@@ -237,6 +342,13 @@ class CallFacts:
     supertypes: dict[str, dict[str, Any]]
     caller_call_sites: list[dict[str, Any]]
     referenced: list[str]
+    # The CALLER's own declared parameters, as D00 §5a type references in declaration
+    # order (`OI-77`, W43's review). A payload handed straight through — `announce(OrderView
+    # order)` calling `convertAndSend(dest, order)` — arrives as `{"kind": "parameter",
+    # "value": 0}`, which names no type of its own; the type is stated in the caller's own
+    # signature, and this is that signature. Empty where the caller is not a declaration
+    # this module scanned, which is the same silence every other unread argument gives.
+    caller_parameters: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -410,6 +522,22 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
     )
 
 
+def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Every declared method's and constructor's own parameter type references, keyed by
+    FULL symbol (`OI-77`).
+
+    The same two queries `field_facts` reads for its own `declared_parameters`, split out
+    because they are needed by a catalog that declares no `field_sources` block at all —
+    which `field_facts` returns `None` for, and which is most of them.
+    """
+    found: dict[str, tuple[dict[str, Any], ...]] = {}
+    for named in ("constructor_declarations", "method_declarations"):
+        for row in workspace.query(named):
+            signature = json.loads(str(row["signature"] or "{}")) or {}
+            found[str(row["symbol"])] = tuple(signature.get("parameters") or [])
+    return found
+
+
 def _field_sources(declared: Any, catalog: Catalog) -> FieldSources:
     """Refuses a malformed `field_sources` block at run start, the
     `_validate_methods`/`_validate_steps` discipline (`ports/catalogs.py`: an
@@ -431,8 +559,8 @@ def _field_sources(declared: Any, catalog: Catalog) -> FieldSources:
             f"getter_prefixes?}}` with dotted type names and string keys, got {declared!r}"
         )
     return FieldSources(
-        value_annotation=_catalog_symbol(str(declared["value_annotation"])),
-        properties_annotation=_catalog_symbol(str(declared["properties_annotation"])),
+        value_annotation=_catalog_symbol(declared["value_annotation"]),
+        properties_annotation=_catalog_symbol(declared["properties_annotation"]),
         prefix_from=str(declared["prefix_from"]),
         getter_prefixes=tuple(declared.get("getter_prefixes", [])),
     )
@@ -684,11 +812,16 @@ def linked_channels(
     FIXED-ARITY overloads (checkpoint ruling), so each element is its own
     literal argument, never an array to enumerate — one resolved tuple per
     string-kind element, plus one trailing `(None, None, "unresolved")`
-    tuple if any element failed to resolve as a string. That is also what a
-    genuinely varargs call collapses to: the scanner never unpacks an array
-    argument into its elements, so a varargs factory's own single
-    unresolved argument reads as zero resolved elements plus this one
-    trailing tuple — never a guess at how many elements it held.
+    tuple if any element failed to resolve as a string. A genuinely varargs
+    factory (`Arrays.asList`) hands over ONE array slot instead, and since
+    extractor capability 9.15 that slot carries its own `elements`, which
+    `_all_string_channels` reads as those positional arguments — so the two
+    spellings answer alike. *This paragraph used to end "the scanner never
+    unpacks an array argument into its elements, so a varargs factory's own
+    single unresolved argument reads as zero resolved elements plus this one
+    trailing tuple". That was true until 9.15 and is what 2O Task 13
+    changed; an array the extractor still cannot read end to end never
+    reaches the `array` kind, and degrades exactly as that sentence said.*
 
     An unlinked argument (no `source` at all), one whose source names no
     real call site, or a linked call none of the declared forms' owner+name
@@ -723,13 +856,24 @@ def _all_string_channels(
     tuple per failed element (D02 §2's unresolved-is-an-answer stays one
     honest fact, not a guess at how many elements were behind it) — and
     never zero rows for a call with no arguments at all, the same
-    never-silently-drop-the-row discipline every other capture here keeps."""
+    never-silently-drop-the-row discipline every other capture here keeps.
+
+    A VARARGS call reads its one array slot's elements as those positional
+    arguments (2O Task 13, `_expanded_arguments`). `Arrays.asList("t1",
+    "t2")` is a genuine varargs call — one `anewarray` argument in bytecode,
+    disassembled from a real probe, never several positional ones — so
+    before extractor capability 9.15 it contributed a single unreadable slot
+    and this reader answered one trailing unresolved tuple for the whole
+    call. `List.of` with <=10 elements binds a FIXED-ARITY overload and has
+    always arrived as positional literals, so it is untouched by the
+    expansion: the two spellings of one topic list now answer alike."""
+    entries = _expanded_arguments(arguments)
     resolved: list[tuple[None, str | None, str]] = [
         (None, str(entry["value"]), "resolved")
-        for entry in arguments
+        for entry in entries
         if entry.get("kind") == "string" and isinstance(entry.get("value"), str)
     ]
-    if resolved and len(resolved) == len(arguments):
+    if resolved and len(resolved) == len(entries):
         return resolved
     return [*resolved, (None, None, "unresolved")]
 
@@ -775,6 +919,11 @@ def argument_descriptor(
       further, and never where no `call_wrappers` entry matches;
     - a bare `instance` roots at the object (or known-type) descriptor for
       its own concrete type;
+    - a `parameter` roots at the type the CALLER's own signature declares for it
+      (`OI-77`): a payload handed straight through names no type of its own, and the
+      signature is where the type is stated. A DESTINATION read from a parameter is
+      still unread — that asks for the value, and the value lives in whatever called
+      this method;
     - anything else resolves to no payload — the row still derives (D02 §2's
       `single_call` rule), only the descriptor is absent.
     """
@@ -801,9 +950,33 @@ def _reference_of(
         return None if symbol is None else _bare_reference(str(symbol))
     if kind in _LITERAL_WIRE_TYPES:
         return _literal_reference(str(kind))
+    if kind == _PARAMETER_KIND:
+        # **The payload was handed straight through from the caller's own signature**
+        # (`OI-77`). The VALUE of a parameter lives in whatever called this method, which
+        # is why `parameter` belongs in `_UNREAD_KINDS` and why a `channel_arg` reading one
+        # stays `unresolved` — a destination IS its value. A payload is the other question:
+        # what a contract needs is the TYPE, and the caller states it.
+        #
+        # Measured before it was written: 22 of the fixture's 25 outbound `single_call` rows
+        # carried no contract at all, across six catalogs, and the three that did all passed
+        # a `new` expression. **That is the measurement AT THE TIME this rung landed, not a
+        # standing count** — the fixture keeps gaining rows (28 by W47), and a bare number in
+        # a comment goes stale with nothing to notice. The declared type is the same claim
+        # every shape derived from a signature already makes.
+        index = parameter_index(argument)
+        if index is None or index >= len(workspace_types.caller_parameters):
+            return None
+        # The `type` member, not the entry. A declared parameter is `{name, annotations,
+        # erased_symbol, type, type_annotations}`; the D00 §5a reference every other rung
+        # here roots is the `type`, and handing the whole entry to `root_type` raises on
+        # the `symbol` it does not carry.
+        declared = workspace_types.caller_parameters[index].get("type")
+        return declared if isinstance(declared, dict) else None
     if kind != "instance":
-        # `unresolved`, `null`, `lambda`: none of these names a payload type
-        # at all.
+        # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
+        # type at all. A `field`'s type is knowable in the same way a parameter's is and is
+        # NOT read here — the ladder that answers a field is `field_facts`', and reaching
+        # into it from this projection would be a second opinion about the same fact.
         return None
     symbol = argument.get("symbol")
     if symbol is None:

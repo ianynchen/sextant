@@ -28,9 +28,28 @@ matches:
     key: "spring.cloud.stream.bindings.{binding}.destination"
     binding:
       from: bean_name
-      # The key that narrows the candidate set. Absent from configuration,
-      # every candidate binds (the framework's own default); present, only
-      # the beans it names do.
+      # The key that narrows the candidate set. Present, only the beans it names
+      # bind; absent, `unselected_binds` below decides.
+      #
+      # This comment used to end "absent from configuration, every candidate binds
+      # (the framework's own default)" — the sentence the conjunct below exists to
+      # correct, left standing three lines above the correction. It is the second
+      # half of the same defect: a claim about a framework that nobody checked
+      # against the framework.
+      #
+      # F2 §3.4's cardinality conjunct. MEASURED against the framework's own
+      # selection code (`scripts/probes/w13_stream_binding.md`, section 1):
+      # `SimpleFunctionRegistry.normalizeFunctionDefinition` defaults the
+      # definition to a bean only when `eligibleFunction.size() == 1`. With two
+      # eligible functions and no `spring.cloud.function.definition`, the
+      # definition stays empty and NOTHING binds.
+      #
+      # This file used to say the opposite in prose — "absent, every candidate
+      # binds, the framework's own default" — and derived one endpoint per bean
+      # for an application that serves none of them. Naming the framework as the
+      # authority for a rule the framework contradicts is the shape §8.1 exists to
+      # refuse, and it survived because nothing compared the sentence to the code.
+      unselected_binds: sole
       selected_by: spring.cloud.function.definition
       # `definition` lists bindings separated by `;`, and ONE entry may
       # itself compose several functions with `|`. A composed entry derives
@@ -53,14 +72,30 @@ matches:
             direction: [inbound, outbound], payload_arg: [0, 1] }
     # Where the binder is configured, and what each configured name speaks.
     # Most specific first: the binding's own declaration, then the module
-    # default. A name absent from `binder_protocols` leaves the row on this
-    # catalog's own declared protocol — a gap to grow this map from, never a
-    # guessed protocol.
+    # default.
+    #
+    # A name absent from this map derives NO ROW and files a `binder_protocol`
+    # question (F2 §3.4). It used to leave the row on this catalog's own declared
+    # protocol, described here as "a gap to grow this map from, never a guessed
+    # protocol" — and the parenthetical was false: measured, a module bound to
+    # `rocketmq` published a row on `kafka`, complete and confident, with no
+    # question anywhere. `protocol` is identity and DR-5 links across bundles on
+    # protocol equality, so that row reached graphs this analysis never sees.
+    #
+    # NO configured name at all is a different answer and still takes this file's
+    # `protocol:` — nothing was configured, so this file's own declaration is the
+    # only statement there is (D02 §2c), which is a declaration and not a
+    # fallback.
     binder_key: "spring.cloud.stream.bindings.{binding}.binder"
     default_binder_key: spring.cloud.stream.default-binder
     binder_protocols:
       kafka: kafka
-      rabbit: jms
+      # 2O design §3a: `amqp` is a real protocol now, so the binder names it.
+      # The stopgap `jms` was chosen when no AMQP member existed, and leaving
+      # it would put a Stream producer and a `@RabbitListener` consumer (Task
+      # 7) on different protocols permanently — DR-5 gates linking on protocol
+      # equality.
+      rabbit: amqp
       sqs: sqs
       pubsub: pubsub
 
@@ -75,31 +110,6 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

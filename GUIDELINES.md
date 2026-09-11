@@ -22,6 +22,8 @@ The design spec (`docs/components/*`, and REQUIREMENTS) and the phase plans (`do
 
 Allowed without asking: reading anything; running tests/linters/builds; writing tests; **implementing exactly what the plan/spec specifies**. When the spec is silent or wrong, do not pick — follow §6 (propose amendment with rationale, then proceed *once confirmed*; never code around a doc without updating it first, per §5).  
 
+**Declare deviations explicitly; silence is not a declaration.** Every task report and hand-off states either `Deviations: none` or an enumerated list — a report that simply does not mention a descope has violated this section, not satisfied it. The same applies to a numbered step in a brief: each is completed or explicitly reported as not completed. Skipping one without saying so is the same failure as descoping without asking.  
+
 **Pre-commit gate:** before committing or merging, confirm the change contains **zero un-approved deviations** from the spec/plan. If a deviation was necessary, it must already be an approved doc amendment. List any deviation in the message only after it was approved — never as a fait accompli.  
 
 ---  
@@ -30,6 +32,9 @@ Allowed without asking: reading anything; running tests/linters/builds; writing 
 - Minimum code to solve the exact request. Zero speculative features, abstractions, or unrequested config.  
 - No error handling for impossible scenarios.  
 - Rewrite 200 lines if it can be done in 50. (Test: Would a senior engineer call this overcomplicated?)  
+- **One feature fully done beats ten half-baked.** *(User principle, 2026-09-05.)* "Done" means the mechanism exists, a consumer reads it, a test proves it, and the documents describing it are true. A feature that is designed, documented and partly wired is not 40% delivered — it is a **liability**, because every reader downstream treats the document as a description of what runs. Half-baked is not a lesser form of shipped; it is a debt with interest, and the interest is paid by whoever believes the doc.  
+
+  The corollary, which is where this bites in practice: **a document describing an unbuilt mechanism is itself a half-baked feature.** Either finish it or retire the claim — but "retire the claim" is a decision to be taken deliberately and recorded, never a quiet deletion, and never a reason to leave the debt unaddressed. See §5.3, and `docs/documented-not-implemented.md`, which is the register this rule keeps.  
 
 ---  
 
@@ -88,6 +93,40 @@ The schema contract can described in several files at once; they must never drif
 
 Architectural change should not take place silently. Always ask for approval before making an architectural change, and always record such changes as ADRs after approval. Clearly state what's replaced in the ADRs. Always apply architectural unit tests to ensure there is no authorized architectural changes. Exact architectural test framework is to be specified in ARCHITECTURE.md file.
 
+### 5.3 Documents are authoritative for intent; code is authoritative for existence  
+
+§5's ordering settles what the system **should** do. It does not establish what is **built**. Before any spec, plan, or review cites a mechanism as shipped — a catalog key, a fact kind, an engine style or capability, a table, a column, a detector — **verify it in `src/` and record the `file:line` that proves it**. A mechanism named only under `docs/` is a proposal until the code says otherwise.  
+
+This is not a hypothetical risk. [docs/documented-not-implemented.md](docs/documented-not-implemented.md) is the register of mechanisms this repository documents and never built — including a catalog key declared by **every shipped catalog** and, when this was written, ignored by the loader (2O Task 6 made it real for two styles; the entry stays open, narrowed), two fact types defined and never constructed, and a fact kind D00 specifies with no producer anywhere. Phase 2O's design was written against two of them as though they were shipped.  
+
+**Why this rule is a grep and not another review round:** four rounds of adversarial spec review did not catch those two, because the reviewer read the same documents the author did and cited the same lines back. A premise the author and reviewer share is invisible to review. It is visible to a grep, in minutes.  
+
+**Cite the consumer, not the declaration.** The `file:line` that satisfies this rule is where the mechanism is READ, called, or acted upon — never where its name appears. `detect:` is declared by every shipped catalog — 41 when this was written, **64 today** — so a grep finds it and a citation of any of those lines would satisfy a weaker rule; **nothing read it at all, and that was the entire defect**. A name existing is not a mechanism existing. *Updated 2026-09-05: 2O Task 6 made the key real, and the update is itself the rule's second form. `detect.coordinates` is now read — but only by `resolve/dependencies.py`, only for the two styles in its `DEPENDENCY_GATED` set plus those declaring `detect.required: true`, and so only for **eight of the 64** catalogs; the loader validates the coordinate SHAPE for the **61** that declare one, which is a read a grep finds and a gate it is not. Cite `dependencies.py::gate_reason`, not the validation, and say which catalogs it reaches. Re-measured 2026-09-10: this sentence said "four of the 55" and "all 55" while 64 ship — the rule's own example had become an instance of the defect it warns about.*  
+
+The same trap has a second form, which costs more because the grep succeeds honestly: a mechanism that IS read, but is **gated, scoped, or answers differently than assumed**. Four of this phase's spec errors were that shape — an inheritance walk that runs only for catalogs declaring a type-level gate; a catalog model that holds one style/protocol/direction triple, not three; a build probe that emits one boolean where plugin ids were assumed; a framework conditional whose second branch its own dependencies make unreachable. So verify what the mechanism DOES at the point of use, and for a conditional, name the circumstances under which it does not hold.  
+
+Two corollaries:  
+
+- **When a document and the code disagree about what exists, the code wins and the document is wrong** — fix it under §6 rather than building on it. (This is narrower than §6's conflict rule, which governs *behaviour*; this one governs *existence*.)  
+- **Where a document deliberately describes something ahead of its implementation, it must say so in the document**, in words a reader cannot mistake for a shipped feature — `default_produces`'s own "specified here, not yet used" is the model. Silence is the failure mode, not intent.  
+
+Prefer making this mechanical over remembering it: an architecture test that asserts every catalog key `D02` declares is read by the loader, and every fact field `D00` declares exists on its model, enforces §5.3 the way §8 requires rules to be enforced rather than aspirational.  
+
+### 5.4 Empirical evidence is bounded by what it measured  
+
+A checkpoint, probe, or experiment establishes its verdict **only for the configuration it ran against**. Extending it further needs either new evidence or an explicit statement that the wider scope is assumed and unverified — written where the verdict is written, so a later reader inherits the boundary along with the result. A recorded verdict otherwise reads as universal.  
+
+Two failures this prevents, both from Phase 2O. A path-normalisation rule was measured against one framework's **server** side and then applied to every catalog sharing that protocol, including a client library whose relative-path semantics differ — so it rewrote addresses instead of normalising spellings. And a checkpoint was written with two branches for a framework conditional whose second branch is unreachable, because the framework's own non-optional dependency pins the antecedent true; implementing the unreachable branch would have produced a wrong address on every module of one build system.  
+
+**Record identity from the run's own output, never from the parameter you passed in.** A probe that builds with `-Dversion=4.1.1` and then labels its results "4.1.1" has recorded an *intention*. It is evidence only if the running process said so itself — the banner it printed, the artifact it resolved, the version it reported. CP-5 in Phase 2O passed `-Dboot.version=4.1.1`, rebuilt without `clean`, ran the previous version's jar twice, and recorded eight observation cells for a configuration that never executed. Every claim in that table was independently true; none of it was measured where it said.  
+
+Two consequences follow, and both are cheap:  
+
+- **Generate the evidence table from the run; do not write it.** A hand-written table can drift from the run silently. A generated one can only be wrong if somebody edits it, which a diff shows.  
+- **Make the mismatch fatal.** If the recorded identity and the observed identity disagree, the harness aborts. An advisory echo that nobody reads is not a check — CP-5's first version printed the version it *believed* alongside output from the version it *ran*, and the two disagreed in plain sight for a full review cycle.  
+
+Hence, before writing a checkpoint with branches, ask **which branches are reachable**. That is a dependency-tree question, not a code-reading one, and it is cheap to answer before a spec is written and expensive to discover during implementation.  
+
 ---  
 
 ## 6. Conflict Resolution  
@@ -130,11 +169,128 @@ Non-negotiable defaults. Deviations require justification in ARCHITECTURE.md.
 - **Dependencies flow inward** toward the domain.  
 - **Extension points are explicit interfaces**, with documented contracts.  
 - **No new global or static mutable state.** Immutability by default; mutation is a deliberate choice with a stated reason. Side effects at the edges.  
+- **Never assert what the evidence does not support.** A derived record must be justified by evidence specific to what it claims: absent evidence, produce nothing; ambiguous evidence, produce nothing. Where a value cannot be read, record it as unresolved with its expression verbatim — *unresolved is an answer, invention is not*. (ARCHITECTURE states this as "the failure mode is fabrication, not imprecision"; it is repeated here because it is a design rule, not only a design note.)  
+- **Exclude only on proof, never on inference.** A decision NOT to analyse, index, or report something is an assertion like any other and needs evidence just as specific. "This module publishes an artifact" does not establish "this module has no endpoints" — the second is knowable only by looking. Exclude where something is *provably* absent (Maven's own `<packaging>pom</packaging>` states the module produces no jar, so there is nothing to scan); never where a signal merely correlates with absence. The asymmetry is decisive: analysing something uninteresting costs a little time, while excluding something interesting removes it from the output entirely, and a reader of the result cannot tell it was ever there. This is the anti-fabrication rule above, applied to a negative claim — and it is easier to violate, because an omission leaves no wrong row to notice.  
 - **Architecture rules are enforceable, not aspirational.** Layering, dependency direction, and naming conventions are encoded as automated architecture tests (tooling chosen in ARCHITECTURE.md). An untested rule is already being violated.  
+
+### 8.1 Modelling a framework, library, or language  
+
+Every catalog, engine, detector and rule that claims to know what a framework does is bound by these four. They exist because a derived record about someone else's framework is only ever as true as our model of it, and a wrong model is indistinguishable from a right one to every consumer downstream.  
+
+1. **Mirror the framework's own rule; never substitute an approximation.** Read what the framework actually does under the exact circumstances, and encode *its* predicate — not a simplification that happens to fit the examples in front of you. Spring's server-side handler test is `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — **measured**, `spring-webmvc 6.2.15`, and unchanged across 6.1.6-7.0.9 — which is meta-annotation and type-hierarchy aware, so a custom stereotype meta-annotated `@Controller` or a `@Controller` base class passes it, and a check for a literal annotation name rejects both. *This sentence previously read "accepts `@Controller` **or** a type-level `@RequestMapping`" — that disjunct is an older Spring's rule and is absent from every version this repo targets. The example teaching "never assert a framework's rule from memory" was itself asserted from memory and shipped wrong for a month; it is corrected here from `javap` output, and `docs/principles-sweep-2026-09-05.md` carries the finding as `A-C7`.* Where the framework's rule is conditional, encode the condition, not the common case.  
+
+2. **A valid usage must never be misinterpreted, and never error out.** Deriving nothing for a shape we cannot see is acceptable — provided rule 3 is honoured. Deriving the *wrong* answer is not, and raising on valid input is worse than both: this phase shipped a renderer that raised on a question kind the same phase had added, so a real module would have crashed at render.  
+
+3. **Raise what the framework supports and we cannot see; never drop it silently.** A shape the framework serves and we miss gets a COVERAGE row naming the shape and why it is invisible. Under-reporting a stated boundary is honest; under-reporting an unstated one is a defect. **Where the escape is a USER ACTION, saying so in COVERAGE is not enough — it belongs in user-facing documentation.** COVERAGE records what we can see; the usage docs are where the person who can actually change the outcome will look. Supplying a dependency's bytecode is the user's responsibility; telling them plainly that a contract living in a dependency jar is invisible until they opt in via `extract_libraries`, and how, is ours.  
+
+4. **Never add behaviour the framework does not have under the exact circumstances.** The test is not "would this be reasonable" but "does the framework do this, here, under these conditions". A class implementing an `@HttpExchange` interface is served only when it is a controller bean; deriving an inbound route for a plain `@Service` implementation invents an endpoint nothing serves.  
+
+5. **When two things look identical to us, the provider has a way to tell them apart. Go and find it; never invent one.** If a framework serves two protocols, two dispatch paths, two lifecycles, it must itself distinguish them or it could not run — so the discriminator EXISTS, and the work is locating it rather than reasoning about which signal seems most likely. Reasoning produces a plausible rule; the provider's own mechanism produces the right one.
+
+   *The worked example.* Spring RSocket and Spring STOMP both use `@MessageMapping` on a `@Controller`, and a catalog published every RSocket route as `websocket`. The candidate discriminators — return types, configuration keys, dependency coordinates — were all guesses. **Measured:** `SimpAnnotationMethodMessageHandler.isHandler` is `hasAnnotation(beanType, Controller.class)` and RSocket's own chain sets an equivalent predicate, so **Spring does not distinguish them on the class at all** — the discriminator is which handler bean auto-configuration registered, i.e. a dependency fact, plus RSocket's own `@ConnectMapping` as a positive marker.
+   
+   **And following the path answered a question we had framed wrongly.** Because both handlers scan the same beans, a module carrying both starters really does serve one `@MessageMapping` over both protocols — so `both` is a correct answer, not an ambiguity to resolve. Every option drafted from reasoning had assumed we must pick one. **An invented discriminator does not merely risk being wrong; it can force a false choice the provider never makes.**
+
+**A language's rules bind exactly as a framework's do.** The four rules above say "framework" throughout; a language is the same discipline with a stricter source. Java identifies a method by **name and parameter types in order** — arity is a consequence of that list, never the rule — so a catalog matching a call by name and argument COUNT has invented a rule the language does not use, and two overloads sharing a count are then indistinguishable. That is not a framework quirk to be probed; it is in the language specification, and mirroring it is not optional. The same holds for any language construct we key on: read the rule, encode the rule.  
+
+**Operationally:** the framework's rule must be **measured before it is built on** (§5.4) — a rule taken from memory, from a reviewer's citation, or from documentation is a *prediction*, and two of Phase 2O's checkpoints falsified exactly such predictions. State the versions measured, because a framework's rule is version-scoped, and a rule verified on one version is evidence about that version only.  
 
 **Diagrams:** Use Mermaid for L1/L2 in docs; L3 only if non-obvious. Use ASCII art for L2, class, and sequence diagrams during chat conversations. A lying diagram is worse than none.  
 
+### 8.2 Code is truth; anything a deployment can overwrite is a possibility  
+
+Sort every fact by whether it can change **without rebuilding the artifact**.  
+
+**Truth:** source and compiled bytecode. A class, a method, an annotation and its arguments are what they are in the jar we read.  
+
+**A declared default:** in-repo configuration. `application.yml`, `.properties`, and every value like them are the *lowest*-precedence source at runtime — an OS environment variable, a Kubernetes ConfigMap, a Helm value, `SPRING_APPLICATION_JSON`, a command-line argument or an external config location all beat them, and none of those is visible from a repository. So in-repo config is truth about **what the repository declares**, never about what runs.  
+
+The rule this yields is asymmetric, and the asymmetry is the point:  
+
+- **Never gate on an overridable value.** Excluding a row because the packaged config would disable it is excluding on inference, which §8 forbids. Gate only where the *code path does not exist* — an absent dependency, an unimplemented interface.  
+- **Never assert one as a property of the running system.** "This endpoint is exposed" is not derivable; "this endpoint is declared and registered" is.  
+- **Report the code fact, and name the dependency.** A row that depends on deployment says so, in COVERAGE and in the catalog.  
+
+**The decision procedure**, because recognising the category is harder than running the test: before gating, ask *"what is the smallest change that makes this row appear at runtime?"* If the answer is a redeploy with different configuration, it is not a gate. If it is adding a dependency or writing code, it is. A writer does not need to know Spring's precedence table to answer that.  
+
+**The direction it is violated:** both shipped instances suppressed a real code fact because a default said it was off. Neither fabricated by trusting config positively. A reviewer should look for the *missing* row, not the wrong one.  
+
+Two rulings came from this before it was written: Spring Boot Actuator endpoints (`management.endpoints.web.exposure.include`, whose default is `health` alone and which any deployment routinely overrides) and servlet `TRACE` handlers (Tomcat's connector `allowTrace`, default false). Both were briefly treated as absent because the in-repo default said so. Contrast Spring Data REST, which we **do** gate: absent that dependency, no code path exists to serve those routes at all.  
+
+**Its §8.3 audit list, run the day this was written — clean, and structurally so.** Every gating decision in the pipeline is one of two, both in `resolve/dependencies.py` and `resolve/capabilities.py`: the build declares a coordinate, or the scan produced the fact kinds a catalog needs. Neither reads configuration. `config_entries` is read in exactly one place, `resolve/config.py`, and only to **derive** `resolved_config` rows — a derivation, never an existence decision. Every catalog `when:` clause keys on a code fact (`implements`, an argument's value), none on a property. The four catalogs that name a config property are the two rulings above plus Spring Data REST, which gates on the dependency.  
+
+So the rule holds today by construction rather than by discipline, and the invariant is the enforceable form: **no gating or exclusion decision may read `config_entries` or `resolved_config`.** The condition that would falsify this audit is a catalog gaining a gate keyed on a property — at which point the allowlist §8.3 requires starts at one.  
+
+### 8.3 A new principle ships with its retroactive audit list  
+
+Every rule in §5.3, §5.4, §8, §8.1, §8.2, §9 and §10 was written **after** the code it governs, because each was derived from a failure. That is the normal way a rule is earned — and it means writing one is a claim that *other places are broken the same way*.  
+
+So a principle does not ship as prose alone. It ships with **every existing site the rule now governs, enumerated as a failing allowlist that must shrink**. An allowlist entry is a deliberate edit with a reason; an omission is a test failure.  
+
+The cost of skipping this is measurable. §8.1's language rule says Java identifies a method by name and parameter types in order. It landed as prose and audited **zero** existing sites — while twenty-three shipped catalog rows were matching calls by argument count, three of which were publishing a message payload as a wire destination. The rule was right, and it reached nothing. The descriptor ratchet that followed (`tests/architecture/test_catalog_descriptor_coverage.py`) is what the rule should have shipped with.  
+
+**A principle that audits nothing on the day it lands is a note, not a rule.** This is §8's "architecture rules are enforceable, not aspirational" applied to the moment of writing rather than to the rule's steady state — and it is the harder half, because a new rule is exactly when the backlog is invisible and the author is thinking about the defect in front of them.  
+
+### 8.4 Completeness is the deliverable; volume is a navigation problem  
+
+**Ruled 2026-09-06 (user)**, overturning a renderer that had just made a bounded document its default so one module's `architecture.md` would be 230 KB rather than 711 KB:  
+
+> *"i agree that if a service contains a lot, the document will be hard for human to read, but we should be focused on telling the truth, not the amount of information. whether that information is useable is the other half of the task, which is why we have indices planned for sextant, such that agents can leverage the truth + indices to quickly find things, and help humans to navigate, not for a human to be able to read through a service with 1000 endpoints."*  
+
+This is the standing answer whenever output volume is weighed against completeness — in a renderer, an exporter, an index, a report, or a summary handed to a person. Four rules:  
+
+1. **The deliverable is completeness, not brevity.** Byte count, diagram count and row count are not quality measures and never a reason to derive less, show less, or draw less. "Nobody will read all of it" is true of every reference work ever written and is an argument about *readers*, not about *truth*.  
+
+2. **A document too large to read linearly is a NAVIGATION problem, and navigation has its own mechanisms** — indices, search, anchors, a table of contents, and the agents that read the document on a person's behalf. Solve it there. Omitting rows is not a navigation mechanism; it is a smaller document that answers fewer questions, and the questions it stops answering are chosen by whoever set the bound rather than by the reader.  
+
+3. **Where a default MUST bound something, the bound is the opt-in and the full form is the default** — never the reverse. The flag is named for what it withholds, never for what the default already is: a flag whose name asserts the default is incomplete is the tell that the default is wrong. **This repository ships no such flag** — the one that prompted this rule, `render --brief`, was deleted rather than renamed, because what it withheld was an arbitrary prefix rather than a summary (see the audit table below). A bound that survives rule 3 has to withhold something a reader can name. And the reduced form still states, in its own text, that it is the reduced one, what it withheld, and the exact command that returns the whole (§8.1 rule 3). **Stating an omission makes it honest; it does not make it acceptable as a default.** A reader handed the file — or an agent parsing it — never ran the command and has no other way to know.  
+
+4. **A bound justified by size needs a reproducible measurement.** The number that motivates it, and the corpus it was measured on, must be re-derivable by someone who was not there; otherwise the bound is unfalsifiable and nobody can ever argue it down. (§5.4, applied to this rule's own evidence.)  
+
+**Not this rule's subject**, and the distinction is worth stating because both look like caps: a bound that exists for TERMINATION (a recursion guard, a cycle bound) or against a HARD EXTERNAL limit (a model's context window) is not trading completeness for volume — it is buying an answer at all. Each still owes rule 3's statement when it fires.  
+
+**Its §8.3 audit list, run the day this was written.** Every bound in the codebase that reduces what a consumer is shown, with its verdict. The two closes and the register rows it names land in this same change's following commits.  
+
+| Site | Verdict |
+|---|---|
+| `egress/render/document.py::BRIEF_TRACE_STEP_BUDGET` (was `DEFAULT_TRACE_STEP_BUDGET`) | **The violation this rule was written for. Removed, not reduced** — the entry is closed and the site no longer exists. Inverting the default closed it as a violation the same day; the flag it survived as, `render --brief`, was deleted the day after on the user's ruling — *"deleting that --brief if it only cuts the first N. that's same as lying"*. What it drew was the first traces in the summary table's own order, which is an arbitrary prefix presented as a reduced document, and rule 3's stated omission does not make a prefix a summary. **There is now one render and it is the complete one**, so the ratchet that stopped the default flipping back went with the behaviour: nothing in `## Traces` takes a bound, and there is no flag to reach for. A trimmed document remains wanted and is enrichment work — *"we may want to leverage llm to produce that trimmed down version, that's a different story and a different ask"* — because which traces a reader can spare is a judgement, and judgement is not something a renderer can compute. |
+| The acceptance corpus (`macrozheng/mall`, `mall-admin`) lived only in a session scratch directory | **A rule-4 violation, closed the same day.** Every volume claim this repo makes cites that module, and nobody outside the session could re-measure any of them. Now `scripts/field-expectations/mall-admin.json`, the same way every other example is carried. |
+| ~~`application/query/trace.py::DEFAULT_MAX_DEPTH` (64)~~ | **GONE, W31** (`OI-27` closed). It was a termination bound rather than a size one, and it fired on nothing measured — the deepest trace across three repositories is **9** (this row said 5, which was stale). The walk is an explicit stack now and terminates at a terminal, a cycle or a revisit, which is what FR-6 asks for; `depth_limit` and `Trace.truncated` retired with it. |
+| `application/enrich/tools.py::MAX_RESULT_BYTES`, `DEFAULT_READ_LINES`, `MAX_GREP_MATCHES`; `agents/__init__.py::DEFAULT_MAX_TURNS` | **In register, not violations.** Each bounds what a MODEL is handed against a context window, not what a reader is shown, and each says in-band that it fired. The document `enrich` wraps in its brief is deliberately NOT bounded, and grew with this rule — `OI-33` carries the measurement that would settle whether it should be. |
+| `ingress/detect/maven.py::_MAX_INHERITANCE_DEPTH`, `_MAX_INTERPOLATION_PASSES` | **In register, not violations.** Termination guards over POM inheritance; each records an `unreadable` reason rather than returning quietly. |
+| `architecture.html` inlines ~3.5 MB of mermaid and renders every diagram eagerly on load | **Not a completeness trade — no row and no diagram is withheld — and registered as `OI-31` anyway**, because it is the cost that made bounding the document look attractive. Its close is lazy per-diagram rendering; it is **never** closed by drawing fewer diagrams. |
+
+The list is short and honestly so: the pipeline derives everything it can see and the renderer prints every row it is handed, which is the shape §8's anti-fabrication and anti-exclusion rules already push it into. The condition that would falsify this audit is a second output-side bound arriving as a default — at which point this table starts shrinking rather than staying still.  
+
+
 ---  
+
+### 8.5 Design an output from what a consumer will DO with it, never from the tables we happen to hold  
+
+An export, an index, a query surface, a rendered document — each is a thing somebody uses, and its shape is settled by the use, not by what is convenient to emit. The failure looks like competence: an interface designed outward from the schema is complete, consistent, and answers questions nobody asked.  
+
+**Ask what the consumer is trying to do, then work backwards.** A developer refactoring for performance wants to know which endpoints touch the most remote things, whether one trace hits a terminal twice, and — the question nobody thinks to offer — *how much of this answer to trust*. An agent avoiding a `grep` wants `symbol → file:line`, reverse indexes for the questions text search cannot answer, and a per-file digest so it can decide not to open a file at all. Neither list falls out of reading the schema.  
+
+**The tell that this rule is being broken:** the design is being argued in terms of our own internals — which tables travel, which queries the graph document once listed — rather than in terms of a task somebody performs.  
+
+**Its §8.3 audit list, and every entry cost something.** `_EXPORTED_TABLES` was a hand-curated list of eleven names, and three tables the trace tier exists to produce were absent because nobody asked what a consumer would need to recompute a diagram we shipped them. D01's ten named queries were drawn up before anything consumed them, and were about to be built as a set of ten. `COVERAGE.md` §5 has one axis, protocol, because it was designed as a checklist of frameworks rather than as an answer to "is this supported" — which is why twelve committed items are enumerated nowhere, and why the document cannot express a support level for a language construct.  
+
+### 8.6 A boundary is real when a chain of evidence reaches the point where it provably happens  
+
+Not when a method with the right name appears. **Follow the call to the place the thing actually occurs; if nothing reaches it, there is no boundary.**  
+
+Every link in that chain is either **a traced call** or **a measured framework rule** — never an assumption. A framework-rule link is what makes the chain reach past our own code, and it is exactly the link that must be measured (§8.1), because assuming it fabricates the whole trace rather than one step of it.  
+
+*The worked example.* Google Pub/Sub is consumed three ways, and each is the same rule:  
+- `pull(…)`, `pullAndAck(…)`, `pullNext(…)` — **the call IS the consumption.** A trace reaching it is the whole chain.  
+- `Subscriber.newBuilder(…).build()` — construction alone subscribes to nothing. Real only if a trace reaches `startAsync`.  
+- a `@Bean` method returning a `Subscriber` — **this example was wrong, and it was wrong in the one way this section exists to forbid.** It asserted *Spring starts a `Subscriber` bean* as "a measured rule". Nobody had measured it, and it is false: `Subscriber extends AbstractApiService implements ApiService` (google-cloud-pubsub 1.127.3, `javap`), no Spring lifecycle interface anywhere in that hierarchy, and spring-cloud-gcp-pubsub 5.1.2 ships no `BeanPostProcessor` that starts one. Spring does not start arbitrary beans. So a `@Bean` returning a `Subscriber` and nothing else is the SAME unstarted subscriber as the case above, and gets the same answer: no boundary. The rule stands unchanged; the example was an assumption dressed as a measurement, written into the paragraph that says *the framework-rule link is exactly the link that must be measured*.  
+
+**What this replaces.** `google-pubsub-subscriber.yml` named `.startAsync()` as a required conjunct and never read it, so a `Subscriber` built and never started derived a live inbound endpoint; and `spring-pubsub.yml` read **1 of the 10** inbound methods `PubSubTemplate` declares, so every pull-based consumer derived nothing at all. A name-shaped rule over-reported one path and missed a whole other one, from the same file.  
+
+**It generalises to every builder-then-act shape** — a `KafkaConsumer.subscribe(…)` whose `poll()` is never reached, a client constructed and never called. Today we would claim all of them.  
+
+**This rule is only expressible because the call graph shipped.** Before 2Q, "follow the call to where it happens" was not something a catalog could ask for, and name-matching was the only available approximation. It is the first place the trace tier pays for itself inside derivation rather than in a document.  
 
 ## 9. Coding Standards  
 
@@ -145,6 +301,8 @@ Every public symbol documents: **purpose**, **parameters and return** (meaning, 
 **Extension points** additionally document: required invariants, ordering and idempotency expectations, what the framework will and will not do, and examples when the contract is subtle.  
 
 **Non-obvious decisions** document: alternatives considered, tradeoff accepted, and conditions to revisit. Prefer one comment explaining *why* over five restating *what*.  
+
+**A comment justifying an omission states the condition that would make it wrong**, in the same sentence. "We do not X because Y" is a claim about the present that a later change can silently falsify — write "we do not X because Y, which holds as long as Z". A rationale that has quietly become false is worse than no comment, because the next reader trusts it.  
 
 ### Naming and style  
 
@@ -174,6 +332,14 @@ GUIDELINES.md states *what tests must cover and how they behave*. ARCHITECTURE.m
 ### Coverage  
 
 Every public method on a domain or application service has tests for the **happy path**, each **documented failure mode**, and **boundary conditions** (empty, absent, max, zero, negative, duplicate, concurrent if relevant).  
+
+**Anything that detects, matches, or classifies is tested on near-miss input that must NOT match** — and the assertion is that *nothing* was produced, not that something different was. A suite where every fixture demonstrates the rule firing cannot tell you the rule declines correctly; it only tells you it is capable of firing. Derive the near-miss from the rule's own conditions: for each conjunct, an input satisfying every other one. This is distinct from the boundary conditions above, which vary a *value*; this varies whether the thing is *the kind of thing at all*.  
+
+**And the near-miss needs a positive PAIRED with it: any rule or catalog key precise enough to be silently wrong needs a test proving the row still FIRES.** The near-miss proves the rule declines; the paired positive proves it still fires. A rule carrying only the first can rot into permanent silence and look correct all the way down — every near-miss still passes, because a rule that matches nothing declines everything.  
+
+The concrete instance is `single_call`'s `descriptor:` key, added in Phase 2O to stop an overload's PAYLOAD being published as a destination. It is validated for well-formedness at load (`application/resolve/engines/single_call.py:601`, which refuses a value not opening with `(`), and its PARAMETER portion is matched against the call site's own `target.descriptor` (F2 §4.1 dropped the return type: it is in the descriptor but is not part of method identity, JLS 8.4.2, and comparing it tied every row to a library version by accident). A descriptor whose PARAMETERS are well-formed and WRONG — one character off, or the source-level signature rather than the erased one — passes the load check, matches nothing, and CLAIMS its arity anyway, so the whole overload set derives nothing. Silently: no error, no COVERAGE row, and every test that asserts absence still passes. Each of the three shipped `descriptor:` rows therefore has such a pair — `spring-rabbit-template.yml`'s arity 3 and arity 2, and `spring-jms-template.yml`'s arity 2, each with a near-miss that derives nothing beside a positive that still resolves.  
+
+The test for whether a key needs the pair: could a change to it be WRONG without being INVALID? A verbatim-compared string, an exact arity, a fully-qualified annotation name and a package coordinate all answer yes.  
 
 Branch and condition coverage are diagnostics, not targets. Coverage drops require justification; coverage increases driven by trivial tests are equally suspect. Bug fixes ship with a regression test that fails before the fix.  
 
@@ -272,3 +438,48 @@ If something might not have worked, say so. Do not claim "migration completed" w
 ### 13.7 New definition-model fields default to `None`  
 
 New definition-model fields default to `None` — non-None defaults change the canonical snapshot dump and cause universal false drift.  
+
+### 13.8 The second occurrence is a diagnosis; the third is a stop  
+
+When the same class of error happens **twice**, record it — in the working ledger during a task, in [RUNBOOK.md](docs/RUNBOOK.md) across tasks. **The record is the mechanism, not the bookkeeping.** Without it the third occurrence looks like the first, which is how six instances of one defect can each feel novel in the moment.  
+
+**Then do the diagnosis, at the second — not the third.** Recording is not enough, because "stay alert" is not an action anyone takes. At the second occurrence:  
+
+1. **State the cause**, not the two symptoms. Why did this happen — what wrong assumption, missing fact, or misleading document produced both?  
+2. **Test the cause against the principles that already exist.** Read §5.3, §5.4, §8, §8.1, §8.2, §9 and §10 and ask whether the cause is something one of them already forbids.  
+3. **If it violates an existing principle, stop and raise it.** Do not fix the instance and continue. A rule we already wrote, already agreed, and still broke twice is not an implementer's slip — it is a rule with no reach, and the fix is a mechanism, not another correction. Bring it to your human partner and settle the mechanism before resuming.  
+4. **If no existing principle covers it, the missing principle is the finding.** Write it, with the audit list §8.3 requires.  
+
+The difference between 3 and 4 matters. A *new* rule needs the backlog it now governs. A *broken* rule needs enforcement — a test, a ratchet, a review instruction — because prose has already been tried on this exact cause and lost.  
+
+**The worked example is this rule's own second occurrence, and it is uncomfortable.** A deployment default was read as a code fact twice: Spring Boot Actuator's `management.endpoints.web.exposure.include`, then Tomcat's connector `allowTrace`. The RUNBOOK entry recorded the second correctly, generalised it correctly, and even *named the principle it violated* — "§8's 'exclude only on proof, never on inference' is the same rule read from the other end" — and then the work continued. The analysis was right, written down, and inert. §8.2 exists because a human raised it afterwards, not because the record did. **Naming the violated principle IS the trigger; it is not the conclusion.**  
+
+**A principle violation counts on a shorter fuse. Ruled 2026-09-06 (user): stop
+at the SECOND.** A recurring *error* may be a hard problem; a recurring *violation
+of a rule we already wrote and agreed* is evidence the rule has no enforcement,
+and a third instance buys nothing the second did not already prove. Count
+violations in `docs/open-issues.md`, where they are visible to someone other than
+the agent that committed them.
+
+On the **third** occurrence of an error class, stop and raise it with your human partner. Do not fix it and continue. A defect class recurring three times is evidence of a systemic cause — a wrong assumption, a missing rule, a misleading document — and **fixing instances is what prevents you from finding it**. Each individual fix is correct, feels like progress, and leaves the cause untouched.  
+
+**Count by cause, not by symptom.** "Cited a mechanism that does not exist" and "assumed a mechanism's behaviour from its name" look like two bugs and are one cause — treating documentation as evidence about code. Counted separately, both stay below the threshold forever.  
+
+Phase 2O is the worked example, twice over:  
+
+- **Six phantom mechanisms.** `detect.coordinates`, the `constant` fact kind and the routing-ambiguity detector were each corrected individually before anyone asked why they kept appearing. The answer became §5.3 — a rule which, written at the third occurrence rather than the sixth, would have preceded the spec that four of them went on to break.  
+- **Four fabrications, four frameworks.** A gRPC endpoint minted from an ordinary `extends` pair; a module excluded because it published an artifact; an endpoint derived with an empty name; a message payload published as part of a destination. One cause: a rule matches on SHAPE and then publishes a specific MEANING, with nothing checking that the shape entails the meaning. Four separate fixes found it; one upstream question would have.  
+
+**Its §8.3 audit list — every recurring class recorded to date, re-read against step 3.** Two of the three had no existing principle to violate: "documentation as evidence about code" (six occurrences) produced §5.3, and the four fabrications produced §8's anti-fabrication and exclusion rules — in both cases the correct outcome was a new rule written late, which is step 4. **One is a real hit.** "A deployment default read as a code fact" reached its second occurrence *after* §8's "exclude only on proof, never on inference" was already written and while the entry recording it cited that very rule. Under this amendment it stops there. That is the only entry in the list, and the list is short because the record only began in Phase 2O — which is itself the argument for keeping it.  
+
+---
+
+### 13.9 One writer per branch; everyone else reads or uses the scratchpad  
+
+Agents and the controller share **one working tree and one git index**. Only ONE agent may do write-related work on a branch at a time. Every other agent working that branch is **read-only**, and anything it needs to create — probe scripts, scratch fixtures, throwaway harnesses — goes to the session scratchpad, **never into the repository**.  
+
+This applies most sharply to reviewers. A review verifies by execution, which means writing probes; those belong in the scratchpad, because a reviewer that leaves files in `tests/` has changed the tree it was asked to judge.  
+
+**Why a shared tree is not survivable without this rule**, from three occurrences of one class in Phase 2O: an implementer's unformatted in-flight file blocked an unrelated docs commit, because the pre-commit hook validates the WHOLE tree rather than the staged paths; a second agent's bare `git commit` swept a first agent's staged files into its own commit; and a read-only reviewer's probe files blocked the controller's commit the same way as the first. Explicit pathspecs (`git commit -- <paths>`) stop the contamination but not the blocking — the tree is shared whether or not your commit is scoped.  
+
+Isolated worktrees would also solve it and are deliberately NOT the answer here: the merge cost of several trees exceeds the coordination cost of one writer.  

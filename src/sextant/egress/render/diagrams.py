@@ -1,10 +1,19 @@
-"""Mermaid `classDiagram` emitter (M07). Pure: no workspace, no facts — tested
-against a hand-written view model, so diagram correctness stops depending on
-having a repository to analyse (M07 "The testing payoff")."""
+"""Mermaid `classDiagram` and `sequenceDiagram` emitters (M07). Pure: no
+workspace, no facts — tested against a hand-written view model, so diagram
+correctness stops depending on having a repository to analyse (M07 "The
+testing payoff")."""
 
 import re
+from collections.abc import Sequence
 
-from sextant.egress.render.viewmodel import ClassEdge, ClassNode, simple_name
+from sextant.egress.render.viewmodel import (
+    ClassEdge,
+    ClassNode,
+    SequenceAlternatives,
+    SequenceMessage,
+    SequenceParticipant,
+    simple_name,
+)
 
 # spec §5a: mermaid's bare-identifier grammar refuses a JVM `$` name — `class
 # AuthenticateController$JWTToken {` is a parse error — while a dotted name
@@ -40,5 +49,84 @@ def class_diagram(nodes: list[ClassNode], edges: list[ClassEdge]) -> str:
     for edge in edges:
         source = _quoted(simple_name(edge.source))
         target = _quoted(simple_name(edge.target))
-        lines.append(f"    {source} --> {target}")
+        # The ANCESTOR is the arrowhead end in mermaid's inheritance notation, which
+        # reverses the association's reading: `Base <|-- Derived` is drawn from the base.
+        # Written out per kind rather than composed from a symbol table, so the direction
+        # and the glyph are decided in one place a reader can check against mermaid's own
+        # documentation.
+        if edge.kind == "extends":
+            lines.append(f"    {target} <|-- {source}")
+        elif edge.kind == "implements":
+            lines.append(f"    {target} <|.. {source}")
+        else:
+            lines.append(f"    {source} --> {target}")
     return "\n".join(lines) + "\n"
+
+
+# Every arrow is the same arrow. A trace step is one thing — a call the
+# compiler recorded — and mermaid's other arrows say things this graph does
+# not know: `-->>` is a RETURN (the walk records what a callee hands back,
+# never when control comes back), `-x` is a failure, `->` a message with no
+# activation. Varying the arrow by `invoke_kind` or by stop reason would put
+# four claims into a glyph a reader has to be taught; the message LABEL says
+# those in words instead.
+_CALL_ARROW = "->>"
+
+
+def sequence_diagram(
+    participants: list[SequenceParticipant],
+    messages: Sequence["SequenceMessage | SequenceAlternatives"],
+) -> str:
+    """Mermaid text for one trace, in the order given — the projection already
+    decided participant order (first appearance in the walk) and message order
+    (the walk's own depth-first order over `call_edges`), so the emitter adds
+    none of its own (M07 "The renderer adds nothing", NFR-1).
+
+    **Every participant is declared before any message**, rather than left for
+    mermaid to infer from first use: an inferred lifeline takes the id as its
+    label, and these ids are generated (`a0`, `a1`, …) precisely because a JVM
+    descriptor is not a legal one. A message naming an undeclared id would
+    therefore draw a lifeline called `a4`.
+
+    `label` is written after the `as`/`:` separator and read to end of line by
+    mermaid, so a label is never quoted here — the projection is what
+    guarantees it carries no newline, having built it from a symbol and a
+    fixed vocabulary."""
+    lines = ["sequenceDiagram"]
+    for participant in participants:
+        lines.append(f"    participant {participant.id} as {participant.label}")
+    _emit(lines, messages, "    ")
+    return "\n".join(lines) + "\n"
+
+
+def _emit(
+    lines: list[str],
+    messages: Sequence["SequenceMessage | SequenceAlternatives"],
+    indent: str,
+) -> None:
+    """Every message at `indent`, with an alternatives block drawn as mermaid's
+    `alt`/`else`/`end` and its branches one level deeper (F7 §8.3, W32).
+
+    `alt` is the only notation mermaid has for "one of these, not all of these", and it
+    is what the graph means: a `narrowed` call site is several candidate bodies with none
+    picked. Recursive because a candidate's own body can narrow again — nothing in the
+    graph stops a repository implementation from calling another interface — and mermaid
+    nests these fine.
+
+    A branch LABEL is read to end of line by mermaid, like a participant's, so it is
+    never quoted here: the projection built it from a symbol and a fixed vocabulary.
+
+    **Verified against the vendored build in a live browser** (`assets/mermaid.min.js`,
+    the §5a precedent rather than a claim about the grammar): the block parses, produces
+    an SVG, and draws each branch label in the frame's own divider. A nested-class name
+    carrying `$` was in the same check, because these labels come from the same strings
+    the participant labels do.
+    """
+    for message in messages:
+        if isinstance(message, SequenceAlternatives):
+            for index, branch in enumerate(message.branches):
+                lines.append(f"{indent}{'alt' if index == 0 else 'else'} {branch.label}")
+                _emit(lines, branch.messages, indent + "    ")
+            lines.append(f"{indent}end")
+            continue
+        lines.append(f"{indent}{message.source}{_CALL_ARROW}{message.target}: {message.label}")

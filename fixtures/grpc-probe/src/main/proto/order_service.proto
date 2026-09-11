@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package sextant.grpcprobe;
+
+option java_package = "com.example.grpcprobe.proto";
+option java_multiple_files = true;
+
+message GetOrderRequest {
+  string order_id = 1;
+}
+
+message GetOrderReply {
+  string order_id = 1;
+  string status = 2;
+}
+
+// The one RPC method exists to give CP-8(d) a wire method name to probe:
+// grpc-java builds this method's `MethodDescriptor` via
+// `generateFullMethodName(SERVICE_NAME, "GetOrder")`, so the proto-cased name
+// reaches the generated class as a call-site argument, never a casing of the
+// Java method name below.
+service OrderService {
+  rpc GetOrder(GetOrderRequest) returns (GetOrderReply);
+}

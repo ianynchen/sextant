@@ -37,10 +37,29 @@ matches:
 |---|---|
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
-| `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c |
-| `detect` | Coordinates that make this catalog active for a module |
+| `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
+| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required` and `satisfied_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`** — see below |
+| `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
+| `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1c. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
+
+**`protocol` and `direction` are omitted by a NON-WIRE style, and their absence is a claim**
+(Phase 2O design §4, Task 8). Every style before that phase derives into `endpoints`, whose
+identity IS `(protocol, direction, method, path)`, so a catalog omitting either is a broken
+file. The two non-wire styles — `scheduled_work` and `error_advice` — derive into tables
+with no such columns: work started on a clock speaks no protocol, and an exception handler
+is not a boundary anyone can address. Writing one of [D00](D00-fact-schema.md)'s protocols
+on those catalogs to satisfy a required field would put a wire claim in a shipped file that
+nothing reads and every reader believes, which is §5.3's failure introduced deliberately.
+
+So the loader accepts the two keys as absent, **and refuses a value outside the closed set
+either way** — a typo is not an absence, and `protocol: htp` must never be read as "no wire
+identity". Which styles need one is checked in `application/resolve/endpoints.py`, the one
+module that knows: it refuses a wire style declaring neither and a non-wire style declaring
+either, naming the file in both messages. That is the same split this document already makes
+for `style` itself, and for the same reason — the loader may not import the layer that knows
+what an engine does.
 
 **Every type name a catalog writes — `owner`, `fqn`, `type` — is dotted**
 (`reactor.core.publisher.Mono`), never the SCIP symbol form the fact stream uses
@@ -49,10 +68,191 @@ specifically: the conversion (`domain/symbols.type_descriptor`) becomes scheme-a
 the first non-JVM catalog arrives, so this notation is documented as JVM sugar now rather
 than ossifying as a universal one.
 
+**Twenty-one type-name keys may name a LIST of dotted types instead of one** (§3.1). A list
+means ONE library or annotation reachable under more than one name — held by its interface
+(`JmsOperations` beside `JmsTemplate`, `RestOperations` beside `RestTemplate`), or under an
+older package. A call site's owner is the DECLARED type, so a codebase writing the interface
+produced a call site the catalog did not name and derived nothing at all, silently.
+
+It does **not** mean two libraries: a `javax`/`jakarta` pair is two jars at two versions
+needing two measurements and stays two catalogs (§3.3). Every name in a list must be measured
+against the library's own bytecode before it is written — `scripts/probes/cp10_catalog_descriptors`
+checks each alternate separately, because an interface declaring a SUBSET of the class's
+methods would match some call sites and miss the rest.
+
+The keys, by the engine that reads them:
+
+| engine | keys |
+|---|---|
+| `single_call` | `matches.owner`, `matches.methods[].path_from_argument_type.annotation` |
+| `fluent` | `matches.roots[].owner`, `matches.steps[].owner` |
+| `annotation_driven` | `matches.type_annotation`, `mapping.prefix_annotation`, `reply.annotation` |
+| `interface_implementation` | `matches.interface`, `registration.owner` |
+| `injected_client` | `field_annotation` |
+| `scheduled_work` | `annotation`, `container` |
+| `error_advice` | `handler_annotation`, `status_annotation` |
+| `supertype_dispatch` | `matches.supertype` |
+| `derived_resource` | `no_repository_bean`, `resource_annotation`, `member_annotation` |
+| `config_join` | `when.implements`, `rule.annotation` |
+| `combinator` | `media_values.owner` |
+
+**`identity_marker` and `supertype_marker` are NOT in this list**, though F2 §3.1 named them.
+Neither holds a type name: each is a mapping of CALL specs
+(`service_name_call: {owner, method}`), and the type name sits one level down under that
+`owner`. Widening the key itself would be widening a mapping. The nested `owner` is a
+candidate, and no shipped catalog needs one — the two that declare these keys name gRPC's own
+descriptor classes, which have no second spelling.
+
+Nineteen of these are F2 §3.1's own list. Two are not, and the design missed both:
+`matches.steps[].owner`, widened because it sits in the same file and the same shape as
+`matches.roots[].owner` and leaving one of a pair scalar would have been the inconsistency;
+and `matches.methods[].path_from_argument_type.annotation`, which is what let
+`spring-ws-template.yml` name both JAXB spellings rather than needing a twin catalog (W12).
+
+The scalar form stays valid and is what almost every shipped catalog writes; this is a
+widening, not a migration. `application/resolve/shapes/rooting.catalog_symbols` is the one
+place that reads either form, and it refuses anything else — a mapping, a number, an empty
+list — naming the file and the key. Where a widened value reaches a consumer, the variable is
+PLURAL (`owners`, `handler_fqns`): the rename is what makes a consumer still comparing with
+`==` fail loudly instead of comparing a string against a tuple and matching nothing.
+
+### 1b-i. `registration.started_by` — construction is not subscription (`OI-64`)
+
+An `interface_implementation` catalog may declare an ordered chain of calls that must
+FOLLOW its registration before the registration is a boundary at all. Each step is
+`{owner, method}`, linked to the previous by receiver-to-result within one method.
+
+`google-pubsub-subscriber.yml` is why it exists. It derived a live inbound endpoint from
+`Subscriber.newBuilder(subscription, receiver).build()` — construction, which subscribes
+to nothing: `Subscriber` is an ordinary start/stop service and delivers no message until
+`startAsync()` runs (measured, `scripts/probes/oi64_subscriber_activation.md`). Our own
+acceptance fixture built two subscribers, started neither, and had both published as
+endpoints the test suite asserted were correct.
+
+**Absent, the style is unchanged**: the registration alone is the evidence, which is
+right for a framework whose registration call IS the subscription. The key is opt-in
+per catalog because that is a property of the framework, not of the style.
+
+**Three outcomes, not two**, because chain reconstruction is within-method only (D00 §5):
+
+- the chain completes in the same method → a row;
+- it does not, and the built object is the method's RETURN type → a
+  `registration_activation` open question. A factory that builds and hands back is
+  ordinary code whose caller may start it, and answering "no boundary" would trade a
+  fabricated row for a silent false negative;
+- it does not, and nothing leaves the method → silence. Nobody can start it, so it is
+  provably not a boundary (GUIDELINES §8: here the absence genuinely is unambiguous).
+
+### 1c. `slice` — what a catalog does not read (F2 §3.8)
+
+**Catalog presence used to mean completeness, and it never was.** `spring-jms-template`
+reads ONE of the 37 methods `JmsTemplate` declares; `aws-sqs-sdk` reads one of
+`SqsClient`'s 29 and none of `SqsAsyncClient`'s 28, so an SDK-level SQS consumer is
+invisible; `spring-webflux-router` reads **none** of `RouterFunctions$Builder`'s 20, so
+the builder DSL — the reference documentation's recommended Java shape since Spring 5.2
+— derives nothing at all. None of those files said so, and a consumer reading the
+catalog list saw "JMS: supported", "SQS: supported", "WebFlux routing: supported".
+
+`slice.outside` is a list of `{owner, methods, why}`. All three are required, and `why`
+is load-bearing rather than decorative: *"this is not a boundary"* and *"this is a
+boundary we do not model"* are different claims, and a reader deciding whether a
+catalog covers their code needs to know which one they are being told.
+
+**It is checked, not merely written.** `scripts/probes/w19_catalog_surface/run.sh`
+enumerates each owner's declared methods out of the jar's own bytecode, cross-references
+the catalog as LOADED, and emits every unread method that can address a wire — by taking
+a name at argument 0, or by taking a request object the way the AWS SDK does.
+`tests/architecture/test_catalog_slice_coverage.py` requires every one of those to
+appear in `slice.outside`, and requires the reverse too: an entry naming a method the
+enumeration does not list is stale. So a framework release that adds an addressable
+method fails the audit **once the probe is re-run and its table pasted back** — the same
+arrangement `cp10_catalog_descriptors.md` uses, and the same limit: `scripts/check.sh`
+does not resolve jars, so nothing re-reads bytecode on its own. The audit holds the
+catalog to the last measurement, not to the current release.
+
+**What the audit cannot check is whether the reason is RIGHT.** Only a reader can tell
+whether "not a boundary" was the honest answer. What it holds is that a choice was made,
+in the file, for every method — and that the distance between what a catalog claims and
+what it reads cannot grow silently.
+
+**`detect.coordinates` is read, and it gates SOME catalogs rather than the whole catalog
+set** (Phase 2O Task 6, ruling R9; before it, every shipped catalog declared the key and the
+loader ignored it). The value is on the `Catalog` model, and
+`application/resolve/dependencies.py` applies it to the styles whose framework rule is
+CONDITIONAL on the library being present — today `derived_resource` and `config_join`. Most
+catalogs need no such gate: their evidence NAMES the framework (an annotation only it
+defines, a call to a type only it ships), so the dependency is implied by the match itself.
+`derived_resource` is the opposite case — a repository interface mentions no HTTP anywhere
+— so without the antecedent there is no consequent to derive. *This paragraph said "ONE
+style … today `derived_resource` alone" after `config_join` had joined the set and again
+after `detect.required` shipped; it is corrected here rather than left as a document a
+reader would have to disbelieve (§5.3).*
+
+**`detect.required` (F2 §3.6) makes the coordinates a conjunct for ONE CATALOG whose style
+is not gated.** Style was a proxy for "is this catalog's evidence enough to name its
+framework", and `spring-stomp` / `spring-rsocket` are the pair where the proxy fails: both
+claim `@MessageMapping`, and Spring's own two handlers scan for it with the identical
+`@Controller` bean predicate, so no fact about the class separates them and the build is the
+only discriminator there is. Setting it refuses to load without `detect.coordinates` — a
+catalog requiring a dependency it does not name gates on nothing and derives nothing, which
+is the silent-disable shape rather than a strict one.
+
+**`detect.satisfied_by` names the annotations that answer the dependency question by
+themselves**, and is refused without `detect.required` (it would describe a bypass of a gate
+that is not there). The gate answers BEFORE any matching runs, so without this key an
+annotation only one framework defines could never be the positive evidence §3.6 says it is:
+a module whose build recorded no RSocket coordinate — the ordinary Maven case, where a
+starter's own transitives are not recorded — derived nothing from a `@ConnectMapping` class
+and asked nothing either. Declared per catalog rather than computed as "an annotation only
+one catalog claims", because a rule that changes when an unrelated catalog is added is a
+rule nobody can read off the file that states it.
+
+**A gated catalog that does not derive files a question rather than going quiet**, on
+either failing branch of the gate: no module fact recorded, and coordinates recorded that
+name none of the catalog's. The two are one finding, because on Maven a dependency reaching
+a module only as another artifact's own transitive is absent from the recorded set and
+cannot be told from real absence. The question is `handler_protocol`
+([D01](D01-graph-schema.md) §7), it is filed only for classes the catalog's whole match —
+`type_annotation` conjunct included — would have claimed and that nothing else derived a row
+for, and where two catalogs ask it about one class the rows are folded into one question
+carrying both wires as candidates.
+
+The coordinates a module's build declares reach the workspace as [D00](D00-fact-schema.md)
+§5's `module` fact (`dependency_coordinates`). **Their REACH differs by build system and
+is not smoothed over**: Gradle reports the resolved compile classpath, transitives
+included; Maven reports the POM's own direct declarations, because the detector parses
+`pom.xml` rather than asking Maven to resolve it. A gated catalog whose question cannot be
+answered — no module fact recorded, or a starter arriving transitively on Maven — is
+SKIPPED and reported, exactly as an unmet capability is. Making this a MODULE-WIDE
+activation gate (the "active set" §12 describes) still waits on a resolved classpath under
+both build systems: applied today it would deactivate a catalog like `spring-mvc.yml` on
+any Maven module that declares only `spring-boot-starter-web`.
+
 **`requires` is the mechanism that keeps degradation visible.** A catalog needing chain
 reconstruction simply does not run against a scanner that lacks it, and
 [M04](M04-resolver.md) reports which catalogs were skipped and why. Silently finding fewer
 endpoints is the failure this prevents.
+
+**Where the line falls, measured** (W47's review). *Fewer endpoints* is the test, and it is
+not the same as *less detail on an endpoint*. Withhold a capability and re-resolve: a catalog
+whose ROW COUNT changes has lost a boundary and declares the capability; one whose rows all
+survive with a column NULL or an address `unresolved` has not, and declares nothing — a row
+present and honestly unresolved is the answer this project prefers everywhere else.
+
+`array_arguments` splits exactly there. `spring-stomp-endpoint.yml` declares it because
+`addEndpoint("/a", "/b")` collapses into ONE boundary without it and a registered URL
+disappears; `spring-mvc-router.yml`, `spring-webflux-router.yml` and `spring-websocket.yml`
+read arrays too and declare nothing, because their row counts are unchanged and only a media
+column or an address goes NULL.
+
+**The convention in practice is wider than that rule, and saying so is the honest part.**
+Thirty catalogs declare `string_constants`, and withholding it changes none of their row
+counts — every row survives with a NULL address, which is a strictly worse degradation than
+the media column the rule above declines to protect. So those thirty are recording *what this
+catalog reads* rather than *what it cannot live without*. Both readings are defensible, the
+estate holds both, and `docs/open-issues.md` `OI-78` carries the question — rather than one
+reading being applied silently to the other's files, which is how a general rule stated in
+either form gets it wrong.
 
 **Capabilities are scanner-declared or pipeline-declared.** Every capability above is
 scanner-declared — earned once, up front, by the scanner that produced a module's facts.
@@ -65,10 +265,143 @@ scanner capability above.
 
 ---
 
-## 2. The nine styles
+## 1a. `measured` — the version(s) a rule was verified against
+
+A framework rule is version-scoped, and [GUIDELINES](../../GUIDELINES.md) §5.4 says a
+verdict is bounded by what it measured. A catalog is a standing verdict, so it states its
+bound:
+
+```yaml
+measured:
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "6.2.15", "7.0.2", "7.0.9"],
+      identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+```
+
+| Key | Meaning |
+|---|---|
+| `artifact` | `groupId:artifactId` of the archive the rule was READ OUT OF |
+| `versions` | Every version of that artifact the rule was verified against, as strings |
+| `identity` | `reported` \| `assumed` — where the version STRING itself came from |
+| `by` | The committed probe document that measured it, repository-relative |
+
+**`artifact` is what was opened, not what the module declares.** It is often not the
+coordinate `detect` names: `spring-web.yml`'s handler gate is `spring-webmvc`'s own
+`isHandler` predicate, and filing the evidence against `spring-web` would name a jar
+nobody read.
+
+**`identity` exists because of CP-5.** That probe published eight observation cells under a
+version header no process had reported. `reported` means the artifact or the running
+process stated the version itself — a manifest's `Implementation-Version`, a
+`pom.properties`, a Boot banner — and every probe harness aborts when that self-report
+disagrees with the coordinate that resolved it. `assumed` means nothing in the archive
+states one at all and the value is the coordinate: Retrofit's two rows are the only
+`assumed` ones that ship, because the retrofit jar states a version nowhere. The
+vocabulary is closed; a third value is a schema change (NFR-5).
+
+**A version nobody measured is never written here.** A catalog whose rule no probe has
+opened declares no block at all and is listed by name in
+`tests/architecture/test_catalog_measurement_coverage.py`'s audit list (§8.3), with what it
+is waiting on. Writing a plausible number instead is `A-Mi8`'s own defect — a catalog
+naming a version because a sibling named two — and it is the failure this block exists to
+end, not a shortcut it permits.
+
+**Its consumer is that test**, which is why there is no `Catalog.measured` field: a value
+carried into the domain and read by nothing is the `detect.coordinates` defect (§5.3), and
+the runtime comparison this block eventually enables — a module's RESOLVED dependency
+versions (`metadata.json`'s `module.dependencies`) against the versions its catalogs
+measured — is not built. The test reads the shipped YAML, refuses a malformed row, and
+refuses a version absent from the version-scope paragraph of the probe the row cites.
+
+---
+
+## 1b. `shape_model` — the payload-type blocks, declared once
+
+Three of the blocks below describe a **payload type** rather than a framework boundary:
+§2e's `nullability`, §2f's `serialization` and §2g's `known_types`. They are not framework
+knowledge in the way `matches` is — which annotation renames a field is the serialiser's
+answer, and the same answer for every framework using that serialiser — and they were
+duplicated across **forty-two catalogs**.
+
+The duplication was not cosmetic. Shape expansion (`derive_shapes`) is a GLOBAL,
+insert-if-absent pass keyed on the type symbol alone, outside any catalog scoping: a
+payload type an HTTP endpoint and a Kafka listener both reach is described once, by
+whichever catalog reached it first, and catalogs are read in filename order. **Two copies
+that disagree do not produce two answers; they produce one answer chosen by a filename.**
+`A-C3` is that live — `{type: java.lang.Void, wire: ""}` in thirty-three catalogs and
+absent from nine, so `ResponseEntity<Void>` published an `object` response shape.
+
+So a catalog names a model instead of carrying a copy:
+
+```yaml
+shape_model: json
+```
+
+and the model is a file in `catalogs/shape-models/`, holding exactly those three blocks
+plus an `id`:
+
+```yaml
+id: json
+serialization: { … }
+nullability: { … }
+known_types: [ … ]
+```
+
+**A shape model is not a catalog.** It declares no `style`, no `matches`, no `protocol`
+and no boundary; no engine runs it, and it derives no rows. It lives in a subdirectory for
+that reason — thirteen places glob `catalogs/*.yml` expecting every hit to be a catalog,
+and none of them has to learn an exception. The two places that DO read the subdirectory
+say so where they read it: `api._catalog_hash`, so an edit to the model changes the
+analysis identity exactly as an edit to a catalog does, and
+`tests/architecture/test_known_types_mirror_the_projection.py`, so the wire-type table is
+still checked against the extractor's own projection.
+
+**A catalog takes the model or declares its own, never both.** The loader refuses a file
+that names a model and declares one of the three beside it, and
+`tests/architecture/test_shape_model_is_declared_once.py` refuses a shipped catalog that
+declares one with no model named — its allowlist is EMPTY. Between them the two close both
+routes back to a private copy. A catalog whose payload-type knowledge genuinely differs
+adds a SECOND model and names that; a private copy is `A-C3` waiting for a different
+symbol.
+
+**This is what makes a Jackson 2 / Jackson 3 split tractable** (Stage 6). `@JsonProperty`
+kept its exact FQN across the split, so the two cannot be told apart by annotation
+spelling — but `tools.jackson.core:jackson-databind` and
+`com.fasterxml.jackson.core:jackson-databind` are different coordinates. On the catalog
+estate that is one new file in `shape-models/` rather than eighty-four edited blocks.
+**It is not by itself a two-file change**: choosing between two models per module is a
+selection rule that does not exist, and nothing here pretends otherwise.
+
+---
+
+## 2. The styles
 
 A style is a shape of evidence, not a framework. New frameworks reuse a style; only a
-genuinely new shape needs a new engine.
+genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived` and
+`injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
+is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
+`error_advice`, Task 8, are the fourteenth and fifteenth.)
+
+**Fifteen sections follow, and they are NOT fifteen engines** — §5.3 requires this document
+to say which is which rather than let a reader count headings. **Thirteen have an engine**,
+each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
+catalog's `style:` is resolved against and the only place the answer lives. The other two
+are:
+
+- **`protocol_hint` is a resolve PASS, not an engine** — no catalog declares it, and one
+  that did would be refused by name. Its own section states this and gives its position in
+  the pipeline.
+- **`filesystem` is SPECIFIED HERE AND NOT IMPLEMENTED.** No engine exists, no shipped
+  catalog declares it, and a catalog that did would abort the resolve by name
+  (`_engine_for`, called for every catalog before `endpoints_reset` runs, so nothing is
+  half-emptied behind it). It is the design
+  for the first non-JVM route shape and is written down so a later phase inherits the
+  reasoning; nothing in it describes behaviour that runs today. Its section says so again
+  at the top, in the `default_produces` model §5.3 names.
+
+The count above therefore reads: thirteen shipped engine styles, one resolve pass, one
+design. *This heading read "The thirteen styles" and the two non-wire engines had no section
+at all until the 2O documentation sweep; the number counted headings, which is exactly the
+substitution §5.3 forbids.*
 
 ### `annotation_driven`
 
@@ -84,6 +417,7 @@ matches:
     method_from: method
     all_methods: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS, TRACE]
     prefix_annotation: "…annotation.RequestMapping"
+    class_level: prefix          # or `sibling`; `prefix` is the default
     annotations:
       - { fqn: "…annotation.RequestMapping" }
       - { fqn: "…annotation.GetMapping",    method: [GET] }
@@ -95,7 +429,37 @@ framework rather than working around it: `@GetMapping` *is* `@RequestMapping` wi
 pre-set, and its own class file says so — it is meta-annotated
 `@RequestMapping(method = [GET])` and declares no `method` attribute of its own.
 
-Four rules follow, and none of them names a framework:
+Five rules follow, and none of them names a framework:
+
+- **`class_level` says whether a class-level address COMPOSES with each method's**, and it is
+  the one rule here about the RELATIONSHIP between the two levels rather than about where a
+  value is read. Two values, and a value outside them is refused by name:
+
+  - **`prefix`** (the default) composes them. `@RequestMapping("/api")` on the class and
+    `@GetMapping("/orders")` on the method address `/api/orders`, and a WebSocket
+    `@ServerEndpoint("/live")` whose `@OnMessage` methods carry no address of their own take
+    the class's unchanged.
+  - **`sibling`** does not. A method that names its own destination is its OWN registration
+    and takes its own address whole; a method that names none still takes the class's, which
+    is what keeps the handler shape working under either value.
+
+  **Declared, not inferred from the protocol.** Measured per framework in
+  `scripts/probes/w14_listener_registration.md`: `@KafkaListener` and `@RabbitListener` are
+  `@Target(TYPE, METHOD)`, declare a destination at both levels, and their registrars each
+  declare two paths — one taking a `Class`, one a `Method` — with neither excluding the
+  other, so a class carrying both registers **two** containers on two topics. Composed, they
+  published `orderspayments`, a destination no broker carries, at `resolved`. `@SqsListener`
+  is `@Target(METHOD)` only, so the question cannot arise for it at all.
+
+  The distinction the value encodes is **whether the member names a destination of its own**,
+  not "messaging versus HTTP". That is why `@KafkaHandler` needs no special case: it declares
+  exactly one attribute, `isDefault()`, and no destination, so both values agree about it.
+
+  The default is `prefix` because every catalog written before this key assumed composition;
+  making it required would refuse ten shipped files to state a rule nine already follow. A
+  messaging catalog must therefore declare `sibling` explicitly rather than rely on anything.
+  The value is refused in `derive_endpoints`'s pre-flight, before any table is emptied — an
+  engine-level check would not fire at all for a catalog skipped on capabilities.
 
 - **`prefix_annotation` names the type-level annotation carrying the path prefix**, and it
   reads `path_from` like everything else. It stays a separate field rather than being inferred
@@ -196,6 +560,15 @@ matches:
   one would invent a destination no broker carries. So the key is **opt-in, never an engine
   default**, and `spring-kafka.yml` says in place why it declares none.
 
+  **Declaring no separator was not the same as declaring no composition, and that gap was a
+  live fabrication.** With `path_separator` absent the seam stayed a bare concatenation, so a
+  class-level `@KafkaListener("orders")` and a method-level one on `payments` composed to
+  `orderspayments` — a topic no broker carries, at `resolved`. The separator key answers "with
+  what do the halves join"; it cannot answer "do they join at all". `class_level: sibling`
+  answers the second, and the two keys are independent: a `sibling` catalog needs no separator
+  because it never joins, and a `prefix` catalog without one joins bare, which is right where
+  the halves are meant to abut.
+
   Two forms were derived wrong while the seam was a bare concatenation, both ordinary Spring
   and both found live against `spring-petclinic-microservices`:
   `@RequestMapping("/api/gateway")` + `@GetMapping("owners/{ownerId}")` published
@@ -211,6 +584,35 @@ matches:
   all) leaves the prefix alone. **The separator is a single character**, refused at load
   otherwise: the dedupe is `rtrim`/`ltrim`, which trim a *set* of characters, so a longer
   separator would strip each of its characters individually.
+
+  > **OVERTURNED for an INBOUND `protocol: http` catalog (2O design §8, Phase 2O Task 2, as
+  > narrowed by ruling R8).** The rule above is about the JOIN, and the join still inserts
+  > nothing into an empty half. What changed is what happens *after* it for a catalog whose
+  > addresses are URLs the module SERVES: the composed address is canonicalized into **the
+  > URL the framework serves** — leading separator guaranteed, one separator per boundary,
+  > trailing separator preserved as distinct — because `@RequestMapping("users")` and
+  > `@RequestMapping("/users")` are the same URL to Spring (checkpoint CP-1, confirmed live
+  > against Boot 4.0.1) and recording them as two identities splits dedup and every
+  > path-keyed anchor downstream. So a slashless inbound HTTP mapping DOES end up with a
+  > leading `/` — from the canonical gate, which knows it is looking at a served URL, and
+  > never from the seam, which does not.
+  >
+  > **Scoped to INBOUND `http`, and to path-shaped values.** STOMP, websocket and every
+  > messaging composition keep the rule above unchanged: a topic is not a URL, and a `/`
+  > invented into one names a destination no broker carries. GraphQL is out for the same
+  > reason from the other end — its address is a FIELD NAME. **Client-side HTTP is out too**
+  > (R8): a `@GET("legacy/invoices")` on a client interface is resolved against the
+  > configured base address's own path, while `@GET("/legacy/invoices")` is root-relative —
+  > against `https://host/v1/` those are different URLs on different services, so
+  > canonicalizing one would rewrite an address rather than normalize a spelling. CP-1 is
+  > evidence about a server, and applying it to client composition is the approximation DR-6
+  > forbids. Inside inbound `http`, a `path` holding a whole address or a
+  > placeholder-bearing composition (`https://${billing.host}/orders`) is untouched; D02
+  > keeps those whole until the peer join splits them, and prefixing one would publish a URL
+  > nobody serves. The gate is `sextant.domain.paths::serves_urls` and the rule is
+  > `canonical_http_path` beside it, with a mirror in `derive_endpoints.sql` (whose address
+  > is composed from columns that layer never sees) pinned against both by a test that runs
+  > every protocol/direction combination.
 
   **It is not the qualifier seam, and does not touch it.** `qualifier_separator` joins a scope
   to the member it qualifies and dedupes nothing, because both halves are written by one author
@@ -273,6 +675,15 @@ mapping:
   default to an empty alias list, and an empty list matches no attribute, so the column is
   `NULL` — absence is not a licence to invent a default. This is why every catalog that
   predates this key keeps deriving `NULL` with zero YAML change.
+- **`default_produces` is read since Phase 2O Task 6; `default_consumes` is still
+  specified-not-used.** `default_produces` is read as a **top-level catalog key**, not
+  under `mapping` where this bullet first sketched it: the catalog that finally needed it
+  (`spring-data-rest.yml`) declares no `mapping` at all — its rows come from a framework
+  rule rather than from annotation attributes — and the contract belongs to the framework,
+  not to any one annotation. `derived_resource` refuses a catalog of its own style that
+  declares none, since nothing else could fill `produces` for a row no mapping wrote.
+  What follows is the original statement of the pair, which still holds for
+  `default_consumes`:
 - **`default_consumes`/`default_produces` are specified here, not yet used**: a
   catalog-declared framework-contract default ([D01](D01-graph-schema.md) §4's evidence kind
   (b)) — a media type the framework enforces whenever a mapping declares none itself, rather
@@ -303,8 +714,10 @@ mapping:
 - **`path_fallback` says what the declared name is when every `path_from` alias is
   absent.** Today's one word is `construct_name` — the annotated construct's own name —
   and it is a closed vocabulary rather than a boolean, so a second source is a new word
-  here and an unrecognised one is refused. It exists because **an annotation's declared
-  default is not written into the class file**: Spring GraphQL, DGS and MicroProfile all
+  here and an unrecognised one is refused. It exists because **an omitted attribute is not written into the annotation USE**
+  — the declared default lives on the annotation TYPE (JVMS 4.7.22 `AnnotationDefault`,
+  readable since W4) and never on the use that left it out, so a use reads NULL there:
+  Spring GraphQL, DGS and MicroProfile all
   declare their field attribute `default ""` and all three mean "the method's name", so
   an absent attribute read as an empty string published a `resolved` endpoint addressing
   nothing — `path_from`'s own "wrong output rather than a missing one" failure reached by
@@ -421,9 +834,10 @@ mapping:
   framework itself withdraws.** A closed SHAPE — exactly those two keys, anything else
   refused — rather than a closed vocabulary, because *which* attribute withdraws a
   declaration and at *which* value is the framework's convention. **An absent attribute is
-  never the withdrawing value**: a declared default is not written into the class file, so
-  the attribute reads NULL wherever it was left alone, and only a value actually written
-  out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
+  never the withdrawing value**: an omitted attribute is not written into the annotation
+  USE — the declared default lives on the annotation TYPE (JVMS 4.7.22, readable since
+  W4) — so the attribute reads NULL wherever it was left alone, and only a value actually
+  written out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
   back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
   either side guessing at the other's type.
 
@@ -466,6 +880,11 @@ matches:
   `@FeignClient(fallback = …)` names a local class implementing the client interface, and
   that interface is still a client — widening the rule would delete every Feign client
   declaring a fallback.
+- **It YIELDS to a `resolves.direction` rule** (§2c, 2O Task 10). Where the catalog resolves
+  a row's direction, the fence's coarser test — SOMETHING implements this interface — has
+  already been answered more precisely, and subtracting the row would delete exactly the one
+  the resolution flips. The subtraction stands wherever the resolution declines, and stands
+  unchanged on every catalog that declares no resolution at all.
 
 **Three catalogs, one engine change.** The forms are stated in framework-neutral words for
 a reason that was tested rather than asserted: `spring-graphql.yml` introduced them, and
@@ -474,6 +893,159 @@ change** — DGS spells the scope `parentType` where Spring spells it `typeName`
 MicroProfile has no scope at all, and all three differences are one line of YAML each.
 That is §4's acceptance test run early, on one protocol, which is why the vocabulary grew
 here instead of three framework special cases growing in the engine.
+
+**Phase 2O generalises it one last way, and the generalisation is that a catalog may derive
+NO ROWS AT ALL.** `corroborates` sits at `matches` level beside `mapping`, and a catalog
+carrying it *without* a `mapping` derives nothing whatever — its entire contribution is
+`service_identity` open questions:
+
+```yaml
+matches:
+  corroborates:
+    class_annotations:
+      - org.springframework.grpc.server.service.GrpcService
+      - net.devh.boot.grpc.server.service.GrpcService
+```
+
+- **Why an annotation can be real evidence and still mint nothing.** `@GrpcService` marks a
+  class as serving something and names NOTHING else — no address, no verb, no member rule.
+  The wire identity comes only from the generated class's own constants, which
+  `supertype_derived` (below) reads. A row derived here would carry an invented address, so
+  none is.
+- **What it buys is the one case that style cannot reach**: a service implemented against a
+  PUBLISHED stubs jar. The extends edge is the module's own fact, but the generated
+  supertype's facts never arrive, so `supertype_derived` derives nothing at all — and
+  without this block the outcome is SILENCE, which 2O design §1b rules out in as many words.
+  A flagged class that no endpoint of this catalog's protocol names as a handler surfaces as
+  a `service_identity` question instead, filed by the engine's `gaps` entry point through
+  `resolve/service_identity.py` (the same hand-off `supertype_derived` and `injected_client`
+  use, and the reason it is a separate pass: the ledger is reset AFTER endpoint derivation).
+- **A flagged class the match DID derive files nothing.** The corroboration asks one
+  question of the finished table — "does any endpoint of this protocol name a method of this
+  class as its handler?" — and is silent when the answer is yes. A version that filed
+  regardless would put every correctly derived service in the ledger.
+- **Inert for every catalog that declares none**, which is every catalog written before it:
+  `gaps` returns an empty list and `run` is untouched. Malformed is REFUSED, not ignored —
+  an unread key is indistinguishable from a typo, and a typo here silently restores the
+  silence the block exists to remove.
+
+**The 2026-09-06 vocabulary pass adds three words at once, and the "at once" is the point.**
+Every generalisation above arrived alone, against whichever framework was in front of its
+author — which is how a style **21 catalogs** share reached a state where three of them knew
+their framework's rule exactly and could not say it. GUIDELINES §13.8's third-occurrence rule
+fired on that (`docs/open-issues.md`, "The §13.8 stop rule fired in Stage 4"), and these three
+words are its answer. **No word here is speculative: each names the measurement that forces
+it**, and a fourth need found later re-triggers §13.8 rather than being pre-solved.
+
+```yaml
+mapping:
+  path_from: [value]                        # …as before: the MATCHED annotation's aliases
+  path_from_siblings:                       # …then these, in order, if none of those is present
+    - { annotation: org.eclipse.microprofile.graphql.Name,        arg: value }
+    - { annotation: jakarta.json.bind.annotation.JsonbProperty,   arg: value }
+  path_fallback: construct_name             # …then this, as before — now a DEFAULT
+  annotations:
+    - { fqn: "…graphql.Query",    method: [query],    path_fallback: read_accessor_property }
+    - { fqn: "…graphql.Mutation", method: [mutation], path_fallback: write_accessor_property }
+    - { fqn: "…annotation.RabbitListener", container: "…annotation.RabbitListeners" }
+```
+
+- **`container` names the container annotation whose `value` array holds uses of that
+  annotation** — the `scheduled_work` style's own key, one style over, and the same rule.
+  **Forced by CP-16** (`scripts/probes/cp16_listener_destinations.md`, rows 2a–2f and 4a–4f;
+  six versions across three frameworks): `@KafkaListener`, `@JmsListener` and
+  `@RabbitListener` are each `@Repeatable`, and each framework's post-processor reads the
+  container. javac writes the container and **not** the member (JLS 9.7.5), so a method
+  carrying two listeners carries no listener annotation at all, the mapping join matches
+  nothing, and **both** destinations vanish — silently, beside a single-listener neighbour
+  that derives normally (`OI-36`). The engine reads each container use's `value` array and
+  synthesizes one ordinary `{target, annotation, args}` row per folded use, before
+  composition and before inheritance, so a folded use is an ordinary annotation everywhere
+  downstream and **there is no container in the query at all**.
+  - **The container need not be javac's, and this key does not ask whose it is.** CP-17
+    (`scripts/probes/cp17_containers_and_class_level.md`, rows 2a/2b, 3a/3b and 6a/6b, at
+    spring-pulsar 1.2.11 and 2.0.7) measured a framework that ships the container SHAPE
+    without the language mechanism: `@PulsarListener` is **not** `@Repeatable`, and
+    `@PulsarListeners` is an ordinary annotation declaring `value(): PulsarListener[]` for
+    an author to write by hand. Its post-processor then registers the **union** of a direct
+    `@PulsarListener` and every member of the container. A class file cannot tell the two
+    mechanisms apart — the bytes are identical — so the engine reads them identically, and
+    the union is what a real row plus the synthesized ones already are. This wording was
+    narrower than the key until CP-17 measured the case; the key itself did not change.
+  - **`value` is not catalog data.** JLS 9.6.3 requires a containing annotation type to
+    declare exactly `value()` returning an array of the repeatable type, so it is the
+    *language's* word; a key for it would let a file state something Java forbids. A
+    hand-written container is under no such obligation, and one declaring its array under
+    another name is unreadable here — a stated boundary in `docs/COVERAGE.md`, not a key.
+    Each entry of the array is checked against the declared member fqn rather than taken on
+    position — a container is an ordinary annotation whose `value` happens to be an array.
+  - **Declared per ANNOTATION ENTRY, not per catalog**, and that is where the difference
+    lives: `scheduled_work` names one annotation, this style names a list, and an entry
+    claims a container only where one was measured. CP-16 measured `@Repeatable` on the
+    listener annotations only; **CP-17 then measured the four the audit left open** (rows
+    2e–2l, 3e–3l) and found `@SqsListener` in all three spellings, `@KafkaHandler` and
+    `@RabbitHandler` neither repeatable nor accompanied by a container-shaped sibling — so
+    those entries' silence is now a measured claim rather than an absence of evidence.
+  - **It needs extractor capability 9.16** (`nested_annotation_args`), because a folded use
+    is a nested annotation. A catalog declaring a container therefore `requires` it, for
+    `spring-scheduling.yml`'s stated reason: a scanner that cannot read one must skip the
+    catalog **visibly** rather than report part of a module's listener surface and stay
+    silent about the rest.
+
+- **`path_from_siblings` names name sources that live on OTHER annotations of the same
+  declaration**, consulted **in the order written** and only where every `path_from` alias
+  is absent. **Forced by CP-15** (`scripts/probes/cp15_mp_graphql_names.md`, rows 1a–1b and
+  2a–2b): `OperationCreator.getOperationName` consults five sources in order and takes the
+  first with a value — the operation annotation's own `value`, then `@Name`, then the
+  `jakarta` and `javax` spellings of `@JsonbProperty`, then Jackson's `@JsonProperty`.
+  `microprofile-graphql.yml` read the first alone, so `@Query @Name("allOrders")
+  List<Order> orders()` was served as `allOrders` while we published `orders` — a wrong
+  address, not a missing one (`OI-35`).
+  - **The order is the rule, not a presentation detail.** The `iconst_N` indices of the
+    source array ARE the order, and a set would not say which name a declaration carrying
+    two of them is served under. So the key is a list, and the engine carries an ordinal.
+  - **`path_from` first, then these, then `path_fallback`** — which is exactly the measured
+    order, since row 1 puts the matched annotation's own value at index 0. **A framework
+    that consulted a sibling BEFORE the matched annotation's own attribute cannot be stated
+    in this grammar**; the boundary is in `docs/COVERAGE.md` rather than left silent, and a
+    framework needing it is a fourth measurement, not a key to add now.
+  - Read scalar-or-array, first present wins, like every other attribute read in this style.
+    A closed SHAPE (`annotation` and `arg`, nothing else) rather than a closed vocabulary,
+    for `unless`'s reason: which annotation renames an operation is the framework's own
+    convention.
+
+- **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
+  declarations that annotation matches**, and **two new words join the closed vocabulary**:
+  `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,
+  row 5 *compiled and run* against both jars: the un-named-operation fallback is
+  `MethodHelper.getPropertyName`, and **which transformation it applies is chosen by which
+  operation annotation matched** — `@Query`/`@Subscription` take `Direction.OUT`, which
+  strips `get` and `is`; `@Mutation` takes `Direction.IN`, which strips `set` and nothing
+  else. One catalog-level word therefore makes one of the two annotations newly wrong,
+  which §8.1 rule 1 forbids in as many words — that is why `OI-5` shipped a
+  measured-and-wrong address for a month rather than a plausible fix.
+
+  | word | strips | measured (CP-15 row 5) |
+  |---|---|---|
+  | `construct_name` | nothing | the construct's own name — unchanged, the word every catalog already declares |
+  | `read_accessor_property` | `get`, `is` | `getOrders→orders`, `isActive→active`, `getX→x`, `get→get`, `gettotal→gettotal`, `getURL→uRL`, `setStatus→setStatus` |
+  | `write_accessor_property` | `set` | `setStatus→status`, `getOrders→getOrders` |
+
+  - **The strip's three conditions are the framework's own**, not a paraphrase that fits the
+    examples: the name starts with the prefix, is **longer** than it, and carries an
+    **upper-case character at the seam** — then the remainder is taken with its **first
+    character** lowercased, never the whole of it. `getURL → uRL` is the case that tells
+    this rule apart from every plausible paraphrase, and any encoding that does not
+    reproduce it is not this rule.
+  - **Which prefixes belong to which word is engine data**, the `namespace_default`
+    precedent: a closed-vocabulary word owes the derivation a rule as well as a name, and
+    the accessor prefixes are the *language's* bean convention rather than any framework's
+    naming choice. What a catalog states is which direction an annotation faces, which is
+    the framework's own fact.
+  - **The catalog-level key stays**, as the default every entry declaring no override
+    carries — so a catalog written before this word binds one value on every entry and
+    derives byte-identically — and as the **only** word an unannotated `members` row can
+    read, since such a row has no annotation to read an override off.
 
 ### `single_call`
 
@@ -489,8 +1061,9 @@ matches:
     - { name: exchange,      method_arg: 1,     url_arg: 0, body_arg: 2, response_arg: 3 }
 ```
 
-Each `methods` row is `{name, arity?, http_method | method_arg | neither, url_arg |
-channel_arg, body_arg?, response_arg?, record_arg?, direction?, path_from_argument_type?}`,
+Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
+url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
+path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?}`,
 beside the catalog-level `default_address?` both described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
@@ -507,6 +1080,35 @@ call has no response to root.
 it matches every overload, so the shipped 2C catalogs parse unchanged; a catalog that
 needs to tell `send(topic, payload)` from `send(topic, key, payload)` apart writes one row
 per arity instead.
+
+**`descriptor` restricts a row to ONE overload, by argument type.** Arity cannot separate
+`convertAndSend(String routingKey, Object message)` from `convertAndSend(Object message,
+MessagePostProcessor after)` — same name, same owner, same count — and where a row reads an
+ADDRESS out of a position, matching the wrong one publishes a message payload as a wire
+destination. The value is the overload's erased JVM method descriptor, and its
+**PARAMETER portion** is compared against the call site's own `target.descriptor`
+([D00](D00-fact-schema.md) §5); `javap -s` prints it.
+
+*The whole string was compared until F2 §4.1.* JLS 8.4.2 identifies a method by its name
+and parameter types — the return type is in the descriptor and is not part of the
+signature — so comparing it tied every row to a library version by accident: a library
+that changes a return type changes nothing in its callers' source and the descriptor
+entirely, and every Spring Kafka 2.x producer derived nothing against rows declaring the
+3.x `CompletableFuture`. **What this means for an author:** a row whose declared RETURN
+type is wrong now still matches, so it is no longer a silent-failure shape; a row whose
+declared PARAMETERS are wrong still is, and that is what the paragraph below is about.
+
+It is validated at load to open with `(` and to contain `)`, because a descriptor no call
+can equal fails INVISIBLY.
+
+**Declaring one on any row CLAIMS that (name, arity) for every row.** A call at a claimed
+arity whose descriptor matches no row derives **nothing** — it does not fall through to a
+descriptor-less sibling, because falling through is exactly the fabrication the key exists
+to stop. So a catalog adding `descriptor` to one overload accepts an under-report on the
+others until it declares them too, and that under-report belongs in `docs/COVERAGE.md`
+(§8). Arities no row claims are unaffected: `spring-rabbit-template.yml` declares
+descriptors at arities 2 and 3 and none at arity 1, whose `convertAndSend(Object)` has no
+sibling to collide with.
 
 **`channel_arg` is an alias of `url_arg` for protocols whose identity is a destination
 rather than a URL** — a topic or queue name in place of a path. Declaring both `url_arg`
@@ -542,6 +1144,53 @@ answered. This same ladder — literal first, linked call as fallback — is wha
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too.
 
+**`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
+all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
+`sqsTemplate.send(to -> to.queue("shipments").payload(event))`. Every position such a row
+could name is the lambda itself, so `lambda_arg` names which argument that is and
+`lambda_steps` names the builder methods called INSIDE it, each with the positions it
+carries: `[{ method: queue, channel_arg: 0 }, { method: payload, body_arg: 0 }]`. A row
+declaring one without the other is a `CatalogError` — one says which argument, the other what
+to read in it, and a row with only one names no readable position at all. So is a step
+declaring no `method`, a step declaring neither `channel_arg` nor `body_arg`, and a step
+declaring `url_arg`: a destination read inside a builder is an opaque CHANNEL kept whole, and
+CP-2's peer/path split has nothing to say about it.
+
+**Reading the body is reading, not guessing, and the STEP NAME is what makes that true.** The
+lambda is one argument of one call, the fact stream names the synthetic method it compiled to
+under the symbol that argument carries, and that method's own call sites say which builder
+method received which literal — there is no ambiguity about whose builder this is. What there
+would be, without matching the name, is a fabrication: `SqsSendOptions` declares seven methods
+and four of them take a string, so a reader taking the first literal in the body would publish
+a trace header as a queue. One hop only, and no chain linking: a `single_call` row reads
+declared positions off named methods, which is exactly what happens here, and a lambda reached
+from inside a lambda is not followed. *`fluent` solved the same defect at `OI-73` by folding a
+lambda body's captures into a chain; the vocabulary differs because the engines differ, and
+the bare-descriptor lookup — `call_sites.caller` carries module coordinates a call argument's
+`symbol` does not — is shared.*
+
+**`mapping.duplicate: conflict` says the framework REFUSES two handlers on one address**
+(F5 §6.1, W28), and its absence — which is every catalog but `spring-web` and `spring-mvc` —
+says several handlers there is ordinary. `@KafkaListener` on a class with `@KafkaHandler` on
+its methods dispatches by PAYLOAD TYPE, so a topic served by two methods is correct and
+reporting it would be a rule mirrored onto a set it does not describe. Spring MVC is the
+other case: `AbstractHandlerMethodMapping$MappingRegistry.validateMethodMapping` throws
+`IllegalStateException` at startup, so the application does not run.
+
+Two more keys ride with it, and both exist to keep the finding honest rather than to produce
+one. **`discriminators` names the conditions `RequestMappingInfo.equals` compares that are
+not already columns on the endpoint row** — `params` and `headers`. They are read from the
+EFFECTIVE annotation set, the same one the endpoint row derived through, so a discriminator
+composed into a module-local meta-annotation, folded into a repeatable container, or
+declared on an interface method the class implements is not read as absent. Class-level and
+method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
+to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
+conflict with each other while neither conflicts with a method outside it. **`custom_condition`
+names the framework's handler-mapping type**, whose subclasses may register a condition that
+is code rather than an attribute: a module declaring one is left alone entirely, because a
+conflict named against a service that starts perfectly well is a claim and a missing finding
+is not (NFR-2).
+
 **A row declaring neither `http_method` nor `method_arg` is verbless by declaration** — a
 topic has no verb. The row derives `method` NULL without penalising `resolution`, exactly
 as `method_arg`'s own unresolved case does; resolved verbless rows dedup on `(protocol,
@@ -576,10 +1225,16 @@ stops being the identity**: a row declaring this reads its url argument for `pee
 WHOLE and unsplit (an address fed from configuration is a `${...}` expression with no
 authority half to take, and two deployments on one host are two peers), leaving `path` to
 the operation. **An absent attribute derives no operation** — a framework's own default
-for one is never written into the class file, and a scope defaulted from a schema is not in
-the class file at all, so the row is `unresolved` rather than carrying a plausible-looking
+for one is never written into the annotation USE (it lives on the annotation TYPE, JVMS
+4.7.22, emitted since W4), and a scope defaulted from a schema is not in the class file at
+all, so the row is `unresolved` rather than carrying a plausible-looking
 address. **The resolved type is the payload**, so the row describes its request without a
-`body_arg` that would have failed on a bare parameter — but only once `annotation` has been
+`body_arg` — *which used to be the point: a declared body capture over a bare parameter
+failed and dropped the row's `resolution`, so this rule was the only way to read such a
+payload and keep the row resolved. `OI-77` removed that, and a body capture reading a
+parameter now resolves to the caller's declared type like any other; the rule remains
+because the identity and the payload are one read here, not because the alternative
+fails.* The type answers only once `annotation` has been
 found on it: a type carrying none is not evidence of a payload, whatever sits at that
 position. `path_from_argument_type` beside `record_arg` is a `CatalogError` (the record IS
 the payload source), as is any malformed or unrecognised rule.
@@ -587,7 +1242,7 @@ the payload source), as is any malformed or unrecognised rule.
 **`default_address: {method, arg}` is the address a client was CONFIGURED with**, for the
 overloads that carry none — a `WebServiceTemplate` whose `setDefaultUri` was called in its
 holder's constructor. Catalog-level, because it describes the `owner` rather than one of
-its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg` of
+its methods, and applied only to rows naming no `url_arg`/`channel_arg`/`record_arg`/`lambda_arg` of
 their own: a declared position is the call's own answer and always wins. The lookup is
 CONFINED TO THE TYPE THAT MAKES THE CALL, and that boundary is the soundness argument —
 nothing links a call's receiver back to the field holding it (a receiver is a value id,
@@ -624,8 +1279,30 @@ matches:
     - { method: body,       captures: { body: arg0 } }
     - { method: bodyToMono, captures: { response: arg0 } }
     - { method: bodyToFlux, captures: { response: arg0, response_is: array } }
+    - { method: header,     collects: { kind: header, name: arg0, value: arg1 } }
   terminal: [retrieve, exchange]
 ```
+
+**`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
+is the whole reason it is a second key rather than a spelling of the first. A capture is
+LAST-WINS — a repeated step overwrites its own earlier value — which is right for a url and
+wrong for a header: a chain calling `.header(...)` three times would keep the third and say
+nothing about the other two, and that is not a smaller answer but a false one. A collecting
+step contributes one `endpoint_metadata` entry per visit instead.
+
+Its `kind` is the catalog's own word for what the entry IS — `header`, `query`, `key` — so a
+reader is never left inferring it from the name; `name` is optional, because a partition key
+and a routing key have a value and no name at all, and writing one in would invent a label
+the wire does not carry. **A varargs position contributes one entry per value**:
+`header(String name, String... values)` is what the API declares, the scanner models the
+call's second argument as an array, and `header("Accept", "a", "b")` sends two values under
+one name. Reading the array itself resolves to no literal — which is what a first
+implementation did, recording every header as `unresolved` including the ones written as
+literals in plain sight.
+
+The value is **redacted where it is read**, not at export ([D01](D01-graph-schema.md) §3),
+and an entry whose value is not a literal is recorded present-and-`unresolved` rather than
+dropped.
 
 **`roots` replaces the single `root`** — a builder library commonly has several
 verb-carrying entry points, each seeding its own `captures`, so this is a list rather than
@@ -968,7 +1645,11 @@ interface is not, on its own, an endpoint. This is the failure mode this style e
 prevent: a phantom endpoint conjured from a class's shape alone, with no call anywhere in
 the scanned code that ever wires it to a channel.
 
-**This style needs no execute-terminal.** `fluent`'s `terminal`/`terminal_via_argument`
+**This style needed no execute-terminal — and that was wrong; see §1b-i.**
+A registration whose framework requires a later ACTIVATION call is not a boundary
+until that call is reached, which `registration.started_by` now declares (`OI-64`).
+What follows is why the ARGUMENT-passing shape still needs no terminal of its own.
+`fluent`'s `terminal`/`terminal_via_argument`
 (§2, above) exists because a *built* HTTP request is not yet a *sent* one — a
 `Request.Builder` built and logged, never executed, made no call. Binding a receiver to a
 subscription has no such gap: the registration call itself IS the intent, in a way a built
@@ -1011,6 +1692,7 @@ matches:
     key: "spring.cloud.stream.bindings.{binding}.destination"
     binding:
       from: bean_name
+      unselected_binds: sole      # or `all`; `all` is the default
       selected_by: spring.cloud.function.definition
       selection_separator: ";"
       composition_separator: "|"
@@ -1023,15 +1705,77 @@ matches:
             direction: [inbound, outbound], payload_arg: [0, 1] }
     binder_key: "spring.cloud.stream.bindings.{binding}.binder"
     default_binder_key: spring.cloud.stream.default-binder
-    binder_protocols: { kafka: kafka, rabbit: jms }
+    binder_protocols: { kafka: kafka, rabbit: amqp }
 ```
 
 **`key` is a template carrying exactly one placeholder, `{binding}`**, and a key naming
 no binding is refused: it would resolve the same address for every bean. `binder_key`
 takes the same check, being as per-binding as `key` is; `default_binder_key` does not,
 since naming no binding is exactly what makes it the module-wide fallback.
-**`binding.from` is `bean_name`** — the only source implemented, and anything else is
-refused rather than read as this one.
+
+**`binding.from` is `bean_name` or `annotation_value`** — the two sources implemented, and
+anything else is refused rather than read as one of them. The DESTINATION half is identical
+for both and is `resolved_config` alone; what differs is where the name being asked about
+comes from, and what happens to a name configuration never answers.
+
+#### `binding.from: annotation_value`
+
+The name is the value of a named ARGUMENT on a named annotation — a channel name written on
+the method the framework wires to that channel — rather than a declared method's own name.
+
+```yaml
+matches:
+  address_from_config:
+    binding:
+      from: annotation_value
+      channels:
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.ServiceActivator,
+            arg: outputChannel, direction: outbound }
+```
+
+**`channels` is a non-empty list of `{annotation, arg, direction}`**, one entry per
+`(annotation, attribute)` pair the framework spells a name with; `direction` defaults to the
+catalog's own and is checked against [D00](D00-fact-schema.md)'s closed set. It is an
+attribute SET and not an annotation's attribute list — most attributes of a channel-bearing
+annotation are not channels, and one of them is usually a plain `String` too, so reading
+whatever is written files a question about a name nobody wrote.
+
+Three rules this source has and `bean_name` does not, each because a channel name is not a
+bean:
+
+- **The annotation's target must be a METHOD.** The same annotation is `@Target`-legal on an
+  ANNOTATION TYPE, which is how a module composes its own stereotype; nothing subscribes
+  there. (`scheduled_work`'s own conjunct, and `derive_endpoints.sql`'s
+  `handler-is-a-method` join on the wire side.)
+- **The value must be a non-empty STRING**, taken verbatim. An array, a nested annotation or
+  a number is not a channel name; an expression still carrying a `${…}` placeholder is asked
+  about exactly as written, resolved by nothing on the way in.
+- **A name whose destination configuration never answered derives NOTHING** — no row, and no
+  ghost row. A bean is a declaration whose address is merely unread; a channel names an
+  in-process pipe, and whether it reaches a broker at all is the thing nobody answered, so a
+  `path` NULL row would assert a boundary no declaration in the module makes. It is not
+  silence either: `gaps` files it (below).
+
+**`key` is therefore OPTIONAL for this source and required for the other.** A framework whose
+channels have no standard configuration key declares none: the catalog then asks
+configuration nothing, derives nothing, and files every channel it finds as a question.
+Requiring a key there would force a template to be invented, which is a convention no
+framework states — and D02 places a project's own convention in that repository's catalog,
+never in a built-in.
+
+**`gaps`: the `channel_destination` hand-off.** One question per `(channel, handler)` whose
+destination configuration did not give, carrying `candidates: [{channel, handler}]` and a
+trail naming the reason — no key template was declared, or a key was built and
+`resolved_config` holds no value every environment agrees on. It is a `gaps` function rather
+than a write inside `run` because the ledger is emptied once per resolve, from the pipeline,
+AFTER the engine loop ([M04](M04-resolver.md)); it rides the same seam
+`supertype_derived`/`injected_client`/`annotation_driven` use. Inert for a `bean_name`
+catalog — whose unresolved bindings already answer for themselves with a row — and for a
+`media_from_config`-only one.
+
+#### `binding.from: bean_name`
 
 **A candidate is a declared method whose RETURN type matches a suffix rule**, tried two
 ways in that order: equality against the declared interface's own descriptor, then the
@@ -1107,11 +1851,46 @@ like every other protocol a catalog writes.
   declared — the class name is in `resolved_config` either way.
 - **An explicitly EMPTY selection selects nothing.** "Nobody said anything" and "somebody
   said: nothing" are opposite statements. A `selected_by` key absent from configuration —
-  or declared but resolvable in no environment — takes the framework default and binds
-  every candidate; a key that RESOLVED, to an empty value or to separators alone, is a
-  select-nothing statement and derives no row. Collapsing the two would bind every bean in
-  the module against a configuration that said the opposite: the one place this style
-  could fabricate a boundary rather than degrade.
+  or declared but resolvable in no environment — falls to `unselected_binds` below; a key
+  that RESOLVED, to an empty value or to separators alone, is a select-nothing statement
+  and derives no row. Collapsing the two would bind every bean in the module against a
+  configuration that said the opposite: the one place this style could fabricate a
+  boundary rather than degrade.
+- **`unselected_binds` says what binds when the selection key names nobody**, and it is a
+  CARDINALITY rule (F2 §3.4). Two values: `all` (the default — every candidate binds) and
+  `sole` (one candidate binds where there is exactly one; two or more bind **nothing**).
+
+  This exists because a framework may refuse to choose. Measured
+  (`scripts/probes/w13_stream_binding.md`): Spring Cloud Function's
+  `normalizeFunctionDefinition` opens its guard with `eligibleFunction.size() == 1`, so
+  with two eligible functions and no definition configured the definition stays empty and
+  nothing binds. `spring-cloud-stream.yml` said the opposite in prose — "absent, every
+  candidate binds, **the framework's own default**" — and derived one endpoint per bean
+  for an application that serves neither. A sentence naming the framework as its
+  authority, saying what the framework does not do; nothing had compared it to the code.
+
+  **Two or more under `sole` files one `unselected_binding` question per candidate.** It
+  filed none at first, on the reasoning that the framework binds nothing so "no row" is
+  the complete answer — which needed the count taken by the engine to EQUAL the count the
+  framework takes. It does not: the framework counts registered BEANS, and
+  `config_join._candidates` counts every declared method returning one of the declared
+  interfaces, with no `@Bean` conjunct. A suppression here is therefore not evidence that
+  the framework suppressed, and suppressing silently lost a real single-bean binding
+  (OI-60).
+- **A configured binder name absent from `binder_protocols` derives NO ROW and files a
+  `binder_protocol` question** (F2 §3.4). It used to take the catalog's own declared
+  `protocol:`, described in place as "a gap to grow this map from, never a guessed
+  protocol" — the parenthetical was false, and a test pinned the fallback under a name
+  that stated it (`..._falls_back_to_its_protocol`).
+
+  **This is the one defect in the analysis that leaves the bundle.** `protocol` is
+  identity and DR-5 gates linking on protocol equality, so a row published on a protocol
+  nobody read links into another consumer's graph against endpoints this module never
+  speaks to, and fails to link to the ones it does. Measured before the fix: a module
+  bound to `rocketmq` derived a row on `kafka`, complete, confident, with no question
+  anywhere. NO configured name at all is a different answer and still takes the catalog's
+  declared protocol — nothing was configured, so the catalog's own declaration is the only
+  statement there is (§2c), which is a declaration rather than a fallback.
 
 The SELECTION key is the one place environments are unioned rather than required to
 agree, because it decides which rows EXIST rather than what a single-valued column holds:
@@ -1219,6 +1998,487 @@ by ordering rather than by a second guard. The declared response is a SCHEMA-NAM
 within the declared universe; no join to a bytecode-derived class is attempted anywhere on
 this path.
 
+### `supertype_derived`
+
+The tenth style, and the first that derives from a SUPERCLASS rather than a call site, an
+annotation, a configuration key or a declared interface (Phase 2O Task 5). gRPC's own
+generated server base (`<Service>Grpc.<Service>ImplBase`) is reached by `extends`, and a
+Spring/net.devh gRPC service registers by bean scanning — there is no registration call
+site for `interface_implementation` (above) to gate on, and no `implements` edge either.
+The evidence is structural and pattern-free instead: protoc compiles the generated classes
+INTO the module's own output, so both the extends edge
+([D00](D00-fact-schema.md) §4's `relationship_kind: extends`, capability 9.13's
+`superclass`) and the identity-building call sites the generated class makes are already in
+the workspace's own facts.
+
+```yaml
+style: supertype_derived
+protocol: grpc
+direction: inbound
+requires: [call_site, string_constants, superclass]
+matches:
+  supertype_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+    method_name_call: { owner: io.grpc.MethodDescriptor, method: generateFullMethodName }
+  members: overridden_public_methods
+```
+
+**Where the identity comes from is a call-site argument, never a field value** (ruling R11,
+superseding an earlier draft's `identity_marker: {constant: SERVICE_NAME}`):
+[D00](D00-fact-schema.md) §5's `constant` fact kind has no producer in this codebase, so a
+compile-time constant's VALUE cannot be read off the field that declares it. It is still
+recoverable from bytecode alone, because the compiler inlines such a constant at every use
+site (JLS 13.1/13.4.9): the service identity is `service_name_call`'s own FIRST argument,
+read on the class whose facts make that call; the wire method name is `method_name_call`'s
+own SECOND argument, one per RPC method the generated class builds a descriptor for. Both
+markers are `{owner, method}`, never a combined `Owner.Fqn#method` string — every catalog
+value is refused if it carries a `#`, reserved for the SCIP symbol grammar the fact stream
+itself uses.
+
+**The match has TWO conjuncts, and the marker call's PRESENCE is the first of them.** A
+class matches only where its extends target is itself in the module's facts **and** that
+target's own outer class MAKES one of the marker calls. Presence, not readability: whether
+the call's arguments can be read is a separate question, answered after the match, and it
+decides only resolved-versus-unresolved. Without the first conjunct the match reduces to
+"extends a module-local class and publicly overrides one of its methods", which every
+abstract-base/template-method pair in an ordinary repository satisfies — and each would then
+mint an inbound boundary plus a ledger question on no protocol evidence at all. That is not
+unresolved-is-an-answer; it is its converse failing: **no evidence means NO ROW, never an
+unresolved one** (fix round 2, C-1).
+
+**`members: overridden_public_methods`** is this style's one vocabulary word: a method the
+implementing class declares under the SAME NAME as one the supertype itself declares,
+PUBLIC on the implementer's own copy (an override may only widen visibility, never narrow
+it, so the supertype's own copy need not be checked). "The registration is the evidence"
+restated one level over: a class merely extending the generated base, overriding none of
+its methods, derives nothing at all.
+
+**One row per `(wire method, overridden method)` pair the marker calls and the overrides
+agree on.** The wire method name in the row's own `path` always carries the literal
+call-site string verbatim — **never derived by casing the compiled override's own method
+name**, which is not invertible (a `mixedLower`-shaped transform can collapse more than one
+proto spelling onto one compiled identifier). The one casing operation this style performs
+runs the OTHER way: decapitalizing the wire name it already read, to find the matching
+override name among what bytecode itself declared.
+
+**That lookup is not injective either, and both of its failures REFUSE rather than guess**
+(fix round 2, I-1). Where two wire names decapitalize onto ONE override — `GetOrder` and
+`getOrder` are two distinct RPCs and both compile to one `getOrder` — **both** are refused:
+deriving a row for each would carry the same handler symbol twice, and at least one of those
+attributions is false. The class derives its unresolved fallback row and a `service_identity`
+question naming the collision. Where an override no wire name reaches at all is found beside
+siblings that DID correlate (`mixedLower` can move a proto name further than decapitalization
+inverts), the correlating siblings still derive and the uncorrelated override is filed as a
+`service_identity` question — a visible gap, never a silent drop.
+
+**Where the constants cannot be read at all — CP-8(b)/(d) falsifying, not the supertype
+being absent — the row still derives** ([D02](D02-catalog-schema.md) §2's unresolved-is-an-
+answer): `path` the supertype's own bare descriptor verbatim, `resolution: unresolved`,
+`handler` NULL, plus one `service_identity` open question naming the implementer class and
+the reason. A supertype whose own facts never reached this workspace at all (a published
+`*-grpc-stubs` jar, consumed without the library opt-in) derives NOTHING — not even the
+unresolved fallback, which is reserved for a LOCALLY SEEN supertype.
+
+`direction`/`protocol` are the catalog's own; `method` is always NULL (gRPC is verbless,
+like every non-HTTP protocol); `caller`/`peer` are always NULL (the deriving method is a
+`handler`); `request_shape`/`response_shape` are written NULL — this style contributes the
+handler symbol only.
+
+**They do not STAY NULL where a descriptor also covers the identity, and that took a fix**
+(round 2, C-2). This style is not in §3's runs-last group, so its row is inserted first, and
+`schema_operations`'s own insert at the identical `(protocol, direction, method, path)` is
+then a no-op under the insert-if-absent guard. Its STAMPS are not: running last is exactly
+what lets it fill `request_shape` and `response_shape` — and, riding the latter's `shape_id`,
+the `unary | server-streaming | client-streaming | bidi` streaming word — onto the row that
+survived, each stamp guarding its own column on `IS NULL` so a first writer is never
+overwritten. The merged row therefore carries BOTH halves: this style's handler symbol and
+the descriptor's own contracts. Before the fix it carried strictly less than the descriptor
+row alone would have, which inverted the whole redundancy the two halves exist for.
+
+### `injected_client`
+
+A second, separate style from `supertype_derived` — injection is a different SHAPE of
+evidence (a field the module declares and a framework populates, never a class the module
+itself extends), and the rule that a style is a shape of evidence, not a framework, forbids
+fusing the two into one engine, even though both read the same kind of identity-building
+call site.
+
+```yaml
+style: injected_client
+protocol: grpc
+direction: outbound
+requires: [call_site, string_constants, annotation_args, typed_signatures]
+matches:
+  field_annotation: net.devh.boot.grpc.client.inject.GrpcClient
+  identity_marker:
+    service_name_call: { owner: io.grpc.ServiceDescriptor, method: newBuilder }
+```
+
+**One row per injected stub, at the SERVICE level.** `method` stays NULL and `path` is
+`<protoPackage>.<Service>` — the stub type's own outer class marker call, read exactly as
+`supertype_derived` reads it (R11: a call-site argument, never a field value), or the stub
+type's own bare descriptor verbatim where that call cannot be read. The injection declares
+that the module TALKS TO the service; it does not declare which methods, and deriving one
+row per service method would fabricate a boundary nothing here observes — per-method
+outbound rows wait on a later phase's call graph, which can read the stub's own calls. An
+unreadable identity derives the same unresolved-fallback-plus-gap pair
+`supertype_derived` derives.
+
+**The fence: an outbound row derives only for a service this module does NOT itself
+implement.** Stated by SYMBOL NAME rather than by identity, because the fence must still
+fire when the injected stub's own identity is unreadable (a module implementing a service
+against PUBLISHED stubs has no local `SERVICE_NAME` to read either): does any of this
+module's own classes carry an `extends` edge whose OUTER class matches the injected stub
+type's own outer class? The extends RELATIONSHIP is a fact of the module's own class even
+when its target lives in an unscanned jar — what the jar withholds is the identity, not the
+edge — so this test survives the published-stubs-jar case an identity-based fence could not.
+
+`direction` is always the catalog's own `outbound`; `handler`/`caller`/`peer` are all
+NULL — the injection names no calling method of its own (a field declaration, not a call
+site) and no handler. This is gRPC's SECOND identity form on [D01](D01-graph-schema.md)
+§3's own table (`<protoPackage>.<Service>`, no method) — it links to nothing until a later
+phase makes it per-method, the same honest-coarseness precedent SOAP's own two forms set.
+
+### `derived_resource`
+
+The twelfth style, and the first whose rows nobody DECLARED (Phase 2O Task 6). Spring Data
+REST exposes a CRUD HTTP API from a repository INTERFACE — no controller, no mapping
+annotation, no string in the module that is a URL. Not `annotation_driven` with `members:`:
+that style reads a path and a verb OFF each member, while here the route table is fixed BY
+FRAMEWORK RULE per repository — six verb/route combinations whose existence depends on
+which CRUD contract is extended — plus one search route per query method.
+
+```yaml
+style: derived_resource
+protocol: http
+direction: inbound
+detect:
+  coordinates: ["org.springframework.boot:spring-boot-starter-data-rest", …]
+requires: [annotation_args, implemented_interfaces, generic_interfaces]
+default_produces: ["application/hal+json"]
+matches:
+  repositories:                     # contract fqn -> the CRUD operations extending it licenses
+    org.springframework.data.repository.CrudRepository: [collection_read, item_read, save, delete]
+    org.springframework.data.repository.PagingAndSortingRepository: [collection_read]
+  routes:                           # the rule table; `needs` names the operation a route requires
+    - { method: GET,  item: false, needs: collection_read }   # EVERY route names one
+    - { method: POST, item: false, needs: save }
+    - { method: GET,  item: true,  needs: item_read }
+  item_segment: "{id}"
+  search_segment: search
+  resource_annotation: org.springframework.data.rest.core.annotation.RepositoryRestResource
+  member_annotation: org.springframework.data.rest.core.annotation.RestResource
+  path_attribute: path
+  exported_attribute: exported
+  no_repository_bean: org.springframework.data.repository.NoRepositoryBean
+  crud_methods: [save, findAll, findById, …]   # a declared method is a QUERY method only if not one of these
+  base_path: { key: spring.data.rest.base-path }
+  detection_strategy:
+    key: spring.data.rest.detection-strategy
+    strategies:                     # flags: public_only | annotated_only | honors_exported
+      default: [public_only, honors_exported]
+      all: []
+      annotated: [annotated_only, honors_exported]
+      visibility: [public_only]
+```
+
+**`detect.coordinates` is mandatory for this style and refused when empty** (§1): the rule
+is conditional, and applying its consequent to a module that does not declare the library
+would mint an entire REST API for every plain Spring Data JPA module in every analysed
+repository.
+
+**`needs:` is mandatory on every route, and a route without one is refused at load**
+(W53, `G-46`). A route naming no required operation asserts the framework serves it for
+EVERY contract the table enumerates, whatever that contract licenses — the strongest claim
+this style can make. The example above carried `- { method: GET, item: false }` for four
+phases and the claim was FALSE: a bare `org.springframework.data.repository.Repository`
+declares no methods at all, so Spring Data REST's collection GET — guarded by
+`exposesFindAll()` — is not among the methods it assembles, and such a repository serves
+`OPTIONS` on its collection and nothing else
+(`scripts/probes/w53_data_rest_collection_read.md`). The refusal is in the loader rather
+than in a test because the unconditional route is precisely the one an author writes
+without noticing they have made a universal claim.
+
+**WHICH repositories are exposed is configuration, not a constant** (CP-2(0),
+`scripts/probes/cp2_data_rest.md`, verified live). The default exposes every PUBLIC
+repository honouring `exported = false`; `annotated` exposes only annotated ones — which
+empties the un-annotated case this style exists for — `all` ignores both visibility and
+`exported`, and `visibility` ignores `exported` alone. The engine reads the key
+READ-IF-PRESENT and derives NOTHING when configuration names a strategy the catalog does
+not enumerate, or names different ones per environment: which repositories are exposed is
+the precondition of every row, and an unanswered precondition produces no rows.
+
+**The collection path** is `path=` when the annotation gives one, else the entity's own
+simple name — first character uncapitalized, then pluralized by `domain/pluralize.py`
+(a port of Evo Inflector's rule set, which `spring-data-rest-core` depends on
+non-optionally, so a working Data REST application always pluralizes). The ENTITY type
+comes from capability 9.14's `generic_interfaces`: `interfaces` erases
+`CrudRepository<Order, Long>` to a bare symbol, and the walk crosses interfaces DECLARED
+IN THIS MODULE only (the `@NoRepositoryBean` base pattern; a base repository shipped in
+another jar is a stated boundary).
+
+**Rows publish at `resolved` / `declared`** — the mirrored rule IS the framework's rule
+(DR-6, the 2I `reversed_package` precedent) — except where `spring.data.rest.base-path`
+differs between environments, in which case one row carries the configuration EXPRESSION
+as its prefix at `unresolved` and an `environment_divergence` question is filed. `handler`
+is NULL on a CRUD row (framework code serves it, and no fact in the module names a symbol
+for it) and the query METHOD's own symbol on a search row.
+
+**Ordering (§3): this style is in the runs-last group.** A predicted route must never
+displace an observed controller's row, and `derive_call_endpoints.sql`'s insert-if-absent
+guard only means that if every observing style has already written.
+
+### `supertype_dispatch`
+
+The thirteenth style (Phase 2O Task 7b), and the second to read a SUPERCLASS — a sibling of
+`supertype_derived`, deliberately not a widening of it. There the supertype is a generated
+base the module COMPILES IN, whose own identity-building call sites carry the address, and
+the match is gated on those calls appearing in the module's facts. Here the supertype is an
+abstract base shipped in a DEPENDENCY, which the workspace never scans and which makes no
+call anything could read, so the address comes from somewhere else entirely: **a type-level
+annotation carries the address, the supertype fixes a dispatch contract, and the members the
+class overrides name the operations.** Three pieces of evidence, jointly.
+
+It is not `annotation_driven` either, and for the reason that engine states about itself: its
+derivation joins METHOD symbols, and *"a type-level annotation mints no row of its own"*
+(`derive_endpoints.sql:398-400`). Routing this shape through `members:` plus the
+`path_fallback` that key requires would compose the type's address with each member's own
+NAME — one fabricated address per member, none of them served (2O design §3b).
+
+```yaml
+style: supertype_dispatch
+protocol: http
+direction: inbound
+requires: [annotation_args, type_annotations, typed_signatures, superclass]
+matches:
+  supertype: jakarta.servlet.http.HttpServlet
+  address:
+    annotation: jakarta.servlet.annotation.WebServlet
+    args: [urlPatterns, value]
+  members: overridden_dispatch_methods
+  dispatch:
+    - name: doGet
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+      method: GET
+  bypassed_by:
+    - name: service
+      parameters: [jakarta.servlet.http.HttpServletRequest, jakarta.servlet.http.HttpServletResponse]
+```
+
+**`supertype` matches the DIRECT superclass, by bare descriptor.** `superclasses` carries one
+hop, and its target is module-prefixed even when it lives in a dependency jar
+(CP-9 rows 27-28), so — unlike `supertype_derived` — the target being a module-local symbol
+is neither required nor possible. A class reaching the supertype through an intermediate base
+of its own is a STATED BOUNDARY, never a guess at what the intermediate declares.
+
+**`address` is `{annotation, args}`, and `args` is an ALIAS SET of the argument
+spellings that carry the address — exactly one of which a declaration writes.** Aliased
+attributes reach the fact stream as their own distinct keys, so both must be named; more than
+one present derives NOTHING rather than a winner, because a declaration writing both is one
+the framework itself refuses to deploy, so the module serves nothing and either value would be
+a fabricated address. Order-independent by construction. **Each value is its own
+endpoint** — one declaration is N addresses, never one — and each is published VERBATIM: an
+address argument may be a pattern grammar with its own precedence rules, and normalising one
+would publish an address no probe covered. The RAW annotation table is read, never the
+composed one: the frameworks reached by this style read the literal annotation written on the
+class, resolving neither meta-annotations nor inheritance, and reading the composed view would
+derive rows for a shape nothing serves (§8.1 rule 4).
+
+**`members: overridden_dispatch_methods`** is this style's one vocabulary word, and its
+selector is `{name, parameters}` — **a member is identified by its name AND its parameter
+types in order** (GUIDELINES §8.1's language rule; arity is a consequence of that list, never
+the rule). A same-named member whose parameter types differ overrides nothing, the supertype's
+own implementation still applies, and a name-only selector publishes an address the framework
+answers 405 to — measured, CP-9 rows 18 and 26.
+
+**No visibility is read, and that is mirroring rather than relaxing.** [D00](D00-fact-schema.md)
+§5a's `visibility` is two-valued, so a `protected` handler is recorded as `other` and the
+column cannot say which (CP-9 row 24). It need not: an override may only widen the visibility
+of the member it overrides, never narrow it, so a member declared under the supertype's own
+name and parameter types IS the override at every visibility the language permits.
+
+**`bypassed_by` discards the CLASS, never merely the member.** A class overriding the
+supertype's own dispatch ENTRY POINT has replaced the lookup the table describes, and serves
+every operation alike (CP-9 rows 14-15). Deriving the table's entries anyway would publish the
+ones it names and withhold the ones it does not — a wrong answer, not a partial one. The key is
+REQUIRED and may be empty: a supertype with no bypass says so, because an omitted bypass is
+indistinguishable from a forgotten one and the forgotten one publishes wrong verbs.
+
+**One row per handler the MODULE DECLARES.** A dispatch supertype may also serve operations
+IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9 and 32).
+Those derive nothing: the code serving them is in a dependency this workspace never scanned, so
+the row would carry either no handler at all or the symbol of a DIFFERENT member the implicit
+path merely calls, and the second is false. A stated under-report in `docs/COVERAGE.md`, on the
+same terms as the identical ruling Task 6 made for `derived_resource`'s own HEAD/OPTIONS.
+
+**The complement of that rule decides the DEPLOYMENT question too**, and it is the sharpest
+thing this style has to get right. An operation the class explicitly overrode is a handler the
+module DECLARED, and a declaration is a code fact — so it derives, even where the deployment
+the probe happened to run refuses to route to it. `doTrace` is the worked case: a Tomcat
+connector rejects TRACE before dispatch unless `allowTrace` is set (CP-9 row 13), but
+`allowTrace` is configuration outside the module that any deployment overrides and no
+repository can see, so its default proves nothing (§8's "exclude only on proof, never on
+inference"). Measured with the connector out of the way, `service()` dispatches TRACE to
+`doTrace` exactly as it dispatches GET to `doGet` (row 31). The row derives and
+`docs/COVERAGE.md` carries the connector as a **stated dependency**, in the shape Task 7 used
+for Actuator's `exposure.include`. The test to apply is whether the thing withholding the
+response is the framework's dispatch or somebody's deployment.
+
+`resolution` is always `resolved` (an address argument is a compile-time constant of the
+declaration itself; the one that cannot be read derives no row rather than an unresolved one);
+`caller`/`peer` are NULL; and `handler_signature`/`request_shape`/`response_shape` are NULL
+together, because a dispatch member's declared parameters are the framework's own request and
+response objects rather than the wire payload — a non-NULL `handler_signature` is what tells
+`derive_endpoint_contracts.sql` a row wants owner-keyed shape expansion, so writing one would
+publish the dependency's API as the module's contract.
+
+**Ordering (§3): NOT in the runs-last group.** Every one of its three evidence pieces is a fact
+of the class itself, so it observes rather than predicts.
+
+### `scheduled_work`
+
+The fourteenth style, and the **first NON-WIRE one** (Phase 2O Task 8). It derives into
+`scheduled_work` — a table of its own with no protocol, no address and no direction — and
+never into `endpoints`: `endpoints` is wire-true, and a method the framework calls on a
+clock serves no protocol anyone can address. A row claiming one would be a boundary nothing
+serves.
+
+```yaml
+# spring-scheduling.yml
+style: scheduled_work
+# NO `protocol` AND NO `direction`. Their absence is a CLAIM, not an omission —
+# see §1: `resolve/endpoints.py` refuses a non-wire style that declares either.
+detect:
+  coordinates: ["org.springframework:spring-context"]
+requires: [annotation_args, nested_annotation_args]
+matches:
+  annotation: org.springframework.scheduling.annotation.Scheduled
+  container: org.springframework.scheduling.annotation.Schedules
+  triggers:                       # attribute -> the framework's own word for the schedule kind
+    cron: cron
+    fixedDelay: fixedDelay
+    fixedDelayString: fixedDelay
+    fixedRate: fixedRate
+    fixedRateString: fixedRate
+  disabled:                       # attribute -> the value the FRAMEWORK reads as "never"
+    cron: "-"                     # `@Scheduled.CRON_DISABLED`, measured by CP-14
+```
+
+**`disabled` is optional, and its absence claims that the framework has no such value.**
+Not that nobody looked: `OI-2` was exactly the second state, and what retires it is a probe,
+so a catalog claiming a sentinel cites one in `measured:` and a catalog claiming none says
+so in prose. A key naming an attribute `triggers` does not is REFUSED rather than ignored —
+a sentinel written against the wrong spelling withdraws nothing, silently, which is the
+mistake it exists to prevent. The value is compared against the expression the declaration
+WROTE, after the "is this a literal we can spell" test and never before it, so an
+unreadable value is never attributed to a disable nobody wrote.
+
+**`container` is where extractor capability 9.16 is load-bearing, and the catalog REQUIRES
+it rather than degrading.** Two or more `@Scheduled` on one method are folded by javac into
+a single `@Schedules` whose `value` is an ARRAY OF ANNOTATIONS (JLS 9.7.5), so on a scanner
+that cannot read a nested annotation such a method carries no readable trigger at all while
+its single-schedule neighbour carries its own. Requiring the capability makes that scanner
+skip the catalog VISIBLY (M04, FR-17) instead of reporting part of a module's scheduled
+surface and staying silent about the rest.
+
+**`triggers` is an ALIAS SET, not the annotation's attribute list.** `@Scheduled` also
+carries `initialDelay`, `initialDelayString`, `zone`, `timeUnit` and `scheduler`, and not
+one of them is a schedule. `initialDelay` is the sharpest: it is a duration, it sits beside
+a rate, and reading it would publish the delay before the FIRST run as the interval between
+every run. A declaration naming no trigger attribute therefore derives NOTHING — an
+absence, not a refusal.
+
+**Every expression is carried VERBATIM and nothing is evaluated.** A `${...}` placeholder
+is preserved exactly as written with `resolution: unresolved` beside it, because a
+placeholder's value comes from configuration a deployment can overwrite (GUIDELINES §8.2)
+and substituting one here would publish a schedule this repository cannot know. `evidence`
+is always `compiler`.
+
+**Ordering (§3): NOT in the runs-last group.** A scheduled declaration is a fact of the
+declaring class, not an enrichment of a row another engine minted — and its table is
+untouched by `endpoints_reset`, so it could not participate in it.
+
+**These rows are deliberately not roots, and the omission is SCOPED rather than permanent.**
+[D00](D00-fact-schema.md) §4 documents a `root_kind` set whose members include `scheduled`,
+and [D01](D01-graph-schema.md) §5 documents a `trace_of` walk. Neither exists anywhere in
+`src/` (entries #7 and #11 of `docs/documented-not-implemented.md`), so nothing here is one
+half of a live mechanism. **The omission becomes wrong the moment a `root_kind` producer
+ships**: a scheduled method IS a root at that point, and these rows have to be re-examined
+as roots rather than left as a table nobody traverses.
+
+### `error_advice`
+
+The fifteenth style and the **second non-wire one** (Phase 2O Task 8). It derives into
+`error_handlers` for the reason `scheduled_work` has its own table: an exception handler is
+not a boundary anyone can address, it is what happens INSIDE one that already exists.
+
+```yaml
+# spring-advice.yml
+style: error_advice
+# NO `protocol` AND NO `direction`, on the same terms as `scheduled_work` above.
+detect:
+  coordinates: ["org.springframework:spring-web"]
+requires: [annotation_args, typed_signatures]
+matches:
+  handler_annotation: org.springframework.web.bind.annotation.ExceptionHandler
+  advice_annotations:             # applies to controllers OTHER than itself
+    - org.springframework.web.bind.annotation.ControllerAdvice
+    - org.springframework.web.bind.annotation.RestControllerAdvice
+  controller_annotations:         # its own handlers answer for that controller alone
+    - org.springframework.stereotype.Controller
+    - org.springframework.web.bind.annotation.RestController
+  scope_from: [annotations, basePackages, basePackageClasses, assignableTypes]
+  status_annotation: org.springframework.web.bind.annotation.ResponseStatus
+  status_from: [code, value]      # an ALIAS ORDER, not a set
+  exception_roots: [java.lang.Throwable, java.lang.Exception,
+                    java.lang.RuntimeException, java.lang.Error]
+```
+
+**TWO container kinds, and they are different claims** — which is why `error_handlers`
+carries `declared_by`. An advice class applies to controllers other than itself, to every
+controller in the application when it narrows nothing; a controller's own handler methods
+answer for that controller alone. A single NULL `scope` cannot tell those apart, and
+reporting the second as the first would widen a handler's reach across the whole
+application.
+
+**Meta-annotations are followed the way the framework follows them**, for module-local
+types: the composition pre-pass (`resolve/effective_annotations.py`) widens both the advice
+set and the controller set to every annotation type THIS MODULE declares that is
+transitively meta-annotated with one of them — the same mechanism `annotation_driven`'s
+type-level gate uses, and for the same reason (§8.1 rule 1: a check for a literal
+annotation name rejects a valid custom stereotype). A composed annotation whose type lives
+in an unscanned jar is a stated boundary of the pre-pass.
+
+**Exception types: the annotation's value, else the parameter type — and the second half is
+deliberately narrower than the framework's own test.** The framework asks whether a
+parameter is assignable to the language's throwable root; this workspace can answer that
+only where the chain is READABLE, so `exception_roots` names the roots and the engine walks
+each scanned class's own `superclass` edges up to one of them. All four are listed rather
+than `Throwable` alone because the JDK's own hierarchy is never scanned: a module exception
+extending `RuntimeException` reaches its root in one hop and would reach nothing if only the
+top were named. A handler whose exception parameter comes from an unscanned jar derives no
+row from that parameter, and COVERAGE says so. **The under-report is the only honest
+direction**: nothing but a throwable reaches a throwable root, so this can never publish an
+ordinary argument as a handled exception.
+
+**One exception type per ROW.** A handler naming three types is three rows: each is a
+distinct, separately answerable fact, and an array in one cell joins against nothing.
+
+**`scope_from` deliberately omits `value`**, which is `@ControllerAdvice`'s own alias for
+`basePackages`. Reading it verbatim under its own name would record the same scope twice
+under two keys and make two identical declarations compare unequal. The consequence is
+stated rather than hidden: an advice narrowed only by the bare `value` form records no
+scope, which reads as "every controller" — the WIDER claim, so it can never under-report a
+handler's reach.
+
+**`status` is NULL where the declaration writes none, and NULL is an answer.** A status
+computed inside a `ResponseEntity` body is `fluent` territory — body analysis that derives
+no endpoint — and a `@ResponseStatus` on the EXCEPTION CLASS is readable only where that
+class is in this module's own facts. Both are stated boundaries of this phase, not gaps
+this column fills in.
+
+**Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
+
 ### `protocol_hint`
 
 **Reclassifies endpoints other engines already produced** — a streaming response, a
@@ -1226,12 +2486,10 @@ long-poll. It changes protocol, never direction, and it never creates an endpoin
 
 **Execution amendment (Phase 2H): it is not an engine in the §3 runs-last group, and it
 does not "run last with `config_join`".** That sentence predates resolve passes. It ships
-as a post-merge resolve pass (`resolve/protocol_hint.py`, the 2G `format.py` precedent),
-and the pipeline order is: engines including their merge → `parse_binding` →
-**`protocol_hint`** → the format ladder. Both sides of that position are the pass's own
-contract. AFTER the merge, because every row must exist and a merged `both` row must
-already BE one row, so it reclassifies wholesale — one identity in, one identity out.
-BEFORE the ladder, because rung 1 reads `protocol` directly, so a row answered before it
+as a resolve pass (`resolve/protocol_hint.py`, the 2G `format.py` precedent), and the
+pipeline order is: engines → `parse_binding` → **`protocol_hint`** → `self_exchange` → the
+format ladder. Both sides of that position are the pass's own contract. AFTER the engines,
+because every row must exist before one can be reclassified. BEFORE the ladder, because rung 1 reads `protocol` directly, so a row answered before it
 was reclassified would carry the format of a protocol it no longer has. It stays
 catalog-declared: the vocabulary below is the whole of what it knows.
 
@@ -1244,9 +2502,9 @@ protocol_hint:
 ```
 
 **Three promises, and they are the whole contract.** (1) It changes `protocol`, never
-`direction` — direction is resolved at match time (§2c) and the inbound/outbound merge has
-already run, so a pass that moved direction afterwards would silently corrupt a `both` row
-the merge had already built. (2) It never creates or deletes an endpoint; the row count is
+`direction` — direction is resolved at match time (§2c), and a pass that moved it here
+would move a row out from under the question `self_exchange` is about to ask, which reads
+both directions on one identity (F5 §6.1). (2) It never creates or deletes an endpoint; the row count is
 identical before and after. (3) It only ever moves a row of the SOURCE protocol its own
 catalog declares — the block is scoped by the catalog's own `protocol` field, so an HTTP
 catalog can only reclassify HTTP rows and the graphql, websocket and messaging rows no
@@ -1261,14 +2519,14 @@ no media at all and still be a stream.
   is deliberately narrower than the format ladder's rung 2, which folds both media columns
   into one answer. `format` describes one wire and both columns describe it; a PROTOCOL
   hint is the narrower claim *this channel IS an event stream*, and only `produces` can
-  evidence it. On an inbound row it is what the route streams back; carried onto a merged
-  `both` row from the outbound twin the merge deleted, it is what a caller expects to
-  receive — evidence either way. `consumes`, on ANY row, means "this accepts event-stream
-  REQUEST BODIES", and a channel is not named after what it eats. Reading `consumes` on a
-  client-side row was tempting and is refused anyway: after the merge the column's
-  PROVENANCE is gone (the merge coalesces, keeping the surviving inbound row's own value
-  first), so a `both` row's `consumes` may be either half's and nothing on the row says
-  which. One column, one meaning.
+  evidence it. On an inbound row it is what the route streams back; on an outbound
+  one it is what a caller expects to receive — evidence either way. `consumes`, on ANY
+  row, means "this accepts event-stream REQUEST BODIES", and a channel is not named after
+  what it eats. Reading `consumes` on a client-side row (where it is what the client
+  RECEIVES) is refused for that reason alone since W27 deleted the merge: the ambiguity
+  that used to make it unreadable — a merged row's `consumes` being either half's, with
+  nothing saying which — is gone, and the rule stays because one column with one meaning
+  is worth more than the outbound case it gives up, which no shipped catalog produces.
 - **`hint_returns` matches a marker type appearing ANYWHERE in the handler's return
   type** — the outer symbol, or any symbol reachable through nested type arguments, to any
   depth. Both halves of that rule are load-bearing because the two real shapes sit at
@@ -1306,6 +2564,16 @@ the other moves too. Moving is still the right side to err on; a future ledger c
 handler could tighten it.
 
 ### `filesystem`
+
+> **SPECIFIED HERE, NOT YET USED.** There is no `filesystem` engine in
+> `application/resolve/endpoints.py`'s `_ENGINES`, no shipped catalog declares this style,
+> and a catalog that declared it would raise `CatalogError` from `_engine_for` at the top of
+> `derive_endpoints` — before any table is touched, so the run aborts rather than degrading.
+> Everything
+> below is design for a phase that has not run — the shape of the evidence, the source
+> precedence, and the vocabulary a catalog would use — and none of it describes behaviour
+> that exists. Stated in the document rather than left to a grep, per §5.3's second
+> corollary.
 
 The declaration is the file's own location. Next.js, SvelteKit, Remix and Nuxt derive the
 path from the directory structure and the HTTP verb from an exported symbol's name —
@@ -1439,7 +2707,8 @@ most catalogs they are constant. Three cases break that, and all three are real:
   payload type extending a generated message says the same thing; a Kafka `value.serializer`
   says it in configuration rather than code.
 
-So a catalog may declare resolution rules alongside its defaults:
+So a catalog may declare resolution rules alongside its defaults. **This is the sketch, not
+what shipped** — the shipped form is the block below it:
 
 ```yaml
 protocol: rest
@@ -1457,6 +2726,61 @@ resolves:
 
 **Rules are evaluated at match time**, in order, first match wins. `direction` resolution must
 complete before §3's inbound/outbound merge, which is why it cannot be a later pass.
+
+### `resolves.direction`, as built (2O Task 10)
+
+Shipped on `spring-http-interface.yml`, the only catalog that declares `resolves` at all, and
+read by `annotation_driven` alone. It differs from the sketch in three ways, each of which is a
+correction rather than a simplification:
+
+```yaml
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - org.springframework.stereotype.Controller
+          - org.springframework.web.bind.annotation.RestController
+      then: inbound
+```
+
+1. **The condition is not `owner_implemented_in_module`.** That one is weaker than the
+   framework's own rule and fabricates: Spring dispatches to a handler BEAN, and its handler
+   test is one `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` call carrying
+   no `@RequestMapping` disjunct — measured on spring-webmvc 6.1.6, 6.2.15, 7.0.2 and 7.0.9
+   (`scripts/probes/cp7_http_exchange.md`). A plain `@Service` implementing an exchange
+   interface is served by nothing, so an inbound row for one invents an endpoint. The shipped
+   condition `owner_implemented_by_type_annotated` reads: *the type enclosing this declaration
+   is implemented, in this module, by a class carrying one of these annotations*. The fqns are
+   catalog data — the same values `spring-mvc.yml` and `spring-web.yml` declare as their own
+   `type_annotation` — because which annotation marks a handler bean is the framework's
+   convention, never an engine's to know.
+2. **The condition vocabulary is CLOSED** (NFR-5), one word today, and a `when` naming anything
+   else is REFUSED rather than read as "never flips" — by the engine, where `declared_on` and
+   the `mapping` vocabulary are also checked, not by the loader. So is a `resolves` block
+   naming any key but `direction` (`format` is named in this section and did not ship, so a
+   rule written under it would be one nothing runs), and so is a `then` outside D00's
+   direction set or equal to the catalog's own declared direction — a rule that resolves
+   nothing is a file claiming a flip it does not perform.
+3. **Exactly ONE rule, not a list evaluated in order.** First-match-wins over several
+   conditions is this section's stated semantics and nothing shipped needs it; an engine
+   honouring one rule while accepting a list would silently drop every rule after the first, so
+   a second rule is refused until the semantics is built.
+
+**What a flipped row carries.** The resolved direction, and the handler that goes with it: the
+symbol handling a flipped declaration is the IMPLEMENTING type's own member where it declares
+one, and the declaring member itself where it does not — a `default` method the implementer
+never overrides is still selected and served, because the framework's handler-method walk
+covers the type's interfaces (CP-7 Q3). Its address is canonicalized under the rule for the
+direction the row TOOK, not the one the catalog declared, which is what lets it merge with the
+identical route a controller's own mapping derives (§3's dedup, ruling R12 — there is no
+collision detector and this needs none).
+
+**Where the interface gate and the flip meet.** An OUTBOUND catalog declaring
+`declared_on: interface` also engages §2's implemented-interface fence, which subtracts every
+interface the module implements. The fence and the flip answer the same question with opposite
+answers, and the fence's is the coarser: it YIELDS where the flip's condition holds. Shipping
+both unconditioned cancels — the fence subtracts exactly the rows the flip must flip, and no
+inbound row survives.
 
 **A default that survives unchallenged is not an observation.** If no rule fires and the
 endpoint takes the catalog's declared `format: json` — because Jackson is simply the framework
@@ -1492,7 +2816,7 @@ that rung's resolution tier:
 | 2 | Declared media | the row's own `consumes`/`produces`, through `media_formats` | `resolved` |
 | 3 | Serializer config | the class the module's configuration names, through `format_from` | `resolved` |
 | 4 | Payload hierarchy | the bound payload was described by a **schema**, and the schema names its own format | `narrowed` |
-| 5 | Framework default | an ordinary declared payload, plus a default converter's package family present in the module (`json_default_markers`) | `narrowed` |
+| 5 | Framework default | an ordinary declared payload, plus a default converter present in the module — a marker package family named by any fqn the module names, or a marker dependency coordinate the analysis recorded (`json_default_markers`) | `narrowed` |
 | 6 | Nothing | — | `unresolved`, `format` NULL |
 
 **Two rules bind the whole ladder.**
@@ -1565,13 +2889,28 @@ media_formats:
   application/xml: xml
   text/xml: xml
 
-# Rung 5 — package families whose PRESENCE anywhere in the module is evidence
-# that a JSON default converter is on the classpath. Both Jackson generations:
-# the relocation between them is a package rename and nothing else.
+# Rung 5 — markers whose PRESENCE anywhere in the module is evidence that a
+# JSON default converter is available. Both Jackson generations: the
+# relocation between them is a package rename and nothing else.
 json_default_markers:
   - com.fasterxml.jackson
   - tools.jackson
+  # The second FORM (2O design §7): a dependency coordinate rather than a
+  # package family, because Boot auto-configures the converter from the jar's
+  # mere presence — a module can carry it and name none of its packages
+  # (checkpoint CP-6, confirmed live).
+  - coordinate: com.fasterxml.jackson.core:jackson-databind
 ```
+
+**A marker has two forms and no third** (2O design §7). A bare string is a **package
+family**, matched against every fqn the module names — the annotations it carries and the
+call-site owners it invokes; a `{coordinate: "group:artifact"}` mapping is a **dependency
+coordinate**, matched against the coordinates this analysis recorded ([D00](D00-fact-schema.md)
+§2's `origin`). Anything else is refused at load, the discipline every value in this
+vocabulary keeps: a marker nothing recognizes answers nothing, and a rung that answers
+nothing reads exactly like a converter that is genuinely absent. The coordinate form
+answers only for a dependency this run actually read — a jar nobody opted into is not
+recorded, and silence about it is the honest answer rather than a guess.
 
 **The two map tables are unioned across every catalog that declares them**, rather than
 scoped to one: a MIME string means the same format whoever wrote it down, and a row that
@@ -1600,9 +2939,9 @@ declared class — what MIME type it implies, and what is actually on the wire �
 key sets deliberately differ**. A schema-registry serializer has no MIME string anyone
 registered, so it appears in `format_from` and not in `values`: it stamps no media and
 answers rung 3 instead, which is the more honest of the two answers. The reverse also
-holds. A merged `both` row is covered by rules for **either** direction — it is one
-identity the module both exposes and calls — and where the two halves' configured classes
-mean different formats, that is a real disagreement about one wire, recorded as a
+holds. Where a module both exposes and calls one identity the two rows stand apart (F5
+§6.1, W27), each covered by the rules for its own direction — and where their configured
+classes mean different formats, that is a real disagreement about one wire, recorded as a
 `format_conflict` rather than resolved.
 
 **`parse_calls` — read by the payload-binding pass, not by the ladder.** It says which
@@ -1783,6 +3122,10 @@ configuration value. Endpoint rows are untouched, in every environment.
 
 ## 2e. Nullability declarations
 
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
+
 Which annotation means "may be null" is framework knowledge, so catalogs declare it and
 [D00](D00-fact-schema.md) §5a's `nullable` flag is populated from it. Note the question: this
 is about the **value**, not about whether the field must appear — those are separate flags in
@@ -1829,6 +3172,10 @@ instead. Neither table can be skipped — the scanner reads both.
 
 ## 2f. Serialisation naming
 
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
+
 `shape_fields.wire_name` is the identity ([D01](D01-graph-schema.md) §5), and a source field
 name is not it: `customerId` reaches the wire as `customer_id` under a snake-case strategy, or
 as whatever `@JsonProperty` says. Which annotation carries the name, and what happens when
@@ -1841,7 +3188,48 @@ serialization:
   ignore:
     - com.fasterxml.jackson.annotation.JsonIgnore
   default_strategy: as_declared      # as_declared | snake_case | kebab_case | upper_camel
+  accessors:                         # optional; which methods name a property
+    - { prefix: get }
+    - { prefix: is, wire_type: boolean }
 ```
+
+**`accessors` is read only where a type's fields describe nothing.** Fields come first
+and keep every shape that already had one; the accessors answer the types whose wire
+contract is not in their fields at all. An **interface** is the whole case: it declares
+no fields, so `Page<T>` and `Slice<T>` — the most common paginated Spring response —
+expanded to a zero-field shape however well the type was reached.
+
+**A prefix may constrain the return's `wire_type`.** `is` names a property only on a
+boolean, which is jackson-databind's own `findNameForIsGetter`; without the constraint
+`isoCode(): String` becomes a field called `oCode`. The name is then Jackson's
+`legacyManglePropertyName`: a bare `get()` names nothing, and the leading run of capitals
+is lowercased whole before the remainder is appended (`getURL` → `url`, `getURLValue` →
+`urlvalue`).
+
+**Only public, non-static, non-synthetic, zero-argument methods that reach a wire type.**
+Each clause drops something a looser rule would publish as a wire field: a private
+accessor, a static one, a bridge method javac generated, `getScaled(String)` — and, for
+the last clause, `void getNothing()` and `Void getNothing()`, both of which reach no wire
+type at all. That last test is on the projected `wire_type` rather than on the return's
+presence or its name: the scanner always writes a `returns` reference, so "the key is
+absent" never described void, and "the symbol is `void#`" would have missed
+`java.lang.Void`.
+
+`hasNext()` and `nextPageable()` are dropped too, but by the PREFIX rule above rather than
+by any clause here — both are public, non-static, non-synthetic, zero-argument and return
+a value. This paragraph used to name them as its own examples, which credited the wrong
+rule with the work.
+
+**Accessors are collected across the scanned ancestry**, in JVMS 5.4.3.3's order, with
+the first declaration of a property name winning. `Page` declares only `getTotalPages`
+and `getTotalElements`; `getContent()` — the accessor the payload travels in — is on
+`Slice`. Reading only the named type would publish a paged response whose metadata is
+present and whose content is missing.
+
+**Substitution is by variable name across that ancestry**, so `Page<T> extends Slice<T>`
+binds `getContent(): List<T>` to the argument `Page` was given. A hierarchy that renames
+the variable leaves the field holding an unbound one, which names no type: the field is
+undescribed and the shape stays open, which is the answer it had before this existed.
 
 **`default_strategy` is a declaration, not an observation.** A module may configure a strategy
 globally, in which case the value the catalog states is a default that configuration overrides
@@ -1857,6 +3245,10 @@ correctly omits it.
 ---
 
 ## 2g. Types with a known wire form
+
+**Declared in the shape model, not in a catalog (§1b).** The block below is the
+grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Some types are objects in code and something else entirely on the wire. `java.time.Instant`
 is an ISO-8601 string; `java.math.BigDecimal` is a number; `google.protobuf.Timestamp` has
@@ -1886,6 +3278,60 @@ extractor converts what the **language** leaves no choice about — primitives, 
 marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
 stopped it — so the catalog grows from observation rather than from a structural guess about
 what looks "simple".
+
+---
+
+## 2j. What a call reaches — `terminals`
+
+**A top-level, optional block** (F7 §8.2, W30). It answers [D00](D00-fact-schema.md) §4's
+`terminal_kind` for a call whose callee's body this workspace did not read, and it exists
+because that set had no producer for two phases for a reason D00 states plainly: *a
+data-access call is `persistence` only to something that knows the callee is one.* This is
+where that knowledge is written down.
+
+```yaml
+terminals:
+  - { owner: jakarta.persistence.EntityManager, kind: persistence, target: database }
+  - { supertype: [org.springframework.data.jpa.repository.JpaRepository],
+      kind: persistence, target: database }
+  - { scanned_by: org.mybatis.spring.annotation.MapperScan, packages_from: value,
+      kind: persistence, target: database }
+```
+
+`kind` is a member of D00's `terminal_kind` set; `target` is `persistence`'s own sub-field
+(`database`, `cache`, `file`) and is omitted for every other kind. Each rule names exactly
+one of three ways to recognise the callee, and **each exists because a real framework needs
+it** — measured on three repositories before any of them was written:
+
+- **`owner`** — the call lands on the library type itself. `EntityManager` is 82 of
+  `spring-petclinic-rest`'s 102 classified terminals; `RedisTemplate` is 41 of
+  `mall-admin`'s 240 and is the rule whose `target` is `cache` rather than `database`.
+- **`supertype`** — the owner implements a declared type, read from the
+  `superclasses`/`implementations` FACTS in JVMS 5.4.3.3 order — **not** from the
+  `type_hierarchy` table, which the same pass writes after the edges, so reading it there
+  returned nothing at all. `jhipster-sample-app`'s repositories are its own interfaces
+  carrying no annotation; the class file says they implement `JpaRepository`, 68 of that
+  corpus's 70. **The match is transitive but stops at the first unscanned type**, so a
+  catalog must name the level a USER extends: naming only Spring Data's base `Repository`
+  classified ZERO, because a framework's own interface has no facts here and the walk
+  never sees what it extends.
+- **`scanned_by`** — an annotation names PACKAGES and every type inside them qualifies.
+  `mall-admin`'s MyBatis mappers carry no annotation; `@MapperScan({"com.macro.mall.
+  mapper"})` on a config class is how MyBatis registers them, and that is 199 terminals.
+  `packages_from` names the attribute holding the list and defaults to `value`. A package
+  matches its own subpackages and never a sibling whose name merely shares a prefix.
+
+**None of the three is a name match, deliberately.** `*Mapper` and `*Repository` are naming
+conventions and §8.1 forbids a rule weaker than the one the framework applies: matching by
+name would claim every unrelated type ending that way, and miss every one named otherwise.
+
+**Routes are tried owner, then supertype, then scanned package** — most specific first, so
+a catalog can name one type out of a scanned package and have that win.
+
+**Where it lives.** On the family's base catalog, the rule `config_model` already follows:
+a terminals-only file cannot be a catalog (`style` and `matches` are required and it
+declares no boundary), and every catalog is loaded regardless of gating, so the rules reach
+every module.
 
 ---
 
@@ -2053,10 +3499,16 @@ method's return value — reaches no rung and is a named gap, not a guess.
 
 Engines run in a fixed order because later passes depend on earlier ones: inbound first,
 then outbound, then the styles that ENRICH what those produced — `config_join` and
-`schema_operations`. Inbound precedes outbound so that a path a module both
-exposes and calls merges into one endpoint with direction `both` rather than appearing
-twice. The enriching styles come after both, whatever direction their own catalog file
-declares, because a stamp cannot reach a row that does not exist yet.
+`schema_operations`. **Inbound no longer precedes outbound to make them merge** (F5 §6.1,
+W27): a path a module both exposes and calls now keeps two rows, and
+`resolve/self_exchange.py` files a `self_exchange` question naming each side and its
+address. Merging asserted that the thing called IS the thing served, which is a claim about
+the far end of a call; it keyed on `(protocol, method, path)` and `peer` is not part of
+endpoint identity (RC-5), so the fixture's call to `${soap.billing.uri}` was published as
+the module's own served operation. The order between the two directions is now merely the
+order they were written. The enriching styles still come after both, whatever direction
+their own catalog file declares, because a stamp cannot reach a row that does not exist
+yet.
 
 `schema_operations` is in that group for the same reason twice over: it stamps a declared
 response shape onto rows other engines minted, and its OWN rows meet §5's insert-if-absent
@@ -2067,6 +3519,14 @@ in step. **Within the runs-last group the same reason applies one level down**: 
 whose catalogs may either DERIVE rows or only stamp them runs every deriving catalog
 first, or a stamp arrives before the rows it was meant to enrich. Direction and filename
 remain the tiebreaks after both ranks.
+
+`derived_resource` joins that group for a reason of its own (Phase 2O Task 6): its rows
+are PREDICTIONS from a framework rule rather than readings of a declaration, so where a
+real controller serves the same URL the observed row is the one that must survive — and
+insert-if-absent only means that once every observing style has written. (2O design §2b
+also said "and before `config_join`". That half is not implementable and is not
+load-bearing: within this group the ranks above decide, there is no per-style rank, and
+the two mint disjoint identities — HTTP routes versus messaging destinations.)
 
 **`protocol_hint` is no longer in this list** (Phase 2H). It ships as a resolve pass
 rather than an engine, and its position is stated where it runs: after the engines' merge
@@ -2104,15 +3564,43 @@ multi-path call matches no row at all. A catalog under this exception is weaker 
 than one with a fixture, and the sentence above — "without this, a catalog is an
 assertion" — is exactly what it trades
 against, so the exception is for this one shape and does not generalise to an
-annotation or configuration catalog, where the fixture is cheap.
+annotation or configuration catalog **on the strength of the shape alone**, where the fixture
+is usually cheap.
 
-**It is still the only instance, and Phase 2I is the reason that is worth recording.**
-`jakarta-jws-client.yml` — generated client stubs, whose declarations live in a dependency
-by definition — was pinned over synthetic facts for exactly one task, and then got a real
-fixture of a shape this document had not had before: a **sibling module built and consumed
-as a jar**, opted into by the analysed fixture's own `.sextant.yml` (§4a), deriving its one
-endpoint through the real commands in CI. A catalog whose subject matter is compiled
-libraries is fixturable after all; it just needs a library.
+**Phase 2I is worth recording before the second instance, because it narrowed the exception
+rather than widening it.** `jakarta-jws-client.yml` — generated client stubs, whose
+declarations live in a dependency by definition — was pinned over synthetic facts for exactly
+one task, and then got a real fixture of a shape this document had not had before: a **sibling
+module built and consumed as a jar**, opted into by the analysed fixture's own `.sextant.yml`
+(§4a), deriving its one endpoint through the real commands in CI. A catalog whose subject
+matter is compiled libraries is fixturable after all; it just needs a library.
+
+**The second instance: `jakarta-servlet.yml` and `javax-servlet.yml` (Phase 2O Task 7b).**
+They are ANNOTATION catalogs, which the paragraph above says the exception does not cover on
+the strength of the shape — so they take it on a different ground, stated here rather than
+assumed. **The reason is a dependency, not a shape.** A servlet fixture compiles against a
+servlet API, which puts `jakarta.servlet:jakarta.servlet-api` (and, for the second catalog,
+`javax.servlet:javax.servlet-api`) into CI's offline priming — a dependency change §7 puts out
+of an implementation task's scope without instruction. The fixture is cheap to WRITE and not
+cheap to LAND, which is a different sentence from the one 2H was written against.
+
+**What ships instead**, satisfying the exception's three conditions with unusually strong
+compensating evidence: the rows are pinned over synthetic facts against the **real loaded
+catalogs** (`tests/application/test_supertype_dispatch.py` loads the shipped files, never a
+copy); every assumption is written down; the boundary is recorded in
+[COVERAGE](../COVERAGE.md). And the fact shapes those synthetic facts mirror were not
+imagined — CP-9 ran the committed extractor over real compiled servlet class files on three
+containers and recorded what reached the fact stream (`scripts/probes/cp9_servlet_shapes.md`,
+rows 20-30). What is still missing is narrow and real: nothing runs the DERIVATION end to end
+over that bytecode in CI, so a change in the fact stream's shape is caught by re-running the
+probe rather than by the suite.
+
+**The condition that closes it** (§9: an omission states what would make it wrong): a servlet
+API present in CI's offline priming. The day one is primed — for this or any other reason —
+the ground above evaporates, and these two catalogs get the fixture D02 §4 requires of every
+other annotation catalog. **Two instances is the count, and it is not a trend**: each was
+admitted for a reason of its own, written down where the catalog is, and a third needs its own
+ruling rather than a citation of these.
 
 ---
 
@@ -2157,15 +3645,30 @@ and be read straight back out of the same workspace.
   both Java and Kotlin.
 - **No ordering requests.**
 - **No conditional logic across catalogs.** Two catalogs may both match; both produce
-  endpoints, and duplicates merge on wire identity.
+  endpoints, and duplicates on one identity IN ONE DIRECTION dedup. The two directions are
+  never folded together (F5 §6.1).
 
 ---
 
 ## 6. Where catalogs live
 
-Built-in catalogs ship with Sextant. A repository adds its own — for an in-house client
+Built-in catalogs ship with Sextant. ~~A repository adds its own — for an in-house client
 library — through `sextant.yml` ([D04](D04-config-and-exclusion.md)). Both sets are loaded
-together and neither is privileged.
+together and neither is privileged.~~
+
+> **Amendment (2026-09-05, principles sweep `A-C9`).** **There is no mechanism by which a
+> repository catalog could load.** `YamlCatalogSource` globs the installed package's own
+> directory and nothing else, and the `sextant.yml` D04 §2 specifies is never opened — see
+> that section's own amendment. The sentence above is struck rather than deleted because
+> NFR-9 names this as the supported extension path and a reader needs to know it is not one;
+> project catalogs are deliberately unscheduled (2O roadmap `:201-205`), because they would
+> make this schema a public API after which every change here is breaking. Recorded in
+> [documented-not-implemented.md](../documented-not-implemented.md).
+
+**Shape models (§1b) live in a `shape-models/` subdirectory of the same set.** They are
+resolved within the set that declares them, so a catalog naming a model its own directory
+does not hold fails at load naming both the file and the model. That the built-in set is
+the only set today is the amendment above, not a property of the reference.
 
 The active set for a module is decided by `detect.coordinates` against the dependencies
 [M02](M02-detector.md) resolved. `module status` lists which catalogs were active, which

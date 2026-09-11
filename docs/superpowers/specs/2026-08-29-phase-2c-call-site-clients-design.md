@@ -66,10 +66,8 @@ D00 §5 reserves the fact kind; this phase amends §5 to state the full shape:
 | `int` / `long` / `boolean` | constant instructions | |
 | `enum` | GETSTATIC on an enum type | symbol reference — `HttpMethod.POST` |
 | `class` | LDC of a class constant | symbol reference — the shape root |
-| `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's
-  synthetic body method — method references resolve the same way |
-| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR and the
-  one-hop body follow |
+| `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
+| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR and the one-hop body follow |
 | `null` | ACONST_NULL | |
 | `unresolved` | anything else | a first-class honest answer, never an omission |
 

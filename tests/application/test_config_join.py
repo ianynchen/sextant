@@ -26,20 +26,27 @@ import pytest
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import config_join
+from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
     CallArgument,
     CallSiteFact,
     CallTarget,
     Document,
+    ModuleFact,
     Signature,
     SymbolFact,
     TypeRef,
 )
 from sextant.domain.symbols import type_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
+CATALOGS_DIR = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
 CAPABILITIES = {"resolved_config", "typed_signatures", "implemented_interfaces"}
 # The module-coordinates prefix every real symbol fact carries (D00 §5a);
 # a signature's own type references stay bare, exactly as the extractor
@@ -55,6 +62,11 @@ RECEIPT = "com/acme/contracts/Receipt#"
 
 DESTINATION_KEY = "acme.bindings.{binding}.destination"
 SELECTION_KEY = "acme.function.definition"
+# The invented framework's own coordinate. `config_join` is dependency-gated
+# (`resolve/dependencies.py`, `A-C5`), so a catalog of this style that declares
+# none is refused at the gate — deliberately, since a `config_join` match can be
+# satisfied by code naming no framework at all.
+INVENTED_COORDINATE = "com.acme:acme-bindings"
 BINDER_KEY = "acme.bindings.{binding}.binder"
 DEFAULT_BINDER_KEY = "acme.default-binder"
 
@@ -74,9 +86,25 @@ def _document() -> Document:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.8",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _module_document() -> Document:
+    """The document carrying the module fact the dependency gate reads."""
+    return Document(
+        document_id="doc_module",
+        relative_path="module",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -157,28 +185,62 @@ def _address(**overrides: object) -> dict:
     return address
 
 
-def _catalog(matches: dict | None = None, *, direction: str = "inbound") -> Catalog:
+def _catalog(
+    matches: dict | None = None, *, direction: str = "inbound", protocol: str = "kafka"
+) -> Catalog:
+    """`protocol` is a parameter for one reason (OI-1): a catalog declaring no
+    `key` mints no endpoint row, and `resolve/endpoints.py` refuses a wire
+    identity on a catalog that mints none. Every catalog here that derives
+    rows keeps the default pair; the key-less ones declare neither, exactly as
+    the shipped `spring-integration.yml` does."""
     return Catalog(
         id="invented-bindings",
         style="config_join",
-        protocol="kafka",
+        protocol=protocol,
         direction=direction,
         requires=("resolved_config",),
         matches=matches if matches is not None else {"address_from_config": _address()},
         source=Path("tests/invented-bindings.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
 
 
 def _workspace(
     tmp_path: Path,
-    facts: list[SymbolFact] | None = None,
+    facts: list[SymbolFact] | list[SymbolFact | AnnotationFact] | None = None,
     config: list[tuple[str, str, str | None]] | None = None,
+    *,
+    coordinates: tuple[str, ...] | None = None,
 ) -> DuckDbWorkspace:
     """A workspace holding the given symbol facts and the given already
     resolved configuration — `(key, environment, value)`, a `None` value
     meaning the environment has the key but never resolved it (D01's
-    unresolved-with-a-reason row, spelled `missing_key` here)."""
+    unresolved-with-a-reason row, spelled `missing_key` here).
+
+    `coordinates=None` writes no module fact at all, which is what every test
+    below that reaches the engine DIRECTLY wants: the dependency gate lives in
+    `derive_endpoints`, not in the engine, so a direct call never asks. The
+    three tests that go through `derive_endpoints` name their coordinates,
+    because since `config_join` joined `DEPENDENCY_GATED` the answer to "does
+    this module declare the framework" decides whether the catalog runs at all
+    (`test_derived_resource.py`'s own `_workspace` precedent)."""
     write_fact_file(tmp_path / "facts" / "Bindings.jsonl", _document(), list(facts or []))
+    if coordinates is not None:
+        write_fact_file(
+            tmp_path / "facts" / "module.jsonl",
+            _module_document(),
+            [
+                ModuleFact(
+                    document_id="doc_module",
+                    module_id="com.acme:orders-service",
+                    module_kind="service",
+                    languages=["java"],
+                    source_roots=["src/main/java"],
+                    output_dirs=["target/classes"],
+                    dependency_coordinates=list(coordinates),
+                )
+            ],
+        )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     if config:
@@ -704,13 +766,29 @@ def test_the_module_default_binder_answers_a_binding_that_declares_none(
     assert row["protocol"] == "jms"
 
 
-def test_a_binder_name_the_catalog_does_not_map_falls_back_to_its_protocol(
-    tmp_path: Path,
-):
-    """An unmapped name is a gap to grow the catalog from, not a guess: the
-    row keeps the catalog's own declared protocol rather than inventing one
-    or dropping to NULL — the same discipline the media half keeps for a
-    serializer class absent from `values`."""
+@pytest.mark.pins("config_join.unmapped-binder-derives-no-row")
+def test_a_binder_name_the_catalog_does_not_map_derives_no_row(tmp_path: Path):
+    """F2 §3.4. This test pinned the opposite until W13, and its own name said
+    so: `..._falls_back_to_its_protocol`, on the stated grounds that "an
+    unmapped name is a gap to grow the catalog from, not a guess".
+
+    It was a guess. The row it asserted carried the catalog's declared
+    `protocol` — a value the matched evidence says nothing about — at
+    `resolved`, which is the defaulted-identity rule's own definition of the
+    defect (`tests/architecture/test_defaulted_identity_values.py`). That rule
+    audits `fluent` captures and could not see this one, because this default
+    lives in catalog data rather than in an engine.
+
+    It is the one defect in this analysis that leaves the bundle: `protocol` is
+    identity, DR-5 gates linking on protocol equality, and a row published on a
+    protocol nobody read links into another consumer's graph against endpoints
+    this module never speaks to.
+
+    No row now. The `binder_protocol` question that replaces it is asserted by
+    `test_an_unmapped_binder_derives_no_row_and_files_a_question` against the
+    SHIPPED catalog; this one keeps the invented-catalog half, where the map is
+    `{queues: jms}` and the configured name is `unheard-of`.
+    """
     workspace = _workspace(
         tmp_path,
         [_bean("handle", SINK, EVENT)],
@@ -723,10 +801,32 @@ def test_a_binder_name_the_catalog_does_not_map_falls_back_to_its_protocol(
     )
     address = _address(binder_key=BINDER_KEY, binder_protocols={"queues": "jms"})
     config_join.run(workspace, _catalog({"address_from_config": address}))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_binder_name_the_catalog_DOES_map_keeps_that_protocol(tmp_path: Path):
+    """The paired positive the test above needs: a change that dropped every
+    row whatever the binder said would pass it. `queues` is in the map, so the
+    row derives on `jms` — the mapped protocol, not the catalog's `kafka`."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("handle", SINK, EVENT)],
+        _selection("handle")
+        + _destination("handle-in-0", "events")
+        + [
+            (BINDER_KEY.replace("{binding}", "handle-in-0"), "default", "queues"),
+            (BINDER_KEY.replace("{binding}", "handle-in-0"), "prod", "queues"),
+        ],
+    )
+    address = _address(binder_key=BINDER_KEY, binder_protocols={"queues": "jms"})
+    config_join.run(workspace, _catalog({"address_from_config": address}))
     [row] = _rows(workspace)
     workspace.close()
 
-    assert row["protocol"] == "kafka"
+    assert row["protocol"] == "jms"
 
 
 # --- job 2: serializer media stamping ------------------------------------
@@ -758,6 +858,7 @@ def _media_catalog(rules: list[dict] | None = None, values: dict | None = None) 
             }
         },
         source=Path("tests/invented-media.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
 
 
@@ -878,63 +979,20 @@ def test_an_unresolved_media_key_stamps_nothing(tmp_path: Path):
     assert row["produces"] is None
 
 
-def test_the_merge_carries_a_deleted_twins_media_onto_the_surviving_row(
-    tmp_path: Path,
-):
-    """Checkpoint falsification F-4. `config_join` stamps BEFORE
-    `merge_endpoints.sql` runs (the merge is once-per-resolve, after every
-    engine), so a `produces` stamped on the outbound half of a path the
-    module both exposes and calls used to be destroyed with the twin the
-    merge deletes — leaving a `both` row that read as "no producer
-    declared", indistinguishable from a module that declares none.
-
-    The merge now coalesces both media columns off the twin, the same way it
-    already coalesces `peer`. D02 §3 calls these columns "carried data,
-    never identity — dedup and merge never *compare* these two columns";
-    carrying is not comparing, and the surviving row's own answer still
-    wins."""
-    workspace = _workspace(tmp_path)
-    _seed(
-        workspace,
-        {"direction": "inbound", "path": "shared", "consumes": JSON_MEDIA},
-        {"direction": "outbound", "path": "shared", "produces": JSON_MEDIA, "caller": "c"},
-    )
-    workspace.derive("endpoints_merge")
-    [row] = _rows(workspace)
-    workspace.close()
-
-    assert row["direction"] == "both"
-    assert row["consumes"] == JSON_MEDIA
-    assert row["produces"] == JSON_MEDIA
-
-
-def test_the_merge_keeps_the_surviving_rows_own_media_over_the_twins(
-    tmp_path: Path,
-):
-    """The coalesce is first-writer too: the twin only ever fills a column
-    the surviving row left NULL."""
-    workspace = _workspace(tmp_path)
-    _seed(
-        workspace,
-        {"direction": "inbound", "path": "shared", "produces": '["text/csv"]'},
-        {"direction": "outbound", "path": "shared", "produces": JSON_MEDIA, "caller": "c"},
-    )
-    workspace.derive("endpoints_merge")
-    [row] = _rows(workspace)
-    workspace.close()
-
-    assert row["produces"] == '["text/csv"]'
-
-
-# --- 2G Task 6: the merge's format carry ---------------------------------
-
-
 def _stamp_format(
-    workspace: DuckDbWorkspace, direction: str, caller: str | None, answer: tuple
+    workspace: DuckDbWorkspace,
+    direction: str,
+    caller: str | None,
+    answer: tuple,
+    media: tuple[str | None, str | None] = (None, None),
 ) -> None:
-    """One row's format pair, applied through the shipped `stamp_format`
-    derive rather than a hand-written UPDATE — the columns the merge below
-    carries have to arrive the way the format pass actually writes them."""
+    """One row's format pair, applied through the shipped `stamp_format` derive rather
+    than a hand-written UPDATE — the columns below have to arrive the way the format pass
+    actually writes them.
+
+    `media` is passed through because `stamp_format.sql` matches on `consumes`/`produces`
+    as well as on the wire identity: a row carrying a stamped media type is not the row a
+    format stamp naming NULL media would find."""
     workspace.derive(
         "stamp_format",
         rows=[
@@ -945,8 +1003,8 @@ def _stamp_format(
                 "path": "shared",
                 "handler": None,
                 "caller": caller,
-                "consumes": None,
-                "produces": None,
+                "consumes": media[0],
+                "produces": media[1],
                 "request_shape": None,
                 "response_shape": None,
                 "format": answer[0],
@@ -956,83 +1014,46 @@ def _stamp_format(
     )
 
 
-def test_the_merge_carries_a_deleted_twins_format_onto_the_surviving_row(tmp_path: Path):
-    """The two format columns (2G design §4) are carried for the same reason
-    the media columns above are: the twin is about to be DELETED, so anything
-    it alone answered goes with it unless the surviving row takes it.
+def test_each_direction_keeps_its_own_media_and_format(tmp_path: Path):
+    """What five tests about the MERGE's carrying rules were really protecting, now that
+    there is no merge (F5 §6.1, W27).
 
-    **Inert in the live pipeline today, deliberately tested anyway.**
-    `resolve/format.py` is the LAST pass of a resolve and this merge is the
-    last statement of `derive_endpoints`, so both columns are still NULL on
-    every row when the merge runs live. The carry exists because the day
-    anything stamps a format before the merge — a derivation reading one off
-    a declaration, a reordered pipeline — a silently discarded half would
-    look exactly like a module that declared no format. Stamping the rows
-    here first is what makes the rule observable at all."""
+    `config_join` stamps `produces` on the outbound half of a path the module both exposes
+    and calls. That stamp used to be destroyed with the twin `merge_endpoints.sql` deleted,
+    leaving one row reading "no producer declared" — indistinguishable from a module that
+    declares none — and the fix was to make the merge coalesce both media columns, both
+    format columns, and take the weaker of the two format markers.
+
+    None of that machinery exists any more, because neither row is deleted. Each half keeps
+    what was stamped on it, which is stronger than carrying: a `format` from one direction
+    beside a `format_resolution` from the other was possible under `arg_min` and is not
+    possible here, and "some client of this path declared this peer" no longer has to stand
+    in for saying which client.
+    """
     workspace = _workspace(tmp_path)
     _seed(
         workspace,
-        {"direction": "inbound", "path": "shared"},
-        {"direction": "outbound", "path": "shared", "caller": "c"},
+        {"direction": "inbound", "path": "shared", "consumes": JSON_MEDIA},
+        {"direction": "outbound", "path": "shared", "produces": JSON_MEDIA, "caller": "c"},
     )
-    _stamp_format(workspace, "inbound", None, (None, None))
-    _stamp_format(workspace, "outbound", "c", ("json", "resolved"))
-    workspace.derive("endpoints_merge")
-    [row] = _rows(workspace)
+    _stamp_format(workspace, "inbound", None, (None, "unresolved"), (JSON_MEDIA, None))
+    _stamp_format(workspace, "outbound", "c", ("protobuf", "resolved"), (None, JSON_MEDIA))
+    rows = {str(row["direction"]): row for row in _rows(workspace)}
     workspace.close()
 
-    assert row["direction"] == "both"
-    assert (row["format"], row["format_resolution"]) == ("json", "resolved")
-
-
-def test_the_merge_takes_the_weaker_of_the_two_format_resolutions(tmp_path: Path):
-    """`format` coalesces (the surviving row's own answer first, the media
-    precedent); `format_resolution` does NOT — it takes the WEAKER of the two
-    markers present, ordering `unresolved` < `narrowed` < `resolved`.
-
-    The rule exists so a half that only GUESSED cannot launder into an
-    observation by being merged with a half that knew. Here the inbound half
-    says `json` at the observed tier and the outbound half says `json` at the
-    assumed one: the surviving row keeps `json` — both halves agree on it —
-    but must report it as assumed, because one of the two directions of this
-    single wire identity was never actually observed."""
-    workspace = _workspace(tmp_path)
-    _seed(
-        workspace,
-        {"direction": "inbound", "path": "shared"},
-        {"direction": "outbound", "path": "shared", "caller": "c"},
+    assert set(rows) == {"inbound", "outbound"}, "the two halves are never folded together"
+    assert (rows["inbound"]["consumes"], rows["inbound"]["produces"]) == (JSON_MEDIA, None)
+    assert (rows["outbound"]["consumes"], rows["outbound"]["produces"]) == (None, JSON_MEDIA)
+    # The weakening rule went with the merge: an unanswered half no longer drags a
+    # resolved one down, because there is no shared row for it to drag.
+    assert (rows["inbound"]["format"], rows["inbound"]["format_resolution"]) == (
+        None,
+        "unresolved",
     )
-    _stamp_format(workspace, "inbound", None, ("json", "resolved"))
-    _stamp_format(workspace, "outbound", "c", ("json", "narrowed"))
-    workspace.derive("endpoints_merge")
-    [row] = _rows(workspace)
-    workspace.close()
-
-    assert (row["format"], row["format_resolution"]) == ("json", "narrowed")
-
-
-def test_the_merge_lets_an_unresolved_half_weaken_the_whole_row(tmp_path: Path):
-    """`unresolved` is the weakest of the three markers, so a half that could
-    not be answered drags the merged row down to it — even though `format`
-    itself still coalesces to the answer the other half had.
-
-    That pair reads oddly on purpose: "this is the format one direction
-    declared, and this row as a whole is not settled" is exactly the honest
-    reading of one wire identity whose two halves were not equally
-    observable."""
-    workspace = _workspace(tmp_path)
-    _seed(
-        workspace,
-        {"direction": "inbound", "path": "shared"},
-        {"direction": "outbound", "path": "shared", "caller": "c"},
+    assert (rows["outbound"]["format"], rows["outbound"]["format_resolution"]) == (
+        "protobuf",
+        "resolved",
     )
-    _stamp_format(workspace, "inbound", None, (None, "unresolved"))
-    _stamp_format(workspace, "outbound", "c", ("protobuf", "resolved"))
-    workspace.derive("endpoints_merge")
-    [row] = _rows(workspace)
-    workspace.close()
-
-    assert (row["format"], row["format_resolution"]) == ("protobuf", "unresolved")
 
 
 # --- job 3: the peer join ------------------------------------------------
@@ -1177,6 +1198,7 @@ def test_the_engine_is_registered_for_the_style_and_runs_after_every_other(
         tmp_path,
         facts,
         _selection("handle") + _destination("handle-in-0", "events"),
+        coordinates=(INVENTED_COORDINATE,),
     )
     call_site_catalog = Catalog(
         id="invented-caller",
@@ -1215,45 +1237,56 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
 
     The filenames are deliberately adverse, the same pattern the runs-last
     test above uses: `invented-a-stamper.yml` sorts BEFORE
-    `invented-z-bindings.yml`, both declare `direction: inbound`, and both are
+    `invented-z-bindings.yml`, neither is `direction: inbound`, and both are
     the same style — so the filename tiebreak alone would run the stamper
-    first and leave the binding row's `consumes` NULL. The rank is what makes
-    it land."""
+    first and leave the binding row's `produces` NULL. The rank is what makes
+    it land.
+
+    **The binding side is OUTBOUND for the sake of that adversity (OI-1).** A
+    stamping catalog now declares no wire identity at all — it mints no
+    endpoint row, so `resolve/endpoints.py` refuses the pair on it — and an
+    absent `direction` sorts on the wrong side of the `direction != "inbound"`
+    tiebreak. Against an INBOUND binding catalog the tiebreak alone would
+    order these two correctly and the rank under test would never be
+    consulted."""
     workspace = _workspace(
         tmp_path,
-        [_bean("handle", SINK, EVENT)],
-        _selection("handle")
-        + _destination("handle-in-0", "events")
+        [_bean("emit", SOURCE, EVENT)],
+        _selection("emit")
+        + _destination("emit-out-0", "events")
         + [(MEDIA_KEY, "default", WRITER), (MEDIA_KEY, "prod", WRITER)],
+        coordinates=(INVENTED_COORDINATE,),
     )
     binding_catalog = Catalog(
         id="invented-z-bindings",
         style="config_join",
         protocol="kafka",
-        direction="inbound",
+        direction="outbound",
         requires=("resolved_config",),
         matches={"address_from_config": _address()},
         source=Path("tests/invented-z-bindings.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
     stamping_catalog = Catalog(
         id="invented-a-stamper",
         style="config_join",
-        protocol="kafka",
-        direction="inbound",
+        protocol="",
+        direction="",
         requires=("resolved_config",),
         matches={
             "media_from_config": {
                 "rules": [
                     {
                         "key": MEDIA_KEY,
-                        "fills": "consumes",
-                        "on": {"protocol": "kafka", "direction": "inbound"},
+                        "fills": "produces",
+                        "on": {"protocol": "kafka", "direction": "outbound"},
                     }
                 ],
                 "values": {WRITER: "application/json"},
             }
         },
         source=Path("tests/invented-a-stamper.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
     )
     skipped = derive_endpoints(
         workspace, [stamping_catalog, binding_catalog], capabilities=CAPABILITIES
@@ -1263,7 +1296,7 @@ def test_a_stamping_catalog_runs_after_every_deriving_one_whatever_its_filename(
 
     assert skipped == []
     assert row["path"] == "events"
-    assert row["consumes"] == JSON_MEDIA
+    assert row["produces"] == JSON_MEDIA
 
 
 def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
@@ -1308,7 +1341,7 @@ def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
                     "binding": {"from": "annotation", "suffix": _suffix_rules()},
                 }
             },
-            "must be `bean_name`",
+            "must be one of `annotation_value`, `bean_name`",
         ),
         (
             {
@@ -1429,3 +1462,1350 @@ class _UnusedWorkspace:
 
     def derive(self, name: str, **params: object) -> None:
         raise AssertionError(f"derived {name} on a catalog that should have been refused")
+
+
+# --- `A-C5` (principles sweep §3.2): the dependency gate ---------------------
+#
+# Against the SHIPPED `spring-cloud-stream` catalog rather than an invented
+# stand-in, because the defect is not in the engine's reading of catalog data —
+# it is that the shipped file's whole match reduces, on a module with no
+# configuration, to "this method returns a `java.util.function` interface",
+# which ordinary Java satisfies constantly.
+
+_STREAM = "org.springframework.cloud:spring-cloud-stream"
+
+
+def _helpers_facts() -> list[SymbolFact]:
+    """Three ordinary utility methods on a plain class. No `@Bean`, no
+    `@Configuration`, nothing naming Spring Cloud Stream anywhere — the exact
+    input sweep 1 measured four fabricated Kafka boundaries from."""
+    return [
+        _bean(
+            "nameNormalizer",
+            "java.util.function.Function",
+            "java/lang/String#",
+            "java/lang/String#",
+        ),
+        _bean("auditSink", "java.util.function.Consumer", "java/lang/String#"),
+        _bean("clockSupplier", "java.util.function.Supplier", "java/time/Clock#"),
+    ]
+
+
+def _stream_catalog() -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-cloud-stream")
+
+
+def test_spring_cloud_stream_derives_nothing_for_a_module_that_does_not_declare_it(
+    tmp_path: Path,
+):
+    """`A-C5`, the near-miss. Three `java.util.function`-returning methods on a
+    plain class, in a module whose build declares no Spring Cloud Stream at
+    all, asserted four Kafka boundaries: `path` NULL at `unresolved`, naming
+    real application methods as their handlers.
+
+    Nothing about that row set is an address fabrication — it is worse in kind.
+    It asserts the EXISTENCE of four boundaries the module does not have, which
+    is §8's cardinal sin with the address column left honest.
+
+    `rows == []` is the assertion the sweep's Tier-1 backlog requires, and the
+    skip beside it is the other half: a catalog that derives nothing must be
+    distinguishable from a framework that exposes nothing (M04, FR-17)."""
+    # The selection NAMES one helper, so `rows == []` is attributable to the gate
+    # and to nothing else. Without it the three helpers bind nothing for the
+    # CARDINALITY reason (F2 §3.4) — measured: with the gate removed entirely,
+    # `rows == []` still held, and only the `skipped` bookkeeping assertion below
+    # caught it. A near-miss satisfied by a second, unrelated rule proves nothing
+    # about the rule it names.
+    workspace = _workspace(
+        tmp_path,
+        _helpers_facts(),
+        _bindings(
+            ("spring.cloud.function.definition", "auditSink"),
+            ("spring.cloud.stream.bindings.auditSink-in-0.destination", "audit.events"),
+        ),
+        coordinates=("com.acme:something-else",),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [entry.catalog_id for entry in skipped] == ["spring-cloud-stream"]
+    assert _STREAM in skipped[0].missing_capabilities[0]
+
+
+def test_spring_cloud_stream_still_derives_for_a_module_that_does_declare_it(
+    tmp_path: Path,
+):
+    """The paired positive. Same facts, one coordinate different — so what the
+    near-miss above proves is the GATE and not some other conjunct quietly
+    matching nothing. A rule that declined everything would pass the near-miss
+    and look correct all the way down (§10).
+
+    It also records what the gate does NOT close, which is the honest half:
+    `_candidates` reads every declared method and filters on the return type
+    alone, so a utility method that merely RETURNS a functional interface is a
+    candidate. Narrowing that needs a `@Bean` conjunct, and whether Spring Cloud
+    Stream actually requires `@Bean` is a framework question no probe in this
+    repository has answered — §8.1 forbids inventing the conjunct, so it is
+    stated in `docs/COVERAGE.md` instead.
+
+    **The selection is now load-bearing here, and was not before W13.** These
+    three helpers used to derive four boundaries with no
+    `spring.cloud.function.definition` at all. F2 §3.4's cardinality rule ends
+    that — three candidates and no selection bind NOTHING, because the framework
+    binds nothing (`eligibleFunction.size() == 1`) — so this test names one, and
+    what it proves is unchanged: the gate is what the near-miss above measures,
+    not some other conjunct silencing everything.
+
+    Selecting `auditSink` rather than asserting on all three is also the smaller
+    claim: one selected bean is enough to show rows derive at all."""
+    workspace = _workspace(
+        tmp_path,
+        _helpers_facts(),
+        # The SHIPPED catalog's own keys, not `_selection`/`_destination` — those
+        # spell the invented framework's (`acme.function.definition`), and this
+        # test drives `spring-cloud-stream.yml`.
+        _bindings(
+            ("spring.cloud.function.definition", "auditSink"),
+            ("spring.cloud.stream.bindings.auditSink-in-0.destination", "audit.events"),
+        ),
+        coordinates=(_STREAM,),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert {row["handler"] or row["caller"] for row in rows} != set()
+
+
+# --- the `stamp_media.sql` settlement (principles sweep §7.4) ---------------
+#
+# Two sweeps touched this file and neither read it. Sweep 1 (backlog row 33)
+# alleged that the UPDATE matches on `(protocol, direction)` ONLY — no
+# `catalog_id`, no module scoping — so one module's
+# `spring.kafka.producer.value-serializer` would stamp every `kafka/outbound`
+# row in the workspace including rows other catalogs derived, and marked the
+# row unverified. Sweep 2 (#25) recorded `spring-kafka-media.yml`'s own
+# narrower claim — "a stamp lands only where every resolved environment agrees,
+# and never over a non-NULL column" — as UNVERIFIED for the opposite reason.
+#
+# The SQL settles both. Sweep 2's claim is TRUE, and two tests above already
+# proved each half against the engine. Sweep 1's is half true: the match really
+# is `(protocol, direction)` alone, so it does reach rows another catalog
+# derived — which is this catalog's whole PURPOSE, since it derives none of its
+# own — but the CROSS-MODULE half is impossible. `endpoints` has no `module`
+# column at all (`storage/duckdb/schema.sql`), `api.py` gives every submodule
+# its own workspace, and `resolve()` runs once per module, so one module's
+# configuration cannot reach another module's rows by any path.
+#
+# What is left is the reach WITHIN one module, and the two tests below pin it
+# against the SHIPPED catalog rather than an invented one, because the question
+# is about a real key on a real row set.
+
+_KAFKA_MEDIA_KEY = "spring.kafka.producer.value-serializer"
+_JSON_SERIALIZER = "org.springframework.kafka.support.serializer.JsonSerializer"
+
+
+def _shipped_media_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-kafka-media")
+
+
+def test_a_media_stamp_reaches_every_kafka_row_in_the_module_whatever_derived_it(
+    tmp_path: Path,
+):
+    """§7.4, settled and pinned. `stamp_media.sql` matches on
+    `(protocol, direction)` and nothing else, so a `spring.kafka.*` serializer
+    stamps rows `kafka-clients.yml` derived from a RAW `KafkaProducer` as well
+    as rows `spring-kafka-template.yml` derived.
+
+    That is deliberate for the template — `spring-kafka-media.yml` derives no
+    rows of its own and exists only to stamp others' — and it is an
+    OVER-REPORT for the raw producer, which builds its own `Properties` and
+    reads no `spring.kafka.*` key. The column is `produces`, carried data
+    rather than identity: no address, verb or protocol is affected, and dedup
+    and merge never compare it. It is recorded here rather than fixed because
+    scoping a rule to a set of catalog ids is a D02 §2d schema change, and
+    because the fix must not throw away the cross-catalog reach the rule needs.
+
+    Bounded by the dependency gate: `config_join` joined `DEPENDENCY_GATED` in
+    round 1a, so this catalog runs only on a module whose build declares
+    `org.springframework.kafka:spring-kafka` — a module using the raw producer
+    ALONE is never stamped at all. **Falsified by** a module that declares
+    spring-kafka and also publishes through a raw `KafkaProducer` configured
+    differently."""
+    workspace = _workspace(
+        tmp_path,
+        config=[
+            (_KAFKA_MEDIA_KEY, "default", _JSON_SERIALIZER),
+            (_KAFKA_MEDIA_KEY, "prod", _JSON_SERIALIZER),
+        ],
+    )
+    _seed(
+        workspace,
+        {"path": "orders", "catalog_id": "spring-kafka-template"},
+        {"path": "raw-audit", "catalog_id": "kafka-clients"},
+    )
+    config_join.run(workspace, _shipped_media_catalog())
+    rows = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows["orders"]["produces"] == JSON_MEDIA
+    assert rows["raw-audit"]["produces"] == JSON_MEDIA
+
+
+def test_a_media_stamp_reaches_no_row_of_another_protocol_or_direction(tmp_path: Path):
+    """The near-miss for the same settlement, and the half sweep 1's row does
+    NOT allege: the two columns the rule DOES name are honoured exactly. A
+    `kafka/inbound` row and an `amqp/outbound` row sit beside the stamped ones
+    and neither is touched, so the reach is wide within one `(protocol,
+    direction)` pair and zero outside it.
+
+    It discriminates: dropping either predicate from the UPDATE's WHERE makes
+    this fail with a producer's serializer stamped onto a consumer's row."""
+    workspace = _workspace(
+        tmp_path,
+        config=[
+            (_KAFKA_MEDIA_KEY, "default", _JSON_SERIALIZER),
+            (_KAFKA_MEDIA_KEY, "prod", _JSON_SERIALIZER),
+        ],
+    )
+    _seed(
+        workspace,
+        {"path": "orders"},
+        {"path": "orders-in", "direction": "inbound"},
+        {"path": "orders-amqp", "protocol": "amqp"},
+    )
+    config_join.run(workspace, _shipped_media_catalog())
+    rows = {row["path"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows["orders"]["produces"] == JSON_MEDIA
+    assert (rows["orders-in"]["produces"], rows["orders-in"]["consumes"]) == (None, None)
+    assert (rows["orders-amqp"]["produces"], rows["orders-amqp"]["consumes"]) == (None, None)
+
+
+# --- job 1's SECOND binding source: `from: annotation_value` (Task 9) ------
+#
+# The name a `config_join` catalog asks configuration about no longer has to
+# be a bean's own method name. It may be the VALUE OF AN ANNOTATION ARGUMENT
+# — a channel name written on the method the framework wires to that channel —
+# which the probe measured reaching the fact stream verbatim, keyed by
+# attribute name (`scripts/probes/spring-integration-destinations.md`, Q2).
+#
+# The vocabulary below is invented for the same reason every other block in
+# this file is: a test that reached for the real framework's spellings would
+# not prove the engine reads catalog data rather than knowing them. The
+# shipped catalog's own answers are pinned separately, in the section after
+# this one.
+
+HANDLERS = "com/acme/streams/Handlers#"
+ACTIVATOR = "com.acme.fn.Activator"
+ACTIVATOR_SYMBOL = "com/acme/fn/Activator#"
+EMITTER = "com.acme.fn.Emitter"
+EMITTER_SYMBOL = "com/acme/fn/Emitter#"
+CHANNEL_KEY = "acme.channels.{binding}.destination"
+
+
+def _handler(name: str) -> SymbolFact:
+    """One ordinary declared method — the target a channel annotation sits on.
+    Its return type is `void`, so it is not a candidate for any suffix rule
+    above and the two binding sources cannot be confused for each other."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=f"{_MODULE}{HANDLERS}{name}(sig_{name}).",
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + HANDLERS,
+        signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+    )
+
+
+def _handler_symbol(name: str) -> str:
+    return f"{_MODULE}{HANDLERS}{name}(sig_{name})."
+
+
+def _annotated(
+    args: dict[str, object],
+    *,
+    annotation: str = ACTIVATOR_SYMBOL,
+    target: str = "handle",
+) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_handler_symbol(target),
+        use=AnnotationUse(annotation=annotation, args=args),
+        retention="RUNTIME",
+    )
+
+
+def _channel_rules() -> list[dict]:
+    """Two annotations, three attributes, each with the direction the
+    framework's own attribute means — the whole of what this source needs to
+    be told, and all of it catalog data."""
+    return [
+        {"annotation": ACTIVATOR, "arg": "inputChannel", "direction": "inbound"},
+        {"annotation": ACTIVATOR, "arg": "outputChannel", "direction": "outbound"},
+        {"annotation": EMITTER, "arg": "channel", "direction": "outbound"},
+    ]
+
+
+def _channel_address(**overrides: object) -> dict:
+    binding: dict = {"from": "annotation_value", "channels": _channel_rules()}
+    binding.update(overrides.pop("binding", {}))  # type: ignore[arg-type]
+    address: dict = {"key": CHANNEL_KEY, "binding": binding}
+    address.update(overrides)
+    return address
+
+
+def _channel_catalog(
+    address: dict | None = None, *, direction: str = "inbound", protocol: str = "kafka"
+) -> Catalog:
+    return _catalog(
+        {"address_from_config": address if address is not None else _channel_address()},
+        direction=direction,
+        protocol=protocol,
+    )
+
+
+def _channel_destination(channel: str, value: str | None) -> list[tuple[str, str, str | None]]:
+    key = CHANNEL_KEY.replace("{binding}", channel)
+    return [(key, "default", value), (key, "prod", value)]
+
+
+def test_a_channel_named_by_an_annotation_argument_derives_a_row_from_its_key(
+    tmp_path: Path,
+):
+    """The whole second source in one row. Nothing about this method's own
+    NAME matters — `handle` appears in no key — and nothing about its return
+    type matters either. The annotation argument carries the name,
+    configuration says what the name means, and the annotated method is the
+    row's handler."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+        _channel_destination("ordersIn", "orders.queue"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["protocol"] == "kafka"
+    assert row["direction"] == "inbound"
+    assert row["method"] is None
+    assert row["path"] == "orders.queue"
+    assert row["handler"] == _handler_symbol("handle")
+    assert row["caller"] is None
+    assert row["peer"] is None
+    assert row["resolution"] == "resolved"
+    assert row["evidence"] == "compiler"
+    assert row["catalog_id"] == "invented-bindings"
+    # A channel annotation names a channel and nothing else: no functional
+    # type argument was read, so no payload is claimed for it.
+    assert row["request_shape"] is None
+    assert row["handler_signature"] is None
+
+
+def test_one_annotation_naming_two_channels_derives_a_row_for_each_direction(
+    tmp_path: Path,
+):
+    """Both attributes of one use are read, and each carries the direction its
+    own catalog row declares — the method CONSUMES from one channel and SENDS
+    to the other, which is two boundaries and not one row whose direction
+    cannot say which. `handler` and `caller` follow D01 §3's direction rule,
+    exactly as the bean source's both-halves case does."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("handle"),
+            _annotated({"inputChannel": "ordersIn", "outputChannel": "auditOut"}),
+        ],
+        _channel_destination("ordersIn", "orders.queue")
+        + _channel_destination("auditOut", "audit.queue"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    rows = {row["direction"]: row for row in _rows(workspace)}
+    workspace.close()
+
+    assert set(rows) == {"inbound", "outbound"}
+    assert rows["inbound"]["path"] == "orders.queue"
+    assert rows["inbound"]["handler"] == _handler_symbol("handle")
+    assert rows["inbound"]["caller"] is None
+    assert rows["outbound"]["path"] == "audit.queue"
+    assert rows["outbound"]["caller"] == _handler_symbol("handle")
+    assert rows["outbound"]["handler"] is None
+
+
+def test_a_second_annotation_the_catalog_declares_contributes_its_own_channel(
+    tmp_path: Path,
+):
+    """`channels` is a LIST of `(annotation, attribute)` rules, not one
+    annotation with several attributes: a framework spells "this method feeds
+    a channel" with more than one annotation, and each names its attribute."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("tick"),
+            _annotated({"channel": "ticks"}, annotation=EMITTER_SYMBOL, target="tick"),
+        ],
+        _channel_destination("ticks", "ticks.topic"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["direction"], row["path"]) == ("outbound", "ticks.topic")
+    assert row["caller"] == _handler_symbol("tick")
+
+
+def test_a_channel_no_configuration_key_answers_derives_no_row_and_no_ghost_row(
+    tmp_path: Path,
+):
+    """The rule that separates this source from the bean one, and it is a
+    deliberate asymmetry (Task 9 step 5).
+
+    A bean-name binding whose key nobody answered still derives a row: the
+    BEAN is the declaration, it exists, and only its address is unread. A
+    channel name is not a declaration of a wire at all — it names an
+    in-process pipe — so a row with `path` NULL would assert a boundary
+    nothing in the module states. There is no endpoint row and no ghost row;
+    the channel becomes a question instead (`gaps` below)."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+    )
+    config_join.run(workspace, _channel_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_catalog_declaring_no_key_template_derives_nothing(tmp_path: Path):
+    """`key` is OPTIONAL for this source and required for the other, because
+    the two are asking different questions. A framework whose channels have no
+    standard configuration key at all declares none — the catalog then asks
+    configuration nothing, derives nothing, and every channel it finds files a
+    question. Left required, such a catalog would have to invent a key
+    template, which is a convention no framework states."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+        _channel_destination("ordersIn", "orders.queue"),
+    )
+    address = _channel_address()
+    del address["key"]
+    config_join.run(workspace, _channel_catalog(address))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_two_methods_on_one_channel_whose_destination_resolves_derive_one_row(
+    tmp_path: Path,
+):
+    """Wire identity dedups here exactly as it does for every other style
+    (D02 §5): one destination, one direction, one protocol is one boundary,
+    however many methods the framework subscribes to it."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("handle"),
+            _handler("audit"),
+            _annotated({"inputChannel": "ordersIn"}),
+            _annotated({"inputChannel": "ordersIn"}, target="audit"),
+        ],
+        _channel_destination("ordersIn", "orders.queue"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["direction"], row["path"]) for row in rows] == [("inbound", "orders.queue")]
+
+
+def test_a_channel_expression_is_asked_about_verbatim_and_never_substituted(
+    tmp_path: Path,
+):
+    """The probe measured a placeholder-valued channel attribute reaching the
+    facts verbatim and unresolved, which is the honest answer. The engine asks
+    configuration about the expression exactly as written: it resolves nothing
+    on the way in, so a key template built from `${...}` finds nothing and the
+    channel becomes a question rather than a guessed name."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "${acme.audit-channel}"})],
+        _channel_destination("${acme.audit-channel}", "audit.queue"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert row["path"] == "audit.queue"
+
+
+def test_an_annotation_argument_that_is_not_a_string_names_no_channel(tmp_path: Path):
+    """A channel name is a string. An attribute the extractor recorded as an
+    array, a nested annotation or a number is not one, and turning any of them
+    into text would ask configuration about a name nobody wrote."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": ["ordersIn"]})],
+        _channel_destination("ordersIn", "orders.queue"),
+    )
+    config_join.run(workspace, _channel_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_empty_channel_name_names_no_channel(tmp_path: Path):
+    """The boundary value beside it. An attribute written empty is not a
+    channel, and a key template built from it would ask about
+    `acme.channels..destination` — a key whose answer belongs to nothing."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": ""})],
+        [("acme.channels..destination", "default", "orders.queue")],
+    )
+    config_join.run(workspace, _channel_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_annotation_value_catalog_declaring_no_channels_is_refused_by_name():
+    """`channels` is what `annotation_value` reads; a block declaring none
+    would run, read nothing and derive nothing, which reads as "this framework
+    wires no channels"."""
+    with pytest.raises(CatalogError) as raised:
+        config_join.run(
+            _UnusedWorkspace(),
+            _channel_catalog({"key": CHANNEL_KEY, "binding": {"from": "annotation_value"}}),
+        )
+
+    assert "`address_from_config.binding.channels` must be a non-empty list" in str(raised.value)
+    assert "invented-bindings.yml" in str(raised.value)
+
+
+def test_a_channel_rule_missing_its_attribute_is_refused_by_name():
+    """Both halves of a rule are matched VERBATIM against a fact, so a rule
+    that names only one of them can only ever decline — silently, forever."""
+    with pytest.raises(CatalogError) as raised:
+        config_join.run(
+            _UnusedWorkspace(),
+            _channel_catalog(_channel_address(binding={"channels": [{"annotation": ACTIVATOR}]})),
+        )
+
+    assert "must be `{annotation: <type>|[<type>, ...], arg: <attribute>" in str(raised.value)
+
+
+def test_a_channel_rule_declaring_a_direction_outside_the_closed_set_is_refused():
+    """NFR-5: the value reaches a derived row's `direction` column, where a
+    typo is indistinguishable from an observation."""
+    with pytest.raises(CatalogError) as raised:
+        config_join.run(
+            _UnusedWorkspace(),
+            _channel_catalog(
+                _channel_address(
+                    binding={
+                        "channels": [
+                            {"annotation": ACTIVATOR, "arg": "inputChannel", "direction": "up"}
+                        ]
+                    }
+                )
+            ),
+        )
+
+    assert "closed sets are closed" in str(raised.value)
+
+
+# --- the `channel_destination` hand-off (2O design §5) --------------------
+
+
+def test_a_channel_no_key_template_covers_files_a_question_naming_it(tmp_path: Path):
+    """The deliverable of the built-in shape. Nothing was derived — no wire
+    row, no ghost row — and the channel is not lost either: it becomes a
+    question carrying the two things an enrichment seat needs to answer it,
+    the channel name and the method the framework wires to it.
+
+    `candidates` is a LIST OF DICTS, the shape every other question kind uses
+    and every renderer arm expects."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+    )
+    address = _channel_address()
+    del address["key"]
+    questions = config_join.gaps(workspace, _channel_catalog(address))
+    workspace.close()
+
+    assert questions == [
+        {
+            "protocol": "kafka",
+            "method": None,
+            "path": "ordersIn",
+            "question": "channel_destination",
+            "candidates": json.dumps(
+                [{"channel": "ordersIn", "handler": _handler_symbol("handle")}],
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "evidence": (
+                "this catalog declares no destination key template, so no configuration "
+                "key names this channel's destination"
+            ),
+        }
+    ]
+
+
+def test_a_channel_whose_declared_key_nobody_answered_names_the_key_it_read(
+    tmp_path: Path,
+):
+    """The other reason, kept apart from the first because the trail is what a
+    reader acts on: a key WAS built and asked, and configuration did not
+    answer it with one value. The question names that key."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+        # Two environments disagreeing is one of the four ways `_agreed`
+        # answers None, and the honest one to prove here: both values stay in
+        # `resolved_config`, and neither becomes an address.
+        [
+            ("acme.channels.ordersIn.destination", "default", "dev.queue"),
+            ("acme.channels.ordersIn.destination", "prod", "prod.queue"),
+        ],
+    )
+    [question] = config_join.gaps(workspace, _channel_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert question["path"] == "ordersIn"
+    assert question["evidence"] == (
+        "resolved_config carries no value every environment agrees on for "
+        "`acme.channels.ordersIn.destination`"
+    )
+
+
+def test_a_channel_whose_destination_resolved_files_no_question(tmp_path: Path):
+    """The paired positive for the whole ledger half: the question is filed
+    where the answer is missing and nowhere else, so a channel the
+    configuration DID name reaches the endpoint table and not the inbox."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+        _channel_destination("ordersIn", "orders.queue"),
+    )
+    catalog = _channel_catalog()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [row["path"] for row in rows] == ["orders.queue"]
+    assert questions == []
+
+
+def test_one_channel_read_by_two_methods_files_a_question_for_each(tmp_path: Path):
+    """The question is about a channel AND the handler on it: two methods
+    subscribed to one unanswered channel are two hand-offs, because the
+    symbol is half of what makes the question answerable."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("handle"),
+            _handler("audit"),
+            _annotated({"inputChannel": "ordersIn"}),
+            _annotated({"inputChannel": "ordersIn"}, target="audit"),
+        ],
+    )
+    address = _channel_address()
+    del address["key"]
+    questions = config_join.gaps(workspace, _channel_catalog(address))
+    workspace.close()
+
+    assert [json.loads(q["candidates"])[0]["handler"] for q in questions] == [
+        _handler_symbol("audit"),
+        _handler_symbol("handle"),
+    ]
+
+
+def test_a_method_on_both_ends_of_one_unanswered_channel_asks_once(tmp_path: Path):
+    """The boundary beside it. One method that both consumes from and
+    publishes to the same channel asks ONE question — "what destination does
+    this channel carry" has one answer, and the direction is not part of it."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("relay"),
+            _annotated({"inputChannel": "loop", "outputChannel": "loop"}, target="relay"),
+        ],
+    )
+    address = _channel_address()
+    del address["key"]
+    questions = config_join.gaps(workspace, _channel_catalog(address))
+    workspace.close()
+
+    assert [question["path"] for question in questions] == ["loop"]
+
+
+def test_a_bean_name_catalog_files_no_question_at_all(tmp_path: Path):
+    """Inert for the other binding source, and that is a claim rather than an
+    omission: a bean-name binding whose key nobody answered already derives an
+    endpoint row saying so (D02 §2d), and a question beside it would be a
+    second record of a fact the endpoint table carries."""
+    workspace = _workspace(tmp_path, [_bean("handle", SINK, EVENT)], _selection("handle"))
+    questions = config_join.gaps(workspace, _catalog())
+    workspace.close()
+
+    assert questions == []
+
+
+def test_a_media_only_catalog_files_no_question_at_all(tmp_path: Path):
+    """Inert for the stamping shape too — it has no address block at all, so
+    there is no channel and nothing to ask about."""
+    workspace = _workspace(tmp_path)
+    questions = config_join.gaps(
+        workspace,
+        _catalog(
+            {
+                "media_from_config": {
+                    "rules": [
+                        {
+                            "key": MEDIA_KEY,
+                            "fills": "produces",
+                            "on": {"protocol": "kafka", "direction": "outbound"},
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    workspace.close()
+
+    assert questions == []
+
+
+def test_the_questions_ride_the_gaps_seam_and_survive_the_ledger_reset(tmp_path: Path):
+    """The step this task's own plan calls out (Task 9 step 2), and the reason
+    `gaps` exists rather than a write inside `run`: `open_questions` is
+    emptied ONCE per resolve, from the pipeline, AFTER the engine loop. A row
+    written during `run` would be erased before anything read it — silently,
+    because a shorter ledger reads exactly like a run with fewer questions.
+
+    Run through the whole pipeline rather than the seam function alone, so
+    what is proved is the ORDER and not just that a list was returned."""
+    workspace = _workspace(
+        tmp_path,
+        [_handler("handle"), _annotated({"inputChannel": "ordersIn"})],
+        coordinates=(INVENTED_COORDINATE,),
+    )
+    address = _channel_address()
+    del address["key"]
+    # No `key`, so no endpoint row, so no wire identity to declare (OI-1) —
+    # `derive_endpoints` refuses the pair on a catalog that mints none.
+    catalog = _channel_catalog(address, direction="", protocol="")
+    derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, [catalog])
+    questions = workspace.query("open_questions")
+    workspace.close()
+
+    assert [(row["question"], row["path"]) for row in questions] == [
+        ("channel_destination", "ordersIn")
+    ]
+
+
+# --- the path seam reads the ROW's own protocol and direction (step 4) ----
+
+
+def test_a_config_join_row_is_canonicalized_by_its_own_protocol_and_direction(
+    tmp_path: Path,
+):
+    """The Task 2 carry. `single_call` had this exact shape and this exact
+    bug: its rows carry a per-row `direction` while its path seam asked
+    `catalog.direction`, so the gate answered about a different row from the
+    one being minted. Both halves of a `config_join` row's identity are
+    per-row — direction from the suffix rule, protocol from the binder
+    configuration — so a gate reading either catalog default answers about
+    something else again.
+
+    One HTTP catalog declared OUTBOUND, two suffix rules, the same slashless
+    address: the rule overriding to inbound must become `/orders` (§8's
+    canonical identity, CP-1), and the rule keeping the catalog's own
+    direction must keep `orders` (ruling R8 — a client's relative mapping is
+    resolved against its base address's path, so prefixing it rewrites an
+    address rather than normalizing a spelling). The test therefore fails if
+    the seam reads either direction alone.
+
+    No shipped catalog reaches this branch, and that is stated rather than
+    hidden: `serves_urls` is inbound HTTP alone and both shipped `config_join`
+    catalogs speak broker protocols. It is written against the row because the
+    seam is a property of the address."""
+    catalog = Catalog(
+        id="invented-http-bindings",
+        style="config_join",
+        protocol="http",
+        direction="outbound",
+        requires=("resolved_config",),
+        matches={
+            "address_from_config": {
+                "key": DESTINATION_KEY,
+                "binding": {
+                    "from": "bean_name",
+                    "suffix": [
+                        {"when": {"implements": SINK}, "then": "-in-0", "direction": "inbound"},
+                        {"when": {"implements": SOURCE}, "then": "-out-0"},
+                    ],
+                },
+            }
+        },
+        source=Path("tests/invented-http-bindings.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
+    )
+    workspace = _workspace(
+        tmp_path,
+        [_bean("serve", SINK, EVENT), _bean("call", SOURCE, EVENT)],
+        _destination("serve-in-0", "orders") + _destination("call-out-0", "orders"),
+    )
+    config_join.run(workspace, catalog)
+    rows = {row["direction"]: row["path"] for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows == {"inbound": "/orders", "outbound": "orders"}
+
+
+def test_a_channel_row_takes_the_same_seam_from_its_own_channel_rule(tmp_path: Path):
+    """The same rule through the other binding source, because the direction
+    reaching `_addressed` comes from a different place there — a `channels`
+    rule rather than a suffix rule — and a seam wired to only one of them
+    would be right by accident."""
+    catalog = Catalog(
+        id="invented-http-channels",
+        style="config_join",
+        protocol="http",
+        direction="outbound",
+        requires=("resolved_config",),
+        matches={"address_from_config": _channel_address()},
+        source=Path("tests/invented-http-channels.yml"),
+        detect_coordinates=(INVENTED_COORDINATE,),
+    )
+    workspace = _workspace(
+        tmp_path,
+        [
+            _handler("handle"),
+            _annotated({"inputChannel": "ordersIn", "outputChannel": "auditOut"}),
+        ],
+        _channel_destination("ordersIn", "orders") + _channel_destination("auditOut", "orders"),
+    )
+    config_join.run(workspace, catalog)
+    rows = {row["direction"]: row["path"] for row in _rows(workspace)}
+    workspace.close()
+
+    assert rows == {"inbound": "/orders", "outbound": "orders"}
+
+
+# --- the SHIPPED `spring-integration` catalog ------------------------------
+#
+# Everything above is invented on purpose. This section is the other half:
+# what the file Sextant actually ships answers, in the framework's own
+# spellings, so a change to those spellings fails here rather than silently
+# covering nothing.
+
+_SI = "org/springframework/integration/annotation/"
+_SERVICE_ACTIVATOR = _SI + "ServiceActivator#"
+_INBOUND_ADAPTER = _SI + "InboundChannelAdapter#"
+_FLOW = "com/acme/orders/OrderFlow#"
+
+
+def _spring_integration() -> Catalog:
+    return next(
+        catalog
+        for catalog in YamlCatalogSource(CATALOGS_DIR).load()
+        if catalog.id == "spring-integration"
+    )
+
+
+def _flow_method(name: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=f"{_MODULE}{_FLOW}{name}(sig_{name}).",
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + _FLOW,
+        signature=Signature(parameters=[], returns=TypeRef(symbol="void#")),
+    )
+
+
+def _flow_annotation(
+    args: dict[str, object],
+    *,
+    annotation: str = _SERVICE_ACTIVATOR,
+    target: str = f"{_FLOW}handleOrder(sig_handleOrder).",
+) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + target,
+        use=AnnotationUse(annotation=annotation, args=args),
+        retention="RUNTIME",
+    )
+
+
+def test_the_shipped_catalog_files_a_question_for_every_channel_and_derives_no_wire(
+    tmp_path: Path,
+):
+    """The deliverable, whole (2O design §5). This catalog declares no `key`,
+    because Spring Integration defines no standard configuration key for a
+    channel's destination — a template here would be a PROJECT convention. So
+    it derives nothing at all, and every channel the code names becomes a
+    `channel_destination` question carrying the channel and the handler.
+
+    The two shapes measured by the probe are both here: the service
+    activator's `inputChannel`/`outputChannel` (Q2, Q3 — the same literal the
+    adapter's own `setOutputChannelName` writes) and the polled adapter's
+    `channel` (Q2). Never a fabricated wire, never `peer: in-process`.
+
+    **And no protocol on the questions either (OI-1).** Every one of these read
+    `amqp` from Task 9 until the wire-identity rule was re-keyed on what a
+    catalog derives: this file mints no endpoint row, so it declares no wire
+    identity, so the column the questions carry is empty rather than guessed.
+    Which broker a channel reaches — if any — is the question, not the answer
+    to it."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _flow_method("handleOrder"),
+            _flow_method("tick"),
+            _flow_annotation(
+                {"inputChannel": "amqpInputChannel", "outputChannel": "amqpAuditChannel"}
+            ),
+            _flow_annotation(
+                {"channel": "tickChannel"},
+                annotation=_INBOUND_ADAPTER,
+                target=f"{_FLOW}tick(sig_tick).",
+            ),
+        ],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [(q["protocol"], q["path"], q["question"]) for q in questions] == [
+        ("", "amqpAuditChannel", "channel_destination"),
+        ("", "amqpInputChannel", "channel_destination"),
+        ("", "tickChannel", "channel_destination"),
+    ]
+    assert json.loads(questions[1]["candidates"]) == [
+        {
+            "channel": "amqpInputChannel",
+            "handler": f"{_MODULE}{_FLOW}handleOrder(sig_handleOrder).",
+        }
+    ]
+
+
+@pytest.mark.declines("spring-integration")
+@pytest.mark.pins("spring-integration.channels-are-the-channel-attributes")
+def test_a_service_activator_naming_no_channel_attribute_asks_nothing(tmp_path: Path):
+    """`sendTimeout` is a real `@ServiceActivator` attribute, it is a `String`
+    exactly as the two channel attributes are, and it is not a channel. Every
+    conjunct but one is satisfied here — the shipped annotation, on a method,
+    with a string argument written — which is what makes this a near-miss
+    rather than an empty input.
+
+    Reading it would file a question about a channel called `3000` in the
+    ledger a human is asked to answer, and an enrichment seat would go looking
+    for a destination for a send timeout."""
+    workspace = _workspace(
+        tmp_path,
+        [_flow_method("handleOrder"), _flow_annotation({"sendTimeout": "3000"})],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+@pytest.mark.pins("config_join.channel-target-is-a-method")
+def test_a_channel_annotation_on_an_annotation_type_asks_nothing(tmp_path: Path):
+    """`@ServiceActivator` is `@Target`-legal on an ANNOTATION TYPE, which is
+    how a module composes its own stereotype. That declaration wires nothing
+    to any channel: no method subscribes, so a question there would send an
+    enrichment seat after a destination for a handler that does not exist.
+    `scheduled_work.declaration-is-a-method` is the same conjunct one table
+    over, and `derive_endpoints.sql`'s `handler-is-a-method` join is it on the
+    wire side."""
+    composed = "com/acme/orders/OnOrders#"
+    workspace = _workspace(
+        tmp_path,
+        [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + composed,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            _flow_annotation({"inputChannel": "amqpInputChannel"}, target=composed),
+        ],
+    )
+    catalog = _spring_integration()
+    config_join.run(workspace, catalog)
+    questions = config_join.gaps(workspace, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert (rows, questions) == ([], [])
+
+
+def test_the_shipped_catalog_is_skipped_where_the_build_declares_no_integration(
+    tmp_path: Path,
+):
+    """The dependency gate, and the paired positive for the near-misses above
+    in the other axis: a catalog that derived nothing must be distinguishable
+    from a framework that exposes nothing (M04, FR-17). `config_join` is
+    dependency-gated by STYLE, so this file is gated like the other two."""
+    workspace = _workspace(
+        tmp_path,
+        [_flow_method("handleOrder"), _flow_annotation({"inputChannel": "amqpInputChannel"})],
+        coordinates=("com.acme:something-else",),
+    )
+    skipped = derive_endpoints(
+        workspace, [_spring_integration()], capabilities={"resolved_config", "annotation_args"}
+    )
+    workspace.close()
+
+    assert [entry.catalog_id for entry in skipped] == ["spring-integration"]
+    assert "spring-integration-core" in skipped[0].missing_capabilities[0]
+
+
+# --- OI-1: the wire-identity rule, re-keyed on what a catalog DERIVES -------
+#
+# Task 8 keyed it on the STYLE, and `config_join` is a style whose catalogs
+# may or may not mint endpoint rows. Under that reading `spring-integration.yml`
+# had to declare a protocol to load, so it declared `amqp` and stamped it on
+# every `channel_destination` question it filed — a Kafka- or JMS-fed
+# channel's included. These four tests are the rule and its audit list
+# (§8.3); `test_call_engines` runs every shipped catalog through
+# `derive_endpoints`, which is what keeps the list honest as catalogs are
+# added.
+
+
+def test_a_catalog_with_no_destination_key_may_not_declare_a_wire_identity(tmp_path: Path):
+    """The arm OI-1 opened. No `key` means `_derive_channels` answers no
+    channel at all, so nothing this file writes has a protocol — and the one
+    place the declaration would still reach is the `protocol` column of the
+    questions it files, where it is a guess a reader believes."""
+    address = _channel_address()
+    del address["key"]
+    workspace = _workspace(tmp_path, [], coordinates=(INVENTED_COORDINATE,))
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [_channel_catalog(address)], capabilities=CAPABILITIES)
+    workspace.close()
+
+    assert "derives no endpoint rows" in str(raised.value)
+    assert "invented-bindings.yml" in str(raised.value)
+
+
+def test_a_catalog_that_does_derive_rows_still_must_declare_both(tmp_path: Path):
+    """The other arm, unchanged in effect and now asked of the catalog rather
+    than the style: a `key` is an address this file will publish, and a row
+    with no protocol is a boundary nobody can address."""
+    workspace = _workspace(tmp_path, [], coordinates=(INVENTED_COORDINATE,))
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(
+            workspace, [_channel_catalog(protocol="", direction="")], capabilities=CAPABILITIES
+        )
+    workspace.close()
+
+    assert "derives endpoint rows" in str(raised.value)
+    assert "invented-bindings.yml" in str(raised.value)
+
+
+def test_the_shipped_channel_catalog_declares_no_wire_identity():
+    """`spring-integration.yml`, pinned. It mints no endpoint row, so it has
+    no wire identity to state, and a later editor restoring `protocol: amqp`
+    to make the file look like its neighbours would be restoring OI-1 —
+    `amqp` on every question a Kafka- or JMS-fed channel files."""
+    catalog = _spring_integration()
+    assert (catalog.protocol, catalog.direction) == ("", "")
+    assert config_join.derives_rows(catalog) is False
+
+
+def test_the_shipped_media_catalog_declares_no_wire_identity():
+    """`spring-kafka-media.yml`, the other half of the audit list. It only
+    STAMPS columns onto rows other engines minted, and each of its own rules
+    carries the `(protocol, direction)` pair of the rows it applies to — the
+    top-level pair named nothing this file writes, and its `direction:
+    inbound` was flatly at odds with the outbound rule sitting beside the
+    inbound one."""
+    catalog = next(
+        entry
+        for entry in YamlCatalogSource(CATALOGS_DIR).load()
+        if entry.id == "spring-kafka-media"
+    )
+    assert (catalog.protocol, catalog.direction) == ("", "")
+    assert config_join.derives_rows(catalog) is False
+
+
+# --- F2 §3.4: cardinality, and the protocol that is never defaulted ---------
+#
+# Built on this file's own `_workspace`/`_bean` helpers rather than a second
+# harness: they already write the module fact the dependency gate reads, and a
+# private copy would be a second thing to keep in step with the catalog.
+
+
+def _stream_questions(workspace: DuckDbWorkspace) -> list[dict]:
+    """The questions the pipeline's own seam files, not `derive_endpoints`.
+
+    The ledger is emptied once per resolve and every `gaps` writer runs AFTER
+    that reset, from `service_identity` — so a test that called only
+    `derive_endpoints` would read zero questions for every shape, including the
+    one whose entire subject is a question.
+    """
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, [_stream_catalog()])
+    return workspace.query("open_questions")
+
+
+def _bindings(*pairs: tuple[str, str]) -> list[tuple[str, str, str | None]]:
+    """Configuration in the `(key, environment, value)` shape `_workspace` takes,
+    stated for one environment because none of these questions is per-profile."""
+    return [(key, "default", value) for key, value in pairs]
+
+
+# `_workspace(coordinates=None)` writes NO module fact, which is right for the
+# tests that call an engine directly. These four go through `derive_endpoints`,
+# whose dependency gate would skip the catalog and make every assertion below
+# hold for the wrong reason.
+_STREAM_COORDINATE = "org.springframework.cloud:spring-cloud-stream"
+
+
+@pytest.mark.pins("config_join.unselected-cardinality")
+def test_two_function_beans_and_no_definition_bind_nothing(tmp_path: Path):
+    """F2 §3.4's cardinality rule, mirrored from the framework's own code.
+
+    `SimpleFunctionRegistry.normalizeFunctionDefinition` opens its guard with
+    `eligibleFunction.size() == 1` — it defaults the definition to a bean only
+    where there is exactly one. With two eligible functions and no
+    `spring.cloud.function.definition` the definition stays empty and NOTHING
+    binds (`scripts/probes/w13_stream_binding.md`).
+
+    The catalog said the opposite in prose — "every candidate binds, the
+    framework's own default" — and derived one endpoint per bean for an
+    application that serves neither. A sentence naming the framework as its
+    authority, saying what the framework does not do.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [
+            _bean("orders", "java.util.function.Consumer", "java/lang/String#"),
+            _bean("payments", "java.util.function.Consumer", "java/lang/String#"),
+        ],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+            ("spring.cloud.stream.bindings.payments-in-0.destination", "payments.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert skipped == [], f"skipped, so this test measures nothing: {skipped}"
+    assert rows == []
+    # And the suppression is VISIBLE. Suppressing silently was the first version
+    # of this rule, on the reasoning that the framework binds nothing so no row is
+    # the complete answer — which needed our candidate count to equal the
+    # framework's. It does not: `_candidates` counts declared METHODS returning
+    # the declared interfaces, the framework counts registered BEANS. One real
+    # bean beside one ordinary helper derived nothing at all.
+    assert sorted((q["question"], q["path"]) for q in questions) == [
+        ("unselected_binding", "orders"),
+        ("unselected_binding", "payments"),
+    ]
+
+
+def test_one_function_bean_and_no_definition_still_binds(tmp_path: Path):
+    """The paired positive: the framework DOES default to a lone function, so a
+    rule that silenced both counts would pass the test above while losing every
+    single-function Stream application in the estate."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = [(r["protocol"], r["path"]) for r in _rows(workspace)]
+    workspace.close()
+
+    assert skipped == []
+    assert rows == [("kafka", "orders.topic")]
+
+
+@pytest.mark.declines("spring-cloud-stream")
+@pytest.mark.pins("config_join.unmapped-binder-derives-no-row")
+def test_an_unmapped_binder_derives_no_row_and_files_a_question(tmp_path: Path):
+    """F2 §3.4's second half, and the one defect in this analysis that leaves
+    the bundle.
+
+    A binder name absent from `binder_protocols` used to fall back to the
+    catalog's declared `protocol:`, so a module bound to `rocketmq` published a
+    row on `kafka` — complete, confident, with nothing saying the protocol had
+    not been read. `protocol` is IDENTITY and DR-5 gates linking on protocol
+    equality, so that row links into another consumer's graph against endpoints
+    this module never speaks to, and misses the ones it does.
+
+    No row now, and a `binder_protocol` question carrying the binding and the
+    configured name — the two things a reader needs to close it. The question's
+    own `protocol` is NULL: one that named a protocol would assert the very
+    thing it reports as unread.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "rocketmq"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [(q["question"], q["path"], q["protocol"]) for q in questions] == [
+        ("binder_protocol", "orders-in-0", None)
+    ]
+    assert "rocketmq" in str(questions[0]["candidates"])
+
+
+def test_a_mapped_binder_resolves_to_its_own_protocol_not_the_catalogs(tmp_path: Path):
+    """The paired positive for the protocol half. `rabbit` maps to `amqp`, so
+    this proves the map is READ rather than the file's `protocol: kafka` being
+    returned for everything — a change that made every unmapped name silent
+    could otherwise pass the test above by making every name silent."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "rabbit"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.queue"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = [(r["protocol"], r["path"]) for r in _rows(workspace)]
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == [("amqp", "orders.queue")]
+    assert questions == []
+
+
+def test_a_lone_bean_beside_a_helper_method_is_not_silently_suppressed(tmp_path: Path):
+    """The Critical this rule's first version introduced, kept as a test.
+
+    One real `Consumer` bean and one ordinary helper returning `Function` — a
+    shape the framework binds, because it counts registered BEANS and sees one.
+    `_candidates` counts declared METHODS returning the declared interfaces and
+    sees two, so the cardinality rule suppressed both and the module's real
+    binding vanished with nothing saying so.
+
+    The count cannot be fixed here — closing it needs a `@Bean` conjunct nobody
+    has measured yet (`docs/COVERAGE.md` records the over-count). What CAN be
+    fixed is the silence, and that is what this asserts: no fabricated row, and
+    no absence that reads like a module with no such boundary.
+    """
+    workspace = _workspace(
+        tmp_path,
+        [
+            _bean("orders", "java.util.function.Consumer", "java/lang/String#"),
+            _bean(
+                "nameHelper",
+                "java.util.function.Function",
+                "java/lang/String#",
+                "java/lang/String#",
+            ),
+        ],
+        _bindings(
+            ("spring.cloud.stream.default-binder", "kafka"),
+            ("spring.cloud.stream.bindings.orders-in-0.destination", "orders.topic"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert {q["question"] for q in questions} == {"unselected_binding"}
+    assert sorted(q["path"] for q in questions) == ["nameHelper", "orders"]
+
+
+def test_a_module_that_does_not_declare_the_dependency_files_no_question(tmp_path: Path):
+    """`record_service_identity_gaps` re-checks neither `requires` nor the
+    dependency gate, which costs nothing for a `gaps` that re-walks the same facts
+    `run` needed. This one reads `method_declarations` and `resolved_config`,
+    which a SKIPPED catalog's module still has — so it published a question
+    asserting a binding exists for a catalog the run explicitly declined.
+
+    The skip message names the parent-POM case, which is exactly when
+    configuration is present and the coordinate is not."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(("spring.cloud.stream.default-binder", "rocketmq")),
+        coordinates=("com.acme:something-else",),
+    )
+    skipped = derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert skipped != [], "the catalog was not skipped, so this test measures nothing"
+    assert questions == []
+
+
+def test_a_composed_definition_under_an_unmapped_binder_derives_no_row(tmp_path: Path):
+    """The degrade row took `catalog.protocol` unconditionally, bypassing the
+    binder resolution entirely — so `definition: a|b` under an unmapped binder
+    published `protocol: kafka`, a wire nobody read, on the very path §3.4 says
+    removes the default *entirely*. Its `path` is NULL so it never linked by
+    address, which is the only reason it was not the same defect as the row it
+    sits beside."""
+    workspace = _workspace(
+        tmp_path,
+        [_bean("orders", "java.util.function.Consumer", "java/lang/String#")],
+        _bindings(
+            ("spring.cloud.function.definition", "orders|payments"),
+            ("spring.cloud.stream.default-binder", "rocketmq"),
+        ),
+        coordinates=(_STREAM_COORDINATE,),
+    )
+    derive_endpoints(workspace, [_stream_catalog()], capabilities=CAPABILITIES)
+    rows = _rows(workspace)
+    questions = _stream_questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [q["question"] for q in questions] == ["binder_protocol"]

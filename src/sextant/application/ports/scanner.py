@@ -39,8 +39,39 @@ class ScanReport:
     documents: int
     facts: int
     scanner_id: str
-    scanner_version: str
+    # `group:artifact:version` per THIRD-PARTY library the scanner ran, in the
+    # order the producing build sorted them (NFR-1). Not a version of the
+    # scanner: a facility Sextant ships moves with `sextant_version` and has
+    # nothing of its own to record, while a library it depends on moves on
+    # someone else's release cycle and is the only version here a consumer can
+    # act on. Empty for a facility that uses none. Which libraries those are is
+    # the backend's business and is named only inside its own adapter
+    # (ARCHITECTURE §10).
+    scanner_libraries: tuple[str, ...] = ()
+    # What the jar says it can read, reported back on every scan. The same list
+    # `--capabilities` answers, so a workspace's record and the set its catalogs
+    # were gated on cannot disagree — and it is READ (`AsmScanner.scan`), not
+    # merely emitted, because a field nothing consumes is the defect this
+    # project keeps finding.
+    capabilities: tuple[str, ...] = ()
     uncovered: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ScannerProvenance:
+    """One facility that produced documents in a workspace.
+
+    A version exists only where the thing can move INDEPENDENTLY of Sextant.
+    `sextant-config-reader` and `sextant-detector` ship inside the wheel, so
+    their version is `sextant_version` and a separate copy of it carried no
+    information — it was two more hand-maintained literals that had never once
+    differed from the tool's own. A backend that runs THIRD-PARTY libraries in a
+    subprocess is different: those can move without Sextant moving at all, so
+    they are the versions worth recording, and each backend reports its own.
+    """
+
+    id: str
+    libraries: tuple[str, ...] = ()
 
 
 class Scanner(Protocol):

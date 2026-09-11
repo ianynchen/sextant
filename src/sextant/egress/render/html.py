@@ -217,7 +217,12 @@ def _section_html(section: Section) -> str:
     if isinstance(section, MachineSection):
         return _machine_html(section)
     if isinstance(section, MachineDiagram):
-        return _diagram_html(section.mermaid)
+        # The same caption a `DiagramClaim` gets, from the same `Elides: `
+        # prefix — a machine diagram that leaves something out says so in the
+        # place a reader already looks for that sentence. `None` passes
+        # through as no caption at all.
+        elides = None if section.elides is None else f"Elides: {section.elides}"
+        return _diagram_html(section.mermaid, caption=elides)
     if isinstance(section, EnrichmentSection):
         return _enrichment_html(section)
     if isinstance(section, StaleNoticeSection):

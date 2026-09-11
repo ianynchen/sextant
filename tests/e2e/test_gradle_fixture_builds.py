@@ -59,18 +59,20 @@ def test_the_real_wrapper_analyzes_both_modules_and_pins_three_endpoints():
             )
         raise AssertionError(f"module analyze failed: {result.output}\n{message}")
 
-    # `pricing-lib` applies `maven-publish` — Gradle's own publishing
-    # evidence makes it `kind == "library"` (2M design §2's Gradle-only
-    # deviation), which the CLI's `_skip_reason` gate skips outright: no
-    # classes to scan, no workspace of its own.
-    assert "skipped pricing-lib (com.acme:pricing-lib): kind is library" in result.output
-    # `service-app` carries no such evidence, so it is `undetermined` and
-    # still analyzed (2M design §2's post-fix-round-1 kind gate) — its three
-    # Spring MVC endpoints are what this test exists to pin end to end,
-    # through the real wrapper, not a capture.
+    # BOTH modules are analyzed. `pricing-lib` applies `maven-publish`, which
+    # until the 2026-09-04 user ruling made it `kind == "library"` and skipped
+    # it outright. Publishing says where artifacts GO, not what a module
+    # CONTAINS — and a library module carries real surface (its outbound
+    # clients and its shapes), so skipping it lost that. This assertion is the
+    # end-to-end pin for that ruling, through the real wrapper.
+    assert "analyzed pricing-lib (com.acme:pricing-lib):" in result.output
+    assert "skipped pricing-lib" not in result.output
+    # `service-app`'s three Spring MVC endpoints are what this test has always
+    # existed to pin end to end.
     assert "analyzed service-app (com.acme:service-app): 3 endpoints" in result.output
 
     modules_path = FIXTURE / ".sextant" / "modules.json"
     assert modules_path.is_file()
-    assert not (FIXTURE / "pricing-lib" / ".sextant" / "metadata.json").exists()
+    # Both now have their own workspace; `pricing-lib`'s used never to exist.
+    assert (FIXTURE / "pricing-lib" / ".sextant" / "metadata.json").is_file()
     assert (FIXTURE / "service-app" / ".sextant" / "metadata.json").is_file()

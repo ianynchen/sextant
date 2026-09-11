@@ -1,0 +1,143 @@
+id: spring-rabbit
+displayName: Spring AMQP (RabbitListener)
+style: annotation_driven
+protocol: amqp
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.amqp:spring-rabbit"]
+
+# `nested_annotation_args` (capability 9.16): a REPEATED `@RabbitListener`
+# reaches the class file only as the nested array inside `@RabbitListeners`
+# (`OI-36`), and `spring-kafka.yml`'s note gives the reason this is a
+# requirement rather than a nicety. It does NOT make the `queuesToDeclare`
+# and `bindings` attributes readable — those are a nested annotation's own
+# ATTRIBUTE, which no `path_from` alias can name, and that boundary stands.
+requires: [annotation_args, typed_signatures, nested_annotation_args]
+
+matches:
+  # No type-level gate: a listener method carries its own `@RabbitListener`
+  # (or, on a class-level, polymorphic listener, `@RabbitHandler`) directly.
+  # The `spring-kafka.yml` shape exactly, and for its reason — there is no
+  # marker interface or class annotation every listener shares.
+  request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
+                  fallback: sole_unannotated,
+                  excludes: [com.rabbitmq.client.Channel] }
+  mapping:
+    # CHECKPOINT FACT (javap, spring-rabbit 3.1.4): `@RabbitListener` declares
+    # `queues()` as `String[]`, `queuesToDeclare()` as `Queue[]` and
+    # `bindings()` as `QueueBinding[]`, and is `@Target({TYPE, METHOD,
+    # ANNOTATION_TYPE})`; `@RabbitHandler` is `@Target({METHOD,
+    # ANNOTATION_TYPE})` and declares only `isDefault()`.
+    #
+    # Only `queues` names a destination as TEXT. `queuesToDeclare` and
+    # `bindings` carry NESTED ANNOTATIONS, whose arguments the extractor
+    # reads only from capability 9.16 onward and which no catalog reads yet,
+    # so a listener that names its queue only through one of those derives
+    # NOTHING rather than a guess — a stated boundary in docs/COVERAGE.md,
+    # which stops being true the day a `path_from` alias can name an
+    # attribute inside a nested annotation.
+    path_from: [queues]
+    # CHECKPOINT FACT (class-level `@RabbitListener` + `@RabbitHandler`): the
+    # `spring-kafka.yml` shape, one framework over. A class-level
+    # `@RabbitListener` carries no method of its own to map, so it doubles as
+    # the `prefix_annotation` — its own `queues` value (the same known
+    # limitation: element 0 only, for a multi-queue class-level listener)
+    # becomes the prefix for every `@RabbitHandler` the class declares.
+    prefix_from: [queues]
+    # DELIBERATELY no `path_separator`, `spring-kafka.yml`'s reason exactly:
+    # the prefix above is a QUEUE NAME, and a queue name has no segments to
+    # join. A `/` at this seam would invent a destination no broker carries.
+    # A `@RabbitHandler` — carrying no queue attribute at all, so an empty
+    # suffix — is then the class-level queue unchanged.
+    method_from: method
+    # Verbless (D02 §2, amended): a listener declares no HTTP-style verb.
+    all_methods: []
+    # F2 §3.5's relationship conjunct. A class-level `@RabbitListener` and a
+    # method-level one are TWO INDEPENDENT REGISTRATIONS, not a prefix and a
+    # suffix — measured in `scripts/probes/w14_listener_registration.md`:
+    # `@RabbitListener` is `@Target(TYPE, METHOD)`, declares `queues` at both
+    # levels, and Rabbit's registrar declares two paths (one taking a
+    # `Class`, one a `Method`) with neither excluding the other. Composed, a
+    # class on `orders` and a method on `payments` published `orderspayments` —
+    # a destination no broker carries — at `resolved`.
+    #
+    # `@RabbitHandler` is unaffected and that is the point of the conjunct rather
+    # than of a special case: it declares exactly one attribute, `isDefault()`,
+    # and no destination, so it names none of its own and takes the class's
+    # under either value. The rule distinguishes "this member names a
+    # destination" from "this member names none", which is the distinction the
+    # framework itself makes.
+    class_level: sibling
+    prefix_annotation: org.springframework.amqp.rabbit.annotation.RabbitListener
+    annotations:
+      # A plain, method-level `@RabbitListener` — the ordinary listener shape.
+      #
+      # `container` names what javac writes for two `@RabbitListener` on one
+      # declaration (`OI-36`). MEASURED: CP-16 rows 2e/2f read
+      # `@Repeatable(RabbitListeners.class)` at 3.1.4 and 4.1.1, and row 4e
+      # shows the 3.1.4 post-processor streaming `RabbitListener` out of a
+      # `MergedAnnotations` view, which is the container-aware read.
+      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitListener,
+          container: org.springframework.amqp.rabbit.annotation.RabbitListeners }
+      # `@RabbitHandler` declares NO container, and that is now MEASURED rather
+      # than an unmeasured silence. CP-16 row 2 asked `@Repeatable` of the
+      # LISTENER annotation only (§8.1 rule 4, so this entry claimed nothing);
+      # CP-17 rows 2k/2l read `@Target({METHOD, ANNOTATION_TYPE})` with NO
+      # `@Repeatable` at 3.1.4 and 4.1.1 alike, and rows 3k/3l found no
+      # `org.springframework.amqp.rabbit.annotation.RabbitHandlers` in either
+      # jar.
+      #
+      # `@RabbitHandler` carries no queue attribute of its own (path suffix
+      # ''), and reaches a destination only through the class-level prefix
+      # above — the polymorphic, class-level shape.
+      - { fqn: org.springframework.amqp.rabbit.annotation.RabbitHandler }
+
+# Copied verbatim from spring-resttemplate.yml: shape (type) expansion is a
+# *global*, insert-if-absent pass keyed on the type symbol alone
+# (`derive_shapes`), so the FIRST catalog to reach a shared payload type is
+# the one that expands it, and every later catalog finds it already there.
+# Whichever catalog that turns out to be, ITS `wrappers` are the rules that
+# describe the type for everyone, regardless of protocol or direction — so a
+# file whose copy disagreed would make the answer depend on catalog sort order.
+#
+# No broker envelope is added here: a `@RabbitListener` method's raw-message
+# parameter type is `org.springframework.amqp.core.Message`, which is not a
+# generic envelope around a payload type the way Kafka's `ConsumerRecord<K,
+# V>` is — there is no type argument to unwrap.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# CP-16 measured what this file's `CHECKPOINT FACT` comments above asserted,
+# and found them right at both 3.1.4 and 4.1.1: `queues()` is `String[]`,
+# `queuesToDeclare()` is `Queue[]`, `bindings()` is `QueueBinding[]`,
+# `@RabbitListener` is `@Target({TYPE, METHOD, ANNOTATION_TYPE})` and
+# `@RabbitHandler` declares `isDefault(): boolean` and nothing else. The
+# post-processor reads all three destination attributes, so the two this file
+# declines to read are a measured under-report rather than a remembered one.
+#
+# TWO THINGS CP-16 FOUND. The first is now encoded: `@RabbitListener` is
+# `@Repeatable(RabbitListeners.class)`, so two listeners on one method fold
+# into a container — which `mapping.annotations[].container` above now names,
+# where before both destinations were dropped (`OI-36`, closed). The second
+# stays a boundary. At 3.1.4 the post-processor
+# searches `MergedAnnotations.from(element, SearchStrategy.TYPE_HIERARCHY)` —
+# the strategy arrives as a constant the probe could read — so a
+# `@RabbitListener` on a superclass or interface method registers a listener on
+# the implementing bean, while an annotation fact exists only on the
+# declaration that carries it (`OI-37`). At 4.1.1 that search moved into
+# `spring-amqp`'s `AbstractListenerAnnotationBeanPostProcessor`, an artifact
+# CP-16 does not open, so the search verdict is bounded to 3.1.4.
+measured:
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp16_listener_destinations.md }
+  # A SECOND row rather than a widened first one, `spring-kafka.yml`'s reason
+  # exactly: CP-16 measured the LISTENER annotation, CP-17 the HANDLER, and a
+  # reader of a `by:` needs the probe that asked the question.
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }

@@ -52,9 +52,8 @@ def _compiled_document(module_id: str) -> Document:
         module_id=module_id,
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="fake-scanner",
-        scanner_version="1.0",
         content_hash="sha256:deadbeef",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -92,7 +91,7 @@ class _FakeCompiledScanner:
             origin="compiled",
         )
         write_fact_file(request.out_dir / "compiled" / "widget.jsonl", self._document, [fact])
-        return ScanReport(documents=1, facts=1, scanner_id="fake-scanner", scanner_version="1.0")
+        return ScanReport(documents=1, facts=1, scanner_id="fake-scanner")
 
 
 class _EmptyCatalogs:
@@ -139,7 +138,7 @@ class _NoOpScanner:
         return 1
 
     def scan(self, request: ScanRequest) -> ScanReport:
-        return ScanReport(documents=0, facts=0, scanner_id="noop", scanner_version="1.0")
+        return ScanReport(documents=0, facts=0, scanner_id="noop")
 
 
 def _write_avsc(root: Path, name: str, field_name: str) -> None:
@@ -407,6 +406,10 @@ def test_an_sdl_file_inside_the_resource_root_is_read_once_not_twice(tmp_path: P
     documents = [document for _, document, _ in read_fact_tree(tmp_path / "facts")]
     assert sorted(document.relative_path for document in documents) == [
         "audit.graphqls",
+        # 2O Task 6: the detector's own conclusions are a fact like any other
+        # now (D00 §5's `module` kind), and its synthesized document sits
+        # beside the read ones.
+        "module",
         "schema.graphqls",
     ]
 

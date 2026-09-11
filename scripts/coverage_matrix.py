@@ -33,6 +33,29 @@ MSG_COLUMNS = [
     ("Async and internal boundaries", "Async"),
 ]
 
+# Section 5 headings that are NOT on the protocol axis (F6 §7.2, W41), so they feed no
+# matrix column and must not. Declared rather than inferred: `parse` reads every `### 5.x`
+# heading, so a section nobody wired to a column is INDISTINGUISHABLE from one whose wiring
+# was forgotten — and the failure mode of the second is silent, because `render` only emits
+# the columns it was given and drops the rest on the floor. A new protocol section now
+# fails this script until it is either given a column or declared here.
+NON_PROTOCOL = {
+    "Language construct",
+    "Shape and contract",
+    "Configuration source",
+    "Trace and diagram",
+    "Bundle and export",
+    "Question ledger",
+    "Rendered document",
+    "Query and findings",
+    # W42's enumerations. Not protocol rows and not language rows — each is a set the
+    # design named that had to carry a support level: Q3's out-of-scope surfaces, F1's
+    # deliberately-not-read attributes, and Q4's declared slices.
+    "Out of scope for v1 (Q3)",
+    "Class-file attributes deliberately not read (F1)",
+    "Declared slices (Q4)",
+}
+
 # Row label in section 5 -> matrix rows it feeds.
 LANGUAGES = ["Java / Kotlin", "Go", "TypeScript", "JavaScript", "Python", "Rust", "Swift"]
 ALIASES = {
@@ -94,14 +117,52 @@ def parse(md: str) -> tuple[dict, dict]:
 
 
 def cell(c: Counter | None) -> str:
+    """One matrix cell, in a notation a reader can take at face value.
+
+        ✅                        shipped, nothing outstanding
+        ◐ (2 limited)             every library catalogued, 2 with stated limits
+        ◐ (4A 3B 4C)              4+3+4 libraries not catalogued at all
+        ◐ (2 limited, 4A 3B 4C)   both
+        4A 3B                     nothing shipped, these outstanding
+        —                         not applicable to this language
+        ·                         not enumerated in §5 yet
+
+    **`◐` can never appear alone**, and that is a rule rather than an accident of
+    the data: a partial cell is one with something missing, so the bracket carries
+    whichever kind of incompleteness caused the glyph. A row that is itself
+    partial — "shipped, narrower than the framework's rule" — counts as `limited`;
+    a library nobody has catalogued counts in its tier.
+
+    **What this replaces, and why it was wrong.** The lead used to be
+    `"◐ " if c["partial"] or c["shipped"]`, which collapsed two different states
+    into one glyph: a cell with every row shipped rendered `◐ —` exactly like a
+    cell with partial rows. Three Java cells — SOAP, GraphQL, WebSocket — are
+    7/7, 5/5 and 3/3 shipped with no gaps at any tier, and all three read `◐ —`.
+    The file then carried a paragraph telling readers to take `◐ —` as "the
+    stronger of the two markings, not the weaker", which is a defect report
+    written as a legend: `◐` is a half-filled circle and reads as half-done to
+    anyone, and `—` reads as not-applicable to anyone, so the pair read as
+    neither of the things it meant.
+
+    The information needed to write `✅` was in the counter the whole time and
+    was thrown away one line before it was used.
+    """
     if not c:
         return "·"  # no rows in section 5 at all: not yet enumerated, not known-absent
     if not (c - Counter({"na": c["na"], "unknown": c["unknown"]})):
         return "⚠️" if c["unknown"] else "—"
-    lead = "◐ " if c["partial"] or c["shipped"] else ""
-    gaps = " ".join(f"{c[t]}{t}" for t in "ABC" if c[t])
     tail = " ⚠️" if c["unknown"] else ""
-    return f"{lead}{gaps or '—'}{tail}"
+    gaps = " ".join(f"{c[t]}{t}" for t in "ABC" if c[t])
+    if not (c["partial"] or c["shipped"]):
+        # Nothing shipped: the tiers stand alone, unbracketed, because there is
+        # no shipped half for them to qualify.
+        return f"{gaps}{tail}"
+    if not c["partial"] and not gaps:
+        return f"✅{tail}"
+    missing = [f"{c['partial']} limited"] if c["partial"] else []
+    if gaps:
+        missing.append(gaps)
+    return f"◐ ({', '.join(missing)}){tail}"
 
 
 def render(counts, numbers, columns, first_col=None) -> str:
@@ -117,9 +178,68 @@ def render(counts, numbers, columns, first_col=None) -> str:
     return "\n".join(out)
 
 
+def unwired(numbers: dict[str, str]) -> list[str]:
+    """Section 5 headings that feed no matrix column and are not declared non-protocol.
+
+    Half the check: `render` iterates the column lists, so a heading missing from them
+    produces no output and no error. Before this, adding `### 5.13 gRPC-Web` would have
+    left §2 silently unchanged and the matrices quietly wrong about what §5 holds.
+    """
+    wired = {heading for heading, _label in HTTP_COLUMNS + MSG_COLUMNS}
+    return sorted(set(numbers) - wired - NON_PROTOCOL)
+
+
+def misfiled(md: str) -> list[str]:
+    """Rows in a NON_PROTOCOL section whose first cell names a language.
+
+    The OTHER half, and the one the first version claimed and did not have. `parse` counts
+    a row by its first cell wherever that cell is in `ALIASES`, and it does that in every
+    `### 5.x` section including the non-protocol ones — so a row written `| Java | some
+    Kotlin construct | … |` under §5.13 is counted into a cell §2 has no column for, and
+    `render` drops it on the floor. Declaring the SECTION non-protocol does not stop that;
+    only looking at the row does.
+
+    Found by W41's own review, which added such a row and watched `--check` print
+    "matrices are current" while the row vanished.
+    """
+    section = None
+    found: list[str] = []
+    for number, line in enumerate(md.splitlines(), start=1):
+        heading = re.match(r"### (5\.\d+) (.+)", line)
+        if heading:
+            section = heading.group(2)
+            continue
+        if section not in NON_PROTOCOL or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or set(cells[0]) <= {"-", ":"}:
+            continue
+        language = cells[0].replace("*", "").strip()
+        if language in ALIASES:
+            found.append(f"{number}: {section} — first cell is `{language}`")
+    return found
+
+
 def main() -> int:
     md = DOC.read_text()
     counts, numbers = parse(md)
+    orphans = unwired(numbers)
+    if orphans:
+        print(
+            "section 5 headings with no matrix column and no NON_PROTOCOL declaration: "
+            + ", ".join(orphans),
+            file=sys.stderr,
+        )
+        return 1
+    stray = misfiled(md)
+    if stray:
+        print(
+            "rows in a non-protocol section whose first cell names a language — they are "
+            "counted into a matrix cell that has no column and are then dropped:\n  "
+            + "\n  ".join(stray),
+            file=sys.stderr,
+        )
+        return 1
     http = render(counts, numbers, HTTP_COLUMNS, first_col="Scanner")
     msg = render(counts, numbers, MSG_COLUMNS)
 

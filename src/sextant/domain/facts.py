@@ -6,7 +6,14 @@ from pydantic import BaseModel, Field
 
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 
-type LiteralValue = str | int | float | bool | list["LiteralValue"]
+# D00 §5a's literal model: string, number, boolean, enum reference, class
+# reference (both spelled as symbol references) and arrays of these — plus,
+# from capability 9.16, an ANNOTATION. An annotation-valued argument is not a
+# new vocabulary: it is an `AnnotationUse`, exactly the shape the enclosing use
+# already has, so `@RabbitListener(bindings = @QueueBinding(value = @Queue(…)))`
+# nests the same way at every level. Recursive, and resolved lazily because
+# `AnnotationUse` is defined below in terms of this alias.
+type LiteralValue = str | int | float | bool | AnnotationUse | list["LiteralValue"]
 
 
 class TypeRef(BaseModel):
@@ -31,19 +38,67 @@ class AnnotationUse(BaseModel):
     model_config = {"frozen": True}
     annotation: str
     args: dict[str, LiteralValue] = Field(default_factory=dict)
+    # Capability 9.16's own key, and set only on a NESTED use the scanner
+    # declined to read to the bottom — the extractor bounds its recursion, and
+    # names why here (`depth_limit`) rather than truncating. The annotation's
+    # TYPE is real evidence read off the descriptor and is kept; its `args`
+    # stay empty because they were never read, which is why this flag has to
+    # exist: an empty `args` alone is indistinguishable from an annotation
+    # genuinely written with no arguments (GUIDELINES §8). `None` on every use
+    # the scanner read in full, which is every outermost one.
+    unresolved: str | None = None
 
 
 class Parameter(BaseModel):
     model_config = {"frozen": True}
     name: str | None = None
     type: TypeRef
+    # The DESCRIPTOR's own symbol for this position, beside `type`, which carries
+    # the declared signature's answer where there is one (D00 §5a).
+    #
+    # The two differ only for a type VARIABLE — `type` then names the variable,
+    # which is what a generic substitution binds, while this names what the
+    # runtime actually erased it to. A variable's name is scoped to the
+    # declaration that introduced it, so it can never be compared between two of
+    # them; this can, and every consumer that keys or looks up by parameter type
+    # reads it. Written on every parameter, so a positional read of the list is
+    # always the same length as the parameter list itself.
+    #
+    # None only for a fact written before the field existed.
+    erased_symbol: str | None = None
     annotations: list[AnnotationUse] = Field(default_factory=list)
+
+
+class TypeParameter(BaseModel):
+    """One formal type parameter a class or method declares, with its bounds
+    (D00 §5a). `class Box<T extends Comparable<T>>` yields one of these.
+
+    The NAME and the POSITION are the load-bearing half: a type reference's
+    `symbol` may now be a bare type variable — `T`, read off the `Signature`
+    attribute rather than erased to whatever the descriptor says — and this is
+    what that variable refers back to.
+
+    Bounds are recorded exactly as the class file states them, an explicit
+    universal-root-type bound included: a compiler may write that bound for a
+    parameter the source declared with none, in which case the two spellings are
+    the same declaration and there is nothing to preserve by dropping it. An
+    empty list would then mean either "unbounded" or "the scanner did not read
+    the bound" (GUIDELINES §8). Which bound a given compiler writes is the
+    extractor's knowledge, not this record's."""
+
+    model_config = {"frozen": True}
+    name: str
+    bounds: list[TypeRef] = Field(default_factory=list)
 
 
 class Signature(BaseModel):
     model_config = {"frozen": True}
     parameters: list[Parameter] = Field(default_factory=list)
     returns: TypeRef | None = None
+    # W7: the types a method DECLARES it can fail with (JVMS 4.7.5), in declaration
+    # order. Part of the signature because it is part of what a caller must handle
+    # to call it. Empty for the great majority, which declare none.
+    throws: list[str] = Field(default_factory=list)
 
 
 class ClasspathEntry(BaseModel):
@@ -64,9 +119,35 @@ class Document(BaseModel):
     module_id: str
     language: str
     sextant_version: str
-    fact_schema_version: str
+    # An integer, not a version string (Step 0): the stamp is compared for
+    # equality and nothing else, and a text type is what let its four
+    # producers hold two different values undetected.
+    fact_schema_version: int
+    # WHICH facility produced this document (D00 §2). There is no version
+    # beside it: a facility Sextant ships moves with `sextant_version` above,
+    # and the third-party libraries that CAN move on their own are recorded
+    # once per workspace in `metadata.json` rather than repeated on every
+    # document that one scanner wrote.
     scanner_id: str
-    scanner_version: str
+    # The class-file format version this document was read from (JVMS 4.1's
+    # `major_version`), or 0 where the source is not a class file at all — a
+    # config or schema document has no such version, and 0 is outside every
+    # real range (the format starts at 45) so it cannot be mistaken for one.
+    class_major: int = 0
+    # WHICH COPY of an overlaid class this is (JEP 238): `base` for the archive
+    # root — and for every document that is not a class in a multi-release jar
+    # at all — or the release its `META-INF/versions/N/` prefix declares, as a
+    # decimal string. A TAG, never a selection: which copy actually loads
+    # depends on the release the DEPENDING module targets, so one scan of a jar
+    # serves modules that target different ones and the choice is made
+    # downstream at resolve.
+    class_release: str = "base"
+    # The class-file's own name with any `META-INF/versions/N/` prefix removed
+    # — the name the JVM knows the class BY. It is the key two copies of one
+    # class are recognised as copies on, which `relative_path` cannot be: that
+    # is the SOURCE path, and a nested class shares its outer's. Empty for a
+    # document that is not a class file.
+    class_name: str = ""
     content_hash: str
     origin_entry: str
     origin_tier: OriginTier
@@ -90,6 +171,56 @@ class ModuleFact(BaseModel):
     source_roots: list[str]
     output_dirs: list[str]
     classpath: list[ClasspathEntry] = Field(default_factory=list)
+    # The compiler target release this module's BUILD declares (W3b), and
+    # `None` where it declares none. Carried on the module fact because its
+    # consumer runs at RESOLVE: which overlay of a class in a multi-release
+    # dependency actually loads is a property of the module doing the
+    # depending, so the answer has to travel with the module rather than with
+    # the archive — one scan of a jar serves modules that target different
+    # releases.
+    declared_release: int | None = None
+    # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
+    # their coordinates, sorted. Carried on the module fact because its consumer runs at
+    # RESOLVE and there is nothing else there that can tell them apart.
+    #
+    # **Why they need telling apart from any other dependency.** A sibling is scanned
+    # AUTOMATICALLY — nobody asked for it, it is on the classpath and its types appear
+    # in this module's signatures — so publishing its controllers as this module's API
+    # would be a fabrication on the analysis's own initiative. `extract_libraries` is the
+    # opposite: a coordinate a person wrote into `.sextant.yml`, which D04 §2a defines as
+    # "scan this dependency's own bytecode as well as mine", and a shipped test asserts
+    # that an opted-in library's SOAP operation DOES reach the endpoint table. Consent is
+    # the whole difference, and it is not readable from the tier — both are `dependency`.
+    sibling_coordinates: list[str] = Field(default_factory=list)
+    # The `groupId:artifactId` coordinates the module's BUILD declares (2O
+    # design §2a, ruling R9), sorted. Its own field rather than `classpath`
+    # above, because the two answer different questions and only this one can
+    # be answered by both build systems today: a `ClasspathEntry` names a
+    # resolved ARCHIVE and its tier, which the Gradle report carries and a
+    # parsed POM does not, so filling `classpath` from Maven would mean
+    # inventing a path. This field is the coordinate half alone — what the
+    # build says it depends on — and it is what a catalog whose framework
+    # rule is conditional on a dependency reads (`detect.coordinates`).
+    #
+    # **Reach differs by build system and the difference is not smoothed
+    # over** (`application/ports/detector.py`'s own field states it in full):
+    # Gradle reports the resolved compile classpath, transitives included;
+    # Maven reports what the pom declares plus what it inherits from every
+    # ancestor pom the detector could open, and no transitives (F1). Empty
+    # means "this analysis recorded none", never "the classpath is empty".
+    dependency_coordinates: list[str] = Field(default_factory=list)
+    # The version each of those coordinates resolved to, for the subset that
+    # resolved (F1), in sorted key order (NFR-1). Written beside the
+    # coordinates rather than folded into them because the coordinate is the
+    # identity a catalog's `detect.coordinates` matches on.
+    #
+    # **A coordinate absent from this map is a version this analysis could not
+    # read, never a dependency with no version** — the two build systems reach
+    # differently and the Maven side needs the pom that states a managed or
+    # property-held version to be readable. A rule scoped to a version range
+    # must therefore treat an absent version as UNANSWERABLE, the same way the
+    # dependency gate treats an absent coordinate list.
+    dependency_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class SymbolFact(BaseModel):
@@ -107,12 +238,65 @@ class SymbolFact(BaseModel):
     # rather than an instance, and a declaration the language marks as not
     # serialized. Defaults empty for constructs that carry no modifiers.
     modifiers: dict[str, bool] = Field(default_factory=dict)
+    # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
+    # element takes when a use omits it. Present only on such an element and
+    # only where it has a default; absent everywhere else.
+    #
+    # Its consumer is the catalogs, which currently HARDCODE these — a
+    # prediction §8.1 forbids, because it states what a framework does at a
+    # version nobody measured. Reading it means a catalog can ask the jar
+    # instead of asserting.
+    #
+    # A `LiteralValue`, the SAME grammar an annotation's arguments already use
+    # at a use site — a default can be an array, an enum constant or a nested
+    # annotation, and re-spelling that here would be a second vocabulary for
+    # one thing.
+    annotation_default: LiteralValue | None = None
     # D00 §5a's PTR carrier: a class symbol's generic supertype reference,
     # when the superclass signature is generic.
     supertype: TypeRef | None = None
     # `implemented_interfaces`: erased interface symbols a class declares,
     # in declaration order. Empty for a class implementing none.
     interfaces: list[str] = Field(default_factory=list)
+    # Capability 9.14: mirrors `supertype`'s PTR-carrier rule one level over,
+    # applied to `implements` instead of `extends`. `interfaces` above erases
+    # `CrudRepository<Order, Long>` to a bare symbol; this is the only place
+    # a generic superinterface's type arguments survive. Empty when nothing
+    # declared here is generic — D00's "nothing generic, nothing captured"
+    # rule, applied per interface.
+    generic_interfaces: list[TypeRef] = Field(default_factory=list)
+    # Capability 9.13: D00 §4's `relationship_kind: extends`, made real. The
+    # erased symbol of a class's direct superclass, read straight off the
+    # class file regardless of whether its `Signature` attribute is generic
+    # (`supertype` above only fires when it is). None for the JVM's universal
+    # root type — every interface carries this same class-file entry though
+    # no interface "extends" it, and every root class gets it implicitly, so
+    # writing it there would say nothing with it.
+    superclass: str | None = None
+    # W7: the complete set of types permitted to extend a SEALED one (JVMS 4.7.31).
+    # The one case where "every implementation of this" is answerable outright
+    # rather than approximated by whatever the scan happened to see. Empty for
+    # every type that is not sealed.
+    permits: list[str] = Field(default_factory=list)
+    # W7: the top-level type whose nest this one belongs to (JVMS 4.7.28). Distinct
+    # from `enclosing`, which names the IMMEDIATE encloser — for `A$B$C` that is
+    # `A$B` where the nest host is `A`. The top-level answer is the one OI-45
+    # records `outer_type_of` guessing at by splitting a name on `$`.
+    nest_host: str | None = None
+    # The same relationship from the host's side (JVMS 4.7.29): every type sharing
+    # this one's nest. Only a host carries it.
+    nest_members: list[str] = Field(default_factory=list)
+    # Attributes this scanner SAW and did not read — a vendor's, or one from a
+    # class-file version newer than the build. By name only: reading the bytes
+    # would mean guessing at a layout nobody published. Recorded so §2.3's ledger
+    # can say "seen, not read", which is a different claim from "not present".
+    unread_attributes: list[str] = Field(default_factory=list)
+    # `type_parameters` (W5): the formal type parameters this class or method
+    # declares, in declaration order. Empty for the great majority of
+    # declarations, which have none — the same "nothing generic, nothing
+    # captured" rule `supertype` and `generic_interfaces` follow, so the key is
+    # absent rather than an empty list on every fact.
+    type_parameters: list[TypeParameter] = Field(default_factory=list)
 
 
 class AnnotationFact(BaseModel):
@@ -142,12 +326,37 @@ class CallArgument(BaseModel):
         # The caller's own parameter N — `value` is that index, never the
         # local slot a JVM happens to keep it in (D00 §5).
         "parameter",
+        # Capability 9.15: ONE argument that happens to be an array, with its
+        # own element arguments in `elements`. Never N arguments — unpacking
+        # would renumber every slot after it and make arity unreadable.
+        "array",
+        # W4: an address the code ASSEMBLES rather than states. javac does not
+        # build `"/api/" + version + "/orders"` in the bytecode — it emits one
+        # `invokedynamic` plus a recipe holding the literal parts — so `value`
+        # is the TEMPLATE, `/api/{}/orders`, with a hole per runtime value.
+        #
+        # The hole is unnamed on purpose: a path variable's name was never part
+        # of the address (a server routes `/api/owners/42` to
+        # `/api/owners/{ownerId}` by POSITION and may rename it freely), so `{}`
+        # is exactly what both sides share and naming it would invent one the
+        # class file often does not carry. What FILLS the hole is the concat
+        # site's own call-site fact, reached by `source` -> `result`.
+        "concat",
         "null",
         "unresolved",
     ]
     value: LiteralValue | None = None
     symbol: str | None = None
     source: int | None = None
+    # Capability 9.15's own key, on the `array` kind alone: the argument list
+    # a varargs call site's `ANEWARRAY`/`AASTORE` construction builds, each
+    # element carrying the same kind it would carry as a single argument in
+    # the same position. `None` on every other kind, and — the one place an
+    # empty value says something an absent one would not — an EMPTY list for
+    # a zero-length varargs call, which is a real call rather than a failure
+    # to read one. An array the extractor could not read end to end stays
+    # `unresolved`, so `elements` is never a partial list.
+    elements: list["CallArgument"] | None = None
 
 
 class CallTarget(BaseModel):
@@ -170,7 +379,52 @@ class CallSiteFact(BaseModel):
     ordinal: int
     receiver: int | None = None
     result: int | None = None
+    # Capability 9.17: the function this site's dispatch will run, where
+    # `target` names the mechanism instead of the code — a JVM
+    # `invokedynamic` bootstrapped by `LambdaMetafactory`, whose second
+    # bootstrap argument is the lambda body javac lifted out. A **bare**
+    # symbol, like the `lambda` argument kind beside it (D00 §1's stability
+    # rule), so an in-module body joins to its own method fact by stripping
+    # that fact's module prefix. `None` everywhere the target already is the
+    # answer, a `StringConcatFactory` site included: there is no
+    # implementation method to name there, and naming one would assert a call
+    # to code that does not exist.
+    implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
+
+
+class MethodReturnFact(BaseModel):
+    """What a method hands back, one fact per return instruction (D00 §5,
+    capability 9.18).
+
+    The value chain a round trip needs is already extracted — an argument
+    carries the `source` id of the call that produced it — and this is the
+    last link: that the value a given call produced is the one the METHOD
+    returns. Its consumer is 2Q's cross-method propagation, which joins this
+    to the caller's own `result` id.
+
+    `value` is an entry of §5's argument grammar rather than a bare id, and
+    that is what keeps two different answers apart: `None` means the return
+    pops nothing (a void return — an answer, not a failure), while
+    `CallArgument(kind="unresolved")` means it pops something this pass could
+    not name. A returned literal, field, parameter or lambda reads exactly as
+    it would in an argument slot in the same position.
+
+    A method with several `return` statements has several of these facts, each
+    with its own `ordinal`. That is deliberate: two returns are two possible
+    answers and no single one, and picking either would be a fact about code
+    that may never run.
+    """
+
+    model_config = {"frozen": True}
+    kind: Literal["method_return"] = "method_return"
+    document_id: str
+    method: str
+    # The return instruction's index among this method's returns, in
+    # instruction order — deterministic by construction (NFR-1), and the same
+    # role `call_site.ordinal` plays.
+    ordinal: int
+    value: CallArgument | None = None
 
 
 class FieldWriteFact(BaseModel):
@@ -185,6 +439,38 @@ class FieldWriteFact(BaseModel):
     document_id: str
     field: str
     from_parameter: int
+
+
+class ConstantFact(BaseModel):
+    """D00 §5's `constant`: a compile-time constant field and the value the
+    class file records for it.
+
+    **A declared fact kind that had no producer until W4.** Its stated consumer
+    is topic and URL resolution — `static final String TOPIC = "orders"` is how
+    a great many real listeners name their destination, and without this the
+    address resolves to nothing readable and the endpoint carries an
+    unresolved reference instead of a wire identity.
+
+    The value comes from JVMS 4.7.2's `ConstantValue`, which the class file
+    carries only for a `static final` field of a primitive or `String` type —
+    exactly the shape that can be a constant expression. A field initialised in
+    `<clinit>` has no such attribute and produces no fact here: that is a
+    different question (what a static initialiser computes) and answering it
+    from this attribute would be a guess.
+    """
+
+    model_config = {"frozen": True}
+    kind: Literal["constant"] = "constant"
+    document_id: str
+    # The field's own symbol, exactly as the `symbol` fact spells it, so the
+    # two join without a transformation in between.
+    symbol: str
+    # The literal the class file records. Kept as its JSON-native type — a
+    # string, integer, float or boolean — rather than stringified, because a
+    # consumer resolving an address needs the string and a consumer reading a
+    # port needs the number, and re-parsing text would put a guess between
+    # them and the class file.
+    value: str | int | float | bool
 
 
 class ConfigEntryFact(BaseModel):
@@ -259,6 +545,28 @@ class DeclaredFieldFact(BaseModel):
     enum_symbols: list[str] | None = None
 
 
+class OperationRecord(BaseModel):
+    """What a service operation declares beyond its name (2O design §1a).
+
+    Optional on `DeclaredShapeFact`, populated only when `role == "operation"`
+    — a fact-schema amendment (`fact_schema_version` bumped, D00 §5's own
+    amendment note records the estate cost). Added for gRPC, whose methods
+    carry a request AND a response type plus the two streaming flags; 2I's
+    SOAP operations may fill the same record later — today their output side
+    is honestly NULL and nothing changes for them, because `wsdl_xsd.py`
+    never constructs one."""
+
+    model_config = {"frozen": True}
+    # The descriptor's own fully-qualified message names — an intra-descriptor
+    # join to the SAME descriptor's `declared_shape` universe (2O design §1a),
+    # never a guess across universes. `None` for a format that has not filled
+    # this record's output side yet (SOAP, today).
+    input_ref: str | None
+    output_ref: str | None
+    client_streaming: bool
+    server_streaming: bool
+
+
 class DeclaredShapeFact(BaseModel):
     """One message or record type, as its schema declares it (D00 §5,
     D01 §3). Never emitted by an extractor: it is the interpreter's output,
@@ -289,6 +597,13 @@ class DeclaredShapeFact(BaseModel):
     # hang off, which a schema format may equally state. NULL for every type
     # that is an ordinary payload, which is nearly all of them.
     role: Literal["query", "mutation", "subscription", "operation"] | None = None
+    # What a `role == "operation"` shape declares beyond its name — a gRPC
+    # method's request/response refs and streaming flags (2O design §1a).
+    # NULL for every shape `role` does not mark `"operation"`, and NULL today
+    # even for a WSDL one (2I's own boundary, restated on `OperationRecord`
+    # itself): a fact-schema amendment gains a field, never fills it
+    # retroactively for a format that does not populate it.
+    operation: OperationRecord | None = None
     fields: list[DeclaredFieldFact] = Field(default_factory=list)
 
 
@@ -297,8 +612,10 @@ Fact = Annotated[
     | SymbolFact
     | AnnotationFact
     | CallSiteFact
+    | MethodReturnFact
     | FieldWriteFact
     | ConfigEntryFact
+    | ConstantFact
     | EmbeddedDescriptorFact
     | DeclaredShapeFact,
     Field(discriminator="kind"),

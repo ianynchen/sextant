@@ -22,10 +22,14 @@ CHECKPOINT FACT, pinned by (1b): a DSL body lands in a synthetic method of its
 own, its calls carry `receiver: null` and (mostly) `result: null`, and the
 entry-to-body and nest-to-body edges are both `lambda`-kind arguments naming
 that method's symbol exactly.
-CHECKPOINT FACT, pinned by (3)/F1: a vararg media constant reaches the facts as
-a bare `{"kind":"unresolved"}` with no symbol at all. The `enum`-kind read path
-below is therefore exercised with synthetic facts, and the unreadable case is
-pinned beside it.
+CHECKPOINT FACT, pinned by (3)/F1 and CORRECTED by extractor capability 9.15: a
+vararg media constant reaches the facts as ONE `{"kind":"array"}` slot carrying
+its own `elements`, each the `enum` it would have been as a single argument.
+*That sentence read "as a bare `{"kind":"unresolved"}` with no symbol at all",
+which was the pre-9.15 fact and the reason every predicate-derived media column
+came back NULL.* A bare `unresolved` is now what an array the extractor could
+not read END TO END degrades to (9.15's five rejection rules), and that case is
+pinned beside the readable one.
 """
 
 from pathlib import Path
@@ -39,7 +43,13 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
-CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction"}
+# `array_arguments` (capability 9.15) is granted because the real scanner declares it and
+# these sets are a real SUBSET of that. *It was added when four catalogs briefly declared
+# it in `requires:`; that declaration is reverted (W46's review — it turned a graceful
+# degradation into a total skip), so nothing here depends on it now. Kept because the
+# varargs reads it feeds are real and a harness that withheld it would be measuring a
+# scanner nobody ships.*
+CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction", "array_arguments"}
 # The module-coordinates prefix a real symbol fact's own `symbol` carries (D00
 # §5a); every call-argument symbol stays bare, exactly as the real facts emit
 # it (`test_call_engines.py`'s own `_MODULE` precedent).
@@ -83,9 +93,8 @@ def _document(document_id: str = "doc_1") -> Document:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -402,6 +411,100 @@ def test_a_nest_prefix_folds_onto_every_route_of_its_subtree_exactly_once(tmp_pa
     ]
 
 
+def test_a_slashless_route_and_a_doubled_seam_both_derive_the_url_spring_serves(
+    tmp_path: Path,
+):
+    """2O design §8 / ruling R8, on the ONE live catalog that reaches this seam
+    outside `annotation_driven`: `spring-webflux-router.yml` is a combinator,
+    `http`, and INBOUND, so its composed routes are URLs this module serves and
+    their identity is the URL the framework answers at.
+
+    Both halves of the canonicalization are exercised here because the router
+    DSL composes `path_parts` by bare concatenation — there is no separator
+    seam in this style to hide either one:
+
+    * `RouterFunctions.route(GET("orders"), …)` is served at `/orders`. Spring
+      combines the predicate path the same way it combines a mapping (CP-1,
+      confirmed live), so recording `orders` would be a second identity for one
+      URL — the split this seam exists to close.
+    * a `nest("/")` prefix over a `GET("/chat")` route composes `//chat` by
+      concatenation, and is served at `/chat`. That is the second live failure
+      D02's prefix-seam note records, reached here by the other style.
+
+    Deleting the `canonical_http_path` call in `_path_of` passes every other
+    test in this file — every other fixture path already spells its leading
+    separator — so this case is the whole of what pins it.
+    """
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            ROUTERS,
+            "route",
+            result=25,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATES,
+            "path",
+            result=30,
+            arguments=[CallArgument(kind="string", value="/")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            PREDICATES,
+            "GET",
+            result=34,
+            arguments=[CallArgument(kind="string", value="/chat")],
+        ),
+        _site(
+            ROUTES,
+            4,
+            ROUTERS,
+            "route",
+            result=40,
+            arguments=[
+                CallArgument(kind="unresolved", source=34),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+        _site(
+            ROUTES,
+            5,
+            ROUTERS,
+            "nest",
+            result=59,
+            arguments=[
+                CallArgument(kind="unresolved", source=30),
+                CallArgument(kind="unresolved", source=40),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/chat", _MODULE + CREATE_ORDER, "resolved"),
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "resolved"),
+    ]
+
+
 # --- (3) `or` duplicates the route per branch, over any predicate kind -----
 
 
@@ -639,6 +742,146 @@ def test_a_string_kind_media_argument_reads_as_its_literal_value(tmp_path: Path)
     assert row["resolution"] == "resolved"
 
 
+def test_a_vararg_media_arrays_elements_fill_the_media_column(tmp_path: Path):
+    """The shape a REAL media predicate compiles to, and the one this engine
+    could not read until 2O Task 13: `accept(MediaType...)` is varargs, so
+    every constant the author wrote arrives inside ONE `array` slot rather
+    than as one argument each.
+
+    Two elements, deliberately: a one-element array would pass even for a
+    reader that mistook the array slot itself for a single value, and the
+    column is a distinct sorted UNION, so both spellings have to survive the
+    read to reach it. `_media_value` translates each element through the
+    catalog's own `media_values` table exactly as it already does for a
+    non-vararg constant — the array changes where the constants live, not what
+    they mean.
+    """
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON."),
+                        CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_XML."),
+                    ],
+                )
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("GET", "/orders")
+    assert row["produces"] == f'["{JSON}","{XML}"]'
+    assert row["consumes"] is None
+    assert row["resolution"] == "resolved"
+
+
+def test_a_vararg_media_array_holding_an_undeclared_constant_contributes_nothing(
+    tmp_path: Path,
+):
+    """The near-miss beside the positive above, one level down: reading an
+    array's `elements` widens WHERE constants are found, never WHICH ones
+    count. An element whose member the catalog's `media_values` table does not
+    declare contributes nothing at all — the media column stays NULL rather
+    than gaining the constant's own member name, a symbol fragment no wire
+    ever carried.
+
+    This is `_media_value`'s pre-existing rule, and it is pinned here because
+    the array read is what first lets a real `enum` element reach it: before
+    9.15 the enum never arrived, so the rule declined by accident rather than
+    by design."""
+    facts = [
+        _site(
+            ROUTES,
+            0,
+            PREDICATES,
+            "GET",
+            result=3,
+            arguments=[CallArgument(kind="string", value="/orders")],
+        ),
+        _site(
+            ROUTES,
+            1,
+            PREDICATES,
+            "accept",
+            result=5,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "TEXT_HTML.")],
+                )
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            PREDICATE_TYPE,
+            "and",
+            receiver=3,
+            result=7,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _site(
+            ROUTES,
+            3,
+            ROUTERS,
+            "route",
+            result=9,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["method"], row["path"]) == ("GET", "/orders")
+    assert row["produces"] is None
+    assert row["resolution"] == "resolved"
+
+
 def test_a_second_verb_inside_one_and_chain_poisons_only_the_verb(tmp_path: Path):
     """A request carries exactly one verb, so two of them merged by a single
     `and` is a constraint no route satisfies. Picking either would be a guess;
@@ -743,8 +986,12 @@ def test_an_unreadable_path_poisons_the_path_while_an_unreadable_media_constant_
             result=3,
             arguments=[CallArgument(kind="string", value="/x")],
         ),
-        # The frozen shape of a real vararg media call: one bare `unresolved`
-        # argument, no `source` and no `symbol` to follow (checkpoint (3)).
+        # A vararg media call whose array the extractor could NOT read end to
+        # end: one bare `unresolved` argument, no `source` and no `symbol` to
+        # follow. This was the frozen shape of every such call at checkpoint
+        # (3); since 9.15 it is the shape only of the five rejection rules'
+        # own output, and the readable case is pinned by
+        # `test_a_vararg_media_arrays_elements_fill_the_media_column` below.
         _site(
             unread, 1, PREDICATES, "accept", result=5, arguments=[CallArgument(kind="unresolved")]
         ),
@@ -1829,3 +2076,332 @@ def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path
     matches["continuations"] = [{"owner": "com.example.web.Router"}]
     with pytest.raises(CatalogError, match="every `continuations` item"):
         _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- `A-M9` (principles sweep §3.3): the shipped catalog's verb vocabulary ---
+#
+# Everything above drives an INVENTED catalog, deliberately — an engine that
+# only works for one library's fqns is what spec §1d forbids. These two drive
+# the SHIPPED `spring-webflux-router.yml`, because the finding is not about the
+# engine at all: the encoded verb list was a projection of the fixture's own
+# routes, which is §8.1 rule 1's failure shape said in the catalog's own words
+# ("exactly what 2E's checkpoint froze against a real scan").
+
+_ROUTER_FUNCTIONS = "org/springframework/web/reactive/function/server/RouterFunctions#"
+_REQUEST_PREDICATES = "org/springframework/web/reactive/function/server/RequestPredicates#"
+_CO_ROUTER_DSL = "org/springframework/web/reactive/function/server/CoRouterFunctionDsl#"
+_CO_ROUTER_FACADE = "org/springframework/web/reactive/function/server/CoRouterFunctionDslKt#"
+
+
+def _shipped_router_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-webflux-router"
+    )
+
+
+def _java_route(ordinal: int, verb: str, path: str, handler: str) -> list[CallSiteFact]:
+    """`RouterFunctions.route(RequestPredicates.<VERB>(path), handler)` — the
+    shape `fixtures/orders-service/.../routes/OrderRoutes.java` writes, spelled
+    once so each verb below differs from its siblings in one cell."""
+    predicate = 100 + ordinal * 10
+    return [
+        _site(
+            ROUTES,
+            ordinal * 2,
+            _REQUEST_PREDICATES,
+            verb,
+            result=predicate,
+            arguments=[CallArgument(kind="string", value=path)],
+        ),
+        _site(
+            ROUTES,
+            ordinal * 2 + 1,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=predicate + 5,
+            arguments=[
+                CallArgument(kind="unresolved", source=predicate),
+                CallArgument(kind="lambda", symbol=handler),
+            ],
+        ),
+    ]
+
+
+def test_the_shipped_router_catalog_reads_every_verb_the_framework_declares(tmp_path: Path):
+    """`A-M9`, the positive half. `RequestPredicates` declares seven per-verb
+    factories at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11) and the catalog
+    encoded GET, POST and HEAD — which is exactly the verb vocabulary
+    `OrderRoutes.java` uses. `RouterFunctions.route(RequestPredicates.PUT(…),
+    …)`, an entirely ordinary WebFlux route, derived nothing, and
+    `docs/COVERAGE.md` stated two WebFlux boundaries and named no verb gap.
+
+    All seven asserted in one tree rather than one test per verb: the finding
+    is about the SET, and a per-verb test would pass while the set was still
+    short."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    for index, verb in enumerate(verbs):
+        facts += _java_route(index, verb, f"/orders/{verb.lower()}", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    derived = sorted((str(row["method"]), str(row["path"])) for row in _rows(workspace))
+    workspace.close()
+
+    assert derived == sorted((verb, f"/orders/{verb.lower()}") for verb in verbs)
+
+
+_BUILDER = "org/springframework/web/reactive/function/server/RouterFunctions$Builder#"
+
+
+def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tmp_path: Path):
+    """The round-1 review's MAJOR 3, pinned so that closing it is visible.
+
+    `RouterFunctions.route().GET("/orders", handler).build()` is the BUILDER
+    DSL — a third WebFlux routing surface, seven verbs x four overloads on
+    `RouterFunctions$Builder` (`javap`, spring-webflux 6.1.6). It is undeclared
+    in `spring-webflux-router.yml` and derives NOTHING, while `docs/COVERAGE.md`
+    listed this exact call as "✅ shipped" and the `A-M9` pass added a sentence
+    saying both routing DSLs now read all seven verbs. Two of four surfaces do;
+    the COVERAGE rows now say which.
+
+    The catalog's `entries` are argument-rooted (`route(predicate, handler)`) or
+    body-linked (`coRouter`), and a builder is neither: the verb call sits on a
+    RECEIVER returned by an argument-less `route()`, which this grammar has no
+    word for. So this is an under-report and NOT a fabrication — the argument-
+    less `route()` is not a root candidate, so no poisoned row is minted either,
+    which is what the emptiness here asserts.
+
+    **It goes red the moment the surface starts deriving**, which is the point:
+    a boundary nothing pins is a boundary that quietly becomes a lie in either
+    direction. The `@HTTP` exclusion in `retrofit.yml` is the same pattern.
+
+    Its paired positive is
+    `test_the_shipped_router_catalog_reads_every_verb_the_framework_declares`: the
+    predicate form of the same route, on the same catalog, deriving."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(ROUTES, 0, _ROUTER_FUNCTIONS, "route", result=200, arguments=[]),
+        _site(
+            ROUTES,
+            1,
+            _BUILDER,
+            "GET",
+            receiver=200,
+            result=201,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(ROUTES, 2, _BUILDER, "build", receiver=201, result=202, arguments=[]),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.declines("spring-webflux-router")
+@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
+def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(
+    tmp_path: Path,
+):
+    """`A-M9`'s near-miss, and it is what keeps "add the missing verbs" from
+    becoming "treat every `RequestPredicates` factory as a verb". `accept` is a
+    real `RequestPredicates` factory (`javap -p` lists it beside `all`, `path`,
+    `headers`, `contentType`, `method` and `methods`) and it constrains a media
+    type rather than naming a verb — CP-12 Q11 excludes it because it is not
+    spelled in upper case, which is the framework's own way of marking the verb
+    factories, and `"application/json"` is a string argument in exactly the
+    position a path would occupy.
+
+    Identical to a route in the positive above in every other cell — same
+    `route` call, same handler, same string argument shape — so it measures the
+    predicate factory and nothing else.
+
+    **NOTHING is derived here, and this test used to assert the opposite**
+    (round-1 review, MAJOR 6). It asserted
+    `(None, None, <handler>, "resolved")` — a `resolved`/`compiler` inbound-HTTP
+    row with a NULL method AND a NULL path — and defended it as "the engine's
+    own answer for a tree whose constraints it cannot read". A row that names
+    no verb and no address names no endpoint, and at the top evidence tier
+    nothing downstream can tell it from an observation. That is precisely what
+    mechanism 3's addresses-nothing gate exists to stop on the annotation path;
+    `derive_call_endpoints.sql` had no such gate, and NULL paths skip its dedup
+    key, so N such routes inserted N undeduped rows.
+
+    The under-report this trades for is real and is stated in
+    `docs/COVERAGE.md`: `route(accept(...), handler)` IS a route, served at
+    every path with that Accept header, and we cannot express it. Silence is
+    the honest answer; a boundary claiming nothing was the dishonest one.
+
+    It still measures the verb vocabulary and nothing else: adding an `accept`
+    row to `verbs` makes this fail with `("ACCEPT", "application/json")`, which
+    is a fabricated verb AND a fabricated address."""
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _java_route(0, "accept", "application/json", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+_MVC_ROUTER_FUNCTIONS = "org/springframework/web/servlet/function/RouterFunctions#"
+_MVC_REQUEST_PREDICATES = "org/springframework/web/servlet/function/RequestPredicates#"
+
+
+def _shipped_mvc_router_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-mvc-router")
+
+
+def _mvc_java_route(ordinal: int, verb: str, path: str, handler: str) -> list[CallSiteFact]:
+    """The servlet twin of `_java_route`: identical call shape, `servlet` owners."""
+    predicate = 100 + ordinal * 10
+    return [
+        _site(
+            ROUTES,
+            ordinal * 2,
+            _MVC_REQUEST_PREDICATES,
+            verb,
+            result=predicate,
+            arguments=[CallArgument(kind="string", value=path)],
+        ),
+        _site(
+            ROUTES,
+            ordinal * 2 + 1,
+            _MVC_ROUTER_FUNCTIONS,
+            "route",
+            result=predicate + 5,
+            arguments=[
+                CallArgument(kind="unresolved", source=predicate),
+                CallArgument(kind="lambda", symbol=handler),
+            ],
+        ),
+    ]
+
+
+def test_the_mvc_router_catalog_reads_every_verb_the_servlet_package_declares(tmp_path: Path):
+    """W44's positive half. `org.springframework.web.servlet.function.RequestPredicates`
+    declares the same seven per-verb factories the reactive package does, each
+    `(Ljava/lang/String;)LRequestPredicate;` at spring-webmvc 6.1.6 — measured with
+    `javap -p -s` rather than assumed from the twin, which is the mistake W43 caught one
+    catalog earlier.
+
+    All seven in one tree, not one test per verb: the finding this shape exists for is
+    about the SET, and a per-verb test passes while the set is still short."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    for index, verb in enumerate(verbs):
+        facts += _mvc_java_route(index, verb, f"/{verb.lower()}", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert [(row[0], row[1]) for row in identities] == [
+        (verb, f"/{verb.lower()}") for verb in sorted(verbs)
+    ]
+    # Every one `resolved`, and every one attributed to the handler the route names —
+    # a verb read without its handler would be an address nobody serves.
+    assert {row[3] for row in identities} == {"resolved"}
+    assert {row[2].endswith("Handlers#listOrders(sig_a1).") for row in identities} == {True}
+
+
+@pytest.mark.declines("spring-mvc-router")
+@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
+def test_an_mvc_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(tmp_path: Path):
+    """§10 near-miss for the servlet twin, and it pins the guard it names.
+
+    `accept` is a real `RequestPredicates` factory on this owner too and it constrains a
+    media type rather than naming a verb — so the route it guards has no verb and no
+    address, and a row naming neither names no endpoint. `derive_call_endpoints`'s
+    addresses-nothing gate is what stops it being inserted; without that gate, N such
+    routes insert N undeduped rows at `resolved`/`compiler`, because a NULL path skips the
+    dedup key.
+
+    *This slot first held an owner-varying input carrying the reactive twin's `pins`
+    marker, which `scripts/guard_check.py` reported passing with that guard disabled — a
+    marker naming a guard the test does not pin. The owner case is measured below, without
+    a marker, because the combinator engine's owner conjunct has no guard id.*
+    """
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _mvc_java_route(0, "accept", "application/json", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+def test_the_mvc_router_declines_a_reactive_owner_at_the_same_call_shape(tmp_path: Path):
+    """§10 near-miss, and it is the one this catalog could actually get wrong.
+
+    Every conjunct of the shipped rule holds — the same `route(predicate, handler)` call,
+    the same verb factory name, the same string argument, the same handler — and only the
+    PACKAGE differs: these are the reactive owners, which belong to `spring-webflux-router`.
+    A catalog written by copying its twin and forgetting an owner would match both and
+    publish a servlet row for a reactive route, or vice versa.
+
+    Nothing at all is the required answer, not "something different": the reactive twin
+    derives this tree correctly, and a second catalog deriving it as well is a duplicate
+    row for one boundary."""
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _java_route(0, "GET", "/orders", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+def _kotlin_route(ordinal: int, verb: str, path: str, handler: str) -> CallSiteFact:
+    """`coRouter { <VERB>("/x") { … } }` — the DSL's own two-argument form,
+    which declares a whole route in one call (2E checkpoint (1b))."""
+    return _site(
+        INLINE_BODY,
+        ordinal,
+        _CO_ROUTER_DSL,
+        verb,
+        receiver=None,
+        arguments=[
+            CallArgument(kind="string", value=path),
+            CallArgument(kind="lambda", symbol=handler),
+        ],
+        invoke_kind="virtual",
+    )
+
+
+def test_the_kotlin_router_dsl_reads_every_verb_the_framework_declares(tmp_path: Path):
+    """`A-M9` on the Kotlin half, where the catalog encoded GET and POST alone
+    — again exactly what `KotlinOrderRoutes.kt` writes. `CoRouterFunctionDsl`
+    declares the same seven verbs at both measured minors (CP-12 Q12), each in
+    four overloads; the two-argument `(String, handler)` form is the one this
+    vocabulary reads."""
+    verbs = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(
+            DSL_ROUTES,
+            0,
+            _CO_ROUTER_FACADE,
+            "coRouter",
+            result=9,
+            arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY)],
+        ),
+    ]
+    facts += [
+        _kotlin_route(index, verb, f"/kt/{verb.lower()}", LIST_ORDERS)
+        for index, verb in enumerate(verbs)
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    derived = sorted((str(row["method"]), str(row["path"])) for row in _rows(workspace))
+    workspace.close()
+
+    assert derived == sorted((verb, f"/kt/{verb.lower()}") for verb in verbs)

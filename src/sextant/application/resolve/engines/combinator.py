@@ -76,8 +76,9 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.shapes.arguments import _arg_at
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.arguments import _arg_at, _expanded_arguments
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 # The two endpoint columns a failed read can poison. Both are wire identity,
@@ -189,7 +190,7 @@ class _TreeContext:
     verbs: dict[tuple[str, str], dict[str, Any]]
     prefixes: dict[tuple[str, str], dict[str, Any]]
     media: dict[tuple[str, str], dict[str, Any]]
-    media_owner: str | None
+    media_owners: tuple[str, ...] | None
     media_values: dict[str, str]
     composers: dict[tuple[str, str], str]
     continuations: tuple[_Continuation, ...]
@@ -270,7 +271,14 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         verbs=_by_owner_method(vocabulary.get("verbs", [])),
         prefixes=_by_owner_method(vocabulary.get("prefixes", [])),
         media=_by_owner_method(vocabulary.get("media", [])),
-        media_owner=(_catalog_symbol(media_values["owner"]) if "owner" in media_values else None),
+        # A LIST or a scalar (§3.1): the enum carrying the wire values may be
+        # reachable under more than one name. `media_owners` plural for the same
+        # reason as every other widened owner — a stale `==` must not compile.
+        media_owners=(
+            catalog_symbols(media_values["owner"], f"{catalog.source}: media_values.owner")
+            if "owner" in media_values
+            else None
+        ),
         media_values=dict(media_values.get("values", {})),
         composers=composers,
         continuations=_continuations_of(matches.get("continuations", [])),
@@ -640,11 +648,20 @@ def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _Tre
     untouched. The route's identity is its verb and path, both fully known;
     calling the row unresolved because a `produces` list could not be read
     would misreport a known endpoint as an unknown one (2E checkpoint F1's
-    ruling). Vararg constants in particular reach the facts with no symbol at
-    all, which is exactly this case.
+    ruling).
+
+    Every media predicate a framework declares is VARARGS
+    (`accept(MediaType...)`), so the constants arrive as one `array` slot
+    rather than as one argument each, and `_expanded_arguments` reads that
+    slot's own `elements` (2O Task 13, on extractor capability 9.15). *The
+    sentence that stood here — "vararg constants in particular reach the
+    facts with no symbol at all, which is exactly this case" — described the
+    pre-9.15 fact and was why every predicate-derived media column came back
+    NULL.* It still describes a vararg array the extractor cannot read end to
+    end, which stays an unreadable slot and still contributes nothing.
     """
     values: list[str] = []
-    for argument in site["arguments"]:
+    for argument in _expanded_arguments(site["arguments"]):
         value = _media_value(argument, context)
         if value is not None and value not in values:
             values.append(value)
@@ -669,7 +686,7 @@ def _media_value(argument: dict[str, Any], context: _TreeContext) -> str | None:
     if symbol is None:
         return None
     symbol = str(symbol)
-    if context.media_owner is not None and owner_of(symbol) != context.media_owner:
+    if context.media_owners is not None and owner_of(symbol) not in context.media_owners:
         return None
     return context.media_values.get(member_name(symbol))
 
@@ -825,7 +842,7 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
         "protocol": catalog.protocol,
         "direction": catalog.direction,
         "method": None if _METHOD in route.poisons else route.verb,
-        "path": _path_of(route),
+        "path": _path_of(route, catalog),
         "handler": route.handler,
         "caller": caller,
         "peer": None,
@@ -840,10 +857,25 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
     }
 
 
-def _path_of(route: _Route) -> str | None:
+def _path_of(route: _Route, catalog: Catalog) -> str | None:
+    """The folded route's own address, as the URL the framework serves it at.
+
+    The canonicalization is `domain/paths.py`'s, called HERE — before
+    `_emitted` dedups on `path` — because it is identity: two spellings of one
+    URL must be one row, and a seam applied after the dedup key was built
+    would leave both. It is INBOUND-HTTP-only for that module's stated reasons
+    (ruling R8: a client's slashless mapping is resolved against its base
+    address's path, so prefixing one rewrites an address rather than
+    normalizing a spelling), and the gate is the CATALOG's protocol and
+    direction rather than the row's: both are still the catalog's at this
+    point (`protocol_hint` reclassifies later, which is how an SSE row
+    inherits this without naming `sse` here, and D02 §3's merge mints `both`
+    later still).
+    """
     if _PATH in route.poisons or not route.path_parts:
         return None
-    return "".join(route.path_parts)
+    path = "".join(route.path_parts)
+    return canonical_http_path(path) if serves_urls(catalog.protocol, catalog.direction) else path
 
 
 def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any]]:

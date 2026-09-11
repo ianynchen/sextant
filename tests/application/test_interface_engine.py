@@ -17,7 +17,7 @@ call's own channel argument (arg 0) arrives `unresolved` — never `instance`
 `channel_via` follows regardless. The receiver argument (arg 1) arrives
 `instance` (symbol the bare `RawPubSubReceiver#` descriptor, `NEW`-produced)
 for the named receiver, and `lambda` (symbol the synthetic body method,
-`RawPubSubSubscribers#lambda$withLambdaReceiver$0(...).`) for the lambda
+`RawPubSubSubscribers#lambda$buildsAndDiscards$0(...).`) for the lambda
 receiver — confirming both real registrations named in the task brief.
 CHECKPOINT FACT, also pinned by the probe: a class symbol fact's own
 `interfaces` entries are module-prefixed exactly like the class's own
@@ -34,7 +34,16 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+    Parameter,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "implemented_interfaces"}
@@ -68,9 +77,8 @@ def _document(document_id: str = "doc_1") -> Document:
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.7",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
@@ -547,7 +555,7 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     hand-built facts — the checkpoint this task's brief requires: compiles
     and scans `fixtures/orders-service` once, then runs an invented catalog
     (this style ships no shipped catalog yet — that is a later task) against
-    the real `RawPubSubSubscribers#withNamedReceiver`/`withLambdaReceiver`
+    the real `RawPubSubSubscribers#startNamedReceiver`/`startLambdaReceiver`
     registrations. Confirms both real receiver-argument shapes named in the
     task brief resolve exactly as the hand-built (a)/(b) cases above assert.
     """
@@ -606,7 +614,11 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     declared_symbols = {str(row["symbol"]) for row in workspace.query("method_symbols")}
     workspace.close()
 
-    assert set(endpoints) == {"raw-notify", "raw-notify-lambda"}
+    # THREE subscriptions in the fixture since `OI-64`, and all three derive here
+    # because this catalog declares no `started_by`. That default is the assertion:
+    # a framework whose registration call IS the subscription must keep deriving from
+    # the registration alone, and adding the conjunct must not have changed it.
+    assert set(endpoints) == {"raw-notify", "raw-notify-factory", "raw-notify-lambda"}
     named = endpoints["raw-notify"]
     assert named["resolution"] == "resolved"
     assert named["handler"] is not None
@@ -615,7 +627,7 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     lambda_row = endpoints["raw-notify-lambda"]
     assert lambda_row["resolution"] == "resolved"
     assert lambda_row["handler"] is not None
-    assert "lambda$withLambdaReceiver" in lambda_row["handler"]
+    assert "lambda$startLambdaReceiver" in lambda_row["handler"]
 
     # The whole point of FIX 1 (final review): a `handler` names a method
     # symbol some scanned document actually declared. Before the fix BOTH of
@@ -624,3 +636,291 @@ def test_the_real_fixture_registrations_probe_both_receiver_shapes(tmp_path: Pat
     # lambda branch emitted the argument's own bare descriptor. This assertion
     # is what keeps either from silently regressing to a decorative string.
     assert {named["handler"], lambda_row["handler"]} <= declared_symbols
+
+
+# --- `A-M1` (principles sweep §3.3): which overload IS the handler ----------
+#
+# The lookup used to take the first match in `method_symbols`' own symbol
+# order — a SHA-256 prefix of the descriptor — and the comment defending it
+# reasoned about the INTERFACE ("the interface declares exactly one, which
+# makes that ordering a tiebreak rather than a choice") while the lookup ran
+# against the implementing CLASS. Nothing stops a class declaring a private
+# helper, a convenience form or a javac bridge beside its real override, and
+# `ClassScanner.visitMethod` deliberately keeps all three.
+
+_OVERLOAD_HANDLER = RECEIVER_TYPE + "receiveMessage(sig_0b978848)."
+
+
+def _overloaded_receiver_facts(*, declare_the_interface: bool) -> list:
+    """The registration, plus a receiver class declaring TWO
+    `receiveMessage`s: the real arity-2 override and a private helper whose
+    descriptor hash sorts FIRST.
+
+    `sig_0b978848` sorts before `sig_r1`, which is the sweep's own reproduction
+    — the wrong method is not merely reachable, it is the one the old
+    first-match-wins rule picked."""
+    facts: list = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _symbol_fact(RECEIVER_TYPE, [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        _signed_method(
+            RECEIVER_HANDLER, ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"]
+        ),
+        _signed_method(_OVERLOAD_HANDLER, ["java/lang/String#", "java/lang/String#"]),
+    ]
+    if declare_the_interface:
+        facts += [
+            _symbol_fact_of_kind(
+                "com/google/cloud/pubsub/v1/MessageReceiver#", ConstructKind.INTERFACE
+            ),
+            _signed_method(
+                "com/google/cloud/pubsub/v1/MessageReceiver#receiveMessage(sig_if).",
+                ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"],
+                enclosing="com/google/cloud/pubsub/v1/MessageReceiver#",
+            ),
+        ]
+    return facts
+
+
+def _symbol_fact_of_kind(type_symbol: str, kind: ConstructKind) -> SymbolFact:
+    return SymbolFact(document_id="doc_1", symbol=_MODULE + type_symbol, construct_kind=kind)
+
+
+def _signed_method(
+    bare: str,
+    parameter_types: list[str],
+    enclosing: str | None = None,
+    erasures: list[str] = (),
+) -> SymbolFact:
+    """A method fact carrying its own parameter types — which is what makes a
+    selector (JLS 8.4.2: name AND parameter types in order) readable at all.
+    Every other method fact in this file omits the signature, and that is
+    deliberate: the rule below must keep answering for those too.
+
+    `erasures` is what the DESCRIPTOR says, which differs from `parameter_types`
+    only where the declaration is generic (D00 §5a): an interface declaring
+    `handle(E event)` reads `E` from its `Signature` attribute and its erasure
+    from the descriptor. Defaults to `parameter_types`, the two being one string
+    for every non-generic declaration."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + (enclosing or bare.partition("#")[0] + "#"),
+        signature=Signature(
+            parameters=[
+                Parameter(
+                    name=f"p{index}",
+                    type=TypeRef(symbol=symbol, wire_type="object"),
+                    erased_symbol=(erasures[index] if index < len(erasures) else symbol),
+                )
+                for index, symbol in enumerate(parameter_types)
+            ],
+            returns=TypeRef(symbol="void#", wire_type=""),
+        ),
+    )
+
+
+def test_a_scanned_GENERIC_interface_still_names_which_overload_it_is(tmp_path: Path):
+    """W5, and the regression it nearly shipped. Same two candidates, and the
+    interface is scanned — but it declares `receiveMessage(E, Object)` on a type
+    parameter of its own, so reading the `Signature` attribute makes its first
+    parameter read `E`.
+
+    A type variable's name is scoped to the declaration that introduced it, and
+    this selector compares an INTERFACE's parameter tuple against an
+    IMPLEMENTATION's. `E` matches neither candidate, `matched` is empty, and the
+    handler goes back to NULL — the attribution lost silently, on evidence that is
+    right there. The descriptor's own answer is the erasure, which is what both
+    sides share and what this compared before W5.
+
+    (Which candidate it names for a generic interface — the real override or
+    javac's bridge — is the narrower, pre-existing question this engine's own
+    docstring records. This asserts it still names ONE.)"""
+    facts = [
+        _linked_of_site(CALLER, "raw-notify"),
+        _registration_site(
+            CALLER,
+            CallArgument(kind="unresolved", source=7),
+            CallArgument(kind="instance", source=8, symbol=RECEIVER_TYPE),
+        ),
+        _symbol_fact(RECEIVER_TYPE, [_MODULE + "com/google/cloud/pubsub/v1/MessageReceiver#"]),
+        _signed_method(
+            RECEIVER_HANDLER, ["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"]
+        ),
+        _signed_method(_OVERLOAD_HANDLER, ["java/lang/String#", "java/lang/String#"]),
+        _symbol_fact_of_kind(
+            "com/google/cloud/pubsub/v1/MessageReceiver#", ConstructKind.INTERFACE
+        ),
+        _signed_method(
+            "com/google/cloud/pubsub/v1/MessageReceiver#receiveMessage(sig_if).",
+            ["E", "java/lang/Object#"],
+            enclosing="com/google/cloud/pubsub/v1/MessageReceiver#",
+            erasures=["com/google/pubsub/v1/PubsubMessage#", "java/lang/Object#"],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
+
+
+def test_an_ambiguous_handler_is_unread_rather_than_guessed_by_hash_order(tmp_path: Path):
+    """`A-M1`'s near-miss, and the shape the fix is FOR. Two `receiveMessage`
+    methods on the implementing class, an interface this scan never opened
+    (which is every shipped catalog's case — `MessageReceiver` lives in a jar),
+    so nothing can say which one implements it.
+
+    The required answer is a NULL handler, which is exactly what this engine's
+    own docstring already promises: "the subscription still derives (the row
+    above), only its handler is unread, never fabricated". What it did instead
+    was publish the private helper — `sig_0b978848` sorts before `sig_r1` — at
+    `resolved`/`compiler`, where nothing downstream can tell an invented
+    attribution from an observed one.
+
+    The row itself must still derive: the destination is a separate fact and
+    withholding it would trade a fabrication for a silent drop."""
+    workspace = _resolve(tmp_path, _overloaded_receiver_facts(declare_the_interface=False))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert (endpoint["path"], endpoint["handler"]) == ("raw-notify", None)
+
+
+def test_a_scanned_interfaces_own_parameter_types_name_which_overload_it_is(tmp_path: Path):
+    """`A-M1`'s paired positive. Same two candidates, one thing added: the
+    interface is itself in the scan and declares its `receiveMessage`'s
+    parameter types. That is the selector JLS 8.4.2 defines, and it names the
+    real override rather than the helper that sorts first.
+
+    Pairing this with the near-miss is what makes the near-miss an assertion
+    rather than a rule that declines everything — a fix that simply returned
+    None for every overloaded receiver would pass that test and lose a handler
+    the evidence names."""
+    workspace = _resolve(tmp_path, _overloaded_receiver_facts(declare_the_interface=True))
+    [endpoint] = workspace.query("endpoints")
+    workspace.close()
+
+    assert endpoint["handler"] == _MODULE + RECEIVER_HANDLER
+
+
+# --- `OI-64`: construction is not subscription -----------------------------
+#
+# `Subscriber.newBuilder(...).build()` delivers nothing until `startAsync()` runs, and
+# `google-pubsub-subscriber.yml` used to derive a live inbound endpoint from the
+# construction alone. Our own fixture built two subscribers, started NEITHER, and had
+# both published as endpoints these tests asserted were correct — the suite protected
+# the fabrication, which is why nothing noticed it for three phases.
+#
+# The fixture now models all three shapes and each gets a different answer. They are
+# asserted together, from one resolve, because what matters is that the three are
+# DISTINGUISHED: a rule that derived all three, or silenced all three, would satisfy
+# any one of these assertions taken alone.
+
+
+def _resolved_raw_pubsub(tmp_path: Path) -> tuple[DuckDbWorkspace, list]:
+    """Compile and scan the real fixture, then resolve the SHIPPED catalog over it.
+
+    The shipped catalog, not an invented one: `started_by` lives in that file, and a
+    test that reproduced it here would pass while the shipped catalog said something
+    else — which is how the fabrication survived. The workspace is handed back open."""
+    import subprocess
+
+    from sextant.application.ports.scanner import ScanRequest
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.ingress.extract.jvm.scanner import AsmScanner
+    from sextant.resources import extractor_jar
+
+    repo = Path(__file__).parents[2]
+    fixture = repo / "fixtures" / "orders-service"
+    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=fixture, check=True)
+    facts = tmp_path / "facts"
+    AsmScanner(extractor_jar()).scan(
+        ScanRequest(
+            module_id="com.acme:orders-service",
+            coordinates="com.acme/orders-service",
+            version="1.0.0",
+            classes_dir=fixture / "target" / "classes",
+            out_dir=facts,
+        )
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    catalog = next(
+        c
+        for c in YamlCatalogSource(repo / "src" / "sextant" / "catalogs").load()
+        if c.id == "google-pubsub-subscriber"
+    )
+    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    assert [s.catalog_id for s in skipped] == [], (
+        "the shipped catalog must RUN here; a skip would make every assertion below "
+        "pass for the wrong reason"
+    )
+    return workspace, skipped
+
+
+def test_only_started_subscribers_derive_rows(tmp_path: Path):
+    """The positive arm, and it covers BOTH receiver shapes.
+
+    `startNamedReceiver` and `startLambdaReceiver` each build and start in one method,
+    so the whole §8.6 chain is present. `withNamedReceiver` builds and hands back
+    without starting, and derives nothing."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"raw-notify", "raw-notify-lambda"}, (
+        "only the started subscribers are boundaries; `raw-notify-factory` is returned "
+        "without being started"
+    )
+
+
+def test_a_builder_setter_between_construction_and_build_still_derives(tmp_path: Path):
+    """The regression this walk was rewritten for.
+
+    `startLambdaReceiver` puts `setParallelPullCount(2)` between `newBuilder` and
+    `build` — the spelling Google's own documentation uses. An earlier version required
+    each declared step to be the IMMEDIATELY next call on the value, so this ordinary
+    shape matched nothing and derived nothing: one over-report traded for a silent
+    false negative on the commonest real spelling of the thing being modelled. The
+    assertion is that an intervening call changes no answer."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert "raw-notify-lambda" in paths
+
+
+def test_a_returned_subscriber_asks_rather_than_deriving_or_vanishing(tmp_path: Path):
+    """The middle arm, and the reason an unstarted subscriber asks rather than vanishing.
+
+    `withNamedReceiver` is an ordinary factory: it builds a subscriber and hands it
+    back, and its caller may well start it. Chain reconstruction is within-method only
+    (D00 §5), so we cannot join the two. Answering "no boundary" would trade the
+    fabricated row for a silent false negative, which §8 forbids just as firmly.
+
+    **There is no third, "provably dead" answer, and an earlier version claimed one.**
+    It called a construction inert when no later CALL mentioned the value — but a
+    subscriber assigned to a FIELD leaves the method through `putfield`, which is not a
+    call site and so not a fact this walk can see. Measured: a `buildsIntoField` shape
+    derived nothing and asked nothing while another method started it. "No call
+    mentions this value" is inference, and §8 permits exclusion only on proof."""
+    workspace, _ = _resolved_raw_pubsub(tmp_path)
+
+    questions = [
+        row
+        for row in workspace.query("open_questions")
+        if str(row["question"]) == "registration_activation"
+    ]
+    workspace.close()
+
+    assert len(questions) == 1
+    assert str(questions[0]["path"]) == "raw-notify-factory"
+    assert "startAsync" in str(questions[0]["candidates"])

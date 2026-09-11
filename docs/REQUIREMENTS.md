@@ -64,15 +64,59 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
-**Status, as of Phase 2I: three of the four protocol families named above derive.** HTTP
-(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, and the message
-brokers Kafka, JMS, SQS and Pub/Sub. **gRPC does not — no Java row for it has shipped**
-([COVERAGE.md](COVERAGE.md) §5.7): the JVM is the one ecosystem where a gRPC service is
-declared by inheriting a generated base class rather than by a registration call, which
-is a scanner capability question rather than a catalog one, and the two Spring-side
-annotation rows beside it are each a catalog away. This note records the position rather
-than changing it — gRPC remains in version-1 scope above, and whether it stays there is a
-scoping decision, not a documentation one.
+**Status, as of Phase 2O Task 6: all four protocol families named above derive.** HTTP
+(both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, the message brokers
+Kafka, JMS, SQS and Pub/Sub, and now gRPC. gRPC's Java surface shipped in two halves
+([COVERAGE.md](COVERAGE.md) §5.7): the `.proto` descriptor (Phase 2O Task 4, both origins —
+embedded and a `.proto` file on disk) and the JVM bytecode half (Task 5) — a
+framework-neutral `supertype_derived` engine for generated `<Service>ImplBase`
+implementations (capability 9.13's `superclass` plus a call-site-argument read, R11) and an
+`injected_client` engine for net.devh's `@GrpcClient`-injected stubs, fenced against a
+locally-implemented service by symbol name. The `@GrpcService`/net.devh annotation
+CORROBORATION ships alongside them (`grpc-spring.yml`, on `annotation_driven`'s new
+`corroborates` block): it derives no endpoint row — the annotation carries no service
+name and cannot mint an identity — and instead surfaces an annotated-but-unmatched class
+as a `service_identity` question rather than silence. Three boundaries remain stated
+rather than closed — published-stubs jars, an UNANNOTATED Spring gRPC service implemented
+against published stubs, and bare `newBlockingStub(channel)` wiring with no field
+injection ([COVERAGE.md](COVERAGE.md) §5.7).
+None of the three narrows what derives; each narrows what a silent miss is visible as.
+
+**Phase 2O Task 6 adds the first endpoints nobody DECLARED.** Spring Data REST exposes a
+CRUD HTTP API from a repository interface — no controller, no mapping annotation — and the
+new `derived_resource` style derives that route table from the framework's own rule
+([COVERAGE.md](COVERAGE.md) §5.1, verified live in `scripts/probes/cp2_data_rest.md`).
+Because such a rule is CONDITIONAL, this is the first style with a DEPENDENCY gate:
+[D02](components/D02-catalog-schema.md) §1's `detect.coordinates` is now read, matched
+against the coordinates the module's build declares (which travel as
+[D00](components/D00-fact-schema.md) §5's `module` fact, constructed for the first time),
+and a module that does not declare the framework — or one whose build system cannot answer
+the question, as Maven cannot for a transitively-inherited starter — is reported SKIPPED
+with its reason rather than derived or silently omitted.
+
+**Phase 2O Task 7b adds the oldest HTTP surface on the platform.** A Jakarta Servlet
+carries its address on a TYPE-level `@WebServlet` and its verb on the `doXxx` method it
+overrides, which no shipped style could join — an annotation-driven derivation joins method
+symbols, and `supertype_derived`'s match requires a supertype whose own facts are in the
+module. The new `supertype_dispatch` style reads all three pieces jointly: the type
+annotation for the address, a catalog-named supertype for the dispatch contract, and the
+members the class overrides — selected by name AND parameter types, which is how the
+language identifies one — for the operations
+([COVERAGE.md](COVERAGE.md) §5.1, measured live in `scripts/probes/cp9_servlet_shapes.md`
+against three container versions). It ships twice, once per package spelling
+(`jakarta-servlet.yml` and `javax-servlet.yml`), because the legacy estate the surface
+exists for is the population using the older one — and as two catalogs only because the
+third container column measured the two behaving identically, never on the assumption that
+they would. Its boundaries are stated rather than closed: the annotation is one of three
+registration routes (`web.xml` and `ServletContext.addServlet` derive nothing); a module
+whose `web.xml` declares `metadata-complete="true"` serves none of its annotated servlets
+and we derive all of them, because nothing here reads a deployment descriptor; and the
+verbs the container serves IMPLICITLY are deliberately not derived — the code serving them
+is not in the module, and the same ruling was already made for Data REST above. An
+explicitly overridden handler is a different case and derives even where a deployment
+would refuse to route to it: `doTrace` is in the verb map with the connector's `allowTrace`
+recorded as a stated dependency, because configuration outside the module is not evidence
+about the module.
 
 ### FR-4 — Shape catalog
 
@@ -103,6 +147,18 @@ optional branches are distinguishable from a straight sequence.
 
 Traces are not bounded by depth. A trace stops only at a terminal.
 
+> **Met as of W31** (`docs/open-issues.md` OI-27, closed). This said "not met as shipped"
+> for the whole of 2Q: the walk stopped at a terminal and at three other places, one of
+> which was a depth bound of 64. The bound is gone — the walk is an explicit stack, so the
+> interpreter's own recursion limit is out of the failure modes and nothing needs a counter
+> to stay finite.
+>
+> **Two stops remain and they are not depth bounds**: a `cycle` (the callee is already on
+> the path from the root) and a `revisit` (the callee was expanded elsewhere in this same
+> trace, and its subtree is shown there). Both are correctness rather than limits — without
+> them the walk would not terminate, and expanding a shared subtree once per route is
+> exponential on an ordinary diamond. Each is stated on the step, so neither is silent.
+
 ### FR-7 — Diagrams
 
 Sextant renders sequence diagrams at module and system level, and class diagrams, from
@@ -113,6 +169,13 @@ anything, it states that it has done so and how much.
 
 *Terminals of kind `unresolved` and `cycle` are always drawn, and cannot be suppressed
 by any filter or overlay.*
+
+> **Module-scope sequence diagrams ship in 2Q, one per root, and they are FLAT** — no
+> `alt`/`opt`/`loop`, because `call_site.ordinal` is instruction order and nothing more
+> ([D00](components/D00-fact-schema.md) §5, which prices the richer field as a later
+> re-extraction). "Where a diagram omits anything, it states that it has done so and how
+> much" is met literally: every diagram carries a machine-written `Elides:` line counting
+> each kind of stop, and no step is filtered out of one.
 
 ### FR-8 — System linking
 
@@ -127,7 +190,15 @@ Where more than one inbound endpoint survives matching, every candidate is recor
 the ambiguity is written out for a person to settle.
 
 Outbound endpoints matching nothing, and inbound endpoints nobody calls, are both
-reported as findings.
+recorded and reported.
+
+> **Amendment (2026-09-10, W52 review).** This clause read *"reported as findings"*. There is
+> no `findings` table and there never was — the same discovery the usage-scenarios section
+> records below for `M04-resolver.md` and `D01`. Nothing about the requirement changes: an
+> unmatched outbound endpoint and an uncalled inbound one are both output. Only the word
+> naming a mechanism that does not exist is gone. **Nothing is output today**: the linking tier
+> that would produce these ([M05](components/M05-sync.md), [M06](components/M06-stitcher.md))
+> is `planned`, so the whole requirement is unbuilt and this clause states what it WILL do.
 
 ### FR-9 — Blast radius
 
@@ -151,42 +222,6 @@ agent.
 *The query surface answers structural questions only. Sextant never produces prose about
 what code is for.*
 
-### FR-11 — Drift detection
-
-Where a module contains both a declared contract and an implementation of the same
-contract, Sextant records both and reports any disagreement between them.
-
-Authority is determined by the build: an artifact the build consumes produces facts; an
-artifact it does not consume is documentation and produces none, but is still compared.
-
-Where a generated artifact embeds the schema it was generated from, that embedded schema
-is the one compared.
-
-### FR-12 — Refactor findings
-
-Sextant reports structural problems: dependency cycles between modules or packages,
-symbols with disproportionate coupling, and violations of a declared layering.
-
-*A symbol is reported as unreachable only where no unresolved call site exists within the
-scope searched. Where one does, the finding is withheld and the unresolved site reported
-instead.*
-
-### FR-13 — Design findings
-
-Sextant reports information supporting the division of a system into services: coupling
-between candidate boundaries, shapes crossing more than one boundary, and the contracts
-each boundary would carry.
-
-### FR-14 — Structural performance risk
-
-Sextant reports shapes in the code that are usually costly: the number of remote hops an
-endpoint makes, the number of distinct services it involves, an endpoint reached more
-than once within a single trace, a persistence or remote call inside a loop, and a
-blocking call on an asynchronous path.
-
-*Sextant reports structure, never cost. It does not measure, estimate, or rank by
-latency, throughput, or resource use.*
-
 ### FR-15 — Overlays
 
 Sextant accepts overlays: statements about the graph that did not come from reading
@@ -201,11 +236,22 @@ and the graph disagree, the disagreement is recorded as an open question.
 
 ### FR-16 — Curation and proposals
 
-A person may assert, correct, or delete a statement in the graph. A curated statement
-outranks every other source and is presented to consumers as proven.
+A person may add a curation **file** that supplies links and context the analysis cannot
+derive — a claim about the world, never an edit to a fact. A curated statement is presented
+to consumers as a distinct, higher-trust source beside the derived one, and the derived fact
+it accompanies is never overwritten, corrected or deleted.
 
-Where Sextant finds a candidate it will not act on alone, it writes a proposal in the
-form a curation takes, so that accepting it requires review rather than transcription.
+Where Sextant finds a candidate it will not act on alone, it writes a proposal in the form a
+curation takes, so that accepting it requires review rather than transcription.
+
+> **Amendment (W51).** The shipped text read *"A person may assert, correct, or delete a
+> statement in the graph. A curated statement outranks every other source and is presented to
+> consumers as proven."* That describes something this project has now ruled it will never
+> build: F11's curation tier moved to phase L with M06, and the design says a format whose
+> only consumer does not exist would ship a schema, an evidence tier and a no-mutation test
+> with nothing that reads any of them. Correcting a false requirement is the work; the
+> **wording** is what stays in v1, and this is it. What ships today is neither half — see
+> `docs/COVERAGE.md` §5.18, where both this and FR-15 clause 3 are recorded `unsupported`.
 
 ### FR-17 — Coverage reporting
 
@@ -255,9 +301,147 @@ reaches storage.
 
 ### FR-20 — Command surface
 
-Every command takes the form *noun, verb, subject, options*. Subjects may be named
-approximately; where a name is ambiguous Sextant lists the matches and stops rather than
-choosing. Every result carries an exact identifier that can be given back to Sextant.
+Every command takes the form *noun, verb, subject, options*. Every result carries an exact
+identifier that can be given back to Sextant.
+
+> **Amendment (2026-09-10, W52 review).** This sentence ended *"and every command takes one"*.
+> **No shipped command takes an identifier.** All four verbs take a filesystem PATH that must
+> already exist — `@click.argument("path", type=click.Path(exists=True, …))` on `analyze`,
+> `render`, `enrich` and `export` in `src/sextant/cli/app.py` — and `sextant.api.analyze` has
+> the same signature. The first half stands and is met: results carry exact identifiers. The
+> second half described the identifier-taking surface FR-20's noun-verb-subject form implies,
+> which is one of the reasons [PROJECT.md](PROJECT.md) records M00 as `in-progress`. It is
+> stated as the gap it is rather than left reading as shipped.
+
+**Approximate lookup happens against the INDEX, not in the command surface.** A person who
+knows a route or part of a name greps `<bundle>/index/` — `symbols.ndjson`, `addresses.ndjson`
+and the six beside them — and gets back the exact identifier a command then takes. That is
+where the matching belongs: the index is the artifact built for it, and a command that
+resolved names itself would need a second matching rule nobody could see.
+
+> **Amendment (W51).** The shipped clause read *"Subjects may be named approximately; where a
+> name is ambiguous Sextant lists the matches and stops rather than choosing."* No command
+> resolves a subject approximately, so the ambiguity rule governed nothing — it is recorded
+> `unsupported` in `docs/COVERAGE.md` §5.20. The restatement is not a retreat: the capability
+> a reader wanted is real and shipped in W35/W36, one layer out.
+
+### FR-21 — Boundary vocabulary
+
+Sextant defines a **closed, versioned boundary vocabulary** over its derived tables — the
+granularity at which architecture is compared and exported. Each kind names what it is
+derived from and what identifies it, so two analyses can be compared kind by kind rather than
+row by row.
+
+*State: unimplemented. The `dependency` kind derives from edges and dispatch, which did not
+exist when `docs/meridian-integration.md` was written and do now (F8) — so the thing that
+would have blocked it is gone.*
+
+### FR-22 — Derivation diff
+
+Given two analyses of the **same module** — workspace or bundle, any mix — Sextant reports
+the typed change-set in the boundary vocabulary: per kind, entries `added | removed |
+changed`, with `from`/`to` attribute values on `changed`, each entry carrying evidence
+pointers to the symbols and documents that ground it.
+
+*State: unimplemented. This is what the drift scenario waits on.*
+
+### FR-23 — Observability map
+
+For any analysis, Sextant answers **per boundary kind, and per attribute where they differ:
+`observable | partial | not-observable`** — derived from the manifest's gaps, the skipped
+catalogs, the uncovered files, and the shipped coverage cells for the module's languages and
+frameworks.
+
+*State: unimplemented. Every input it needs is already published — `manifest.json` carries
+the gaps and the skipped catalogs with their reasons, `coverage` carries the uncovered files,
+and `docs/COVERAGE.md` carries the cells — so this is an assembly rather than a measurement.*
+
+### FR-24 — Library embedding
+
+Analyze, query, export and diff are callable **in-process from Python**: the CLI is a thin
+wrapper over the same operations. No subprocess *required* of the caller, no global state, no
+environment reads — the caller supplies configuration as an object. The enrichment step's language-model port stays a
+port, so an embedding caller supplies its own.
+
+*State: **partial** — two clauses met outright, one met with a carve-out the requirement
+itself names, one partial, one unmet and one never measured. Clause by clause, on
+2026-09-10, rather than summarised into a single word:*
+
+| Clause | State |
+|---|---|
+| the four operations are callable in-process | **two of the four this clause names.** It names `analyze`, `query`, `export` and `diff`; `sextant.api` ships `analyze` (`:770`) and `export` (`:1416`), and `query` and `diff` are absent — `diff` being FR-22. `sextant.api` also ships `render` and `enrich`, which this clause does not name, so the module surface is four operations and the clause's own score is two |
+| the CLI is a thin wrapper over the same operations | **met.** Each verb in `src/sextant/cli/app.py` calls into `sextant.api` |
+| no subprocess *required of the caller* | **met as written** — an embedding caller calls `sextant.api` in-process and shells out to nothing. **The stronger reading is false**: Sextant itself cannot run `analyze` without a subprocess — the JVM extractor is launched with `subprocess.run` (`src/sextant/ingress/extract/jvm/scanner.py:41`, `:60`), Gradle detection shells out (`ingress/detect/gradle.py:319`), `protoc` likewise (`ingress/read/proto_source.py:124`), and `api.py:389`, `:399`, `:409` run `git` for provenance. Which reading is meant matters, so both are stated |
+| no global state | **not assessed here** — no measurement was taken, and saying so beats guessing |
+| no environment reads | **one, and it is the carved-out one.** `src/sextant/agents/tradewind.py:343` reads an API key for the language-model adapter, which this requirement's own last sentence says an embedding caller replaces |
+| the caller supplies configuration as an object | **not met.** `analyze(path, *, allow_resolve=False)` takes a path and a flag; there is no configuration object to supply |
+
+> **The wording was also strengthened in W51 and is restored.** `docs/meridian-integration.md:105`
+> says *"No subprocess **required**"* — a claim about the caller not having to shell out to
+> Sextant. W51 transcribed it as "No subprocess", which is a claim about Sextant not shelling
+> out to anything, and that is false today. Read as written in the source it is a much weaker
+> commitment, and the row above measures the stronger reading it acquired here.
+
+> **Where these came from (W51).** `docs/meridian-integration.md` states them and is tracked
+> verbatim; they were cited as requirements without being in this file, which is the same
+> defect in the other direction from FR-11 … FR-14 — a commitment nobody could look up.
+> They are requirements: each is a thing Sextant must DO, not a thing a consumer derives.
+
+---
+
+## Implementation state — FR-21 … FR-24
+
+These four are in the [Traceability](#traceability) table at the end with every other
+requirement, which is what NFR-6 depends on. This table adds only what that one does not
+carry for any requirement: how much of each is built today.
+
+| Requirement | Component | State |
+|---|---|---|
+| FR-21 boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) | unimplemented |
+| FR-22 derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) | unimplemented |
+| FR-23 observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) | unimplemented |
+| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — FR-24's own six-row table measures each clause; `query`, `diff` and a configuration object are the unmet ones |
+
+---
+
+## Usage scenarios
+
+**These are not requirements of Sextant. They are things Sextant ENABLES** — ruled by the
+user, and consistent with the whole design: Sextant observes, and judgement belongs to
+enrichment, curation or a downstream tool. *"Sextant can only provide the ammo, but won't be
+pulling the trigger."*
+
+They were written as FR-11 … FR-14 and read as things Sextant **reports**; they are things a
+consumer **derives** from what Sextant reports. Each names the capability it waits on, so a
+reader can tell "not built" from "not ours".
+
+| | Scenario | Depends on |
+|---|---|---|
+| Drift | A design is generated, something implements it, Sextant derives the architecture from the **built** code, and the two are compared | FR-22's derivation diff |
+| Refactor | The user reads the architecture plus `call_edges` — dependency cycles, disproportionate coupling, layering violations | `call_edges` exported (shipped, F8) |
+| Design | Coupling between candidate boundaries, shapes crossing more than one — needs stitching between services | phase L |
+| Performance risk | Remote hops per endpoint, an endpoint reached twice in one trace, a call inside a loop — needs cross-module call hops | phase L, plus traces |
+
+**Three rules travelled with these four, and all three are about what Sextant may SAY rather
+than what a consumer does with it — so all three survive the move.** W51 kept the first and
+dropped the other two without saying so; W52 restores them.
+
+1. **Unreachability.** A symbol is reported unreachable only where NO unresolved call site
+   exists in the scope searched. Two thirds of a typical graph ends at a boundary, so this
+   withholds most such findings on most modules — which is why the scenario is a consumer's
+   judgement and not a row we publish.
+2. **Structure, never cost.** Sextant *"does not measure, estimate, or rank by latency,
+   throughput, or resource use."* It reports that an endpoint makes four remote hops; it never
+   says that is slow. This rule is the reason the performance-risk scenario is a consumer's:
+   the word "risk" is the consumer's to apply, and Sextant supplies only the count.
+3. **The embedded schema is the one compared.** Where a generated artifact embeds the schema
+   it was generated from, that embedded schema is what a comparison uses — which is what makes
+   drift exact rather than approximate. This one is a live design rule, not just a scenario's:
+   it is [ARCHITECTURE.md](ARCHITECTURE.md)'s DR-4 consequence, and FR-22's derivation diff
+   inherits it.
+
+*`M04-resolver.md` and `D01` asserted that the resolver computes these and that a `findings`
+table is produced. Neither is true and neither ever was; both now say so.*
 
 ---
 
@@ -400,16 +584,22 @@ Component designs live in [components/](components/README.md).
 | FR-8 | System linking | [M06](components/M06-stitcher.md), [M05](components/M05-sync.md) |
 | FR-9 | Blast radius | [M09](components/M09-query.md) |
 | FR-10 | Query surface | [M09](components/M09-query.md), [D01](components/D01-graph-schema.md) |
-| FR-11 | Drift detection | [M03](components/M03-scanner.md), [M04](components/M04-resolver.md) |
-| FR-12 | Refactor findings | [M04](components/M04-resolver.md) |
-| FR-13 | Design findings | [M04](components/M04-resolver.md) |
-| FR-14 | Structural performance risk | [M04](components/M04-resolver.md) |
+| ~~FR-11 … FR-14~~ | **Usage scenarios, not requirements** (W51) — see the section above; these four rows named [M04](components/M04-resolver.md) as satisfying them, and it computes none of them | — |
 | FR-15 | Overlays | [M01](components/M01-overlay.md), [D03](components/D03-overlay-schema.md) |
 | FR-16 | Curation and proposals | [M01](components/M01-overlay.md), [M06](components/M06-stitcher.md) |
 | FR-17 | Coverage reporting | [M02](components/M02-detector.md), [M03](components/M03-scanner.md), [M04](components/M04-resolver.md) |
 | FR-18 | Export | [M08](components/M08-exporter.md), [D06](components/D06-bundle-format.md) |
 | FR-19 | Exclusion and redaction | [D04](components/D04-config-and-exclusion.md), [M03](components/M03-scanner.md) |
 | FR-20 | Command surface | [M00](components/M00-cli.md) |
+| FR-21 | Boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) |
+| FR-22 | Derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) |
+| FR-23 | Observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) |
+| FR-24 | Library embedding | [M00](components/M00-cli.md), `sextant.api` |
+
+W51 added FR-21 … FR-24 and this table did not gain them until W52 — which is exactly the
+defect NFR-6 names, a requirement with no component named. How much of each is built is in
+[Implementation state](#implementation-state--fr-21--fr-24) above; this table answers only
+*which component realises it*, as it does for the other sixteen.
 
 ### Non-functional
 

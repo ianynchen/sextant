@@ -25,6 +25,23 @@ uv run sextant module export  <module-path>
 extractor's own build and tests, then the Python suite. `scripts/check.sh --lint` runs
 the lint gates alone, which is what the pre-commit hook in `.githooks/` runs.
 
+### Re-analyse after an upgrade — a workspace is comparable only with its own version
+
+`module analyze` writes facts and a workspace under the module. **They are not comparable
+across Sextant versions.** Every document and every export records the `sextant_version` that
+produced it, so the evidence is there — but nothing compares two of them for you, and a diff
+of two exports will not say that half the difference is the tool. Re-run `analyze` after
+upgrading, rather than rendering or exporting from a workspace an older version wrote.
+
+The concrete instance, and why this is a usage note rather than only a coverage row: until
+`A-M10` the extractor recorded an array's *innermost* element type, so `String[][]` and
+`String[]` produced byte-identical facts. They no longer do — the symbol carries its
+dimensions and the type argument becomes the array it holds — so every content hash over such
+a shape moved, and a contract comparison between an old workspace and a new one reads
+UNEQUAL for a payload nobody changed. Later fixes have the same property in the other
+direction: a route an older version published and a newer one declines, or the reverse, is a
+difference in Sextant and not in the module.
+
 ## Embedding Sextant as a library
 
 `sextant.api` exposes the same four verbs as the CLI's own `module` commands —
@@ -115,11 +132,39 @@ for the HTTP inbound surface, against `examples/jhipster-sample-app` and
 module docstring states exactly what it checks (endpoint counts, route sets, the HTML
 output-quality assertions) and how "the first diagram parses" is defined without a browser.
 
+**Reproducing an example.** `examples/` is gitignored — the upstreams are not ours and are
+never committed — so each pinned example lives as one file under
+`scripts/field-expectations/`, carrying the `remote` to clone, the `commit` to validate at,
+and the counts and routes recorded against it. `macrozheng/mall` is the largest, and the
+corpus every claim about document size in this repository is measured on:
+
+```bash
+git clone https://github.com/macrozheng/mall.git examples/mall
+export JAVA_HOME=$(brew --prefix openjdk@21)   # JDK 26 breaks mall's Lombok processor
+(cd examples/mall && mvn -q compile)           # mall ships no `mvnw`
+python scripts/field_check.py mall-admin       # checkout, build if needed, analyze, render, assert
+```
+
+`mall-admin` is the analysed module: **157 classes, 160 inbound HTTP endpoints, 160 traces**,
+rendering a **711 KB** `architecture.md` and a **4.6 MB** `architecture.html` with **161
+diagrams** — the complete document, which is the default (GUIDELINES §8.4). The pin declares
+its own `module`, `maven` launcher and `jdk`, and the JDK is checked against Maven's own
+banner before anything is built, so the Lombok failure above is a one-line refusal rather
+than a stack trace. **First run in an existing clone:** if `analyze` raises
+`_duckdb.BinderException`, that is `OI-29` — delete `examples/mall/mall-admin/.sextant/workspace.duckdb`
+and re-run.
+
 ## `.sextant.yml` — reading a dependency's own code
 
 Some declarations a module depends on are not in the module. A generated SOAP client stub,
-for instance, is usually published as a jar. A file beside the module's build file names
-the dependencies whose **own bytecode** should be scanned alongside it:
+for instance, is usually published as a jar — and so are Spring Boot Actuator's built-in
+endpoints (`/actuator/health`, `/actuator/info` and the rest), which live in the actuator jar
+rather than in your code and are therefore invisible until you ask for that jar here. The same
+goes for a **shared API interface**: a Spring `@HttpExchange` contract published as a jar and
+implemented by your controller carries its routes in that jar, so those routes are missing from
+your module's surface until the jar is named below — the controller's own `@GetMapping`s are
+read either way. A file beside the module's build file names the dependencies whose **own
+bytecode** should be scanned alongside it:
 
 ```yaml
 # .sextant.yml, beside pom.xml
@@ -329,3 +374,23 @@ Upgrading is deliberate: replace the file and bump both constants together.
 
 The pan-zoom script beside it, `assets/panzoom.js`, is not vendored — it is Sextant's own,
 a few dozen lines of vanilla JS with no dependency of its own to pin.
+
+### A ported rule set — attributed, not vendored and not depended on
+
+`src/sextant/domain/pluralize.py` is a port of the pluralization rule set of
+[Evo Inflector](https://github.com/atteo/evo-inflector) (`org.atteo:evo-inflector`,
+Copyright 2011 Atteo, Apache License 2.0) — the same categories and regular expressions in
+the same registration order. It is here because Spring Data REST pluralizes a repository's
+entity name to build its collection path using exactly that library, so what Sextant must
+predict is **what Evo returns**, not what English arguably ought to do (`person` →
+`persons`, not `people`). Porting adds no Python dependency and no JVM one, and it keeps a
+single answer for every machine (NFR-1); depending on a "better" Python pluralizer would be
+wrong here by definition.
+
+A port of a rule set is a derivative work, so Apache-2.0 §4's attribution obligation
+applies as it would to the jar: `src/sextant/domain/LICENSE-evo-inflector` records the
+origin and reproduces the license in full, and the module's own docstring points at it.
+There is nothing to pin the way `mermaid.min.js` is pinned — no Evo bytes are shipped —
+so the equivalent check is a differential run against the real 1.3 jar over all 235,976
+words of `/usr/share/dict/words`, with zero mismatches
+(`scripts/probes/cp2_data_rest.md`).

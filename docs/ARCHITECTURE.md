@@ -338,9 +338,24 @@ single large files where compression and portability matter.
 **The workspace persists.** It is the product, not an intermediate. `render` and every
 query read it without re-analysing.
 
-**Redaction happens during extraction**, before anything is written. The cache key includes
-the redaction pattern set, because a pattern added later cannot clean facts already
-written.
+**Redaction happens at the EXITS**, and the workspace stays verbatim. Masking runs where
+data crosses the trust boundary — the rendered document (`api.py::render`), the exported
+bundle (`api.py::export`), and the enrichment tools' read path — never during extraction.
+The reason is `resolved_config`: analysis needs the real values locally, because peer
+resolution substitutes real addresses into endpoint expressions, and a workspace of masked
+values is a workspace that cannot answer. **So `<module>/.sextant/facts/**` holds
+unmasked values, and a workspace is not safe to copy, share or commit on the strength of
+this section.** Every document written locally carries `redaction_set_hash: sha256:none`,
+which is the fact stream saying so; the exporter produces the real hash for the bytes that
+leave. [D04](components/D04-config-and-exclusion.md) §4 is the full amendment, approved
+2026-09-02 with Phase 2K's design.
+
+*This paragraph read "Redaction happens during extraction, before anything is written. The
+cache key includes the redaction pattern set, because a pattern added later cannot clean
+facts already written." Both sentences were false: the amendment landed in D04 and never
+here (§5.1), and there is no cache at all. It is corrected rather than deleted because
+NFR-8 is a confidentiality claim and this is the first document a reader opens —
+`docs/principles-sweep-2026-09-05.md` carries the finding as `A-C8`.*
 
 ---
 
@@ -611,7 +626,7 @@ one component:
 
 | Decision | Blocks | Tracked in |
 |---|---|---|
-| Which clustering algorithm proposes components | [FR-13](REQUIREMENTS.md#fr-13--design-findings) and the overlay skill | [M04](components/M04-resolver.md) |
+| Which clustering algorithm proposes components | the design *scenario* ([REQUIREMENTS.md](REQUIREMENTS.md#usage-scenarios), formerly FR-13) and the overlay skill — **not a Sextant requirement**, so the question is a consumer's (W51) | [M04](components/M04-resolver.md) |
 | The field-list residue of [D00](components/D00-fact-schema.md) — §5a settled the structure; what remains lands with the validated models | NFR-10's schema-as-code | [D00](components/D00-fact-schema.md) |
 | Repository initialisation under version control | `GUIDELINES.md` §11 | [PROJECT.md](PROJECT.md) |
 

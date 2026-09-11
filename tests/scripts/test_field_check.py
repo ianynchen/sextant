@@ -105,3 +105,152 @@ def test_ensure_compiled_rebuilds_unconditionally_when_head_moved(
     field_check._ensure_compiled(repo, force=True)
 
     assert calls, "a moved HEAD must trigger a rebuild even though target/classes exists"
+
+
+# --- a multi-module upstream, its launcher and its JDK --------------------
+
+
+def test_ensure_compiled_asks_the_MODULE_whether_it_is_already_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`macrozheng/mall`'s root is `<packaging>pom</packaging>` and never has a
+    `target/classes` of its own, so a pin naming a `module` must read the
+    MODULE's. Reading the root's instead would rebuild the whole reactor on
+    every run of an already-built clone — the shortcut, silently never taken."""
+    repo = tmp_path / "repo"
+    (repo / "mall-admin" / "target" / "classes").mkdir(parents=True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=False, module=repo / "mall-admin")
+
+    assert calls == []
+
+
+def test_ensure_compiled_builds_when_the_MODULE_is_not_built_and_the_root_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The near-miss paired with the test above, and the failure that matters:
+    a reactor root carrying leftover `target/classes` from some other goal is
+    NOT evidence that the analysed module was compiled. Reading the root would
+    skip the build and hand `analyze` an empty module — a field check that
+    validates nothing while reporting `ok`."""
+    repo = tmp_path / "repo"
+    (repo / "target" / "classes").mkdir(parents=True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=False, module=repo / "mall-admin")
+
+    assert calls, "an unbuilt module must be built even where the reactor root looks built"
+
+
+def test_an_already_built_module_is_not_refused_for_the_machines_jdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The JDK check guards a BUILD, so it must not run when there is none.
+
+    It used to run before `_ensure_compiled` decided whether to build at all,
+    which refused `mall-admin` on a machine whose Maven reports 26 even though
+    `target/classes` was already compiled at the pinned commit by a 21. Nothing
+    was going to invoke Maven, so there was no wrong toolchain to prevent — and
+    the message said the pin could not be validated, which was untrue. The pin
+    was then verified by hand and matched exactly.
+    """
+    repo = tmp_path / "repo"
+    (repo / "target" / "classes").mkdir(parents=True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=False, jdk="21")
+
+    assert calls == [], "an already-built module must not shell out at all, `mvn -v` included"
+
+
+def test_a_build_that_does_run_is_still_refused_on_the_wrong_jdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The other arm, so moving the check did not delete it: a module that is
+    NOT already built still verifies the toolchain before compiling, because
+    that is the case the refusal exists for — `macrozheng/mall` on a JDK newer
+    than 21 dies inside Lombok with nothing naming the toolchain."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(field_check, "_run", _stub_banner(_MAVEN_BANNER.format(version="26.0.2.1")))
+
+    with pytest.raises(field_check.FieldCheckFailure) as refused:
+        field_check._ensure_compiled(repo, force=False, jdk="21")
+
+    assert "pins JDK 21" in str(refused.value)
+
+
+def test_the_launcher_a_pin_names_is_the_one_that_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`macrozheng/mall` ships no `mvnw`, so its pin names the system `mvn`.
+    Defaulting silently to the wrapper would fail with `No such file` on every
+    upstream that has none, which is a toolchain fact the pin exists to state."""
+    repo = tmp_path / "repo"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_compiled(repo, force=True, maven="mvn")
+
+    assert calls and calls[0][0] == "mvn"
+
+
+def _stub_banner(stdout: str, returncode: int = 0) -> object:
+    def fake_run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, returncode, stdout, "")
+
+    return fake_run
+
+
+_MAVEN_BANNER = (
+    "Apache Maven 3.9.16\nMaven home: /opt/homebrew/Cellar/maven/3.9.16/libexec\n"
+    "Java version: {version}, vendor: Homebrew, runtime: /opt/homebrew/Cellar/openjdk\n"
+)
+
+
+def test_the_pinned_jdk_accepts_the_version_maven_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The positive paired with the two refusals below: a matching toolchain
+    passes silently, so the refusals are evidence about the VERSION rather than
+    about the check being unconditionally loud."""
+    monkeypatch.setattr(
+        field_check, "_run", _stub_banner(_MAVEN_BANNER.format(version="21.0.12.1"))
+    )
+
+    field_check._refused_if_wrong_jdk(tmp_path, "mvn", "21")
+
+
+def test_a_jdk_maven_will_actually_use_that_is_not_the_pinned_one_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The real failure, from this repo's own machine: `mvn` on the default
+    `JAVA_HOME` reports 26, on which `macrozheng/mall`'s Lombok processor
+    throws and the build dies several screens into a stack trace naming
+    nothing about the toolchain. The refusal names both versions and the fix,
+    and it happens BEFORE the build rather than inside it."""
+    monkeypatch.setattr(field_check, "_run", _stub_banner(_MAVEN_BANNER.format(version="26.0.2.1")))
+
+    with pytest.raises(field_check.FieldCheckFailure) as refused:
+        field_check._refused_if_wrong_jdk(tmp_path, "mvn", "21")
+
+    assert "pins JDK 21 and Maven will use 26" in str(refused.value)
+
+
+def test_a_banner_with_no_java_version_line_is_refused_rather_than_assumed_right(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Unverifiable is not verified. A banner this regex cannot read leaves the
+    toolchain unknown, and continuing would validate the pin against whatever
+    JDK happened to be there — the same unpinned `ok` the dirty-tree check
+    exists to prevent, one layer down."""
+    monkeypatch.setattr(field_check, "_run", _stub_banner("Apache Maven 3.9.16\n"))
+
+    with pytest.raises(field_check.FieldCheckFailure) as refused:
+        field_check._refused_if_wrong_jdk(tmp_path, "mvn", "21")
+
+    assert "no `Java version:` line" in str(refused.value)

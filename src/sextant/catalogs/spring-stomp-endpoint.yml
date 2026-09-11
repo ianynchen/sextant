@@ -1,0 +1,83 @@
+id: spring-stomp-endpoint
+displayName: Spring STOMP messaging (the connect URL)
+style: single_call
+protocol: websocket
+direction: inbound
+
+# THE ASYMMETRY THIS CLOSES (F10 §11, `G-42`, W45). A STOMP module's
+# `@MessageMapping` destinations derive — `spring-stomp.yml` since 2H, and their
+# outbound half since W43 — while **the transport endpoint they arrive on did not
+# exist in the export at all**. `registry.addEndpoint("/ws")` is the URL a client
+# actually opens, and no catalog named it: `spring-websocket.yml` names the RAW
+# handler registry (`WebSocketHandlerRegistry.addHandler`), which is the non-STOMP
+# registration form and a different interface.
+#
+# A SEPARATE FILE rather than a second owner on `spring-websocket.yml`, and the
+# reason is the project's own rule: an `owner` list names one library reachable
+# under more than one NAME and deriving the same row. These are two registries
+# — one registers a raw `WebSocketHandler`, the other registers a STOMP endpoint
+# a broker serves — so they get two files, the way `spring-kafka-template` and
+# `spring-kafka-replying` do.
+detect:
+  coordinates:
+    - "org.springframework:spring-websocket"
+    - "org.springframework.boot:spring-boot-starter-websocket"
+
+measured:
+  - { artifact: org.springframework:spring-websocket, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+
+# **`array_arguments` IS declared here, and the three sibling catalogs that read arrays do
+# not declare it** — a split settled by measuring rather than by a principle (W47's review).
+# Withhold the capability and re-resolve, on facts where every `array` argument arrives as one
+# opaque `unresolved`:
+#
+#   this catalog          3 rows -> 2   `addEndpoint("/ws-alt", "/ws-legacy")` collapses to
+#                                       ONE boundary. A registered URL disappears.
+#   spring-mvc-router     3 rows -> 3   media column NULL; every route still published
+#   spring-webflux-router 10 -> 10      the same
+#   spring-websocket      1 -> 1        `path` NULL at `unresolved`; the row is still there
+#
+# **The line is whether a BOUNDARY disappears**, not whether a column does. D02 §1's doctrine
+# is that `requires` keeps degradation VISIBLE and that "silently finding fewer endpoints is
+# the failure this prevents" — and only this catalog loses one. A row present and honestly
+# `unresolved` is the answer this project prefers everywhere else, so a catalog that degrades
+# that way declares nothing.
+#
+# *W45 declared it here for the wrong reason ("this catalog would derive nothing"), W46's
+# review reverted all four on a rule that was false of thirty other catalogs, and this is the
+# measured position. `string_constants` remains declared by 30 catalogs whose row counts are
+# unaffected by its absence — a convention broader than the rule above, recorded in
+# `docs/open-issues.md` `OI-78` rather than silently condemned here.*
+requires: [call_site, string_constants, array_arguments]
+
+matches:
+  owner: org.springframework.web.socket.config.annotation.StompEndpointRegistry
+  # MEASURED, at spring-websocket 6.1.6: the interface declares
+  # `StompWebSocketEndpointRegistration addEndpoint(String...)` and nothing else of
+  # that name — one overload, so the descriptor claim costs nothing today and buys
+  # silence the day a sibling appears.
+  #
+  # VARARGS COLLAPSE INTO ONE ARGUMENT, which is why `arity: 1` is right for a call
+  # naming two paths. Compiled against the jar and read back rather than reasoned
+  # about: `registry.addEndpoint("/ws")` emits `anewarray String` then
+  # `invokeinterface addEndpoint([Ljava/lang/String;)…`, and
+  # `addEndpoint("/ws-alt", "/ws-legacy")` emits the same call with a two-element
+  # array. `channels_of` reads the slot's own `elements` (extractor capability
+  # 9.15), so a two-path registration derives TWO rows — one per URL a client may
+  # open — exactly as `addHandler`'s own multi-path call already does.
+  #
+  # `channel_arg`, not `url_arg`: a handshake path is a destination identity, never
+  # a peer+path URL to split (CP-2) — `spring-websocket.yml`'s own reasoning for
+  # the same shape one interface along.
+  methods:
+    - { name: addEndpoint, arity: 1,
+        descriptor: "([Ljava/lang/String;)Lorg/springframework/web/socket/config/annotation/StompWebSocketEndpointRegistration;",
+        channel_arg: 0 }
+
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

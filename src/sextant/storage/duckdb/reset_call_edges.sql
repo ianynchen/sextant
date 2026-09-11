@@ -1,0 +1,13 @@
+-- Clears 2Q `G4`'s call graph for one resolve.
+--
+-- Runs from the PASS rather than from the pipeline, the reset_return_flows.sql
+-- precedent and for the same reason: `call_edges` has exactly one writer,
+-- `resolve/call_edges.py`, so reset and insert belong together there. The two
+-- non-wire tables need a pipeline-owned reset only because more than one
+-- CATALOG contributes rows to each.
+--
+-- The table itself is never dropped: schema.sql pre-declares it so the
+-- "call_edges" query still succeeds on a module whose facts carry no call site
+-- at all. Unconditional, so a resolve that derives nothing leaves an empty
+-- table rather than the previous run's rows.
+DELETE FROM call_edges;

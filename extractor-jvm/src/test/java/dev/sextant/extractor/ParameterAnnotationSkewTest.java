@@ -1,0 +1,188 @@
+package dev.sextant.extractor;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.InputStream;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * JVMS 4.7.18: the parameter-annotation table may be SHORTER than the
+ * descriptor's parameter list, because a compiler omits parameters it did not
+ * read from source. Which ones it omitted is read from `MethodParameters`
+ * (JVMS 4.7.24), never inferred from the difference in the two counts.
+ *
+ * <p>It WAS inferred from the counts, on the rule "what is omitted is omitted
+ * from the FRONT" — the outer instance on an inner class, `$enum$name` /
+ * `$enum$ordinal` on an enum. That is javac's rule for MANDATED parameters and
+ * it is not javac's rule for synthesised ones: a local class that captures gets
+ * its captures appended at the END (measured, javac 26), and shifting from the
+ * end then moved an annotation off the parameter that declared it and onto a
+ * captured value. `a_capturing_local_classs_annotation_stays_on_its_own_parameter`
+ * is that case; the enum below is the same failure in the other direction, which
+ * is why the shift existed at all. The flags distinguish them and the counts
+ * cannot.
+ *
+ * <p>Measured on the enum fixture: the constructor's descriptor carries four
+ * parameters (String, int, String, int) while `RuntimeVisibleParameterAnnotations`
+ * declares two, so the annotation at attribute index 0 belongs to descriptor
+ * index 2 — which is what the flags say (synthetic, synthetic, declared,
+ * declared). Indexing from zero put it on `$enum$name`.
+ *
+ * <p>An ENUM rather than only an inner class, deliberately: the hidden first
+ * parameter here is also a `String`, so the misalignment is invisible to every
+ * check except one that knows about 4.7.18. On an inner class the hidden
+ * parameter is the outer instance and a consumer could notice the type is
+ * wrong; that is the easy case, and it is not the one that ships silently.
+ */
+class ParameterAnnotationSkewTest {
+
+    private List<String> scan(String simpleName) throws Exception {
+        try (InputStream in =
+                getClass().getResourceAsStream("/dev/sextant/extractor/" + simpleName + ".class")) {
+            return new ClassScanner("com.acme/orders", "1.0.0")
+                .scan(in.readAllBytes(), "doc-" + simpleName);
+        }
+    }
+
+    private static String constructorSymbol(List<String> lines) {
+        return lines.stream()
+            .filter(line -> line.contains("\"construct_kind\":\"constructor\""))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no constructor symbol emitted"));
+    }
+
+    @Test
+    void an_enum_constructors_annotation_lands_on_the_parameter_that_declares_it()
+            throws Exception {
+        String constructor = constructorSymbol(scan("EnumConstructorAnnotated"));
+
+        // The descriptor's own four parameters, synthesised ones included: the
+        // signature describes the METHOD as the JVM sees it.
+        int parameters = constructor.split("\"annotations\":", -1).length - 1;
+        assertEquals(4, parameters, "expected the descriptor's four parameters");
+
+        // `@Labelled` belongs to `display`, the THIRD descriptor parameter.
+        // Before the fix it sat on the first, which is `$enum$name` — also a
+        // String, which is why no downstream type check could catch it.
+        int labelled = constructor.indexOf("Labelled");
+        assertTrue(labelled > 0, "the annotation was dropped entirely");
+        String beforeLabelled = constructor.substring(0, labelled);
+        int parameterOfLabelled = beforeLabelled.split("\"annotations\":", -1).length - 2;
+        assertEquals(
+            2,
+            parameterOfLabelled,
+            "the annotation is on parameter " + parameterOfLabelled
+                + "; `display` is descriptor parameter 2 and parameter 0 is $enum$name");
+    }
+
+    /** The index of the parameter carrying the first annotation, counted the way
+     *  the emitted signature orders them. */
+    private static int annotatedParameter(String symbol) {
+        return annotatedParameter(symbol, "Labelled");
+    }
+
+    private static int annotatedParameter(String symbol, String annotation) {
+        int at = symbol.indexOf(annotation);
+        assertTrue(at > 0, "the annotation was dropped entirely: " + symbol);
+        return symbol.substring(0, at).split("\"annotations\":", -1).length - 2;
+    }
+
+    @Test
+    void kotlins_trailing_synthetics_do_not_move_a_parameter_annotation()
+            throws Exception {
+        // The assumption this test exists to REPLACE: "synthesised parameters
+        // are always LEADING" is javac's rule, not the class file's, and Kotlin
+        // appends its synthetics at the END — a `Continuation` on a suspend
+        // fun. If kotlinc wrote a SHORT annotation table, aligning from the end
+        // would move an annotation that indexing from zero had right.
+        //
+        // Measured, not assumed: kotlinc writes one entry per DESCRIPTOR
+        // parameter, empty for the synthetic ones, so the table is full length
+        // and the shift is 0. `suspending` takes (String, Continuation) and its
+        // table declares two entries; the annotation stays on parameter 0.
+        String suspending = scan("KotlinParameterAnnotated").stream()
+            .filter(line -> line.contains("suspending("))
+            .filter(line -> line.contains("Tagged"))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no annotated suspend fun symbol"));
+        assertEquals(0, annotatedParameter(suspending, "Tagged"),
+            "a suspend fun's annotation belongs on its declared parameter, "
+                + "not on the trailing Continuation");
+    }
+
+    @Test
+    void a_capturing_local_classs_annotation_stays_on_its_own_parameter() throws Exception {
+        // The shape that makes counting WRONG, and in the direction the old rule
+        // could not see. javac appends a local class's captured values to the
+        // constructor descriptor, so `$1Local` is
+        // (Outer, List, StringBuilder, int) against a ONE-entry annotation table,
+        // and `MethodParameters` reads mandated, -, synthetic, synthetic.
+        //
+        // `@Labelled` is written on the `List`. Shifting by the difference in the
+        // counts (4 - 1 = 3) put it on the captured `int` — a parameter that
+        // exists, in a fact that is well formed, which is why nothing downstream
+        // ever noticed. The flags say slot 1 and slot 1 is where it belongs.
+        assertEquals(
+            1,
+            annotatedParameter(constructorSymbol(scan("GenericSignatureSample$1Local"))),
+            "the annotation was moved off the parameter that declares it");
+    }
+
+    @Test
+    void a_local_class_with_no_parameter_flags_counts_from_zero() throws Exception {
+        // The same capture in a STATIC method, where javac writes NO
+        // `MethodParameters` at all (measured) — so there are no flags to align by
+        // and the counts still disagree (3 against 1).
+        //
+        // The index is taken as the slot. Every shape measured that omits from the
+        // FRONT carries the flags saying so; this one, the only measured shape that
+        // carries none, appends its synthetics — so counting from zero is already
+        // right. Stated as measured rather than as a property of the format.
+        //
+        // The old shift produced 2 here, the captured `int`, for the third time in
+        // this file's three fixtures.
+        assertEquals(
+            0,
+            annotatedParameter(constructorSymbol(scan("GenericSignatureSample$1StaticLocal"))),
+            "the annotation was moved off the only parameter written in source");
+    }
+
+    @Test
+    void a_top_level_constructor_is_unmoved_because_nothing_was_synthesised()
+            throws Exception {
+        // Shift 0. A fix that aligned from the end UNCONDITIONALLY would break
+        // every ordinary constructor, so this is the arm that says it does not.
+        assertEquals(
+            0, annotatedParameter(constructorSymbol(scan("ConstructorAnnotationShapes$TopLevel"))));
+    }
+
+    @Test
+    void a_class_retention_annotation_uses_its_own_attributes_count() throws Exception {
+        // Every other fixture uses a RUNTIME annotation, so nothing exercised
+        // `RuntimeInvisibleParameterAnnotations` at all — a CLASS-retention
+        // parameter annotation could have been dropped entirely and the suite
+        // would not have noticed. This drives that attribute.
+        //
+        // What it does NOT prove, stated so the next reader does not assume it:
+        // that holding the two counts separately is load-bearing. javac writes
+        // the same count in both attributes, so collapsing them passes — I
+        // checked. The separation is defensive against a producer that differs,
+        // which javac is not.
+        assertEquals(
+            0,
+            annotatedParameter(
+                constructorSymbol(scan("ConstructorAnnotationShapes$Invisible")), "Retained"));
+    }
+
+    @Test
+    void an_inner_class_constructor_shifts_by_its_hidden_outer_instance() throws Exception {
+        // Shift 1. The easy case: the hidden parameter is the outer instance, so
+        // its type differs and a consumer could in principle notice. It is here
+        // because the shift is not a constant — 0, 1 and 2 all occur, and a fix
+        // that hardcoded any one of them would pass one of these three tests.
+        assertEquals(
+            1, annotatedParameter(constructorSymbol(scan("ConstructorAnnotationShapes$Inner"))));
+    }
+}

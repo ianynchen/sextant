@@ -33,6 +33,7 @@ Left alone; a future phase widens that lookup the same way this one widens
 `mapping_annotations`.
 """
 
+import json
 from typing import Any
 
 from sextant.domain.symbols import bare_descriptor, member_name, method_name
@@ -132,13 +133,85 @@ def composed_mapping_rows(
     return synthetic
 
 
+def folded_rows(
+    annotation_rows: list[dict[str, Any]],
+    containers: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Synthesizes one row per use held INSIDE a container annotation — the same
+    `{target, annotation, args}` shape the other two passes synthesize, and
+    `annotation` always the MEMBER fqn the catalog declared, so the caller's SQL
+    never has to know a folding happened any more than it has to know a
+    composition did (`OI-36`).
+
+    `containers` maps a container fqn to the member fqn it folds, both in the
+    `annotations` view's own symbol form. Empty for every catalog that declares
+    none, in which case this returns an empty list without reading a row.
+
+    **Two or more uses of one repeatable annotation on one declaration are not
+    N annotations in the class file.** javac writes the CONTAINER and nothing
+    else (JLS 9.7.5), so a method carrying two listener annotations carries no
+    listener annotation at all and the mapping join matches nothing — both
+    destinations vanish, silently, beside a single-use neighbour that derives
+    normally. That is the under-report CP-16 measured at six versions across
+    three frameworks, and this is the read that closes it.
+
+    **A container the AUTHOR wrote is the same bytes and the same read.** CP-17
+    rows 2a/2b, 3a/3b and 6a/6b measured `@PulsarListeners`: the container shape
+    without the language mechanism, on an annotation that is not `@Repeatable`,
+    whose post-processor registers the union of a direct use and every member of
+    the container. This pass emits the members and the real annotation row
+    survives untouched beside them, so the union is what the caller sees —
+    which is the framework's own answer rather than a widening. Nothing here
+    asks whose container it is, because a class file does not record that.
+
+    **`value` is the LANGUAGE's word, not a framework's**, which is why it is
+    spelled here and is not catalog data: JLS 9.6.3 requires a containing
+    annotation type to declare exactly `value()`, returning an array of the
+    repeatable type. A catalog key for it would let a file state something the
+    language forbids. `scheduled_work._folded` spells it in the same place for
+    the same reason.
+
+    Every entry is checked against the declared member fqn rather than taken on
+    position, `scheduled_work._folded`'s reason unchanged: a container is an
+    ordinary annotation whose `value` happens to be an array, and reading
+    whatever it holds would let some other array-valued annotation contribute
+    declarations. An entry the extractor recorded as unread carries no `args`
+    key and contributes nothing, rather than reading as an annotation genuinely
+    written with no arguments — which is why the `args` type is checked and not
+    defaulted.
+    """
+    if not containers:
+        return []
+    synthetic: list[dict[str, Any]] = []
+    for row in annotation_rows:
+        member = containers.get(str(row["annotation"]))
+        if member is None:
+            continue
+        value = (row["args"] or {}).get("value")
+        if not isinstance(value, list):
+            continue
+        synthetic.extend(
+            {"target": str(row["target"]), "annotation": member, "args": dict(entry["args"])}
+            for entry in value
+            if isinstance(entry, dict)
+            and entry.get("annotation") == member
+            and isinstance(entry.get("args"), dict)
+        )
+    # NFR-1: deterministic order, sorted by (target, annotation) — the same
+    # normalisation `composed_mapping_rows` ends with. The folded uses of ONE
+    # container keep the array order javac wrote, which is the declaration
+    # order the source had, because `sort` is stable and the key names neither.
+    synthetic.sort(key=lambda row: (row["target"], row["annotation"]))
+    return synthetic
+
+
 def inherited_rows(
     annotation_rows: list[dict[str, Any]],
     implementation_rows: list[dict[str, Any]],
-    supertype_rows: list[dict[str, Any]],
+    superclass_rows: list[dict[str, Any]],
     method_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
-    prefix_fqn: str | None,
+    prefix_fqns: list[str] | None,
 ) -> list[dict[str, Any]]:
     """Synthesizes one row per method that carries no mapping annotation of
     its own but implements or overrides one that does (spec §3): the same
@@ -152,20 +225,32 @@ def inherited_rows(
     own worst case (`OrdersApi#composed`'s `@ApiGet`) must resolve through
     both passes at once: §2 composes it to a real `@RequestMapping` on the
     interface method first, and only then does this pass have anything to
-    inherit. `implementation_rows`/`supertype_rows`/`method_rows` are each
+    inherit. `implementation_rows`/`superclass_rows`/`method_rows` are each
     the plain-Python form of the same-named workspace query (`implementations`,
-    `supertypes`, a new `method_declarations`) — JSON columns already
+    `superclasses`, a new `method_declarations`) — JSON columns already
     decoded, the same convention `composed_mapping_rows` takes for `args`.
 
+    **The class-inheritance edge is `superclasses`, not `supertypes`
+    (`A-C4`).** `supertypes` carries D00 §5a's parameterized-type reference,
+    emitted ONLY where the superclass carries type ARGUMENTS — so reading it
+    as the superclass edge gave `class Child extends Base` no edge at all,
+    and `derive_endpoints.sql`'s `LEFT JOIN prefixes` then composed the
+    absent prefix as the empty string and published the child's methods at an
+    address the framework does not serve. JLS 8.1.4/8.2 is that a class has
+    exactly one direct superclass and inherits its members, generic or not,
+    and capability 9.13's erased `superclass` field is that sentence in the
+    fact stream: written for every non-`Object` superclass, off the class
+    file's own `super_class` entry.
+
     Every symbol here — `implementations.symbol`, its `interfaces` entries,
-    `method_rows.enclosing`, and every `annotations` `target` — shares one
-    coordinate space: module-prefixed exactly as the fact wrote it (D00
-    §5a), which is why none of them is stripped to a bare descriptor before
-    a lookup. The one exception is a class's own generic supertype
-    reference (`supertypes`, D00 §5a's PTR carrier): like every type
-    reference inside a `signature`, its embedded `symbol` is bare even for a
-    module-local ancestor (2E checkpoint item (4)), so `_prefixed_types`
-    below is the one bare-to-prefixed lookback this module needs.
+    `method_rows.enclosing`, `superclass_rows`' own two columns, and every
+    `annotations` `target` — shares one coordinate space: module-prefixed
+    exactly as the fact wrote it (D00 §5a), which is why none of them is
+    stripped to a bare descriptor before a lookup. The `supertypes` edge was
+    the one exception and needed a bare-to-prefixed lookback, which could
+    only recover an ancestor this module had seen SOMEWHERE ELSE — so an
+    abstract base declaring nothing but a type-level prefix was unreachable
+    (`A-M11`). Both go away with the edge.
 
     Resolution order (spec §3, exact), applied per candidate method
     (`_resolve_method`) and, separately, per implementing class's own
@@ -183,29 +268,43 @@ def inherited_rows(
     is PRIMARY, not a fallback): the compiler's covariant-return bridge is
     an ordinary method symbol carrying the interface method's EXACT
     descriptor, with no distinguishing key at all — so it, not the real
-    override, is what the name+descriptor join actually finds. The only
-    available discriminator is structural: within one class, a candidate
-    whose name and parameter types match another of that class's own
-    methods but whose return type does not is a bridge, and neither method
-    in that pair is ever a synthesis target (`_is_bridge`). This is an
-    honest miss for the fixture's own single-ancestor case (the real
-    override's descriptor never matched the interface's anyway), but it is
-    a real, checkpoint-mandated boundary, not merely a defensive no-op: a
-    class that inherits the SAME-named method from both a mapped interface
-    AND a generic superclass can grow two bridges (one exact-matching each
-    ancestor's own descriptor) plus one real override, all three sharing
-    one name and one parameter list — `_is_bridge` cannot tell which
-    ancestor a given bridge belongs to, so it excludes all three, and BOTH
-    ancestors' mappings are silently lost, not just the honest single one.
-    See `_is_bridge`'s own docstring; documented as a COVERAGE boundary
-    (Task 7 review, Important finding I1), not fixed — the structural rule
-    is the only signal bytecode carries at all.
+    override, is what the name+descriptor join actually finds — because the
+    ancestor lookup is by name AND descriptor, and a covariant or generic
+    override's descriptor is by definition not its ancestor's.
+
+    So the bridge is the only thing that CAN resolve, and it is the wrong
+    target: it names a method nobody wrote. It is treated as evidence
+    instead, and the mapping is carried across to the method it forwards to
+    (`_synthesis_target`). Which method that is comes from the fact, not
+    from a guess: D00 §5a's `modifiers.synthetic` folds in `ACC_BRIDGE`.
+
+    *This was a structural guess until OI-47 — same class, same name, same
+    parameters, different return — and it was wrong in both directions. A
+    COVARIANT override matched it, so the real method was excluded along
+    with its bridge and the mapping was lost. A GENERIC-PARAMETER override
+    did not match it at all (the parameters differ, the return does not),
+    so the row was published naming the synthetic bridge as the handler.*
+
+    A class inheriting the SAME-named method from both a mapped interface
+    AND a mapped superclass grows two bridges that redirect to one method,
+    and still derives nothing — now because two ancestors give it two
+    different answers and the framework's own annotation search order is
+    not read here, so §8 says produce none. That is finding I1, restated as
+    a rule for an ambiguity rather than a consequence of discarding every
+    bridge.
     """
     methods_by_type: dict[str, dict[str, str]] = {}
     signature_by_symbol: dict[str, dict[str, Any] | None] = {}
+    # D00 §5a's method `modifiers`, which carry `synthetic` — `ACC_BRIDGE`
+    # folded in, since javac sets the two together. Absent for a fact from a
+    # scanner that reports no modifiers, which is what `_is_synthetic`'s
+    # fallback exists for; NOT defaulted to `{}` here, because "no modifiers
+    # reported" and "reported, and not synthetic" are different answers.
+    modifiers_by_symbol: dict[str, dict[str, Any] | None] = {}
     for row in method_rows:
         symbol = str(row["symbol"])
         signature_by_symbol[symbol] = row.get("signature")
+        modifiers_by_symbol[symbol] = row.get("modifiers")
         enclosing = row.get("enclosing")
         if enclosing is None:
             continue
@@ -217,7 +316,7 @@ def inherited_rows(
         for row in implementation_rows
     }
 
-    supertype_of = _supertype_of(supertype_rows, interfaces_of, methods_by_type)
+    supertype_of = _superclass_of(superclass_rows)
 
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for row in annotation_rows:
@@ -245,10 +344,12 @@ def inherited_rows(
     rows: list[dict[str, Any]] = []
     for type_symbol in classes:
         methods = methods_by_type.get(type_symbol, {})
+        # Keyed by the method the mapping BELONGS to, which is not always the
+        # candidate that resolved it — see `_synthesis_target`. Insertion order
+        # follows `methods`, which follows the query's `ORDER BY symbol` (NFR-1).
+        resolved: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for key, candidate in methods.items():
             if _own_mapping(candidate, mapping_fqns, annotations_by_target) is not None:
-                continue
-            if _is_bridge(candidate, methods.values(), signature_by_symbol):
                 continue
             found = _resolve_method(
                 key,
@@ -261,9 +362,35 @@ def inherited_rows(
                 mapping_fqns,
                 {type_symbol},
             )
-            if found is not None:
-                annotation, args = found
-                rows.append({"target": candidate, "annotation": annotation, "args": args})
+            if found is None:
+                continue
+            target = _synthesis_target(
+                candidate, methods.values(), signature_by_symbol, modifiers_by_symbol
+            )
+            if target is None:
+                continue
+            # A redirected mapping must not land on a method that declares its
+            # own: the candidate loop skips a method with an own mapping, but
+            # the BRIDGE that forwards to it has none of its own to skip on.
+            if target != candidate and (
+                _own_mapping(target, mapping_fqns, annotations_by_target) is not None
+            ):
+                continue
+            resolved.setdefault(target, []).append(found)
+        for target, mappings in resolved.items():
+            # Two ancestors mapping one method — the shape a class carrying two
+            # bridges has (I1). Which one the framework serves depends on its own
+            # annotation search order, which is not read here, so a target with
+            # two DIFFERENT answers gets none: §8's ambiguous evidence, and the
+            # same nothing this shape produced before, now stated rather than a
+            # side effect of excluding every bridge.
+            distinct = {
+                (annotation, json.dumps(args, sort_keys=True)) for annotation, args in mappings
+            }
+            if len(distinct) != 1:
+                continue
+            annotation, args = mappings[0]
+            rows.append({"target": target, "annotation": annotation, "args": args})
         # Computed once per class, independent of the per-method loop above:
         # a class's inherited prefix applies to EVERY one of its methods
         # that ends up mapped, whether that mapping is itself inherited or
@@ -271,8 +398,8 @@ def inherited_rows(
         # `@RequestMapping` prefix at the type level, once, never
         # separately per method (Task 7 review, M2).
         if (
-            prefix_fqn is not None
-            and _own_mapping(type_symbol, {prefix_fqn}, annotations_by_target) is None
+            prefix_fqns is not None
+            and _own_mapping(type_symbol, set(prefix_fqns), annotations_by_target) is None
         ):
             found_prefix = _resolve_prefix(
                 interfaces_of.get(type_symbol, []),
@@ -280,7 +407,7 @@ def inherited_rows(
                 interfaces_of,
                 supertype_of,
                 annotations_by_target,
-                prefix_fqn,
+                prefix_fqns,
                 {type_symbol},
             )
             if found_prefix is not None:
@@ -303,7 +430,7 @@ def _own_mapping(
     """The first (deterministically, by annotation fqn) mapping-shaped
     annotation a target carries directly — never one this pass itself
     walked up to find. `fqns` is `mapping_fqns` for a method-level check,
-    `{prefix_fqn}` for a class's own type-level one; the same helper serves
+    `set(prefix_fqns)` for a class's own type-level one; the same helper serves
     both "own wins outright" gates spec §3 states."""
     for annotation, args in annotations_by_target.get(target, []):
         if annotation in fqns:
@@ -375,17 +502,17 @@ def _resolve_prefix(
     interfaces_of: dict[str, list[str]],
     supertype_of: dict[str, str],
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]],
-    prefix_fqn: str,
+    prefix_fqns: list[str],
     visited: set[str],
 ) -> tuple[str, dict[str, Any]] | None:
     """The type-level twin of `_resolve_method`: walks the same
     interfaces-then-superclass order looking for an ancestor TYPE's own
-    `prefix_fqn` annotation rather than a same-key method's."""
+    `prefix_fqns` annotation rather than a same-key method's."""
     for interface in interfaces:
         if interface in visited:
             continue
         visited.add(interface)
-        found = _own_mapping(interface, {prefix_fqn}, annotations_by_target)
+        found = _own_mapping(interface, set(prefix_fqns), annotations_by_target)
         if found is not None:
             return found
         found = _resolve_prefix(
@@ -394,7 +521,7 @@ def _resolve_prefix(
             interfaces_of,
             supertype_of,
             annotations_by_target,
-            prefix_fqn,
+            prefix_fqns,
             visited,
         )
         if found is not None:
@@ -402,7 +529,7 @@ def _resolve_prefix(
     if supertype is None or supertype in visited:
         return None
     visited.add(supertype)
-    found = _own_mapping(supertype, {prefix_fqn}, annotations_by_target)
+    found = _own_mapping(supertype, set(prefix_fqns), annotations_by_target)
     if found is not None:
         return found
     return _resolve_prefix(
@@ -411,9 +538,98 @@ def _resolve_prefix(
         interfaces_of,
         supertype_of,
         annotations_by_target,
-        prefix_fqn,
+        prefix_fqns,
         visited,
     )
+
+
+def _is_synthetic(
+    symbol: str,
+    siblings: Any,
+    signature_by_symbol: dict[str, dict[str, Any] | None],
+    modifiers_by_symbol: dict[str, dict[str, Any] | None],
+) -> bool:
+    """Whether the compiler generated `symbol`, rather than a person writing it.
+
+    **The fact says so.** D00 §5a: a method carries `modifiers.synthetic`, with
+    `ACC_BRIDGE` folded in because javac sets the two together. This is read
+    rather than inferred, and reading it is the whole of OI-47.
+
+    `_is_bridge` below is the fallback, taken when nothing was reported about
+    this method — no `modifiers` key at all, or an EMPTY one, which is what
+    `SymbolFact.modifiers` defaults to and therefore what every hand-built fact
+    in the tests carries. `"synthetic" in modifiers` is the test rather than
+    `modifiers.get(...)` because "reported, and false" and "not reported" are
+    different answers and only the second may fall back; an empty dict reports
+    nothing and so falls back too.
+
+    A MIXED set — the bridge reporting modifiers and its sibling not — answers
+    incoherently: the sibling falls back, `_is_bridge` is symmetric, and it
+    reports the real method synthetic as well, so the redirect finds no target
+    and the mapping is dropped. Unreachable today, since siblings come from one
+    scan of one class file and this scanner writes both keys on every method.
+    """
+    modifiers = modifiers_by_symbol.get(symbol)
+    if modifiers is not None and "synthetic" in modifiers:
+        return bool(modifiers["synthetic"])
+    return _is_bridge(symbol, siblings, signature_by_symbol)
+
+
+def _synthesis_target(
+    candidate: str,
+    siblings: Any,
+    signature_by_symbol: dict[str, dict[str, Any] | None],
+    modifiers_by_symbol: dict[str, dict[str, Any] | None],
+) -> str | None:
+    """The method a mapping resolved through `candidate` actually belongs to.
+
+    Usually `candidate` itself. The exception is the whole of this fix.
+
+    **A bridge is the only thing that can resolve, and it is the wrong target.**
+    `_resolve_method` joins an ancestor's method by name AND descriptor, and a
+    covariant or generic override's descriptor is by definition not its
+    ancestor's — the forwarder javac generates beside it is. So the mapping is
+    reachable only through the bridge, and publishing it there names a method
+    nobody wrote as the handler.
+
+    Both directions of getting that wrong shipped, and they were one cause:
+
+    * a COVARIANT override (differs in return type) was recognised by the old
+      structural rule, and excluded together with the real method — so the
+      mapping was **lost**;
+    * a GENERIC-PARAMETER override (differs in parameter types, same return) was
+      not recognised at all, so the row was published **naming the bridge**.
+
+    So a bridge is evidence, not a target: the mapping is carried across to the
+    method it forwards to — the same class, the same plain name, not synthetic.
+    Exactly one, or nothing at all: several same-named real overloads leave no
+    way to say which one this bridge stands for, and §8 says produce nothing
+    rather than pick.
+    """
+    if not _is_synthetic(candidate, siblings, signature_by_symbol, modifiers_by_symbol):
+        return candidate
+    name = method_name(bare_descriptor(candidate))
+    # A bridge has its target's ARITY — it forwards the same argument list, only
+    # more weakly typed. Matching on the name alone picks an unrelated overload:
+    # measured on javac 26, `class Sub extends Base implements IGet<String>`
+    # where `Base` declares `get()` and `Sub` declares only an unrelated
+    # `get(int)` emits a bridge `get()` in `Sub` forwarding to `Base.get()`, and
+    # the one same-name method in `Sub` is the `get(int)` that has nothing to do
+    # with it. Publishing the mapping there swaps one fabrication for another.
+    #
+    # The arity guard also declines that case outright rather than reaching for
+    # the superclass: the method a bridge forwards to is not always in the same
+    # class, and this rule cannot see there. Nothing, per §8.
+    arity = len(_parameter_types(signature_by_symbol.get(candidate)))
+    declared = [
+        sibling
+        for sibling in siblings
+        if sibling != candidate
+        and method_name(bare_descriptor(sibling)) == name
+        and len(_parameter_types(signature_by_symbol.get(sibling))) == arity
+        and not _is_synthetic(sibling, siblings, signature_by_symbol, modifiers_by_symbol)
+    ]
+    return declared[0] if len(declared) == 1 else None
 
 
 def _is_bridge(
@@ -421,12 +637,18 @@ def _is_bridge(
     siblings: Any,
     signature_by_symbol: dict[str, dict[str, Any] | None],
 ) -> bool:
-    """Checkpoint item (4)'s structural bridge rule: within the SAME class,
-    a same-name method whose parameter types match `candidate`'s exactly but
-    whose return type does not is the compiler-generated bridge (or, from
-    that method's own perspective, `candidate` is). Bytecode carries no
-    other marker — no `modifiers`, no `access`, identical `visibility` — so
-    this is the only signal there is.
+    """Checkpoint item (4)'s structural bridge rule, kept as the FALLBACK
+    (OI-47): within the SAME class, a same-name method whose parameter types
+    match `candidate`'s exactly but whose return type does not is the
+    compiler-generated bridge (or, from that method's own perspective,
+    `candidate` is).
+
+    It used to say bytecode carries no other marker — "no `modifiers`, no
+    `access`, identical `visibility` — so this is the only signal there is".
+    That stopped being true when the method `modifiers` slot shipped: D00 §5a
+    writes `synthetic` with `ACC_BRIDGE` folded in, and `_is_synthetic` reads
+    it. This runs only for a fact carrying no `modifiers` key at all, and
+    inherits the limits below wherever it does.
 
     Boundary (Task 7 review, Important finding I1 — NOT "this only ever
     suppresses the bridge itself"): the rule is purely structural and
@@ -459,9 +681,23 @@ def _is_bridge(
 
 
 def _parameter_types(signature: dict[str, Any] | None) -> list[Any]:
+    """The parameters as the DESCRIPTOR names them, which is what makes them
+    comparable between two declarations.
+
+    `type.symbol` is the signature's answer where the method has one, so a
+    parameter declared `T` reads `T` — and a type variable's name means nothing
+    outside the declaration that introduced it. It matters here specifically: a
+    covariant override carries a `Signature` and reads `T`, while the bridge
+    beside it carries none and reads the erasure, so the rule below — same
+    parameters, different return — stops recognising the pair it exists to find.
+    `erased_symbol` is the same string for both. Falls back for a fact written
+    before the field existed."""
     if not signature:
         return []
-    return [(p.get("type") or {}).get("symbol") for p in signature.get("parameters") or []]
+    return [
+        p.get("erased_symbol") or (p.get("type") or {}).get("symbol")
+        for p in signature.get("parameters") or []
+    ]
 
 
 def _return_type(signature: dict[str, Any] | None) -> Any:
@@ -470,52 +706,19 @@ def _return_type(signature: dict[str, Any] | None) -> Any:
     return (signature.get("returns") or {}).get("symbol")
 
 
-def _supertype_of(
-    supertype_rows: list[dict[str, Any]],
-    interfaces_of: dict[str, list[str]],
-    methods_by_type: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    """Each class's own generic superclass reference, module-prefixed on
-    BOTH sides (unlike the raw `supertypes` query, whose inner `symbol` is
-    bare — see `inherited_rows`'s docstring). `_prefixed_types` recovers the
-    prefixed form from every module-local type symbol this module has
-    otherwise seen; an ancestor this module never saw any other evidence for
-    (not itself an implementer, an interface, or a method's own enclosing
-    type) resolves to nothing here, honestly — 2E checkpoint Falsification
-    F3: a generic supertype edge is only ever emitted for a scanned
-    ancestor, and a scanned ancestor always encloses at least its own
-    inherited `Object` methods... in practice, its own declared ones."""
-    prefixed_types = _prefixed_types(interfaces_of, methods_by_type, supertype_rows)
-    supertype_of: dict[str, str] = {}
-    for row in supertype_rows:
-        supertype = row.get("supertype")
-        if not supertype:
-            continue
-        target = prefixed_types.get(bare_descriptor(str(supertype.get("symbol"))))
-        if target is not None:
-            supertype_of[str(row["symbol"])] = target
-    return supertype_of
+def _superclass_of(superclass_rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Each class's own direct superclass, module-prefixed on both sides
+    (capability 9.13, `ClassScanner.erasedSuperclassJson` writing through
+    `symbolOf`).
 
-
-def _prefixed_types(
-    interfaces_of: dict[str, list[str]],
-    methods_by_type: dict[str, dict[str, str]],
-    supertype_rows: list[dict[str, Any]],
-) -> dict[str, str]:
-    """Every module-prefixed type symbol this module has independent
-    evidence for, keyed by its own bare descriptor — the lookback
-    `_supertype_of` needs to cross from a supertype reference's bare
-    `symbol` (D00 §5a) back into the module-prefixed space every other
-    lookup here works in."""
-    prefixed: dict[str, str] = {}
-    known = (
-        *interfaces_of.keys(),
-        *methods_by_type.keys(),
-        *(str(row["symbol"]) for row in supertype_rows),
-    )
-    for symbol in known:
-        prefixed.setdefault(bare_descriptor(symbol), symbol)
-    for interfaces in interfaces_of.values():
-        for symbol in interfaces:
-            prefixed.setdefault(bare_descriptor(symbol), symbol)
-    return prefixed
+    A plain comprehension because there is nothing to resolve: the fact
+    already names both ends in the coordinate space every other lookup here
+    works in. A superclass the module never scanned — a framework base class
+    living in a jar — matches no annotation target and contributes nothing,
+    which is the honest answer rather than a case to defend against.
+    """
+    return {
+        str(row["symbol"]): str(row["superclass"])
+        for row in superclass_rows
+        if row.get("superclass")
+    }

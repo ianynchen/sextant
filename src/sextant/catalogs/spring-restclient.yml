@@ -7,21 +7,36 @@ direction: outbound
 detect:
   coordinates: ["org.springframework:spring-web"]
 
+measured:
+  - { artifact: org.springframework:spring-web, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:
+  # MEASURED, at spring-web 6.1.6 and 7.0.2 (CP-12 Q3,
+  # `scripts/probes/cp12_sweep_round1b.md`): `RestClient` declares the same
+  # EIGHT request-starting methods `WebClient` does, identical at both minors.
+  # This list held five, which was the fixture's verb vocabulary rather than
+  # the framework's (`A-M3`); a chain rooted on an undeclared starter is never
+  # rooted at all and derives NO row. The `method(HttpMethod)` root's verb is
+  # an enum constant this scanner cannot read, so it derives the address at
+  # `unresolved` with `method` NULL — `spring-webclient.yml` carries the full
+  # reasoning for that root and it applies here unchanged.
   roots:
-    - { owner: org.springframework.web.client.RestClient, method: get,    captures: { http_method: GET } }
-    - { owner: org.springframework.web.client.RestClient, method: post,   captures: { http_method: POST } }
-    - { owner: org.springframework.web.client.RestClient, method: put,    captures: { http_method: PUT } }
-    - { owner: org.springframework.web.client.RestClient, method: delete, captures: { http_method: DELETE } }
-    - { owner: org.springframework.web.client.RestClient, method: patch,  captures: { http_method: PATCH } }
+    - { owner: org.springframework.web.client.RestClient, method: get,     captures: { http_method: GET } }
+    - { owner: org.springframework.web.client.RestClient, method: head,    captures: { http_method: HEAD } }
+    - { owner: org.springframework.web.client.RestClient, method: post,    captures: { http_method: POST } }
+    - { owner: org.springframework.web.client.RestClient, method: put,     captures: { http_method: PUT } }
+    - { owner: org.springframework.web.client.RestClient, method: patch,   captures: { http_method: PATCH } }
+    - { owner: org.springframework.web.client.RestClient, method: delete,  captures: { http_method: DELETE } }
+    - { owner: org.springframework.web.client.RestClient, method: options, captures: { http_method: OPTIONS } }
+    - { owner: org.springframework.web.client.RestClient, method: method,  captures: { http_method: arg0 } }
   # RestClient is WebClient's synchronous twin: same `uri` step, but `body`
   # is reused for two different roles on two different types — a
   # request-setter on `RequestBodySpec` and a response-extractor on
   # `ResponseSpec` — indistinguishable by method name alone, so both declare
-  # `owner` (D02 §4's amendment). `retrieve` alone is the terminal: no
-  # `exchange` on this synchronous surface.
+  # `owner` (D02 §4's amendment).
   steps:
     # `baseUrl` sits BEFORE the verb root in a real chain
     # (`RestClient.builder().baseUrl(...).build().get()`), which is why the
@@ -34,7 +49,24 @@ matches:
     - { method: uri, captures: { url: arg0 } }
     - { method: body, owner: org.springframework.web.client.RestClient$RequestBodySpec, captures: { body: arg0 } }
     - { method: body, owner: org.springframework.web.client.RestClient$ResponseSpec,     captures: { response: arg0 } }
-  terminal: [retrieve]
+  # MEASURED (CP-12 Q4). This file previously said "`retrieve` alone is the
+  # terminal: no `exchange` on this synchronous surface", and the jar says
+  # otherwise: `RestClient$RequestHeadersSpec`'s response-obtaining methods —
+  # those returning anything other than the spec itself — are
+  #
+  #   spring-web 6.1.6  retrieve, exchange(fn), exchange(fn, boolean)
+  #   spring-web 7.0.2  the same, plus exchangeForRequiredValue in two arities
+  #
+  # A `fluent` terminal matches on the method NAME, so one entry covers both
+  # arities of each. `exchangeForRequiredValue` is 7.0.2-only and is dead data
+  # at 6.1.6 for `spring-webclient.yml`'s own reason: no 6.1.6 call site can
+  # name a method that jar does not declare, so it matches nothing and costs no
+  # row.
+  #
+  # NOT `exchangeToMono`/`exchangeToFlux`: those are WebClient's reactive
+  # terminals and this synchronous surface has neither, which is why the two
+  # twin catalogs cannot share one list.
+  terminal: [retrieve, exchange, exchangeForRequiredValue]
   type_carriers: [org.springframework.core.ParameterizedTypeReference]
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary
@@ -49,15 +81,16 @@ matches:
     getter_prefixes: [get, is]
 
 # Shared verbatim across every outbound catalog on purpose (not just these
-# three plus RestTemplate), for the same reason `nullability` is copied from
-# spring-mvc.yml elsewhere: shape (type) expansion is a *global*,
+# three plus RestTemplate): shape (type) expansion is a *global*,
 # insert-if-absent pass keyed on the type symbol alone (`derive_shapes`), so
 # the FIRST catalog to reach a shared payload type is the one that expands
 # it, and every later catalog finds it already there — regardless of
 # protocol or direction, including a row a *different* catalog produced
-# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's
-# wrappers/serialization/known_types must therefore agree, or the first one
-# alphabetically silently mis-describes a route it never derived.
+# (Retrofit's own `Call<OrderView>`, say). Every outbound catalog's `wrappers`
+# must therefore agree, or the first one alphabetically silently mis-describes
+# a route it never derived. **The three payload-type blocks that used to be
+# copied alongside them are one file now** (D02 §1b), which is what closed
+# this hazard for them and leaves it open only for `wrappers`.
 # Endpoint-level ownership is a different question and is NOT this reason:
 # `_owns` reads a row's own `catalog_id` (2E-prep design §1a), so a
 # catalog's rules describe only the rows it derived itself.
@@ -67,30 +100,6 @@ wrappers:
   - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
   - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
 
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

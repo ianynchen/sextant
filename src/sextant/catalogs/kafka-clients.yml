@@ -12,61 +12,65 @@ direction: outbound
 detect:
   coordinates: ["org.apache.kafka:kafka-clients"]
 
+measured:
+  - { artifact: org.apache.kafka:kafka-clients, versions: ["3.6.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+
 requires: [call_site, string_constants]
 
 matches:
-  owner: org.apache.kafka.clients.producer.KafkaProducer
-  # CHECKPOINT FACT (real javap descriptors, kafka-clients 3.6.2):
-  # `send(ProducerRecord<K, V>)` is arity 1, `send(ProducerRecord<K, V>,
-  # Callback)` is arity 2 — only arity 1 is exercised by the fixture
-  # (`rawProducer.send(new ProducerRecord<>(...))`), so only it is declared
-  # (checkpoint ruling: declare only what is verified).
+  # The interface a codebase declares its field as (§3.1). A call site's
+  # owner is the DECLARED type, so a field typed by the interface carried
+  # an owner this catalog did not name and matched nothing.
+  # Measured: org.apache.kafka:kafka-clients 3.6.2 declares every method matched below
+  # (scripts/probes/cp10_catalog_descriptors.md, which is the probe that ran).
+  owner:
+    - org.apache.kafka.clients.producer.KafkaProducer
+    - org.apache.kafka.clients.producer.Producer
+  # MEASURED, at kafka-clients 3.6.2 (CP-12 Q6,
+  # `scripts/probes/cp12_sweep_round1b.md`): `KafkaProducer` declares exactly
+  # TWO `send` overloads, `send(ProducerRecord)` and
+  # `send(ProducerRecord, Callback)`.
+  #
+  # Only the first was declared here, on the checkpoint ruling "declare only
+  # what is verified" applied to the FIXTURE's own call. That ruling is about
+  # evidence and this was an application of it to the wrong evidence: the
+  # framework's overload set is a fact about the framework, and
+  # `producer.send(record, (m, e) -> …)` is the IDIOMATIC asynchronous producer
+  # call, not an exotic one (`A-M6`). `_matching_method` filters candidates on
+  # `row.get("arity") in (None, len(arguments))` BEFORE consulting descriptors,
+  # so a two-argument call never saw the arity-1 row and derived NOTHING —
+  # while `docs/COVERAGE.md` listed this catalog "✅ shipped" with no arity
+  # qualification.
+  #
+  # Both rows read the destination the same way, because the callback overload
+  # differs only in a TRAILING argument: the record is argument 0 in each.
+  #
+  # Each row states its own erased JVM `descriptor` (javap -p -s, kafka-clients
+  # 3.6.2, recorded in `scripts/probes/cp10_catalog_descriptors.md`). Java
+  # identifies a method by name and parameter types in order, never by argument
+  # count (GUIDELINES §8.1's language rule), so a future sibling at either
+  # arity derives NOTHING rather than being read through a `record_wrappers`
+  # rule written for `ProducerRecord`. Re-running the CP-10 harness is the
+  # check.
   methods:
-    - { name: send, arity: 1, record_arg: 0 }
+    - { name: send, arity: 1,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;)Ljava/util/concurrent/Future;",
+        record_arg: 0 }
+    - { name: send, arity: 2,
+        descriptor: "(Lorg/apache/kafka/clients/producer/ProducerRecord;Lorg/apache/kafka/clients/producer/Callback;)Ljava/util/concurrent/Future;",
+        record_arg: 0 }
   record_wrappers:
     - { type: org.apache.kafka.clients.producer.ProducerRecord,
         channel_ctor_arg: 0, payload_ctor_arg: last }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale). `nullability` is harvested from spring-mvc.yml.
+# rationale).
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
 
-nullability:
-  nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
-             javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
-  not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
-             org.jetbrains.annotations.NotNull]
-  scope:
-    - { annotation: org.jspecify.annotations.NullMarked, means: not_null_by_default }
-
-serialization:
-  name_from:
-    - { annotation: com.fasterxml.jackson.annotation.JsonProperty, arg: value }
-  ignore: [com.fasterxml.jackson.annotation.JsonIgnore]
-  default_strategy: as_declared
-
-known_types:
-  - { type: java.time.Instant,    wire: string, format: date-time }
-  - { type: java.math.BigDecimal, wire: number }
-  # A `class` literal or a constructed `instance` reaches payload rooting as a
-  # bare symbol: the extractor's own wire projection travels on a type
-  # reference (D00 §5a), and a call argument carries none. So the types that
-  # projection already flattens — the boxes and String — are declared here
-  # too, with exactly the `wire`/`format` it emits for each, so a captured
-  # `String.class` and a scanned `String` field can never disagree. `Void`
-  # reaches no wire type at all: the empty `wire` a `void` return already
-  # carries reads as "no payload", never as a shape nobody can expand.
-  - { type: java.lang.String,     wire: string }
-  - { type: java.lang.Boolean,    wire: boolean }
-  - { type: java.lang.Byte,       wire: integer, format: int32 }
-  - { type: java.lang.Short,      wire: integer, format: int32 }
-  - { type: java.lang.Integer,    wire: integer, format: int32 }
-  - { type: java.lang.Long,       wire: integer, format: int64 }
-  - { type: java.lang.Character,  wire: integer }
-  - { type: java.lang.Float,      wire: number,  format: float }
-  - { type: java.lang.Double,     wire: number,  format: double }
-  - { type: java.lang.Void,       wire: "" }
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

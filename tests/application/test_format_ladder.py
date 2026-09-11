@@ -32,6 +32,8 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
+    CallSiteFact,
+    CallTarget,
     DeclaredFieldFact,
     DeclaredShapeFact,
     Document,
@@ -52,6 +54,9 @@ READER = "com.acme.serde.ScrollReader"
 MEDIA_KEY = "acme.channel.writer"
 MARKER_2 = "com.acme.binder2"
 MARKER_3 = "acme.binder3"
+# The third marker FORM (2O design §7): a classpath coordinate rather than a
+# package family. Invented, like every other value here.
+COORDINATE = "com.acme:binder-runtime"
 
 # The two payload types the tests bind. `SCHEMA_TYPE` owns a declared_shape
 # fact (2G design §3's descriptor-described payload); `DTO_TYPE` is an
@@ -76,20 +81,27 @@ SCALAR_PAYLOAD = json.dumps(
 )
 
 
-def _document(document_id: str = "doc_1", path: str = "com/acme/contracts/Parcel.java") -> Document:
+def _document(
+    document_id: str = "doc_1",
+    path: str = "com/acme/contracts/Parcel.java",
+    origin: str | None = None,
+) -> Document:
     return Document(
         document_id=document_id,
         relative_path=path,
         module_id="com.acme:orders-service",
         language="java",
         sextant_version="0.1.0",
-        fact_schema_version="1.0.0",
+        fact_schema_version=2,
         scanner_id="asm",
-        scanner_version="9.12",
         content_hash="sha256:a",
         origin_entry="target/classes",
         origin_tier=OriginTier.MODULE_OUTPUT,
         redaction_set_hash="sha256:b",
+        # D00 §2: the artifact outside this module's own output the document
+        # was read from, as its coordinate — rung 5's third presence source
+        # (2O design §7).
+        origin=origin,
     )
 
 
@@ -119,10 +131,14 @@ def _workspace(
     config: list[tuple[str, str, str | None]] | None = None,
     shapes: list[DeclaredShapeFact] | None = None,
     marked: str | None = None,
+    called: str | None = None,
+    origins: list[str] | None = None,
 ) -> DuckDbWorkspace:
     """A workspace holding already-resolved configuration, any declared-shape
-    facts the test binds, and — where `marked` is given — one annotation from
-    that package family, which is rung 5's whole presence test."""
+    facts the test binds, and whichever of rung 5's three presence sources
+    (2O design §7) the test supplies: `marked` puts one ANNOTATION from that
+    package family in the module, `called` puts one CALL onto a type from it,
+    and `origins` records one document per classpath COORDINATE."""
     facts: list[Fact] = list(shapes or [])
     if marked is not None:
         facts.append(
@@ -133,7 +149,25 @@ def _workspace(
                 retention="runtime",
             )
         )
+    if called is not None:
+        facts.append(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=_MODULE + DTO_TYPE + "write().",
+                target=CallTarget(
+                    owner=type_descriptor(f"{called}.Writer"), name="write", descriptor="sig_1"
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+            )
+        )
     write_fact_file(tmp_path / "facts" / "Parcel.jsonl", _document(), facts)
+    for index, origin in enumerate(origins or []):
+        write_fact_file(
+            tmp_path / "facts" / f"library_{index}.jsonl",
+            _document(document_id=f"lib_{index}", path=f"lib/{index}/Type.java", origin=origin),
+            [],
+        )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     if config:
@@ -186,7 +220,7 @@ def _seed(workspace: DuckDbWorkspace, *rows: dict) -> None:
 def _catalog(
     format_fixed: dict[str, str] | None = None,
     media_formats: dict[str, str] | None = None,
-    json_default_markers: list[str] | None = None,
+    json_default_markers: list[str | dict[str, str]] | None = None,
     format_from: dict[str, str] | None = None,
     rules: list[dict] | None = None,
 ) -> Catalog:
@@ -402,6 +436,70 @@ def test_a_default_converter_on_the_classpath_narrows_an_ordinary_payload(
     workspace.close()
 
     assert _formats(rows)["a"] == ("json", "narrowed")
+
+
+def test_a_marker_family_the_module_only_CALLS_is_presence_evidence_too(tmp_path: Path):
+    """Rung 5's second source (2O design §7). The doc has always described
+    these markers as package families whose presence ANYWHERE in the module is
+    the evidence; the code read annotation fqns alone, so a module that uses
+    the converter's API and none of its annotations answered `unresolved` —
+    the same jar, a different answer. The call's owner type is an fqn the
+    module could not have compiled against unless the family was there, which
+    is exactly the proof an annotation is."""
+    workspace = _workspace(tmp_path, called=MARKER_2)
+    _seed(workspace, {"path": "a", "request_shape": NOTE_PAYLOAD})
+    rows = _run(workspace, _catalog(json_default_markers=[MARKER_2, MARKER_3]))
+    workspace.close()
+
+    assert _formats(rows)["a"] == ("json", "narrowed")
+
+
+def test_a_recorded_classpath_coordinate_is_presence_evidence_with_no_fqn_at_all(
+    tmp_path: Path,
+):
+    """Rung 5's third source, and the one CP-6 confirmed against a live app:
+    the framework auto-configures its JSON converter from the jar's MERE
+    PRESENCE, with no annotation and no API call anywhere in the module. The
+    marker is therefore a classpath coordinate rather than a package family —
+    that is the evidence the framework itself acts on — and the module below
+    names nothing at all from it.
+
+    The recorded trail is the COORDINATE, not a package: `seen_in` is already
+    "module" for this rung, and the coordinate is what was actually seen."""
+    workspace = _workspace(tmp_path, origins=[COORDINATE])
+    _seed(workspace, {"path": "a", "request_shape": NOTE_PAYLOAD})
+    rows = _run(workspace, _catalog(json_default_markers=[{"coordinate": COORDINATE}]))
+    workspace.close()
+
+    assert _formats(rows)["a"] == ("json", "narrowed")
+
+
+def test_a_coordinate_marker_no_recorded_coordinate_matches_answers_nothing(tmp_path: Path):
+    """The other half: a coordinate nobody recorded is not evidence. Only a
+    dependency this run actually read is recorded (D00 §2's `origin`), so a
+    jar nobody opted into leaves the row `unresolved` — silence rather than a
+    guess, which is the answer the design asks for."""
+    workspace = _workspace(tmp_path, origins=["com.acme:something-else"])
+    _seed(workspace, {"path": "a", "request_shape": NOTE_PAYLOAD})
+    rows = _run(workspace, _catalog(json_default_markers=[{"coordinate": COORDINATE}]))
+    workspace.close()
+
+    assert _formats(rows)["a"] == (None, "unresolved")
+
+
+def test_a_marker_entry_of_neither_form_is_refused_by_file(tmp_path: Path):
+    """Rung 5 has two forms and no third. A marker nothing recognizes answers
+    nothing, and a rung that answers nothing reads exactly like a converter
+    that is genuinely absent — refused at the edge, the same discipline every
+    other value in this vocabulary gets."""
+    workspace = _workspace(tmp_path)
+    _seed(workspace, {"path": "a", "request_shape": NOTE_PAYLOAD})
+
+    with pytest.raises(CatalogError) as raised:
+        _run(workspace, _catalog(json_default_markers=[{"artifact": COORDINATE}]))
+    workspace.close()
+
+    assert "json_default_markers" in str(raised.value)
 
 
 def test_an_absent_default_converter_leaves_an_ordinary_payload_unresolved(tmp_path: Path):

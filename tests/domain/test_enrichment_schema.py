@@ -20,7 +20,9 @@ from sextant.domain.enrichment import (
     OpenQuestionRef,
     Provenance,
     VerdictClaim,
+    open_question_identity,
 )
+from sextant.domain.redaction import Redactor
 
 PROVENANCE = {
     "model": "a-model",
@@ -302,3 +304,37 @@ def test_a_question_shaped_like_both_kinds_at_once_is_refused_not_guessed():
     ambiguous = dict(VERDICT["question"], key="spring.config.import", environment="default")
     with pytest.raises(ValidationError):
         VerdictClaim.model_validate(dict(VERDICT, question=ambiguous))
+
+
+def test_a_question_with_no_protocol_still_matches_the_row_it_was_written_for():
+    """OI-1's downstream check, taken rather than assumed. A catalog that
+    mints no endpoint row declares no wire identity, so the questions
+    `spring-integration.yml` files carry an EMPTY protocol — and the 2K
+    verification seat must still be able to answer one.
+
+    The empty string is what makes that true, and it is the project's own
+    spelling of "declares no wire identity" (`ports/catalogs.Catalog`): a NULL
+    in the column would give the row an identity no `OpenQuestionRef` can
+    express, since `protocol` is a required `str`, and every verdict on a
+    channel question would be refused as naming a row that does not exist."""
+    row = {
+        "protocol": "",
+        "method": None,
+        "path": "ordersIn",
+        "question": "channel_destination",
+        "candidates": "[]",
+        "evidence": "no key names this channel's destination",
+    }
+    claim = VerdictClaim.model_validate(
+        dict(
+            VERDICT,
+            question={
+                "protocol": "",
+                "method": None,
+                "path": "ordersIn",
+                "kind": "channel_destination",
+            },
+        )
+    )
+
+    assert claim.question.identity == open_question_identity(row, Redactor.from_rules())

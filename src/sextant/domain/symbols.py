@@ -5,6 +5,13 @@ from dataclasses import dataclass
 
 NOT_APPLICABLE = "."
 
+# D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
+# member descriptor carries its owner's name up to. Named here because this
+# module is the seam that reads the symbol grammar
+# (`tests/architecture/test_symbol_grammar_confinement.py`), and a literal
+# spelled at a second site is a second copy of the grammar.
+_TYPE_MARKER = "#"
+
 
 @dataclass(frozen=True)
 class Symbol:
@@ -43,6 +50,60 @@ def owner_of(descriptor: str) -> str | None:
     return None if index == -1 else descriptor[: index + 1]
 
 
+def is_type_descriptor(descriptor: str) -> bool:
+    """Whether `descriptor` names a TYPE rather than one of its members (D00
+    §5a): a type descriptor ends at the type marker, a member descriptor
+    carries a name after it.
+
+    Here rather than at the call site because the marker is the symbol
+    grammar, and `tests/architecture/test_symbol_grammar_confinement.py` keeps
+    every reading of that grammar in this module — a second copy of "ends with
+    the marker" elsewhere is exactly the ad hoc parsing the seam replaced. Two
+    callers need the question rather than the split `owner_of` performs: an
+    annotation whose target must be a type before it names a container, and an
+    annotation argument that is a class reference only when it names one.
+    """
+    return descriptor.endswith(_TYPE_MARKER)
+
+
+def names_a_type(symbol: str) -> bool:
+    """Whether `symbol` names a real type at all, as against a TYPE VARIABLE
+    (D00 §5a).
+
+    A type reference read from a declared signature may carry a type variable
+    rather than a type: `T`, or `T[]` for an array of one. Every real type
+    carries the type marker somewhere — a type descriptor ends at it, and an
+    array's descriptor is its component's plus a suffix — while a variable is a
+    bare identifier the declaration invented, and never does.
+
+    Here rather than at the call site for `is_type_descriptor`'s reason: the
+    marker is the symbol grammar, and a second reading of it elsewhere is the ad
+    hoc parsing the seam exists to prevent. Distinct from `is_type_descriptor`,
+    which asks whether a descriptor names a type rather than a MEMBER of one —
+    `X#m().` fails that and passes this, correctly, because it does name
+    something real. The caller that needs this one roots a payload shape, and a
+    shape is identified by its symbol: rooting at a variable's name mints an id
+    that every unrelated variable of the same name collides onto.
+    """
+    return _TYPE_MARKER in symbol
+
+
+def outer_type_of(descriptor: str) -> str:
+    """A nested type's own top-level enclosing type, bare, dollar-nesting
+    stripped entirely — `A$B#` -> `A#` (D00 §5a: the JVM's own nested-class
+    notation, embedded in the path segment ahead of the trailing type
+    marker). `owner_of`'s sibling: that function splits a MEMBER descriptor
+    on its `#` to find the type that declares it; this one splits a TYPE
+    descriptor on its `$` to find the type that ENCLOSES it — 2O design
+    §1b/§1c's own read, where a generated class's identity-building call
+    sites live on the OUTER type, never on a nested `ImplBase`/`*Stub` a
+    catalog's own marker names. A descriptor naming no `$` at all (already
+    top-level) is returned unchanged."""
+    body = descriptor.removesuffix("#")
+    index = body.find("$")
+    return descriptor if index == -1 else body[:index] + "#"
+
+
 def member_name(descriptor: str) -> str:
     """The segment after the last `#`, trailing `.` stripped — a descriptor
     with no `#` returns itself minus any trailing `.` (D00 §5a)."""
@@ -62,6 +123,66 @@ def method_name(descriptor: str) -> str:
     name = member_name(descriptor)
     head, paren, _ = name.partition("(")
     return head if paren else name
+
+
+# D00 §5a's member-descriptor punctuation, spelled once. A member descriptor is
+# `owner#name(<disambiguator>).` — the owner already carries its own trailing
+# type marker, so composing one needs only these three characters and never a
+# second `#` literal.
+_ARGUMENTS_OPEN = "("
+_ARGUMENTS_CLOSE = ")."
+# The JVM DESCRIPTOR's own close paren, which is NOT `_ARGUMENTS_CLOSE`. Two grammars
+# meet in this module: a SCIP symbol closes its argument list `).`, a descriptor closes
+# it `)`. Substituting one for the other here raised `ValueError: substring not found`
+# on every descriptor in the tree — 177 test errors from one character.
+_DESCRIPTOR_ARGUMENTS_CLOSE = ")"
+# The `sig_` prefix and the four bytes of digest behind it, exactly as
+# `ClassScanner.disambiguatorOf` writes them. Four bytes is eight hex
+# characters; both halves are pinned against a real scan
+# (`tests/domain/test_symbols.py`, `tests/application/test_return_flow.py`)
+# rather than trusted, because a disagreement here is a join that matches
+# nothing while every fixture that spells the hash by hand still passes.
+_DISAMBIGUATOR_PREFIX = "sig_"
+_DISAMBIGUATOR_BYTES = 4
+
+
+def method_descriptor(owner: str, name: str, descriptor: str) -> str:
+    """The bare member descriptor of the method a `call_site` target names —
+    the one spelling that joins a call to the callee's own symbol fact (D00
+    §5a).
+
+    A `call_site` carries its callee in the JVM's spelling (owner, name, and a
+    JVM type descriptor); a method's own symbol fact carries it in SCIP's
+    (`com/x/Y#m(sig_1a2b3c4d).`). The bridge between them is
+    `ClassScanner.disambiguatorOf` — the first four bytes of the SHA-256 of the
+    JVM descriptor — so **caller to callee is arithmetic, not a lookup**: no
+    index of every scanned method is needed to ask what one call site calls,
+    and a callee outside the workspace produces a descriptor that simply
+    matches nothing rather than an exception.
+
+    Here rather than at the call site for the reason `type_descriptor` is: this
+    is the symbol grammar, and a second place that composes one is a second
+    place for it to disagree with the extractor that wrote the first. The
+    result is BARE — coordinates are the writing module's to add, and the
+    caller compares descriptors (`bare_descriptor`) exactly as every other
+    join in this codebase does.
+    """
+    return owner + name + _ARGUMENTS_OPEN + disambiguator_of(descriptor) + _ARGUMENTS_CLOSE
+
+
+def disambiguator_of(descriptor: str) -> str:
+    """The overload disambiguator D00 §5a's method descriptors carry, as
+    `ClassScanner.disambiguatorOf` computes it: `sig_` and the first four
+    bytes of the SHA-256 of the JVM descriptor, lower-case hex.
+
+    It exists because a name alone does not identify a method — two overloads
+    of `find` share one — and because the full JVM descriptor is unreadable in
+    a rendered document. Truncation is deliberate and its collision risk is
+    scoped: the pair must collide *within one type* to matter, and the
+    extractor owns the same arithmetic on the writing side.
+    """
+    digest = hashlib.sha256(descriptor.encode("utf-8")).hexdigest()
+    return _DISAMBIGUATOR_PREFIX + digest[: _DISAMBIGUATOR_BYTES * 2]
 
 
 # D00 §5a: an array's symbol is its ELEMENT's descriptor with this suffix
@@ -90,12 +211,66 @@ def type_descriptor(dotted: str) -> str:
     `byte#[]`, so a catalog writing `byte[]` and a scanned parameter of that
     type must compare equal. Inert for every name without one, which is
     every catalog value written before 2G.
+
+    **Refuses anything that is not a string, rather than converting it.** Since
+    §3.1 a catalog site may name a LIST of types, and only a few sites can honour
+    one so far. At every other site the value reached here through `str(...)`,
+    and `str(["a.B"])` is `"['a.B']"` — a perfectly well-formed conversion of
+    nonsense, producing `"['a/B']#"`, which matches no fact, derives no row and
+    says nothing. Even a ONE-element list did it, which is the slip an author
+    makes first.
+
+    Refusing here removes the cause instead of testing for it at twenty sites:
+    a list written where it cannot yet be honoured stops the run with a message,
+    which is the §8.1 rule that deriving nothing beats deriving the wrong thing.
     """
+    if not isinstance(dotted, str):
+        raise TypeError(
+            f"a catalog type name must be a string, not {type(dotted).__name__} "
+            f"({dotted!r}). A list of alternates is only honoured at the sites "
+            f"converted for §3.1; elsewhere it must stay a single name."
+        )
     depth = 0
     while dotted.endswith(_ARRAY_SUFFIX):
         dotted = dotted[: -len(_ARRAY_SUFFIX)]
         depth += 1
     return dotted.replace(".", "/") + "#" + _ARRAY_SUFFIX * depth
+
+
+def parameter_types(descriptor: str) -> str:
+    """A JVM method descriptor's parameter list, `(` and `)` included, with the return
+    type dropped — the part that is method IDENTITY.
+
+    JLS 8.4.2 identifies a method by its name and its parameter types; the return type
+    is in the JVM descriptor and is not part of the signature. A catalog comparing whole
+    descriptors was therefore version-dependent by accident: a library that changes a
+    return type changes nothing in its callers' source, and the descriptor entirely.
+    Ten `spring-kafka-template` rows declare `send`/`sendDefault` returning
+    `CompletableFuture`, which is Spring Kafka 3.x — the same call in a 2.x module
+    returns `ListenableFuture` and matched nothing at all (F2 §4.1).
+
+    Lives here because it is symbol-grammar parsing, which happens in this module and
+    nowhere else (`test_symbol_grammar_confinement`).
+    """
+    return descriptor[: descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1]
+
+
+def returned_type(descriptor: str) -> str | None:
+    """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
+    returns a primitive, `void` or an array.
+
+    Lives here rather than beside its one caller because it is symbol-grammar parsing,
+    and this module is the only place that happens (`test_symbol_grammar_confinement`).
+    `None` for the non-object cases is an answer, not a gap: a method returning `void`
+    or an `int` cannot be handing a constructed object back to its caller, which is the
+    only question anyone asks this. Arrays answer `None` for the same reason — nothing
+    in the tree needs an array's element type here, and inventing one would be a
+    grammar rule with no consumer.
+    """
+    returned = descriptor[descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1 :]
+    if not returned.startswith("L"):
+        return None
+    return returned[1:].removesuffix(";") + _TYPE_MARKER
 
 
 def package_path(dotted: str) -> str:

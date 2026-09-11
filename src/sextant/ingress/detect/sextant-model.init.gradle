@@ -41,6 +41,31 @@ gradle.rootProject { rp ->
                 def resourceRoots = []
                 def classesDirs = []
                 def classpath = []
+                // The Java release this project's BUILD declares (W3b). Asked of
+                // GRADLE rather than parsed out of a build script, because the
+                // value can come from a convention plugin, a toolchain, or a
+                // property, and only the evaluated model knows which won.
+                //
+                // `options.release` first — it is the modern and unambiguous
+                // one. `targetCompatibility` is the fallback and still what
+                // older builds set; it arrives as a JavaVersion-ish string, so
+                // `1.8` and `8` both have to reduce to 8. A project declaring
+                // neither reports null: an absence, never a default.
+                def declaredRelease = null
+                if (hasJava) {
+                    def compileJava = p.tasks.findByName("compileJava")
+                    if (compileJava != null) {
+                        declaredRelease = compileJava.options.release.getOrNull()
+                        if (declaredRelease == null) {
+                            def target = compileJava.targetCompatibility
+                            if (target != null) {
+                                def text = target.toString()
+                                if (text.startsWith("1.")) text = text.substring(2)
+                                if (text.isInteger()) declaredRelease = text.toInteger()
+                            }
+                        }
+                    }
+                }
                 if (hasJava) {
                     def main = p.sourceSets.main
                     def buildDirPath = p.layout.buildDirectory.get().asFile.absolutePath
@@ -82,6 +107,18 @@ gradle.rootProject { rp ->
                                 entry.version = id.version
                             } else if (id instanceof ProjectComponentIdentifier) {
                                 entry.internal = true
+                                // W55: the project PATH (`:pricing-lib`), which is
+                                // the only identity this component id carries — it
+                                // has no group/name/version of its own. Recorded so
+                                // the detector can join it to that project's own
+                                // entry in `projects[]`, which DOES carry a group
+                                // and a name, and form the coordinate from those.
+                                //
+                                // The path itself never becomes a coordinate: D00
+                                // §2 requires `origin` to survive being read on
+                                // another machine, and a project path is meaningful
+                                // only inside this build.
+                                entry.projectPath = id.projectPath
                             }
                             classpath << entry
                         }
@@ -97,6 +134,7 @@ gradle.rootProject { rp ->
                     sourceRoots: sourceRoots,
                     resourceRoots: resourceRoots,
                     classesDirs: classesDirs,
+                    declaredRelease: declaredRelease,
                     publishing: p.plugins.hasPlugin("maven-publish"),
                     classpath: classpath,
                 ]
