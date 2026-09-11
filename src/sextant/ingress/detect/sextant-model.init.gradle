@@ -107,6 +107,18 @@ gradle.rootProject { rp ->
                                 entry.version = id.version
                             } else if (id instanceof ProjectComponentIdentifier) {
                                 entry.internal = true
+                                // W55: the project PATH (`:pricing-lib`), which is
+                                // the only identity this component id carries — it
+                                // has no group/name/version of its own. Recorded so
+                                // the detector can join it to that project's own
+                                // entry in `projects[]`, which DOES carry a group
+                                // and a name, and form the coordinate from those.
+                                //
+                                // The path itself never becomes a coordinate: D00
+                                // §2 requires `origin` to survive being read on
+                                // another machine, and a project path is meaningful
+                                // only inside this build.
+                                entry.projectPath = id.projectPath
                             }
                             classpath << entry
                         }

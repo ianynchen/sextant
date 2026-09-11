@@ -87,6 +87,32 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **A Gradle multi-project build reads its own siblings** (F4 §5.2, W55). Maven modules have
+  read a reactor sibling's types since W24 — the sibling is on the classpath, its types appear
+  in this module's signatures, and the only difference from a resolved jar is that it was built
+  next door. Gradle modules got none of it: an inter-project dependency was marked `internal`
+  and excluded outright, so the same repository analysed differently under the two build
+  systems.
+  **The design question the plan said to settle first has a clean answer, and it is a JOIN
+  rather than a spelling.** Gradle reports such a dependency as a `ProjectComponentIdentifier`,
+  which carries a project PATH — `:pricing-lib` — and no group, name or version at all. The
+  path cannot be the coordinate: D00 §2 requires `origin` to survive being read on another
+  machine, and a project path means something only inside the build that declares it. So the
+  init script now records the path, the detector uses it to JOIN to that project's own record
+  in the reactor, and the coordinate comes from its `group` and `name` — the same spelling
+  Maven's siblings carry.
+  That is load-bearing rather than tidy. `sibling_coordinates` is what
+  `drop_borrowed_endpoints.sql` matches against `documents.origin`, so a coordinate in a second
+  spelling would match nothing and a sibling's controllers would publish as this module's API.
+  A test pins that the two are the same string.
+  **Verified against real Gradle**, not only the captured init-script document the unit tests
+  drive from: `service-app` names `com.acme:pricing-lib` with a root at its actual compiled
+  output, and `pricing-lib`, which depends on nothing internal, names none.
+  No transitive walk is needed, because `compileClasspath` is a RESOLVED configuration and a
+  sibling's own api dependencies are already their own entries on it. Maven walks the reactor
+  itself because a POM's `<dependencies>` list is declarations rather than a resolution — a
+  difference between the build systems, not between the rules.
+
 - **A performance wave that measured its own premise away** (F4 §5.2, W56). The plan said
   scanning a reactor sibling for everything, rather than for its types, costs roughly 33 of
   ~61 seconds of derivation and buys nothing, with two levers to reclaim it. **Neither

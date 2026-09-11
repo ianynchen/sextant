@@ -105,7 +105,8 @@
         },
         {
           "path": "{root}/pricing-lib/build/classes/java/main",
-          "internal": true
+          "internal": true,
+          "projectPath": ":pricing-lib"
         }
       ],
       "declaredRelease": 21

@@ -43,6 +43,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -218,7 +219,8 @@ class GradleDetector:
             multi_module = len(subprojects) > 0
             selected = subprojects if multi_module else [p for p in projects if p["path"] == ":"]
             modules = tuple(
-                GradleDetector._module_of(Path(project["dir"]), project) for project in selected
+                GradleDetector._module_of(Path(project["dir"]), project, projects)
+                for project in selected
             )
             notes: list[str] = [note for note in (wrapper_note,) if note]
             notes.extend(GradleDetector._composite_build_notes(data))
@@ -337,7 +339,14 @@ class GradleDetector:
             ) from expired
 
     @staticmethod
-    def _module_of(path: Path, project: dict[str, Any]) -> ModuleModel:
+    def _module_of(
+        path: Path, project: dict[str, Any], reactor: Sequence[dict[str, Any]] = ()
+    ) -> ModuleModel:
+        # `reactor` defaults to EMPTY, which yields no siblings — the honest answer
+        # for a caller that does not know the rest of the build, and what every
+        # single-project build gets anyway. The detector's own call site passes the
+        # real list; tests that build one project pass nothing and get the
+        # pre-W55 behaviour, which is what they are about.
         name = project["name"]
         group = project["group"]
         version = project["version"]
@@ -366,6 +375,13 @@ class GradleDetector:
         library_roots, libraries_not_resolved = GradleDetector._library_roots(
             path, project["classpath"]
         )
+        # W55: reactor siblings as library roots, the way `MavenDetector` has done
+        # since W24 — appended to whatever `.sextant.yml` opted into, because a
+        # sibling is a dependency in every sense that matters: it is on the
+        # classpath, its types appear in this module's signatures, and the only
+        # difference from a resolved jar is that it was built next door.
+        siblings = GradleDetector._sibling_roots(project, reactor)
+        library_roots = library_roots + siblings
         return ModuleModel(
             module_id=f"{group}:{name}",
             coordinates=f"{group}/{name}",
@@ -420,8 +436,72 @@ class GradleDetector:
             # here has seen — inventing one would be a release nobody cut.
             dependency_versions=GradleDetector._dependency_versions(project["classpath"]),
             library_roots=library_roots,
+            sibling_coordinates=tuple(root.coordinate for root in siblings),
             libraries_not_resolved=libraries_not_resolved,
         )
+
+    @staticmethod
+    def _sibling_roots(
+        project: dict[str, Any], reactor: Sequence[dict[str, Any]]
+    ) -> tuple[LibraryRoot, ...]:
+        """The compiled output of every reactor sibling on this project's compile
+        classpath (W55), as library roots.
+
+        **The design question this had to settle first, and its answer.** Gradle
+        reports an inter-project dependency as a `ProjectComponentIdentifier`,
+        which carries a project PATH — `:pricing-lib` — and no group, name or
+        version at all. A path cannot be the coordinate: D00 §2 requires `origin`
+        to survive being read on another machine, and a project path is meaningful
+        only inside the build that declares it. So the path is used only to JOIN,
+        and the coordinate comes from that project's own `group` and `name` — the
+        same `group:artifact` spelling Maven's siblings carry, and the spelling
+        `documents.origin` already uses, so `drop_borrowed_endpoints.sql` needs no
+        second shape to match on.
+
+        **No transitive walk, because Gradle already did it.** `compileClasspath`
+        is a RESOLVED configuration: an inter-project dependency's own api
+        dependencies are on it as their own entries. `MavenDetector` walks the
+        reactor itself because a POM's `<dependencies>` list is declarations, not
+        a resolution — a difference in the two build systems, not in the rule.
+
+        A project the reactor does not name, or one with no compiled output, is
+        skipped rather than guessed at: `LibraryRoot` points at bytecode, and a
+        root naming a directory that does not exist would be a scan target the
+        scanner has to refuse later.
+        """
+        by_path = {str(entry["path"]): entry for entry in reactor}
+        found: dict[tuple[str, str], LibraryRoot] = {}
+        for entry in project["classpath"]:
+            if not entry.get("internal"):
+                continue
+            sibling = by_path.get(str(entry.get("projectPath") or ""))
+            if sibling is None:
+                continue
+            group, name = sibling.get("group"), sibling.get("name")
+            if not group or not name:
+                continue
+            coordinate = f"{group}:{name}"
+            # ONE ROOT PER CLASSES DIRECTORY, because `LibraryRoot.archive` is one
+            # path and Gradle's `classesDirs` is a SET: it carries one entry per
+            # compiled source set, so a project built from more than one of them
+            # has more than one, and taking only the first would silently drop
+            # everything the others hold. Maven's sibling walk passes a single
+            # directory because a POM has one `target/classes` — a difference
+            # between the build systems, not between the rules. All of them share
+            # a coordinate, which is what `origin` records and what
+            # `sibling_coordinates` names.
+            for directory in (Path(each) for each in sibling.get("classesDirs") or ()):
+                if not directory.is_dir():
+                    continue
+                found.setdefault(
+                    (coordinate, str(directory)),
+                    LibraryRoot(
+                        coordinate=coordinate,
+                        version=str(sibling.get("version") or "unversioned"),
+                        archive=directory,
+                    ),
+                )
+        return tuple(found[key] for key in sorted(found))
 
     @staticmethod
     def _dependency_versions(classpath: list[dict[str, Any]]) -> dict[str, str]:

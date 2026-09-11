@@ -227,11 +227,49 @@ def test_the_real_fixtures_inter_project_dependency_is_excluded_from_the_gap_lis
     Task 3 fix round 1, I3) — internal wiring Gradle resolved just fine, so
     it must not appear in `libraries_not_resolved` alongside a genuinely
     unresolved coordinate, even though nothing in this fixture names it via
-    `extract_libraries`."""
+    `extract_libraries`.
+
+    **The `library_roots` half of this changed in W55** and the gap-list half did
+    not. Until then an inter-project dependency was excluded outright and a Gradle
+    module got no sibling scanning at all, where Maven had had it since W24; now
+    the sibling IS a library root, so this asserts the root rather than its
+    absence. What the test is about — that internal wiring is not a GAP — is
+    unchanged, and is the first assertion."""
     model = _repository_model(CAPTURE)
     service_app = next(m for m in model.modules if m.module_id == "com.acme:service-app")
     assert service_app.libraries_not_resolved == ()
-    assert service_app.library_roots == ()
+    assert [(r.coordinate, r.version) for r in service_app.library_roots] == [
+        ("com.acme:pricing-lib", "1.0.0")
+    ]
+
+
+def test_a_gradle_sibling_is_named_by_its_group_and_artifact_never_by_its_project_path():
+    """W55, and the design question it had to settle first.
+
+    Gradle reports an inter-project dependency as a `ProjectComponentIdentifier`,
+    which carries a project PATH (`:pricing-lib`) and no group, name or version at
+    all. The path cannot be the coordinate: D00 §2 requires `origin` to survive
+    being read on another machine, and a project path means something only inside
+    the build that declares it. So the path is used to JOIN to that project's own
+    record, and the coordinate comes from its `group` and `name`.
+
+    That matters beyond tidiness: `sibling_coordinates` is what
+    `drop_borrowed_endpoints.sql` matches against `documents.origin`, so a
+    coordinate in a second spelling would silently match nothing and a sibling's
+    controllers would publish as this module's."""
+    model = _repository_model(CAPTURE)
+    service_app = next(m for m in model.modules if m.module_id == "com.acme:service-app")
+    pricing = next(m for m in model.modules if m.module_id == "com.acme:pricing-lib")
+
+    assert service_app.sibling_coordinates == ("com.acme:pricing-lib",)
+    # The same string the sibling module reports as its OWN id, which is what makes
+    # the two joinable at all.
+    assert service_app.sibling_coordinates == (pricing.module_id,)
+    assert not any(":" == c[0] for c in service_app.sibling_coordinates), (
+        "a project PATH reached `sibling_coordinates`"
+    )
+    # And a module depending on nothing internal names none.
+    assert pricing.sibling_coordinates == ()
 
 
 def test_a_container_file_beside_the_project_makes_it_a_service(tmp_path: Path):
