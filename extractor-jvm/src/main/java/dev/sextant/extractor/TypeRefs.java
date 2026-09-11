@@ -61,6 +61,21 @@ public final class TypeRefs {
      *  argument's, which is what lets a later pass root the payload and then say whether
      *  what it rooted at is a payload at all. */
     public static String returnFromSignature(String signature) {
+        return returnFromSignature(signature, null);
+    }
+
+    /** The same, with a nullability another source already resolved applied to the TOP
+     *  level — Kotlin's type system, read from {@code @kotlin.Metadata} (`G-63`). Nested
+     *  type arguments are untouched, exactly as {@link #fieldRef} leaves them, because
+     *  that source says nothing about them.
+     *
+     *  <p>Java's own rule is the fallback and stays right for every Java method: every
+     *  reference permits null, every primitive forbids it. What it is NOT right about is
+     *  a Kotlin declaration, where the type itself settles the question — and reporting
+     *  {@code nullable: true, nullable_resolution: "resolved"} for a Kotlin method
+     *  declared non-null put a certainty marker on a value the same fact contradicts,
+     *  carrying kotlinc's own {@code @NotNull} beside it. */
+    public static String returnFromSignature(String signature, Boolean nullableOverride) {
         if (signature == null) return null;
         List<Node> collected = new ArrayList<>();
         new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
@@ -68,7 +83,9 @@ public final class TypeRefs {
                 return new NodeCollector(collected::add);
             }
         });
-        return collected.isEmpty() ? null : toJson(collected.get(0));
+        if (collected.isEmpty()) return null;
+        Node node = collected.get(0);
+        return toJson(nullableOverride == null ? node : node.withNullable(nullableOverride));
     }
 
     /** The generic superclass reference from a class {@code Signature}, or null when there is
@@ -167,6 +184,71 @@ public final class TypeRefs {
             }
         });
         return parameters;
+    }
+
+    /** The return type a Kotlin {@code suspend fun} declared, recovered from the trailing
+     *  {@code Continuation}'s own type argument — or {@code null} when this method has no
+     *  such parameter, which is every Java method and every ordinary Kotlin one.
+     *
+     *  <p>A {@code suspend fun} reaches the class file with its return type ERASED: kotlinc
+     *  compiles {@code suspend fun fetch(id: String): Order} to
+     *  {@code (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;}, so
+     *  the descriptor's return says {@code Object} and the declared type survives only as
+     *  the {@code Continuation}'s type argument in {@code Signature}. Reading it back is
+     *  what makes a suspending function an ordinary one with a return type, which is what
+     *  every consumer downstream already knows how to handle.
+     *
+     *  <p>Read from the SIGNATURE and not from {@code @kotlin.Metadata}, deliberately. Both
+     *  state the type; only the signature states it in JVM spelling, already projected onto
+     *  a wire type by the same collector every other reference here is walked by. Metadata
+     *  spells it in Kotlin's own classifier names — {@code kotlin/String}, {@code kotlin/Int} —
+     *  and mapping those back would mean a builtin table whose boxed-versus-primitive answer
+     *  depends on nullability. Nullability is the one thing the signature CANNOT state
+     *  (kotlinc writes {@code Continuation<? super Order>} identically for a declared
+     *  {@code Order} and {@code Order?}), so that arrives as {@code nullableOverride} from
+     *  the metadata read instead. Each source supplies what it alone is authoritative for.
+     *
+     *  <p>{@code kotlin/Unit} is mapped to {@code void}: a {@code suspend fun} returning
+     *  {@code Unit} is a function returning nothing, and an ordinary Kotlin {@code fun}
+     *  returning {@code Unit} already reports {@code void} here. Leaving it as
+     *  {@code kotlin/Unit#} would make the same declaration read two different ways
+     *  depending on a modifier the reader is being told to ignore. */
+    public static String coroutineReturnFromSignature(String signature, Boolean nullableOverride) {
+        if (signature == null) return null;
+        // The LAST parameter and its sole type argument, both as live nodes: the argument
+        // has to survive as a Node rather than as the JSON a Node normally serializes to,
+        // because `nullableOverride` still has to reach it.
+        List<String> owners = new ArrayList<>();
+        List<Node> arguments = new ArrayList<>();
+        new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
+            @Override public SignatureVisitor visitParameterType() {
+                // Each parameter resets both, so what is left standing at the end belongs
+                // to the last one — which is where kotlinc puts the Continuation.
+                owners.clear();
+                arguments.clear();
+                return new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
+                    @Override public void visitClassType(String name) {
+                        owners.add(name);
+                    }
+
+                    @Override public SignatureVisitor visitTypeArgument(char wildcard) {
+                        return new NodeCollector(arguments::add);
+                    }
+                };
+            }
+        });
+        if (owners.size() != 1 || !"kotlin/coroutines/Continuation".equals(owners.get(0))) return null;
+        // Exactly one type argument, or this is not the shape this method claims to read.
+        // A raw `Continuation` carries none, and a reader that took "the first of zero"
+        // would be guessing where it should decline.
+        if (arguments.size() != 1) return null;
+        Node declared = arguments.get(0);
+        // `suspend fun f(): Unit?` is declarable, and metadata reports it nullable. `void`
+        // is not a reference and cannot be null — `toJson`'s own rule — so the override is
+        // refused here rather than flipping a primitive's nullability and publishing a
+        // fact that contradicts the rule the same file states.
+        if ("kotlin/Unit#".equals(declared.symbol())) return toJson(nodeFromType(Type.VOID_TYPE));
+        return toJson(nullableOverride == null ? declared : declared.withNullable(nullableOverride));
     }
 
     /** The FORMAL type parameters a class or method declares, in declaration order, each

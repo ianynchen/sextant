@@ -142,7 +142,7 @@ public final class ClassScanner {
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
-        private java.util.Map<String, Boolean> kotlinNullability = KotlinNullability.NONE;
+        private KotlinNullability.Decoded kotlinNullability = KotlinNullability.NONE;
 
         Visitor(List<String> lines, String documentId, Consumer<String> onKotlinMetadataUnsupported,
                  Consumer<String> onSourceFile) {
@@ -723,7 +723,7 @@ public final class ClassScanner {
                     super.visitEnd();
                     fillParameterNamesFromLocals();
                     emit(methodSymbol, constructKind, typeSymbol,
-                         signatureJson(descriptor, sig, parameterNames, parameterFlags,
+                         signatureJson(name, descriptor, sig, parameterNames, parameterFlags,
                                        throwsJson,
                                        parameterAnnotations,
                                        parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
@@ -768,7 +768,7 @@ public final class ClassScanner {
             Type type = Type.getType(descriptor);
             // null when this field is not a Kotlin property (every Java field, and any
             // Kotlin field @Metadata did not name) — Java's rule still applies to those.
-            Boolean kotlinNullable = kotlinNullability.get(name);
+            Boolean kotlinNullable = kotlinNullability.properties().get(name);
 
             return new FieldVisitor(Opcodes.ASM9) {
                 @Override
@@ -1132,7 +1132,7 @@ public final class ClassScanner {
             return JsonOut.array(declared);
         }
 
-        private String signatureJson(String descriptor, String genericSignature,
+        private String signatureJson(String methodName, String descriptor, String genericSignature,
                                       String[] parameterNames, int[] parameterFlags,
                                       String declaredThrows,
                                       List<List<String>> parameterAnnotations,
@@ -1147,8 +1147,54 @@ public final class ClassScanner {
             List<String> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
             int[] genericOf = alignedSignature(argumentTypes.length, genericParameters.size(),
                                                 parameterFlags);
+            // Q2's `suspend fun` obligation. kotlinc erases a suspending function's
+            // declared return to `Object` and appends a `Continuation` parameter nobody
+            // wrote, so the facts published a parameter absent from the source and a
+            // return type absent from the language. The declared type survives as that
+            // `Continuation`'s own type argument and its NULLABILITY survives only in
+            // `@kotlin.Metadata` — measured: `fetch(String): KotlinSample` and
+            // `maybe(String): KotlinSample?` compile to one descriptor, one signature
+            // hash, and kotlinc stamps `@Nullable` on BOTH, so no annotation separates
+            // them either.
+            //
+            // Read back, a `suspend fun` is an ordinary function: the trailing parameter
+            // is dropped and the return is the type the author declared. Nothing
+            // downstream has to know coroutines exist, which is the whole point — the
+            // synthetic is symmetric, appearing identically here and at every call site,
+            // and the SYMBOL's identity hashes the raw descriptor (`disambiguatorOf`),
+            // so dropping it here cannot move an identity or break descriptor matching.
+            // Null for every Java method and for any Kotlin one `@Metadata` did not name —
+            // Java's rule still applies to those, and it is right for them.
+            String methodKey = methodName + descriptor;
+            Boolean kotlinReturnNullable = kotlinNullability.returnNullable().get(methodKey);
+            // TWO conjuncts, and each rules out a measured class of wrong answer.
+            //
+            // `suspendMethods` is metadata's own statement. The structural test alone —
+            // "the last parameter is a `Continuation`" — fires on a Java method that
+            // declares one, on a Kotlin `fun` that merely takes one, and above all on the
+            // `<init>` of every generated coroutine state-machine class, which would then
+            // stop reporting `returns: void#`.
+            //
+            // The DESCRIPTOR's own last slot has to be the `Continuation` as well, because
+            // the truncation below removes a descriptor slot while the recovery reads a
+            // SIGNATURE position, and those two coincide only when the signature is
+            // full-length. It is routinely not: an inner class's constructor carries the
+            // enclosing instance in its descriptor and omits it from its signature, so
+            // trusting the signature alone deleted the author's own declared parameter and
+            // kept the synthetic — the exact inversion W5's alignment exists to prevent.
+            boolean continuationLast = argumentTypes.length > 0
+                && argumentTypes[argumentTypes.length - 1].getSort() == Type.OBJECT
+                && "kotlin/coroutines/Continuation".equals(
+                    argumentTypes[argumentTypes.length - 1].getInternalName());
+            String coroutineReturn =
+                kotlinNullability.suspendMethods().contains(methodKey) && continuationLast
+                    ? TypeRefs.coroutineReturnFromSignature(genericSignature, kotlinReturnNullable)
+                    : null;
+            int declaredParameters = coroutineReturn == null
+                ? argumentTypes.length
+                : argumentTypes.length - 1;
             List<String> parameters = new ArrayList<>();
-            for (int i = 0; i < argumentTypes.length; i++) {
+            for (int i = 0; i < declaredParameters; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
@@ -1185,8 +1231,15 @@ public final class ClassScanner {
                 parameter.put("type_annotations", JsonOut.array(parameterTypeAnnotations.get(i)));
                 parameters.add(JsonOut.object(parameter));
             }
-            String generic = TypeRefs.returnFromSignature(genericSignature);
-            String returns = generic != null ? generic : TypeRefs.fromType(Type.getReturnType(descriptor));
+            String generic = TypeRefs.returnFromSignature(genericSignature, kotlinReturnNullable);
+            String returns = coroutineReturn != null
+                ? coroutineReturn
+                : generic != null
+                    ? generic
+                    // `fieldRef` with no signature is `fromType` plus the override —
+                    // the erased descriptor type, which is where a method with no
+                    // `Signature` attribute has always got its return.
+                    : TypeRefs.fieldRef(Type.getReturnType(descriptor), null, kotlinReturnNullable);
             TreeMap<String, String> signature = new TreeMap<>();
             signature.put("parameters", JsonOut.array(parameters));
             signature.put("returns", returns);

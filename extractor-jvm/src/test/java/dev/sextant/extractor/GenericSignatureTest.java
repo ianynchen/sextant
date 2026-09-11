@@ -321,15 +321,34 @@ class GenericSignatureTest {
         // A type reference writes its `arguments` before its own `symbol` (the keys are
         // sorted), so each parameter reads argument-then-symbol and the four together
         // give the exact order: List<String>, then Continuation<Unit>.
+        //
+        // REWRITTEN when the `suspend fun` read landed (`G-63`, Q2). This test used to
+        // read the order `String < List < Unit < Continuation` across the published
+        // parameters, which required the `Continuation` to BE published. It no longer is:
+        // a suspending function is now read as the ordinary function it describes, its
+        // trailing synthetic dropped and its return taken from that synthetic's own type
+        // argument (`kotlin/Unit` becoming `void`, as an ordinary Kotlin `fun` returning
+        // `Unit` already reads).
+        //
+        // The property this test exists for is UNCHANGED and still pinned here. The
+        // synthetic is dropped AFTER alignment, so a SHORT signature would still break
+        // the alignment first: the counts would disagree, no attribute would explain the
+        // gap, `names` would fall back to the erased `java/util/List#` carrying NO type
+        // argument, and the assertion below would fail. What is measured is the same
+        // thing; only the shape it is read through has moved.
         String suspending = symbol("KotlinGenericSignature", "batched");
-        int string = suspending.indexOf("\"symbol\":\"java/lang/String#\"");
-        int list = suspending.indexOf("\"symbol\":\"java/util/List#\"");
-        int unit = suspending.indexOf("\"symbol\":\"kotlin/Unit#\"");
-        int continuation = suspending.indexOf("\"symbol\":\"kotlin/coroutines/Continuation#\"");
         assertTrue(
-            string > 0 && string < list && list < unit && unit < continuation,
-            "the declared parameter and the trailing Continuation did not each keep "
-                + "their own type argument, in that order");
+            suspending.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\""),
+            "the declared parameter lost its type argument, which is what a SHORT "
+                + "signature from kotlinc would look like");
+        assertFalse(
+            suspending.contains("kotlin/coroutines/Continuation#"),
+            "the trailing synthetic is published as a parameter again");
+        assertTrue(
+            suspending.contains("\"returns\":{\"arguments\":[],\"nullable\":false,"
+                + "\"nullable_resolution\":\"resolved\",\"symbol\":\"void#\""),
+            "a suspend fun returning Unit did not read as the void it is");
 
         // A Kotlin function's own formal type parameter, read the same way a Java one is.
         String ranked = symbol("KotlinGenericSignature", "ranked");
