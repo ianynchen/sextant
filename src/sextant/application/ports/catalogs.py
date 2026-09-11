@@ -45,7 +45,7 @@ class Catalog:
     # D02 §1's `detect.coordinates`: the dependency coordinates that make this
     # catalog's framework rule applicable to a module. Declared by every
     # shipped catalog since day one and read by NOTHING until 2O Task 6
-    # (ruling R9, `docs/documented-not-implemented.md` entry #1) — it is read
+    # (ruling R9, `docs/open-issues.md` OI-83 entry #1) — it is read
     # here now, and consumed by the one style whose framework rule is
     # CONDITIONAL on the dependency: `derived_resource` derives an HTTP API
     # from a repository interface that names no HTTP anywhere, so applying it

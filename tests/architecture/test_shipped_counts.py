@@ -5,7 +5,7 @@
 
 Four of the RESTATE batch's thirty-nine are the same defect wearing different numbers:
 `principles-sweep` says 52 catalogs, `RUNBOOK` said 55, one `open-issues` entry said 56 and
-another 57, `documented-not-implemented` said 55. Sixty-four ship. None was wrong when it was
+another 57, `open-issues.md` OI-83 said 55. Sixty-four ship. None was wrong when it was
 written — a catalog count decays every time a wave adds a catalog, which this session did six
 times.
 

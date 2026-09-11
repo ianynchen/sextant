@@ -49,7 +49,7 @@ the catalog.
 > [D02](D02-catalog-schema.md)'s schema into a public API, after which every schema change
 > is breaking. NFR-9's stated case — extension without modification, for an in-house client
 > library — is therefore unmet and knowingly so. Recorded in
-> [documented-not-implemented.md](../documented-not-implemented.md), which is where a
+> `open-issues.md` OI-83, which is where a
 > retirement decision belongs; retiring the SECTION is the documentation-debt checkpoint's
 > call, not this pass's, so the text stays and this box says what is true of it.
 

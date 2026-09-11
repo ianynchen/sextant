@@ -2401,7 +2401,7 @@ untouched by `endpoints_reset`, so it could not participate in it.
 **These rows are deliberately not roots, and the omission is SCOPED rather than permanent.**
 [D00](D00-fact-schema.md) §4 documents a `root_kind` set whose members include `scheduled`,
 and [D01](D01-graph-schema.md) §5 documents a `trace_of` walk. Neither exists anywhere in
-`src/` (entries #7 and #11 of `docs/documented-not-implemented.md`), so nothing here is one
+`src/` (entries #7 and #11 of `docs/open-issues.md` OI-83), so nothing here is one
 half of a live mechanism. **The omission becomes wrong the moment a `root_kind` producer
 ships**: a scheduled method IS a root at that point, and these rows have to be re-examined
 as roots rather than left as a table nobody traverses.
@@ -3663,7 +3663,7 @@ together and neither is privileged.~~
 > NFR-9 names this as the supported extension path and a reader needs to know it is not one;
 > project catalogs are deliberately unscheduled (2O roadmap `:201-205`), because they would
 > make this schema a public API after which every change here is breaking. Recorded in
-> [documented-not-implemented.md](../documented-not-implemented.md).
+> `open-issues.md` OI-83.
 
 **Shape models (§1b) live in a `shape-models/` subdirectory of the same set.** They are
 resolved within the set that declares them, so a catalog naming a model its own directory

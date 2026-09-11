@@ -89,12 +89,30 @@ matches:
     # every operation on a port shares it.
     all_methods: []
     annotations:
-      - { fqn: org.springframework.ws.server.endpoint.annotation.PayloadRoot }
+      # BOTH are `@Repeatable`, confirmed in spring-ws-core's own class files, and
+      # Spring-WS reads the containers: `PayloadRootAnnotationMethodEndpointMapping`
+      # and `SoapActionAnnotationMethodEndpointMapping` both resolve through
+      # `AnnotatedElementUtils.getMergedRepeatableAnnotations`. One handler serving two
+      # message types is the documented way to write it, and without `container:` the
+      # second message is served in production and absent from the document — half a
+      # SOAP service's surface, silently.
+      #
+      # `@Namespace` is NOT repeatable and has no container, despite `Namespaces`
+      # existing beside it: that one is a distinct annotation an author writes
+      # explicitly. Checked in the class file rather than inferred from the plural name,
+      # which is how an earlier draft of this entry got it wrong.
+      #
+      # verify: javap -v -cp $(find ~/.m2 -name 'spring-ws-core-*.jar' | grep -v sources
+      #         | head -1) org.springframework.ws.server.endpoint.annotation.PayloadRoot
+      #         | grep Repeatable
+      - { fqn: org.springframework.ws.server.endpoint.annotation.PayloadRoot,
+          container: org.springframework.ws.server.endpoint.annotation.PayloadRoots }
       # A SECOND, independent identity form on the same handler class, not a
       # variant of the first: `@SoapAction` dispatches on the transport's
       # SOAPAction header rather than on the payload's root element, so its
       # address is that header's URI verbatim.
-      - { fqn: org.springframework.ws.soap.server.endpoint.annotation.SoapAction }
+      - { fqn: org.springframework.ws.soap.server.endpoint.annotation.SoapAction,
+          container: org.springframework.ws.soap.server.endpoint.annotation.SoapActions }
 
 # 2G design §7, rung 1: SOAP's wire is XML by definition — the envelope IS an
 # XML document, and no handler-level declaration can make it anything else —

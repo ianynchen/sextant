@@ -355,7 +355,7 @@ cache key includes the redaction pattern set, because a pattern added later cann
 facts already written." Both sentences were false: the amendment landed in D04 and never
 here (§5.1), and there is no cache at all. It is corrected rather than deleted because
 NFR-8 is a confidentiality claim and this is the first document a reader opens —
-`docs/principles-sweep-2026-09-05.md` carries the finding as `A-C8`.*
+`docs/open-issues.md` OI-84 carries the finding as `A-C8`.*
 
 ---
 
@@ -446,6 +446,16 @@ exists usually means naming the thing it forbids.
 | **Ports hold only contracts** | Protocols, frozen dataclasses, errors, and do-nothing implementations. A port that grows behaviour stops being a seam | source rule |
 | **Closed sets defined once** | Only `domain/closed_sets.py` defines one; a second definition is NFR-5 widened by accident | source rule |
 | **Application reads no files** | Every I/O concern reaches `application` through a port | source rule |
+| **A feature with an open Critical or Major does not claim to be delivered** | `COVERAGE.md` §2's `✅` means every library catalogued; delivery additionally requires no open blocker. Both directions checked, and every Critical or Major must be placed against the feature it blocks | source rule (`test_feature_delivery.py`) |
+| **Every feature has an intention test** | A fixture a user of the framework would recognise, plus an assertion on DERIVED output — never on one of our own documents. `GUIDELINES.md` §4.1 | source rule (`test_feature_intention.py`) |
+
+**Three registers, not seven** (2026-09-11). `docs/` holds one register per question:
+`open-issues.md` — what is wrong and open; `java-kotlin-delivery-list.md` — what is not
+delivered, enforced by tests; `COVERAGE.md` — what we cannot see and say so.
+`java-gap-analysis-2026-09-06.md`, `documented-not-implemented.md` and
+`principles-sweep-2026-09-05.md` were folded into those three and removed; their live
+content is `OI-83`, `OI-84` and the delivery list's own `severity` block, and their history
+is in git.
 
 **Exceptions are written down, never absorbed.** A rule quietly loosened until it passes still
 reads as enforcement. One is currently recorded in the suite: `domain/facts.py` names a field

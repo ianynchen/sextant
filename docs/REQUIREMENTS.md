@@ -10,7 +10,15 @@ component that realises each requirement is named in
 
 ## Scope of version 1
 
-**In scope.** Java and Kotlin modules whose bytecode is available. Analysis of a single
+**In scope.** Java and Kotlin modules whose bytecode is available — **every JVM framework,
+not one.** Spring Boot is the first framework and the version-bump milestone, never the
+definition of done; Micronaut, Quarkus, Ktor, Javalin, Vert.x, Alpakka and Temporal are in
+scope and sequenced after it. *(Stated 2026-09-11 after the opposite was assumed for a week
+and under-counted the remaining work by about eleven libraries.)*
+What is not delivered, per feature, is
+[`java-kotlin-delivery-list.md`](java-kotlin-delivery-list.md), which
+`tests/architecture/test_feature_delivery.py` enforces against this document's own
+traceability. Analysis of a single
 module, of several modules in one repository, and of a system assembled from modules
 across repositories. HTTP, SOAP, gRPC, and message-broker boundaries.
 
@@ -64,7 +72,14 @@ request and response shapes, and its trust fields.
 data, never as code, so that supporting a new framework requires no change to Sextant
 itself.*
 
-**Status, as of Phase 2O Task 6: all four protocol families named above derive.** HTTP
+**Status.** All four protocol families named above derive — but *derives* is not
+*delivered*, and this paragraph read as though it were for a week. Three protocol cells in
+[COVERAGE.md](COVERAGE.md) §2 said `✅` while carrying open Majors, because `✅` there means
+*every library catalogued* and never *no open defects*. Per-feature delivery is
+[`java-kotlin-delivery-list.md`](java-kotlin-delivery-list.md); what follows is the 2O-era
+record of what began deriving and is kept as history.
+
+**As of Phase 2O Task 6:** HTTP
 (both directions, plus GraphQL, WebSocket and SSE on top of it), SOAP, the message brokers
 Kafka, JMS, SQS and Pub/Sub, and now gRPC. gRPC's Java surface shipped in two halves
 ([COVERAGE.md](COVERAGE.md) §5.7): the `.proto` descriptor (Phase 2O Task 4, both origins —
@@ -332,9 +347,11 @@ granularity at which architecture is compared and exported. Each kind names what
 derived from and what identifies it, so two analyses can be compared kind by kind rather than
 row by row.
 
-*State: unimplemented. The `dependency` kind derives from edges and dispatch, which did not
-exist when `docs/meridian-integration.md` was written and do now (F8) — so the thing that
-would have blocked it is gone.*
+*State: unimplemented, and tracked on
+[`java-kotlin-delivery-list.md`](java-kotlin-delivery-list.md) since 2026-09-11. The
+`dependency` kind derives from edges and dispatch, which did not exist when
+`docs/meridian-integration.md` was written and do now (F8) — so the thing that would have
+blocked it is gone, and it has been unblocked and unbuilt since.*
 
 ### FR-22 — Derivation diff
 

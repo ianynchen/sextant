@@ -11,9 +11,9 @@ what closes it. An issue leaves this file only when its fix ships, and the row
 moves to CLOSED with the commit that closed it. A register that lies about its
 own state is the defect it exists to catch.
 
-**Relationship to the other registers.** `docs/principles-sweep-2026-09-05.md` is
+**Relationship to the other registers.** `docs/open-issues.md` OI-84 is
 the triage of one audit and stays frozen as that audit's record.
-`docs/documented-not-implemented.md` holds one class — mechanisms documents
+`docs/open-issues.md` OI-83 holds one class — mechanisms documents
 describe that code does not implement. `docs/COVERAGE.md` states BOUNDARIES: what
 we cannot see and say so. **This file holds what is WRONG**, whether or not it is
 also stated elsewhere.
@@ -301,7 +301,7 @@ prose or a latent shape with no live consequence.
 ## OPEN
 
 ### OI-42 — a class file above the ceiling is refused, and the refusal kills the whole scan
-**Critical · pre-existing, entered here 2026-09-06 · `docs/java-gap-analysis-2026-09-06.md`
+**Critical · pre-existing, entered here 2026-09-06 · `docs/java-kotlin-delivery-list.md`
 `G-3` (audit 4 `F1`), root cause `RC-6`**
 
 Two defects in one line of build configuration, and they need two different fixes.
@@ -392,7 +392,7 @@ a real-scan half asserts the composed descriptor against what the extractor
 wrote. Four crossings, four discharges, and still no type.
 
 ### OI-6 — 6 Class A Minors remain open
-**Minor · pre-existing · `docs/principles-sweep-2026-09-05.md` §13**
+**Minor · pre-existing · `docs/open-issues.md` OI-84 §13**
 
 `A-Mi17/18/19/20/21` (extractor, engine and ratchet code rather than text),
 `A-Mi22` (a published contract column, waiting on the serializer question).
@@ -1578,7 +1578,7 @@ step, which is G4's.
 F2's own entry said "Sweep 2's `A-C2` is the consequence: the `Void` mapping
 replicated in 28 with 9 missing", and the stage-2 summary said the same of
 "`A-C2`'s nine-catalog defect". `A-C2` in
-`docs/principles-sweep-2026-09-05.md:122` is the OkHttp
+`docs/open-issues.md` OI-84:122` is the OkHttp
 `.method("DELETE", …)` → `GET` fabrication; the `Void` finding is `A-C3` at
 `:123` and `:352`. The collision is a sweep-2-local numbering (`A-C2` is
 labelled "Sweep 2, C-1" and `A-C3` "Sweep 2, C-2") leaking into a document that
@@ -1644,7 +1644,7 @@ one direction a wrong claim about redaction must never point.
 
 **Not tracked anywhere before this.** FR-19 appears in no other document except
 a Phase 1 plan listing it as not-yet-covered — not in `open-issues.md`, not in
-`documented-not-implemented.md`, not in `COVERAGE.md`.
+`open-issues.md` OI-83, not in `COVERAGE.md`.
 
 **Not fixed here, deliberately.** Correcting an FR's wording is F9's RESTATE
 batch (spec §12, `W51`), which is where every other false requirement statement
@@ -2977,6 +2977,55 @@ per catalog.
 array-reading catalogs should all declare `array_arguments` and the rule W47 measured is
 the wrong test.
 
+### OI-84 — the principles sweep of 2026-09-05, folded
+
+**Folded 2026-09-11** when `docs/open-issues.md` OI-84 was removed. It was 2,195
+lines: the triage of one audit, frozen as that audit's record. Its findings were acted on at
+the time and its remaining value was two things, both preserved rather than the whole file.
+
+**1. The anchors two tests cite.** `tests/architecture/test_guard_pins.py` cites `S1-MAJ-1`
+for a backlog entry, and `tests/architecture/test_defaulted_identity_values.py` cites §4 for
+the rule it enforces. Both are prose citations in docstrings — neither opened the file — and
+both now point here. The rules themselves live where they are enforced: in the tests, and in
+`GUIDELINES.md` §8.3, which the sweep produced.
+
+**2. The rule it exists to have produced**, already in `GUIDELINES.md` §8.3: *a new principle
+ships with its retroactive audit list.* That is the sweep's actual output; the 2,195 lines
+were the audit, and an audit's job ends when its findings are placed.
+
+**Why it is not archived instead.** A frozen record nobody reads, that forty files cite, is
+the documentation sprawl this consolidation exists to end. Its history is in git — `git show
+HEAD~1:`docs/open-issues.md` OI-84 — which is where a frozen record belongs.
+
+### OI-83 — documented mechanisms that do not exist, folded from `open-issues.md` OI-83
+
+**Folded 2026-09-11** when that file was removed. It opened 2026-09-04 with fourteen rows,
+seven of which closed. The seven that did not are below, verbatim in substance, because its
+own lesson is the one this register exists to carry: **for this codebase, a document is not
+evidence that a mechanism exists** — four rounds of adversarial spec review missed two
+phantom mechanisms because every reviewer read the same documents the author did. A shared
+false premise is invisible to review and visible to a grep.
+
+**The standing rule it produced, which moves to `GUIDELINES.md` rather than dying here:**
+before a spec cites a mechanism as shipped, grep for it in `src/`.
+
+| # | Mechanism | What the code does |
+|---|---|---|
+| 1 | `detect:` / `detect.coordinates` | **PARTLY CLOSED, 2O Task 6.** Now on the `Catalog` model and read by the loader, and it GATES the **two** styles whose framework rule is conditional on the library — `derived_resource` and `config_join`, `application/resolve/dependencies.py::DEPENDENCY_GATED`, applied in `gate_reason`. **Re-measured |
+| 2 | `ClasspathEntry` | Still **constructed nowhere**, deliberately (2O Task 6): an entry names a resolved ARCHIVE and its tier, which the Gradle report carries and a parsed POM does not, so filling it from Maven would mean inventing a path. The coordinate half a gate needs is `ModuleFact.dependency_coordinates` instead. |
+| 10 | Project catalogs — D02 §6's repository-supplied catalog directory | **No repository-supplied catalog is ever loaded.** The catalog set is hard-wired to the installed package's own directory: `api.py:565` → `resources.py::catalogs_dir` (`:34-46`), which resolves `<package root>/catalogs` and raises if it is absent. There is no parameter, no merge and no search path,  |
+| 11 | D01 §5's ten named queries — `callers_of`, `callees_of`, `implementations_of`, `uses_of`,  | **None of the ten exists.** Across `src/` and `tests/` the ten names occur exactly once, and that occurrence is `engines/scheduled_work.py:13` citing `trace_of` as a thing that does not exist. The real registry is `storage/duckdb/workspace.py:10`'s `_NAMED_QUERIES`, a different and resolver-internal |
+| 12 | `publishing` in the Gradle init script | **Deliberately unconsumed since 2026-09-04.** Its only reader was `GradleDetector._classify`, removed by the user ruling that publishing says where artifacts go rather than what a module contains. Listed here so it is not rediscovered as an accidental phantom: the emission stays only because removin |
+| 13 | `~/.sextant/config.yml` and the repository-root `sextant.yml` — **both files, whole** | **Neither file is ever opened.** `grep -rn "sextant\.yml" src/ \ |
+| 14 | The `filesystem` catalog style | **No engine.** `filesystem` is absent from `application/resolve/endpoints.py`'s `_ENGINES` (`:214-253`), which is the dict a catalog's `style:` is resolved against, so a catalog declaring it raises `CatalogError` from `_engine_for` (`:196-211`) at the top of `derive_endpoints` (`:83`), before `endpo |
+
+**Where each is tracked now.** #10 and #13 are standing retirements (a repository-supplied
+catalog would make D02's schema a public API). #11's ten named queries are `FR-9`/`FR-10`'s
+missing surface and sit with `G-71` on the delivery list. #2's classpath tiering waits on a
+resolved classpath under both build systems. #12 is an emission to delete when a
+build-script change is next authorised. #14 is the `filesystem` engine, deliberately ahead
+of implementation.
+
 ### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive
 
 **Found by** the review of `G-63` (`7716ab3`), measured rather than reasoned.
@@ -3030,7 +3079,7 @@ where a synthetic leads or trails.
 
 **Recorded rather than absorbed into the return half's commit**, because a claim that `G-63`
 is closed when half of what its row names is still live is the register defect this file
-exists against. `docs/java-gap-analysis-2026-09-06.md:241`'s `G-63` row names both.
+exists against. `docs/java-kotlin-delivery-list.md`:241`'s `G-63` row names both.
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 

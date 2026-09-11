@@ -16,7 +16,7 @@ trace begins at it exactly as one begins at a served handler.
 
 *This docstring said the opposite until 2Q's `I1`* — that `root_kind` "does
 not exist anywhere in `src/`", entry #7 of
-`docs/documented-not-implemented.md`, and that the omission "becomes wrong the
+`docs/open-issues.md` OI-83, and that the omission "becomes wrong the
 moment a `root_kind` producer ships". It shipped:
 `resolve/roots.py` reads this table and writes one `roots` row per handler
 here, so nothing in this file is half of a live mechanism any more. The engine

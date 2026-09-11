@@ -34,7 +34,7 @@ Allowed without asking: reading anything; running tests/linters/builds; writing 
 - Rewrite 200 lines if it can be done in 50. (Test: Would a senior engineer call this overcomplicated?)  
 - **One feature fully done beats ten half-baked.** *(User principle, 2026-09-05.)* "Done" means the mechanism exists, a consumer reads it, a test proves it, and the documents describing it are true. A feature that is designed, documented and partly wired is not 40% delivered — it is a **liability**, because every reader downstream treats the document as a description of what runs. Half-baked is not a lesser form of shipped; it is a debt with interest, and the interest is paid by whoever believes the doc.  
 
-  The corollary, which is where this bites in practice: **a document describing an unbuilt mechanism is itself a half-baked feature.** Either finish it or retire the claim — but "retire the claim" is a decision to be taken deliberately and recorded, never a quiet deletion, and never a reason to leave the debt unaddressed. See §5.3, and `docs/documented-not-implemented.md`, which is the register this rule keeps.  
+  The corollary, which is where this bites in practice: **a document describing an unbuilt mechanism is itself a half-baked feature.** Either finish it or retire the claim — but "retire the claim" is a decision to be taken deliberately and recorded, never a quiet deletion, and never a reason to leave the debt unaddressed. See §5.3, and `docs/open-issues.md` OI-83, which is the register this rule keeps.  
 
 ---  
 
@@ -64,6 +64,43 @@ For multi-step tasks, state a brief plan:
 ```  
 
 AI agents additionally checkpoint after each significant step per §13.4.  
+
+### 4.1 A feature starts with a failing fixture, and that fixture decides whether to build it at all
+
+**Binding, and enforced by `tests/architecture/test_feature_intention.py` rather than by
+anyone remembering it.** Added 2026-09-11 after five days of work moved no feature to
+delivered: every rule about finishing that was written down and unenforced was broken, and
+every rule with a failing test behind it held.
+
+**Before any feature work, write the fixture and the assertion, and watch them fail.** The
+fixture is code a user of the target framework would recognise as their own. The assertion
+is on what Sextant DERIVES from it — endpoint rows, call edges, the rendered document —
+never on a document that describes the feature.
+
+That one artefact settles both questions that were being got wrong:
+
+* **Is this the right thing to build?** If no realistic fixture exhibits the symptom, no
+  user is waiting on it, and it is not the next thing to do. `G-36` needed `@PayloadRoot`
+  twice on one handler, which any Spring-WS developer writes — four minutes. `G-52` needed
+  a class invented to hold a method that only throws — a day, and it moved nothing.
+* **Is the test testing the intention?** A near-miss or guard test asserts that a catalog
+  RULE discriminates. Hundreds were green while three features were undelivered, because
+  none of them assert that a user's SURFACE appears in the output. An assertion on derived
+  rows cannot be satisfied by editing prose.
+
+**Done is green in CI, never green locally.** Ruled by the user 2026-09-11. An item stays
+on `docs/java-kotlin-delivery-list.md` until its intention test has passed in the pipeline,
+and the entry that retires it records the run. `G-36` was retired on a local pass and
+reopened within the hour; the register now cannot express a closure without a run id.
+
+**A red intention test is the correct state for an undelivered feature.** It is how the work
+is tracked, so the suite naming eleven of them is the register, not a failure.
+
+**Corollary, and the rule that stops half-delivery:** the half not done goes into
+`docs/java-kotlin-delivery-list.md` against the feature it blocks, before the commit.
+`tests/architecture/test_feature_delivery.py` fails until it does, and a feature with a
+blocker may not claim `✅` in `docs/COVERAGE.md`.
+
 
 ---  
 
@@ -97,7 +134,7 @@ Architectural change should not take place silently. Always ask for approval bef
 
 §5's ordering settles what the system **should** do. It does not establish what is **built**. Before any spec, plan, or review cites a mechanism as shipped — a catalog key, a fact kind, an engine style or capability, a table, a column, a detector — **verify it in `src/` and record the `file:line` that proves it**. A mechanism named only under `docs/` is a proposal until the code says otherwise.  
 
-This is not a hypothetical risk. [docs/documented-not-implemented.md](docs/documented-not-implemented.md) is the register of mechanisms this repository documents and never built — including a catalog key declared by **every shipped catalog** and, when this was written, ignored by the loader (2O Task 6 made it real for two styles; the entry stays open, narrowed), two fact types defined and never constructed, and a fact kind D00 specifies with no producer anywhere. Phase 2O's design was written against two of them as though they were shipped.  
+This is not a hypothetical risk. `docs/open-issues.md` OI-83 is the register of mechanisms this repository documents and never built — including a catalog key declared by **every shipped catalog** and, when this was written, ignored by the loader (2O Task 6 made it real for two styles; the entry stays open, narrowed), two fact types defined and never constructed, and a fact kind D00 specifies with no producer anywhere. Phase 2O's design was written against two of them as though they were shipped.  
 
 **Why this rule is a grep and not another review round:** four rounds of adversarial spec review did not catch those two, because the reviewer read the same documents the author did and cited the same lines back. A premise the author and reviewer share is invisible to review. It is visible to a grep, in minutes.  
 
@@ -177,7 +214,7 @@ Non-negotiable defaults. Deviations require justification in ARCHITECTURE.md.
 
 Every catalog, engine, detector and rule that claims to know what a framework does is bound by these four. They exist because a derived record about someone else's framework is only ever as true as our model of it, and a wrong model is indistinguishable from a right one to every consumer downstream.  
 
-1. **Mirror the framework's own rule; never substitute an approximation.** Read what the framework actually does under the exact circumstances, and encode *its* predicate — not a simplification that happens to fit the examples in front of you. Spring's server-side handler test is `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — **measured**, `spring-webmvc 6.2.15`, and unchanged across 6.1.6-7.0.9 — which is meta-annotation and type-hierarchy aware, so a custom stereotype meta-annotated `@Controller` or a `@Controller` base class passes it, and a check for a literal annotation name rejects both. *This sentence previously read "accepts `@Controller` **or** a type-level `@RequestMapping`" — that disjunct is an older Spring's rule and is absent from every version this repo targets. The example teaching "never assert a framework's rule from memory" was itself asserted from memory and shipped wrong for a month; it is corrected here from `javap` output, and `docs/principles-sweep-2026-09-05.md` carries the finding as `A-C7`.* Where the framework's rule is conditional, encode the condition, not the common case.  
+1. **Mirror the framework's own rule; never substitute an approximation.** Read what the framework actually does under the exact circumstances, and encode *its* predicate — not a simplification that happens to fit the examples in front of you. Spring's server-side handler test is `AnnotatedElementUtils.hasAnnotation(beanType, Controller.class)` — **measured**, `spring-webmvc 6.2.15`, and unchanged across 6.1.6-7.0.9 — which is meta-annotation and type-hierarchy aware, so a custom stereotype meta-annotated `@Controller` or a `@Controller` base class passes it, and a check for a literal annotation name rejects both. *This sentence previously read "accepts `@Controller` **or** a type-level `@RequestMapping`" — that disjunct is an older Spring's rule and is absent from every version this repo targets. The example teaching "never assert a framework's rule from memory" was itself asserted from memory and shipped wrong for a month; it is corrected here from `javap` output, and `docs/open-issues.md` OI-84 carries the finding as `A-C7`.* Where the framework's rule is conditional, encode the condition, not the common case.  
 
 2. **A valid usage must never be misinterpreted, and never error out.** Deriving nothing for a shape we cannot see is acceptable — provided rule 3 is honoured. Deriving the *wrong* answer is not, and raising on valid input is worse than both: this phase shipped a renderer that raised on a question kind the same phase had added, so a real module would have crashed at render.  
 

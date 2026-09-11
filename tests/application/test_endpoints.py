@@ -64,7 +64,7 @@ def test_catalog_declares_its_style_and_required_capabilities_when_loaded():
 
 def test_the_loader_reads_detect_coordinates_and_the_framework_media_default():
     """Two keys D02 declared and the loader ignored until 2O Task 6
-    (`docs/documented-not-implemented.md`, entries #1 and #6). `detect:` was
+    (`docs/open-issues.md` OI-83, entries #1 and #6). `detect:` was
     declared by every shipped catalog and read by nothing; `default_produces`
     had been specified-not-used since 2E. Both are now values on the model,
     and `spring-data-rest` is the catalog that needs each."""

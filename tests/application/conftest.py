@@ -1,9 +1,9 @@
-import subprocess
 from pathlib import Path
 
 import pytest
 from fixture_module import write_fixture_module_fact
 
+from fixture_build import compile_fixture
 from sextant.application.ports.artifacts import ReadRequest, group_files_by_reader
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import ResolveReport, resolve
@@ -32,7 +32,7 @@ def fixture_facts(tmp_path_factory: pytest.TempPathFactory) -> Path:
     — and compiling the fixture a second time for it would double the slowest
     step in the suite for no new evidence."""
     facts = tmp_path_factory.mktemp("fixture_facts") / "facts"
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     AsmScanner(JAR).scan(
         ScanRequest(
             module_id="com.acme:orders-service",
@@ -59,7 +59,7 @@ def resolved_fixture(
     here would take them with it — session teardown closes it once, after
     every consumer is done."""
     tmp_path = tmp_path_factory.mktemp("resolved_fixture")
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     facts = tmp_path / "facts"
     AsmScanner(JAR).scan(
         ScanRequest(

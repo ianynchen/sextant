@@ -15,6 +15,13 @@ public class OrderSoapEndpoint {
     @ResponsePayload
     public OrderView placeOrder(@RequestPayload PlaceOrderRequest request) { return null; }
 
+    // ONE handler for TWO message types. Spring-WS reads `@PayloadRoots`, the container
+    // `@PayloadRoot` declares itself `@Repeatable` with, so both messages route here.
+    @PayloadRoot(namespace = "http://orders.example.com/ws", localPart = "amendOrderRequest")
+    @PayloadRoot(namespace = "http://orders.example.com/ws", localPart = "reviseOrderRequest")
+    @ResponsePayload
+    public OrderView amendOrder(@RequestPayload PlaceOrderRequest request) { return null; }
+
     @SoapAction("http://orders.example.com/action/cancelOrder")
     @ResponsePayload
     public OrderView cancelOrder(@RequestPayload PlaceOrderRequest request) { return null; }

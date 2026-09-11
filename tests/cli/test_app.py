@@ -1,12 +1,12 @@
 import json
 import shutil
-import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
+from fixture_build import compile_fixture
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScannerProvenance, ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
@@ -59,13 +59,8 @@ class _NoCapabilitiesScanner:
         return self._inner.scan(request)
 
 
-def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
-    )
-    assert result.exit_code == 0, result.output
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_service: Path):
+    metadata = json.loads((analyzed_orders_service / "metadata.json").read_text())
     # 2E-prep Task 6: +1 (`GET /composed`, the effective-annotations
     # pre-pass's `@ApiGet` composition). Phase 2E Task 7: +2 more
     # (`GET /api/orders`, `GET /api/composed`, the inherited-mappings
@@ -115,7 +110,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(tmp_path: Path):
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
-def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_path: Path):
+def test_analyze_document_count_matches_the_real_compiled_and_source_files(
+    analyzed_orders_service: Path,
+):
     """IMPORTANT A fix (Task 4 review round 1): compiled-origin declared_shape
     facts used to be written into a NEW fact file that re-emitted their own
     `Document` header, so a document that already had one fact file (every
@@ -124,12 +121,7 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     regression that mints a second Document record for an existing document
     is caught here directly rather than only inferred from row counts
     elsewhere."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
-    )
-    assert result.exit_code == 0, result.output
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    metadata = json.loads((analyzed_orders_service / "metadata.json").read_text())
     # 84 + 3: 2G Task 7's `messaging/parse` package compiles to three more
     # class files (the listeners and the two delegation targets), one
     # document each — a real source counted once, which is exactly what this
@@ -202,7 +194,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(tmp_p
     assert metadata["coverage"]["documents"] == 135
 
 
-def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path: Path):
+def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(
+    analyzed_orders_service: Path,
+):
     """IMPORTANT B (Task 4 review round 1): `receipt.avsc` is this fixture's
     one schema identity with no compiled counterpart —
     `fixtures/orders-service/pom.xml`'s avro-maven-plugin `<excludes>` block
@@ -211,15 +205,10 @@ def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(tmp_path
     `<excludes>` block (making Receipt compiled again, and DR-4 drop the
     source shape this test expects) fails a test rather than only a stale
     fixture comment."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
-    )
-    assert result.exit_code == 0, result.output
 
     shapes = [
         fact
-        for _, _, facts in read_fact_tree(tmp_path / "facts")
+        for _, _, facts in read_fact_tree(analyzed_orders_service / "facts")
         for fact in facts
         if fact.kind == "declared_shape" and fact.schema_name == "com.example.orders.avro.Receipt"
     ]
@@ -245,7 +234,7 @@ def test_a_declared_protobuf_shape_expands_from_the_schema_not_the_generated_cla
     Pinned end to end through the real CLI `analyze` command and the real
     DuckDB tables it wrote, exact-list, copied from a live run rather than
     computed by hand."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     result = CliRunner().invoke(
         cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
     )
@@ -320,16 +309,17 @@ def test_a_declared_protobuf_shape_expands_from_the_schema_not_the_generated_cla
     assert bytecode_field_count == 19
 
 
-def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+def test_export_writes_a_bundle_with_manifest_graph_and_facts(analyzed_workspace_copy: Path):
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(
+        cli, ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
+    )
     assert result.exit_code == 0, result.output
     bundle = Path(result.output.strip())
     assert (bundle / "manifest.json").is_file()
@@ -338,31 +328,33 @@ def test_export_writes_a_bundle_with_manifest_graph_and_facts(tmp_path: Path):
     assert facts_files, "facts/ must not be empty"
 
 
-def test_render_writes_the_document_after_analyze(tmp_path: Path):
+def test_render_writes_the_document_after_analyze(analyzed_workspace_copy: Path):
     runner = CliRunner()
-    runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    result = runner.invoke(cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(
+        cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
+    )
     assert result.exit_code == 0, result.output
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    document = (analyzed_workspace_copy / "render" / "architecture.md").read_text()
     assert "POST" in document and "/v1/orders" in document
 
 
-def test_render_also_writes_a_self_contained_offline_html_document(tmp_path: Path):
+def test_render_also_writes_a_self_contained_offline_html_document(analyzed_workspace_copy: Path):
     """2K design §6b, the live pin over a real analysed module rather than a
     synthetic one: `architecture.html` lands beside `architecture.md`, wraps
     the real structure diagram in pan-zoom controls, and carries no CDN or
     external script URL."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    result = runner.invoke(cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(
+        cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
+    )
     assert result.exit_code == 0, result.output
-    html_path = tmp_path / "render" / "architecture.html"
+    html_path = analyzed_workspace_copy / "render" / "architecture.html"
     assert html_path.is_file()
     document = html_path.read_text(encoding="utf-8")
     assert 'class="diagram"' in document
@@ -382,7 +374,7 @@ def test_rendering_the_same_workspace_twice_writes_a_byte_identical_html_documen
     workspace and the same (absent) overlay produces the same bytes — nothing
     in the HTML path reads a clock or a dict in insertion-unstable order
     either."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     html_path = tmp_path / "render" / "architecture.html"
@@ -403,32 +395,33 @@ def test_rendering_the_same_workspace_twice_writes_a_byte_identical_html_documen
     assert first == second
 
 
-def test_export_carries_both_rendered_documents_into_the_bundle(tmp_path: Path):
+def test_export_carries_both_rendered_documents_into_the_bundle(analyzed_workspace_copy: Path):
     """The bundle carries what `render` already wrote (2K design §6b) — copied
     verbatim rather than re-rendered, so the bundle and the workspace can
     never disagree about what a reader saw."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
     assert (
         runner.invoke(
-            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(
+        cli, ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
+    )
     assert result.exit_code == 0, result.output
     bundle = Path(result.output.strip())
     assert (bundle / "render" / "architecture.md").read_bytes() == (
-        tmp_path / "render" / "architecture.md"
+        analyzed_workspace_copy / "render" / "architecture.md"
     ).read_bytes()
     assert (bundle / "render" / "architecture.html").read_bytes() == (
-        tmp_path / "render" / "architecture.html"
+        analyzed_workspace_copy / "render" / "architecture.html"
     ).read_bytes()
     # The manifest declares what it shipped (2K Task 8 review, D06 §3):
     # `render/` joins `facts`/`graph`/`tables`/`facts_files` as content the
@@ -438,19 +431,20 @@ def test_export_carries_both_rendered_documents_into_the_bundle(tmp_path: Path):
     assert manifest["contents"]["render"] == ["architecture.md", "architecture.html"]
 
 
-def test_export_without_a_prior_render_carries_no_render_directory(tmp_path: Path):
+def test_export_without_a_prior_render_carries_no_render_directory(analyzed_workspace_copy: Path):
     """`render` is not a prerequisite for `export` (M08: export only ever
     reads what `analyze` left) — a workspace that skipped it must still
     export cleanly, exactly as it did before this task."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(
+        cli, ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
+    )
     assert result.exit_code == 0, result.output
     bundle = Path(result.output.strip())
     assert not (bundle / "render").exists()
@@ -475,7 +469,7 @@ def test_re_analyzing_clears_a_stale_rendered_document(tmp_path: Path):
     mere presence, so a stale render would let `enrich` compose a brief
     from a document describing code that no longer exists rather than
     guiding the user back to `render` first."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     assert (
         runner.invoke(
@@ -514,7 +508,7 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
     """A weaker scanner must degrade *visibly* (M04, FR-17) — including
     through `render`, which reads back what `analyze` already established
     rather than recomputing it."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
@@ -547,7 +541,9 @@ def test_render_names_the_catalog_and_capability_analyze_skipped(tmp_path: Path)
     assert "annotation_args" in document
 
 
-def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(tmp_path: Path):
+def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(
+    analyzed_workspace_copy: Path,
+):
     """The fixture's nested class was this module's one compiled source the
     facts did not account for, and `uncovered` existed to say so. It is scanned
     now (D00 §2 — one class file is one document), so the honest answer is an
@@ -555,24 +551,23 @@ def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(tmp
     still load-bearing — a Kotlin class whose metadata cannot be decoded still
     travels it — which is why the assertion is that it is empty here, not that
     it is gone."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
     assert metadata["uncovered"] == []
 
     assert (
         runner.invoke(
-            cli, ["module", "render", str(FIXTURE), "--workspace", str(tmp_path)]
+            cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
     )
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    document = (analyzed_workspace_copy / "render" / "architecture.md").read_text()
     assert "Not read" not in document.split("## Known gaps", 1)[1]
 
 
@@ -617,7 +612,7 @@ def test_allow_resolve_flag_reaches_the_detector(tmp_path: Path, monkeypatch: py
     argument parsing. Spies on `MavenDetector.detect` itself rather than on
     any Sextant-internal wiring, so the pin is about the value a real detector
     receives."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     calls: list[bool] = []
     original = MavenDetector.detect
 
@@ -640,7 +635,7 @@ def test_allow_resolve_flag_reaches_the_detector(tmp_path: Path, monkeypatch: py
 def test_allow_resolve_defaults_to_false_when_the_flag_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     calls: list[bool] = []
     original = MavenDetector.detect
 
@@ -659,17 +654,14 @@ def test_allow_resolve_defaults_to_false_when_the_flag_is_absent(
     assert all(call is False for call in calls)
 
 
-def test_analyze_writes_an_empty_detect_notes_list_for_a_plain_maven_fixture(tmp_path: Path):
+def test_analyze_writes_an_empty_detect_notes_list_for_a_plain_maven_fixture(
+    analyzed_orders_service: Path,
+):
     """`detect_notes` is a key that is always present (empty where the
     detector had nothing to remark on), not one that appears only once a note
     exists — a reader parsing `metadata.json` must never special-case a
     missing key."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)]
-    )
-    assert result.exit_code == 0, result.output
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    metadata = json.loads((analyzed_orders_service / "metadata.json").read_text())
     assert metadata["detect_notes"] == []
 
 
@@ -813,7 +805,7 @@ def test_detection_reaches_the_detector_exactly_once_per_analyze(
     `./gradlew` subprocess. `_KnownModuleDetector` closes it: the ONE real
     `MavenDetector.detect` call replays into every per-module `analyze()`
     rather than triggering a second one."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     calls: list[Path] = []
     original = MavenDetector.detect
 
@@ -858,8 +850,8 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
     exactly; `billing-lib`'s `<parent>` resolves offline because its own
     `<relativePath>` reaches the reactor parent's `pom.xml` directly, no
     install required."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=BILLING_LIB, check=True)
+    compile_fixture(FIXTURE)
+    compile_fixture(BILLING_LIB)
 
     baseline = CliRunner().invoke(
         cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path / "baseline")]
@@ -994,7 +986,7 @@ def _trivial_service_module(root: Path, name: str, compile_it: bool) -> None:
         f"package com.acme;\npublic class {class_name} {{}}\n", encoding="utf-8"
     )
     if compile_it:
-        subprocess.run(["mvn", "-q", "-o", "compile"], cwd=root, check=True)
+        compile_fixture(root)
 
 
 def _bom_module(root: Path, name: str) -> None:

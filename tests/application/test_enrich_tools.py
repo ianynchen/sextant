@@ -23,12 +23,12 @@ to end.
 
 import json
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
+from fixture_build import compile_fixture
 from sextant.application.enrich.tools import (
     CONFIG_BEARING_EXTENSIONS,
     MAX_GREP_MATCHES,
@@ -73,7 +73,7 @@ def _build_fixture_workspace() -> None:
     isolated `tmp_path` instead, which is exactly why this one was silently
     depending on a developer's own uncommitted leftover before this fixture
     existed."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     result = CliRunner().invoke(cli, ["module", "analyze", str(FIXTURE)])
     if result.exit_code != 0:
         raise RuntimeError(

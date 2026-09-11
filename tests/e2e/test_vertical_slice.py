@@ -1,11 +1,11 @@
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 import duckdb
 from click.testing import CliRunner
 
+from fixture_build import compile_fixture
 from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
 from sextant.domain.enrichment import load_overlay
@@ -39,7 +39,7 @@ def _fingerprint(workspace: Path) -> dict[str, bytes]:
 
 
 def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     first, second = tmp_path / "one", tmp_path / "two"
     _run(first)
     _run(second)
@@ -67,7 +67,7 @@ def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
 
 
 def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
     for route in ("POST", "GET", "/v1/orders", "/v1/orders/{id}"):
@@ -288,7 +288,7 @@ def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_
     raises on the first one the model refuses. The kind check keeps the test
     from passing vacuously on an empty or truncated tree; `module` is absent
     on purpose, being the detector's fact rather than the scanner's."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
 
     files = sorted((tmp_path / "facts").rglob("*.jsonl"))
@@ -302,7 +302,7 @@ def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_
 
 
 def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)  # analyze + render + export
     # Phase 2D (Task 12): metadata.json's own direction/protocol buckets
     # (written by analyze, D05 §3) count every messaging protocol too, a
@@ -497,7 +497,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
-        "soap": 6,
+        # 8 since `G-36` — `amendOrder`'s two `@PayloadRoot` both derive now.
+        "soap": 8,
         "sqs": 4,
         "sse": 2,
         # 6 since W45: the three connect URLs `addEndpoint` registers.
@@ -698,7 +699,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # W45: +3 inbound — 109 — the three STOMP connect URLs that close G-42.
     # W46: +3 OUTBOUND — 60 — the three client connects that close G-32, for a
     # 169-endpoint total.
-    assert rows == [("inbound", 109), ("outbound", 60)]
+    # 111 inbound since `G-36`: `amendOrder`'s two `@PayloadRoot` both derive now, where
+    # only the first did. Outbound is untouched — a repeatable mapping annotation says
+    # nothing about the direction of anything.
+    assert rows == [("inbound", 111), ("outbound", 60)]
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -722,7 +726,7 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
     A test that only pinned the successes could not tell a refusal from a
     miss.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -825,7 +829,7 @@ def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_anal
       `json`/`resolved` and the column never receives a value D00's format set
       does not contain.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -926,7 +930,7 @@ def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_p
       ordinary generic interface: the near-miss that a synthetic test can only
       approximate.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -983,7 +987,7 @@ def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     column shows — there is no full symbol to move for a row with no
     handler (fix round 1, MEDIUM 1: the identity stays in the header even
     where there is no symbol to append after it)."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
@@ -1020,7 +1024,7 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
       INPUT elements only, so there is no output linkage to honestly
       coalesce a response from — this task's own stated boundary.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -1056,6 +1060,12 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
         ("{http://orders.example.com/ws}placeOrderRequest", "outbound"),
         ("{http://orders.example.com/ws}quoteOrderRequest", "inbound"),
         ("http://orders.example.com/action/cancelOrder", "inbound"),
+        # `G-36`: `amendOrder` declares two `@PayloadRoot`, which is how Spring-WS routes
+        # two message types to one handler — the annotation is
+        # `@Repeatable(PayloadRoots.class)` and the container is now declared, so the
+        # second message stops being served in production and absent from the document.
+        ("{http://orders.example.com/ws}amendOrderRequest", "inbound"),
+        ("{http://orders.example.com/ws}reviseOrderRequest", "inbound"),
         ("{http://billing.example.com/ws}chargeOrder", "inbound"),
         ("{http://billing.example.com/ws}refund", "inbound"),
         ("{http://billing.example.com/ws}stubCharge", "outbound"),
@@ -1143,7 +1153,7 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
       exactly that reason: "the stub catalog is inert" was only ever a claim
       about local declarations.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     runner = CliRunner()
     result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
     assert result.exit_code == 0, result.output
@@ -1271,7 +1281,7 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     misclassification rendered nothing live) through 2I Task 2's own rows,
     which is what let this row's first live pin carry the wrong,
     `(unresolved)`-prefixed form until this fix."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
@@ -1335,7 +1345,7 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     invariant `test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze`
     pins at the workspace level, pinned here at the document a reader
     actually sees."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)  # analyze + render + export
     document = (tmp_path / "render" / "architecture.md").read_text()
 
@@ -1435,7 +1445,7 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     what shows that opting out actually RETRACTS — the property a reader needs
     if the opt-in is to be a decision they can reverse.
     """
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
 
@@ -1520,7 +1530,7 @@ def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace
     rule names, which must survive untouched. The workspace keeps all three as
     written, because resolution and peer substitution read the real values and
     the analyst's own disk is not the trust boundary."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     bundle = next((tmp_path / "bundles").iterdir())
     exported = dict(
@@ -1589,7 +1599,7 @@ def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
     adds a rule, so its hash must differ from the built-in-only one; editing
     that section changes the hash, and re-running without editing it does not
     (the byte-identity test above covers the second half)."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     bundle = next((tmp_path / "bundles").iterdir())
     manifest = json.loads((bundle / "manifest.json").read_text())
@@ -1606,7 +1616,7 @@ def test_the_planted_decoy_config_file_never_reaches_resolved_config(tmp_path: P
     resolve its own key into its own environment. Ignoring it means the
     file never reaches `YamlConfigReader` at all: not merely unresolved or
     masked, its key and its whole profile are simply never there."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
 
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
@@ -1655,7 +1665,7 @@ def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp
     wall-clock at ingest time and is hand-pinned to a fixed value afterward —
     informational only, never compared, the same way every other field here
     is checked by what it grounds rather than by its own bytes."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     overlay = load_overlay(FIXTURE)
     assert overlay is not None
@@ -1739,7 +1749,7 @@ def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path)
     rows the rest of this suite pins are still exactly where they were —
     `test_format_field_number_and_open_questions_reach_the_rendered_document`
     asserts those same lines against this same document."""
-    subprocess.run(["mvn", "-q", "-o", "compile"], cwd=FIXTURE, check=True)
+    compile_fixture(FIXTURE)
     _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
 

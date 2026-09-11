@@ -1,0 +1,397 @@
+# Java/Kotlin — what is not delivered, and how to close it
+
+**Target:** an accurate architecture document for a **Java/Kotlin module** — every
+framework, not one. Micronaut, Quarkus, Ktor, Javalin, Vert.x, Alpakka and Temporal are
+**in scope and sequenced after Spring Boot**, which is the first framework rather than the
+definition of done. *(Corrected 2026-09-11: an earlier version of this document called them
+out of scope, which under-counted the work by about eleven libraries.)*
+
+**Spring Boot end-to-end is the first MILESTONE.** It gates the version bump. It does not
+close a feature.
+
+**Delivered means:** every Java/Kotlin library catalogued, **no open Critical or Major**,
+and no unsettled boundary in the feature's own `docs/COVERAGE.md` section. A feature with an
+open Major is not delivered.
+
+**Two axes, and they are different questions.** *Spring Boot ready* — the milestone — and
+*delivered* — every Java/Kotlin framework. A feature can be the first without being the
+second, and the blocker lists below mark which is which.
+
+Every row was verified against the code and the framework jars on 2026-09-11. Where a row
+says a count, the command that produces it is in the `verify` line.
+
+---
+
+## 0. The machine-readable register
+
+**This block is the source of truth and `tests/architecture/test_feature_delivery.py`
+enforces it.** One line per feature: the COVERAGE column it maps to, then every open issue
+blocking it. A feature with no blockers must read `✅` in `docs/COVERAGE.md`'s matrices, and
+a feature with blockers must not. Both directions fail the suite.
+
+Adding a Critical or Major anywhere without naming the feature it blocks fails the suite
+too — that is the check aimed at half-delivery: the half you did not do has to appear here,
+against the feature it belongs to, or the build goes red.
+
+```delivery
+REST inbound       | REST in    | G-37 G-30 G-45 W44-verb-overloads GAP-1b spring7-version conditional-controllers kotlin-null-handler micronaut-controller quarkus-jaxrs quarkus-vertx-route ktor-routing javalin-routing
+REST outbound      | REST out   | G-30-outbound spring7-import-http-services jdk-httpclient micronaut-client
+SOAP               | SOAP       | G-36 jaxws-public-final apache-cxf
+GraphQL            | GraphQL    | G-39 G-40
+WebSocket          | WebSocket  | G-34
+SSE                | SSE        | jaxrs-sse
+gRPC               | gRPC       |
+Kafka              | Kafka      | G-31 kafka-batch-generics micronaut-kafka alpakka-pekko
+JMS and AMQP       | JMS / AMQP | G-44 micronaut-jms
+AWS SQS            | SQS        | G-43 micronaut-sqs
+Google Pub/Sub     | Pub/Sub    | pubsub-receive-half micronaut-pubsub
+Meridian           | —          | FR-21 FR-22 FR-23 FR-24
+Async              | Async      | G-47 async-limited temporal-cadence vertx-eventbus
+```
+
+**Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
+the only remaining gaps are in languages this target does not cover. gRPC's are Go, Python,
+Rust and Swift; there is no Java gap left in it.
+
+**SSE is NOT here any more.** Its gap is JAX-RS `@Produces(SERVER_SENT_EVENTS)`, which is
+Java — so it is real work, sequenced after Spring Boot, not something scoped away.
+
+```scoped-out
+gRPC
+```
+
+**Not blocking any feature** — tracked so "no open Critical or Major" can be claimed
+honestly at the end, and excluded from the per-feature check by being named here:
+
+```unassigned
+G-52 OI-80 OI-81 OI-82 kotlin-default-bridge kotlin-extension-functions
+kotlin-defaultimpls G-73 G-74 GAP-7
+```
+
+**Out of scope for this target** — neither blocking nor tracked for delivery:
+
+```out-of-scope
+GAP-2 G-10 G-71
+```
+
+**Intention test not yet written** — every feature needs one (`GUIDELINES.md` §4.1), and
+these do not have one. Named here so the suite can be GREEN while the gap stays visible:
+the check expects each of these to fail, and **fails if one unexpectedly passes**, which is
+what forces this list to shrink rather than rot. A feature missing from both this block and
+`tests/e2e/` is a hard failure.
+
+```intention-test-missing
+REST inbound | REST outbound | GraphQL | WebSocket | SSE | gRPC | Kafka
+JMS and AMQP | AWS SQS | Google Pub/Sub | Async | Meridian
+```
+
+**Severity, carried here** so this register stands on its own. Folded from
+`docs/java-gap-analysis-2026-09-06.md` on 2026-09-11 when that file was removed; it was
+the input audit of 2026-09-06, and every one of its rows is now either placed above or
+recorded as closed below.
+
+```severity
+G-1 | Critical
+G-2 | Critical
+G-3 | Critical
+G-4 | Critical
+G-5 | Critical
+G-6 | Critical
+G-7 | Critical
+G-8 | Critical
+G-9 | Critical
+G-10 | Critical
+G-11 | Critical
+G-12 | Critical
+G-13 | Critical
+G-14 | Critical
+G-15 | Major
+G-16 | Major
+G-17 | Major
+G-18 | Major
+G-19 | Major
+G-20 | Major
+G-21 | Major
+G-22 | Major
+G-23 | Major
+G-24 | Major
+G-25 | Major
+G-26 | Major
+G-27 | Major
+G-28 | Major
+G-29 | Major
+G-30 | Major
+G-31 | Major
+G-32 | Major
+G-33 | Major
+G-34 | Major
+G-35 | Major
+G-36 | Major
+G-37 | Major
+G-38 | Major
+G-39 | Major
+G-40 | Major
+G-41 | Major
+G-42 | Major
+G-43 | Major
+G-44 | Major
+G-45 | Major
+G-46 | Major
+G-47 | Major
+G-48 | Major
+G-49 | Major
+G-50 | Major
+G-51 | Major
+G-52 | Major
+G-53 | Major
+G-54 | Major
+G-55 | Major
+G-56 | Major
+G-57 | Major
+G-58 | Major
+G-59 | Major
+G-60 | Major
+G-61 | Major
+G-62 | Major
+G-63 | Major
+G-64 | Major
+G-65 | Major
+G-66 | Major
+G-67 | Major
+G-68 | Major
+G-69 | Major
+G-70 | Major
+G-71 | Major
+G-73 | Moderate
+G-74 | Moderate
+```
+
+**Closed by the waves, verified by reading the code on 2026-09-11 — a WEAKER
+guarantee than the `closed` block above.** These have no test that fails if they
+regress; they were checked once, against the shipped catalogs and engines, in the audit
+of all 53 Criticals and Majors that the completeness plan never named by number. Any of
+them reopening would be silent. Listed rather than deleted so that is visible.
+
+```closed-by-audit
+G-1 G-2 G-3 G-4 G-5 G-6 G-7 G-8 G-9 G-11 G-12 G-13 G-14 G-15 G-16 G-17 G-18
+G-19 G-20 G-21 G-22 G-23 G-24 G-25 G-26 G-27 G-28 G-29 G-32 G-33 G-35 G-38
+G-41 G-42 G-46 G-48 G-49 G-50 G-51 G-53 G-54 G-55 G-56 G-57 G-58 G-59 G-60
+G-61 G-62 G-63 G-64 G-65 G-66 G-67 G-68 G-69 G-70
+```
+
+**Closed** — a blocker leaves this register only when its intention test has passed **in
+the CI pipeline**, and the entry records the run that proves it. Ruled by the user
+2026-09-11: *"definition of done is when all tests pass in ci pipeline"*.
+
+Implemented-and-locally-green is NOT closed. `G-36` was moved here on a local pass and moved
+back the same hour, which is exactly the drift this format exists to stop: the entry cannot
+be written without a run id, so there is nothing to write until CI has actually said so.
+
+Format: `id | test node id | CI run URL`
+
+```closed
+```
+
+---
+
+## 1. The list, by feature
+
+### REST inbound — NOT DELIVERED (largest)
+
+| # | issue | what it costs |
+|---|---|---|
+| `G-37` | `RouterFunctions$Builder` unread, **0 of 20 methods, both stacks** | a module routing this way exports **no HTTP at all** |
+| `GAP-1b` | WebFlux non-coroutine `router { }` derives nothing | whole Kotlin router silent |
+| — | W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | publishes a lambda or a predicate **as a URL** — a wrong row, not a missing one |
+| `G-30` | **Spring Cloud Gateway — no catalog exists at all** | the commonest edge component in a Spring estate, inbound and outbound |
+| `G-45` | Spring Data REST reads **JPA only** | Mongo, R2DBC, Cassandra, Redis repositories derive nothing |
+| — | Spring 7 `version = "1.1"` on `@RequestMapping` | unread |
+| — | `@ConditionalOnProperty` / `@Profile` controllers | tier C — no mechanism in the code |
+| — | 2 catalogs narrower than the framework's rule ("limited") | error handling is one |
+| — | Kotlin routes carry a **NULL handler**, all 3 of them; no Kotlin symbol reaches `roots` or `reachability` | Java functional routes name theirs |
+
+> `verify: grep -rl "RouteLocator" src/sextant/catalogs/` → empty
+> `verify: awk '/repositories:/,/routes:/' src/sextant/catalogs/spring-data-rest.yml | grep -c Mongo` → 0
+
+### REST outbound — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| `G-30` | Spring Cloud Gateway outbound half — no catalog |
+| — | Spring 7 `ImportHttpServices` registration |
+| — | JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` — tier B |
+
+### SOAP — NOT DELIVERED (matrix says `✅`; it is wrong)
+
+| # | issue |
+|---|---|
+| `G-36` | `spring-ws.yml` declares no `container:`. **`@PayloadRoot` and `@SoapAction` are both `@Repeatable`** (confirmed in the class file); a second one on a method is lost. `@Namespace` is NOT repeatable — an earlier claim of "three pairs" here was wrong |
+| — | JAX-WS `public final` operation — **over-reports one row per such method**, `§5.3`'s own stated residual. `ACC_FINAL` has been readable since W7, so this may already be closeable: re-measure before planning |
+| — | Apache CXF rather than the reference implementation — "version-scoped, not settled" |
+
+> `verify: javap -v -cp $(find ~/.m2 -name 'spring-ws-core-*.jar'|grep -v sources|head -1) org.springframework.ws.server.endpoint.annotation.PayloadRoot | grep Repeatable`
+> `verify: grep -c container src/sextant/catalogs/spring-ws.yml` → 0
+
+### GraphQL — NOT DELIVERED (matrix says `✅`)
+
+| # | issue |
+|---|---|
+| `G-39` | no `container:` for `@DgsData`, which **is** `@Repeatable(DgsData$List)`; two on a method become one |
+| `G-40` | `@DgsEntityFetcher` unread — Apollo Federation's entity resolution |
+
+### WebSocket — NOT DELIVERED (matrix says `✅`)
+
+| # | issue |
+|---|---|
+| `G-34` | programmatic `ServerEndpointConfig.Builder.create(Class, "/path")` unread; the annotation path only |
+
+### Kafka — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| `G-31` | **Kafka Streams — no catalog exists.** `COVERAGE` asserts the shape is `fluent`'s without anyone measuring which builder methods address a topic, and `kafka-streams` is not in the local jar cache, so that measurement cannot be taken yet |
+| — | batch listener generics: `@KafkaListener(batch = true)` takes `List<Foo>`; the payload publishes as the list, not the element |
+
+### JMS / AMQP — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| `G-44` | the receive half is unread. `RabbitTemplate` 1 of 88, `JmsTemplate` 1 of 49. The ratio overstates it — most of the remainder is configuration — but `receive()` is a real inbound boundary and none of it derives |
+
+### AWS SQS — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| `G-43` | `SqsAsyncClient` **0 of 28**, and it is Spring Cloud AWS 3.x's **default** auto-configured client. `SqsClient` is 1 of 29 |
+
+### Google Pub/Sub — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| — | `PubSubTemplate` 11 of 20 — the receive half |
+
+### Async and internal boundaries — NOT DELIVERED
+
+| # | issue |
+|---|---|
+| `G-47` | Spring Integration reads **2 of 9** channel-bearing annotations. Missing: `@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter`, `@Transformer` |
+| — | 1 catalog narrower than the framework's rule |
+
+### Meridian integration — NOT DELIVERED, and asked for four times
+
+**Not a protocol, so it has no COVERAGE column** — the register's `—` says so. It is here
+because it is four committed requirements with no implementation, and because leaving it off
+this list is how it went unbuilt for a week.
+
+| # | requirement | state |
+|---|---|---|
+| `FR-21` | Boundary vocabulary — a closed, versioned set of kinds over the derived tables, so two analyses compare kind by kind rather than row by row | **unimplemented.** Its stated blocker is gone: the `dependency` kind derives from edges and dispatch, which did not exist when it was written and do now (F8) |
+| `FR-22` | Derivation diff — two analyses of one module, typed `added｜removed｜changed` per kind with evidence pointers | **unimplemented.** This is what the drift scenario waits on |
+| `FR-23` | Observability map — per boundary kind, `observable｜partial｜not-observable` | **unimplemented.** Every input already ships: `manifest.json` carries gaps and skipped catalogs, `coverage` carries uncovered files. An assembly, not a measurement |
+| `FR-24` | Library embedding — analyze, query, export, diff callable in-process | **partial.** `analyze` and `export` ship; `query` and `diff` are absent, and there is no configuration object |
+
+**Why it is on this list now.** The user asked for it at least four times — *"wrap this in
+2P"*, *"check ... if not, add it to a roadmap item and have it covered"*, *"i want you to
+implement @docs/meridian-integration.md"*, *"this is a real FR ... Add this to your FR"*. Each
+time it was documented further and never built: FR-21–24 were written into `REQUIREMENTS.md`
+with traceability rows, scoped to a phase 2P that never ran. *"It is on the roadmap"* was the
+answer that made it disappear four times. It is on a list that a test enforces now.
+
+**Closes by** M09's query surface (FR-21, FR-22), an assembly over the manifest (FR-23), and
+two functions plus a config object on `sextant.api` (FR-24).
+
+### DELIVERED in this scope
+
+**gRPC** and **Server-Sent Events.** Every remaining gap in both is another language
+(Go, Python, Rust, Swift) or JAX-RS, all out of scope.
+
+---
+
+## 2. Open Criticals and Majors that block no single feature
+
+These are real and they are not on the path to any cell above. They are listed so that
+"no open Critical or Major" can be claimed honestly at the end, not so they are done first.
+
+`G-52` throw exits — *in flight, uncommitted, 2 Criticals from review already fixed* ·
+`OI-82` Kotlin parameter nullability · `OI-80` boxed primitive on a suspend return ·
+`OI-81` `$default` bridge nullability disagreement · Kotlin `$default` / extension
+functions / `DefaultImpls` unread · `G-73` `visibility` two-valued for a four-valued
+concept · `G-74` `signature.throws` has no consumer · `GAP-7` ~100s per reactor module.
+
+## 3. Out of scope for this target
+
+`GAP-2` the linking tier (FR-8, M05, M06 — phase L, never started) · `G-10` FR-11 to
+FR-14 unbuilt · `G-71` blast radius has no surface at all.
+
+---
+
+## 4. Categories, and what each needs
+
+### Category A — catalog data, no engine change · **PLAN ONLY**
+
+`G-36` SOAP containers · `G-39` DGS container · `G-40` `@DgsEntityFetcher` ·
+`G-34` programmatic WebSocket · `G-43` `SqsAsyncClient` · `G-45` Data REST stores ·
+`G-47` Spring Integration annotations · `G-44` template receive halves · Pub/Sub receive
+half · batch-listener generics · Spring 7 `version=` · Spring 7 `ImportHttpServices`
+
+Twelve items. Each is: measure the surface from the jar, write the YAML, one fixture, one
+declining test, gate, review, commit. This is the shape W44 and W53 already shipped.
+
+**`G-44` is five items wearing one number** — one per template, each needing its own
+fixture, because a `receive()` with no payload capture is a boundary with no readable
+contract.
+
+### Category B — needs the overload discriminator first · **SPEC EXISTS, THEN PLAN**
+
+`G-37` builder routing (both stacks) · `GAP-1b` WebFlux `router { }` · W44's wrong verb
+rules · `G-30` Spring Cloud Gateway
+
+All four need the same two things: telling same-name overloads apart, and walking a
+receiver chain. The spec is written and committed
+(`docs/superpowers/specs/2026-09-11-combinator-overload-discrimination-design.md`) and is
+**awaiting your review**. `G-30` was measured into this group today —
+`RouteLocatorBuilder$Builder.route` has two overloads with the lambda at different
+positions, so writing it as catalog data first would publish a lambda as a path.
+
+**These four are one plan, not four**, and they are the whole of REST inbound's engine work.
+
+### Category C — needs a spec of its own · **SPEC THEN PLAN**
+
+- **Kotlin routes with a NULL handler.** A resolve-layer question about what counts as a
+  handler and a root when the handler is a compiler-generated lambda class. Short spec.
+- **JDK / Apache `HttpClient`** (REST outbound, tier B). A builder chain; may fall out of
+  Category B's mechanism, which the spec should establish before assuming it.
+- **`@ConditionalOnProperty` / `@Profile` controllers** (tier C). No mechanism exists; a
+  route's existence becomes conditional on configuration. Largest design question here.
+
+### Category D — measure first, then decide · **NO PLAN YET**
+
+- **`G-31` Kafka Streams.** Cannot be specified past step one: the jar is not cached, so
+  "which builder methods address a topic" has never been measured.
+- **SOAP `public final` over-reporting.** `ACC_FINAL` became readable in W7; re-measure
+  before writing anything.
+- **Apache CXF.** A version-scoping question, not a code change.
+
+### Category E — the honesty fix · **NO SPEC, NO PLAN, ONE EDIT**
+
+`✅` in `COVERAGE.md`'s matrices means *"every library catalogued"*. It does **not** mean
+"no open defects", which is why SOAP, GraphQL and WebSocket all read `✅` while carrying
+open Majors. The legend says `✅ shipped, nothing outstanding`, and that phrase cannot
+deliver on its own words.
+
+Re-score so a cell reads `✅` only when the feature is delivered by the definition at the
+top of this document. Until that changes, this argument recurs.
+
+---
+
+## 5. Suggested order
+
+1. **Category E** — one edit, and every subsequent status report becomes readable.
+2. **SOAP, GraphQL, WebSocket** — four Category A items total, and three features move
+   from a false `✅` to a true one. Shortest path to something finished.
+3. **SQS, Pub/Sub, Async, JMS/AMQP** — the rest of Category A. Messaging closes.
+4. **Category B as one plan** — REST inbound and outbound engine work, on the spec that is
+   already written and waiting.
+5. **Category C** — the three that need their own design.
+6. **Category D** — measure, then fold into whichever category the measurement says.
+7. **Section 2's cross-cutting defects** last, to make "no open Critical or Major" true.
