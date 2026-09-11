@@ -43,6 +43,21 @@ dependencies {
     testImplementation("org.jspecify:jspecify:1.0.0")
 }
 
+java {
+    // THE COMPILER, not just the bytecode it emits. `options.release` below pins the
+    // class-file VERSION; it does not pin which javac runs, and javac's own synthetic
+    // naming moves between releases — a lambda body is `lambda$m$0` under one JDK and
+    // `lambda$m$1` under another. Two tests asserted the ordinal, passed on a local
+    // JDK 26 and failed on CI's 21, and `scripts/check.sh` could not have caught it
+    // because it runs whichever JDK the developer has.
+    //
+    // Pinned to the version CI installs, so a green local gate means a green CI gate.
+    // The assertions were fixed too — pinning a counter is pinning the compiler's
+    // conventions, which the RUNBOOK records as a repeating class — but a test that
+    // is right on both JDKs and a build that tests only one are different problems.
+    toolchain { languageVersion.set(JavaLanguageVersion.of(21)) }
+}
+
 tasks.withType<JavaCompile> {
     options.release.set(21)
     // javac is the linter here: no new dependency, and a warning that reaches

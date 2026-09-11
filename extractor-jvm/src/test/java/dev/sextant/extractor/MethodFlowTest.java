@@ -287,7 +287,7 @@ class MethodFlowTest {
         String line = last(callSites("lambdaArgument"));
         assertTrue(line.contains("\"name\":\"forEach\""), line);
         assertTrue(line.contains("\"kind\":\"lambda\",\"source\":"), line);
-        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"), line);
+        assertNamesLambdaOf(line, "symbol", "lambdaArgument");
     }
 
     /** Capability 9.17, on the site itself rather than on a slot that happens
@@ -300,8 +300,7 @@ class MethodFlowTest {
     void names_the_lambda_body_a_dynamic_site_will_dispatch_into() throws Exception {
         String line = callSites("lambdaArgument").get(0);
         assertTrue(line.contains("\"invoke_kind\":\"dynamic\""), line);
-        assertTrue(line.contains("\"implementation\":\"" + OWNER + "#lambda$lambdaArgument$0(sig_"),
-                   line);
+        assertNamesLambdaOf(line, "implementation", "lambdaArgument");
         // The bootstrap is still recorded, and must be: it is what says this
         // site is a lambda at all, where the body alone does not.
         assertTrue(line.contains("\"owner\":\"java/lang/invoke/LambdaMetafactory#\""), line);
@@ -317,8 +316,7 @@ class MethodFlowTest {
         List<String> lines = callSites("returnedLambda");
         assertEquals(1, lines.size());
         String line = lines.get(0);
-        assertTrue(line.contains("\"implementation\":\"" + OWNER + "#lambda$returnedLambda$0(sig_"),
-                   line);
+        assertNamesLambdaOf(line, "implementation", "returnedLambda");
         assertFalse(line.contains("\"kind\":\"lambda\""), line);
     }
 
@@ -878,6 +876,26 @@ class MethodFlowTest {
     void reads_a_returned_lambda_as_the_body_it_names() throws Exception {
         String line = methodReturns("returnedLambda").get(0);
         assertTrue(line.contains("\"value\":{\"kind\":\"lambda\",\"source\":"), line);
-        assertTrue(line.contains("\"symbol\":\"" + OWNER + "#lambda$returnedLambda$0(sig_"), line);
+        assertNamesLambdaOf(line, "symbol", "returnedLambda");
     }
+
+    /** A synthetic lambda method named by its ENCLOSING METHOD, with javac's own
+     *  counter left unpinned.
+     *
+     *  The counter is the compiler's business and it moves: these assertions read
+     *  `lambda$returnedLambda$0` under one JDK and `$1` under another, which is how
+     *  two of them passed locally and failed in CI. The FACT under test is that the
+     *  site names the lambda's own synthetic method — never which ordinal javac
+     *  handed it. §13.8: the RUNBOOK already records "one compiler's conventions
+     *  written down as the format's rules" as a repeated class; this is that class
+     *  in a test rather than in a reader. */
+    private static void assertNamesLambdaOf(String line, String key, String method) {
+        String prefix = OWNER + "#lambda$" + method + "$";
+        assertTrue(
+            Pattern.compile(Pattern.quote("\"" + key + "\":\"" + prefix) + "\\d+" + Pattern.quote("(sig_"))
+                   .matcher(line)
+                   .find(),
+            line);
+    }
+
 }
