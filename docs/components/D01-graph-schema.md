@@ -630,11 +630,24 @@ build module leaves for a workspace this one does not hold, so no body was read 
 correct — while a body exists somewhere. Joining the two is `Bundle`/`Link` work, not this
 walk's; `docs/COVERAGE.md` §7 carries the measurement.
 
-One table is materialised, because a consumer computing the refactor or performance-risk scenario needs its numbers without walking everything:
+One table is DESIGNED and materialised, and it is not built:
 
-| Table | Holds |
-|---|---|
-| `trace_summary` | Per inbound endpoint: hop counts, services involved, terminal counts by kind, endpoints reached more than once |
+| Table | Holds | State |
+|---|---|---|
+| `trace_summary` | Per inbound endpoint: hop counts, services involved, terminal counts by kind, endpoints reached more than once | **designed, never built** — `grep -n trace_summary src/sextant/storage/duckdb/schema.sql` returns nothing |
+
+> **Amendment (2026-09-10, W52 review).** This read *"One table is materialised, because a
+> consumer computing the refactor or performance-risk scenario needs its numbers without
+> walking everything"* — present tense for a table that has never existed, and justified by
+> two scenarios that [REQUIREMENTS.md](../REQUIREMENTS.md#usage-scenarios) has since ruled
+> are a consumer's to derive rather than requirements of Sextant (they were FR-11 and FR-14).
+> The design stands: if those numbers are ever wanted without a walk, this is their shape.
+> What is corrected is the tense. `G-70` recorded the same defect against D06 — whose §3
+> example manifest once listed `trace_summary` among `contents.tables`, and therefore described
+> a bundle that could not be produced. **That half is already fixed**: commit `a184a0d`
+> (2026-09-07) removed it, and §3's manifest now lists eighteen tables that all exist. D06 §4's
+> cross-service row still names `trace_summary` among the inputs `trace_of` walks over, which
+> is a statement about a DESIGNED input and reads correctly beside this one.
 
 A trace is a subgraph with ordering and nesting, not a list of routes. Its size grows with
 the code reached, not with the branching — which is why it needs no depth bound. If full

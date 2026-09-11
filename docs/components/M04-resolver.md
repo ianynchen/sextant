@@ -168,7 +168,12 @@ catalog.
 **5b. Expand the shapes**, rooted at exactly those type references — after **unwrapping
 envelopes by catalog rule** ([D02](D02-catalog-schema.md) §2a): `Mono<ResponseEntity<T>>`
 roots at `T`, and the `semantics` peeled on the way there (`async`, `optional`,
-`http_envelope`) are what settle presence, protocol reclassification and the FR-14 findings.
+`http_envelope`) are what settle presence and protocol reclassification. They are also what
+a consumer reads to judge structural performance risk — the scenario formerly numbered FR-14,
+which W51 moved out of the requirements because Sextant reports the structure and never ranks
+it. The paragraph beginning **"No findings are computed here, and none ever were"**, forty-odd
+lines below, states that correction in full — cited by its own words rather than by a line
+number, which is what this wave's ratchet was written to encourage.
 That chain is consumed where it is produced rather than stored on the endpoint: it describes
 the route to the payload, not the contract, and everything it decides already has a column of
 its own — a second copy could only ever disagree with them. An undeclared wrapper is left

@@ -87,6 +87,83 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **Two ratchets for the two ways a document decays on its own** (F9 §10.4, W52). The
+  RESTATE batch is thirty-nine claims that are untrue or unmeasured, and **seven of the
+  Critical and Major ones had already been closed** by earlier waves — so the batch is what
+  remained, measured rather than worked through blindly.
+  Two were **stale citations**. `COVERAGE.md` said `resolved_config` is read by *"only
+  `config_join.py:528` and `derived_resource.py:578`"* — **five** modules read it (`api.py`,
+  both those engines, and `enrich/brief.py` and `enrich/validate.py`), and both line
+  numbers had drifted. *The first correction said six and was itself wrong, naming
+  `resolve/config.py`, which WRITES the table, and `resolve/pipeline.py`, which only holds the
+  string as a capability name, while omitting `api.py`, which reads it twice — a grep for the
+  table's NAME standing in for a grep for a READ of it. Corrected 2026-09-10.* — and it placed `_grpc_operation_row` at `schema_operations.py:164-197`
+  when it is at `:367`. Neither was wrong when written. Both are cited by SYMBOL now, which
+  moves with the thing it names, and a test checks every remaining `file.py:NNN` in a shipped
+  document points inside that file. **Of 492 citations, 14 name a path no tracked file matches
+  and go unchecked; of the 478 checkable, 475 already landed inside their file** and the three
+  that do not are archived design records, excluded because a stale citation in a record is
+  history. *This read "478 of 481" — the count of CHECKABLE citations paired with a denominator
+  built from a different total. Re-measured 2026-09-10.*
+  Four were **stale counts** — 52, 55, 56 and 57 catalogs asserted where 64 ship — so a second
+  test checks that a stated catalog count is the real one.
+  **That rule took three attempts to make honest, and the failures are the interesting part.**
+  Its first version matched any "N catalogs" and reported fourteen failures, of which most
+  were SUBSET claims that were perfectly true: "a style 21 catalogs share", "already declared
+  by 40 catalogs". A rule false of the estate the moment it is written is exactly what W47's
+  review had just caught in a `requires` rule, and here it was again. It matches only
+  QUANTIFIED totals now — `all N`, `every one of the N`, `N of the M` — allows a count that
+  its own sentence DATES, because "the 41 catalogs shipping then" is the most valuable kind of
+  sentence in these files, and excludes `CHANGELOG.md`, whose entries are dated by their
+  position: forcing them to today's number would rewrite the past to match the present.
+  **What neither ratchet catches is said outright rather than implied**: semantic drift, where
+  a citation still lands inside its file and now points at something else. That is what both
+  of this wave's own examples actually were, and there is no mechanical test for it — claiming
+  otherwise would be the true-sounding sentence this batch exists to remove.
+
+- **The register that exists to tell the truth was wrong in four places** (W52 review of
+  W50/W51). The largest finding set of the programme — 4 Critical, 11 Major, 4 Minor — and
+  most of the Critical were figures written in W50, whose whole purpose was a register a
+  reader can act on. Every correction below is a MEASUREMENT, not a better guess.
+  **`26 of 26 designed scanner capabilities` was 23 of 26** — and self-contradictory in its
+  own sentence, which named three as unshipped. `Capabilities.ALL` has 23 entries;
+  `M03-scanner.md:77` had said "twenty-three" all along.
+  **`8 delivered, 5 in-progress, 4 planned` was 4/9/4**, and the paragraph explaining "the
+  five that carry it" explained six and omitted M09 entirely. Every `in-progress` component
+  now has a row naming its specific distance, and the counts are a `grep` over the two tables.
+  **D00 and D04 were `delivered` over their own open work.** D00's row claims the field lists
+  are FROZEN, and freezing the schema is an open decision in D00 §10 and in `ARCHITECTURE.md`'s
+  own table. D04 covers three configuration files and two of them have no reader anywhere in
+  `src/` — its 2026-09-05 amendment calls them "designed and never built". Both are
+  `in-progress`.
+  **`impact.ndjson` was counted as answering `impact_of` and does not**: D01 designs that
+  query as three partitions including the unknown regions reached, while the file carries a
+  shape, its fields and the endpoints that carry it. Four of the nine missing named queries
+  are reachable from the index bundle, not five.
+  W51's own work needed six corrections of the same kind. FR-21 … FR-24 were added as
+  requirements and never entered the traceability table, which is precisely the defect NFR-6
+  names. FR-20's *"every command takes"* an exact identifier describes a surface that does not
+  exist — all four verbs take a filesystem path. FR-24's one-word `partial` hid three failing
+  clauses and had silently strengthened *"no subprocess required"* into *"no subprocess"*; it
+  is six measured rows now. FR-8 still promised *"findings"*, a mechanism W51 itself
+  established never existed. `D01`'s trace section said a `trace_summary` table *"is materialised"* —
+  it has never been built. And two rules that travelled with the retired FR-11 and FR-14 were
+  dropped without being mentioned: *"Sextant reports structure, never cost"* and the
+  embedded-schema comparison rule. Both are about what Sextant may SAY rather than what a
+  consumer does, which is the same reason W51 gave for keeping the third one, so all three are
+  restored together.
+  **The recurring shape across seven reviews, stated plainly: the code holds up and the prose
+  does not.** Three real behavioural defects were found in this programme and every other
+  finding was a document asserting something the estate contradicts. That is why W50's
+  register test and W52's two ratchets exist — and why this review found four things none of
+  them can catch, since no test arbitrates `delivered` against `in-progress`.
+  The register test itself gained the three holes this review found in it: a component row may
+  now only be `delivered`, `in-progress` or `planned` (`deferred` would have suspended both
+  checks while still reading as a delivery claim), "exactly once" is actually checked rather
+  than swallowed by a dict, and the two pairs it cannot tell apart — D05 from M08, D03 from
+  M01, each decided by a single path — are stated rather than papered over with a second path
+  chosen only to look distinct.
+
 - **Four requirements that were never ours, and four that were never written down**
   (F9 §10.2/§10.3, W51). FR-11 … FR-14 — drift, refactor, design, performance risk — read as
   things Sextant REPORTS. They are things a consumer DERIVES from what Sextant reports, ruled
@@ -123,12 +200,18 @@ here would restate those documents rather than add anything.
   **Re-measured rather than copied**, because the design's own evidence block had gone stale
   in the same way: **15 tables and 11 views** where it recorded 11 tables. D01's named queries
   are still **1 of 10** — only `trace_of` — but that number alone misleads, so the file now
-  also records that five of the nine missing questions ARE answerable today from the index
-  bundle, as NDJSON rather than as a named query: callers, implementors, impact, addresses
-  and shape carriers. 4 CLI verbs, 64 catalogs, 26 of 26 designed scanner capabilities with
-  the three unshipped ones named, and `overlay`/`sync`/`stitcher`/`state.json` absent.
-  Statuses are now 8 delivered, 5 in-progress and 4 planned, and each `in-progress` says what
-  distance remains rather than rounding in either direction.
+  also records that **four** of the nine missing questions ARE answerable today from the index
+  bundle, as NDJSON rather than as a named query: callers, implementors, addresses and shape
+  carriers. `impact.ndjson` is not a fifth — it carries a shape, its fields and the endpoints
+  carrying it, where D01 designs `impact_of` as three partitions including the unknown
+  regions reached, so the file says that rather than counting a near-miss.
+  4 CLI verbs, 64 catalogs, **23 of 26** designed scanner capabilities — `Capabilities.ALL`
+  has 23 entries — with the three unshipped ones named, and
+  `overlay`/`sync`/`stitcher`/`state.json` absent.
+  Statuses are **4 delivered, 9 in-progress and 4 planned**, counted off the two tables; D00
+  and D04 are among the nine because freezing D00's schema is still an open decision in D00's
+  own §10 and two of D04's three configuration files have no reader anywhere in `src/`. Each
+  `in-progress` row says what distance remains rather than rounding in either direction.
   The test checks the two things that can be mechanically wrong — a row claiming more than
   the code carries, and a row understating one that shipped — and deliberately does not
   arbitrate `delivered` against `in-progress`, which is a judgement the file states its

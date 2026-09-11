@@ -311,7 +311,7 @@ in [documented-not-implemented.md](documented-not-implemented.md), one of which
 (a routing-ambiguity "collision detector" that D01 describes as a *property* of
 identity, not a component) reached an implementation task's dispatch before a
 grep caught it. *(Both counts are of that moment and are left there deliberately:
-2O Task 6 made `detect.coordinates` real for two styles, and 55 catalogs ship
+2O Task 6 made `detect.coordinates` real for two styles, and 64 catalogs ship
 today. The lesson is about the spec, not about the current numbers — register
 entry #1 carries those.)*
 

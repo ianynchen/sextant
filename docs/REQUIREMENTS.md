@@ -190,7 +190,15 @@ Where more than one inbound endpoint survives matching, every candidate is recor
 the ambiguity is written out for a person to settle.
 
 Outbound endpoints matching nothing, and inbound endpoints nobody calls, are both
-reported as findings.
+recorded and reported.
+
+> **Amendment (2026-09-10, W52 review).** This clause read *"reported as findings"*. There is
+> no `findings` table and there never was — the same discovery the usage-scenarios section
+> records below for `M04-resolver.md` and `D01`. Nothing about the requirement changes: an
+> unmatched outbound endpoint and an uncalled inbound one are both output. Only the word
+> naming a mechanism that does not exist is gone. **Nothing is output today**: the linking tier
+> that would produce these ([M05](components/M05-sync.md), [M06](components/M06-stitcher.md))
+> is `planned`, so the whole requirement is unbuilt and this clause states what it WILL do.
 
 ### FR-9 — Blast radius
 
@@ -294,7 +302,16 @@ reaches storage.
 ### FR-20 — Command surface
 
 Every command takes the form *noun, verb, subject, options*. Every result carries an exact
-identifier that can be given back to Sextant, and every command takes one.
+identifier that can be given back to Sextant.
+
+> **Amendment (2026-09-10, W52 review).** This sentence ended *"and every command takes one"*.
+> **No shipped command takes an identifier.** All four verbs take a filesystem PATH that must
+> already exist — `@click.argument("path", type=click.Path(exists=True, …))` on `analyze`,
+> `render`, `enrich` and `export` in `src/sextant/cli/app.py` — and `sextant.api.analyze` has
+> the same signature. The first half stands and is met: results carry exact identifiers. The
+> second half described the identifier-taking surface FR-20's noun-verb-subject form implies,
+> which is one of the reasons [PROJECT.md](PROJECT.md) records M00 as `in-progress`. It is
+> stated as the gap it is rather than left reading as shipped.
 
 **Approximate lookup happens against the INDEX, not in the command surface.** A person who
 knows a route or part of a name greps `<bundle>/index/` — `symbols.ndjson`, `addresses.ndjson`
@@ -342,13 +359,28 @@ and `docs/COVERAGE.md` carries the cells — so this is an assembly rather than 
 ### FR-24 — Library embedding
 
 Analyze, query, export and diff are callable **in-process from Python**: the CLI is a thin
-wrapper over the same operations. No subprocess, no global state, no environment reads — the
-caller supplies configuration as an object. The enrichment step's language-model port stays a
+wrapper over the same operations. No subprocess *required* of the caller, no global state, no
+environment reads — the caller supplies configuration as an object. The enrichment step's language-model port stays a
 port, so an embedding caller supplies its own.
 
-*State: **partial**. `sextant.api` ships `analyze`, `render`, `enrich` and `export` as
-in-process operations and the CLI is already a wrapper over them; `query` and `diff` are
-absent, and `diff` is FR-22.*
+*State: **partial** — two clauses met outright, one met with a carve-out the requirement
+itself names, one partial, one unmet and one never measured. Clause by clause, on
+2026-09-10, rather than summarised into a single word:*
+
+| Clause | State |
+|---|---|
+| the four operations are callable in-process | **two of the four this clause names.** It names `analyze`, `query`, `export` and `diff`; `sextant.api` ships `analyze` (`:770`) and `export` (`:1416`), and `query` and `diff` are absent — `diff` being FR-22. `sextant.api` also ships `render` and `enrich`, which this clause does not name, so the module surface is four operations and the clause's own score is two |
+| the CLI is a thin wrapper over the same operations | **met.** Each verb in `src/sextant/cli/app.py` calls into `sextant.api` |
+| no subprocess *required of the caller* | **met as written** — an embedding caller calls `sextant.api` in-process and shells out to nothing. **The stronger reading is false**: Sextant itself cannot run `analyze` without a subprocess — the JVM extractor is launched with `subprocess.run` (`src/sextant/ingress/extract/jvm/scanner.py:41`, `:60`), Gradle detection shells out (`ingress/detect/gradle.py:319`), `protoc` likewise (`ingress/read/proto_source.py:124`), and `api.py:389`, `:399`, `:409` run `git` for provenance. Which reading is meant matters, so both are stated |
+| no global state | **not assessed here** — no measurement was taken, and saying so beats guessing |
+| no environment reads | **one, and it is the carved-out one.** `src/sextant/agents/tradewind.py:343` reads an API key for the language-model adapter, which this requirement's own last sentence says an embedding caller replaces |
+| the caller supplies configuration as an object | **not met.** `analyze(path, *, allow_resolve=False)` takes a path and a flag; there is no configuration object to supply |
+
+> **The wording was also strengthened in W51 and is restored.** `docs/meridian-integration.md:105`
+> says *"No subprocess **required**"* — a claim about the caller not having to shell out to
+> Sextant. W51 transcribed it as "No subprocess", which is a claim about Sextant not shelling
+> out to anything, and that is false today. Read as written in the source it is a much weaker
+> commitment, and the row above measures the stronger reading it acquired here.
 
 > **Where these came from (W51).** `docs/meridian-integration.md` states them and is tracked
 > verbatim; they were cited as requirements without being in this file, which is the same
@@ -357,14 +389,18 @@ absent, and `diff` is FR-22.*
 
 ---
 
-## Traceability — FR-21 … FR-24
+## Implementation state — FR-21 … FR-24
+
+These four are in the [Traceability](#traceability) table at the end with every other
+requirement, which is what NFR-6 depends on. This table adds only what that one does not
+carry for any requirement: how much of each is built today.
 
 | Requirement | Component | State |
 |---|---|---|
 | FR-21 boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) | unimplemented |
 | FR-22 derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) | unimplemented |
 | FR-23 observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) | unimplemented |
-| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — analyze/render/enrich/export ship; query and diff do not |
+| FR-24 library embedding | [M00](components/M00-cli.md), `sextant.api` | partial — FR-24's own six-row table measures each clause; `query`, `diff` and a configuration object are the unmet ones |
 
 ---
 
@@ -386,11 +422,23 @@ reader can tell "not built" from "not ours".
 | Design | Coupling between candidate boundaries, shapes crossing more than one — needs stitching between services | phase L |
 | Performance risk | Remote hops per endpoint, an endpoint reached twice in one trace, a call inside a loop — needs cross-module call hops | phase L, plus traces |
 
-**The guard that travelled with the refactor scenario is worth keeping**, because it is about
-what Sextant may say rather than what a consumer does with it: a symbol is reported
-unreachable only where NO unresolved call site exists in the scope searched. Two thirds of a
-typical graph ends at a boundary, so that guard withholds most such findings on most modules
-— which is why the scenario is a consumer's judgement and not a row we publish.
+**Three rules travelled with these four, and all three are about what Sextant may SAY rather
+than what a consumer does with it — so all three survive the move.** W51 kept the first and
+dropped the other two without saying so; W52 restores them.
+
+1. **Unreachability.** A symbol is reported unreachable only where NO unresolved call site
+   exists in the scope searched. Two thirds of a typical graph ends at a boundary, so this
+   withholds most such findings on most modules — which is why the scenario is a consumer's
+   judgement and not a row we publish.
+2. **Structure, never cost.** Sextant *"does not measure, estimate, or rank by latency,
+   throughput, or resource use."* It reports that an endpoint makes four remote hops; it never
+   says that is slow. This rule is the reason the performance-risk scenario is a consumer's:
+   the word "risk" is the consumer's to apply, and Sextant supplies only the count.
+3. **The embedded schema is the one compared.** Where a generated artifact embeds the schema
+   it was generated from, that embedded schema is what a comparison uses — which is what makes
+   drift exact rather than approximate. This one is a live design rule, not just a scenario's:
+   it is [ARCHITECTURE.md](ARCHITECTURE.md)'s DR-4 consequence, and FR-22's derivation diff
+   inherits it.
 
 *`M04-resolver.md` and `D01` asserted that the resolver computes these and that a `findings`
 table is produced. Neither is true and neither ever was; both now say so.*
@@ -543,6 +591,15 @@ Component designs live in [components/](components/README.md).
 | FR-18 | Export | [M08](components/M08-exporter.md), [D06](components/D06-bundle-format.md) |
 | FR-19 | Exclusion and redaction | [D04](components/D04-config-and-exclusion.md), [M03](components/M03-scanner.md) |
 | FR-20 | Command surface | [M00](components/M00-cli.md) |
+| FR-21 | Boundary vocabulary | [D01](components/D01-graph-schema.md), [M09](components/M09-query.md) |
+| FR-22 | Derivation diff | [M09](components/M09-query.md), [D06](components/D06-bundle-format.md) |
+| FR-23 | Observability map | [D05](components/D05-manifest-and-state.md), [M04](components/M04-resolver.md) |
+| FR-24 | Library embedding | [M00](components/M00-cli.md), `sextant.api` |
+
+W51 added FR-21 … FR-24 and this table did not gain them until W52 — which is exactly the
+defect NFR-6 names, a requirement with no component named. How much of each is built is in
+[Implementation state](#implementation-state--fr-21--fr-24) above; this table answers only
+*which component realises it*, as it does for the other sixteen.
 
 ### Non-functional
 

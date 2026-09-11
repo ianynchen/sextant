@@ -47,7 +47,7 @@ violation stops work.**
 | 2 | W1 opens with "bump asm 9.7 → 9.10.1" | already shipped in `0674bfd`; `build.gradle.kts` pins 9.10.1 |
 | 3 | `terminal_kind`'s set "derived from the corpora, not invented here" — `database`, `remote`, `queue`, `cache` | already declared at `D00-fact-schema.md:205`; the four names match neither it nor `target_kind`, and a second definition fails `test_source_rules.py:158` |
 | 4 | `dependents_of` and `blast_radius` are D01 named queries | neither exists |
-| 5 | "`_NO_DECLINING_TEST_YET` lists 25 of the 55 catalogs" | 27 |
+| 5 | "`_NO_DECLINING_TEST_YET` lists 25 of the 55 catalogs" (as written then) | 27 when re-counted; **24 of 64 today** — the backlog shrinks as waves add declining tests, so the figure is dated rather than standing |
 | 6 | "Nothing in Wave 1 changes derived output" | false for 2 of 8 items — the worst, because it told a reviewer not to look |
 | 7 | "grepping 200KB instead of 50MB is the entire point" | never measured; removed rather than dressed up |
 
@@ -1837,7 +1837,7 @@ wrapper's `type`, a `known_types` entry's `type`, `channel_via`'s `owner`, a
 combinator step's `owner`, `parse_binding`'s hierarchy names.
 
 **Consequence:** none to the derived facts. A list written at any of these is
-refused either way; the cost is what a reader holding 56 catalogs is told.
+refused either way; the cost is what a reader holding the shipped catalogs is told.
 
 **Closes by**, for each file below, either routing its sites through
 `catalog_symbols` with a `where` string or recording why that key's refusal needs
@@ -2125,7 +2125,7 @@ make the case unreachable.
 `displayName` had any shipped effect.
 
 `grep displayName` across `src/`, `scripts/` and `tests/` finds the loader and no
-consumer. All 57 catalogs declare one. GUIDELINES §2 — a capability with no consumer is
+consumer. Every shipped catalog declares one. GUIDELINES §2 — a capability with no consumer is
 half-shipped — applies to catalog keys as much as to scanner capabilities, and W17's own
 finding was a reader predicting behaviour from an unread key.
 
@@ -2135,7 +2135,7 @@ without any gate noticing. `spring-mvc.yml`'s said "server-rendered controllers"
 deriving reactive WebFlux routes.
 
 **Closes by** either giving it a consumer (the rendered document names catalogs by id
-today) or removing it from all 57 files and from D02. **Falsified by** finding a consumer
+today) or removing it from all 64 catalog files and from D02. **Falsified by** finding a consumer
 this grep missed.
 
 ### OI-64 — a `Subscriber` built and never started derives a live inbound endpoint · **CLOSED**
