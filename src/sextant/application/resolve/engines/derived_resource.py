@@ -843,6 +843,23 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: every `routes` entry needs a `method` "
                 f"— got {route!r} (2O design §2b)"
             )
+        # W53 (`G-46`), and the rule exists because its absence was a wrong row rather
+        # than a missing one. A route with no `needs:` asserts the framework serves it
+        # for EVERY contract the catalog enumerates, whatever that contract licenses —
+        # which is the strongest claim the style can make and the one nothing was
+        # checking. `spring-data-rest.yml`'s collection GET carried no `needs:` and was
+        # wrong for a bare `Repository`, whose interface body is empty, so Spring Data
+        # REST exposes OPTIONS on its collection and nothing else. Refused at LOAD
+        # rather than caught by a test, because a test has to be remembered and this
+        # cannot be: the unconditional route is exactly the one a catalog author writes
+        # without noticing they have made a universal claim.
+        if "needs" not in route:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: the `routes` entry {route!r} names no "
+                f"`needs:`, which asserts every enumerated contract serves it — state the "
+                f"operation it requires, and give the contracts that lack it an empty list "
+                f"(W53, `G-46`)"
+            )
     strategies = matches["detection_strategy"].get("strategies")
     if not isinstance(strategies, dict) or not strategies:
         raise CatalogError(

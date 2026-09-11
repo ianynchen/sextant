@@ -53,6 +53,10 @@ _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 # and as the facts spell them (SCIP) where a fact needs one.
 CRUD = "org/springframework/data/repository/CrudRepository#"
 PAGING = "org/springframework/data/repository/PagingAndSortingRepository#"
+# The bare marker. It declares no methods at all — measured with `javap` at
+# spring-data-commons 3.2.5 and 4.0.1, both interface bodies empty
+# (`scripts/probes/w53_data_rest_collection_read.md`).
+MARKER = "org/springframework/data/repository/Repository#"
 REPOSITORY_REST_RESOURCE = "org/springframework/data/rest/core/annotation/RepositoryRestResource#"
 REST_RESOURCE = "org/springframework/data/rest/core/annotation/RestResource#"
 NO_REPOSITORY_BEAN = "org/springframework/data/repository/NoRepositoryBean#"
@@ -193,12 +197,21 @@ def _catalog(*, matches: dict[str, object] | None = None, **overrides: object) -
     shipped catalog's live answer belongs to a fixture."""
     declared = {
         "repositories": {
+            # `Repository` licenses NOTHING — not even the collection read. It
+            # declares no methods at all, so Spring Data REST's `exposesFindAll()`
+            # is false for it and the collection carries OPTIONS only (W53, `G-46`,
+            # measured in `scripts/probes/w53_data_rest_collection_read.md`).
             "org.springframework.data.repository.Repository": [],
-            "org.springframework.data.repository.CrudRepository": ["item_read", "save", "delete"],
-            "org.springframework.data.repository.PagingAndSortingRepository": [],
+            "org.springframework.data.repository.CrudRepository": [
+                "collection_read",
+                "item_read",
+                "save",
+                "delete",
+            ],
+            "org.springframework.data.repository.PagingAndSortingRepository": ["collection_read"],
         },
         "routes": [
-            {"method": "GET", "item": False},
+            {"method": "GET", "item": False, "needs": "collection_read"},
             {"method": "POST", "item": False, "needs": "save"},
             {"method": "GET", "item": True, "needs": "item_read"},
             {"method": "PUT", "item": True, "needs": "save"},
@@ -369,12 +382,46 @@ def test_item_routes_honour_which_crud_interface_is_extended(tmp_path: Path):
     """CP-2(b), observed: since Spring Data 3 `PagingAndSortingRepository` no
     longer extends `CrudRepository`, and a repository extending only it serves
     a collection GET and NOTHING else — `/boxes/1` answered 405, not 404, so
-    the resource exists and the item route does not."""
+    the resource exists and the item route does not.
+
+    Since W53 this also guards the other side of `G-46`'s measurement: the
+    collection read now needs `collection_read`, and this contract must still
+    have it. `PagingAndSortingRepository` declares `findAll(Pageable)` and
+    `findAll(Sort)` — both read with `javap` — so `exposesFindAll()` holds. A
+    fix that took the collection GET away from every contract would pass the
+    bare-marker test above and fail this one."""
     workspace, _ = _resolve(tmp_path, _repository(extends=PAGING))
     routes = _routes(workspace)
     workspace.close()
 
     assert routes == {("GET", "/orders")}
+
+
+def test_a_bare_repository_marker_derives_nothing_not_even_the_collection_read(tmp_path: Path):
+    """`G-46`, measured in W53 by opening the framework rather than by running it.
+
+    This file used to derive `GET /orders` here, because the collection read
+    carried no `needs:` at all and the catalog said in so many words that it is
+    "the one route every exposed repository serves, whatever it extends". It is
+    not. `CrudMethodsSupportedHttpMethods.getMethodsFor` (spring-data-rest-core
+    5.0.1) adds GET to a collection only when `exposesFindAll()` holds, which
+    resolves to a `findMethod` lookup for `findAll` over the repository
+    interface and everything it extends — and `Repository` declares zero
+    methods. Such a repository serves OPTIONS on its collection and nothing
+    else.
+
+    CP-2 could not have caught this: every contract it exercised live declares
+    or inherits a `findAll`, so the missing `needs:` never produced a wrong row
+    on a real repository. The near-miss is the whole point of the test."""
+    workspace, skipped = _resolve(tmp_path, _repository(extends=MARKER))
+    routes = _routes(workspace)
+    workspace.close()
+
+    assert routes == set()
+    # And it is DERIVED-AND-EMPTY rather than skipped: the framework is present,
+    # the repository is exposed, and the answer is that it carries no route we
+    # publish. A skip would say something different and weaker.
+    assert skipped == []
 
 
 def test_a_path_override_replaces_the_derived_collection_path(tmp_path: Path):
@@ -988,6 +1035,40 @@ def test_the_shipped_catalog_declares_a_gate_and_a_framework_default(tmp_path: P
     assert catalog.default_produces == ("application/hal+json",)
     assert catalog.media_formats == {"application/hal+json": "json"}
     derived_resource._validate_matches(catalog)
+
+
+def test_no_shipped_route_claims_every_contract_serves_it(tmp_path: Path):
+    """W53, `G-46`. A `routes` entry with no `needs:` asserts the framework serves
+    that route for EVERY contract the catalog enumerates, whatever the contract
+    licenses. That is the strongest claim this style can make, and until W53
+    nothing checked it: `spring-data-rest.yml`'s collection GET carried no
+    `needs:` and the claim was false for a bare `Repository`, whose interface body
+    is empty at spring-data-commons 3.2.5 and 4.0.1.
+
+    The loader REFUSES such a route now, so this reads the shipped file to show
+    the refusal reaches it — the hand-built catalog above pins the engine, and a
+    catalog defect can walk straight past an engine test. Deleting `needs:
+    collection_read` from `spring-data-rest.yml` fails here."""
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    shipped = {catalog.id: catalog for catalog in YamlCatalogSource(catalogs_dir()).load()}
+    for catalog in shipped.values():
+        if catalog.style != "derived_resource":
+            continue
+        unconditional = [route for route in catalog.matches["routes"] if "needs" not in route]
+        assert unconditional == [], (
+            f"{catalog.id} declares a route no contract has to license: {unconditional}"
+        )
+
+
+def test_a_route_without_needs_is_refused_at_load():
+    """The other half: the rule is a REFUSAL, not a preference, so a catalog
+    carrying such a route never loads at all."""
+    matches = dict(_catalog().matches)
+    matches["routes"] = [{"method": "GET", "item": False}]
+    with pytest.raises(CatalogError, match="names no `needs:`"):
+        derived_resource._validate_matches(_catalog(matches=matches))
 
 
 # --- `A-M13` (principles sweep §3.3): an interface's methods are inherited ---

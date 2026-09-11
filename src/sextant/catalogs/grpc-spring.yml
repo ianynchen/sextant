@@ -40,6 +40,19 @@ detect:
     - "org.springframework.grpc:spring-grpc-spring-boot-starter"
     - "net.devh:grpc-server-spring-boot-starter"
 
+# W53 (`G-91`). Both `@GrpcService` spellings were predictions until this probe:
+# neither `org.springframework.grpc:*` nor `net.devh:*` resolved when A2 audited
+# them. Both exist. **`spring-grpc-core` is where Spring gRPC's lives**, not the
+# starter named in `detect.coordinates` above — that artifact carries zero
+# classes and only pulls the core. Provenance rather than a fence here, so it
+# costs nothing today; it would matter the day this catalog became gated, since
+# a Maven module declaring only the starter records only the starter.
+measured:
+  - { artifact: org.springframework.grpc:spring-grpc-core, versions: ["0.10.0"],
+      identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
+  - { artifact: net.devh:grpc-server-spring-boot-starter, versions: ["3.1.0.RELEASE"],
+      identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
+
 # Only the annotation itself is read — presence on a class, no attributes —
 # so `annotation_args` is the whole requirement. No `superclass` here: this
 # catalog deliberately does NOT repeat `grpc-java.yml`'s supertype match, and

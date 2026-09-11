@@ -10,6 +10,14 @@ detect:
 measured:
   - { artifact: com.squareup.okhttp3:okhttp, versions: ["4.12.0"],
       identity: reported, by: scripts/probes/cp11_sweep_round1.md }
+  # W53 (`G-22`). The comment below claimed the verb-setter set was measured on
+  # 3.14.9 as well as 4.12.0, and only 4.12.0 had ever been read — `3.14.9`
+  # appeared nowhere else in the repository. Now it has been: same eight, no
+  # ninth. Its identity is `reported` by a different route from 4.12.0's — the
+  # 3.x jar states its version in `pom.properties`, where the 4.x jar states it
+  # only as the `ConstantValue` of `okhttp3.OkHttp.VERSION`.
+  - { artifact: com.squareup.okhttp3:okhttp, versions: ["3.14.9"],
+      identity: reported, by: scripts/probes/w53_okhttp_verb_setters.md }
 
 requires: [call_site, string_constants, chain_reconstruction]
 
@@ -21,10 +29,11 @@ matches:
   roots:
     - { owner: okhttp3.Request$Builder, method: <init>, captures: { http_method: GET } }  # GET is OkHttp's own default
   # EVERY verb-setting method `okhttp3.Request$Builder` declares, measured
-  # rather than remembered — `javap -p -s` on okhttp 3.14.9 and 4.12.0 gives
-  # the same eight: `get() head() post(RequestBody) put(RequestBody)
+  # rather than remembered — `javap -p` on okhttp 3.14.9 (W53) and 4.12.0
+  # (CP-11) gives the same eight: `get() head() post(RequestBody) put(RequestBody)
   # patch(RequestBody) delete() delete(RequestBody) method(String,
-  # RequestBody)` (CP-11, `scripts/probes/cp11_sweep_round1.md`). Completeness
+  # RequestBody)` (`scripts/probes/w53_okhttp_verb_setters.md`, which reads both
+  # versions and reports any method declared and not encoded — none). Completeness
   # is the load-bearing property, not coverage: a verb-setting call this list
   # misses falls through as an unmatched step (D02 §4's "unmatched steps pass
   # through uncaptured") and the root's own `http_method: GET` default stands

@@ -345,22 +345,31 @@ restricting the walk to poms inside the repository and losing
 `spring-boot-starter-parent` with it. **Falsified by** two machines deriving
 different endpoint sets from one commit.
 
-### OI-10 — 19 shipped catalogs state no measured version at all
+### OI-10 — shipped catalogs that state no measured version at all
 **Major · pre-existing, made countable 2026-09-06 by F5 ·
 `tests/architecture/test_catalog_measurement_coverage.py::_NOT_MEASURED_YET`**
 
-F5 gave the catalog schema a `measured:` block (D02 §1a) and twenty-nine
-catalogs a row citing a committed probe. **Twenty-six have none, because no
-probe has ever opened the artifact whose rule they encode** — every
+F5 gave the catalog schema a `measured:` block (D02 §1a) and twenty-nine of
+the fifty-five catalogs shipping THEN a row citing a committed probe. **Twenty-six
+had none, because no probe had ever opened the artifact whose rule they encode.**
+
+*The live count is deliberately not repeated here* — `COVERAGE.md` §3a's generated
+block holds it and names every catalog on each side, regenerated from the catalogs
+by `scripts/coverage_versions.py` and checked by a test. This entry's title carried
+19 and its body 29/26 at the same time, which is what `G-27` recorded; W53 removed
+the numbers rather than refreshing them, because a hand-maintained count of a
+generated fact decays every time a wave adds a catalog.
+
+The twenty-six F5 counted included every
 `@KafkaListener`, `@JmsListener`, `@RabbitListener`, gRPC, GraphQL and schema
-catalog among them. Their rules are claimed for every version of their
+catalog. Each one still on the list claims its rule for every version of its
 framework on evidence from none.
 
 This is not a new defect and F5 did not introduce it; what F5 changed is that
-the twenty-six are now a named list with a reason each, and a NEW catalog cannot
+they became a named list with a reason each, and a NEW catalog cannot
 join them silently. **Cost:** a framework rule that moved between versions —
 `isHandler` losing a disjunct, `WebClient.exchange` disappearing at 7.0.2 — is
-undetectable in these twenty-six, and the failure is silent in both directions
+undetectable in whichever catalogs remain on that list, and the failure is silent in both directions
 (a rule that stopped firing under-reports; a rule whose meaning changed
 fabricates). The two the plan already names as live are `A-C5`
 (`spring-cloud-stream`) and `OI-5` (`microprofile-graphql`).
@@ -375,9 +384,22 @@ since: `spring-scheduling` (CP-14, spring-context 6.1.6/6.2.19/7.0.9),
 and `spring-kafka`, `spring-jms` and `spring-rabbit` (CP-16, spring-kafka
 3.1.4/4.1.1, spring-jms 6.1.6/7.0.9, spring-rabbit 3.1.4/4.1.1), and
 `spring-pulsar` and `spring-sqs-legacy` (CP-17, spring-pulsar 1.2.11/2.0.7 and
-both legacy messaging artifacts at 2.2.6.RELEASE and 2.4.4). The
-heading above is the count as it stands and is edited down with each entry, so
-this row cannot go stale about its own subject.
+both legacy messaging artifacts at 2.2.6.RELEASE and 2.4.4).
+
+**W53 retired three more, and all three had been recorded as UNMEASURABLE**
+rather than merely unmeasured — the audit could not resolve their artifacts in
+either local repository, so it filed their FQNs as predictions. All three resolve:
+`grpc-spring` and `grpc-net-devh` (`net.devh` 3.1.0.RELEASE, Spring gRPC 0.10.0 —
+all three `@GrpcService`/`@GrpcClient` spellings confirmed) and `spring-kafka-media`
+(Confluent 7.6.0 from `packages.confluent.io`, spring-kafka 3.1.4, kafka-clients
+3.6.2 — all fourteen serializer classes confirmed). `spring-data-rest` was already
+measured and gained a second block, because W53's probe found its collection-read
+rule WRONG (`G-46`). **"No artifact available" was worth re-testing rather than
+trusting**: it is a statement about one machine on one day.
+
+*The heading above no longer carries a count.* It did, and the body carried a
+different one at the same time (`G-27`). `COVERAGE.md` §3a is the live figure, and
+it is generated.
 
 **A catalog measured and found CORRECT retires an entry too**, and that is worth
 saying because the list's name suggests otherwise: `spring-sqs-legacy` needed no

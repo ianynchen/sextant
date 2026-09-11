@@ -2132,10 +2132,10 @@ requires: [annotation_args, implemented_interfaces, generic_interfaces]
 default_produces: ["application/hal+json"]
 matches:
   repositories:                     # contract fqn -> the CRUD operations extending it licenses
-    org.springframework.data.repository.CrudRepository: [item_read, save, delete]
-    org.springframework.data.repository.PagingAndSortingRepository: []
+    org.springframework.data.repository.CrudRepository: [collection_read, item_read, save, delete]
+    org.springframework.data.repository.PagingAndSortingRepository: [collection_read]
   routes:                           # the rule table; `needs` names the operation a route requires
-    - { method: GET,  item: false }
+    - { method: GET,  item: false, needs: collection_read }   # EVERY route names one
     - { method: POST, item: false, needs: save }
     - { method: GET,  item: true,  needs: item_read }
   item_segment: "{id}"
@@ -2160,6 +2160,18 @@ matches:
 is conditional, and applying its consequent to a module that does not declare the library
 would mint an entire REST API for every plain Spring Data JPA module in every analysed
 repository.
+
+**`needs:` is mandatory on every route, and a route without one is refused at load**
+(W53, `G-46`). A route naming no required operation asserts the framework serves it for
+EVERY contract the table enumerates, whatever that contract licenses — the strongest claim
+this style can make. The example above carried `- { method: GET, item: false }` for four
+phases and the claim was FALSE: a bare `org.springframework.data.repository.Repository`
+declares no methods at all, so Spring Data REST's collection GET — guarded by
+`exposesFindAll()` — is not among the methods it assembles, and such a repository serves
+`OPTIONS` on its collection and nothing else
+(`scripts/probes/w53_data_rest_collection_read.md`). The refusal is in the loader rather
+than in a test because the unconditional route is precisely the one an author writes
+without noticing they have made a universal claim.
 
 **WHICH repositories are exposed is configuration, not a constant** (CP-2(0),
 `scripts/probes/cp2_data_rest.md`, verified live). The default exposes every PUBLIC

@@ -45,6 +45,14 @@ detect:
 measured:
   - { artifact: org.springframework.data:spring-data-commons, versions: ["3.2.5", "4.1.1"],
       identity: reported, by: scripts/probes/cp13_inherited_members.md }
+  - { artifact: org.springframework.data:spring-data-rest-core, versions: ["5.0.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
+  - { artifact: org.springframework.data:spring-data-commons, versions: ["3.2.5", "4.0.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
+  # `JpaRepository`'s row in `repositories` rests on this jar and on no other, so it
+  # is recorded rather than only cited in a comment — §3a shows what was read.
+  - { artifact: org.springframework.data:spring-data-jpa, versions: ["4.1.1"],
+      identity: reported, by: scripts/probes/w53_data_rest_collection_read.md }
 
 requires: [annotation_args, implemented_interfaces, generic_interfaces]
 
@@ -77,19 +85,43 @@ matches:
   # imperative one, and no probe in this checkpoint exercised a reactive store.
   # Absent evidence, produce nothing (GUIDELINES §8) — COVERAGE carries the
   # row, so the gap is visible rather than silent.
+  #
+  # `collection_read` is the one that was MISSING until W53, and its absence was
+  # a wrong route rather than a lost one. The collection GET carried no `needs:`
+  # at all, on the belief — written into this file — that "the collection read
+  # is the one route every exposed repository serves, whatever it extends". It
+  # is not. **Measured by opening the framework's own class files** rather than
+  # from the live probe, which never exercised a bare `Repository`:
+  # `CrudMethodsSupportedHttpMethods.getMethodsFor(COLLECTION)` in
+  # spring-data-rest-core 5.0.1 adds GET and HEAD **only** when
+  # `exposesFindAll()` is true, which resolves to
+  # `DefaultCrudMethods.selectMostSuitableFindAllMethod` — a
+  # `ReflectionUtils.findMethod` for `findAll(Pageable)` then `findAll()` on the
+  # repository interface. `Repository` declares NO METHODS AT ALL (verified with
+  # `javap` at spring-data-commons 3.2.5 and 4.0.1: the interface body is
+  # empty), so a bare `interface Foo extends Repository<Foo, Long>` exposes
+  # OPTIONS on its collection and nothing else. This file used to derive
+  # `GET /foos` for it.
   repositories:
     org.springframework.data.repository.Repository: []
-    org.springframework.data.repository.CrudRepository: [item_read, save, delete]
-    org.springframework.data.repository.ListCrudRepository: [item_read, save, delete]
-    org.springframework.data.repository.PagingAndSortingRepository: []
-    org.springframework.data.repository.ListPagingAndSortingRepository: []
-    org.springframework.data.jpa.repository.JpaRepository: [item_read, save, delete]
+    org.springframework.data.repository.CrudRepository: [collection_read, item_read, save, delete]
+    org.springframework.data.repository.ListCrudRepository: [collection_read, item_read, save, delete]
+    # Both paging contracts declare `findAll(Pageable)`/`findAll(Sort)` and so
+    # DO serve the collection GET — which is what CP-2 observed live on
+    # `BoxRepository` (`/boxes` → GET, no POST) and what kept the missing
+    # `needs:` from ever showing up as a wrong row on a real repository.
+    org.springframework.data.repository.PagingAndSortingRepository: [collection_read]
+    org.springframework.data.repository.ListPagingAndSortingRepository: [collection_read]
+    # `JpaRepository extends ListCrudRepository, ListPagingAndSortingRepository`
+    # (javap, spring-data-jpa 4.1.1), so it reaches `findAll()` either way.
+    org.springframework.data.jpa.repository.JpaRepository: [collection_read, item_read, save, delete]
 
-  # §2b's route table, verb by verb, each with the operation it needs. The
-  # collection read is the one route every exposed repository serves, whatever
-  # it extends.
+  # §2b's route table, verb by verb, each with the operation it needs. **Every
+  # route needs one**, including the collection read — see `repositories` above
+  # for the measurement that corrected this, and `_reach` in the engine for how
+  # the operations of every contract a repository reaches are unioned.
   routes:
-    - { method: GET, item: false }
+    - { method: GET, item: false, needs: collection_read }
     - { method: POST, item: false, needs: save }
     - { method: GET, item: true, needs: item_read }
     - { method: PUT, item: true, needs: save }

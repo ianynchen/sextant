@@ -87,6 +87,56 @@ here would restate those documents rather than add anything.
   asserted.*
   An ADDRESS capture is untouched, because a destination IS its value.
 
+- **A route nobody's repository serves** (F9 §10.5, W53). `spring-data-rest.yml` derived a
+  collection `GET` for every exposed repository and gave that one route **no required
+  operation at all**, where every other route names one. The file said why: *"the collection
+  read is the one route every exposed repository serves, whatever it extends."*
+  **It is not.** Measured by opening the framework instead of running it:
+  `CrudMethodsSupportedHttpMethods.getMethodsFor` (spring-data-rest-core 5.0.1) adds GET to a
+  collection only when `exposesFindAll()` holds, and that reduces to a `findMethod` lookup for
+  `findAll` over the repository interface and everything it extends. `Repository` declares
+  **zero methods** — the interface body is empty at spring-data-commons 3.2.5 and 4.0.1 — so a
+  repository extending only it serves OPTIONS on its collection and nothing else.
+  **The live probe could not have caught this, and that is the lesson.** CP-2 is a good probe
+  and it exercised `CrudRepository`, `JpaRepository` and `PagingAndSortingRepository` — all
+  three of which declare or inherit a `findAll`. A rule read off the cases a probe happened to
+  cover is a prediction about the ones it did not. A `collection_read` operation now gates the
+  route — and the LOADER now refuses any `derived_resource` route that names no required
+  operation at all, because such a route asserts the framework serves it for every contract
+  the catalog enumerates, which is the strongest claim the style can make and was the one
+  nothing checked. *This entry first said "a test fails if it is removed" and that was false:
+  the new test pinned the ENGINE, which had behaved as designed, and deleting the fix from the
+  shipped catalog broke nothing. Caught in review; the refusal is the fix, since a catalog
+  author writing an unconditional route does not notice they have made a universal claim.*
+  **Nothing wrong was ever published, and the reason is the dependency gate.** The fixture's
+  `OrderRepository` extends the fixture's own `Repository` stand-in, so that one never matched
+  — but `spring-petclinic`'s `VetRepository` extends Spring's real marker, and derives nothing
+  only because its pom declares no Data REST coordinate and this style is dependency-gated.
+  The shape the defect needed is in this repository. This is a shipped RULE that was wrong,
+  with no instance in any output — corrected on that basis rather than on an incident.
+
+  **Three catalogs were recorded as UNMEASURABLE and all three resolve.** The audit could not
+  find `net.devh:*`, `org.springframework.grpc:*` or any `io.confluent` artifact in either
+  local repository, so their class names were filed as beliefs — and a wrong class name in an
+  annotation or serializer catalog is **silent**: nothing matches, nothing derives, no skip
+  and no gap row says a name was wrong. The first two come from Maven Central and the third
+  from `packages.confluent.io`. All three `@GrpcService`/`@GrpcClient` spellings exist, and so
+  do all fourteen Kafka serializer classes. *"No artifact available" is a statement about one
+  machine on one day.*
+  Two smaller corrections with them. `okhttp.yml` claimed its verb-setter list was measured on
+  3.14.9 **and** 4.12.0 where only 4.12.0 had been read; both are now, and the list is right —
+  the same eight either way, which is a claim about two compilers' output, since the 3.x line
+  is Java and the 4.x line is Kotlin. And the measured-version counts in two prose sites were
+  stale and disagreed with each other; they are **deleted** rather than refreshed, because
+  COVERAGE §3a generates that count from the catalogs and names every catalog on each side.
+  A hand-maintained copy of a generated fact decays every time a wave adds a catalog.
+  Four probes ship with committed harnesses. Each reads every version out of the jar itself
+  and aborts when it disagrees with the coordinate — and two of them had to learn a new route
+  to do it honestly: okhttp 4.x states its version only as the `ConstantValue` of
+  `okhttp3.OkHttp.VERSION`, and `kafka-clients` only in `kafka/kafka-version.properties`.
+  A reader checking manifests alone would have written `assumed` where a real self-report
+  exists.
+
 - **Two ratchets for the two ways a document decays on its own** (F9 §10.4, W52). The
   RESTATE batch is thirty-nine claims that are untrue or unmeasured, and **seven of the
   Critical and Major ones had already been closed** by earlier waves — so the batch is what

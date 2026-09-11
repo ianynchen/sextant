@@ -7,6 +7,15 @@ direction: outbound
 detect:
   coordinates: ["net.devh:grpc-client-spring-boot-starter"]
 
+# W53 (`G-91`). The FQN below was a PREDICTION until this probe: no `net.devh`
+# artifact resolved in either local repository when A2 audited it, and a wrong
+# FQN in an `injected_client` catalog is SILENT — the annotation never matches,
+# nothing is derived, and no skip or gap row says a name was wrong. Opened:
+# `net/devh/boot/grpc/client/inject/GrpcClient.class` is in the starter jar.
+measured:
+  - { artifact: net.devh:grpc-client-spring-boot-starter, versions: ["3.1.0.RELEASE"],
+      identity: reported, by: scripts/probes/w53_grpc_annotation_identities.md }
+
 requires: [call_site, string_constants, annotation_args, typed_signatures]
 
 matches:

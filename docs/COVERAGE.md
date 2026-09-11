@@ -716,12 +716,15 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**46 of 64 catalogs name the artifact and versions their rules were read from. 18 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**49 of 64 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
+| `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
+| `grpc-spring` | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
+|  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
 | `jakarta-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50, 11.0.24 |
@@ -733,16 +736,24 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
-| `okhttp` | `com.squareup.okhttp3:okhttp` | 4.12.0 |
+| `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
-| `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.1.1 |
+| `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.0.1, 4.1.1 |
+|  | `org.springframework.data:spring-data-jpa` | 4.1.1 |
+|  | `org.springframework.data:spring-data-rest-core` | 5.0.1 |
 | `spring-http-interface` | `org.springframework:spring-aop` | 6.1.6 |
 |  | `org.springframework:spring-core` | 6.2.15 |
 |  | `org.springframework:spring-web` | 6.1.6, 6.2.15 |
 |  | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-jms-template` | `org.springframework:spring-jms` | 6.1.6 |
 | `spring-jms` | `org.springframework:spring-jms` | 6.1.6, 7.0.9 |
+| `spring-kafka-media` | `io.confluent:kafka-avro-serializer` | 7.6.0 |
+|  | `io.confluent:kafka-json-schema-serializer` | 7.6.0 |
+|  | `io.confluent:kafka-json-serializer` | 7.6.0 |
+|  | `io.confluent:kafka-protobuf-serializer` | 7.6.0 |
+|  | `org.apache.kafka:kafka-clients` | 3.6.2 |
+|  | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka-replying` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka-template` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka` | `org.springframework.kafka:spring-kafka` | 3.1.4, 4.1.1 |
@@ -786,9 +797,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `google-pubsub-publisher` |
 | `graphql-schema` |
 | `grpc-java` |
-| `grpc-net-devh` |
 | `grpc-schema` |
-| `grpc-spring` |
 | `jakarta-jws-client` |
 | `netflix-dgs` |
 | `spring-advice` |
@@ -796,7 +805,6 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-cloud-stream` |
 | `spring-graphql` |
 | `spring-integration` |
-| `spring-kafka-media` |
 | `spring-kafka-message` |
 | `spring-ws` |
 | `wsdl-schema` |
@@ -3688,9 +3696,16 @@ catalogs match both FQNs, alongside the `javax`/`jakarta`/JetBrains spellings.
 
 **BOUNDARY, stated 2026-09-06 with F5** ([D02](components/D02-catalog-schema.md) §1a;
 `docs/open-issues.md` OI-10, OI-11). A catalog now declares the artifact(s) and version(s)
-its rule was verified against, and twenty-nine of the fifty-five do. **Nothing compares
-that against the version the analysed module resolves**, and twenty-six catalogs declare no
-measured version at all because no committed probe has opened their framework's jar.
+its rule was verified against. **How many do is not restated here**: [§3a](#3a-what-we-support-and-at-which-versions)'s
+generated block carries the count and names every catalog on each side of it, and a test
+regenerates it from the catalogs themselves — so it cannot go stale, where this paragraph
+did. It read "twenty-nine of the fifty-five" and "twenty-six declare no measured version"
+long after both numbers had moved (`G-27`, corrected in W53 by deleting the numbers rather
+than by refreshing them).
+
+**Nothing compares a catalog's measured version against the version the analysed module
+resolves**, and a catalog with no `measured:` block at all has had no committed probe open
+its framework's jar.
 
 So a run says nothing about whether the rules that produced it were ever measured on the
 framework generation the module actually builds against. The shape this hides is a rule

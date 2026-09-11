@@ -16,6 +16,27 @@ style: config_join
 detect:
   coordinates: ["org.springframework.kafka:spring-kafka"]
 
+# W53 (`G-88`). Every class named below was a SPELLING until this probe: no
+# `io.confluent` artifact resolved anywhere when A2 audited this file, and a
+# class absent from these maps stamps nothing (D02 §4) — so a typo and an
+# unconfigured module are indistinguishable in the output. All fourteen opened,
+# all fourteen present.
+measured:
+  - { artifact: io.confluent:kafka-avro-serializer, versions: ["7.6.0"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+  - { artifact: io.confluent:kafka-protobuf-serializer, versions: ["7.6.0"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+  - { artifact: io.confluent:kafka-json-schema-serializer, versions: ["7.6.0"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+  - { artifact: io.confluent:kafka-json-serializer, versions: ["7.6.0"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+  # `kafka-clients` states its version in `kafka/kafka-version.properties` — its
+  # manifest is 25 bytes and carries none. Still `reported`, not `assumed`.
+  - { artifact: org.apache.kafka:kafka-clients, versions: ["3.6.2"],
+      identity: reported, by: scripts/probes/w53_kafka_serializer_identities.md }
+
 requires: [resolved_config]
 
 matches:
