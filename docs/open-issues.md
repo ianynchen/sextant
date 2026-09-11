@@ -2368,14 +2368,12 @@ every one of them non-terminal — bodies that were read — at depths 1 through
 them traced" and "22,000 edges from callers nothing will ever trace" are both false, and the
 call-graph work is buying recall.
 
-*How much a types-only scan would cost is larger in kind than those 2,105 rows and is NOT
-54% of the graph, which is what W56 first published. That figure was an inference from the
-2,105 stated as a measurement: a types-only sibling loses its CALL SITES, not its symbols, so
-a sibling method called straight from a module body keeps its row — and, in the other
-direction, rows reachable only THROUGH a sibling body are lost although they are not the
-dependency's own. A faithful replay of the walk during review put the loss near half with
-several hundred lost rows belonging to this module or its libraries. The number is not
-restated here because neither replay written for it reproduced the real table.*
+**How much a types-only scan would cost, measured:** **48.2% — 1,874 of the 3,892 rows** (measured by deleting the sibling bodies' outgoing edges and re-running `record_reachability` itself, so the real walk answers rather than a replay of it). The composition is the sharper point: **856 of the 2,105 sibling rows SURVIVE**, because a sibling method called straight from a module body keeps its row, and **625 of the lost rows are not the dependency's own at all** — this module's symbols and its libraries', reachable only THROUGH a sibling body.
+
+*W56 first published "54%", which was the 2,105 restated as a consequence rather than measured
+as one. The measurement above deletes the sibling bodies' outgoing edges from a copy of the
+workspace and re-runs `record_reachability`, so the walk that answers is the one that built the
+table — no replay, which is what the first two attempts at this number got wrong.*
 
 **Lever 2 was built, measured and reverted.** Filtering sibling annotations out of the
 endpoint root is output-neutral on this corpus — every table identical — and saves no

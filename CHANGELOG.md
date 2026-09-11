@@ -142,10 +142,7 @@ here would restate those documents rather than add anything.
   edge, so that work is buying recall.
   *Two figures in this paragraph were wrong when first written and are corrected rather than
   quietly dropped.* It said such a mode "would delete 54% of the reachability graph" — the
-  2,105 restated as a consequence instead of measured as one. A sibling method called straight
-  from a module body keeps its row; rows reachable only THROUGH a sibling body are lost even
-  though they are not the dependency's own. A replay during review put the loss near half, and
-  no figure is given here because neither replay written for it reproduced the real table.
+  2,105 restated as a consequence instead of measured as one. Measured, it is **48.2% — 1,874 of the 3,892 rows** (measured by deleting the sibling bodies' outgoing edges and re-running `record_reachability` itself, so the real walk answers rather than a replay of it). The composition is the sharper point: **856 of the 2,105 sibling rows SURVIVE**, because a sibling method called straight from a module body keeps its row, and **625 of the lost rows are not the dependency's own at all** — this module's symbols and its libraries', reachable only THROUGH a sibling body.
   It also said "the 16.7s it costs is buying trace depth", which misread the table it cites in
   the same breath as saying that table had drifted: 16.7s was the WITH-siblings total against
   1.6s without, and profiled today the pass that builds the reachability graph costs about a
