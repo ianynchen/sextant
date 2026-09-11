@@ -72,6 +72,40 @@ def caller_outer_class(caller: str) -> str | None:
 outer_class = outer_type_of
 
 
+def nest_hosts(workspace: Workspace) -> dict[str, str]:
+    """Each nested type's TOP-LEVEL enclosing type, as the class file states it
+    (W4b).
+
+    JVMS 4.7.28's `NestHost` names exactly what `outer_class` derives by splitting
+    a binary name on its first `$`, and it has been extracted since W7 — it was
+    simply never projected out of `raw_facts`, so nothing downstream could read it
+    and three engines went on splitting. A class file that states its nest host is
+    TELLING us; a split is inferring, and infers correctly right up until a name
+    carries a `$` that is not nesting. Several compilers targeting this runtime
+    emit exactly that, and so does every code generator that mangles names.
+
+    Only a nested type carries the attribute, and only above a certain class-file
+    version — a top-level type states none, and neither does a nested one compiled
+    for an older target. Absence is why `outer_of` below still falls back rather than treating
+    a missing fact as "already top-level"."""
+    return {
+        str(row["symbol"]): bare_descriptor(str(row["nest_host"]))
+        for row in workspace.query("nest_hosts")
+    }
+
+
+def outer_of(descriptor: str, hosts: dict[str, str]) -> str:
+    """The stated nest host where the class file carries one, the `$` split where
+    it does not (W4b).
+
+    The two agree on every shape in this repository's corpora — which is the point
+    of preferring the fact rather than a reason to skip it: they agree until they
+    do not, and the day they disagree the split is the one that is wrong."""
+    return (
+        hosts.get(descriptor) or hosts.get(bare_descriptor(descriptor)) or outer_class(descriptor)
+    )
+
+
 def parsed_call_sites(workspace: Workspace) -> list[dict[str, Any]]:
     """`call_sites`, `arguments` decoded once — the `single_call`/
     `interface_implementation` precedent, shared here because both styles

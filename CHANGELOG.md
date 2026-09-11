@@ -113,6 +113,24 @@ here would restate those documents rather than add anything.
   itself because a POM's `<dependencies>` list is declarations rather than a resolution — a
   difference between the build systems, not between the rules.
 
+- **The class file states which type encloses a nested one, and nothing read it** (W4b).
+  Three engines derived a nested type's top-level enclosing type by splitting its binary name
+  on the first `$`. JVMS 4.7.28's `NestHost` names it outright, the extractor has emitted it
+  since W7, and `D00` already described it as *"the top-level answer `OI-45` records
+  `outer_type_of` guessing at"*. It was never projected out of `raw_facts`, so nothing
+  downstream could reach it.
+  Projected now, behind a named query, and `outer_of` takes the stated host where there is one
+  and falls back to the split where there is not. **Absence is ordinary** — a top-level type
+  carries no such attribute, and neither does a nested one built for an older target — so
+  treating a missing fact as "already top-level" would be a second guess dressed as a fact.
+  A split is right until a name carries a `$` that is not nesting, which several compilers
+  targeting this runtime emit in ordinary code.
+  *The row's premise was stale in two ways.* It proposed walking `enclosing`, the IMMEDIATE
+  encloser, with repeated joins to reach top level — unnecessary, since `NestHost` is the
+  top-level answer directly. And it called this a layering change because the function lives
+  in `domain/`, which may not query the workspace: true, and its three callers are all in the
+  application layer, which may. The split stays in `domain/` as the fallback it now is.
+
 - **"A declared default is never written into the class file" — false since W4, in seven
   places** (W4a). The statement appears in `derive_endpoints.sql`, `jakarta-jws.yml`, D02 and
   three test files. The default IS written into the class file: on the annotation TYPE, as

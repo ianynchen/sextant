@@ -173,6 +173,58 @@ def _resolved(tmp_path: Path) -> list[dict]:
     return rows
 
 
+def test_a_nest_host_the_class_file_states_beats_splitting_the_name(tmp_path: Path):
+    """W4b. Three engines derived a nested type's top-level enclosing type by
+    splitting its binary name on the first `$`. The class file STATES it —
+    JVMS 4.7.28's `NestHost`, extracted since W7 — and nothing read it, because
+    the fact was never projected out of `raw_facts`.
+
+    A split is right until a name carries a `$` that is not nesting, which several
+    compilers targeting this runtime emit in ordinary code. Here the two
+    disagree deliberately: the symbol is `Outer$Inner$Deep#`, so the split answers
+    `Outer#` — which happens to be right — while a class whose stated host is
+    something else entirely proves which one is being read.
+
+    `outer_of` takes the stated host where there is one and falls back otherwise,
+    because only nested types compiled for Java 11+ carry the attribute: absence
+    is ordinary, and treating it as "already top-level" would be a second guess
+    dressed as a fact."""
+    from sextant.application.resolve.shapes.identity_calls import nest_hosts, outer_of
+
+    facts = tmp_path / "facts"
+    nested = "com/acme/gen/Outer$Inner$Deep#"
+    stated = "com/acme/gen/DifferentHost#"
+    write_fact_file(
+        facts / "own.jsonl",
+        _document("own", OriginTier.MODULE_OUTPUT, None),
+        [
+            SymbolFact(
+                document_id="own",
+                symbol=nested,
+                construct_kind=ConstructKind.CLASS,
+                nest_host=stated,
+            ),
+            # A nested type carrying NO `NestHost` — an older target, which is the
+            # case the fallback exists for.
+            SymbolFact(
+                document_id="own",
+                symbol="com/acme/gen/Legacy$Inner#",
+                construct_kind=ConstructKind.CLASS,
+            ),
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    hosts = nest_hosts(workspace)
+    workspace.close()
+
+    # The STATED host wins, and it is not what a `$` split would have answered.
+    assert outer_of(nested, hosts) == stated
+    assert outer_of(nested, hosts) != "com/acme/gen/Outer#"
+    # With no fact, the split still answers — an absent attribute is not a claim.
+    assert outer_of("com/acme/gen/Legacy$Inner#", hosts) == "com/acme/gen/Legacy#"
+
+
 def test_an_exchange_interface_a_SIBLING_declares_still_serves_this_modules_route(
     tmp_path: Path,
 ):

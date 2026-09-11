@@ -29,6 +29,132 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 **Second principle violation → stop and raise.** The running count is below and is
 kept here rather than in an agent's head.
 
+---
+
+# GAPS — what Sextant does not yet read
+
+**Read this section first when planning new work.** Everything below is a
+CAPABILITY GAP rather than a defect: the code is correct as far as it goes, and
+these are the places it does not go. They are separated from the defect register
+beneath because they answer a different question — not *"what is broken"* but
+*"what would make this more complete"*.
+
+**Every figure here is measured against the framework's own jars** by
+`scripts/probes/w19_catalog_surface/run.sh`, which reads each owner's declared
+methods and cross-references the catalog as loaded. Re-run it rather than trusting
+this table: a release that adds an addressable method widens a gap without
+touching this file.
+
+**Why this section exists.** `docs/COVERAGE.md` states nine of these as
+"partially supported", and that word carries no magnitude — 0-of-20 and 19-of-20
+read identically. A reader could not tell, from the coverage document, the
+difference between a framework shape we mostly read and one we do not read at all.
+
+---
+
+## GAP-1 — functional routing's BUILDER form is unread, on both stacks · **0 of 20, twice**
+
+`RouterFunctions$Builder` — `route().GET("/orders", handler).POST(…)` — is read by
+NEITHER `spring-mvc-router` nor `spring-webflux-router`. Zero of its twenty methods
+on each side.
+
+**It is not an exotic shape.** It has been the reference documentation's
+recommended Java form for functional routing since Spring 5.2. A module written
+that way has its **entire routing surface absent from the export**, with nothing
+saying so — the catalog matches nothing and a reader sees a service with no
+inbound HTTP at all.
+
+**Why it is not just a wider `entries` list.** `combinator`'s grammar is
+argument-rooted (`RouterFunctions.route(predicate, handler)`) or body-linked
+(`coRouter { }`). A builder is neither: the verb call sits on a RECEIVER returned
+by an argument-less `route()`, and this grammar has no word for that. Closing it
+is engine work plus a probe of which overload position carries the path.
+
+**Closes by** a `combinator` rooting form for a receiver-chained builder.
+**Falsified by** measuring that the builder form is rare in real Java codebases,
+which would lower its priority without making the row wrong.
+
+## GAP-2 — the linking tier does not exist · FR-8, M05, M06
+
+Sextant reads that service A calls `POST /orders` and that service B serves
+`POST /orders`, and **nothing joins those two facts**. FR-8 — *"matches each
+outbound endpoint to the inbound endpoints it may reach"* — is unbuilt; `M05`
+(sync) and `M06` (stitcher) are both `planned` in `docs/PROJECT.md`.
+
+**The groundwork is present.** Outbound rows carry protocol, wire identity and
+payload contracts; DR-5 already specifies the matching rule (protocol equality,
+wire identity, directional payload compatibility). What is missing is the tier
+that runs it across bundles.
+
+**Nothing in the corpora demonstrates it either way.** All three pinned repositories
+are single REST applications with genuinely zero outbound calls.
+`examples/spring-petclinic-microservices` has nine modules and real cross-service
+traffic, and has never been used for this.
+
+**Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
+completeness plan, which is why finishing that plan did not produce it.
+
+## GAP-3 — the async SQS client is unread · **0 of 28**
+
+`SqsAsyncClient` — every method, including `sendMessage` — is outside
+`aws-sqs-sdk`'s declared slice. `SqsClient` itself is **1 of 29**: the synchronous
+`sendMessage` only. The entire inbound direction, including `receiveMessage`, and
+every batch form are outside on both.
+
+**Closes by** widening the slice, which is catalog data rather than engine work —
+the request-object shape each of these takes is the same one `sendMessage` already
+reads.
+
+## GAP-4 — the messaging templates read their SEND half only
+
+Measured, read of declared:
+
+| Owner | Read |
+|---|---|
+| `RabbitTemplate` | 1 of 88 |
+| `JmsTemplate` | 1 of 49 |
+| `SimpMessagingTemplate` | 3 of 14 |
+| `SqsTemplate` | 1 of 12 |
+| `PubSubTemplate` | 11 of 20 |
+
+**The raw ratio overstates every row here and the probe says so.** Most of what a
+template declares is configuration and lifecycle — `RabbitTemplate`'s 83 unread
+include `setChannelTransacted` and its kin, which address no wire. The honest
+statement is that the SEND half is read and the RECEIVE half is not, plus the
+batch and async forms.
+
+**Closes by** a per-template pass declaring the receive half, which needs a fixture
+for each: a `receive` with no payload capture is a boundary whose contract nobody
+can read, and deriving it would publish a row with no shape.
+
+## GAP-5 — Spring Integration reads 2 of roughly 12 channel annotations
+
+`spring-integration` declares two; the framework has about twelve. A module using
+`@ServiceActivator`, `@Splitter`, `@Aggregator` or `@Router` has those channels
+absent.
+
+**Closes by** enumerating the annotation set from the jar and widening the catalog.
+
+## GAP-6 — Spring Data REST derives for JPA repositories only
+
+`spring-data-rest` reads the JPA repository contracts. A module exposing
+MongoDB, Cassandra or R2DBC repositories through Spring Data REST derives nothing
+for them.
+
+**Closes by** enumerating each store module's own repository contracts. The
+`repositories` map is catalog data; the rule that reads it is store-neutral
+already.
+
+## GAP-7 — analysing a reactor module costs ~100s and the cause is not diagnosed
+
+Tracked in full as `OI-68` below, listed here because it is a capability limit a
+reader will hit rather than a defect in output. Both mechanisms originally blamed
+were refuted by measurement in W56; the cost is real, has grown from the 67s that
+entry records, and sits in `derive_endpoints` and `derive_endpoint_shapes` at
+roughly 25-36s each.
+
+---
+
 ### Principle-violation count: 1 confirmed
 
 **PV-1 (2026-09-07) — claims about our own system asserted without measuring them.**

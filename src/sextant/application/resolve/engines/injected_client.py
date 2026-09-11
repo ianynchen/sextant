@@ -48,7 +48,8 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.identity_calls import (
     first_string_arguments,
-    outer_class,
+    nest_hosts,
+    outer_of,
     parsed_call_sites,
     split_call,
 )
@@ -137,6 +138,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
     call_sites = parsed_call_sites(workspace)
     service_names = first_string_arguments(call_sites, service_owner, service_method, 0)
     field_types = _field_types(workspace)
+    hosts = nest_hosts(workspace)
     fenced = _fenced_outer_classes(workspace)
 
     matches: list[_FieldMatch] = []
@@ -149,7 +151,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_FieldMatch]:
             # No declared type for this field reached the workspace — a
             # capture failure, never a fabricated stub type.
             continue
-        outer = outer_class(stub_type)
+        outer = outer_of(stub_type, hosts)
         if outer in fenced:
             # The fence: this module implements the very service the stub
             # would otherwise appear to call.
@@ -184,8 +186,9 @@ def _fenced_outer_classes(workspace: Workspace) -> set[str]:
     own facts reached this workspace — the module docstring's own reason:
     the fence must still fire against a published-stubs jar, where the edge
     is this class's own fact but the target's identity is unreadable."""
+    hosts = nest_hosts(workspace)
     return {
-        outer_class(bare_descriptor(str(row["superclass"])))
+        outer_of(bare_descriptor(str(row["superclass"])), hosts)
         for row in workspace.query("superclasses")
     }
 

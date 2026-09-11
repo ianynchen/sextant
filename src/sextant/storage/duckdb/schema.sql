@@ -771,6 +771,14 @@ SELECT rowid                        AS seq,
        payload ->> 'symbol'         AS symbol,
        payload ->> 'construct_kind' AS construct_kind,
        payload ->> 'enclosing'      AS enclosing,
+       -- W4b: JVMS 4.7.28's `NestHost` — the TOP-LEVEL type whose nest this one
+       -- belongs to. The extractor has emitted it since W7 and the fact model has
+       -- carried it since; it was never projected, so nothing downstream could
+       -- read it and three engines went on deriving the same answer by splitting
+       -- a binary name on `$`. A class file that states its nest host is telling
+       -- us; a split is guessing, and guesses right until a name contains a `$`
+       -- that is not nesting.
+       payload ->> 'nest_host'      AS nest_host,
        payload ->  'signature'      AS signature,
        -- D00 §5a: `public` or `other`, as the declaring language sees it.
        -- Carried on every symbol fact and, until 2I's class-gate member rule,

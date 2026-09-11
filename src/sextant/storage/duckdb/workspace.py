@@ -364,6 +364,18 @@ _NAMED_QUERIES = {
     # One column, because existence is the whole question. Ordered by symbol
     # for NFR-1, like every other projection here.
     "declared_symbols": "SELECT symbol FROM symbols ORDER BY symbol",
+    # W4b: JVMS 4.7.28's `NestHost` — the TOP-LEVEL type whose nest a nested type
+    # belongs to, which three engines had been deriving by splitting a binary name
+    # on `$`. Only a nested type above a certain class-file version carries it, so
+    # this is a partial map by construction and its reader falls back rather than
+    # treating an absent row as "already top-level".
+    "nest_hosts": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'nest_host' AS nest_host
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'nest_host') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared INTERFACE with the three things a supertype-shaped match
     # asks of it (2O design §2a, Task 6): its own visibility, its erased
     # superinterfaces, and capability 9.14's parameterized references to them.

@@ -89,7 +89,8 @@ from sextant.application.resolve.shapes.identity_calls import (
     all_string_arguments,
     calling_classes,
     first_string_arguments,
-    outer_class,
+    nest_hosts,
+    outer_of,
     parsed_call_sites,
     split_call,
 )
@@ -301,6 +302,8 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
     )
     service_names = first_string_arguments(call_sites, service_owner, service_method, 0)
     wire_names = all_string_arguments(call_sites, method_owner, method_method, 1)
+    # Read once per run, the `parsed_call_sites` precedent above (W4b).
+    hosts = nest_hosts(workspace)
 
     methods_by_class = _methods_by_class(workspace)
     known_symbols = {str(row["symbol"]) for row in workspace.query("declared_symbols")}
@@ -315,7 +318,9 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             # target's own facts never reached this workspace, so nothing
             # here proves it is a gRPC service at all.
             continue
-        outer = outer_class(bare_descriptor(supertype))
+        # W4b: the nest host the class file STATES, falling back to the `$` split
+        # only where it states none.
+        outer = outer_of(bare_descriptor(supertype), hosts)
         if outer not in marked:
             # Ordinary class inheritance. No evidence means NO ROW, never an
             # unresolved one (the gate above).
