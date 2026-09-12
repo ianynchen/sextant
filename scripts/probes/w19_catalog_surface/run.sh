@@ -16,7 +16,8 @@ for artifact in \
   "org.springframework:spring-webmvc:6.1.6" \
   "software.amazon.awssdk:sqs:2.25.31" \
   "org.apache.kafka:kafka-streams:3.6.2" \
-  "io.javalin:javalin:6.4.0"
+  "io.javalin:javalin:6.4.0" \
+  "org.apache.pekko:pekko-connectors-kafka_2.13:1.1.0"
 do
   echo "ensuring ${artifact}" >&2
   mvn -q -B dependency:get -Dtransitive=false -Dartifact="${artifact}" >/dev/null 2>&1 || true

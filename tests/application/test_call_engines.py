@@ -8466,6 +8466,27 @@ _CLAIMED_ARITIES = [
         ],
         id="KStream.to(TopicNameExtractor) — the real overload with no declared row",
     ),
+    # `alpakka-pekko` (w62). `Consumer.plainSource(ConsumerSettings, Subscription)`'s
+    # own arity-2 shape is unique in pekko-connectors-kafka 1.1.0 — no sibling
+    # overload shares its name and arity — so the near-miss is hypothetical, stated as
+    # such in the case id: a caller passing a plain object at argument 1, never built
+    # by `Subscriptions`, is exactly the shape a release adding a same-name-same-arity
+    # overload with a wider parameter type would produce, and the row must not read it.
+    pytest.param(
+        "pekko-connectors-kafka",
+        "org/apache/pekko/kafka/javadsl/Consumer#",
+        "plainSource",
+        "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/Subscription;)"
+        "Lorg/apache/pekko/stream/javadsl/Source;",
+        "(Lorg/apache/pekko/kafka/ConsumerSettings;Ljava/lang/Object;)"
+        "Lorg/apache/pekko/stream/javadsl/Source;",
+        [
+            CallArgument(kind="instance", symbol="org/apache/pekko/kafka/ConsumerSettings#"),
+            CallArgument(kind="instance", symbol="java/lang/Object#"),
+        ],
+        id="Consumer.plainSource(ConsumerSettings, Object) — hypothetical arity-2 sibling, "
+        "argument 1 a plain object",
+    ),
 ]
 
 
@@ -8475,6 +8496,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("kafka-clients")
 @pytest.mark.declines("kafka-consumer")
 @pytest.mark.declines("kafka-streams-sink")
+@pytest.mark.declines("pekko-connectors-kafka")
 @pytest.mark.declines("spring-pubsub")
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")

@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (2B, 3 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**63 of 78 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**64 of 79 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -751,6 +751,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `micronaut-pubsub` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
+| `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
@@ -2911,7 +2912,7 @@ Task 5):**
 | Java | **Kafka Streams** — `StreamsBuilder.stream/table/globalTable`, `KStream.to`, `Topology.addSource`/`addSink` (`G-31`) | split into three catalogs by owner — `kafka-streams.yml` (`StreamsBuilder`), `kafka-streams-sink.yml` (`KStream`), `kafka-streams-topology.yml` (`Topology`); the three are unrelated types with disjoint method sets, not one library reachable under more than one name (§3.1), the same reason `spring-websocket-client.yml`/`spring-stomp-client.yml` split | `call_site` | **supported** (3.6.2, w60): DSL sources (`stream`/`table`/`globalTable`, `Collection`/`Pattern` overloads included) and sinks (`KStream.to`), Processor API sink (`Topology.addSink`); `Topology.addSource`'s `String...` topics MEASURED to derive one inbound row per topic (w60 Step 4 — `single_call`'s `channel_arg` already reads an array argument element-wise, the `spring-websocket.yml` `addHandler` precedent) and read across its four `AutoOffsetReset`/`TimestampExtractor` prefixed forms; `to(TopicNameExtractor)` and the deprecated `through` are stated outside rather than read. Pinned by `tests/e2e/test_kafka_delivered.py` |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination`; gated on the build declaring `org.springframework.cloud:spring-cloud-stream`, and **any** method returning one of the three function interfaces is a candidate — see the boundary note below | `config_join` | ✅ shipped |
 | Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — rides 2F's `config_join` once catalogued |
-| Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
+| Java | **Apache Pekko Connectors Kafka (Alpakka)** `Consumer.plainSource`/`committableSource`/`atMostOnceSource`/`plainPartitionedSource`/`committablePartitionedSource(settings, Subscriptions.topics("t"))` (`alpakka-pekko`) | subscription is `channel_arg: 1`, built by a `Subscriptions` factory read through `channel_via` — `topics(String...)` MEASURED (w62, this task's Step 4) to arrive as one `array`-kind argument the existing `all_strings` reader already unpacks (the same mechanism `kafka-consumer.yml`'s `Arrays.asList` row carries); `topicPattern(String)` reads its one argument directly. `Producer.plainSink`/`committableSink`/`flexiFlow` name no topic — outbound is a stated boundary | `call_site` | ✅ shipped (pekko-connectors-kafka 1.1.0, w62). Pinned by `tests/e2e/test_kafka_delivered.py` |
 | Go | `segmentio/kafka-go` `kafka.NewReader(kafka.ReaderConfig{Topic: "t"})` | **topic is a struct-literal field** — easier than positional | `registration_call` | A |
 | Go | `IBM/sarama` (was `Shopify/sarama`), `confluent-kafka-go` | **both import paths are live in the wild** — the module declared the Shopify path for a period after the move, so neither can be dropped | `registration_call` | A |
 | TS | `kafkajs` `consumer.subscribe({topic})`, `producer.send({topic, messages})` | topic in an object literal | `registration_call` | A |

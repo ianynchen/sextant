@@ -308,6 +308,31 @@ SURFACES = (
         "6.4.0",
         "javalin-routing",
     ),
+    # `alpakka-pekko` (w62). `Consumer` is the owner `pekko-connectors-kafka.yml`
+    # declares in `matches.owner`; `Producer` is named nowhere in `matches` at all —
+    # its inbound-only catalog reads none of it — and is enumerated here anyway so
+    # the header comment's "no single call names both" claim about `plainSink`/
+    # `committableSink`/`flexiFlow` is a MEASUREMENT rather than a paragraph nobody
+    # checks. MEASURED (w62): neither owner declares a method taking a `String` at
+    # argument 0, a single `*Request` argument, or a route predicate — every method
+    # on both takes `ConsumerSettings`/`ProducerSettings`/`ActorRef`/a `Producer`/
+    # `CommitterSettings` first — so section 3 below lists no candidate for either,
+    # and `pekko-connectors-kafka.yml` ships with no `slice.outside` block at all,
+    # the same shape `kafka-consumer.yml`'s own file keeps for the identical reason.
+    Surface(
+        "pekko-connectors-kafka",
+        "org.apache.pekko.kafka.javadsl.Consumer",
+        "org.apache.pekko:pekko-connectors-kafka_2.13",
+        "1.1.0",
+        "alpakka-pekko",
+    ),
+    Surface(
+        "pekko-connectors-kafka",
+        "org.apache.pekko.kafka.javadsl.Producer",
+        "org.apache.pekko:pekko-connectors-kafka_2.13",
+        "1.1.0",
+        "alpakka-pekko",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and

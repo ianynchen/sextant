@@ -1,0 +1,82 @@
+id: pekko-connectors-kafka
+displayName: Apache Pekko Connectors Kafka (Alpakka)
+style: single_call
+protocol: kafka
+direction: inbound
+detect:
+  coordinates: ["org.apache.pekko:pekko-connectors-kafka_2.13", "org.apache.pekko:pekko-connectors-kafka_3"]
+measured:
+  - { artifact: org.apache.pekko:pekko-connectors-kafka_2.13, versions: ["1.1.0"],
+      identity: reported, by: scripts/probes/w62_pekko_kafka_surface.md }
+
+# MEASURED (this task, Step 4): `Subscriptions.topics(String...)` — a real varargs
+# factory, `([Ljava/lang/String;)Lorg/apache/pekko/kafka/AutoSubscription;` — arrives at
+# the scanner as ONE `array`-kind argument carrying its own `elements`, the identical
+# shape `kafka-consumer.yml`'s own `Arrays.asList` channel_via form reads (extractor
+# capability 9.15, 2O Task 13). `Consumer.plainSource`'s own second argument is
+# `{"kind":"unresolved","source":<the topics() call's result>}` — a linked call, exactly
+# what `channel_via`'s `source`-follow expects. `all_strings` reads the linked call's
+# arguments through `_expanded_arguments`, which unpacks an `array` slot into its
+# elements before resolving each as a string — so this row derives one inbound tuple per
+# subscribed topic with no new engine word, the same mechanism `kafka-consumer.yml`
+# already carries for `Arrays.asList`.
+requires: [call_site, string_constants]
+matches:
+  owner: org.apache.pekko.kafka.javadsl.Consumer
+  methods:
+    - name: plainSource
+      arity: 2
+      descriptor: "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/Subscription;)Lorg/apache/pekko/stream/javadsl/Source;"
+      channel_arg: 1
+      channel_via:
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topics, arg: all_strings }
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topicPattern, arg: 0 }
+    - name: committableSource
+      arity: 2
+      descriptor: "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/Subscription;)Lorg/apache/pekko/stream/javadsl/Source;"
+      channel_arg: 1
+      channel_via:
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topics, arg: all_strings }
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topicPattern, arg: 0 }
+    - name: atMostOnceSource
+      arity: 2
+      descriptor: "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/Subscription;)Lorg/apache/pekko/stream/javadsl/Source;"
+      channel_arg: 1
+      channel_via:
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topics, arg: all_strings }
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topicPattern, arg: 0 }
+    # MEASURED (w62): unlike the three rows above, `plainPartitionedSource` and
+    # `committablePartitionedSource` declare their second parameter as
+    # `AutoSubscription`, not the wider `Subscription` — a partitioned source has to
+    # know the exact partition assignment up front, which `ManualSubscription`
+    # (`Subscriptions.assignment`) cannot answer, so the JVM signature is narrower
+    # even though every `channel_via` form still applies (`Subscriptions.topics`/
+    # `topicPattern` both return `AutoSubscription`).
+    - name: plainPartitionedSource
+      arity: 2
+      descriptor: "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/AutoSubscription;)Lorg/apache/pekko/stream/javadsl/Source;"
+      channel_arg: 1
+      channel_via:
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topics, arg: all_strings }
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topicPattern, arg: 0 }
+    - name: committablePartitionedSource
+      arity: 2
+      descriptor: "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/AutoSubscription;)Lorg/apache/pekko/stream/javadsl/Source;"
+      channel_arg: 1
+      channel_via:
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topics, arg: all_strings }
+        - { owner: org.apache.pekko.kafka.Subscriptions, method: topicPattern, arg: 0 }
+shape_model: json
+
+# NO `slice.outside` for `org.apache.pekko.kafka.javadsl.Producer`, even though its
+# `plainSink`/`committableSink`/`flexiFlow` name no topic (the topic is on each
+# `ProducerRecord` the stream carries into the sink, and no single call names both —
+# stated in COVERAGE §5.8, not here). MEASURED (w62): none of `Producer`'s methods
+# take a `String` at argument 0, a single `*Request` argument, or a route predicate —
+# `plainSink`/`committableSink`/`flexiFlow` all take `ProducerSettings` first — so w19's
+# mechanical candidate test lists NOTHING for `Producer` at all
+# (`scripts/probes/w19_catalog_surface.md`). A `slice.outside` entry for it would be
+# STALE the moment it was written (`test_no_slice_names_a_method_the_enumeration_does_not_list`),
+# the identical reason `kafka-streams-sink.yml`'s own header keeps `repartition` out of
+# its slice and this file ships with no `slice:` key at all — the same shape
+# `kafka-consumer.yml` keeps for `KafkaConsumer.assign(Collection<TopicPartition>)`.

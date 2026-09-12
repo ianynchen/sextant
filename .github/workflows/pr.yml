@@ -62,6 +62,7 @@ jobs:
           mvn -q -B -f fixtures/orders-receivers/pom.xml compile
           mvn -q -B -f fixtures/orders-streams/pom.xml compile
           mvn -q -B -f fixtures/orders-javalin/pom.xml compile
+          mvn -q -B -f fixtures/orders-pekko/pom.xml compile
 
       - name: Prime the Gradle fixture's dependencies
         # The Gradle counterpart of the step above — the ONE fetch-allowed

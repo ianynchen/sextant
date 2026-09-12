@@ -1,0 +1,34 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-pekko</artifactId>
+  <version>1.0.0</version>
+  <!-- Pekko Connectors Kafka (`alpakka-pekko`), in its own module so that
+       `orders-service`'s pinned row counts do not move. API jars only; never runs. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.pekko</groupId><artifactId>pekko-connectors-kafka_2.13</artifactId><version>1.1.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.pekko</groupId><artifactId>pekko-stream_2.13</artifactId><version>1.1.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.pekko</groupId><artifactId>pekko-actor_2.13</artifactId><version>1.1.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>3.6.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.scala-lang</groupId><artifactId>scala-library</artifactId><version>2.13.14</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

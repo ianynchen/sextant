@@ -59,6 +59,11 @@ ARTIFACTS=(
   # `Implementation-Version:` — measured with `unzip -l` rather than assumed;
   # `pom.properties` is read here, the same order w61's own harness checks first.
   "io.javalin|javalin|6.4.0|pom.properties|version"
+  # alpakka-pekko (w62). pekko-connectors-kafka_2.13 writes no `pom.properties` (a
+  # Scala/sbt-built artifact, not `mvn`-built) but does write a manifest
+  # `Implementation-Version:` — measured with `unzip -l`, the same rung w61's own
+  # harness checks second.
+  "org.apache.pekko|pekko-connectors-kafka_2.13|1.1.0|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-jms|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   # W43. `SimpMessagingTemplate` lives here, and `convertAndSend` is declared one
   # level up on `MessageSendingOperations<D>` — so the harness's superclass walk is

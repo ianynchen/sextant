@@ -14,6 +14,7 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 RECEIVERS = FIXTURES / "orders-receivers"
 STREAMS = FIXTURES / "orders-streams"
+PEKKO = FIXTURES / "orders-pekko"
 
 
 @pytest.fixture(scope="module")
@@ -90,3 +91,37 @@ def test_a_processor_api_topology_derives_its_sink_and_source(streams_rows):
     assert ("kafka", "outbound", "streams.pa.out") in streams_rows, sorted(streams_rows)
     assert ("kafka", "inbound", "streams.pa.in.a") in streams_rows, sorted(streams_rows)
     assert ("kafka", "inbound", "streams.pa.in.b") in streams_rows, sorted(streams_rows)
+
+
+@pytest.fixture(scope="module")
+def pekko_rows(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(protocol, direction, path)` for every kafka row the Pekko Connectors Kafka
+    fixture derives."""
+    workspace_dir = tmp_path_factory.mktemp("kafka_pekko")
+    compile_fixture(PEKKO)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(PEKKO), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["protocol"]), str(row["direction"]), str(row["path"]))
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "kafka"
+        }
+    finally:
+        workspace.close()
+
+
+def test_pekko_consumer_sources_derive_one_inbound_row_per_subscribed_topic(pekko_rows):
+    """`Consumer.plainSource(settings, Subscriptions.topics(…))` — pekko-connectors-kafka
+    1.1.0. The topics are the varargs of a factory call at argument 1: the `channel_via`
+    form `kafka-consumer.yml` uses for `List.of`."""
+    expected = {
+        ("kafka", "inbound", "pk.orders.placed"),
+        ("kafka", "inbound", "pk.audit.a"),
+        ("kafka", "inbound", "pk.audit.b"),
+    }
+    missing = expected - pekko_rows
+    assert missing == set(), f"missing {sorted(missing)}. Derived: {sorted(pekko_rows)}"

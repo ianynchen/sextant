@@ -6815,8 +6815,12 @@ def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
     # `javap -c` on the fixture shows a call through a `Javalin`-typed local carrying
     # `io/javalin/Javalin` in the constant pool even though the method is a `default`
     # one it never overrides), which IS one library under two names, §3.1's own
-    # meaning, not a second library. A test that silently found none would pass
-    # forever once the key was renamed.
+    # meaning, not a second library. `pekko-connectors-kafka.yml` (`alpakka-pekko`,
+    # w62) does NOT make a tenth: it names exactly ONE owner
+    # (`org.apache.pekko.kafka.javadsl.Consumer`), so it is written as the scalar form
+    # every single-owner catalog uses, not a one-element list — §3.1's list form is for
+    # more than one spelling of ONE owner, never a wrapper around a single name. A test
+    # that silently found none would pass forever once the key was renamed.
     assert listed == 9, f"expected nine catalogs with an owner list, found {listed}"
 
 
