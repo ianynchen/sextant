@@ -69,7 +69,21 @@ interface — so a superclass-only walk reported all fourteen of `javalin.yml`'s
 get(…)` compiles and runs; walking `implements` the same way
 `w19_catalog_surface/sweep.py`'s own `declared_methods` already does closed it,
 for every existing catalog and this one alike (measured: zero rows for any
-other catalog changed verdict). It ends by printing the two tables below. Needs
+other catalog changed verdict). **`pekko-connectors-kafka.yml` (`alpakka-pekko`,
+w62) needed no further harness change**: its owner, `org.apache.pekko.kafka.
+javadsl.Consumer`, is a `final class` that declares its five matched methods
+directly rather than through an interface, so the existing `implements`-walk
+covers it with no new gap — all five new rows came back `declared`, and adding
+its artifact changed the verdict of zero other rows. It ends by printing the
+two tables below — **only the tables**, not this surrounding prose, which is
+why they are fenced between `<!-- table:start -->`/`<!-- table:end -->`
+markers rather than trusted to end where the last committed table happened to
+end: `descriptors.py` has no notion of this file's own sections, so a
+regeneration that pastes over "the rest of the file" rather than between the
+markers silently deletes everything below them (found on review after `alpakka-
+pekko` landed — the Verdict section, its numbered notes and the two closing
+sections were dropped from the committed file for one commit; restored here,
+verbatim, from the commit before that fix). Needs
 a JDK and Maven. Not a test: nothing in the suite runs it, and NFR-1's no-network
 rule governs the suite rather than evidence gathering.
 
@@ -102,6 +116,7 @@ version it had not run. The second table's `artifact` column is likewise the jar
 the run found the owner class in, discovered by indexing the archives rather than
 by a hand-written owner→artifact map.
 
+<!-- table:start -->
 | what the run read | 1.1.0 | 1.129.3 | 2.0.1 | 2.1.1 | 2.2.0 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.1.2 | 6.1.6 | 6.4.0 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | artifacts reporting this version | pekko-connectors-kafka_2.13 | google-cloud-pubsub | javax.jms-api | jakarta.websocket-api | jakarta.websocket-client-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients, kafka-streams | spring-ws-core | spring-cloud-gcp-pubsub | spring-jms, spring-messaging, spring-web, spring-websocket | javalin |
@@ -396,3 +411,123 @@ by a hand-written owner→artifact map.
 | 283 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 284 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 285 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+<!-- table:end -->
+
+## Verdict
+
+**Re-run for W10 (owner alternates).** `matches.owner` may now name a LIST — one library
+under the class name and under the interface a codebase more often declares its field as
+(§3.1) — and this harness asks its question of each name separately, because an interface
+declaring a SUBSET of the class's methods would match some call sites and silently miss the
+rest. 53 of the rows above are alternate owners, and every one is `declared`.
+
+`javax-jms.yml` is measured here too, and is NOT an alternate: an alternate is one library
+under several names, while `javax.jms-api 2.0.1` and `jakarta.jms-api 3.1.0` are two jars at
+two versions, each needing its own measurement (W12). All twelve of its rows come back
+`declared`, and none of its descriptors is its `jakarta` counterpart with the package
+swapped — `Session`'s own parameter and return types moved with the API.
+
+Three alternates were applied after the first W10 run and are measured here for the first
+time: `KafkaOperations` on `spring-kafka-template`, and Kafka's own `Consumer` and
+`Producer` interfaces on `kafka-consumer` and `kafka-clients`. They were named in the
+design and left out of the catalogs, which is the shape a declared-but-absent capability
+takes — the same one the descriptor sweep exists to catch, from the other side.
+
+The run also caught a wrong artifact before it could be committed: `AmqpTemplate` is in
+`spring-amqp`, not in `spring-rabbit` where `RabbitTemplate` lives, so the harness ABORTED
+with *"add its coordinate to run.sh rather than leaving it unmeasured"* rather than filling
+a column it could not resolve. A provenance naming spring-rabbit would have been
+uncheckable.
+
+**`javalin.yml` (w61) found a real gap in this harness itself, not in a catalog.**
+`declared_descriptors` walked `extends` only, because every owner measured here so
+far reaches its methods through a superclass chain (`AbstractMessagingTemplate`,
+`RestOperations` notwithstanding — `RestTemplate` REDECLARES its interface's methods
+as its own concrete overrides, so the class itself already carries them). Javalin
+does not: `io.javalin.Javalin implements JavalinDefaultRoutingApi<Javalin>` and never
+overrides `get`/`post`/`put`/`delete`/`patch`/`head`/`options` at all — they run
+purely as `default` methods on the interface — so the first run of this harness
+after `javalin.yml` was written reported all fourteen `Javalin`-owned rows
+`NOT DECLARED`, while the fourteen `JavalinDefaultRoutingApi`-owned alternates (the
+same descriptors, the other name in the same `matches.owner` list) came back
+`declared`. `javap -c` on the fixture settles which of the two readings is the live
+one: `app.get(…)` on a `Javalin`-typed local compiles to `invokevirtual
+io/javalin/Javalin.get` — so the call site DOES carry `Javalin` as its owner, and a
+harness that could not see the method there would have called a correct row
+`NOT DECLARED`. `declared_descriptors` now walks `implements` alongside `extends`
+(mirroring `w19_catalog_surface/sweep.py`'s own `declared_methods`, which already
+did), and re-running every other artifact above changed no verdict — the fix adds
+supertypes to the walk, it does not touch what the walk already found.
+
+**Found on review: a SECOND implementer of the same interface, same shape,
+no further harness change needed.** `io.javalin.router.JavalinDefaultRouting`
+(`public final class ... implements JavalinDefaultRoutingApi<JavalinDefaultRouting>`,
+reached through `RouterConfig.mount(Consumer<JavalinDefaultRouting>)`) never
+overrides the verb methods either — identical to `Javalin`'s own shape — and the
+`implements`-walking fix above already covers it: all fourteen
+`JavalinDefaultRouting`-owned rows came back `declared` on the run that added
+them, with no second fix required.
+
+**`pekko-connectors-kafka.yml` (`alpakka-pekko`, w62) added a fifth artifact and
+five new rows, and moved no other verdict.** `org.apache.pekko.kafka.javadsl.
+Consumer` is a `final class` declaring `plainSource`/`committableSource`/
+`atMostOnceSource`/`plainPartitionedSource`/`committablePartitionedSource`
+directly, not through an interface it never overrides — unlike `Javalin`'s own
+shape — so this addition needed no walk fix, only the artifact's coordinate in
+`run.sh`. All five rows came back `declared`, including the two
+`plainPartitionedSource`/`committablePartitionedSource` rows whose own
+descriptor takes `AutoSubscription` rather than the wider `Subscription` the
+other three take (measured with `javap`, not assumed from the other three).
+Diffed the regenerated table against the pre-change committed file: zero
+verdict changes for any catalog other than `pekko-connectors-kafka`.
+
+
+1. **Every descriptor a shipped catalog declares is real** — named by `javap -p
+   -s` on the owner class or on a superclass reachable from the same jar set, at
+   the versions above. Nothing in the sweep was mistyped, and nothing was
+   transcribed from a source-level signature. **This is one direction only, and
+   the zero failures are not a completeness result** (`A-Mi5`): the probe asks
+   "is every declared descriptor real" and never "is every real overload
+   declared". The second question is answered nowhere in this file — see "what
+   this probe deliberately did not measure" — so a `0 NOT DECLARED` column
+   means no row is wrong, not that no overload is missing. `A-M3`–`A-M7` are
+   findings of exactly the second kind.
+2. **An inherited method is still the owner's**, and the check has to know it.
+   `SqsTemplate` declares only `send(Consumer)` itself; the arity-1 and arity-2
+   forms come from `AbstractMessagingTemplate`. A call on a variable typed
+   `SqsTemplate` records `SqsTemplate` as the owner all the same — javac emits
+   the compile-time qualifying type — so a descriptor check that stopped at
+   declared methods would have called a correct row wrong.
+3. **The check is offline and the measurement is not.** The suite reads this
+   file; only this harness reads a jar. That split is what keeps NFR-1's
+   no-network rule and §5.4's measured-evidence rule from pulling against each
+   other.
+
+## What this probe deliberately did not measure
+
+- **Whether the owner is the type a real call records — no longer a gap, and this
+  entry is kept as the record of one.** A call made through an interface records
+  THAT type, and this paragraph used to say those names "match no shipped catalog,
+  whose `matches.owner` is single-valued". Both halves are now false: §3.1 widened
+  `matches.owner` to a list, seven catalogs declare an alternate, and 53 of the rows
+  in the table above are those very owners — `SqsOperations`, `AmqpTemplate`,
+  `JmsOperations`, `RestOperations`, `KafkaOperations`, `Consumer`, `Producer` —
+  every one `declared`. What the probe still does not measure is whether some FURTHER
+  interface or supertype exists that no catalog names; the harness answers "is this
+  owner real", never "is this the complete set of names this library is held under".
+- **Whether an overload the catalogs do NOT declare exists.** The table answers
+  "is this string real", never "is this the complete overload set". The catalogs'
+  own comments carry the overload lists, and each names `javap` as its check.
+- **`spring-webflux-router.yml`'s `methods: [route, nest]`.** A bare name list
+  read by the `combinator` engine, which has no `descriptor` support at all
+  (`engines/combinator.py` matches on owner and name alone). Different grammar,
+  different engine; nothing here applies to it.
+- **Any language but the JVM's.** `descriptor` is whatever a module's own
+  extractor records at `target.descriptor`; this harness reads JVM bytecode
+  because every catalog declaring one today names a JVM owner.
+
+## How the verdict is consumed
+
+`tests/architecture/test_catalog_descriptors.py` pins every shipped catalog
+against the table above and fails on a descriptor that was never measured, a
+measurement no catalog still declares, or a verdict other than `declared`.
