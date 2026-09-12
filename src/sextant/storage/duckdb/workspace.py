@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import duckdb
@@ -1043,6 +1044,13 @@ class DuckDbWorkspace:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._connection = duckdb.connect(str(path))
+        # EXPERIMENT (docs/performance.md P-2): DuckDB defaults to every core it can see,
+        # and four test workers on a four-core runner each opening several workspaces
+        # oversubscribe it. `SEXTANT_DUCKDB_THREADS` caps one connection's threads; unset
+        # means DuckDB's own default, so a plain run changes nothing.
+        threads = os.environ.get("SEXTANT_DUCKDB_THREADS")
+        if threads:
+            self._connection.execute(f"SET threads = {int(threads)}")
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._connection.execute(schema)
         self._add_columns_the_schema_has_gained(schema)

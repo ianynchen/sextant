@@ -10,6 +10,7 @@ each file. The build-and-install logic itself lives in `fixture_stub.py`,
 because CI's priming step needs it before the suite exists.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -92,3 +93,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     slow = [i for i in items if str(Path(i.path).relative_to(root)) in _PIPELINE_FILES]
     fast = [i for i in items if str(Path(i.path).relative_to(root)) not in _PIPELINE_FILES]
     items[:] = slow + fast
+
+
+# EXPERIMENT (docs/performance.md P-2): under xdist, every worker's DuckDB connections
+# share the runner's cores with three other workers' JVMs and DuckDBs. One thread per
+# connection per worker is the hypothesis; the CI run this ships on is the measurement.
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    os.environ.setdefault("SEXTANT_DUCKDB_THREADS", "1")
