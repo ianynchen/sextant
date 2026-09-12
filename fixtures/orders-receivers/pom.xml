@@ -1,0 +1,62 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-receivers</artifactId>
+  <version>1.0.0</version>
+  <!-- The RECEIVE half of the messaging templates (`G-44`), in its own module so that
+       `orders-service`'s pinned row counts do not move. API jars only; never runs. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.amqp</groupId><artifactId>spring-rabbit</artifactId><version>3.1.4</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.amqp</groupId><artifactId>spring-amqp</artifactId><version>3.1.4</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-core</artifactId><version>6.1.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- `RabbitTemplate` implements `BeanFactoryAware`/`BeanNameAware` (spring-beans) and
+         `ApplicationContextAware`/`Lifecycle` (spring-context); every dependency here is
+         exclusion-stripped to API jars only, so these two are named directly rather than
+         arriving transitively. -->
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-beans</artifactId><version>6.1.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>6.1.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-jms</artifactId><version>6.1.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.jms</groupId><artifactId>jakarta.jms-api</artifactId><version>3.1.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.kafka</groupId><artifactId>spring-kafka</artifactId><version>3.1.4</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>3.6.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.awspring.cloud</groupId><artifactId>spring-cloud-aws-sqs</artifactId><version>3.1.1</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-messaging</artifactId><version>6.1.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

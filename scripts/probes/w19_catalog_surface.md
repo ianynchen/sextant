@@ -95,8 +95,8 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | 49 | **1 of 49** |
 | G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | 10 | **1 of 10** |
-| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | **1 of 88** |
-| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | **1 of 8** |
+| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | **4 of 88** |
+| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | **4 of 8** |
 | G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | **1 of 12** |
 | G-44 | `spring-sqs-template` | `SqsOperations` | — | 4 | — | — | — | **1 of 4** |
 | G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | 20 | — | **11 of 20** |
@@ -111,7 +111,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | 2 | **1 of 2** |
 | G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
 | G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | **1 of 29** |
-| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **0 of 28** |
+| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **1 of 28** |
 
 - A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
 
@@ -132,8 +132,8 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | --- | --- | --- | --- | --- | --- | --- |
 | `spring-jms-template` | `JmsTemplate` | 48 | **11** | **0** | **0** | **11** |
 | `spring-jms-template` | `JmsOperations` | 9 | **9** | **0** | **0** | **9** |
-| `spring-rabbit-template` | `RabbitTemplate` | 87 | **20** | **0** | **0** | **20** |
-| `spring-rabbit-template` | `AmqpTemplate` | 7 | **7** | **0** | **0** | **7** |
+| `spring-rabbit-template` | `RabbitTemplate` | 84 | **17** | **0** | **0** | **17** |
+| `spring-rabbit-template` | `AmqpTemplate` | 4 | **4** | **0** | **0** | **4** |
 | `spring-sqs-template` | `SqsTemplate` | 11 | **7** | **0** | **0** | **7** |
 | `spring-sqs-template` | `SqsOperations` | 3 | **3** | **0** | **0** | **3** |
 | `spring-pubsub` | `PubSubTemplate` | 9 | **0** | **0** | **0** | **0** |
@@ -148,7 +148,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-webflux-router` | `CoRouterFunctionDslKt` | 1 | **0** | **0** | **1** | **1** |
 | `spring-webflux-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
 | `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
-| `aws-sqs-sdk` | `SqsAsyncClient` | 28 | **0** | **25** | **0** | **25** |
+| `aws-sqs-sdk` | `SqsAsyncClient` | 27 | **0** | **24** | **0** | **24** |
 
 **`spring-jms-template` / `JmsTemplate`**
 
@@ -160,11 +160,11 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 **`spring-rabbit-template` / `RabbitTemplate`**
 
-> by name at argument 0 (20): `addConsumerArg`, `convertSendAndReceive`, `convertSendAndReceiveAsType`, `nullSafeExchange`, `nullSafeRoutingKey`, `receive`, `receiveAndConvert`, `receiveAndReply`, `removeConsumerArg`, `send`, `sendAndReceive`, `setBeanName`, `setCorrelationKey`, `setDefaultReceiveQueue`, `setEncoding`, `setExchange`, `setMandatoryExpressionString`, `setReplyAddress`, `setRoutingKey`, `setUserIdExpressionString`
+> by name at argument 0 (17): `addConsumerArg`, `convertSendAndReceive`, `convertSendAndReceiveAsType`, `nullSafeExchange`, `nullSafeRoutingKey`, `removeConsumerArg`, `send`, `sendAndReceive`, `setBeanName`, `setCorrelationKey`, `setDefaultReceiveQueue`, `setEncoding`, `setExchange`, `setMandatoryExpressionString`, `setReplyAddress`, `setRoutingKey`, `setUserIdExpressionString`
 
 **`spring-rabbit-template` / `AmqpTemplate`**
 
-> by name at argument 0 (7): `convertSendAndReceive`, `convertSendAndReceiveAsType`, `receive`, `receiveAndConvert`, `receiveAndReply`, `send`, `sendAndReceive`
+> by name at argument 0 (4): `convertSendAndReceive`, `convertSendAndReceiveAsType`, `send`, `sendAndReceive`
 
 **`spring-sqs-template` / `SqsTemplate`**
 
@@ -232,7 +232,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 **`aws-sqs-sdk` / `SqsAsyncClient`**
 
-> by a `*Request` object (25): `addPermission`, `cancelMessageMoveTask`, `changeMessageVisibility`, `changeMessageVisibilityBatch`, `createQueue`, `deleteMessage`, `deleteMessageBatch`, `deleteQueue`, `getQueueAttributes`, `getQueueUrl`, `listDeadLetterSourceQueues`, `listDeadLetterSourceQueuesPaginator`, `listMessageMoveTasks`, `listQueueTags`, `listQueues`, `listQueuesPaginator`, `purgeQueue`, `receiveMessage`, `removePermission`, `sendMessage`, `sendMessageBatch`, `setQueueAttributes`, `startMessageMoveTask`, `tagQueue`, `untagQueue`
+> by a `*Request` object (24): `addPermission`, `cancelMessageMoveTask`, `changeMessageVisibility`, `changeMessageVisibilityBatch`, `createQueue`, `deleteMessage`, `deleteMessageBatch`, `deleteQueue`, `getQueueAttributes`, `getQueueUrl`, `listDeadLetterSourceQueues`, `listDeadLetterSourceQueuesPaginator`, `listMessageMoveTasks`, `listQueueTags`, `listQueues`, `listQueuesPaginator`, `purgeQueue`, `receiveMessage`, `removePermission`, `sendMessageBatch`, `setQueueAttributes`, `startMessageMoveTask`, `tagQueue`, `untagQueue`
 
 ### 3. Every unread candidate, one per row
 
@@ -263,9 +263,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `convertSendAndReceiveAsType` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `nullSafeExchange` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `nullSafeRoutingKey` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receive` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receiveAndConvert` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `receiveAndReply` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `removeConsumerArg` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `send` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `sendAndReceive` | `argument 0` |
@@ -280,9 +277,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `setUserIdExpressionString` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertSendAndReceive` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `convertSendAndReceiveAsType` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receive` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receiveAndConvert` | `argument 0` |
-| `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `receiveAndReply` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `send` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.core.AmqpTemplate` | `sendAndReceive` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `receive` | `argument 0` |

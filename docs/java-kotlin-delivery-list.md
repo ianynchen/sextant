@@ -82,7 +82,7 @@ what forces this list to shrink rather than rot. A feature missing from both thi
 
 ```intention-test-missing
 SSE | gRPC | Kafka
-JMS and AMQP | Google Pub/Sub | Meridian
+Google Pub/Sub | Meridian
 ```
 
 **Severity, carried here** so this register stands on its own. Folded from

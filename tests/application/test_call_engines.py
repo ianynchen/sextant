@@ -7391,6 +7391,38 @@ def test_the_rabbit_arity_two_routing_key_overload_still_derives(tmp_path: Path)
     assert (endpoint["path"], endpoint["resolution"]) == ("order.created", "resolved")
 
 
+@pytest.mark.declines("spring-rabbit-template")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_a_rabbit_receive_from_the_default_queue_derives_nothing(tmp_path: Path):
+    """§10 near-miss for `G-44`'s receive rows: `receive(long)` — a timeout, no queue —
+    reads the template's configured default queue. It shares its NAME and its ARITY with
+    the addressable `receive(String)` overload and differs only in descriptor, which is
+    what the descriptor pin (`single_call.claimed-arity`) is for. A row here would
+    publish a queue nobody named."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollDefaultQueue()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RABBIT_TEMPLATE,
+                name="receive",
+                descriptor="(J)Lorg/springframework/amqp/core/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="long", value=500)],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 JMS_TEMPLATE = "org/springframework/jms/core/JmsTemplate#"
 
 

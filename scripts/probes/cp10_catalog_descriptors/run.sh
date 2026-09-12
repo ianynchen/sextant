@@ -61,6 +61,11 @@ ARTIFACTS=(
   # server catalog matches on do too — the `-api` jar at 2.2.0 holds ONLY
   # `jakarta/websocket/server/**`, measured.
   "jakarta.websocket|jakarta.websocket-client-api|2.2.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `jakarta-websocket-programmatic.yml` matches `ServerEndpointConfig$Builder.create`,
+  # declared in the SERVER api jar rather than the client one above; this entry was
+  # missing (the catalog's own `measured:` cites this file, but the harness could not
+  # reach its jar), which aborted every run of this probe rather than any one catalog.
+  "jakarta.websocket|jakarta.websocket-api|2.1.1|pom.properties|version"
   "org.springframework|spring-web|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-websocket|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.amqp|spring-rabbit|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
