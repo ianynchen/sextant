@@ -55,6 +55,7 @@ jobs:
         run: |
           python tests/fixture_stub.py
           mvn -q -B -f fixtures/orders-service/pom.xml compile
+          mvn -q -B -f fixtures/orders-soap-final/pom.xml compile
           mvn -q -B -f fixtures/orders-spring7/pom.xml compile
           mvn -q -B -f fixtures/spring-integration-probe/pom.xml compile
           mvn -q -B -f fixtures/orders-micronaut/pom.xml compile

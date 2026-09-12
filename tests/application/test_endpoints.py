@@ -5861,8 +5861,9 @@ def _gate_facts(
     *,
     owner_kind: ConstructKind,
     type_annotations: dict[str, dict],
-    method_annotation: str,
+    method_annotation: str | None,
     method_args: dict,
+    method_modifiers: dict[str, bool] | None = None,
 ) -> None:
     """One type of the given construct kind carrying the given type-level
     annotations, and one method on it carrying one mapping annotation.
@@ -5870,7 +5871,13 @@ def _gate_facts(
     Deliberately generic: the four gates below differ only in which of those
     three knobs the framework's own rule turns, and writing four near-identical
     fact builders is how a near-miss ends up differing from its positive in
-    more than the one conjunct under test."""
+    more than the one conjunct under test.
+
+    `method_annotation=None` writes no annotation on the method at all — the
+    `jakarta-jws` `members: public_methods` shape, whose gate is `@WebService`
+    on the class rather than anything stated on the member. `method_modifiers`
+    lets a near-miss vary the method's own `SymbolFact.modifiers`, unset by
+    every other caller here."""
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/gate/Subject.java",
@@ -5897,6 +5904,7 @@ def _gate_facts(
             # `reply` block reads the handler's own signature, and a method
             # fact carrying none is a shape the extractor never emits.
             signature=Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type="")),
+            **({"modifiers": method_modifiers} if method_modifiers is not None else {}),
         ),
     ]
     facts += [
@@ -5908,14 +5916,15 @@ def _gate_facts(
         )
         for fqn, args in type_annotations.items()
     ]
-    facts.append(
-        AnnotationFact(
-            document_id="doc_1",
-            target=handler,
-            retention="runtime",
-            use=AnnotationUse(annotation=method_annotation, args=method_args),
+    if method_annotation is not None:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_1",
+                target=handler,
+                retention="runtime",
+                use=AnnotationUse(annotation=method_annotation, args=method_args),
+            )
         )
-    )
     write_fact_file(root / "Subject.jsonl", document, facts)
 
 
@@ -7768,3 +7777,24 @@ def test_a_micronaut_or_quarkus_annotation_from_another_package_derives_nothing(
         )
         == []
     ), f"{catalog_id} matched an annotation from another package"
+
+
+@pytest.mark.declines("jakarta-jws")
+@pytest.mark.pins("derive_endpoints.members-exclude-final")
+def test_a_final_public_method_on_a_web_service_derives_nothing(tmp_path: Path):
+    """CP-13 Q4: `isWebMethodBySpec` excludes a `final` method the same way it excludes a
+    `static` one. `jakarta-jws` gates its members on `@WebService` alone — the member
+    carries no annotation of its own — so this near-miss varies the method's own
+    `modifiers` rather than an annotation package or a construct kind."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-jws",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={"jakarta/jws/WebService#": {}},
+            method_annotation=None,
+            method_args={},
+            method_modifiers={"final": True},
+        )
+        == []
+    )

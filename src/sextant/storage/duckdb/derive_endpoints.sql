@@ -727,6 +727,10 @@ member_declarations AS (
     JOIN symbols s ON s.symbol = em.symbol
     WHERE em.nearest = 1
       AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
+      -- A `final` member is not exposed either: JAX-WS's `isWebMethodBySpec` (CP-13 Q4)
+      -- excludes it beside `static`, and both catalogs that declare `$members` are JAX-WS.
+      -- `modifiers.final` is written for every method (`ClassScanner.methodModifiersJson`).
+      AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation

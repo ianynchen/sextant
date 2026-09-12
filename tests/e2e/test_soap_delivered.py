@@ -9,11 +9,15 @@ satisfied by editing `COVERAGE.md`, and it goes green only when the feature work
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from fixture_build import FIXTURES, compile_fixture
+from sextant.cli.app import cli
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
+SOAP_FINAL = FIXTURES / "orders-soap-final"
 NS = "http://orders.example.com/ws"
 
 
@@ -61,3 +65,32 @@ def test_the_single_payload_root_and_soap_action_forms_still_derive(soap_address
         "http://orders.example.com/action/cancelOrder",
     ):
         assert address in soap_addresses, f"{address} stopped deriving"
+
+
+@pytest.fixture(scope="module")
+def soap_final_paths(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
+    """`orders-soap-final`, analysed on its own: a `@WebService` class declaring one
+    ordinary public method and one `public final` method (Task 9, `jaxws-public-final`)."""
+    workspace_dir = tmp_path_factory.mktemp("soap-final")
+    compile_fixture(SOAP_FINAL)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(SOAP_FINAL), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            str(row["path"])
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "soap"
+        }
+    finally:
+        workspace.close()
+
+
+def test_a_public_final_method_is_not_an_operation(soap_final_paths):
+    """JAX-WS RI 4.0.2 `isWebMethodBySpec` excludes `static` and `final` (CP-13 Q4). Ours
+    excluded `static` only, so a `public final` helper on a `@WebService` derived a SOAP
+    operation nobody serves. `modifiers.final` has been in the facts since W7."""
+    assert any(p.endswith("quote") for p in soap_final_paths), sorted(soap_final_paths)
+    assert not any(p.endswith("internalAudit") for p in soap_final_paths), sorted(soap_final_paths)

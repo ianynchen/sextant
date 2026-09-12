@@ -663,6 +663,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.members-exclude-final": Guard(
+        what="a `$members` row excludes a `final` method the same way it already excludes "
+        "a `static` one",
+        why="JAX-WS RI 4.0.2's `isWebMethodBySpec` excludes `static` AND `final` (CP-13 "
+        "Q4), and both catalogs that declare `members: public_methods` are JAX-WS. Without "
+        "this a `public final` helper method on a `@WebService` class — a common way to "
+        "mark one non-overridable — is published as a SOAP operation nobody serves "
+        "(`jaxws-public-final`)",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="      AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'",
+                replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- the two NON-WIRE styles (2O design §4) ----------------------------
     "scheduled_work.declaration-is-a-method": Guard(
         what="a schedule annotation counts only where its target is a METHOD — a use on an "
