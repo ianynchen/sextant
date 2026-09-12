@@ -93,8 +93,8 @@ Methods every class carries are excluded from both sides of every count: <clinit
 
 | gap | catalog | owner | 2.25.31 | 3.1.1 | 3.1.4 | 5.1.2 | 6.1.6 | reads |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | 49 | **1 of 49** |
-| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | 10 | **1 of 10** |
+| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | 49 | **5 of 49** |
+| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | 10 | **5 of 10** |
 | G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | **4 of 88** |
 | G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | **4 of 8** |
 | G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | **1 of 12** |
@@ -130,8 +130,8 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 | catalog | owner | unread | name at arg 0 | single `*Request` argument | declares a route | distinct |
 | --- | --- | --- | --- | --- | --- | --- |
-| `spring-jms-template` | `JmsTemplate` | 48 | **11** | **0** | **0** | **11** |
-| `spring-jms-template` | `JmsOperations` | 9 | **9** | **0** | **0** | **9** |
+| `spring-jms-template` | `JmsTemplate` | 44 | **7** | **0** | **0** | **7** |
+| `spring-jms-template` | `JmsOperations` | 5 | **5** | **0** | **0** | **5** |
 | `spring-rabbit-template` | `RabbitTemplate` | 84 | **17** | **0** | **0** | **17** |
 | `spring-rabbit-template` | `AmqpTemplate` | 4 | **4** | **0** | **0** | **4** |
 | `spring-sqs-template` | `SqsTemplate` | 11 | **7** | **0** | **0** | **7** |
@@ -152,11 +152,11 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 **`spring-jms-template` / `JmsTemplate`**
 
-> by name at argument 0 (11): `browse`, `browseSelected`, `execute`, `receive`, `receiveAndConvert`, `receiveSelected`, `receiveSelectedAndConvert`, `send`, `sendAndReceive`, `setDefaultDestinationName`, `setSessionAcknowledgeModeName`
+> by name at argument 0 (7): `browse`, `browseSelected`, `execute`, `send`, `sendAndReceive`, `setDefaultDestinationName`, `setSessionAcknowledgeModeName`
 
 **`spring-jms-template` / `JmsOperations`**
 
-> by name at argument 0 (9): `browse`, `browseSelected`, `execute`, `receive`, `receiveAndConvert`, `receiveSelected`, `receiveSelectedAndConvert`, `send`, `sendAndReceive`
+> by name at argument 0 (5): `browse`, `browseSelected`, `execute`, `send`, `sendAndReceive`
 
 **`spring-rabbit-template` / `RabbitTemplate`**
 
@@ -241,10 +241,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `browse` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `browseSelected` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `execute` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receive` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveAndConvert` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveSelected` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `receiveSelectedAndConvert` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `send` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `sendAndReceive` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsTemplate` | `setDefaultDestinationName` | `argument 0` |
@@ -252,10 +248,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `browse` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `browseSelected` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `execute` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receive` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveAndConvert` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveSelected` | `argument 0` |
-| `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `receiveSelectedAndConvert` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `send` | `argument 0` |
 | `spring-jms-template` | `org.springframework.jms.core.JmsOperations` | `sendAndReceive` | `argument 0` |
 | `spring-rabbit-template` | `org.springframework.amqp.rabbit.core.RabbitTemplate` | `addConsumerArg` | `argument 0` |
@@ -422,3 +414,4 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `startMessageMoveTask` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `tagQueue` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `untagQueue` | `request object` |
+

@@ -7490,6 +7490,80 @@ def test_the_jms_arity_two_destination_name_overload_still_derives(tmp_path: Pat
     assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")
 
 
+@pytest.mark.declines("spring-jms-template")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_a_jms_receive_selected_from_a_destination_object_derives_nothing(tmp_path: Path):
+    """`G-44`'s receive-half arity collision: `receiveSelected(Destination, String)`
+    shares its NAME and its ARITY with the addressable `receiveSelected(String,
+    String)` row and differs only in descriptor — argument 0 is a `Destination`
+    object built elsewhere, never a string constant a call site carries (measured,
+    w59). A row here would read that object as if it were the destination name,
+    the same fabrication `single_call.claimed-arity` exists to stop."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollSelectedFromDestination()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=JMS_TEMPLATE,
+                name="receiveSelected",
+                descriptor="(Ljakarta/jms/Destination;Ljava/lang/String;)Ljakarta/jms/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+                CallArgument(kind="string", value="priority > 5"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_jms_receive_selected_at_arity_one_reads_the_default_destination_derives_nothing(
+    tmp_path: Path,
+):
+    """`G-44`'s other trap, on the same method name: `receiveSelected(String)` — arity
+    1 — takes a SELECTOR and reads the default destination (spring-jms's own javadoc).
+    Its descriptor, `(Ljava/lang/String;)Ljakarta/jms/Message;`, happens to equal
+    `receive(String)`'s, but the catalog separates overloads by NAME first, so this
+    call never reaches a `receiveSelected` candidate at all — the catalog declares no
+    arity-1 row for this name (`tests/e2e/test_jms_and_amqp_delivered.py` asserts the
+    same fact against real bytecode). Not `@pytest.mark.declines`: there is no
+    same-name, same-arity descriptor collision here for a guard to defend, so no
+    `scripts/guard_check.py` id fits — the boundary is the catalog's own `methods:`
+    list declaring no row, not a removable conjunct in the engine. A row here would
+    publish `priority > 5` as a queue."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollDefaultSelected()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=JMS_TEMPLATE,
+                name="receiveSelected",
+                descriptor="(Ljava/lang/String;)Ljakarta/jms/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="priority > 5")],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 # --- Descriptor sweep (2O), R1: the SAME overload collision as Task 7's, still
 # live in `spring-ws-template.yml`. `marshalSendAndReceive` overloads at arity 2
 # as `(String uri, Object payload)` and `(Object payload,

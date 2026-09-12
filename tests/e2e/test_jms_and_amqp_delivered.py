@@ -51,3 +51,20 @@ def test_rabbit_template_receives_derive_one_inbound_row_per_queue(receiver_rows
     assert ("amqp", "outbound", "recv.orders.rpc") not in receiver_rows, (
         "receiveAndReply derived an OUTBOUND row on the receive queue; the reply address is per-message"
     )
+
+
+def test_jms_template_receives_derive_one_inbound_row_per_destination_name(receiver_rows):
+    """`G-44`, JMS half. Four shapes naming the destination at argument 0. And the trap:
+    `receiveSelected("priority > 5")` — arity 1 — takes a SELECTOR and reads the default
+    destination; a name-and-arity read would publish the selector as a queue."""
+    expected = {
+        ("jms", "inbound", "recv.jms.raw"),
+        ("jms", "inbound", "recv.jms.selected"),
+        ("jms", "inbound", "recv.jms.converted"),
+        ("jms", "inbound", "recv.jms.selected.converted"),
+    }
+    missing = expected - receiver_rows
+    assert missing == set(), f"missing {sorted(missing)}. Derived: {sorted(receiver_rows)}"
+    assert ("jms", "inbound", "priority > 5") not in receiver_rows, (
+        "a selector was published as a queue"
+    )

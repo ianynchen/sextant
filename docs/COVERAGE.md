@@ -1619,8 +1619,8 @@ owner's declared methods out of the jar and cross-references the catalog as load
 
 | catalog | owner | reads | of those unread, can address a wire |
 |---|---|---|---|
-| `spring-jms-template` | `JmsTemplate` (spring-jms 6.1.6) | **1 of 49** | 11 |
-| `spring-jms-template` | `JmsOperations` | **1 of 10** | 9 |
+| `spring-jms-template` | `JmsTemplate` (spring-jms 6.1.6) | **5 of 49** | 7 |
+| `spring-jms-template` | `JmsOperations` | **5 of 10** | 5 |
 | `spring-rabbit-template` | `RabbitTemplate` (spring-rabbit 3.1.4) | **4 of 88** | 17 |
 | `spring-rabbit-template` | `AmqpTemplate` (spring-amqp 3.1.4) | **4 of 8** | 4 |
 | `spring-sqs-template` | `SqsTemplate` (spring-cloud-aws-sqs 3.1.1) | **1 of 12** | 7 |
@@ -1663,8 +1663,8 @@ enumerated separately (`scripts/probes/w19b_type_and_annotation_surface.md`):
 | `spring-data-rest` | repository contracts across 12 Spring Data artifacts | **7 of 28** |
 
 - **`spring-integration`'s cost is bounded**: it mints no endpoint rows, it files
-  `channel_destination` questions, so nine unread annotations under-report a QUESTION
-  list rather than producing nine wrong rows. Two further gaps are recorded rather than
+  `channel_destination` questions, so four unread annotations under-report a QUESTION
+  list rather than producing four wrong rows. Two further gaps are recorded rather than
   closed: `@InboundChannelAdapter("orders")` — the shorthand, whose `value()` is an
   `@AliasFor` of `channel` — filed no question at all until this change added the second
   row, and both annotations this catalog reads are `@Repeatable` while `config_join` has
@@ -1673,9 +1673,10 @@ enumerated separately (`scripts/probes/w19b_type_and_annotation_surface.md`):
   declared in the slice anyway, and emitted into the table so the audit holds them.
 - **`spring-data-rest`'s roster IS the whole rule.** A `derived_resource` match has no
   other evidence, so a contract missing from the roster removes the row entirely rather
-  than degrading it. Every Mongo, R2DBC, Cassandra, Elasticsearch and Neo4j repository
-  derives nothing, and so does every reactive, coroutine and RxJava3 one — including
-  those declared in `spring-data-commons` beside the contracts the roster does name.
+  than degrading it. `MongoRepository` is now read (7 of 28); every R2DBC, Cassandra,
+  Elasticsearch and Neo4j repository still derives nothing, and so does every reactive,
+  coroutine and RxJava3 one — including `ReactiveMongoRepository` and those declared in
+  `spring-data-commons` beside the contracts the roster does name.
   *Scoped to a module-local fact stream: a repo declaring `extract_libraries` for one
   of these artifacts may cross the jar hop for the contracts whose parents the roster
   does name. Not measured — named so the claim is not read as absolute.*
@@ -3099,6 +3100,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Java | Micronaut `@JMSListener` + `@Queue`/`@Topic`, `@JMSProducer` + the same on an interface | one catalog per direction, as for Kafka above | `annotation` | ✅ shipped (micronaut-jms-core 4.2.0, W58). Pinned by `tests/e2e/test_messaging_micronaut_delivered.py` |
 | Java | `JmsTemplate.send` / `convertAndSend` | the declared row is `convertAndSend(String destinationName, Object message)`, pinned to that overload by its `descriptor` | `registration_call` | ✅ shipped — **read with the two collision rows below**, which it shares with `RabbitTemplate` |
 | Java | `RabbitTemplate.receive` / `receiveAndConvert` / `receiveAndReply` | every overload naming the queue at argument 0 (nine, spring-rabbit 3.1.4, `scripts/probes/w59_template_receive_halves.md`); the destination-less overloads read the configured default queue and derive nothing. `receiveAndReply` is one INBOUND row: the reply goes to the message's own `replyTo` | `registration_call` | ✅ **shipped** (`G-44`, AMQP half) |
+| Java | `JmsTemplate.receive` / `receiveSelected` / `receiveAndConvert` / `receiveSelectedAndConvert` | the four overloads naming the destination at argument 0 (spring-jms 6.1.6, `scripts/probes/w59_template_receive_halves.md`) | `registration_call` | ✅ **shipped** (`G-44`, JMS half). The `jakarta.jms.Destination`-typed overloads take an object built elsewhere and stay outside; the arity-1 `receiveSelected(String)`/`receiveSelectedAndConvert(String)` forms take a SELECTOR, not a destination — their descriptor is identical to `receive(String)`/`receiveAndConvert(String)`'s, but the catalog separates overloads by NAME first, so it simply declares no arity-1 row for those two names and each call derives nothing |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer` and **all eleven consumer factories** — plain, selector-carrying, shared, durable and shared-durable — linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread, `createBrowser` deliberately undeclared | `registration_call` | ✅ shipped |
 | Java | Spring AMQP `@RabbitListener(queues = …)`, plus class-level `@RabbitListener` + `@RabbitHandler` | `queues` is a `String[]` (javap, spring-rabbit 3.1.4); the class-level form doubles as the destination prefix, `spring-kafka.yml`'s shape | `annotation` | ✅ **shipped** (2O Task 7) |
 | Java | `@RabbitListener(bindings = @QueueBinding(…))` / `queuesToDeclare = @Queue(…)` | the destination lives inside a NESTED annotation | `annotation` | **Boundary — derives nothing.** Nested-annotation arguments are readable since extractor capability 9.16, and **`spring-rabbit.yml` does not read them** — precisely: no catalog reads a nested annotation's own ATTRIBUTE as an address, because no `path_from` alias can name one, and declaring `path_from: [bindings]` would hand `annotation_driven` the whole `@QueueBinding` value and publish its JSON text as a queue name. (9.16 is not unread in general: `spring-scheduling.yml` reads a repeatable container's array of annotations through `engines/scheduled_work.py::_folded`. This row is about the ATTRIBUTE half.) The addresses-nothing gate drops the would-be row rather than publishing an empty destination. **Closes when** a `path_from` alias can name an attribute inside a nested annotation — an engine change, not a catalog one |
@@ -3471,7 +3473,7 @@ widening the distance between what a catalog claims and what it reads.
 
 | Slice | Catalog | What is outside | Support |
 |---|---|---|---|
-| `G-44` | `spring-jms-template`, `spring-rabbit-template`, `spring-sqs-template` | `spring-jms-template` and `spring-sqs-template` read their SEND half only and declare the rest outside; `spring-jms-template` is narrower still, since its own slice puts `send` and `sendAndReceive` outside too, beside the four `receive*` families that are a real inbound wire. `spring-rabbit-template` now reads BOTH halves — `convertAndSend` and the nine queue-naming `receive`/`receiveAndConvert`/`receiveAndReply` overloads (`scripts/probes/w59_template_receive_halves.md`) — and declares only the destination-less receive overloads, the request/reply forms and the setters outside | **partially supported**, declared |
+| `G-44` | `spring-jms-template`, `spring-rabbit-template`, `spring-sqs-template` | `spring-sqs-template` reads its SEND half only and declares the rest outside. `spring-rabbit-template` and `spring-jms-template` now BOTH read both halves (`scripts/probes/w59_template_receive_halves.md`): Rabbit reads `convertAndSend` plus the nine queue-naming `receive`/`receiveAndConvert`/`receiveAndReply` overloads, and JMS reads `convertAndSend` plus the four destination-naming `receive`/`receiveSelected`/`receiveAndConvert`/`receiveSelectedAndConvert` overloads. Each still declares outside: Rabbit's destination-less receive overloads, request/reply forms and setters; JMS's `send`/`sendAndReceive`, `browse`/`browseSelected`, `execute`, the setters, and the `jakarta.jms.Destination`-typed and arity-1-selector overloads of its four read receive names | **partially supported**, declared |
 | — | `spring-pubsub` | **NOTHING.** *This file was listed under `G-44` as reading "the send half only" and marked declared; both halves were false.* It declares TEN `direction: inbound` methods — `subscribe`, `subscribeAndConvert`, and the eight `pull*` forms — and derives a live inbound row on the fixture beside its outbound one. It has no `slice:` block because it needs none: the surface probe measures 11 of `PubSubTemplate`'s 20 read and records that **no unread method addresses a wire**, which is the one case the enumeration says needs no slice | ✅ **supported**, both directions |
 | `G-37` | `spring-webflux-router`, `spring-mvc-router` | `RouterFunctions$Builder` entirely — 0 of 20 on each side. `route()`'s builder DSL has been the reference documentation's recommended Java shape since Spring 5.2 | **partially supported**, declared |
 | `G-43` | `aws-sqs-sdk` | `SqsAsyncClient`'s other 27 methods (`sendMessage` is read on it too, since `G-43`), the batch forms, and the entire inbound direction including `receiveMessage` | **partially supported**, declared |
