@@ -1,7 +1,9 @@
 import json
+import re
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -13,6 +15,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     ConfigEntryFact,
+    ConstantFact,
     Document,
     FieldWriteFact,
     MethodReturnFact,
@@ -23,7 +26,8 @@ from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.export.index import write_index
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
-from sextant.storage.duckdb.workspace import DuckDbWorkspace
+from sextant.storage.duckdb import workspace as workspace_module
+from sextant.storage.duckdb.workspace import _FACT_VIEWS, DuckDbWorkspace
 
 
 def _fixture_facts(root: Path) -> None:
@@ -731,8 +735,9 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
     # `elements` (capability 9.15) among them, which is None on every kind but
     # `array`. Pinned exactly rather than by subset: this view is what a
     # consumer reads, and a key silently appearing or vanishing here is the
-    # drift the round trip exists to catch.
-    assert json.loads(row["arguments"]) == [
+    # drift the round trip exists to catch. Read back decoded: `arguments` is
+    # one of the columns the workspace hands over as objects (`_DECODED_COLUMNS`).
+    assert row["arguments"] == [
         {
             "kind": "string",
             "value": "/billing/invoices",
@@ -823,7 +828,9 @@ def test_every_table_and_view_in_the_schema_is_exported(tmp_path: Path):
     There is no exclusion class. `raw_facts` travels twice — as this table and
     as the per-document `facts/*.parquet` stream — because those are two
     shapes of one thing a reader wants for two different reasons, not an
-    exemption.
+    exemption. The `fact_*` tables `load_facts` builds are not one either:
+    each is the storage behind one fact view, and that view exports under its
+    own name, so its rows travel exactly once.
     """
     workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
@@ -1188,6 +1195,190 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
     }
     assert one == two and one
     workspace.close()
+
+
+def _call_site_facts_carrying(root: Path, value: str) -> None:
+    """One call_site fact whose single argument is `value` — the shape a
+    credential reaches the argument grammar in."""
+    document = Document(
+        document_id="doc_secret",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:m",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=5,
+        scanner_id="sextant-jvm-extractor",
+        class_name="com/acme/A.class",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    write_fact_file(
+        root / "A.jsonl",
+        document,
+        [
+            CallSiteFact(
+                document_id="doc_secret",
+                caller="mod com/acme/A#go(sig_1).",
+                target=CallTarget(
+                    owner="x/Client#", name="post", descriptor="(Ljava/lang/String;)V"
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                arguments=[CallArgument(kind="string", value=value)],
+            ),
+        ],
+    )
+
+
+def _exported_argument_values(bundle: Path) -> set[str]:
+    """Every string-literal argument value the bundle's call-site facts carry."""
+    return {
+        str(value)
+        for (value,) in duckdb.sql(
+            "SELECT unnest(from_json(payload -> 'arguments', '[\"JSON\"]')) ->> 'value' "
+            f"FROM read_parquet('{bundle / 'facts' / '*.parquet'}') WHERE kind = 'call_site'"
+        ).fetchall()
+        if value is not None
+    }
+
+
+# The texts `test_the_prefilter_admits_every_payload_the_walk_would_change` runs,
+# spelled as a JSON writer spells them (the strings are Python source, so `\\/`
+# here is `\/` in the text). Each is a fact payload shape or a fragment of one;
+# what they are chosen for is the seam between the decoded string a rule reads
+# and the encoded text the predicate reads: escapes inside a URL's userinfo,
+# `/` spelled `\/`, a non-ASCII letter spelled both ways, a name in each
+# separator and case spelling `normalize_key` folds, and the prose and
+# expression shapes the rules deliberately leave alone.
+_PREFILTER_TEXTS = [
+    '{"value":"https://user:hunter2@billing.internal/pay"}',
+    '{"value":"https:\\/\\/user:hunter2@billing.internal"}',
+    '{"value":"http://us\\"er:p@host"}',
+    '{"value":"http://us\\ter:p@host"}',
+    '{"value":"user@host"}',
+    '{"value":"${jdbc.url}@x"}',
+    '{"value":"jdbc:postgresql://db/orders"}',
+    '[{"kind":"string","value":"Authorization"},{"kind":"string","value":"Bearer x"}]',
+    '[{"kind":"string","value":"api_key"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"API-KEY"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"X-Api-Key"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"apiKey"},{"kind":"array","elements":[{"kind":"string","value":"k"}]}]',
+    '[{"kind":"string","value":"password"}]',
+    '[{"kind":"string","value":"Changed password for {}"},{"kind":"string","value":"bob"}]',
+    '[{"kind":"string","value":"a"},{"kind":"string","value":"b"}]',
+    '{"password":"/billing/invoices","token":"order-events"}',
+    '{"value":"sk-live-abc123"}',
+    '{"value":"SK-LIVE-abc123"}',
+    '{"value":"\u017fK-live-abc123"}',
+    '{"value":"\\u017fK-live-abc123"}',
+    '{"value":"BEARER tok"}',
+    '{"value":"beaRER\\ttok"}',
+    '{"value":"bearer"}',
+    '{"value":"x.env=1"}',
+    '{"value":"xaenv=1"}',
+    '{"value":"\u2014 \u00e9"}',
+    '{"value":"\\u2014 \\u00e9"}',
+    '{"value":"4111111111111111"}',
+    '{"kind":"symbol","symbol":"com/acme/Secret#","name":"Secret"}',
+    # The scheme in either case and with the `+.-` a scheme may carry.
+    '{"value":"HTTPS://u:p@h"}',
+    '{"value":"svn+ssh://u:p@h"}',
+    # A value pattern (`https://host`) that matches only AFTER the userinfo
+    # strip: admitted through the userinfo alternative, which is why the
+    # value-pattern branch need not see through the strip itself.
+    '{"value":"https://u:p@host"}',
+    # The four non-ASCII letters Python's case fold maps onto `i`, `k` and
+    # `s`, each spelled raw (as the extractor writes them) and escaped —
+    # against a `(?i)` prefix carrying `k` and `i`.
+    '{"value":"\u212aelvin-42"}',
+    '{"value":"\\u212aelvin-42"}',
+    '{"value":"kelv\u0131n-42"}',
+    '{"value":"kelv\\u0131n-42"}',
+    '{"value":"kelv\u0130n-42"}',
+    '{"value":"kelv\\u0130n-42"}',
+]
+
+_PREFILTER_REDACTORS = [
+    Redactor.from_rules(),
+    Redactor.from_rules(RedactionRules(key_patterns=("dsn",))),
+    Redactor.from_rules(
+        RedactionRules(value_patterns=("sk-live-[a-z0-9]+", r"(?i)bearer\s+\S+", r"\.env="))
+    ),
+    Redactor.from_rules(RedactionRules(value_patterns=(r"(?i)sk-live-[a-z0-9]+",))),
+    Redactor.from_rules(RedactionRules(value_patterns=(r"(?i)kelvin-[0-9]+", "https://host"))),
+    Redactor.from_rules(RedactionRules(value_patterns=("[0-9]{16}",))),
+]
+
+
+def test_the_prefilter_admits_every_payload_the_walk_would_change():
+    """The one property `_stage_fact_redactions`' SQL prefilter rests on, run
+    where RE2 actually runs: for every text and every rule set, a payload the
+    walk changes is a payload the predicate matches. The reverse is not
+    claimed — the predicate is allowed to admit more, and does — so the two
+    counts at the end say the test is not vacuous: some texts change, and
+    more texts than those are turned away, on the same rule set.
+
+    Evaluated through DuckDB rather than Python's `re`, because the predicate
+    is written in RE2's dialect and the two disagree exactly where it matters
+    (case folding, `\\s`)."""
+    connection = duckdb.connect()
+    changed = 0
+    turned_away = 0
+    for redactor in _PREFILTER_REDACTORS:
+        prefilter = redactor.json_text_prefilter()
+        for text in _PREFILTER_TEXTS:
+            walk_changes_it = redactor.redact_json(text) != text
+            admitted = prefilter is None or bool(
+                connection.execute("SELECT regexp_matches(?, ?)", [text, prefilter]).fetchone()[0]
+            )
+            assert admitted or not walk_changes_it, (text, prefilter)
+            changed += walk_changes_it
+            turned_away += not admitted
+    connection.close()
+    assert changed >= 20 and turned_away >= 30
+
+
+def test_the_second_export_reuses_the_payloads_the_first_staged(tmp_path: Path):
+    """`export_tables` and `export_facts` join the same payload map, and
+    computing it was the largest cost of exporting a workspace (1.1s of
+    `mall-admin`'s 3.3s, paid twice). The second call re-stages the rows the
+    first computed: the redactor is not consulted again, and the bundle is
+    masked exactly as before."""
+    _call_site_facts_carrying(tmp_path / "facts", "https://user:hunter2@billing.internal/pay")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    redactor = Redactor.from_rules()
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, redactor)
+
+    def not_again(text: str) -> str:
+        raise AssertionError("the second export re-derived the payload map")
+
+    redactor.redact_json = not_again  # type: ignore[method-assign]
+    workspace.export_facts(bundle, redactor)
+    workspace.close()
+    assert _exported_argument_values(bundle) == {"https://billing.internal/pay"}
+
+
+def test_reloading_facts_forgets_the_staged_payloads(tmp_path: Path):
+    """The kept rows describe one `raw_facts`; `load_facts` is its one writer
+    and clears them. Pinned on the failure that matters: a workspace exported
+    once with nothing to mask, then reloaded with a credential, must mask the
+    credential — a stale map would ship it in the clear."""
+    _call_site_facts(tmp_path / "first")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "first")
+    redactor = Redactor.from_rules()
+    workspace.export_facts(tmp_path / "one", redactor)
+    assert _exported_argument_values(tmp_path / "one") == {"/billing/invoices"}
+
+    _call_site_facts_carrying(tmp_path / "second", "https://user:hunter2@billing.internal/pay")
+    workspace.load_facts(tmp_path / "second")
+    workspace.export_facts(tmp_path / "two", redactor)
+    workspace.close()
+    assert _exported_argument_values(tmp_path / "two") == {"https://billing.internal/pay"}
 
 
 def test_module_dependencies_projects_the_versions_beside_the_coordinates(tmp_path: Path):
@@ -1751,3 +1942,352 @@ def test_the_coverage_distributions_group_the_columns_that_already_exist(tmp_pat
     # `resolution` cannot give: two of these are `resolved` and one of those two reached
     # nothing.
     assert reach == {"body_read": 3, "boundary": 1}
+
+
+# --------------------------------------------------------------------------
+# The fact views are materialized once per load (P-1a)
+# --------------------------------------------------------------------------
+
+
+def _view_sql(workspace: DuckDbWorkspace) -> dict[str, str]:
+    rows = workspace._connection.execute(
+        "SELECT view_name, sql FROM duckdb_views() WHERE NOT internal"
+    ).fetchall()
+    return {str(name): str(sql) for name, sql in rows}
+
+
+def _rows_of(workspace: DuckDbWorkspace, sql: str) -> list[tuple[object, ...]]:
+    return sorted(workspace._connection.execute(sql).fetchall(), key=repr)
+
+
+def _fact_tables(workspace: DuckDbWorkspace) -> set[str]:
+    rows = workspace._connection.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE starts_with(table_name, 'fact_')"
+    ).fetchall()
+    return {str(name) for (name,) in rows}
+
+
+def test_every_fact_view_is_materialized_on_load_and_answers_exactly_as_its_json_form_did(
+    tmp_path: Path,
+):
+    """The correctness pin for P-1a. Measured on `mall-admin`, every fact view
+    re-extracted JSON from `raw_facts` on every query, and one pass ran one of
+    them 629 times; `load_facts` now builds a `fact_<view>` table per view and
+    points the view at it. The JSON-form SELECT is captured from an EMPTY
+    workspace — `schema.sql`'s own definition, before anything was loaded —
+    and re-run against the loaded workspace beside each materialized view, so
+    a table that drifted from the definition by one column or one row fails
+    here. The multi-release fixture is used because its selection actually
+    excludes rows, and a config entry and a constant ride along so every view
+    has something to hold — asserted, because an empty view compares equal to
+    anything."""
+    empty = DuckDbWorkspace(tmp_path / "empty.duckdb")
+    json_form = {view: _view_sql(empty)[view].split(" AS ", 1)[1] for view in _FACT_VIEWS}
+    empty.close()
+    _config_entry_facts(tmp_path / "facts")
+    write_fact_file(
+        tmp_path / "facts" / "Topics.jsonl",
+        Document(
+            document_id="doc_constants",
+            relative_path="com/acme/Topics.java",
+            module_id="com.acme:m",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=5,
+            scanner_id="asm",
+            content_hash="sha256:t",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:none",
+        ),
+        [
+            ConstantFact(
+                document_id="doc_constants", symbol="mod com/acme/Topics#TOPIC.", value="orders"
+            )
+        ],
+    )
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    defined = _view_sql(workspace)
+    for view in _FACT_VIEWS:
+        assert defined[view] == f"CREATE VIEW {view} AS SELECT * FROM fact_{view};"
+        materialized = _rows_of(workspace, f"SELECT * FROM {view}")
+        assert materialized == _rows_of(workspace, json_form[view]), view
+        assert materialized, f"{view} holds no rows, so the comparison proves nothing"
+    workspace.close()
+
+
+def test_reopening_a_workspace_keeps_the_fact_views_on_their_tables(tmp_path: Path):
+    """`__init__` re-runs `schema.sql`, which re-issues every fact view in its
+    JSON form — so without the reopen rule, every command that opens an
+    analyzed workspace would run the slow views while the tables sat unused."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    before = {view: _rows_of(workspace, f"SELECT * FROM {view}") for view in _FACT_VIEWS}
+    workspace.close()
+
+    reopened = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    defined = _view_sql(reopened)
+    for view in _FACT_VIEWS:
+        assert defined[view] == f"CREATE VIEW {view} AS SELECT * FROM fact_{view};"
+        assert _rows_of(reopened, f"SELECT * FROM {view}") == before[view], view
+    reopened.close()
+
+
+def test_a_fact_table_that_no_longer_matches_the_schema_is_dropped_on_reopen(
+    tmp_path: Path,
+):
+    """A schema that gained a column since the tables were written must not be
+    masked by a stale table: the views fall back to the JSON form and every
+    `fact_*` table goes, so the next `load_facts` rebuilds them. Simulated from
+    the other side — a table missing a column the view declares — which is the
+    same mismatch."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    expected = _rows_of(workspace, "SELECT * FROM symbols")
+    workspace.close()
+    stale = duckdb.connect(str(tmp_path / "ws.duckdb"))
+    stale.execute("ALTER TABLE fact_symbols DROP COLUMN line_end")
+    stale.close()
+
+    reopened = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    assert "FROM raw_facts" in _view_sql(reopened)["symbols"]
+    assert _fact_tables(reopened) == set()
+    assert _rows_of(reopened, "SELECT * FROM symbols") == expected
+    reopened.close()
+
+
+def test_loading_facts_twice_rebuilds_the_tables_from_the_second_tree(tmp_path: Path):
+    """`raw_facts` has one writer, and the tables are rebuilt at the end of
+    every write — never left over from the previous one."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    assert workspace._connection.execute("SELECT count(*) FROM documents").fetchone() == (4,)
+    _fixture_facts(tmp_path / "second")
+    workspace.load_facts(tmp_path / "second")
+
+    assert workspace._connection.execute("SELECT count(*) FROM documents").fetchone() == (1,)
+    assert workspace._connection.execute("SELECT symbol FROM symbols").fetchall() == [
+        ("s maven p 1 com/acme/A#",)
+    ]
+    assert _view_sql(workspace)["symbols"] == "CREATE VIEW symbols AS SELECT * FROM fact_symbols;"
+    workspace.close()
+
+
+# ---- P-1b: fact-only queries are read once per load, JSON-bound parameters ----
+
+
+class _CountingConnection:
+    """The workspace's DuckDB connection, with every `execute` recorded — timing-free
+    evidence of whether a query ran."""
+
+    def __init__(self, inner: duckdb.DuckDBPyConnection) -> None:
+        self.inner = inner
+        self.executed: list[str] = []
+
+    def execute(self, sql: str, *args: object) -> duckdb.DuckDBPyConnection:
+        self.executed.append(sql)
+        return self.inner.execute(sql, *args)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.inner, name)
+
+
+def _counting(workspace: DuckDbWorkspace) -> _CountingConnection:
+    connection = _CountingConnection(workspace._connection)
+    workspace._connection = connection  # type: ignore[assignment]
+    return connection
+
+
+def test_a_fact_only_query_is_read_once_per_load_and_read_again_after_the_next_load(
+    tmp_path: Path,
+):
+    """`declared_symbols` reads only the fact tables, and `load_facts` is their one
+    writer — so the second call is the first call's rows, the same list, and only the
+    next load makes the query run again."""
+    workspace = _loaded_workspace(tmp_path)
+    connection = _counting(workspace)
+
+    first = workspace.query("declared_symbols")
+    assert first == [{"symbol": "s maven p 1 com/acme/A#"}]
+    assert len(connection.executed) == 1
+    assert workspace.query("declared_symbols") is first
+    assert len(connection.executed) == 1, "the second read ran the query again"
+
+    _fixture_facts(tmp_path / "second")
+    document = Document(
+        document_id="doc_2",
+        relative_path="com/acme/B.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    symbol = SymbolFact(
+        document_id="doc_2", symbol="s maven p 1 com/acme/B#", construct_kind=ConstructKind.CLASS
+    )
+    write_fact_file(tmp_path / "second" / "com" / "acme" / "B.jsonl", document, [symbol])
+    workspace.load_facts(tmp_path / "second")
+
+    second = workspace.query("declared_symbols")
+    assert second is not first
+    assert second == [{"symbol": "s maven p 1 com/acme/A#"}, {"symbol": "s maven p 1 com/acme/B#"}]
+    workspace.close()
+
+
+def test_a_parameterized_fact_only_query_is_cached_per_bound_value(tmp_path: Path):
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    connection = _counting(workspace)
+    controller = "com/acme/orders/OrderController#"
+    method = "com/acme/orders/OrderController#list(sig_08c5be17)."
+
+    on_controller = workspace.query("annotations_of", target=controller)
+    on_method = workspace.query("annotations_of", target=method)
+    assert [row["annotation"] for row in on_controller] == [
+        "org/springframework/web/bind/annotation/RequestMapping#",
+        "org/springframework/web/bind/annotation/RestController#",
+    ]
+    assert [row["annotation"] for row in on_method] == [
+        "org/springframework/web/bind/annotation/GetMapping#"
+    ]
+    assert len(connection.executed) == 2
+    assert workspace.query("annotations_of", target=controller) is on_controller
+    assert workspace.query("annotations_of", target=method) is on_method
+    assert len(connection.executed) == 2
+    workspace.close()
+
+
+def test_a_query_over_a_derived_table_is_never_served_from_the_cache(tmp_path: Path):
+    """`endpoints` is written by derivations between one read and the next, so the
+    rows it hands back are the table's rows NOW — here, none after the reset."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    connection = _counting(workspace)
+
+    assert len(workspace.query("endpoints")) == 1
+    workspace.derive("endpoints_reset")
+    assert workspace.query("endpoints") == []
+    assert [sql for sql in connection.executed if sql.lstrip().startswith("SELECT")] == [
+        workspace_module._NAMED_QUERIES["endpoints"],
+        workspace_module._NAMED_QUERIES["endpoints"],
+    ]
+    workspace.close()
+
+
+_FACT_TABLES = frozenset({"raw_facts", *_FACT_VIEWS})
+
+
+def _tables_read(sql: str) -> set[str]:
+    body = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return set(re.findall(r"\b(?:FROM|JOIN)\s+([a-z_]+)", body))
+
+
+def _tables_written(sql: str) -> set[str]:
+    body = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return set(
+        re.findall(
+            r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|"
+            r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP\s+|TEMPORARY\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?)"
+            r"\s+([a-z_]+)",
+            body,
+        )
+    )
+
+
+def test_the_cache_rule_holds_for_every_named_query_and_every_derivation():
+    """The invalidation rule, checked rather than trusted: a `_FACT_ONLY` query reads
+    fact tables and nothing else; a query reading anything else is not in the set (a
+    name that could be cached and is not is a defect too, since the set is what makes
+    a resolve read each fact table once); and no derivation writes a fact table, which
+    is what leaves `load_facts` as the one event that clears the cache."""
+    for name, sql in workspace_module._NAMED_QUERIES.items():
+        read = _tables_read(sql)
+        assert read, f"{name}: reads no table at all?"
+        if name in workspace_module._FACT_ONLY:
+            assert read <= _FACT_TABLES, f"{name} is cached but reads {read - _FACT_TABLES}"
+        else:
+            assert not read <= _FACT_TABLES, f"{name} reads only fact tables and is not cached"
+    for name, file in workspace_module._NAMED_DERIVATIONS.items():
+        sql = (workspace_module._SQL_DIR / file).read_text(encoding="utf-8")
+        written = _tables_written(sql)
+        assert written, f"{name}: writes no table?"
+        assert not (written & _FACT_TABLES), f"{name} writes a fact table: {written}"
+
+
+def test_decoded_columns_arrive_as_objects_and_a_json_null_as_none(tmp_path: Path):
+    """`method_declarations.signature`/`.modifiers` and `call_sites.arguments` are the
+    columns every reader decoded for itself, once per catalog; the workspace hands them
+    over decoded, once."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+    (declaration,) = workspace.query("method_declarations")
+    assert declaration["symbol"] == "com/acme/orders/OrderController#list(sig_08c5be17)."
+    # The fixture's method fact declares no signature, which the fact writes as the
+    # JSON literal `null` — decoded to `None`, never handed over as the text `null`;
+    # its modifiers default to an empty object, decoded to exactly that.
+    assert declaration["signature"] is None
+    assert declaration["modifiers"] == {}
+    workspace.close()
+
+    workspace = _workspace_with_a_call_site(tmp_path / "call_site")
+    (site,) = workspace.query("call_sites")
+    assert isinstance(site["arguments"], list)
+    assert [argument["kind"] for argument in site["arguments"]] == ["string", "unresolved"]
+    workspace.close()
+
+
+def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The rows a pass hands a derivation travel as one JSON value (`_bound`), and every
+    value comes back exactly as it went in — quotes, backslashes, non-ASCII text, NULL —
+    including a struct key the row does not carry, which the statement's own type
+    supplies as NULL, the contract every hand-built row in this file relies on."""
+    workspace = _loaded_workspace(tmp_path)
+    rows = [
+        {
+            "caller": "he said \"hi\" \\ {x} 'q' ünï",
+            "ordinal": 0,
+            "invoke_kind": "virtual",
+            "target": "t#",
+            "callee": None,
+            "result": 3,
+            "resolution": "resolved",
+            "evidence": '{"json":[1,{"k":null}]}',
+            "terminal_kind": None,
+            "target_kind": "method",
+        },
+        {"caller": "c#", "ordinal": 1, "invoke_kind": "static", "target": "u#"},
+    ]
+    workspace.derive("call_edges_insert", rows=rows)
+    # The second row lacks six declared keys, so this list took the per-value route —
+    # recorded by name, which is what lets a whole pipeline assert it took none.
+    assert workspace._per_value_retries == ["call_edges_insert"]
+    read = workspace.query("call_edges")
+    assert read == [
+        {
+            "caller": "c#",
+            "ordinal": 1,
+            "invoke_kind": "static",
+            "target": "u#",
+            "callee": None,
+            "result": None,
+            "resolution": None,
+            "evidence": None,
+            "terminal_kind": None,
+            "target_kind": None,
+        },
+        rows[0],
+    ]
+    # Only a conversion error is retried: a statement that fails to bind for any other
+    # reason propagates from the first run, untouched and unrecorded. The statement lives
+    # under `tmp_path` — an absolute path, which `_SQL_DIR / <path>` resolves to as is.
+    broken = tmp_path / "broken.sql"
+    broken.write_text(
+        "INSERT INTO call_edges SELECT r.* "
+        "FROM (SELECT UNNEST($rows::STRUCT(no_such INTEGER)[]) AS r)"
+    )
+    monkeypatch.setitem(workspace_module._NAMED_DERIVATIONS, "_broken", str(broken))
+    with pytest.raises(duckdb.BinderException):
+        workspace.derive("_broken", rows=[{"no_such": 1}])
+    assert workspace._per_value_retries == ["call_edges_insert"]
+    workspace.close()

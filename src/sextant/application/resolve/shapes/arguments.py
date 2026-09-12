@@ -17,7 +17,7 @@ inside `contracts.py` (2E-prep design §1e).
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -502,7 +502,7 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
     # configured from a constructor parameter, and which construct holds it is
     # the framework's convention rather than a fact about the expression.
     for row in workspace.query("method_declarations"):
-        signature = json.loads(str(row["signature"] or "{}")) or {}
+        signature = cast(dict[str, Any], row["signature"] or {})
         declared_parameters[str(row["symbol"])] = list(signature.get("parameters") or [])
     declared_fields: dict[str, list[str]] = {}
     for row in workspace.query("fields"):
@@ -531,10 +531,13 @@ def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, An
     which `field_facts` returns `None` for, and which is most of them.
     """
     found: dict[str, tuple[dict[str, Any], ...]] = {}
-    for named in ("constructor_declarations", "method_declarations"):
-        for row in workspace.query(named):
-            signature = json.loads(str(row["signature"] or "{}")) or {}
-            found[str(row["symbol"])] = tuple(signature.get("parameters") or [])
+    for row in workspace.query("constructor_declarations"):
+        signature = json.loads(str(row["signature"] or "{}")) or {}
+        found[str(row["symbol"])] = tuple(signature.get("parameters") or [])
+    # `signature` arrives decoded on this query (`_DECODED_COLUMNS`), text on the one above.
+    for row in workspace.query("method_declarations"):
+        signature = cast(dict[str, Any], row["signature"] or {})
+        found[str(row["symbol"])] = tuple(signature.get("parameters") or [])
     return found
 
 

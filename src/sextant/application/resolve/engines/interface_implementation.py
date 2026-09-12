@@ -22,7 +22,7 @@ this module never names a framework."""
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -78,12 +78,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     method_symbols = _method_symbols(workspace)
     declarations = _declarations(workspace)
 
-    # Parsed once, as every other engine does: `call_sites` returns
-    # `arguments` as raw JSON text.
-    call_sites = [
-        {**site, "arguments": json.loads(str(site["arguments"]))}
-        for site in workspace.query("call_sites")
-    ]
+    # `arguments` arrives decoded, once per load, from the workspace
+    # (`_DECODED_COLUMNS`) — every engine used to decode it again for itself.
+    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
@@ -370,12 +367,11 @@ def _declarations(workspace: Workspace) -> _Declarations:
     returns: dict[str, str] = {}
     for row in workspace.query("method_declarations"):
         symbol = str(row["symbol"])
-        # `or {}` on BOTH sides: the column may be SQL NULL, and it may
-        # also hold the JSON literal `null` — a method fact written with no
-        # signature at all, which every hand-built unit fact in this repo is.
-        signature = (
-            json.loads(str(row["signature"])) if row["signature"] is not None else {}
-        ) or {}
+        # `or {}`: the column may be SQL NULL, and it may also hold the JSON
+        # literal `null` — a method fact written with no signature at all, which
+        # every hand-built unit fact in this repo is — and the workspace decodes
+        # both to `None`.
+        signature = cast(dict[str, Any], row["signature"] or {})
         # `erased_symbol` — the DESCRIPTOR's own answer — because these tuples are
         # compared BETWEEN declarations: `_handler_for_interface` tests an
         # implementation's against the interface's. `type.symbol` is the signature's

@@ -351,7 +351,7 @@ flip_handlers AS (
 controllers AS (
     SELECT DISTINCT target AS type_symbol
     FROM annotations_effective
-    WHERE list_contains($type_annotation, annotation)
+    WHERE list_contains($type_annotation::VARCHAR[], annotation)
 ),
 declared AS (
     SELECT
@@ -866,7 +866,7 @@ prefixes AS (
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1) AS produces_list
     FROM annotations_effective a
-    WHERE list_contains($prefix_annotation, a.annotation)
+    WHERE list_contains($prefix_annotation::VARCHAR[], a.annotation)
 ),
 -- Cross product of methods and paths (a two-topic, two-method mapping is
 -- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit

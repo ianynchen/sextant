@@ -242,12 +242,9 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         for rule in declared:
             composers[(_catalog_symbol(rule["owner"]), rule["method"])] = role
     # Parsed once, as every other call-site engine does, for the same reason:
-    # `call_sites` hands back `arguments` as raw JSON text, and every fold
-    # below reads the parsed list.
-    call_sites = [
-        {**site, "arguments": json.loads(str(site["arguments"]))}
-        for site in workspace.query("call_sites")
-    ]
+    # `call_sites` hands back `arguments` decoded (`_DECODED_COLUMNS`), and every
+    # fold below reads that list.
+    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)

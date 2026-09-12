@@ -1457,28 +1457,18 @@ def _method_declaration_rows(workspace: Workspace) -> list[dict[str, object]]:
 
     `modifiers` carries D00 §5a's `synthetic`, which is how the walk tells a
     method a human wrote from the bridge javac generates beside it (OI-47).
-    **This function is the only producer of `inherited_rows`' method rows**, so
-    a column added to the query and not rebuilt here reaches nothing: the walk
-    falls back to inferring a bridge from its shape, silently, and every
-    assertion about the fixed behaviour still passes because they hand-build
-    their own rows. That is exactly what happened.
+    This function used to rebuild each row column by column, and a column added
+    to the query and not rebuilt here reached nothing: the walk fell back to
+    inferring a bridge from its shape, silently, and every assertion about the
+    fixed behaviour still passed because they hand-build their own rows. That is
+    exactly what happened, and passing the rows through is what closes it.
 
-    Decoded, not passed through: DuckDB returns a JSON column as TEXT, and a
-    string answers `"synthetic" in modifiers` by SUBSTRING — True, and then
-    subscripting it raises. `signature` above is decoded for the same reason."""
-    return [
-        {
-            "symbol": row["symbol"],
-            "enclosing": row["enclosing"],
-            "signature": (
-                json.loads(str(row["signature"])) if row["signature"] is not None else None
-            ),
-            "modifiers": (
-                json.loads(str(row["modifiers"])) if row["modifiers"] is not None else None
-            ),
-        }
-        for row in workspace.query("method_declarations")
-    ]
+    Both columns arrive decoded from the workspace (`_DECODED_COLUMNS`), which is
+    what lets `"synthetic" in modifiers` mean membership rather than substring
+    search over JSON text. They arrived as text and were decoded HERE, once per
+    catalog, until P-1b measured that as 2.6 million `json.loads` calls on
+    `mall-admin`; the rows are now shared across every catalog and read only."""
+    return workspace.query("method_declarations")
 
 
 def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:

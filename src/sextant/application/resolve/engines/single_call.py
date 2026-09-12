@@ -15,7 +15,7 @@ catalog data; this module never names a framework.
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -340,15 +340,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # with no `field_sources` block gets `None` above, and a payload handed through from
     # the caller's signature has nothing to do with the field ladder.
     caller_parameters = declared_parameters_of(workspace)
-    # `arguments` is parsed once, here, rather than once per reader: the
-    # `call_sites` query returns it as raw JSON text, and both the matching
-    # loop below and the `call_wrappers` one-hop (over a *different* call
-    # site's own arguments, `contracts._linked_constructor`) need the parsed
-    # list, never the text.
-    call_sites = [
-        {**site, "arguments": json.loads(str(site["arguments"]))}
-        for site in workspace.query("call_sites")
-    ]
+    # `arguments` arrives decoded, once per load, from the workspace
+    # (`_DECODED_COLUMNS`): both the matching loop below and the `call_wrappers`
+    # one-hop (over a *different* call site's own arguments,
+    # `contracts._linked_constructor`) read the list, never the text.
+    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
     by_caller: dict[str, list[dict[str, Any]]] = {}
     # A SECOND index, keyed by BARE descriptor, for `lambda_arg` (`OI-74`, W57).
     # `call_sites.caller` carries the module coordinates a fact writes (D00 §5a)
@@ -1037,7 +1033,7 @@ class _IdentityFacts:
 def _identity_facts(workspace: Workspace) -> _IdentityFacts:
     signatures: dict[str, dict[str, Any]] = {}
     for row in workspace.query("method_declarations"):
-        signatures[str(row["symbol"])] = json.loads(str(row["signature"] or "{}")) or {}
+        signatures[str(row["symbol"])] = cast(dict[str, Any], row["signature"] or {})
     annotations: dict[tuple[str, str], dict[str, Any]] = {}
     for row in workspace.query("annotations"):
         # First use wins, in the query's own (target, annotation) order: a

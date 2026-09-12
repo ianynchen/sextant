@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 2B 4C, 10 open) | ◐ (2A 2B, 2 open) | ◐ (2 open) | ✅ | ✅ | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 2B 4C, 9 open) | ◐ (2A 2B, 2 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (3 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ◐ (2 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -1331,7 +1331,8 @@ documents against 161. `derive_endpoints` is 47s of it and `derive_endpoint_shap
 and the cost is NOT work the guardrail then discards — the SQL the guardrail cleans up
 after is 2.8s of the 31.7s replay (the fresh run's 47s was not profiled to the query); the
 rest is every catalog re-reading the fact tables from
-Python (`OI-68` has the profile to the query). **Gradle is not implemented** — `GradleDetector` sets no sibling
+Python (`docs/performance.md` P-1 has the profile to the query and the fix shape; it is
+a performance item, not a gap, and is worked after the delivery register is empty). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)

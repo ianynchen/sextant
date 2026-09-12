@@ -53,7 +53,7 @@ argument as a handled exception.
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -240,7 +240,7 @@ class _Rules:
             if status is not None
         }
         signatures = {
-            str(row["symbol"]): json.loads(str(row["signature"]))
+            str(row["symbol"]): cast(dict[str, Any], row["signature"])
             for row in workspace.query("method_declarations")
             if row["signature"] is not None
         }

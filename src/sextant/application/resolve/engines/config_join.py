@@ -44,7 +44,7 @@ protocol — is catalog data. No framework name appears in this module.
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -353,10 +353,10 @@ def _candidates(workspace: Workspace, suffix_rules: list[dict[str, Any]]) -> dic
     ]
     found: dict[str, _Candidate] = {}
     for row in workspace.query("method_declarations"):
-        signature = row["signature"]
+        signature = cast(dict[str, Any] | None, row["signature"])
         if signature is None:
             continue
-        returns = json.loads(str(signature)).get("returns")
+        returns = signature.get("returns")
         if not isinstance(returns, dict) or returns.get("symbol") is None:
             continue
         returned = bare_descriptor(str(returns["symbol"]))

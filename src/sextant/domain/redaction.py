@@ -81,6 +81,167 @@ _USERINFO = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^/?#\s@]*@")
 # match pairs on.
 _KEY_TOKEN = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
+# What `Redactor.json_text_prefilter` is built from: each rule restated as the
+# LOOSER test "the JSON text contains something this rule could act on", in
+# the RE2 dialect. RE2 is what the export's own query engine runs, and it is
+# not Python's `re`: no lookaround, no backreferences, ASCII-only `\s`, `\w`
+# and `\d`, and a narrower case fold. Every pattern here is written so that
+# each of those differences can only widen the match, never narrow it — the
+# whole value of the prefilter is that it never excludes a document the walk
+# would change, and the pin for that is `tests/storage/test_workspace.py`'s
+# comparison of the walk over every payload against the walk over the
+# prefiltered ones.
+#
+# The one assumption every alternative shares: a JSON writer spells a printable
+# ASCII character other than `"`, `\` and `/` as itself. JSON permits `\u003a`
+# for a colon, but no serializer whose output is read here writes one, so a
+# rule's ASCII characters appear in the text exactly as they appear in the
+# decoded string. This holds as long as fact files come from a JSON serializer
+# rather than from a hand that chose to escape ASCII.
+#
+# `_USERINFO` in JSON text: the scheme is dropped (it only narrows), `/` may be
+# spelled `\/`, and the character class is the same one — a `\t` or `\n` escape
+# in the text is two printable characters, which the class admits though the
+# decoded whitespace would not, and that is the widening direction.
+_USERINFO_IN_JSON_TEXT = r":\\?/\\?/[^/?#\s@]*@"
+# The characters a NORMALIZED key token is made of — `_KEY_TOKEN`'s set with
+# the two separators `normalize_key` strips taken out and lowercased. A key
+# pattern using any other character cannot be a substring of a normalized
+# token, so the paired rule can never fire on it and it contributes nothing.
+_NORMALIZED_TOKEN_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.")
+# Under Python's case-insensitive matching three ASCII letters also match a
+# non-ASCII letter that folds to them (Unicode simple case folding: the dotted
+# and dotless `I`, the long `s`, the Kelvin sign). RE2 folds only two of the
+# four, and a JSON writer may spell any of them as a `\u` escape, so a
+# case-insensitive literal lists every spelling itself. The raw letters are
+# written as Python escapes so the code points are checkable by eye: the
+# Kelvin sign once shipped here as the ASCII letter `K` it looks like, and a
+# `(?i)kelvin-…` pattern then excluded `Kelvin-42`, which the walk masks.
+_FOLDS_TO_ASCII = {
+    "i": ("\u0130\u0131", r"\\u013[01]"),
+    "k": ("\u212a", r"\\u212[aA]"),
+    "s": ("\u017f", r"\\u017[fF]"),
+}
+# Characters a literal prefix stops at: JSON spells them with an escape (`"`,
+# `\`, control characters), may spell them with one (`/`, and any non-ASCII
+# character as `\uXXXX`; `<>&='` as `\u003c` and so on by an HTML-safe writer,
+# which a third-party scanner named in `scanner_id` may be), so the decoded
+# and the encoded text differ there and a literal that needs one is not a
+# substring of the text. Every other printable ASCII character is assumed
+# spelled as itself — the residual stated above.
+_NOT_SPELLED_AS_ITSELF = frozenset("\"\\/<>&='")
+
+
+def _re2_literal(text: str) -> str:
+    """`text` as an RE2 pattern matching exactly itself. Word characters
+    stand for themselves; every other ASCII character is escaped, which RE2
+    reads as that character whether or not it needed escaping."""
+    return "".join(ch if ch.isalnum() or ch == "_" else "\\" + ch for ch in text)
+
+
+def _re2_case_insensitive_literal(text: str) -> str:
+    """`text` as an RE2 pattern matching it under Python's case-insensitive
+    rule — both cases of each letter and, for the three letters a non-ASCII
+    letter folds onto, that letter in both of its JSON spellings."""
+    parts = []
+    for ch in text:
+        if not ch.isalpha():
+            parts.append(_re2_literal(ch))
+            continue
+        folded, escaped = _FOLDS_TO_ASCII.get(ch.lower(), ("", ""))
+        letters = f"[{ch.lower()}{ch.upper()}{folded}]"
+        parts.append(f"(?:{letters}|{escaped})" if escaped else letters)
+    return "".join(parts)
+
+
+def _has_top_level_alternation(body: str) -> bool:
+    """Whether `body` (a Python regular expression with its leading flags
+    removed) is `A|B` at its outermost level. Such a pattern has no single
+    literal prefix: a match may start with B's first character."""
+    depth = 0
+    in_class = False
+    index = 0
+    while index < len(body):
+        ch = body[index]
+        if ch == "\\":
+            index += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+            # `[]...]` and `[^]...]`: a `]` first in the class is a member.
+            following = index + 1
+            if following < len(body) and body[following] == "^":
+                following += 1
+            if following < len(body) and body[following] == "]":
+                index = following
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            return True
+        index += 1
+    return False
+
+
+def _literal_prefix(pattern: str) -> tuple[str, bool] | None:
+    """The characters every match of `pattern` (a Python regular expression)
+    begins with, and whether they match case-insensitively — or None when
+    the pattern has no such prefix, in which case nothing short of running
+    the pattern says whether a text matches it.
+
+    Deliberately conservative: it reads a pattern's leading literal
+    characters and stops at the first thing that is not one — a class, a
+    group, an anchor, an alternation, a quantifier (which makes the character
+    before it optional, so that character is dropped too) — and at the first
+    character JSON may not spell as itself. Every stop shortens the prefix,
+    and a shorter prefix matches more, which is the safe direction. Only the
+    `x` (verbose) flag, under which whitespace and `#` are not literals, gives
+    up entirely.
+    """
+    flags = ""
+    body = pattern
+    if body.startswith("(?"):
+        close = body.find(")")
+        candidate = body[2:close] if close > 0 else ""
+        if not candidate or any(ch not in "aiLmsu" for ch in candidate):
+            # `(?x)` at the front, or a group where a literal would have to be.
+            return None
+        flags, body = candidate, body[close + 1 :]
+    if _has_top_level_alternation(body):
+        return None
+    prefix: list[str] = []
+    index = 0
+    while index < len(body):
+        ch = body[index]
+        if ch == "\\":
+            following = body[index + 1] if index + 1 < len(body) else ""
+            # `\d`, `\A`, `\1`, `\_`: a class, an anchor or a backreference —
+            # not a literal. Anything else after a backslash is that character.
+            if not following or following.isalnum() or following == "_" or not following.isascii():
+                break
+            literal = following
+            index += 2
+        elif ch in ".[(|^$)":
+            break
+        elif ch in "*?{":
+            if prefix:
+                prefix.pop()
+            break
+        elif ch == "+":
+            break
+        else:
+            literal = ch
+            index += 1
+        if literal in _NOT_SPELLED_AS_ITSELF or not literal.isascii() or not literal.isprintable():
+            break
+        prefix.append(literal)
+    if not prefix:
+        return None
+    return "".join(prefix), "i" in flags
+
 
 class RedactionError(ValueError):
     """A redaction rule that cannot be honoured as written."""
@@ -316,6 +477,50 @@ class Redactor:
             return False
         normalized = normalize_key(text)
         return any(pattern in normalized for pattern in self._key_patterns)
+
+    def json_text_prefilter(self) -> str | None:
+        """A regular expression, in the RE2 dialect, that matches the text of
+        EVERY JSON document `redact_json` would change — and some it would
+        not. Or None, when a value pattern has no literal prefix (see
+        `_literal_prefix`) and so no text can be ruled out without running it.
+
+        For a caller holding tens of thousands of documents in a store whose
+        query engine runs RE2, this is the test to apply BEFORE handing each
+        one to `redact_json`: a document this does not match has no string any
+        rule can act on, so walking it would return it unchanged. Measured on
+        the `mall-admin` example, 75,296 distinct fact payloads become the few
+        hundred that contain something a rule could touch.
+
+        Three rules, one alternative each — `_USERINFO_IN_JSON_TEXT` for the
+        userinfo strip; for every key pattern that could name a secret, its
+        characters in either case with `-` and `_` allowed between them, which
+        is `normalize_key` run backwards over a `_KEY_TOKEN` literal; and for
+        every value pattern its literal prefix, spelled case-insensitively
+        when the pattern is. The paired rule's other conditions (the token
+        shape, an argument following) and a value pattern's remainder are not
+        restated: leaving a condition out widens the match, and this only has
+        to be wide enough.
+
+        It restates no rule's DECISION — the walk still decides, on every
+        document this admits — which is what keeps this a filter rather than
+        a second copy of the rules: a document that reaches the walk is
+        masked exactly as it would have been without the filter. The pin is
+        the equality of the two, walked over the whole fact set of a fixture.
+        """
+        alternatives = [_USERINFO_IN_JSON_TEXT]
+        for pattern in self._key_patterns:
+            if set(pattern) <= _NORMALIZED_TOKEN_CHARACTERS:
+                spelled = "[-_]*".join(_re2_literal(ch) for ch in pattern)
+                alternatives.append(f"(?i:{spelled})")
+        for pattern in self._value_patterns:
+            found = _literal_prefix(pattern)
+            if found is None:
+                return None
+            prefix, case_insensitive = found
+            alternatives.append(
+                _re2_case_insensitive_literal(prefix) if case_insensitive else _re2_literal(prefix)
+            )
+        return "|".join(alternatives)
 
     def redact_text(self, text: str) -> str:
         """Free text — an address expression, a rendered line, a tool result —

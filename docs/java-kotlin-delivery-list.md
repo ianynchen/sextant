@@ -34,16 +34,16 @@ too — that is the check aimed at half-delivery: the half you did not do has to
 against the feature it belongs to, or the build goes red.
 
 ```delivery
-REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-routing javalin-apibuilder
+REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder
 REST outbound      | REST out   | G-30-outbound jdk-httpclient
-SOAP               | SOAP       | jaxws-public-final jaxws-inherited-unannotated
+SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
 SSE                | SSE        | jaxrs-sse
 gRPC               | gRPC       |
-Kafka              | Kafka      | G-31 kafka-batch-generics alpakka-pekko
-JMS and AMQP       | JMS / AMQP | G-44
-AWS SQS            | SQS        | micronaut-sqs sqs-template-receive micronaut-jms-over-sqs
+Kafka              | Kafka      | kafka-batch-generics
+JMS and AMQP       | JMS / AMQP |
+AWS SQS            | SQS        | sqs-template-receive micronaut-jms-over-sqs
 Google Pub/Sub     | Pub/Sub    | pubsub-channel-adapter
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
 Async              | Async      | temporal-cadence vertx-eventbus
@@ -64,7 +64,7 @@ gRPC
 honestly at the end, and excluded from the per-feature check by being named here:
 
 ```unassigned
-GAP-7 OI-85
+OI-85
 ```
 
 **Out of scope for this target** — neither blocking nor tracked for delivery:
@@ -267,6 +267,13 @@ Format: `id | test node id | CI run URL`
 
 ```closed
 G-36 | tests/e2e/test_soap_delivered.py::test_one_handler_serving_two_message_types_derives_both | https://github.com/ianynchen/sextant/actions/runs/34646355110
+G-44 | tests/e2e/test_jms_and_amqp_delivered.py::test_rabbit_template_receives_derive_one_inbound_row_per_queue | https://github.com/ianynchen/sextant/actions/runs/34703991222
+G-31 | tests/e2e/test_kafka_delivered.py::test_a_streams_dsl_topology_derives_every_source_and_sink | https://github.com/ianynchen/sextant/actions/runs/34703991222
+alpakka-pekko | tests/e2e/test_kafka_delivered.py::test_pekko_consumer_sources_derive_one_inbound_row_per_subscribed_topic | https://github.com/ianynchen/sextant/actions/runs/34703991222
+javalin-routing | tests/e2e/test_rest_inbound_delivered.py::test_javalin_flat_registrations_derive_every_route | https://github.com/ianynchen/sextant/actions/runs/34703991222
+micronaut-sqs | tests/e2e/test_aws_sqs_delivered.py::test_a_micronaut_module_using_the_raw_sqs_sdk_derives_its_queues | https://github.com/ianynchen/sextant/actions/runs/34703991222
+jaxws-public-final | tests/e2e/test_soap_delivered.py::test_a_public_final_method_is_not_an_operation | https://github.com/ianynchen/sextant/actions/runs/34703991222
+jaxws-inherited-unannotated | tests/e2e/test_soap_delivered.py::test_an_operation_inherited_from_an_unannotated_superclass_is_not_published | https://github.com/ianynchen/sextant/actions/runs/34703991222
 G-39 | tests/e2e/test_graphql_delivered.py::test_one_resolver_serving_two_fields_derives_both | https://github.com/ianynchen/sextant/actions/runs/34669970510
 G-40 | tests/e2e/test_graphql_delivered.py::test_a_federation_entity_fetcher_is_visible | https://github.com/ianynchen/sextant/actions/runs/34669970510
 G-34 | tests/e2e/test_websocket_delivered.py::test_a_programmatically_registered_endpoint_is_visible | https://github.com/ianynchen/sextant/actions/runs/34669970510
@@ -288,11 +295,10 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 
 One row per blocker the ```delivery block above still carries, in that block's order. A
 closed item keeps a row only where its closing has to be read beside its neighbours, and
-every such row says `**closed**` with the CI run that proved it. Seven blockers below
-(`javalin-routing`, `jaxws-public-final`, `jaxws-inherited-unannotated`, `G-31`,
-`alpakka-pekko`, `micronaut-sqs`, `G-44`) are implemented and pinned by a test that is green
-locally; they stay on the register until that test has passed in CI, because that is the
-definition of done (§0, "Closed").
+every such row says `**closed**` with the CI run that proved it. The seven blockers that
+shipped on the delivery branch (`javalin-routing`, `jaxws-public-final`,
+`jaxws-inherited-unannotated`, `G-31`, `alpakka-pekko`, `micronaut-sqs`, `G-44`) passed their
+intention tests in CI run 34703991222 and are in ```closed; their rows below say so.
 
 ### REST inbound — NOT DELIVERED (largest)
 
@@ -306,7 +312,7 @@ definition of done (§0, "Closed").
 | `kotlin-null-handler` | Kotlin routes carry a **NULL handler**, all 3 of them; no Kotlin symbol reaches `roots` or `reachability` | Java functional routes name theirs |
 | `quarkus-jaxrs` | JAX-RS `@Path` + `@GET` + `@Produces` are sibling annotations on ONE method, and `annotation_driven` reads one annotation's attributes; engine work (§4's opening note) | every Quarkus, Helidon, Jersey and RESTEasy resource derives nothing — deliberately, since a catalog of the existing forms would put every GET onto the class `@Path` |
 | `ktor-routing` | `RoutingBuilderKt.get(Route, String, Function2)` — the prefix a surrounding `route("/api") { … }` adds is visible only by walking from the inner call's receiver to the outer call's lambda; Category B | a `single_call` row would publish `/x` alone, a wrong row |
-| `javalin-routing` | **shipped** (`javalin.yml`, w61, `5e3e887` and `abba4db`): both flat forms derive, pinned by `tests/e2e/test_rest_inbound_delivered.py::test_javalin_flat_registrations_derive_every_route`. Still on the register because that test has not yet passed in CI | — |
+| `javalin-routing` | **closed** on CI run 34703991222 — **shipped** (`javalin.yml`, w61, `5e3e887` and `abba4db`): both flat forms derive, pinned by `tests/e2e/test_rest_inbound_delivered.py::test_javalin_flat_registrations_derive_every_route`. Still on the register because that test has not yet passed in CI | — |
 | `javalin-apibuilder` | the nested `ApiBuilder` form — `get("/{id}", h)` inside `path("/orders", …)`'s lambda; Category B (§4) | a flat read would publish `/{id}` without its prefix, a wrong row |
 | `G-45` | **closed** — a Data REST resource over MongoDB derives its route table since `6f088be`, proven in CI run 34669970510. The R2DBC, Cassandra, Elasticsearch, Neo4j and reactive contracts still outside are `GAP-6` | — |
 | `spring7-version` | **closed** — two versions of one route are not reported as a conflict, proven in CI run 34669970510 | — |
@@ -321,13 +327,13 @@ definition of done (§0, "Closed").
 | `G-30-outbound` | Spring Cloud Gateway outbound half — no catalog; the same Category B read as its inbound half |
 | `jdk-httpclient` | JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` — tier B, a builder chain; Category C until the combinator spec says whether it falls out of Category B's mechanism |
 
-### SOAP — NOT DELIVERED (`◐ (2 open)`)
+### SOAP — DELIVERED (both blockers closed on run 34703991222; matrix `✅`)
 
 | # | issue |
 |---|---|
 | `G-36` | **closed** — `spring-ws.yml` declares `container:` for `@PayloadRoot` and `@SoapAction`, both `@Repeatable`, proven in CI run 34646355110 |
-| `jaxws-public-final` | **shipped** (Task 9, `c6539f0`): a `public final` method on a `@WebService` is not an operation — `isWebMethodBySpec` excludes `final` beside `static`, and `derive_endpoints.sql`'s member rule now does too. Pinned by `tests/e2e/test_soap_delivered.py::test_a_public_final_method_is_not_an_operation`. Still on the register because that test has not yet passed in CI |
-| `jaxws-inherited-unannotated` | both runtimes measured, w63; Sextant over-reported: `gate_ancestry` derived an operation inherited from a plain, unannotated superclass that NEITHER jaxws-rt nor Apache CXF would ever serve. **Fixed in Task 10b, awaiting CI** — `derive_endpoints.sql`'s member rule now requires the DECLARING class to carry `@WebService`; pinned by `tests/e2e/test_soap_delivered.py::test_an_operation_inherited_from_an_unannotated_superclass_is_not_published` |
+| `jaxws-public-final` | **closed** on CI run 34703991222 — **shipped** (Task 9, `c6539f0`): a `public final` method on a `@WebService` is not an operation — `isWebMethodBySpec` excludes `final` beside `static`, and `derive_endpoints.sql`'s member rule now does too. Pinned by `tests/e2e/test_soap_delivered.py::test_a_public_final_method_is_not_an_operation`. Still on the register because that test has not yet passed in CI |
+| `jaxws-inherited-unannotated` | **closed** on CI run 34703991222 — both runtimes measured, w63; Sextant over-reported: `gate_ancestry` derived an operation inherited from a plain, unannotated superclass that NEITHER jaxws-rt nor Apache CXF would ever serve. **Fixed in Task 10b, awaiting CI** — `derive_endpoints.sql`'s member rule now requires the DECLARING class to carry `@WebService`; pinned by `tests/e2e/test_soap_delivered.py::test_an_operation_inherited_from_an_unannotated_superclass_is_not_published` |
 
 > `verify: javap -v -cp $(find ~/.m2 -name 'spring-ws-core-*.jar'|grep -v sources|head -1) org.springframework.ws.server.endpoint.annotation.PayloadRoot | grep Repeatable`
 > `verify: grep -c container src/sextant/catalogs/spring-ws.yml` → 5
@@ -353,22 +359,22 @@ run 34669970510; the cell reads `✅`.
 
 | # | issue |
 |---|---|
-| `G-31` | **Kafka Streams — three catalogs ship** (`kafka-streams.yml`, `kafka-streams-sink.yml`, `kafka-streams-topology.yml`, w60, split by owner per D02 §3.1): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
+| `G-31` | **closed** on CI run 34703991222 — **Kafka Streams — three catalogs ship** (`kafka-streams.yml`, `kafka-streams-sink.yml`, `kafka-streams-topology.yml`, w60, split by owner per D02 §3.1): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
 | `kafka-batch-generics` | batch listener generics: `@KafkaListener(batch = true)` takes `List<Foo>`; the payload publishes as the list, not the element. Engine work (§0, "Moved to engine work") — a wrapper conditional on an annotation attribute |
-| `alpakka-pekko` | **shipped** (`15deca9`, w62): Pekko Connectors consumer sources derive one inbound row per subscribed topic, pinned by `tests/e2e/test_kafka_delivered.py::test_pekko_consumer_sources_derive_one_inbound_row_per_subscribed_topic`. Still on the register because that test has not yet passed in CI |
+| `alpakka-pekko` | **closed** on CI run 34703991222 — **shipped** (`15deca9`, w62): Pekko Connectors consumer sources derive one inbound row per subscribed topic, pinned by `tests/e2e/test_kafka_delivered.py::test_pekko_consumer_sources_derive_one_inbound_row_per_subscribed_topic`. Still on the register because that test has not yet passed in CI |
 
-### JMS / AMQP — NOT DELIVERED
+### JMS / AMQP — DELIVERED (`G-44` closed on run 34703991222; matrix `✅`)
 
 | # | issue |
 |---|---|
-| `G-44` | three of four quarters derive (Tasks 1–3, commits `371cfaf`, `760c884`, `7771be7`): `RabbitTemplate`'s nine queue-naming overloads, `JmsTemplate`'s four, `KafkaTemplate`'s one. The SQS quarter is `sqs-template-receive` on the SQS row — `SqsTemplate.receive*` buries the queue inside `Consumer<SqsReceiveOptions>`, Category B (§4). `G-44` closes when the three delivered quarters' tests have passed in CI |
+| `G-44` | **closed** on CI run 34703991222 — three of four quarters derive (Tasks 1–3, commits `371cfaf`, `760c884`, `7771be7`): `RabbitTemplate`'s nine queue-naming overloads, `JmsTemplate`'s four, `KafkaTemplate`'s one. The SQS quarter is `sqs-template-receive` on the SQS row — `SqsTemplate.receive*` buries the queue inside `Consumer<SqsReceiveOptions>`, Category B (§4). `G-44` closes when the three delivered quarters' tests have passed in CI |
 
 ### AWS SQS — NOT DELIVERED
 
 | # | issue |
 |---|---|
 | `G-43` | **closed** — `SqsAsyncClient.sendMessage` derives since `6f088be`, proven in CI run 34669970510. The 27 other methods on the async client, `receiveMessage` among them, are `GAP-3` |
-| `micronaut-sqs` | **shipped** (`b4bbfa4`): a Micronaut module's raw `SqsClient` derives through `aws-sqs-sdk.yml`, pinned by `tests/e2e/test_aws_sqs_delivered.py::test_a_micronaut_module_using_the_raw_sqs_sdk_derives_its_queues`. Still on the register because that test has not yet passed in CI |
+| `micronaut-sqs` | **closed** on CI run 34703991222 — **shipped** (`b4bbfa4`): a Micronaut module's raw `SqsClient` derives through `aws-sqs-sdk.yml`, pinned by `tests/e2e/test_aws_sqs_delivered.py::test_a_micronaut_module_using_the_raw_sqs_sdk_derives_its_queues`. Still on the register because that test has not yet passed in CI |
 | `sqs-template-receive` | the SQS quarter of `G-44`: `SqsTemplate.receive` / `receiveMany` / `receiveAsync` / `receiveManyAsync` name the queue inside a `Consumer<SqsReceiveOptions>` lambda, not at any argument `single_call` reads; Category B (§4) |
 | `micronaut-jms-over-sqs` | `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms` though the wire is SQS, so a Spring SQS sender and this listener will not link; Category C (§4) |
 
@@ -411,8 +417,9 @@ two functions plus a config object on `sextant.api` (FR-24).
 
 ### DELIVERED in this scope
 
-**gRPC**, **GraphQL** and **WebSocket.** GraphQL and WebSocket closed their last blockers on
-CI run 34669970510 and read `✅`. gRPC's every remaining gap is another language (Go, Python,
+**gRPC**, **GraphQL**, **WebSocket**, **SOAP** and **JMS / AMQP.** GraphQL and WebSocket
+closed their last blockers on CI run 34669970510, SOAP and JMS / AMQP on run 34703991222; all
+four read `✅`. gRPC's every remaining gap is another language (Go, Python,
 Rust, Swift), so its cell reads `◐` correctly and forever — the ```scoped-out block says so.
 
 ---
@@ -422,7 +429,10 @@ Rust, Swift), so its cell reads `◐` correctly and forever — the ```scoped-ou
 These are real and they are not on the path to any cell above. They are listed so that
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
-`GAP-7` ~111s per reactor module (measured 2026-09-12: `mall-admin` 111s with its siblings, 8s alone; the cause is profiled in `OI-68`).
+`GAP-7` left this register on 2026-09-12: it is a performance cost (a reactor module
+analyses in 111s, 8s alone), not a missing feature, and the user ruled that a slow correct
+answer is not a gap. It lives in [`performance.md`](performance.md) P-1, worked after the
+register is empty.
 `G-52` throw exits left this list on 2026-09-12: it blocked no feature, so it is not in
 the `closed` block above; it is recorded closed in `open-issues.md`, by the tests named there.
 `G-74` `signature.throws` gains its consumer left this list on 2026-09-12: it blocked no

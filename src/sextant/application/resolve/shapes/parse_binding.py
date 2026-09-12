@@ -40,7 +40,7 @@ data (2G design §7). None appears below.
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -584,8 +584,7 @@ class _Facts:
 def _facts(workspace: Workspace) -> _Facts:
     sites: dict[str, list[dict[str, Any]]] = {}
     for row in workspace.query("call_sites"):
-        parsed = {**row, "arguments": json.loads(str(row["arguments"]))}
-        sites.setdefault(str(row["caller"]), []).append(parsed)
+        sites.setdefault(str(row["caller"]), []).append(row)
     ancestry: dict[str, list[str]] = {}
     for row in workspace.query("supertypes"):
         supertype = json.loads(str(row["supertype"]))
@@ -614,7 +613,7 @@ def _facts(workspace: Workspace) -> _Facts:
         enclosing = row["enclosing"]
         if enclosing is None:
             continue
-        signature = json.loads(str(row["signature"] or "{}")) or {}
+        signature = cast(dict[str, Any], row["signature"] or {})
         descriptor = bare_descriptor(str(row["symbol"]))
         key = (bare_descriptor(str(enclosing)), method_name(descriptor))
         methods.setdefault(key, []).append(
