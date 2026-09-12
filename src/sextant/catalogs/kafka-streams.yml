@@ -1,0 +1,62 @@
+id: kafka-streams
+displayName: Apache Kafka Streams (topology sources)
+style: single_call
+protocol: kafka
+direction: inbound
+
+# Split by owner, one catalog each — `kafka-clients`/`kafka-consumer` and
+# `micronaut-http`/`micronaut-http-client`'s own precedent, applied for the same
+# reason: `StreamsBuilder` and `KStream` declare DISJOINT method sets — neither
+# declares the other's — rather than being one library reachable under more than one
+# name (D02 §3.1's own definition of a `matches.owner` LIST — an interface and the
+# class implementing it, e.g. `JmsTemplate`/`JmsOperations`). This file reads
+# `StreamsBuilder` only. `KStream.to` is `kafka-streams-sink.yml`; `Topology.
+# addSource`/`addSink` is `kafka-streams-topology.yml`. All are detected on the same
+# artifact and measured against the same probe.
+detect:
+  coordinates: ["org.apache.kafka:kafka-streams"]
+measured:
+  - { artifact: org.apache.kafka:kafka-streams, versions: ["3.6.2"],
+      identity: reported, by: scripts/probes/w60_kafka_streams_surface.md }
+requires: [call_site, string_constants]
+matches:
+  owner: org.apache.kafka.streams.StreamsBuilder
+  methods:
+    # SOURCES — the topic at argument 0. MEASURED kafka-streams 3.6.2 (w60).
+    - { name: stream, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
+    - { name: stream, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
+    - name: stream
+      arity: 1
+      descriptor: "(Ljava/util/Collection;)Lorg/apache/kafka/streams/kstream/KStream;"
+      channel_arg: 0
+      channel_via:
+        - { owner: java.util.List, method: of, arg: all_strings }
+        - { owner: java.util.Arrays, method: asList, arg: all_strings }
+        - { owner: java.util.Collections, method: singletonList, arg: 0 }
+    - name: stream
+      arity: 2
+      descriptor: "(Ljava/util/Collection;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;"
+      channel_arg: 0
+      channel_via:
+        - { owner: java.util.List, method: of, arg: all_strings }
+        - { owner: java.util.Arrays, method: asList, arg: all_strings }
+        - { owner: java.util.Collections, method: singletonList, arg: 0 }
+    - name: stream
+      arity: 1
+      descriptor: "(Ljava/util/regex/Pattern;)Lorg/apache/kafka/streams/kstream/KStream;"
+      channel_arg: 0
+      channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }]
+    - name: stream
+      arity: 2
+      descriptor: "(Ljava/util/regex/Pattern;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;"
+      channel_arg: 0
+      channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }]
+    - { name: table, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+shape_model: json

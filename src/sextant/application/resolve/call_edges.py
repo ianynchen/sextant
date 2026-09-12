@@ -81,7 +81,7 @@ from collections.abc import Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
+from sextant.application.resolve.dispatch import DYNAMIC, THROW, Dispatch, dispatch_of
 from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor
@@ -158,7 +158,15 @@ def _record_resolution(
     # `call_edges.a-lambda-site-names-the-body-not-the-bootstrap` on that exact line and
     # a second copy makes the anchor ambiguous — it would disable one of the two and
     # report the guard as still held.
-    for site in (candidate for candidate in sites if str(candidate["invoke_kind"]) != DYNAMIC):
+    for site in (
+        candidate
+        for candidate in sites
+        # A `throw` site joins `dynamic` here for a different reason with the same
+        # consequence: there is no method to look up. Resolving one asked dispatch for
+        # `(IllegalStateException, "None", "None")` and got back a row claiming a method
+        # named `None` was inherited from an unscanned ancestor.
+        if str(candidate["invoke_kind"]) not in (DYNAMIC, THROW)
+    ):
         key = (
             bare_descriptor(str(site["owner"])),
             str(site["name"]),
@@ -191,7 +199,12 @@ def _rows_for(
     and it is what a walk stops at.
     """
     target, callees = _edge(site, dispatch)
-    if target is None:
+    # A THROW whose type could not be read still gets its row. The alternative is the
+    # silent absence `test_every_other_call_site_contributes_at_least_one_edge` exists
+    # against — the site was extracted, and dropping it here would lose an exit that the
+    # fact stream recorded. MEASURED: 5 of 39 throw sites on the fixture, all rethrows,
+    # whose type lives in the try-catch table this extractor does not read.
+    if target is None and str(site["invoke_kind"]) != THROW:
         return []
     # D01 §3: the tier describes the SITE, not the candidate. NO candidate is
     # `resolved` and not `unresolved` — the compiler named that target exactly,
@@ -216,7 +229,7 @@ def _rows_for(
             # F7 §8.2 (W30). Classified here, with the row, because this is where it is
             # already known whether a body was read — a later UPDATE would have to
             # rediscover which rows are terminals.
-            **classify(rules, target, callee),
+            **classify(rules, target, callee, str(site["invoke_kind"])),
         }
         for callee in reached
     ]
@@ -237,5 +250,12 @@ def _edge(site: dict[str, object], dispatch: Dispatch) -> tuple[str | None, list
         # can override it and a subtype's same-named body is a candidate the
         # JVM cannot reach here.
         return str(implementation), list(dispatch.bodies.get(str(implementation), ()))
+    if str(site["invoke_kind"]) == THROW:
+        # The TYPE is the target, whole. No candidates: a throw reaches no body, and an
+        # empty candidate list is the honest answer rather than a lookup that cannot run.
+        # `owner` is itself NULL for a rethrow whose type the try-catch table holds, and
+        # that stays NULL rather than becoming the string "None".
+        owner = site["owner"]
+        return (None if owner is None else str(owner)), []
     target = method_descriptor(str(site["owner"]), str(site["name"]), str(site["descriptor"]))
     return target, dispatch.candidates(site)

@@ -198,6 +198,33 @@ def test_a_chain_deeper_than_any_recursion_limit_still_walks():
     assert steps[-1].depth == depth
 
 
+def test_a_throw_with_no_target_stays_null_on_its_step():
+    """`G-52`. A rethrow whose type was unread is a `call_edges` row with a NULL target.
+    `str(row["target"])` spelled it `"None"` — a participant named `None` in the diagram
+    and a symbol named `None` in `reachability` — where the honest value is no value."""
+    edges = {
+        "m0": [
+            {
+                "callee": None,
+                "ordinal": 0,
+                "invoke_kind": "throw",
+                "target": None,
+                "result": None,
+                "resolution": "resolved",
+                "terminal_kind": "throws",
+                "target_kind": None,
+            }
+        ]
+    }
+    steps: list = []
+    _walk("m0", {"m0"}, steps, _Index(edges=edges, returns={}, responses={}))
+
+    assert len(steps) == 1
+    assert steps[0].target is None
+    assert steps[0].invoke_kind == "throw"
+    assert steps[0].stop == TraceStop.BOUNDARY
+
+
 def test_a_terminal_is_where_the_workspace_stopped_and_not_where_the_walk_did(
     resolved_fixture: tuple[DuckDbWorkspace, ResolveReport],
 ):

@@ -2291,11 +2291,13 @@ the rule). A same-named member whose parameter types differ overrides nothing, t
 own implementation still applies, and a name-only selector publishes an address the framework
 answers 405 to — measured, CP-9 rows 18 and 26.
 
-**No visibility is read, and that is mirroring rather than relaxing.** [D00](D00-fact-schema.md)
-§5a's `visibility` is two-valued, so a `protected` handler is recorded as `other` and the
-column cannot say which (CP-9 row 24). It need not: an override may only widen the visibility
-of the member it overrides, never narrow it, so a member declared under the supertype's own
-name and parameter types IS the override at every visibility the language permits.
+**No visibility is read, and that is mirroring rather than relaxing.** An override may only
+widen the visibility of the member it overrides, never narrow it (CP-9 row 24), so a member
+declared under the supertype's own name and parameter types IS the override at every
+visibility the language permits, whichever of [D00](D00-fact-schema.md) §5's four `visibility`
+words it carries. (Before `G-73` the column was two-valued and a reduced-but-legal
+declaration read `other` with no way to say which — the same conclusion, for a cruder
+reason.)
 
 **`bypassed_by` discards the CLASS, never merely the member.** A class overriding the
 supertype's own dispatch ENTRY POINT has replaced the lookup the table describes, and serves

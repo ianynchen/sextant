@@ -164,15 +164,41 @@ _NAMED_QUERIES = {
           AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Every static body a compiler-emitted holder of an interface's default
+    # method bodies carries (D00 §5, the delivery register's `DefaultImpls`
+    # item): the body's own module-prefixed symbol, the interface its holder
+    # stands for (`implements_default_of`, module-prefixed as `superclass`
+    # above is), the interface method's NAME (`bridge_of`) and the body's
+    # `signature`, whose first parameter is the interface instance. Neither key
+    # is projected by `symbols`, so this reads `raw_facts` the way
+    # `superclasses` does. The join to the enclosing type's own fact is what
+    # keeps an ordinary `$default` bridge — which carries `bridge_of` too, on
+    # every data class — out: only a method whose TYPE carries
+    # `implements_default_of` is a holder body. `dispatch.py` reads this and
+    # nothing else does.
+    "default_bodies": """
+        SELECT m.payload ->> 'symbol'               AS symbol,
+               t.payload ->> 'implements_default_of' AS interface,
+               m.payload ->> 'bridge_of'            AS stands_for,
+               m.payload ->  'signature'            AS signature
+        FROM raw_facts m
+        JOIN raw_facts t
+          ON t.kind = 'symbol'
+         AND (t.payload ->> 'symbol') = (m.payload ->> 'enclosing')
+         AND (t.payload ->> 'implements_default_of') IS NOT NULL
+        WHERE m.kind = 'symbol' AND (m.payload ->> 'bridge_of') IS NOT NULL
+          AND m.document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and visibility (2O design
     # §1b, Task 5): `method_declarations` above carries `signature` instead,
     # which this join has no use for, and `method_symbols` carries neither
     # `enclosing` nor `visibility` at all — `supertype_derived`'s own
     # `overridden_public_methods` evidence needs both, to tell an
     # implementer's own override from an unrelated same-named method
-    # elsewhere in the module AND to gate it on visibility (D00 §5a: `public`
-    # or `other`, the same column `mapping.members: public_methods` already
-    # reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
+    # elsewhere in the module AND to gate it on visibility (D00 §5, `Visibility`'s
+    # four members — `G-73` — the same column `mapping.members: public_methods`
+    # already reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
     # share the module-prefixed coordinate space `effective_annotations.py`'s
     # own `method_declarations` join already relies on. Ordered by symbol for
     # the same reason every other declaration-level query here is.
@@ -632,6 +658,22 @@ _NAMED_QUERIES = {
         SELECT root, symbol, depth, terminal
         FROM reachability
         ORDER BY root, depth, symbol
+    """,
+    # `G-74`'s own join: every `invoke_kind: throw` call site whose CALLER is a symbol a
+    # root reaches (`reachability`, the root's own body at depth 0 included) — a throw
+    # site reachable from a handler, at whatever depth. `cs.owner` is the thrown TYPE,
+    # Task 16's own shape (`G-52`): non-NULL where the extractor read it (a `NEW`, an
+    # invoke's declared return) and NULL for a rethrow whose type lives in the try-catch
+    # table nothing here reads. `call_sites` is already scoped to `selected_documents` in
+    # its own view definition, so this join needs no filter of its own — the
+    # `default_bodies` precedent above scopes at `raw_facts`; this one scopes at the view
+    # built on it. `egress/render/document.py`'s `Fails with` line is the only reader.
+    "reachable_throws": """
+        SELECT r.root AS root, cs.caller AS caller, cs.ordinal AS ordinal, cs.owner AS target
+        FROM reachability r
+        JOIN call_sites cs ON cs.caller = r.symbol
+        WHERE cs.invoke_kind = 'throw'
+        ORDER BY root, caller, ordinal
     """,
     # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
     # dispatch narrowed to two bodies is two rows — so `target` and `callee`

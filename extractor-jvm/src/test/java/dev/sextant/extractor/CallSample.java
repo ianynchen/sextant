@@ -462,6 +462,36 @@ public final class CallSample {
         return supplied;
     }
 
+    /** `G-52`. The only exit is a throw: before the throw site existed this
+     *  method published a call to the exception's CONSTRUCTOR and nothing
+     *  saying the method then left through it — the same facts as a method
+     *  that builds an exception to hand somewhere else. */
+    void throwsNew(String reason) {
+        throw new IllegalStateException(reason);
+    }
+
+    /** A rethrow: the thrown value's producer is the catch handler's stack
+     *  entry, whose type lives in the try-catch table this pass does not read,
+     *  so the site names NO type rather than a guess — but still names the exit. */
+    void rethrows() {
+        try {
+            helper("attempt");
+        } catch (RuntimeException caught) {
+            throw caught;
+        }
+    }
+
+    /** A helper-built exception, which is how most factory methods throw: the
+     *  producer is an invoke, and the DECLARED return type is a bound the class
+     *  file states rather than a guess. */
+    void throwsBuilt() {
+        throw build("reason");
+    }
+
+    static RuntimeException build(String reason) {
+        return new RuntimeException(reason);
+    }
+
     void hold(Holder held) {
         record(held.note());
     }

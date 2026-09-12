@@ -94,64 +94,78 @@ traffic, and has never been used for this.
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
 
-## GAP-3 — the async SQS client is unread · **0 of 28**
+## GAP-3 — the async SQS client is read for one call · **1 of 28**
 
-`SqsAsyncClient` — every method, including `sendMessage` — is outside
-`aws-sqs-sdk`'s declared slice. `SqsClient` itself is **1 of 29**: the synchronous
-`sendMessage` only. The entire inbound direction, including `receiveMessage`, and
-every batch form are outside on both.
+`SqsAsyncClient.sendMessage` derives since `G-43` (closed on CI run 34669970510):
+`aws-sqs-sdk`'s `matches.terminal` names `SqsClient` and `SqsAsyncClient` together as
+the builder chain's terminal owner. `SqsClient` itself is still **1 of 29**. What is
+still outside, on both clients: the entire inbound direction, including
+`receiveMessage`, and every batch form.
 
 **Closes by** widening the slice, which is catalog data rather than engine work —
 the request-object shape each of these takes is the same one `sendMessage` already
 reads.
 
-## GAP-4 — the messaging templates read their SEND half only
+## GAP-4 — the messaging templates' receive halves: three of four read, SQS's not
 
-Measured, read of declared:
+Measured, read of declared (COVERAGE §3b):
 
 | Owner | Read |
 |---|---|
-| `RabbitTemplate` | 1 of 88 |
-| `JmsTemplate` | 1 of 49 |
+| `RabbitTemplate` | 4 of 88 |
+| `JmsTemplate` | 5 of 49 |
 | `SimpMessagingTemplate` | 3 of 14 |
 | `SqsTemplate` | 1 of 12 |
 | `PubSubTemplate` | 11 of 20 |
 
 **The raw ratio overstates every row here and the probe says so.** Most of what a
-template declares is configuration and lifecycle — `RabbitTemplate`'s 83 unread
-include `setChannelTransacted` and its kin, which address no wire. The honest
-statement is that the SEND half is read and the RECEIVE half is not, plus the
-batch and async forms.
+template declares is configuration and lifecycle — `RabbitTemplate`'s 84 unread
+include `setChannelTransacted` and its kin, which address no wire. `RabbitTemplate`'s
+and `JmsTemplate`'s receive halves derive since `G-44`'s Tasks 1–2 (`371cfaf`,
+`760c884`): the overloads that name the queue or destination at an argument, one
+inbound row each. What is still outside: `SqsTemplate`'s receive half, where the
+queue is named inside a `Consumer<SqsReceiveOptions>` lambda rather than at any
+argument — the delivery register's `sqs-template-receive`, Category B — plus the
+request/reply, batch and async forms on every template.
 
-**Closes by** a per-template pass declaring the receive half, which needs a fixture
-for each: a `receive` with no payload capture is a boundary whose contract nobody
-can read, and deriving it would publish a row with no shape.
+**Closes by** the receiver-chain read the combinator overload spec describes, for
+SQS; the other three templates needed only a fixture each, and have one.
 
-## GAP-5 — Spring Integration reads 2 of roughly 12 channel annotations
+## GAP-5 — Spring Integration reads 7 of 11 channel annotations
 
-`spring-integration` declares two; the framework has about twelve. A module using
-`@ServiceActivator`, `@Splitter`, `@Aggregator` or `@Router` has those channels
-absent.
+`spring-integration` declares seven of the eleven channel-declaring annotations in
+spring-integration-core 6.2.4 (COVERAGE §3b); `G-47` closed on CI run 34669970510
+when `@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter` and
+`@Transformer` began deriving. What is still outside: `@Gateway`, `@MessagingGateway`,
+`@Poller` and `@Publisher`, whose cost is bounded — this catalog files
+`channel_destination` questions and mints no endpoint rows, so each under-reports a
+question list rather than producing a wrong row.
 
-**Closes by** enumerating the annotation set from the jar and widening the catalog.
+**Closes by** widening the catalog to the remaining four, from the same enumeration.
 
-## GAP-6 — Spring Data REST derives for JPA repositories only
+## GAP-6 — Spring Data REST derives for JPA and MongoDB repositories, 7 of 28 contracts
 
-`spring-data-rest` reads the JPA repository contracts. A module exposing
-MongoDB, Cassandra or R2DBC repositories through Spring Data REST derives nothing
-for them.
+`spring-data-rest` reads the base contracts plus `JpaRepository` and
+`MongoRepository` (COVERAGE §3b); `G-45` closed on CI run 34669970510 when a Data
+REST resource over MongoDB derived its route table. What is still outside: every
+R2DBC, Cassandra, Elasticsearch and Neo4j repository contract, and every reactive,
+coroutine and RxJava3 variant — `ReactiveMongoRepository` included — which derive
+nothing.
 
-**Closes by** enumerating each store module's own repository contracts. The
+**Closes by** enumerating each remaining store module's own repository contracts. The
 `repositories` map is catalog data; the rule that reads it is store-neutral
 already.
 
-## GAP-7 — analysing a reactor module costs ~100s and the cause is not diagnosed
+## GAP-7 — analysing a reactor module costs ~111s and the cause is now diagnosed
 
 Tracked in full as `OI-68` below, listed here because it is a capability limit a
 reader will hit rather than a defect in output. Both mechanisms originally blamed
-were refuted by measurement in W56; the cost is real, has grown from the 67s that
-entry records, and sits in `derive_endpoints` and `derive_endpoint_shapes` at
-roughly 25-36s each.
+were refuted by measurement in W56, and the last lever it named was refuted again on
+2026-09-12: `mall-admin` with its three siblings analyses in 111s against 8s alone,
+`derive_endpoints` 47s against 3.6s, `derive_endpoint_shapes` 39s against 1.6s —
+and the SQL the lever would have filtered is 2.8s of the 31.7s replay (the fresh
+run's 47s was not profiled to the query). The rest is 72 catalogs
+each re-reading the whole fact table from Python; that entry has the profile.
 
 ---
 
@@ -1124,6 +1138,46 @@ Recorded rather than fixed silently because it is a rule that would have
 rejected honest evidence, which is the failure mode a rule about provenance can
 least afford.
 
+### OI-85 — three inputs the `DefaultImpls` holder rule would misread, none of which a real module presents
+**Minor · logged 2026-09-12 at Task 15's review (`kotlin-defaultimpls`, `b6be0e1`) ·
+`extractor-jvm/.../KotlinDefaultImpls.java`, `ClassScanner.java`, `workspace.py`**
+
+Logged rather than fixed, under the ruling of 2026-09-12 that an issue whose triggering
+input does not occur in real codebases is recorded, not worked. The holder is recognised
+from three conjuncts — the `<Iface>$DefaultImpls` name, the `InnerClasses` entry naming
+the interface as the outer class, and every method `static` with the interface at slot 0
+(COVERAGE §5.13, D00 §5). Each bullet names the input that gets past one of them, and why
+it is not seen in practice.
+
+- **A hand-written nested class named `<Iface>$DefaultImpls`** whose static methods take
+  the interface first and are declared BEFORE an explicit constructor. The method facts are
+  emitted as the methods are visited, so those methods carry `bridge_of` while the type's
+  `implements_default_of` is withheld at `visitEnd` by the constructor. No compiler emits
+  this and nobody writes it: the name is the Kotlin compiler's own reserved spelling, and a
+  Java author declaring a nested `DefaultImpls` with that method shape is copying kotlinc by
+  hand. **Fix when wanted:** a fourth conjunct in `holderOf`'s gate — `@kotlin.Metadata`
+  kind `k=3` (a synthetic class), which `KotlinNullability.collector` already reads off the
+  annotation before any method is visited.
+- **A losing multi-release overlay copy of the holder's TYPE fact.** `workspace.py`'s
+  `default_bodies` query filters its method side (`m`) by `selected_documents` and joins the
+  enclosing type's side (`t`) without that filter, so a holder type fact from a losing
+  overlay copy can pair with the winning copy's method fact. The projected columns come from
+  the pair's `t.implements_default_of` and `m.*`, which the two copies agree on, so the
+  result is a DUPLICATE row and never a different one; `dispatch._default_bodies` keys a
+  set-like list and dedupes it. A Kotlin holder in a `META-INF/versions/` overlay is the
+  input, and no module here or in the corpora carries one.
+- **Under `-jvm-default=disable`, a default body containing a lambda.** A non-capturing
+  lambda inside the body is expected to put its `private static synthetic` body method into
+  the holder, with slot 0 not the interface; "every method shaped" then fails and the holder
+  is silently unrecognised — it fails CLOSED, with no `implements_default_of` and no
+  `bridge_of`, never a wrong fact. Unmeasured (§5.4: the shape is assumed from how kotlinc
+  places a lambda body in its enclosing class, not read from a class file): the mode has not
+  been any supported compiler's default since 2.2, and no scanned module was built under it.
+
+**Verify** each by building the input and scanning it; **closes** when the fourth conjunct
+lands for (a), when the `t` side takes the `selected_documents` filter for (b), and when (c)
+is measured.
+
 
 ## CLOSED
 
@@ -1853,11 +1907,23 @@ Counted across `src/`, excluding the declarations themselves, the readers are:
 | field | readers |
 |---|---|
 | `nest_host`, `nest_members`, `unread_attributes` | 0 |
-| `permits`, `signature.throws` | 0 |
+| `permits` | 0 |
 | `modifiers.abstract`, `varargs`, `final`, `native`, `synchronized`, `volatile`, `deprecated` | 0 |
+| `signature.throws` | 1 — the module document's `Fails with:` line, `G-74`, **closed 2026-09-12** |
 
-Every apparent hit is prose in a docstring or a SQL comment. The only W7 output
-with a live consumer is `construct_kind: annotation`, through `interface_symbols`.
+Eleven of the twelve remain at zero. `signature.throws` closed by
+`egress/render/document.py`'s `_fails_with_entry`, pairing the DECLARED clause with the
+OBSERVED throw-exit call sites `G-52` gave the call graph — `reachable_throws`
+(`storage/duckdb/workspace.py`) joins `reachability` to `call_sites` at the composition
+root, and `egress/render/document.py` renders the answer. Proved by
+`tests/egress/test_render.py`'s `test_a_handlers_declared_exception_renders_as_fails_with`,
+`test_a_reachable_throw_exit_joins_the_same_line_after_the_declared_half`,
+`test_a_throw_site_whose_target_was_unread_says_so_in_words` and
+`test_no_fails_with_line_where_neither_half_has_anything`.
+
+Every apparent hit among the remaining eleven is prose in a docstring or a SQL comment. The
+only other W7 output with a live consumer is `construct_kind: annotation`, through
+`interface_symbols`.
 
 **The rule was applied to three items and not to twelve.** `Module`,
 `LocalVariableTypeTable` and class-level type annotations were dropped for having
@@ -1924,9 +1990,11 @@ in the local dependency cache). Two wrong consumers is a signal that the right o
 has to be chosen deliberately, not that the data is worthless.
 
 **Consequence:** measured over javac 21 output, a `private record Inner(int y)`
-reports `visibility: other` and no `private` modifier — the same as a
-package-private one. Nothing downstream distinguishes them today, which is why
-this is Minor rather than Major.
+reports `visibility: package` (`G-73` gave the class-file word its other three
+values; the class file itself still writes a private nested type
+package-private, so the word this reports did not change) and no `private`
+modifier — the same as a package-private one. Nothing downstream distinguishes
+them today, which is why this is Minor rather than Major.
 
 **Closes by** `visitInnerClass` reading `access` into a field that feeds
 `modifiers` ONLY for the nesting modifiers (`ACC_PRIVATE`, `ACC_PROTECTED`,
@@ -2432,7 +2500,7 @@ METHOD walk: the annotations sit on methods the subclass does not declare at all
 **Closes by** that walk, over `type_hierarchy` (W22). **Falsified by** a DGS codebase
 with no inheritance among its fetchers, for which today's rows are already complete.
 
-### OI-68 — analysing a reactor module costs 10× what it did · **OPEN; both proposed causes REFUTED by W56**
+### OI-68 — analysing a reactor module costs 14× what it did · **OPEN; every proposed cause REFUTED — W56, and lever 2 again on 2026-09-12; the profile below is where the cost is**
 
 *The title said "and most of it is avoidable" until W56 measured it. The cost is real and has
 GROWN; the two mechanisms this entry blamed are not it.*
@@ -2533,6 +2601,86 @@ and is why a single-run comparison misled this wave once already.*
 **Still closes by** attacking the two passes that actually dominate, which are shape
 expansion and endpoint derivation — not by the two levers named above. **Falsified by** a
 profile on another corpus putting the cost somewhere else entirely.
+
+---
+
+## Lever 2 was measured a second time on 2026-09-12, and the pass was profiled to the query. It is not the SQL.
+
+The pipeline now has a standing per-pass timer (`pipeline._timed`, one INFO line per pass,
+pinned by `tests/application/test_pipeline.py::test_every_resolve_pass_logs_its_seconds_
+at_info`), so these tables come from the instrument rather than from a script. Apple M4,
+24 GB, Python 3.14.7, DuckDB 1.5.5; `mall-admin`, 160 endpoints either way; two runs of
+each, the second within 1s a pass of the first.
+
+**Before anything was changed** — with its three siblings (648 documents) and alone (161):
+
+| pass | alone | with siblings |
+|---|---|---|
+| `record_return_flows` | 0.3s | 4.3s |
+| `record_call_edges` | 1.3s | 12.7s |
+| `derive_endpoints` | 3.6s | **47.4s** |
+| `derive_endpoint_shapes` | 1.5s | **39.7s** |
+| `record_service_identity_gaps` | 0.1s | 1.6s |
+| `record_routing_conflicts` | 0.1s | 1.4s |
+| `record_reachability` | 0.4s | 1.3s |
+| whole analyze | 8.0s | **111.9s** |
+
+**Lever 2, applied and measured.** `annotations_effective` in `derive_endpoints.sql`
+restricted to documents whose `origin_tier` is `module_output`, run over the same
+with-siblings workspace: `derive_endpoints` 32.0s against 31.7s without it (a resolve
+replayed over an already-loaded workspace runs the pass in ~32s; a fresh analyze runs it
+in ~47s — both are recorded, neither is explained here), the `endpoints` statement 3.07s
+against 2.82s, the 160 rows identical on this corpus. **And it drops two real routes on the
+fixture:** the sibling-declared exchange interface's `/orders/list`
+(`test_module_edge.py::test_an_exchange_interface_a_SIBLING_declares_still_serves_this_
+modules_route`) and the opted-in library's `{http://billing.example.com/ws}stubCharge`
+(four tests in `tests/e2e/test_vertical_slice.py`) — the second because `origin_tier` is
+`dependency` for a consented library and a sibling alike, which is the distinction
+`drop_borrowed_endpoints.sql` already explains it cannot read from the tier. The filter
+was reverted; the SQL is byte-identical to before.
+
+**After** (the same code plus the timer; the second full run):
+
+| pass | alone | with siblings |
+|---|---|---|
+| `record_return_flows` | 0.3s | 4.4s |
+| `record_call_edges` | 1.3s | 13.0s |
+| `derive_endpoints` | 3.6s | **47.4s** |
+| `derive_endpoint_shapes` | 1.6s | **38.7s** |
+| whole analyze | 8.1s | **111.3s** |
+
+**Where `derive_endpoints` actually spends its time**, replayed over the with-siblings
+workspace with every named query and derivation timed (31.7s in the replay):
+
+| what | seconds | calls | rows read |
+|---|---|---|---|
+| `derive_endpoints.sql` (the `endpoints` derivation, every annotation-driven catalog) | 2.8s | 29 | — |
+| every other named derivation together | 0.2s | | |
+| `method_declarations` query | 6.0s | 59 | 1,301,481 |
+| `call_sites` query | 4.7s | 38 | 952,166 |
+| `constructor_declarations` query | 1.6s | 36 | 29,448 |
+| `interface_symbols` query | 1.5s | 30 | 4,020 |
+| `annotations` query | 1.4s | 41 | 73,103 |
+| `enum_types` query | 1.3s | 32 | 32 |
+| `supertypes` query | 1.3s | 31 | 31 |
+| `implementations` query | 1.2s | 28 | 3,360 |
+| `superclasses` query | 1.0s | 24 | 2,184 |
+| all named queries together | 21.0s | 353 | |
+| `json.loads` over the rows those queries return (cProfile) | 7.7s | 2,647,512 | |
+
+The SQL that lever 2 would have narrowed is 2.8s of the pass, so **no root filter in
+`derive_endpoints.sql` can save more than that**, which is why W56 measured nothing and
+this did too. The 72 catalogs cost 0.5–1.1s EACH and the cost is the same shape in every
+one of them: each engine's Python pre-pass re-reads the whole `method_declarations`
+(22,059 rows × 59 reads) or `call_sites` table (25,000 rows × 38 reads) and re-parses
+every row's JSON, per catalog, when the table is the same table every time. A `supertypes`
+query that returns one row costs 41ms because it scans the fact table to find it.
+
+**What closes it, now that the number is measured:** the pass reads each fact table once
+per resolve rather than once per catalog — a read shared across the engines, or the JSON
+parsed once at load. That is a change to how engines read, not to any SQL, and it is not
+a root filter. `derive_endpoint_shapes` (39s) was not profiled to the query here.
+**`GAP-7` stays open**: 111s against the 10s the register calls acceptable.
 
 ### OI-69 — Gradle modules cross no module edge · **SCHEDULED as W55 (Wave 12)**
 
@@ -2807,7 +2955,7 @@ the destination is at `queue(arg0)` inside it`". That is what shipped, near enou
 `lambda_arg` and `lambda_steps` — and the paragraph is kept for that rather than repeated as
 an open question.*
 
-### OI-75 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
+### OI-75 — five of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
 
 **Found by** W30's review, which asked the question `RootKind`'s own docstring already
 answers for `entry_point` and this set did not answer for anything: which members are
@@ -2818,13 +2966,14 @@ catalog declares a `terminals` block, all twelve of its rules say `persistence`,
 measured output across `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app`
 contains no other value.
 
-**The six absentees are absent for two different reasons, and conflating them was the
+**The five absentees (six until `G-52`) are absent for two different reasons, and conflating them was the
 finding.** The published note said only that "no shipped catalog declares a rule that mints
 one", which is true of half of them and false of the other half:
 
 | member | why it is absent |
 |---|---|
-| `outbound_call`, `throws`, `async_handoff` | one catalog rule away — an `owner` rule naming `ExecutorService` mints `async_handoff` today |
+| `outbound_call`, `async_handoff` | one catalog rule away — an `owner` rule naming `ExecutorService` mints `async_handoff` today |
+| ~~`throws`~~ | **produced since `G-52`, 2026-09-12** — and by the second route below, not a catalog rule: `resolve/terminals.classify` returns it for a `throw` site from the site's own `invoke_kind`, because how a body exits is not a property of any callee's type. This entry read "six" until then |
 | `TargetKind.file` | likewise: `io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are live on `mall-admin` and read `unresolved` |
 | `cycle` | unreachable BY CONSTRUCTION — a cyclic edge has a non-NULL `callee`, so `resolve/terminals.classify` returns NULL for it and always will |
 | `returns`, `ends_silently` | unreachable by any rule — they describe how a BODY exits, and all three catalog routes are predicates on the callee's TYPE |
@@ -2834,10 +2983,11 @@ defect. It matters to a reader of `call_edges` deciding whether an absent value 
 analysis found nothing or cannot express it, and to a catalog author wondering whether a
 rule of theirs could produce one.
 
-**Closes by** two separate acts: declaring the rules for the first four (cheap, and
+**Closes by** two separate acts: declaring the rules for the first three (cheap, and
 `file` has live candidates waiting), and — for the last three — a mechanism that classifies
 a BODY's exit rather than a callee's type, which is a different pass, not a different rule.
-Either half may close on its own.
+Either half may close on its own. `throws` closed by the second: the throw site (`G-52`)
+is exactly such a mechanism for the one exit the instruction stream states.
 
 **Falsified by** finding that `returns`/`ends_silently` were never meant for `call_edges`
 at all, in which case the fix is to narrow the set the way `RootKind` was narrowed from six
@@ -3026,7 +3176,7 @@ resolved classpath under both build systems. #12 is an emission to delete when a
 build-script change is next authorised. #14 is the `filesystem` engine, deliberately ahead
 of implementation.
 
-### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive
+### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive · **CLOSED, 2026-09-12**
 
 **Found by** the review of `G-63` (`7716ab3`), measured rather than reasoned.
 
@@ -3047,7 +3197,28 @@ return, so this is an unfinished improvement rather than a regression. **Closes 
 the declared return's classifier from `@kotlin.Metadata` for the primitive cases only, where
 the boxed-versus-primitive answer is exactly what `Attributes.isNullable` already supplies.
 
-### OI-81 — a `$default` bridge and the function beside it disagree about one declared type
+**CLOSED by** `feat(extractor): a suspend fun returning Int reads as int, not Integer, where
+the source declared it non-null (OI-80)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinSuspendPrimitiveTest.java`.
+`KotlinNullability.Decoded` now keeps each function's declared return CLASSIFIER beside its
+nullability, and `KOTLIN_PRIMITIVES` names the eight classifiers (`kotlin/Int`, `Long`,
+`Boolean`, `Double`, `Float`, `Short`, `Byte`, `Char`) that compile to a JVM primitive when
+declared non-null. Where a suspend function's classifier is one of those AND its declared
+return is non-null, the recovered reference is the primitive's — `suspCount(): Int` reads
+`int#` with the same whole reference as `plainCount(): Int`. `suspMaybeCount(): Int?` keeps
+`java/lang/Integer#`, nullable: a nullable `Int` genuinely boxes, so the `Integer` the
+signature spelled is the right answer there.
+
+Found and closed in the same change, one position along: a return declared as a bare type
+variable (`fun <T> ranked(x: T): T`) read `nullable: false` from metadata, which describes the
+variable and not what a caller binds it to (`ranked<String?>(null)` is legal). A bare `T`
+now keeps Java's rule on the return, parameter and field projections — the field of a
+`val x: T` carries no `ext.kotlin` block at all, so a getter, a constructor parameter and a
+field of one declared type do not disagree, which is the intra-class disagreement `G-63`
+was opened for; `T?` still reads `true`. A bound that would settle it (`T : Any`) is not
+read.
+
+### OI-81 — a `$default` bridge and the function beside it disagree about one declared type · **CLOSED, 2026-09-12**
 
 **Found by** the review of `G-63` (`7716ab3`).
 
@@ -3063,7 +3234,42 @@ states the bridge is read as a second symbol at all.
 **Closes by** the same work that closes `$default` generally: recognising the suffix and the
 mask parameter, at which point the bridge stops being published as an independent declaration.
 
-### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule
+**CLOSED by** `feat(extractor): a Kotlin $default bridge names the function it stands for and
+takes its declared types (OI-81)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinDefaultBridgeTest.java`. Measured
+first, on kotlinc 2.2.0: `fun greet(name: String = "x", loud: Boolean = false): String` emits
+`greet$default`, flags `ACC_PUBLIC | ACC_STATIC | ACC_SYNTHETIC`, descriptor
+`(Ldev/sextant/extractor/KotlinDefaultsSample;Ljava/lang/String;ZILjava/lang/Object;)Ljava/lang/String;`
+— the receiver, the function's own slots, one `int` mask per 32 parameters (a 33-parameter
+function carries two), an `Object` marker; a `@JvmStatic` function's bridge has no receiver
+slot, and a `suspend fun`'s carries its `Continuation` before the mask. `KotlinDefaultBridge`
+recognises that shape (the mask count is solved from the slot count, not counted as trailing
+`int`s, which a function whose last parameters are `Int` would defeat), derives the sibling's
+`name + descriptor` by dropping the receiver and the masks and marker, and settles the
+receiver question by which ONE candidate `@kotlin.Metadata` keyed — where it keys both
+(review case: an `object`'s `@JvmStatic fun js(a: String, b: Int = 0): String` beside an
+arity overload `fun js(b: Int): String`, whose key the receiver-dropped candidate derives),
+there is no sibling and the bridge carries only its name, because ambiguity is not a guess.
+The bridge is then read under its sibling's key: `greet$default` reads `name: String` as
+`nullable: false` and its return `false`, where both read `true`; `maybe$default` borrows
+`true` for `note: String?` and `String?`. The receiver, the masks, the marker and a suspend
+sibling's `Continuation` are nobody's declaration and keep Java's rule. A suspend sibling's
+bridge returns the erased `java/lang/Object#` with the declared nullability over it —
+accurate for the erased protocol, not the declared type, which only the sibling's
+`Signature` holds.
+
+**Departing from the "closes by" above in one respect, deliberately:** the bridge is still
+published as its own symbol, now carrying `bridge_of: "greet"` beside its `synthetic: true`
+(D00 §5a). A call site names the bridge by its own descriptor, so a fact for it has to exist
+for the call to resolve to anything; `bridge_of` is what lets a consumer follow it back to the
+declaration. Every consumer that filters `synthetic: true` (`derive_endpoints.sql`'s
+member rule, `shapes/expansion.py`, `effective_annotations._is_synthetic`) already excludes
+it, so the field is informational until dispatch reuses it. The bridge's parameterized slots
+stay erased at the type level — it carries no `Signature`, and a `List<String?>`'s element
+is not invented from metadata; only the declared nullability at each level the two agree on
+is applied, which for an erased `List` is the top.
+
+### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule · **CLOSED, 2026-09-12**
 
 **Found by** implementing `G-63`'s return half (`7716ab3`), which closed the half it names and
 left this one measurable.
@@ -3080,6 +3286,116 @@ where a synthetic leads or trails.
 **Recorded rather than absorbed into the return half's commit**, because a claim that `G-63`
 is closed when half of what its row names is still live is the register defect this file
 exists against. `docs/java-kotlin-delivery-list.md`:241`'s `G-63` row names both.
+
+**CLOSED by** `feat(extractor): a Kotlin parameter carries the nullability its source
+declared, type arguments included (OI-82)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinParameterNullabilityTest.java`.
+`KotlinNullability.Decoded` now keeps each function's and constructor's declared parameter
+types (`KmType`, whole — not a boolean), and `TypeRefs.withDeclaredNullability` walks that
+tree beside the `Node` tree built from `Signature`, before serialization, applying the
+declared nullability at every level where the two trees agree on shape: `List<String?>` and
+`List<String>?` now read differently, where one descriptor and one signature spelled them
+the same. Where metadata's parameter count differs from the descriptor's declared slots
+(an extension function's receiver, an inner class's enclosing instance, an enum's
+name/ordinal), nothing is applied and every parameter keeps Java's rule. A `var`
+property's SETTER is neither a function nor a constructor in metadata and still takes
+Java's rule — the same shape `G-63` closed for getters, one position along; not
+re-opened here because no fixture exhibits it (§4.1). `GenericSignatureTest`'s pin on
+`batched(List<String>)`'s element moved from `nullable: true` to `false` — the pin was
+carrying the defect.
+
+### G-52 — a `throw` is an exit the call graph did not record · **CLOSED, 2026-09-12**
+
+**Found by** the completeness audit of 2026-09-06 (F1 §2.3): every `ATHROW` was dropped by
+`extractor-jvm/.../MethodFlow.java`, so a method whose only exit is a throw published a call
+to the exception's CONSTRUCTOR and nothing saying the method then left through it — the same
+facts as a method that builds an exception to hand somewhere else. A trace that ended in a
+throw looked like one that fell off the end. D00 §5 had reserved `invoke_kind: throw` for
+exactly this and nothing produced it; the same paragraph also claimed a throw site is "what
+gives traces their `throws` terminal", which was false — `terminal_kind` came only from
+`rules.of(target)`, which never reads an invoke kind.
+
+**CLOSED by** `feat(extractor): a throw is an exit — every ATHROW is a call-site fact whose
+target is the thrown type, and traces stop on it (G-52)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/MethodFlowTest.java`'s
+`publishes_a_throw_as_an_exit_naming_the_thrown_type_and_no_method`,
+`tests/domain/test_facts.py`'s `test_a_throw_site_round_trips_naming_a_type_and_no_method` and
+`test_a_throw_site_may_name_no_type_and_a_dispatching_call_may_not`,
+`tests/application/test_terminals.py`'s
+`test_a_throw_edge_is_throws_from_its_invoke_kind_and_not_from_a_rule`,
+`tests/application/test_call_edges.py`'s
+`test_a_throw_site_is_one_resolved_edge_to_the_thrown_type_and_reads_throws`,
+`tests/application/test_trace.py`'s `test_a_throw_with_no_target_stays_null_on_its_step`,
+`tests/application/test_reachability.py`'s `test_a_throw_whose_type_was_unread_reaches_no_symbol`,
+`tests/egress/test_render_traces.py`'s
+`test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type` and
+`test_a_throw_whose_type_was_unread_is_a_self_arrow_said_in_words`, and the counts pinned in
+`tests/e2e/test_vertical_slice.py`. Every `ATHROW` is now a `call_site` fact with
+`invoke_kind: "throw"` whose target is the thrown TYPE — read from the value's producer, a
+`NEW` or an invoke's declared return type, and NULL for a rethrow whose type lives in the
+try-catch table this pass does not read — with no `name` and no `descriptor`, absent rather
+than empty; `CallSiteFact` enforces that only a throw omits them. `call_edges` skips dispatch
+for it and gives it a row with no candidates, `classify` returns `terminal_kind: throws` from
+the invoke kind rather than a catalog rule, and the document renders a type-unread throw in
+words rather than as a symbol named `None`: the step's `target` stays NULL from
+`query/trace.py` onward, the step table's call cell reads `throws (type unread)`, the
+sequence diagram draws a self-arrow on the method that exits labelled `throw (type unread)`
+(a lifeline is a type that holds state and receives calls, and a type nobody named is not
+one), and `reachability` records no symbol for it — the exit is on the step row, and that
+table is what a root REACHES. D00 §5 now states the shape and no longer claims the catalog
+path produces `throws`. Measured on the fixture: 39 throw sites, 8 named types, 5 rethrows
+unread, call edges 1486 → 1525 and `resolved` 1484 → 1523, both by exactly 39;
+`owner_not_scanned` unmoved at 345, because a throw dispatches to no method and records no
+lookup.
+
+*Logged, not fixed, because no fixture needs either: `CHECKCAST` is transparent to the
+producer walk, so `throw supplier.get()` where the cast names `X` publishes the invoke's
+declared `java/lang/Object#` rather than `X`; and ASM's
+`Interpreter.newExceptionValue(TryCatchBlockNode, Frame, Type)` would hand the rethrow's
+type over at the source, closing the 5 unread. Both are one override away.*
+
+### G-73 — `visibility` was two-valued for a four-valued concept · **CLOSED, 2026-09-12**
+
+**Found by** the completeness audit of 2026-09-06 (F1 §2.3): `ClassScanner.java` wrote
+`(access & ACC_PUBLIC) != 0 ? "public" : "other"` on every symbol fact — method, field and
+type alike — collapsing `protected`, package-private and `private` into one word that says
+nothing about which. JVMS 4.1 states all three of the other access flags in the same class
+file `visibility` already reads; there was never a reason to fold them together.
+
+**CLOSED by** `feat(extractor): visibility is the four words the language has, not
+public-or-other (G-73)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/AccessFlagTest.java`'s
+`visibility_is_the_four_words_the_language_has_not_public_or_other` and the sibling
+`MethodModifierScanTest.java`'s pin, `reports_a_private_method_as_private`, corrected rather
+than left asserting the two-valued reading. `ClassScanner.visibilityOf` now tests
+`ACC_PUBLIC`, `ACC_PROTECTED` and `ACC_PRIVATE` in turn and falls back to `package`, the one
+case none of the three is set — the same JVM word every scanner emits for the symbol,
+whether method, field or type, since all three share the one `emit`. `AttributeLedger`'s
+`ACC_PRIVATE` and `ACC_PROTECTED` entries move from `skipped` to `read("visibility")`,
+naming the reader that now exists rather than the reason it did not. `Visibility`
+(`src/sextant/domain/closed_sets.py`) is the new closed set (NFR-5) and
+`SymbolFact.visibility` (`src/sextant/domain/facts.py`) is typed to it rather than to `str`,
+so a fact naming a fifth word fails validation rather than being silently accepted.
+
+**Left exactly where it was: a NESTED type's visibility.** The class file's own word for a
+nested type is still the coarse one — a `private` or `protected` nested type is written
+package-private or public respectively at that level (`OI-51`, unchanged by this) — so a
+nested type's `visibility` fact is its OUTER word until `OI-51` recovers `InnerClasses`'
+own source modifier. D00 §5 states this beside the four-valued rule so the two are not read
+as one claim.
+
+**`fact_schema_version` is not bumped.** `src/sextant/domain/version.py`'s own ruling (user,
+2026-09-07) freezes both schema stamps until release — "a fact-shape change lands WITHOUT an
+increment, deliberately" — and this change rides at the same integer every value-level
+change since has. The one place that matters: within a single `analyze` run the JVM
+extractor's own JSONL output is parsed straight back through `SymbolFact` (`factfile.py`'s
+`read_fact_tree`), so a STALE, unrebuilt extractor jar run beside the rebuilt Python would
+still emit `"other"` and now fail that validation instead of silently writing it — the
+`./gradlew build` this task's own gate runs before `check.sh` is what prevents that in
+practice. A previously-analyzed `workspace.duckdb` is unaffected either way: render, enrich
+and export read its `visibility` column as a plain string over SQL and never reconstruct a
+`SymbolFact` from it, so an old workspace simply keeps answering `other` for anything that
+was not `public` until it is re-analyzed.
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 

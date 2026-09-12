@@ -66,6 +66,12 @@ def record_reachability(workspace: Workspace) -> None:
             # is a thing the root reaches, and omitting it would make a root that only
             # calls a library look like a root that calls nothing.
             symbol = step.callee if step.callee is not None else step.target
+            # Neither: a `throw` whose type was unread (`G-52`). The method exits and
+            # reaches no symbol a row could name — a NULL key here would also have been
+            # sorted beside `str` keys below and raised. The exit itself is on the
+            # trace's step row; this table is what a root REACHES.
+            if symbol is None:
+                continue
             found = shallowest.get(symbol)
             # Strictly shallower, so a tie keeps the walk's own first answer and two runs
             # over one graph record one thing (NFR-1). `terminal` travels with the depth

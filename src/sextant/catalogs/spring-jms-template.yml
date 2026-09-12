@@ -10,6 +10,10 @@ detect:
 measured:
   - { artifact: org.springframework:spring-jms, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # The RECEIVE half (`G-44`): the four `receive`/`receiveSelected`/`receiveAndConvert`/
+  # `receiveSelectedAndConvert` overloads that name the destination at argument 0.
+  - { artifact: org.springframework:spring-jms, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/w59_template_receive_halves.md }
 
 requires: [call_site, string_constants]
 
@@ -87,6 +91,20 @@ matches:
         channel_arg: 0, body_arg: 1 }
     - { name: convertAndSend, arity: 1, descriptor: "(Ljava/lang/Object;)V", body_arg: 0 }
 
+    # `G-44`, the RECEIVE half. MEASURED spring-jms 6.1.6 (w59): the four overloads whose
+    # argument 0 is the destination NAME. The `jakarta.jms.Destination` overloads take an
+    # object built elsewhere and stay outside; `receiveSelected(String)` at arity 1 takes a
+    # SELECTOR — same parameter list as `receive(String)` — and is pinned out by descriptor
+    # AND name below, because `(Ljava/lang/String;)Ljakarta/jms/Message;` is both of them.
+    - { name: receive, arity: 1, descriptor: "(Ljava/lang/String;)Ljakarta/jms/Message;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveSelected, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljakarta/jms/Message;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndConvert, arity: 1, descriptor: "(Ljava/lang/String;)Ljava/lang/Object;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveSelectedAndConvert, arity: 2, descriptor: "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;",
+        channel_arg: 0, direction: inbound }
+
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
 # rationale).
@@ -99,25 +117,38 @@ wrappers:
 shape_model: json
 
 # D02's declared SLICE (F2 §3.8). Measured, not remembered: `JmsTemplate` declares
-# 37 public methods at spring-jms 6.1.6 and this catalog reads ONE
-# (`scripts/probes/w19_catalog_surface.md`). Ten of the unread take a destination
-# name at argument 0, so ten are addressable and every one is named below with the
-# reason it is outside. `tests/architecture/test_catalog_slice_coverage.py` fails if
-# a release adds an eleventh and nobody decides which side of the line it is on.
+# 37 public methods at spring-jms 6.1.6 and this catalog now reads FIVE method names —
+# `convertAndSend` (the send half) plus `receive`, `receiveSelected`, `receiveAndConvert`
+# and `receiveSelectedAndConvert` (the four `G-44` receive rows above,
+# `scripts/probes/w19_catalog_surface.md`). Of the still-unread methods, seven take a
+# destination name at argument 0, so seven are addressable and every one is named below
+# with the reason it is outside. `tests/architecture/test_catalog_slice_coverage.py`
+# fails if a release adds an eighth and nobody decides which side of the line it is on.
 #
-# **The honest summary a reader needs: this catalog models the CONVERT-AND-SEND half
-# of JmsTemplate and nothing else.** A module that receives over JMS through this
-# template derives nothing from this file.
+# **The honest summary a reader needs: this catalog models `convertAndSend` (send) and
+# the four destination-naming `receive`/`receiveSelected`/`receiveAndConvert`/
+# `receiveSelectedAndConvert` overloads (`G-44`'s receive half). A module doing
+# request/reply through `sendAndReceive` derives nothing here.**
 slice:
+  # `receive`, `receiveSelected`, `receiveAndConvert` and `receiveSelectedAndConvert` are
+  # no longer named here (Task 1's fallback for `spring-rabbit-template.yml` applies
+  # identically): `test_catalog_slice_coverage.py` keys `slice.outside` on the method
+  # NAME alone, and `methods:` above now declares a row for each of the four names, so
+  # the surface enumeration stops listing any of them as an unread candidate on EITHER
+  # owner — a `slice.outside` entry for them would be stale the moment it was written.
+  #
+  # The overloads of those four names this catalog still does not read — the
+  # `jakarta.jms.Destination`-typed forms (an object built elsewhere, never a string
+  # constant a call site carries) and the arity-1 `receiveSelected(String)`/
+  # `receiveSelectedAndConvert(String)` forms (a SELECTOR, not a destination — the
+  # `G-44` trap: identical parameter list to `receive(String)`/`receiveAndConvert(String)`,
+  # pinned out by descriptor in `methods:` and confirmed silent by the declining test in
+  # `tests/application/test_call_engines.py`) — read the template's configured default
+  # destination or an object this style cannot resolve, which is configuration/opacity
+  # this catalog does not join. That gap is real and is recorded in `docs/COVERAGE.md`
+  # §5.9 rather than in this block, because the block has no way to name "some overloads
+  # of a read name" without the mechanical check reading it as stale prose.
   outside:
-    - owner: org.springframework.jms.core.JmsTemplate
-      method_names: [receive, receiveSelected, receiveAndConvert, receiveSelectedAndConvert]
-      why: >
-        A boundary this catalog does NOT model. Each is a synchronous receive from a
-        named destination — a real inbound wire, and the largest half of G-44. Reading
-        them needs no new engine capability (the destination is at argument 0, the shape
-        `convertAndSend` already reads); it needs a fixture and a measurement of which
-        overloads carry a payload type, which is the work, not the design.
     - owner: org.springframework.jms.core.JmsTemplate
       method_names: [send, sendAndReceive]
       why: >
@@ -155,10 +186,12 @@ slice:
         not read that overload either. Named here so the connection is on record rather
         than rediscovered.
     - owner: org.springframework.jms.core.JmsOperations
-      method_names: [browse, browseSelected, execute, receive, receiveAndConvert, receiveSelected,
-                receiveSelectedAndConvert, send, sendAndReceive]
+      method_names: [browse, browseSelected, execute, send, sendAndReceive]
       why: >
         The interface `JmsTemplate` implements, carried as an owner alternate since W10
         so an interface-typed field derives the same rows. Its slice is its
-        implementation's slice: every method here is outside for the reason given above
-        for the same name on `JmsTemplate`.
+        implementation's slice: each method is outside for the reason given above for the
+        same name on `JmsTemplate`. (`receive`, `receiveSelected`, `receiveAndConvert` and
+        `receiveSelectedAndConvert` are read on this owner too — `G-44`'s `methods:` rows
+        above name `JmsOperations` beside `JmsTemplate` implicitly, through the shared
+        `owner:` list at the top of this file.)

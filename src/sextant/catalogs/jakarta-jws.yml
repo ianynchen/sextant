@@ -7,12 +7,17 @@ direction: inbound
 detect:
   coordinates: ["jakarta.jws:jakarta.jws-api", "javax.jws:javax.jws-api"]
 
-# ONE of the two reference implementations this file's prose claims. The
-# Apache CXF half is still unmeasured (`A-Mi7`), and an artifact nobody ran
-# gets no row here — that is the whole point of the block.
+# BOTH JAX-WS implementations this file's prose claims, now that both are
+# measured. Apache CXF (`A-Mi7`) agrees with the reference implementation on
+# every axis this rule turns on — `static`/`final` exclusion,
+# `@WebMethod(exclude = true)`, and the declaring-class `@WebService` read a
+# method with no `@WebMethod` of its own is tested against (w63,
+# `scripts/probes/w63_cxf_web_method_rule.md`).
 measured:
   - { artifact: com.sun.xml.ws:jaxws-rt, versions: ["4.0.2"],
       identity: reported, by: scripts/probes/cp13_inherited_members.md }
+  - { artifact: org.apache.cxf:cxf-rt-frontend-jaxws, versions: ["4.0.5"],
+      identity: reported, by: scripts/probes/w63_cxf_web_method_rule.md }
 
 requires: [annotation_args, typed_signatures]
 
@@ -110,15 +115,17 @@ matches:
     # independent `PackageUtils#getNamespace`, which agree character for
     # character". Those two classes ARE the right places to look and the reading
     # stands, but it was a READ of the implementations, not a RUN of either:
-    # **no version is recorded for either, and no probe is committed** — CXF in
-    # particular has never been executed by this repository. So the claim's real
-    # tier is "framework rule read, not measured", which §8.1 calls a prediction
+    # **no version is recorded for either, and no probe reads THIS claim.**
+    # w63 (2026-09-12, `scripts/probes/w63_cxf_web_method_rule.md`) has since run
+    # CXF live — but for the `isOperation`/member rule below, not for
+    # `getNamespace`/`PackageUtils`. This specific namespace-default claim is
+    # still "framework rule read, not measured", which §8.1 calls a prediction
     # until something runs it. It stays because the spec defines the default and
     # both implementations were read agreeing on it, and because the alternative
     # is a namespace-less QName that matches no caller. **Falsified by** either
     # implementation deriving a different default at a version this catalog is
-    # pointed at; the probe backlog carries "JAX-WS's exposed-member rule per
-    # RI" and this belongs beside it.
+    # pointed at; the probe backlog carries "JAX-WS's namespace default per RI
+    # and CXF" and this belongs beside it.
     namespace_default: reversed_package
     # DR-6, the rule that made this file wait on a vocabulary addition: a public
     # method with no `@WebMethod` at all IS exposed by JAX-WS — the annotation
@@ -147,18 +154,38 @@ matches:
     # walk, stopping at the module boundary and at `Object` (which capability
     # 9.13 never writes a `superclass` for).
     #
-    # ONE DIVERGENCE FROM THE RI REMAINS AND IS STATED IN COVERAGE:
-    # `isWebMethodBySpec` also excludes a `final` method, and the SQL excludes
-    # `static` and `synthetic` only. A `public final` operation is exposed by us
-    # and not by the RI. It is left rather than added because `modifiers` is
-    # written by `ClassScanner.methodModifiersJson`, which records neither
-    # `ACC_FINAL` nor `ACC_ABSTRACT` — the same missing bit `spring-data-rest`'s
-    # `default`-method boundary waits on.
+    # `isWebMethodBySpec` also excludes a `final` method, beside `static` (CP-13
+    # Q4, jaxws-rt 4.0.2) — `jaxws-public-final`, shipped 2026-09-12.
+    # `derive_endpoints.sql`'s member rule excludes both:
+    # `coalesce(s.modifiers ->> 'final', 'false') <> 'true'` sits right beside
+    # the `static` conjunct it mirrors. `modifiers.final` is written for every
+    # method by `ClassScanner.methodModifiersJson` (W7), so nothing here waits
+    # on the extractor.
+    #
+    # **AND THE DECLARING CLASS MUST CARRY `@WebService` ITSELF, measured
+    # 2026-09-12 (w63, `scripts/probes/w63_cxf_web_method_rule.md`).**
+    # `isWebMethodBySpec` does not stop at excluding `static`/`final`: for a
+    # method with no `@WebMethod` of its own, it reads `@WebService` off THAT
+    # METHOD'S OWN declaring class (offsets 124-147:
+    # `getDeclaringClass().getAnnotation(WebService.class)`, `ifnull` → no),
+    # not off the implementor class the walk is gated on — and CXF's
+    # `hasWebServiceAnnotation` (offsets 0-17) makes the identical read. A live
+    # run of both runtimes over `BillingWebService extends AbstractBilling` (no
+    # `@WebService` on `AbstractBilling`) confirms it: neither exposes the
+    # inherited `refund()`. `gate_ancestry`'s walk used to publish it anyway
+    # (`jaxws-inherited-unannotated`, fixed 2026-09-12): `derive_endpoints.sql`'s
+    # member rule now asks `s.enclosing IN (SELECT type_symbol FROM gate_types)`
+    # of the member the dedup chose. The walk still CONTINUES past a plain
+    # class — an annotated grandparent's methods derive — because the rule is
+    # a filter on the declaring class, not a stop in the ancestry.
     #
     # AND THE RI IS ONE IMPLEMENTATION. This file used to claim it was
     # "verified against BOTH reference implementations" while naming neither
-    # (`A-Mi7`); CP-13 names and measures jaxws-rt 4.0.2. **Apache CXF is not
-    # measured**, so every rule here is scoped to the RI until it is.
+    # (`A-Mi7`); CP-13 measured jaxws-rt 4.0.2 and w63 measured Apache CXF
+    # 4.0.5 (`scripts/probes/w63_cxf_web_method_rule.md`). **CXF agrees with
+    # the RI** on `static`/`final` exclusion, `@WebMethod(exclude = true)`, and
+    # the declaring-class `@WebService` read above — including the
+    # over-reporting bug, which both runtimes avoid identically.
     members: public_methods
     # Neither annotation declares a `method` attribute; the name is borrowed and
     # never populated (the spring-jms.yml/spring-kafka.yml precedent), which is

@@ -663,6 +663,41 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.members-exclude-final": Guard(
+        what="a `$members` row excludes a `final` method the same way it already excludes "
+        "a `static` one",
+        why="JAX-WS RI 4.0.2's `isWebMethodBySpec` excludes `static` AND `final` (CP-13 "
+        "Q4), and the one catalog that declares `members: public_methods`, "
+        "`jakarta-jws.yml`, is JAX-WS. Without "
+        "this a `public final` helper method on a `@WebService` class — a common way to "
+        "mark one non-overridable — is published as a SOAP operation nobody serves "
+        "(`jaxws-public-final`)",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="      AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'",
+                replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "derive_endpoints.members-declaring-type-is-gated": Guard(
+        what="a `$members` row is published only where the member's DECLARING class itself "
+        "carries the catalog's gate annotation — the walk still continues past a plain "
+        "ancestor, the filter is per declaring class",
+        why="jaxws-rt 4.0.2's `isWebMethodBySpec` (offsets 124-147) and Apache CXF 4.0.5's "
+        "`hasWebServiceAnnotation` (offsets 0-17) both read `@WebService` off "
+        "`method.getDeclaringClass()`, never off the implementor class (w63, both runtimes "
+        "run live: `charge` alone). Without this `gate_ancestry` publishes a public method "
+        "inherited from a plain, unannotated superclass as a SOAP operation neither runtime "
+        "serves (`jaxws-inherited-unannotated`)",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="      AND s.enclosing IN (SELECT type_symbol FROM gate_types)",
+                replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # --- the two NON-WIRE styles (2O design §4) ----------------------------
     "scheduled_work.declaration-is-a-method": Guard(
         what="a schedule annotation counts only where its target is a METHOD — a use on an "

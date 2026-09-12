@@ -107,10 +107,10 @@ wrappers:
 shape_model: json
 
 # D02's declared SLICE (F2 §3.8). Measured (`scripts/probes/w19_catalog_surface.md`):
-# this catalog reads **1 of `SqsClient`'s 29** methods and **0 of `SqsAsyncClient`'s
-# 28** at aws-sdk sqs 2.25.31.
+# this catalog reads **1 of `SqsClient`'s 29** methods and **1 of `SqsAsyncClient`'s
+# 28** at aws-sdk sqs 2.25.31 (the async `sendMessage` since `G-43`).
 #
-# **The honest summary: one request type, in one direction, on one of the two clients.**
+# **The honest summary: one request type, in one direction, on both clients.**
 # `sendMessage(SendMessageRequest)` is the whole model. An SDK-level SQS consumer is
 # invisible, and so is every module using the async client.
 #

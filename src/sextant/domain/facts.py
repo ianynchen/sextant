@@ -2,9 +2,9 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.closed_sets import ConstructKind, OriginTier, Visibility
 
 # D00 §5a's literal model: string, number, boolean, enum reference, class
 # reference (both spelled as symbol references) and arrays of these — plus,
@@ -67,6 +67,15 @@ class Parameter(BaseModel):
     # None only for a fact written before the field existed.
     erased_symbol: str | None = None
     annotations: list[AnnotationUse] = Field(default_factory=list)
+    # This slot is the declaration's extension receiver: the runtime sees a
+    # parameter, the author wrote a receiver (`fun String.shout()`). Published
+    # so a consumer can drop it from the declared signature, and kept rather
+    # than dropped here because a call site names the method by its full
+    # descriptor and the receiver's type is real evidence. Absent means false,
+    # as `bridge_of` is absent rather than null; only ever the first slot the
+    # declaration owns. Unrelated to `CallSiteFact.receiver`, which is the
+    # argument SLOT a call's target object came from.
+    receiver: bool = False
 
 
 class TypeParameter(BaseModel):
@@ -231,13 +240,28 @@ class SymbolFact(BaseModel):
     construct_kind: ConstructKind
     enclosing: str | None = None
     signature: Signature | None = None
-    visibility: str = "public"
+    visibility: Visibility = Visibility.PUBLIC
     line_start: int = 0
     line_end: int = 0
     # D00 §5a: always written on a field fact — a value bound to the type
     # rather than an instance, and a declaration the language marks as not
     # serialized. Defaults empty for constructs that carry no modifiers.
     modifiers: dict[str, bool] = Field(default_factory=dict)
+    # The name of the declared method this one stands for, on two shapes and
+    # no other: a compiler-emitted default-argument bridge (`<fn>$default`,
+    # `OI-81`), beside the `synthetic: true` its modifiers already carry; and
+    # a static body inside a compiler-emitted holder of an interface's default
+    # method bodies, whose own type fact carries `implements_default_of`
+    # (the delivery register's `DefaultImpls` item). Absent on every other
+    # fact.
+    bridge_of: str | None = None
+    # The interface whose default method bodies this TYPE holds, as a symbol
+    # spelled the way `enclosing` is — the compiler-emitted nested class whose
+    # every method is static with that interface at slot 0 and carries
+    # `bridge_of`. Absent on every other fact. Read by `resolve/dispatch.py`,
+    # which makes such a body the candidate for an interface method that
+    # declares no body of its own.
+    implements_default_of: str | None = None
     # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
     # element takes when a use omits it. Present only on such an element and
     # only where it has a default; absent everywhere else.
@@ -360,10 +384,29 @@ class CallArgument(BaseModel):
 
 
 class CallTarget(BaseModel):
+    """What a call site names. `name` and `descriptor` on every site that dispatches
+    to a method — which is every one except a THROW — and `owner` on all but a rethrow
+    whose type this pass could not read.
+
+    The invariant is enforced on `CallSiteFact` rather than here, because it is stated
+    in terms of `invoke_kind`, which lives there. A validator on this model can only see
+    three optional fields and would accept a bare `CallTarget()` — which is what the
+    first version of it did, while its own docstring claimed it stopped exactly that.
+
+    `G-52`: a throw site is call-site-shaped and its target is the thrown
+    exception TYPE (D00 §5), so the owner is the whole of it. There is no
+    method, and the two keys that name one are absent rather than empty — the
+    same rule `implementation` states below for the opposite case, and for the
+    same reason: an empty name matches nothing while looking like a name, so a
+    consumer joining `target` to method symbols would be reading a claim about
+    code that does not exist. `schema.sql`'s `->>` already yields NULL for an
+    absent key, so the projection needed no change.
+    """
+
     model_config = {"frozen": True}
-    owner: str
-    name: str
-    descriptor: str
+    owner: str | None = None
+    name: str | None = None
+    descriptor: str | None = None
 
 
 class CallSiteFact(BaseModel):
@@ -391,6 +434,32 @@ class CallSiteFact(BaseModel):
     # to code that does not exist.
     implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _only_a_throw_names_no_method(self) -> "CallSiteFact":
+        """`G-52`: a throw site names a TYPE and no method; every other site names both.
+
+        Enforced here and not on `CallTarget`, because both halves are only visible
+        together: the model that holds `name` and `descriptor` cannot see `invoke_kind`,
+        so a validator there accepts a bare target and guarantees nothing. Stated as an
+        equivalence rather than one implication, so neither a dispatching call that lost
+        its method nor a throw that acquired one can pass.
+        """
+        # A throw names NEITHER half and a dispatching call names BOTH — two tests, not
+        # one comparison of "names a method": under that, a throw carrying a `name` and no
+        # `descriptor` did not "name a method" and passed, half a claim about code that
+        # does not exist.
+        names_a_method = self.target.name is not None and self.target.descriptor is not None
+        names_half_of_one = self.target.name is not None or self.target.descriptor is not None
+        if names_half_of_one if self.invoke_kind == "throw" else not names_a_method:
+            raise ValueError(
+                "a `throw` site names a thrown type and no method; every other site names "
+                f"both — got invoke_kind={self.invoke_kind!r} with "
+                f"name={self.target.name!r}, descriptor={self.target.descriptor!r}"
+            )
+        if self.invoke_kind != "throw" and self.target.owner is None:
+            raise ValueError("a dispatching call site must name an owner")
+        return self
 
 
 class MethodReturnFact(BaseModel):

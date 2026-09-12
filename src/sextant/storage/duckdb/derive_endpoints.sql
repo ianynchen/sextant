@@ -727,6 +727,36 @@ member_declarations AS (
     JOIN symbols s ON s.symbol = em.symbol
     WHERE em.nearest = 1
       AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
+      -- A `final` member is not exposed either: JAX-WS's `isWebMethodBySpec` (CP-13 Q4)
+      -- excludes it beside `static`, and the one catalog that declares
+      -- `members: public_methods`, `jakarta-jws.yml`, is JAX-WS.
+      -- `modifiers.final` is written for every method (`ClassScanner.methodModifiersJson`).
+      AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'
+      -- THE DECLARING CLASS MUST ITSELF BE GATED (w63, `jaxws-inherited-unannotated`).
+      -- A member with no annotation of its own is an operation only if the class
+      -- that DECLARES it carries the gate annotation — not the class the walk
+      -- started from. Measured in both runtimes' bytecode and confirmed live
+      -- (`scripts/probes/w63_cxf_web_method_rule.md`): jaxws-rt 4.0.2's
+      -- `RuntimeModeler.isWebMethodBySpec` offsets 124-147 and Apache CXF 4.0.5's
+      -- `JaxWsServiceConfiguration.hasWebServiceAnnotation` offsets 0-17 both read
+      -- `method.getDeclaringClass()` then `getAnnotation(WebService.class)`, and
+      -- `ifnull` → not an operation; over `BillingWebService extends AbstractBilling`
+      -- (no `@WebService` on the base) both produced `charge` alone. Without this the
+      -- walk published the base's `refund` as an operation neither runtime serves.
+      --
+      -- Asked HERE, of the dedup's winner, and not in `exposed_members` of every
+      -- declaration: `isWebMethodBySpec` tests what `getMethods()` returned, and
+      -- that is the NEAREST declaration (JLS 8.4.8.1: the middle class's
+      -- declaration OVERRIDES the ancestor's and is then the one member;
+      -- confirmed with `getMethods()` over `C extends D extends E`, D plain
+      -- and E annotated, both declaring `op()` — D's is returned). Filtering
+      -- before the dedup would
+      -- drop D's row and let E's shadowed declaration win the partition — the
+      -- same fabrication one level down. And this is a FILTER on the declaring
+      -- class, not a stop in `gate_ancestry`: the walk continues past a plain
+      -- class, so E's OTHER public methods — declared by an annotated class —
+      -- still derive for C, exactly as `getMethods()` still returns them.
+      AND s.enclosing IN (SELECT type_symbol FROM gate_types)
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation

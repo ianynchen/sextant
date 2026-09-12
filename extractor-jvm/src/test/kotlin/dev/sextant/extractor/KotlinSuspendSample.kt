@@ -17,6 +17,21 @@ class KotlinSuspendSample {
 
     /** The control: an ordinary function whose descriptor already states it. */
     fun plain(id: String): KotlinSample = KotlinSample(id, null)
+
+    /** `OI-80`: a type argument cannot be a primitive, so the `Continuation` names
+     *  `Integer` where the author wrote `Int`. Only `@kotlin.Metadata`'s classifier says
+     *  which one was declared, and only its nullability says whether it boxes. */
+    suspend fun suspCount(): Int = 1
+
+    suspend fun suspFlag(): Boolean = true
+
+    suspend fun suspTotal(): Long = 1L
+
+    /** `Int?` genuinely boxes — this one must STAY `java/lang/Integer`. */
+    suspend fun suspMaybeCount(): Int? = null
+
+    /** The control: the descriptor itself says `I`. */
+    fun plainCount(): Int = 1
 }
 
 /** Kotlin declarations that are NOT suspend but mention `Continuation`. Metadata says so;

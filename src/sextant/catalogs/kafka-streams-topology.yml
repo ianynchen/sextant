@@ -1,0 +1,52 @@
+id: kafka-streams-topology
+displayName: Apache Kafka Streams (Processor API)
+style: single_call
+protocol: kafka
+direction: inbound
+
+# One of three catalogs split by owner (see `kafka-streams.yml`'s own comment for the
+# full rationale). This file reads `Topology.addSource`/`addSink` only —
+# `StreamsBuilder`'s DSL sources are `kafka-streams.yml`; `KStream.to` is
+# `kafka-streams-sink.yml`.
+detect:
+  coordinates: ["org.apache.kafka:kafka-streams"]
+measured:
+  - { artifact: org.apache.kafka:kafka-streams, versions: ["3.6.2"],
+      identity: reported, by: scripts/probes/w60_kafka_streams_surface.md }
+requires: [call_site, string_constants]
+matches:
+  owner: org.apache.kafka.streams.Topology
+  methods:
+    # `addSink(name, topic, parents…)` — the topic at argument 1.
+    - { name: addSink, arity: 3, descriptor: "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 1, direction: outbound }
+    # MEASURED (w60, Step 4): `addSource(name, topics…)`'s trailing `String...` compiles
+    # to ONE `array`-kind argument (extractor capability 9.15), and `single_call`
+    # already reads a `channel_arg` array element-wise without any `channel_via` —
+    # `channels_of` (`spring-websocket.yml`'s `addHandler(handler, String... paths)`
+    # is the shipped precedent) — so this derives one inbound row PER TOPIC, exactly
+    # the shape `subscribe(Collection<String>)` derives for a real collection. Four
+    # overloads carry the array in this shape; the `AutoOffsetReset`/
+    # `TimestampExtractor` prefixes push the name and the array one and two
+    # positions later. The `Pattern`-taking and `Deserializer`-taking siblings are
+    # NOT declared — same NAME, so `w19_catalog_surface`'s coverage still marks
+    # `addSource` read, and they are recorded here rather than silently dropped:
+    # `addSource(String, Pattern)` and its `AutoOffsetReset`/`TimestampExtractor`
+    # twins take a topic PATTERN, the same shape `stream(Pattern)` already reads —
+    # unclaimed by this row; `addSource(String, Deserializer, Deserializer,
+    # String...)` and its prefixed twins carry the same trailing array two
+    # positions later still — unclaimed too. Both are read-or-declare gaps a later
+    # task can close, not a fabrication risk today.
+    - { name: addSource, arity: 2, descriptor: "(Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 1 }
+    - { name: addSource, arity: 3, descriptor: "(Lorg/apache/kafka/streams/Topology$AutoOffsetReset;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 2 }
+    - { name: addSource, arity: 3, descriptor: "(Lorg/apache/kafka/streams/processor/TimestampExtractor;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 2 }
+    - { name: addSource, arity: 4, descriptor: "(Lorg/apache/kafka/streams/Topology$AutoOffsetReset;Lorg/apache/kafka/streams/processor/TimestampExtractor;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 3 }
+shape_model: json
+slice:
+  outside:
+    - owner: org.apache.kafka.streams.Topology
+      method_names: [addProcessor, connectProcessorAndStateStores]
+      why: >
+        Both take a processor/store NAME at argument 0, exactly like `addSource` and
+        `addSink`, but neither one names a TOPIC anywhere in its signature — a
+        processor name and the state-store names it connects to are not wire
+        addresses, and a row here would publish one as a Kafka topic.

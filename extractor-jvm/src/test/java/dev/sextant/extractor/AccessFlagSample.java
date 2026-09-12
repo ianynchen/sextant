@@ -25,6 +25,19 @@ public abstract class AccessFlagSample {
     public volatile int changing = 0;
 
     public final int fixed = 1;
+
+    /** `ACC_PUBLIC` (`G-73`), named apart from the sample's other public methods
+     *  above so `visibilityOf` has one plain control beside the three below. */
+    public void pub() {}
+
+    /** `ACC_PROTECTED` (`G-73`). */
+    protected void p() {}
+
+    /** No visibility bit at all — package-private (`G-73`). */
+    void pkg() {}
+
+    /** `ACC_PRIVATE` (`G-73`). */
+    private void priv() {}
 }
 
 /** `ACC_ANNOTATION`: an annotation TYPE, which carries `ACC_INTERFACE` too — which is

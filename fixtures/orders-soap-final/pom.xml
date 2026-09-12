@@ -1,0 +1,23 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-soap-final</artifactId>
+  <version>1.0.0</version>
+  <!-- One `@WebService` class, one `public final` method beside an ordinary public one
+       (Task 9, `jaxws-public-final`). `isWebMethodBySpec` (CP-13 Q4, jaxws-rt 4.0.2)
+       excludes `static` AND `final`; `derive_endpoints.sql`'s member rule excluded
+       `static` only until this fixture pinned the gap. Only the annotation artifact —
+       this fixture compiles against the API and never runs. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>jakarta.jws</groupId>
+      <artifactId>jakarta.jws-api</artifactId>
+      <version>3.0.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

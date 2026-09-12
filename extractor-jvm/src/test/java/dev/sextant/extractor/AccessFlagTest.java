@@ -26,6 +26,13 @@ class AccessFlagTest {
             .orElseThrow(() -> new AssertionError("no symbol fact matching " + named));
     }
 
+    /** The `visibility` value on {@code AccessFlagSample}'s method of that name. */
+    private String visibilityOf(String methodName) throws Exception {
+        String fact = symbol("AccessFlagSample", "#" + methodName + "(");
+        int start = fact.indexOf("\"visibility\":\"") + "\"visibility\":\"".length();
+        return fact.substring(start, fact.indexOf('"', start));
+    }
+
     @Test
     void an_annotation_type_is_not_reported_as_an_interface() throws Exception {
         // `@interface` compiles to an interface extending java.lang.annotation.Annotation,
@@ -89,6 +96,18 @@ class AccessFlagTest {
     void a_type_reports_abstract_and_final() throws Exception {
         assertTrue(symbol("AccessFlagSample", "AccessFlagSample#").contains("\"abstract\":true"));
         assertTrue(symbol("AccessFlagSample", "AccessFlagSample#").contains("\"final\":false"));
+    }
+
+    @Test
+    void visibility_is_the_four_words_the_language_has_not_public_or_other() throws Exception {
+        // G-73: `(access & ACC_PUBLIC) != 0 ? "public" : "other"` collapsed protected,
+        // package-private and private into one meaningless word. The class file states
+        // all three of the other bits (JVMS 4.1), so there was never a reason to fold
+        // them together.
+        assertEquals("protected", visibilityOf("p"));
+        assertEquals("package",   visibilityOf("pkg"));
+        assertEquals("private",   visibilityOf("priv"));
+        assertEquals("public",    visibilityOf("pub"));
     }
 
     @Test

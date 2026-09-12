@@ -249,12 +249,15 @@ exactly as the other two do the day something writes one.
 > [D01](D01-graph-schema.md) §3's Traces) answers why the WALK stopped and is decided
 > entirely from what the walk did. One edge carries both and they say different things:
 > `boundary` because this workspace read no body, `persistence` because a catalog knows
-> what the callee is. **Six of the eight have no producer, for two different reasons**
-> (`OI-75`): `outbound_call`, `throws` and `async_handoff` are one catalog rule away and
-> none is declared, while `cycle`, `returns` and `ends_silently` are unreachable by any
-> rule — a cyclic edge has a non-NULL `callee` so the classification is NULL for it, and
-> the other two describe how a BODY exits while every catalog route is a predicate on the
-> callee's TYPE.
+> what the callee is. **Three of the eight have a producer**: `persistence` and
+> `unresolved` come from the one catalog that declares `terminals`, and `throws` is
+> decided from a throw site's `invoke_kind` rather than by any catalog rule
+> (`resolve/terminals.classify`, `G-52`) — a second, stated producer beside the catalog
+> one. **The other five have none, for two different reasons** (`OI-75`): `outbound_call`
+> and `async_handoff` are one catalog rule away and none is declared, while `cycle`,
+> `returns` and `ends_silently` are unreachable by any rule — a cyclic edge has a non-NULL
+> `callee` so the classification is NULL for it, and the other two describe how a BODY
+> exits while every catalog route is a predicate on the callee's TYPE.
 
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index. Measured on `mall-admin`:
@@ -340,6 +343,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 |---|---|---|
 | `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs | Dispatch tiering, noise filtering, coverage |
 | `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
+| — | **`visibility` is four-valued** (`G-73`): `public`, `protected`, `package` or `private` — the four access levels a declaration can have, closed by `Visibility` (NFR-5). For a NESTED type this is the class file's OWN word, which is the coarse one: a `private` or `protected` nested type states that modifier in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a private nested type package-private and a protected one public. Recovering the source modifier is `OI-51`; until then a nested type's visibility is its outer word. | Member-exposure rules (D02's `mapping.members`), endpoint derivation |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
@@ -399,7 +403,35 @@ nested class's private member. **Unlike a synthetic field, a synthetic METHOD do
 fact**, on purpose: the effective-annotations inheritance walk's bridge rule can only
 recognise a bridge by seeing it, so the flag — not omission — is what lets a later pass tell
 one from a method a human declared. Both keys are always written, for the field rule's
-reason, and a reader supplies `false` for a scanner that reports neither.
+reason, and a reader supplies `false` for a scanner that reports neither. A Kotlin
+`$default` bridge — the `static synthetic <fn>$default(receiver, <fn's slots…>, int mask,
+Object marker)` kotlinc emits beside a function with default arguments — is emitted with
+`modifiers.synthetic: true` AND `bridge_of: "<fn>"`, and its return and the function's own
+slots carry the types the FUNCTION declared rather than Java's rule (`OI-81`). **A Kotlin
+`DefaultImpls` holder carries the same key on each body** (`kotlin-defaultimpls`): an
+interface with a default method body compiles to a nested `<Iface>$DefaultImpls` class —
+`public final`, NOT synthetic, no fields, no constructor, every method `static` with the
+interface at descriptor slot 0 — and that class's TYPE fact carries
+`implements_default_of: "<Iface>#"` (spelled as `enclosing` spells a type, and for the
+holder naming the same type `enclosing` does; the key is the statement), while each of its
+methods carries `bridge_of: "<interface method's name>"`, which for the `$default` bridge
+kotlinc puts inside the holder is the function's name, as it is anywhere else. The holder is
+recognised from all three of its name, the `InnerClasses` entry naming the interface as its
+outer class, and every method having that shape with at least one present — a hand-written
+nested class of that name fails at its own constructor. A method's `bridge_of` states that
+method's own shape and the type's `implements_default_of` states every method's, so a
+consumer reads the first beside the second. The holder's own `@Metadata` is a
+synthetic-class kind and declares no function, so a body's slots and return keep Java's
+rule: the declared types are in the INTERFACE's metadata, and the scanner reads one class
+at a time. `bridge_of` appears on no fact but those two shapes, and `implements_default_of`
+on no fact but the holder's; `resolve/dispatch.py` reads the pair, making a holder body the
+candidate for an interface method that declares no body of its own (COVERAGE §5.13). A Kotlin extension function's receiver (`fun String.shout()`) —
+descriptor slot 0 of the static method a top-level extension compiles into in its file
+facade, and of a member extension's instance method alike, and the first slot after the
+owner in its `$default` bridge — is published as a parameter carrying `receiver: true`, with
+the declared value parameters laid from the slot after it; absent means false, as
+`bridge_of` is absent rather than null, and the receiver slot's own type keeps Java's rule
+(`kotlin-extension-functions`).
 
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the
@@ -596,7 +628,12 @@ every unannotated Java field look uncertain and downgrade every link built on it
 **Kotlin's nullability is in its type system, not an annotation**, so it arrives through
 `ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared field** rather than
 leaving it in the extension. Nullability crosses languages; anything DR-5 compares cannot live
-behind an extension read boundary.
+behind an extension read boundary. The projection reaches a method's `returns` (`G-63`) and,
+since `OI-82`, each of a function's and a constructor's `parameters` — at every level of the
+type reference, so `List<String?>` and `List<String>?` carry different `nullable` values on
+different levels where the descriptor and the `Signature` attribute spell them the same.
+Where the declared type and the signature disagree on shape, the reference keeps Java's rule
+at that level and below: less specific, never wrong.
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
@@ -891,8 +928,20 @@ implemented. Both are kept; the body is added beside them.
 
 **`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
 five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
-a call-site-shaped observation whose target is the thrown exception type, and it is what
-gives traces their `throws` terminal.
+a call-site-shaped observation whose target is the thrown exception type. It carries no
+`name` and no `descriptor`, because there is no method: a throw dispatches to no body, and
+an empty name would match nothing while looking like one.
+
+**It gives traces their `throws` terminal by a path this paragraph used to misname.**
+Until `G-52` was built it said the throw site is "what gives traces their `throws`
+terminal" as if the catalog path did it, and measuring `resolve/terminals.py` showed that
+path never could: `rules.of(target)` keys on `owner_of(target)` — the callee's TYPE —
+through direct owner, then supertype, then scanned package, and never reads `invoke_kind`.
+A catalog rule naming an exception type would have classified the CONSTRUCTOR call, not
+the exit. So `classify()` reads the site's `invoke_kind` first and returns `throws` for a
+throw site directly, before any rule: how a method exits is a property of the instruction,
+not of any library. The catalog path is unchanged and still produces no `throws`. The
+false sentence was written when neither half existed and nobody could notice.
 
 **`ordinal`** is the invoke's index within its method, assigned in instruction order and
 therefore deterministic (NFR-1). It is **the v1 of the control-flow position** this schema

@@ -16,6 +16,10 @@ measured:
   # coordinate was added, which is how the wrong artifact was caught.
   - { artifact: org.springframework.amqp:spring-amqp, versions: ["3.1.4"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # The RECEIVE half (`G-44`): the nine `receive`/`receiveAndConvert`/`receiveAndReply`
+  # overloads that name the queue at argument 0.
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/w59_template_receive_halves.md }
 
 requires: [call_site, string_constants]
 
@@ -28,6 +32,10 @@ matches:
   owner:
     - org.springframework.amqp.rabbit.core.RabbitTemplate
     - org.springframework.amqp.core.AmqpTemplate
+  # `receiveAndConvert(String, PTR)` carries a `ParameterizedTypeReference` at the position
+  # `body_arg` reads (spring-resttemplate.yml:25 precedent) — the file had no
+  # `type_carriers` before the RECEIVE half needed one.
+  type_carriers: [org.springframework.core.ParameterizedTypeReference]
   # AMQP's wire identity is the exchange AND the routing key: a broker routes
   # on the pair, and either half alone names a different destination — the
   # exchange alone names everything bound to it, the routing key alone
@@ -104,6 +112,37 @@ matches:
     # the check.
     - { name: convertAndSend, arity: 1, descriptor: "(Ljava/lang/Object;)V", body_arg: 0 }
 
+    # `G-44`, the RECEIVE half. MEASURED spring-rabbit 3.1.4 (`javap -s`, pasted in
+    # scripts/probes/w59_template_receive_halves.md): nine overloads take the queue name at
+    # argument 0. The destination-less ones read the configured default queue and stay
+    # outside, on the line `convertAndSend(Object)` already sits on.
+    - { name: receive, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/springframework/amqp/core/Message;",
+        channel_arg: 0, direction: inbound }
+    - { name: receive, arity: 2, descriptor: "(Ljava/lang/String;J)Lorg/springframework/amqp/core/Message;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndConvert, arity: 1, descriptor: "(Ljava/lang/String;)Ljava/lang/Object;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndConvert, arity: 2, descriptor: "(Ljava/lang/String;J)Ljava/lang/Object;",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndConvert, arity: 2,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/core/ParameterizedTypeReference;)Ljava/lang/Object;",
+        channel_arg: 0, body_arg: 1, direction: inbound }
+    - { name: receiveAndConvert, arity: 3,
+        descriptor: "(Ljava/lang/String;JLorg/springframework/core/ParameterizedTypeReference;)Ljava/lang/Object;",
+        channel_arg: 0, body_arg: 2, direction: inbound }
+    # `receiveAndReply` is a receive whose reply goes to the message's OWN `replyTo`: one
+    # inbound row on the queue and no outbound row, because no argument names the reply
+    # address and publishing the receive queue as it would be a wrong row.
+    - { name: receiveAndReply, arity: 2,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/amqp/core/ReceiveAndReplyCallback;)Z",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndReply, arity: 4,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/amqp/core/ReceiveAndReplyCallback;Ljava/lang/String;Ljava/lang/String;)Z",
+        channel_arg: 0, direction: inbound }
+    - { name: receiveAndReply, arity: 3,
+        descriptor: "(Ljava/lang/String;Lorg/springframework/amqp/core/ReceiveAndReplyCallback;Lorg/springframework/amqp/core/ReplyToAddressCallback;)Z",
+        channel_arg: 0, direction: inbound }
+
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
 # discipline as spring-kafka-template.yml — see its own comment for the full
 # rationale).
@@ -119,22 +158,38 @@ wrappers:
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
 
-# D02's declared SLICE (F2 §3.8). `RabbitTemplate` declares 83 public methods at
-# spring-amqp/spring-rabbit 3.1.4 and this catalog reads ONE
-# (`scripts/probes/w19_catalog_surface.md`). Twenty of the unread take a `String` at
-# argument 0; that test admits setters, so the list below separates the ones that
-# address a wire from the ones that configure a default address.
+# D02's declared SLICE (F2 §3.8). `RabbitTemplate` declares 88 public methods at
+# spring-amqp/spring-rabbit 3.1.4 and this catalog reads FOUR method names — `4 of 88`,
+# `scripts/probes/w19_catalog_surface.md` — `convertAndSend` (three overloads, the send
+# half) plus `receive`, `receiveAndConvert` and `receiveAndReply` (the nine `G-44`
+# receive rows above). Of the 84 still unread, 17 take a `String` at argument 0; that
+# test admits setters, so the list below separates the ones that address a wire from
+# the ones that configure a default address.
 #
-# **The honest summary: this catalog models `convertAndSend` and nothing else.** A
-# module that receives over AMQP, or that does request/reply, derives nothing here.
+# **The honest summary: this catalog models `convertAndSend` (send) and the nine
+# queue-naming `receive`/`receiveAndConvert`/`receiveAndReply` overloads (`G-44`'s
+# receive half). A module doing request/reply through `*SendAndReceive*` derives
+# nothing here.**
 slice:
+  # `receive`, `receiveAndConvert` and `receiveAndReply` are no longer named here.
+  # `test_catalog_slice_coverage.py` keys `slice.outside` on the method NAME alone
+  # (`scripts/probes/w19_catalog_surface.md`'s enumeration does too — `read_names`
+  # asks "does this catalog read this NAME on this owner", not "every overload of
+  # it"), and `methods:` above now declares a row for each of the three names — so
+  # the enumeration no longer lists any of them as an unread candidate, on EITHER
+  # owner, and a `slice.outside` entry for them would be stale the moment it was
+  # written (confirmed by running the check: `test_no_slice_names_a_method_the_-
+  # enumeration_does_not_list` fails on exactly these six rows if they stay).
+  #
+  # The destination-less overloads this catalog still does not read — `receive()`,
+  # `receive(long)`, `receiveAndConvert()`, `receiveAndConvert(long)`,
+  # `receiveAndConvert(PTR)`, `receiveAndConvert(long, PTR)`, and every
+  # `receiveAndReply` overload WITHOUT a queue name — read the template's
+  # CONFIGURED DEFAULT queue, which is configuration this catalog does not join.
+  # That gap is real and is recorded in `docs/COVERAGE.md` §5.9 rather than in this
+  # block, because the block has no way to name "some overloads of a read name"
+  # without the mechanical check reading it as stale prose.
   outside:
-    - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
-      method_names: [receive, receiveAndConvert, receiveAndReply]
-      why: >
-        A boundary this catalog does NOT model — the inbound half of G-44. Each reads
-        from a named queue; `receiveAndReply` is inbound AND outbound in one call and
-        would derive two rows.
     - owner: org.springframework.amqp.rabbit.core.RabbitTemplate
       method_names: [send, sendAndReceive, convertSendAndReceive, convertSendAndReceiveAsType]
       why: >
@@ -164,9 +219,11 @@ slice:
         Internal helpers that substitute the configured default when an argument is
         null. They are public on this class but they address nothing themselves.
     - owner: org.springframework.amqp.core.AmqpTemplate
-      method_names: [convertSendAndReceive, convertSendAndReceiveAsType, receive, receiveAndConvert,
-                receiveAndReply, send, sendAndReceive]
+      method_names: [convertSendAndReceive, convertSendAndReceiveAsType, send, sendAndReceive]
       why: >
         The interface `RabbitTemplate` implements, carried as an owner alternate since
         W10. Its slice is its implementation's slice: each method is outside for the
-        reason given above for the same name on `RabbitTemplate`.
+        reason given above for the same name on `RabbitTemplate`. (`receive`,
+        `receiveAndConvert` and `receiveAndReply` are read on this owner too — `G-44`'s
+        `methods:` rows above name `AmqpTemplate` beside `RabbitTemplate` implicitly,
+        through the shared `owner:` list at the top of this file.)

@@ -676,7 +676,7 @@ def test_a_package_private_repository_derives_nothing_under_the_default_strategy
     """CP-2(0), observed: `HiddenRepository`, identical to the others but
     package-private, is exposed by no strategy except `all`. Visibility is part
     of the default rule, and the spec never said so."""
-    workspace, _ = _resolve(tmp_path, _repository(visibility="other"))
+    workspace, _ = _resolve(tmp_path, _repository(visibility="package"))
     routes = _routes(workspace)
     workspace.close()
 
@@ -716,7 +716,7 @@ def test_the_configured_detection_strategy_decides_which_repositories_are_expose
         _annotation(exported, REPOSITORY_REST_RESOURCE, path="alphas"),
         *_repository(unexported, entity="com/acme/orders/Beta#"),
         _annotation(unexported, REPOSITORY_REST_RESOURCE, exported=False),
-        *_repository(hidden, entity="com/acme/orders/Gamma#", visibility="other"),
+        *_repository(hidden, entity="com/acme/orders/Gamma#", visibility="package"),
     ]
     workspace, _ = _resolve(
         tmp_path,

@@ -141,6 +141,31 @@ def test_an_unclassified_terminal_says_so_rather_than_going_quiet(tmp_path: Path
     }
 
 
+def test_a_throw_edge_is_throws_from_its_invoke_kind_and_not_from_a_rule(tmp_path: Path):
+    """`G-52`. A throw reaches nothing, so no catalog can classify it by the callee's
+    type — left to `rules.of` it read `unresolved`, "looked at and could not be named",
+    which is false twice over. The invoke kind decides it, before any rule, with or
+    without a type: a rethrow whose type was unread has a NULL target and is still an
+    exit through an exception."""
+    workspace = _workspace(tmp_path, [])
+    rules = TerminalRules(workspace, [_catalog({"owner": STORE, "kind": "persistence"})])
+    workspace.close()
+
+    assert classify(rules, "com/acme/Boom#", None, "throw") == {
+        "terminal_kind": "throws",
+        "target_kind": None,
+    }
+    assert classify(rules, None, None, "throw") == {
+        "terminal_kind": "throws",
+        "target_kind": None,
+    }
+    # The near-miss: the same type as a dispatching call's owner is not a throw.
+    assert classify(rules, "com/acme/Boom#<init>(sig_1).", None, "special") == {
+        "terminal_kind": "unresolved",
+        "target_kind": None,
+    }
+
+
 def test_a_scanned_package_is_read_from_the_annotation(tmp_path: Path):
     """The route MyBatis needs, and the one a name match would have faked.
 

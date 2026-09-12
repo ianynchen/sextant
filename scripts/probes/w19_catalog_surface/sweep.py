@@ -240,6 +240,99 @@ SURFACES = (
         "2.25.31",
         "G-43",
     ),
+    # `G-31` (w60). Split into three catalogs, one scalar owner each
+    # (`kafka-streams.yml`'s own header comment carries the full rationale).
+    # `KTable` is NOT enumerated: it names no method in any of the three
+    # `matches.methods` lists at all — `KStream.to()`, not `KTable`, is the call
+    # site `customers.toStream().to(...)` reaches — so it is not in any of the
+    # three `matches.owner` either, and a slice measures a claimed surface, not
+    # an owner mentioned in passing.
+    Surface(
+        "kafka-streams",
+        "org.apache.kafka.streams.StreamsBuilder",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
+    Surface(
+        "kafka-streams-sink",
+        "org.apache.kafka.streams.kstream.KStream",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
+    Surface(
+        "kafka-streams-topology",
+        "org.apache.kafka.streams.Topology",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
+    # `javalin-routing` (w61). Three spellings of the owner (§3.1): a call through a
+    # `Javalin`-typed local records `Javalin` in the constant pool even though `get`/
+    # `post`/etc. are `default` methods it never overrides (`javap -c` on the fixture
+    # confirms the call site's own owner), a call through a
+    # `JavalinDefaultRoutingApi`-typed one records the interface, and — added on
+    # review, `config.router.mount(router -> router.get(...))` — a call through the
+    # SECOND type implementing that interface, `JavalinDefaultRouting` (`public final
+    # class ... implements JavalinDefaultRoutingApi<JavalinDefaultRouting>`), records
+    # that class. `ApiBuilder` is enumerated too: none of its methods are in
+    # `javalin.yml`'s `matches.owner`, so its whole addressable surface is "missing"
+    # here — the mechanical measurement behind filing it `slice.outside` in full
+    # (`javalin-apibuilder`, Category B).
+    Surface(
+        "javalin",
+        "io.javalin.Javalin",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    Surface(
+        "javalin",
+        "io.javalin.router.JavalinDefaultRoutingApi",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    Surface(
+        "javalin",
+        "io.javalin.router.JavalinDefaultRouting",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    Surface(
+        "javalin",
+        "io.javalin.apibuilder.ApiBuilder",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    # `alpakka-pekko` (w62). `Consumer` is the owner `pekko-connectors-kafka.yml`
+    # declares in `matches.owner`; `Producer` is named nowhere in `matches` at all —
+    # its inbound-only catalog reads none of it — and is enumerated here anyway so
+    # the header comment's "no single call names both" claim about `plainSink`/
+    # `committableSink`/`flexiFlow` is a MEASUREMENT rather than a paragraph nobody
+    # checks. MEASURED (w62): neither owner declares a method taking a `String` at
+    # argument 0, a single `*Request` argument, or a route predicate — every method
+    # on both takes `ConsumerSettings`/`ProducerSettings`/`ActorRef`/a `Producer`/
+    # `CommitterSettings` first — so section 3 below lists no candidate for either,
+    # and `pekko-connectors-kafka.yml` ships with no `slice.outside` block at all,
+    # the same shape `kafka-consumer.yml`'s own file keeps for the identical reason.
+    Surface(
+        "pekko-connectors-kafka",
+        "org.apache.pekko.kafka.javadsl.Consumer",
+        "org.apache.pekko:pekko-connectors-kafka_2.13",
+        "1.1.0",
+        "alpakka-pekko",
+    ),
+    Surface(
+        "pekko-connectors-kafka",
+        "org.apache.pekko.kafka.javadsl.Producer",
+        "org.apache.pekko:pekko-connectors-kafka_2.13",
+        "1.1.0",
+        "alpakka-pekko",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and
@@ -297,11 +390,15 @@ def jar(artifact: str, version: str) -> Path:
 def self_reported_version(archive: Path) -> str:
     """The version the jar records about ITSELF (§5.4).
 
-    Two places, because different publishers use different ones and neither is
-    universal — the same pair CP-10's harness reads. The Spring artifacts write
+    THREE places, because different publishers use different ones and none is
+    universal — the same set CP-10's harness reads. The Spring artifacts write
     `Implementation-Version:` into the manifest; the AWS SDK writes none at all and
     records its version only in Maven's `pom.properties`, which is still the
-    archive's own statement about itself rather than the path it was cached at."""
+    archive's own statement about itself rather than the path it was cached at.
+    Kafka Streams (`G-31`, w60) writes neither: its own version lives in
+    `kafka/kafka-streams-version.properties`, at a DIFFERENT path than the raw
+    client's `kafka/kafka-version.properties` — measured with `unzip -l` rather
+    than assumed from the sibling artifact."""
     with zipfile.ZipFile(archive) as zf:
         try:
             manifest = zf.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
@@ -321,6 +418,15 @@ def self_reported_version(archive: Path) -> str:
             for line in zf.read(name).decode("utf-8", "replace").splitlines():
                 if line.startswith("version="):
                     return line.split("=", 1)[1].strip()
+        try:
+            kafka_properties = zf.read("kafka/kafka-streams-version.properties").decode(
+                "utf-8", "replace"
+            )
+        except KeyError:
+            kafka_properties = ""
+        for line in kafka_properties.splitlines():
+            if line.startswith("version="):
+                return line.split("=", 1)[1].strip()
     return "the archive records no version about itself"
 
 
@@ -593,9 +699,15 @@ def main() -> None:
         print()
 
     print("### 2. Of the unread, which could carry a destination\n")
+    # The count is the table's own, read from the same dict the rows print — it was
+    # once a literal, and the literal stayed at 83 after the receive half shipped
+    # and the row beneath it said 84.
+    rabbit_unread = sum(
+        len(missing) for (_, owner), missing in unread.items() if owner.endswith(".RabbitTemplate")
+    )
     print(
         "A raw ratio overstates every gap here: most of what a template class declares is "
-        "configuration and lifecycle, not boundaries. `RabbitTemplate`'s 83 include "
+        f"configuration and lifecycle, not boundaries. `RabbitTemplate`'s {rabbit_unread} include "
         "`setChannelTransacted`, `afterPropertiesSet` and every getter. So the unread half "
         "is split by a MEASURED property rather than by judgement — **does the method take a "
         "`String` at argument 0**, the position every destination-carrying method in these "

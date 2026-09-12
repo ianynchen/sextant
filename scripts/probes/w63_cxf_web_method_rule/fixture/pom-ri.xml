@@ -1,0 +1,25 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <!--
+    W63's OTHER live-run half — the RI, for the side-by-side cross-check with
+    CXF (`pom.xml`). `dependency:build-classpath` hands `sweep.py` a classpath
+    that boots `com.sun.xml.ws.model.RuntimeModeler` (through the public
+    `DatabindingFactory` SPI, `RiLiveProbe.java`). Builds and runs nothing on
+    its own.
+  -->
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.sextant.probes</groupId>
+  <artifactId>w63-ri-fixture</artifactId>
+  <version>1</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.sun.xml.ws</groupId>
+      <artifactId>jaxws-rt</artifactId>
+      <version>4.0.2</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.jws</groupId>
+      <artifactId>jakarta.jws-api</artifactId>
+      <version>3.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
