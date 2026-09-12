@@ -1,0 +1,112 @@
+id: javalin
+displayName: Javalin
+# The flat registration form (`javalin-routing`) — `app.get("/path", handler)` on a
+# `Javalin` instance, the shape the Javalin front page shows. The NESTED form,
+# `ApiBuilder.get(…)` called inside a lambda passed to `path(…)` inside
+# `config.router.apiBuilder(…)`, is a receiver-chain read this style cannot do —
+# filed separately as `javalin-apibuilder`, Category B, and stated `slice.outside`
+# below rather than matched wrongly.
+style: single_call
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["io.javalin:javalin"]
+
+measured:
+  - { artifact: io.javalin:javalin, versions: ["6.4.0"],
+      identity: reported, by: scripts/probes/w61_javalin_surface.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # `Javalin implements JavalinDefaultRoutingApi<Javalin>` (measured, w61): the verbs
+  # are `default` methods declared on the INTERFACE, so a call site typed by either
+  # the concrete class or the interface reaches the same method — both spellings are
+  # named, per §3.1, the same shape `spring-resttemplate.yml`'s
+  # `RestTemplate`/`RestOperations` pair already uses.
+  owner:
+    - io.javalin.Javalin
+    - io.javalin.router.JavalinDefaultRoutingApi
+  methods:
+    - { name: get, arity: 2, http_method: GET, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: get, arity: 3, http_method: GET, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: post, arity: 2, http_method: POST, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: post, arity: 3, http_method: POST, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: put, arity: 2, http_method: PUT, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: put, arity: 3, http_method: PUT, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: delete, arity: 2, http_method: DELETE, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: delete, arity: 3, http_method: DELETE, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: patch, arity: 2, http_method: PATCH, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: patch, arity: 3, http_method: PATCH, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: head, arity: 2, http_method: HEAD, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: head, arity: 3, http_method: HEAD, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+    - { name: options, arity: 2, http_method: OPTIONS, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
+    - { name: options, arity: 3, http_method: OPTIONS, url_arg: 0,
+        descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+
+# Every candidate below is measured against `scripts/probes/w19_catalog_surface.md`
+# (regenerated for this catalog) — a method the enumeration lists as unread AND
+# addressable (a `String` at argument 0), which is what
+# `tests/architecture/test_catalog_slice_coverage.py` checks this file against.
+slice:
+  outside:
+    - owner: io.javalin.Javalin
+      method_names: [start]
+      why: >
+        `start(String host, int port)` takes a `String` at argument 0, exactly the
+        shape this catalog reads a URL at — but the string is the BIND HOST, not a
+        route. A row here would publish a host address as an HTTP endpoint path.
+    - owner: io.javalin.Javalin
+      method_names: [sse, ws, before, beforeMatched, after, afterMatched, wsBefore, wsBeforeUpgrade, wsAfter, wsAfterUpgrade]
+      why: &filters_and_other_protocols >
+        `sse`/`ws` register OTHER protocols this catalog does not derive as `http`
+        (SSE and WebSocket have their own catalogs); `before`/`beforeMatched`/
+        `after`/`afterMatched` and their `ws*` twins are FILTERS — cross-cutting
+        interceptors matched against a path pattern, never routes an HTTP client can
+        address on their own. A row for any of these would publish plumbing as an
+        endpoint, the same ruling `jakarta-servlet.yml` makes for `@WebFilter`.
+    - owner: io.javalin.router.JavalinDefaultRoutingApi
+      method_names: [sse, ws, before, beforeMatched, after, afterMatched, wsBefore, wsBeforeUpgrade, wsAfter, wsAfterUpgrade]
+      why: *filters_and_other_protocols
+    # `addHttpHandler(HandlerType, String, Handler[, RouteRole...])` carries its verb
+    # as an ENUM at argument 0 rather than in the method NAME — no `single_call` word
+    # reads a verb off an argument, so this row would need one that does not exist
+    # yet. It is NOT in the mechanical list above: its own descriptor opens with
+    # `HandlerType`, not `String`, so w19's own "name at argument 0" measurement does
+    # not count it as a candidate, and declaring it here would be a STALE entry
+    # `test_no_slice_names_a_method_the_enumeration_does_not_list` refuses (Task 5's
+    # `repartition` precedent). Stated here in prose instead, on both owners.
+    #
+    # `io.javalin.apibuilder.ApiBuilder` is not named as an outside owner here at
+    # all, for the same reason: NONE of its methods are read by this catalog's
+    # `matches.owner`, so it needs its own mechanical entry, immediately below.
+    - owner: io.javalin.apibuilder.ApiBuilder
+      method_names: [get, post, put, patch, delete, head, before, after, ws, wsBefore, wsAfter, sse, crud, path, prefixPath]
+      why: >
+        `ApiBuilder`'s verbs are STATIC methods called inside a lambda passed to
+        `path(prefix, () -> { … })`, which composes the full address across TWO
+        stack frames neither `single_call` nor this catalog's `owner` conjunct
+        reaches — reading `ApiBuilder.get("/{id}", h)` on its own would publish
+        `/{id}` with no `path(…)` prefix, a WRONG row rather than a missing one
+        (pinned by `test_javalin_flat_registrations_derive_every_route`'s own
+        assertion that `/{id}` never appears). Filed as `javalin-apibuilder`,
+        Category B (the register, §4) — it needs the same receiver-chain walk
+        `G-37`/`GAP-1b`/`G-30` wait on, not a catalog fix. `before`/`after`/`ws*`/
+        `sse` sit here for the same filter/other-protocol reason as the owners
+        above; `crud` registers FIVE routes off one `CrudHandler` argument, a
+        one-call-to-many-rows shape this style has no word for; `path` and
+        `prefixPath` are the nesting primitive itself, not a route.

@@ -317,3 +317,52 @@ def test_quarkus_route_base_media_reaches_every_route(quarkus_media):
         '["application/json"]',
         '["application/json"]',
     ), f"the route's own consumes was lost or the class produces did not reach it: {quarkus_media}"
+
+
+JAVALIN = FIXTURES / "orders-javalin"
+
+
+@pytest.fixture(scope="module")
+def javalin_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+    """`(direction, method, path)` for every inbound HTTP row the Javalin fixture derives."""
+    workspace_dir = tmp_path_factory.mktemp("javalin")
+    compile_fixture(JAVALIN)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(JAVALIN), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return {
+            (str(row["direction"]), str(row["method"]), str(row["path"]))
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "http"
+        }
+    finally:
+        workspace.close()
+
+
+def test_javalin_flat_registrations_derive_every_route(javalin_routes):
+    """`app.get("/path", handler)` on a `Javalin` — the form the Javalin front page
+    shows. javalin 6.4.0: the verbs are default methods on `JavalinDefaultRoutingApi`,
+    path at argument 0, handler a lambda at 1 (the handler recorded is the calling
+    method, as for every `single_call` inbound row)."""
+    expected = {
+        ("inbound", "GET", "/jv/orders"),
+        ("inbound", "GET", "/jv/orders/{id}"),
+        ("inbound", "POST", "/jv/orders"),
+        ("inbound", "DELETE", "/jv/orders/{id}"),
+    }
+    missing = expected - javalin_routes
+    assert missing == set(), f"missing {sorted(missing)}. Derived: {sorted(javalin_routes)}"
+    assert ("inbound", "GET", "/{id}") not in javalin_routes, (
+        "the ApiBuilder inner path was published WITHOUT its `path(…)` prefix — a wrong row"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="javalin-apibuilder: nested ApiBuilder needs the receiver-chain walk (Category B)",
+)
+def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
+    assert ("inbound", "GET", "/jv/nested/{id}") in javalin_routes

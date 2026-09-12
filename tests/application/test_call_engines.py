@@ -8601,6 +8601,74 @@ def test_an_addsink_call_on_an_owner_that_is_not_topology_derives_nothing(
     assert rows == []
 
 
+def test_javalin_add_http_handler_derives_nothing(tmp_path: Path):
+    """`javalin.yml` (`javalin-routing`, w61): `addHttpHandler(HandlerType, String,
+    Handler)` carries the verb as an ENUM at argument 0 and the path at argument 1 —
+    the near miss `get`/`post`/etc.'s own descriptors would be if Javalin named the
+    verb this way instead of in the method name. No `single_call` row declares
+    `addHttpHandler` at all (`javalin.yml`'s own comment states why: no word reads a
+    verb off an argument), so this is a "no row at this NAME" near-miss, not a same-
+    name-same-arity collision. Not `@pytest.mark.declines`: there is no descriptor
+    collision here for a guard to defend — `_matching_method`'s name+arity filter
+    already excludes `addHttpHandler` from every candidate list before any descriptor
+    is compared, so `python scripts/guard_check.py single_call.call-site-owner` and
+    `single_call.claimed-arity` would both report this test SURVIVING while
+    discriminating nothing, the same finding Task 2 made for JMS's arity-1 twin and
+    Task 5 restated for `SqsTemplate.receive(Collection, Duration)` above. A row here
+    would publish whatever the caller passed as `HandlerType.GET` as a path."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "io/javalin/router/JavalinDefaultRoutingApi#",
+                "addHttpHandler",
+                "(Lio/javalin/http/HandlerType;Ljava/lang/String;Lio/javalin/http/Handler;)"
+                "Lio/javalin/router/RoutingApi;",
+                [
+                    CallArgument(kind="enum", symbol="io/javalin/http/HandlerType#GET."),
+                    CallArgument(kind="string", value="/jv/orders"),
+                    CallArgument(kind="unresolved"),
+                ],
+            )
+        ],
+        "javalin",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.declines("javalin")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_javalin_get_call_on_an_owner_that_is_not_javalin_derives_nothing(tmp_path: Path):
+    """§10 near-miss, negating `javalin.yml`'s `owner` conjunct while satisfying every
+    other one: the method name, arity and descriptor are exactly `Javalin.get(String,
+    Handler)`'s own, and only the receiver's type differs. `get` is not a name
+    Javalin owns exclusively — any application router helper is free to declare
+    one — and a row derived here would publish an unrelated call's argument as an
+    HTTP route."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/own/Router#",
+                "get",
+                "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;",
+                [
+                    CallArgument(kind="string", value="/not-a-real-route"),
+                    CallArgument(kind="unresolved"),
+                ],
+            )
+        ],
+        "javalin",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 @pytest.mark.declines("spring-ws-template")
 @pytest.mark.pins("single_call.claimed-arity")
 def test_the_ws_arity_one_and_three_rows_decline_an_overload_they_do_not_declare(

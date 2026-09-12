@@ -34,7 +34,7 @@ too — that is the check aimed at half-delivery: the half you did not do has to
 against the feature it belongs to, or the build goes red.
 
 ```delivery
-REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-routing
+REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-routing javalin-apibuilder
 REST outbound      | REST out   | G-30-outbound jdk-httpclient
 SOAP               | SOAP       | jaxws-public-final apache-cxf
 GraphQL            | GraphQL    |
@@ -223,6 +223,18 @@ receiver-chain form, Category B of the register (§4), the same overload-discrim
 work `G-37`/`G-30`/`GAP-1b` wait on — not a fixture-and-test item like the other three
 quarters. `RabbitTemplate`, `JmsTemplate` and `KafkaTemplate`'s receive halves already
 derive (Tasks 1-3, commits `371cfaf`, `760c884`, `7771be7`).
+
+**Also named 2026-09-12, alongside `javalin-routing` shipping:**
+`javalin-apibuilder`. `config.router.apiBuilder(() -> path("/orders", () ->
+get("/{id}", h)))` calls the static `ApiBuilder.get` inside a lambda inside
+`path(…)`'s own lambda — measured (w61, `scripts/probes/
+w61_javalin_surface.md`): `ApiBuilder.get`'s descriptor carries a route
+`String` at argument 0, the identical shape and position `javalin.yml`'s flat
+`Javalin.get` reads, so a `single_call` row on `ApiBuilder.get` alone would
+publish `/{id}` with no `/orders` prefix — a wrong row, not a missing one
+(`javalin.yml`'s own `test_javalin_flat_registrations_derive_every_route`
+pins the negative). Composing the prefix needs the same receiver-chain walk
+`G-37`/`GAP-1b`/`G-30` wait on — Category B, not a catalog fix.
 
 **Named 2026-09-12 when the Pub/Sub cell's last blocker closed:** `pubsub-channel-adapter` —
 `PubSubInboundChannelAdapter` + `@ServiceActivator`, the one Java row COVERAGE §5.11 still

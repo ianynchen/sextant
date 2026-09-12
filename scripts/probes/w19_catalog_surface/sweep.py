@@ -268,6 +268,35 @@ SURFACES = (
         "3.6.2",
         "G-31",
     ),
+    # `javalin-routing` (w61). Both spellings of the owner (§3.1) — a call through a
+    # `Javalin`-typed local records `Javalin` in the constant pool even though `get`/
+    # `post`/etc. are `default` methods it never overrides (`javap -c` on the fixture
+    # confirms the call site's own owner), and a call through a
+    # `JavalinDefaultRoutingApi`-typed one records the interface. `ApiBuilder` is
+    # enumerated too: none of its methods are in `javalin.yml`'s `matches.owner`, so
+    # its whole addressable surface is "missing" here — the mechanical measurement
+    # behind filing it `slice.outside` in full (`javalin-apibuilder`, Category B).
+    Surface(
+        "javalin",
+        "io.javalin.Javalin",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    Surface(
+        "javalin",
+        "io.javalin.router.JavalinDefaultRoutingApi",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
+    Surface(
+        "javalin",
+        "io.javalin.apibuilder.ApiBuilder",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-routing",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and

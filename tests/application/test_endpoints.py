@@ -6809,11 +6809,15 @@ def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
         symbols = catalog_symbols(declared, f"{catalog.source}: matches.owner")
         assert len(set(symbols)) == len(symbols), f"{catalog.source} repeats an owner: {symbols}"
         assert all(symbol.endswith("#") for symbol in symbols), symbols
-    # §3.1 was applied to eight catalogs — seven, plus W43's `spring-stomp-template`,
-    # whose `SimpMessagingTemplate`/`SimpMessageSendingOperations` pair is the same
-    # class-and-interface shape the rule exists for. A test that silently found none would
-    # pass forever once the key was renamed.
-    assert listed == 8, f"expected eight catalogs with an owner list, found {listed}"
+    # §3.1 was applied to nine catalogs — eight, plus `javalin.yml` (w61,
+    # `javalin-routing`): `Javalin implements JavalinDefaultRoutingApi<Javalin>` and a
+    # call through either type's own name records that type as the owner (measured —
+    # `javap -c` on the fixture shows a call through a `Javalin`-typed local carrying
+    # `io/javalin/Javalin` in the constant pool even though the method is a `default`
+    # one it never overrides), which IS one library under two names, §3.1's own
+    # meaning, not a second library. A test that silently found none would pass
+    # forever once the key was renamed.
+    assert listed == 9, f"expected nine catalogs with an owner list, found {listed}"
 
 
 def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_path):

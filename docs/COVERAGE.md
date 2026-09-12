@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 3B 4C, 9 open) | ◐ (2A 2B, 2 open) | ◐ (2 open) | ✅ | ✅ | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 2B 4C, 10 open) | ◐ (2A 2B, 2 open) | ◐ (2 open) | ✅ | ✅ | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**62 of 77 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**63 of 78 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -733,6 +733,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `jakarta-websocket-programmatic` | `jakarta.websocket:jakarta.websocket-api` | 2.1.1 |
 | `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
+| `javalin` | `io.javalin:javalin` | 6.4.0 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
@@ -2047,7 +2048,7 @@ arrive there.
 | Java | WebFlux functional — the non-coroutine Kotlin DSL, `router { GET("/x") { … } }` | `RouterFunctionDslKt.router` and `RouterFunctionDsl`'s seven verbs x five overloads (`javap`, spring-webflux 6.1.6) | `combinator` | **Boundary — derives NOTHING.** `spring-webflux-router.yml` declares `CoRouterFunctionDslKt.coRouter` and its `CoRouterFunctionDsl` verbs only. The two DSLs are structurally identical, so this is a catalog addition rather than engine work — but no probe has read `RouterFunctionDsl`'s call-site shape, and the coroutine one's was read by 2E checkpoint (1b) rather than assumed. **Falsified by** a Kotlin module using `router { }` rather than `coRouter { }` |
 | Java | **Akka HTTP** `path("users" / IntNumber) { get { complete(…) } }` | nested closures, route is a *value* | `combinator` | **C-ish — the hardest inbound form surveyed** |
 | Java | Ktor `routing { get("/path") { … } }` | Kotlin DSL | `combinator` | B |
-| Java | Javalin `app.get("/path", ctx -> …)` | — | `registration_call` | B |
+| Java | Javalin `app.get("/path", ctx -> …)` | `Javalin implements JavalinDefaultRoutingApi<Javalin>`; the verbs are `default` methods on that interface | `single_call` | ✅ **shipped** (`javalin.yml`, javalin 6.4.0, w61, `javalin-routing`). **Boundary — the nested `ApiBuilder` form derives nothing, deliberately.** `config.router.apiBuilder(() -> path("/x", () -> get("/{id}", h)))` calls the static `ApiBuilder.get` inside a lambda inside `path(…)`'s lambda — reading it as a flat row would publish `/{id}` with no `path(…)` prefix, a wrong row rather than a missing one (pinned: `test_javalin_flat_registrations_derive_every_route` asserts `("inbound","GET","/{id}")` is never derived). Filed as `javalin-apibuilder`, Category B (the register §4) — needs the same receiver-chain walk `G-37`/`GAP-1b`/`G-30` wait on |
 | Java | **Spring Data REST** — a repository interface becomes a CRUD API | six routes per exposed repository plus one per query method, derived from a framework rule; `@RepositoryRestResource` is OPTIONAL and the un-annotated case is the common one | `derived_resource` | ✅ **shipped** (2O Task 6) — gated on the module's build declaring Spring Data REST |
 | Java | Data REST — WHICH repositories are exposed (`spring.data.rest.detection-strategy`) | `default` = public only, honouring `exported = false`; `all`, `annotated`, `visibility` each change the set | `derived_resource` | ✅ shipped — all four verified live (CP-2(0)); a value the catalog does not enumerate, or one that differs per environment, derives **nothing** |
 | Java | Data REST — `path=`, `exported=false`, `/search/{query}`, `@RestResource` renames/removals | — | `derived_resource` | ✅ shipped |

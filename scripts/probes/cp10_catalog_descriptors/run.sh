@@ -55,6 +55,10 @@ ARTIFACTS=(
   # the raw client jar's `kafka/kafka-version.properties` — measured with `unzip -l`
   # rather than assumed from the sibling artifact.
   "org.apache.kafka|kafka-streams|3.6.2|kafka/kafka-streams-version.properties|version"
+  # javalin-routing (w61). Javalin writes BOTH a `pom.properties` and a manifest
+  # `Implementation-Version:` — measured with `unzip -l` rather than assumed;
+  # `pom.properties` is read here, the same order w61's own harness checks first.
+  "io.javalin|javalin|6.4.0|pom.properties|version"
   "org.springframework|spring-jms|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   # W43. `SimpMessagingTemplate` lives here, and `convertAndSend` is declared one
   # level up on `MessageSendingOperations<D>` — so the harness's superclass walk is
