@@ -66,6 +66,24 @@ class KotlinParameterNullabilityTest {
         assertEquals(true, returns(methodFact("KotlinParameterSample", "rankedMaybe")).get("nullable"));
     }
 
+    @Test
+    void aBareTypeVariablesFieldCarriesNoKotlinClaimAtAll() throws Exception {
+        // `class KotlinBoxSample<T>(val x: T, val y: T?)`. The field `x`, its getter and
+        // its constructor parameter are one declared type and must not disagree: all
+        // three keep Java's rule. On the field that means NO `ext.kotlin` block — "no
+        // Kotlin claim" is the honest output for a type whose nullability is its bound's
+        // — and the shared `nullable` at Java's `true`. `y: T?` is a claim, and reads as one.
+        var x = fieldFact("KotlinBoxSample", "x");
+        assertEquals(null, x.get("ext"));
+        assertEquals(true, returns(x).get("nullable"));
+        var y = fieldFact("KotlinBoxSample", "y");
+        assertEquals(true, object(object(y.get("ext")).get("kotlin")).get("nullable"));
+        assertEquals(true, returns(y).get("nullable"));
+        // The other two projections of `x`, so the three are asserted together.
+        assertEquals(true, returns(methodFact("KotlinBoxSample", "getX")).get("nullable"));
+        assertEquals(true, parameters(methodFact("KotlinBoxSample", "<init>")).get(0).get("nullable"));
+    }
+
     // ---- reading the emitted facts -------------------------------------------------
 
     private Map<String, Object> methodFact(String className, String member) throws Exception {
@@ -78,6 +96,21 @@ class KotlinParameterNullabilityTest {
                     && l.contains(className + "#" + member + "("))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("no symbol fact for " + member));
+            return object(new Json(line).value());
+        }
+    }
+
+    /** A field's symbol fact, whose symbol ends in {@code .} where a method's has {@code (}. */
+    private Map<String, Object> fieldFact(String className, String member) throws Exception {
+        try (InputStream in =
+                getClass().getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
+            List<String> lines = new ClassScanner("com.acme/orders", "1.0.0")
+                .scan(in.readAllBytes(), "doc-kotlin-parameters");
+            String line = lines.stream()
+                .filter(l -> l.contains("\"kind\":\"symbol\"")
+                    && l.contains(className + "#" + member + "."))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no field fact for " + member));
             return object(new Json(line).value());
         }
     }

@@ -58,7 +58,10 @@ public final class KotlinNullability {
     /** One class's Kotlin-declared facts, as far as the scanner consumes them.
      *
      *  <p>{@code properties} maps a property NAME to the nullability its declared type
-     *  carries — the field projection that has shipped since M03.
+     *  carries — the field projection that has shipped since M03. Absent for a property
+     *  declared as a bare type variable ({@link #declaredNullable}), so that field keeps
+     *  Java's rule and carries no {@code ext.kotlin} block: the same answer its getter and
+     *  its constructor parameter give, because one declared type must not read three ways.
      *
      *  <p>{@code returnNullable} maps a method's JVM {@code name + descriptor} to the
      *  nullability of the type it DECLARES it returns — every Kotlin function, plus every
@@ -203,7 +206,8 @@ public final class KotlinNullability {
         if (!(parsed instanceof KotlinClassMetadata.Class classMetadata)) return NONE;
         Map<String, Boolean> properties = new HashMap<>();
         for (KmProperty property : classMetadata.getKmClass().getProperties()) {
-            properties.put(property.getName(), Attributes.isNullable(property.getReturnType()));
+            Boolean nullable = declaredNullable(property.getReturnType());
+            if (nullable != null) properties.put(property.getName(), nullable);
         }
         Map<String, Boolean> returns = new HashMap<>();
         Map<String, String> returnClassifier = new HashMap<>();
@@ -255,7 +259,9 @@ public final class KotlinNullability {
      *  metadata's "not nullable" on it describes the VARIABLE and not what a caller binds
      *  it to — {@code ranked<String?>(null)} is legal against {@code fun <T> ranked(x: T):
      *  T}. Java's rule (a type variable is a reference, and every reference permits null)
-     *  is the right answer there and a caller receiving null leaves it standing.
+     *  is the right answer there and a caller receiving null leaves it standing — on all
+     *  three projections, the field, the getter and the parameter, so that one declared
+     *  type does not read differently depending on which of them a consumer looks at.
      *  {@code T?} is nullable whatever {@code T} is, and a class is what it says. A bound
      *  that would settle it ({@code T : Any}) is not read: Java's rule is less specific
      *  and never wrong, and no fixture declares one. */

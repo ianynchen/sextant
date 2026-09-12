@@ -3062,8 +3062,11 @@ signature spelled is the right answer there.
 Found and closed in the same change, one position along: a return declared as a bare type
 variable (`fun <T> ranked(x: T): T`) read `nullable: false` from metadata, which describes the
 variable and not what a caller binds it to (`ranked<String?>(null)` is legal). A bare `T`
-now keeps Java's rule on both the return and (`OI-82`'s walk) the parameter side; `T?` still
-reads `true`. A bound that would settle it (`T : Any`) is not read.
+now keeps Java's rule on the return, parameter and field projections — the field of a
+`val x: T` carries no `ext.kotlin` block at all, so a getter, a constructor parameter and a
+field of one declared type do not disagree, which is the intra-class disagreement `G-63`
+was opened for; `T?` still reads `true`. A bound that would settle it (`T : Any`) is not
+read.
 
 ### OI-81 — a `$default` bridge and the function beside it disagree about one declared type
 

@@ -18,3 +18,8 @@ class KotlinParameterSample(val id: String, val note: String?) {
 
     fun <T> rankedMaybe(x: T): T? = x
 }
+
+/** The FIELD projection of the same boundary: `x`'s nullability is whatever `T` is bound
+ *  to, so metadata's "not nullable" on it is no claim about the field, and the field
+ *  carries no Kotlin claim at all. `y: T?` is a claim. */
+class KotlinBoxSample<T>(val x: T, val y: T?)
