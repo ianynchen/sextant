@@ -64,7 +64,7 @@ gRPC
 honestly at the end, and excluded from the per-feature check by being named here:
 
 ```unassigned
-GAP-7 OI-85
+OI-85
 ```
 
 **Out of scope for this target** — neither blocking nor tracked for delivery:
@@ -422,7 +422,9 @@ Rust, Swift), so its cell reads `◐` correctly and forever — the ```scoped-ou
 These are real and they are not on the path to any cell above. They are listed so that
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
-`GAP-7` ~111s per reactor module (measured 2026-09-12: `mall-admin` 111s with its siblings, 8s alone; the cause is profiled in `OI-68`).
+`GAP-7` left this register on 2026-09-12: it is a performance cost (a reactor module
+analyses in 111s, 8s alone — `OI-68` has the profile), not a missing feature, and the user
+ruled that a slow correct answer is not a gap. It stays open as a performance issue there.
 `G-52` throw exits left this list on 2026-09-12: it blocked no feature, so it is not in
 the `closed` block above; it is recorded closed in `open-issues.md`, by the tests named there.
 `G-74` `signature.throws` gains its consumer left this list on 2026-09-12: it blocked no

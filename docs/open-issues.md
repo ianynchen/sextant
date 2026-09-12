@@ -156,10 +156,23 @@ nothing.
 `repositories` map is catalog data; the rule that reads it is store-neutral
 already.
 
-## GAP-7 — analysing a reactor module costs ~111s and the cause is now diagnosed
+## GAP-7 — analysing a reactor module costs ~111s · **NOT A GAP — a performance issue, tracked as `OI-68`**
 
-Tracked in full as `OI-68` below, listed here because it is a capability limit a
-reader will hit rather than a defect in output. Both mechanisms originally blamed
+Kept under this number so old references resolve, and removed from the delivery register
+on 2026-09-12: the output is the same 160 endpoints with or without the cost, so nothing is
+undelivered (user ruling: a slow correct answer is not a gap). What is wrong is the SHAPE
+of the resolve: siblings this module depends on are loaded as extra documents into the same
+fact tables and every derivation runs over all of them and deletes the sibling-owned rows
+afterwards, instead of starting from this module's own classes and pulling a sibling's facts
+only where a reference from here lands there (a supertype, an implemented interface's
+annotations, a called method). Stated as a rule (user, 2026-09-12): every derivation has a
+ROOT side — what it derives FOR, this module's own classes, annotations and call sites — and
+a LOOKUP side — anything scanned. The root side is filtered to `origin_tier =
+'module_output'` at the FIRST read, in SQL; the lookup side stays open. Lever 2 failed by
+putting the predicate on the lookup side (the annotation's document) instead of the root
+(the implementor). And the engines that pull whole tables into Python and filter there
+(`method_declarations` 59 times, `call_sites` 38 times, per the profile) push the same
+predicate into their read and read once. That is what `OI-68` names as the close. Both mechanisms originally blamed
 were refuted by measurement in W56, and the last lever it named was refuted again on
 2026-09-12: `mall-admin` with its three siblings analyses in 111s against 8s alone,
 `derive_endpoints` 47s against 3.6s, `derive_endpoint_shapes` 39s against 1.6s —
