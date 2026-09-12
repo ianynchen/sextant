@@ -30,7 +30,8 @@ cast refuses is counted (`_per_value_retries`) and asserted empty by the pipelin
 **What remains, measured after P-1b** (`mall-admin` 8.7s): `derive_endpoints` 6.6s — of which
 the `endpoints` statement is 1.6s (28 executions, ~55ms each) and Python folds the rest
 (`single_call.run` 2.1s, `declared_parameters_of` 1.1s, `inherited_rows` 1.1s, `_origin_tiers`
-0.9s); `derive_endpoint_shapes` 1.3s; scan 1.1s; `interpret schemas` 0.7s. See P-4.
+0.9s); `derive_endpoint_shapes` 1.3s; scan 1.1s; `interpret schemas` 0.7s. See P-4, and A
+below for the Python folds.
 
 *The original analysis, kept for the record:*
 
@@ -330,6 +331,49 @@ MATERIALIZED CTEs or comment stripping cannot move it (all measured). Only runni
 per resolve, over a table of every catalog's parameters joined in, cuts it. That is a rewrite
 of the largest SQL file, the design §8.7 would have asked for at the start; it is the biggest
 single item left for the suite and CI.
+
+## A — the engines' per-catalog folds over the fact tables
+
+**Status: shipped 2026-09-12 — whole `api.analyze`, `mall-admin` (+3 siblings) 9.5s → 7.0s,
+`orders-service` 2.6s → 2.5s** (Apple M4, three runs each, before and after every step; the
+before is higher than the P-1 row's 8.7s because it is this session's machine, and every
+number in the table below is from the same session).
+
+**Measured.** After P-1b every fact query is read once, so what remained was each engine
+folding the same cached rows into the same catalog-independent structure once per catalog:
+`single_call` indexed the 24,815 `call_sites` rows by caller 25 times and tested every one of
+them against its owners; `derive_shapes` built the symbol → origin-tier map 79 times;
+`declared_parameters_of` folded 22,059 method rows 31 times; `annotation_driven` decoded every
+annotation's `args` 30 times and rebuilt the type hierarchy the inheritance walk reads 19
+times. ~4s of the 6.9s resolve on `mall-admin`, ~0.5s on `orders-service`.
+
+**Fix — one rule, `Workspace.once(build)`.** A structure that depends on no catalog is built
+once per load and handed back until the next `load_facts`, the lifetime the cached rows
+already have; the memo lives on the workspace (cleared where `_fact_reads` is), keyed by the
+builder function, and a builder that reads a derived table is refused at the read, so a value
+cannot survive the derivation that changed it. Chosen over a per-resolve context threaded
+through every engine's `run(workspace, catalog)` because it changes eight call sites and no
+signature — the context would have touched thirteen engines, the shape pass and every test
+that calls an engine directly. What is shared is read-only to its consumers, the same contract
+the port states for query rows. Output identical: every workspace table (`ORDER BY ALL`, every
+column as text) and `metadata.json` compare equal before and after each step on both corpora.
+
+| step | structure, built once per load | `mall-admin` | `orders-service` |
+|---|---|---|---|
+| before | — | 9.5s | 2.6s |
+| 1 | `CallSiteIndex` (`call_sites` by caller, by bare caller, positions by owner) — `single_call` reads the sites on its owners instead of testing every site (`run` own time 0.81s → 0.00s under cProfile) | **8.6s** | 2.6s |
+| 2 | `annotations` rows with `args` decoded; `TypeHierarchy` for the inheritance walk (`_synthetic_annotations` 1.27s → 0.56s, `inherited_rows` 1.15s → 0.51s) | **8.3s** | 2.6s |
+| 3 | `_origin_tiers` (0.96s over 79 calls → 0.03s, one call) | **7.7s** | 2.6s |
+| 4 | `declared_parameters_of` (0.79s/31 → 0.01s/1) and `FieldDeclarations`, the four catalog-independent maps of `FieldFacts` (0.47s/31 → 0.02s) | **7.1s** | 2.5s |
+| 5 | `fluent` reads the same `CallSiteIndex` (`run` 0.50s → 0.44s) | **7.0s** | 2.5s |
+
+**Left, with the number.** `inherited_rows_over` still costs 0.51s over 19 catalogs on
+`mall-admin`: what remains is the walk itself — which ancestor method carries one of THIS
+catalog's mapping annotations — and the per-target annotation map it reads, both of which
+take the catalog's fqns as input; the catalog-independent half is the hierarchy, and that is
+step 2. `fluent.run`'s own 0.15s is its per-caller receiver index, 25k `setdefault`s per
+catalog over six catalogs; below the threshold this round set. The `endpoints` statement
+(P-4) is now the largest item inside `derive_endpoints` on both corpora.
 
 ## The whole flow, after P-1 and P-3 (analyze → render → export, 2026-09-12)
 

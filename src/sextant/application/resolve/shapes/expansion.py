@@ -43,7 +43,9 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     accessors = _Accessors(workspace=workspace, rules=rules)
     descriptors = _declared_shapes(workspace)
     parameters = _type_parameters(workspace)
-    tiers = _origin_tiers(workspace)
+    # Built once per load and shared by every catalog's expansion (`Workspace.once`):
+    # the fold over every declared symbol ran 79 times on `mall-admin`.
+    tiers = workspace.once(_origin_tiers)
     enums = _enum_symbols(workspace)
     shapes: list[dict[str, object]] = []
     fields: list[dict[str, object]] = []
@@ -206,7 +208,8 @@ class _Rules:
 
 
 def _origin_tiers(workspace: Workspace) -> dict[str, str]:
-    """Where each declared type's class file was read from, by bare symbol (W25)."""
+    """Where each declared type's class file was read from, by bare symbol (W25).
+    Read through `Workspace.once`, so the map is read and never written into."""
     tiers = {
         str(row["document_id"]): str(row["origin_tier"]) for row in workspace.query("documents")
     }

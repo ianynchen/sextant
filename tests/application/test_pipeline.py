@@ -12,7 +12,9 @@ from sextant.application.ports.artifacts import ReadRequest, group_files_by_read
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.endpoints import SkippedCatalog
+from sextant.application.resolve.engines import annotation_driven, fluent, single_call
 from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.application.resolve.shapes import arguments, expansion
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.facts import Document
@@ -4165,6 +4167,54 @@ def test_the_reachability_table_is_written_by_the_pipeline(
     assert {row[0] for row in rows if row[2] == 0} == roots
     # And the walk really walked: some root reaches something other than itself.
     assert any(row[2] > 0 for row in rows)
+
+
+# The structures the engines fold from the fact tables once per resolve
+# (`Workspace.once`, `docs/performance.md` A), each named by the module that reads it:
+# the same builder object is bound in every module listed, so one counter stands
+# for every reader. A reader that called a builder directly instead of through
+# `once` — or through a builder of its own — would build once per catalog again,
+# and this is the test that says so.
+_FOLDS_ONCE_PER_RESOLVE: dict[str, tuple[tuple[object, str], ...]] = {
+    "call_site_index": ((single_call, "call_site_index"), (fluent, "call_site_index")),
+    "declared_parameters_of": (
+        (single_call, "declared_parameters_of"),
+        (fluent, "declared_parameters_of"),
+    ),
+    "field_declarations": ((arguments, "field_declarations"),),
+    "_annotation_rows": ((annotation_driven, "_annotation_rows"),),
+    "_type_hierarchy": ((annotation_driven, "_type_hierarchy"),),
+    "_origin_tiers": ((expansion, "_origin_tiers"),),
+}
+
+
+def test_every_shared_fold_is_built_once_per_resolve_and_again_after_the_next_load(
+    tmp_path: Path, fixture_facts: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`docs/performance.md` A. Each structure in `_FOLDS_ONCE_PER_RESOLVE` depends on
+    no catalog, and `derive_endpoints` runs every shipped catalog — 25 through
+    `single_call`, 6 through `fluent`, 29 through `annotation_driven` — so a resolve
+    builds each ONCE, whatever the catalog count. The second resolve loads the facts
+    again, which is the one event that makes a builder run again."""
+    builds: dict[str, int] = {}
+    for name, bindings in _FOLDS_ONCE_PER_RESOLVE.items():
+        builder = getattr(bindings[0][0], name)
+
+        def counting(workspace: object, *, name: str = name, builder=builder) -> object:
+            builds[name] = builds.get(name, 0) + 1
+            return builder(workspace)
+
+        for module, attribute in bindings:
+            monkeypatch.setattr(module, attribute, counting)
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        resolve(workspace, fixture_facts, YamlCatalogSource(CATALOGS), set(FIXTURE_CAPABILITIES))
+        assert builds == {name: 1 for name in _FOLDS_ONCE_PER_RESOLVE}
+        resolve(workspace, fixture_facts, YamlCatalogSource(CATALOGS), set(FIXTURE_CAPABILITIES))
+        assert builds == {name: 2 for name in _FOLDS_ONCE_PER_RESOLVE}
+    finally:
+        workspace.close()
 
 
 def test_every_resolve_pass_logs_its_seconds_at_info(

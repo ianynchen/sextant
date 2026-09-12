@@ -2174,6 +2174,70 @@ def test_a_query_over_a_derived_table_is_never_served_from_the_cache(tmp_path: P
     workspace.close()
 
 
+def test_a_value_built_once_is_handed_back_until_the_next_load(tmp_path: Path):
+    """`once` keeps what a builder folded from the fact rows for as long as those rows
+    stand: one build serves every later call — the same object — and the next
+    `load_facts` makes the builder run again over the second tree."""
+    workspace = _loaded_workspace(tmp_path)
+    builds: list[int] = []
+
+    def symbols_by_length(space: DuckDbWorkspace) -> dict[int, list[str]]:
+        builds.append(1)
+        found: dict[int, list[str]] = {}
+        for row in space.query("declared_symbols"):
+            found.setdefault(len(str(row["symbol"])), []).append(str(row["symbol"]))
+        return found
+
+    first = workspace.once(symbols_by_length)
+    assert first == {23: ["s maven p 1 com/acme/A#"]}
+    assert workspace.once(symbols_by_length) is first
+    assert len(builds) == 1, "the second call built the value again"
+
+    _fixture_facts(tmp_path / "second")
+    document = Document(
+        document_id="doc_2",
+        relative_path="com/acme/B.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    symbol = SymbolFact(
+        document_id="doc_2", symbol="s maven p 1 com/acme/B#", construct_kind=ConstructKind.CLASS
+    )
+    write_fact_file(tmp_path / "second" / "com" / "acme" / "B.jsonl", document, [symbol])
+    workspace.load_facts(tmp_path / "second")
+
+    second = workspace.once(symbols_by_length)
+    assert second is not first
+    assert second == {23: ["s maven p 1 com/acme/A#", "s maven p 1 com/acme/B#"]}
+    assert len(builds) == 2
+    workspace.close()
+
+
+def test_a_builder_that_reads_a_derived_table_is_refused(tmp_path: Path):
+    """A value kept until the next load may fold only fact rows: `endpoints` is
+    rewritten by derivations between two calls, so a builder reading it is refused
+    at the read, and nothing is kept for it."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+
+    def endpoint_paths(space: DuckDbWorkspace) -> list[str]:
+        return [str(row["path"]) for row in space.query("endpoints")]
+
+    with pytest.raises(ValueError, match="endpoint_paths.*`endpoints`.*facts alone"):
+        workspace.once(endpoint_paths)
+    assert endpoint_paths not in workspace._folds
+    # The guard is lifted with the builder: an ordinary read of the same table after
+    # the refusal is the read it always was.
+    assert len(workspace.query("endpoints")) == 1
+    workspace.close()
+
+
 _FACT_TABLES = frozenset({"raw_facts", *_FACT_VIEWS})
 
 

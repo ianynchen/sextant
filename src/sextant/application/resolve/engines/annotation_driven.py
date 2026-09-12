@@ -14,9 +14,11 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
+    TypeHierarchy,
     composed_mapping_rows,
     folded_rows,
-    inherited_rows,
+    inherited_rows_over,
+    type_hierarchy,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -1356,14 +1358,9 @@ def _synthetic_annotations(
     fix. `composed_mapping_rows` carries no such scope limit — meta-annotation
     composition is a same-target rewrite, never a cross-type join, so it
     still runs for every catalog regardless of `run_inheritance`."""
-    annotation_rows = [
-        {
-            "target": row["target"],
-            "annotation": row["annotation"],
-            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
-        }
-        for row in workspace.query("annotations")
-    ]
+    # Decoded once per load and shared (`Workspace.once`): every row below is
+    # read from the shared list, and the lists built from it are new lists.
+    annotation_rows = workspace.once(_annotation_rows)
     folded = folded_rows(annotation_rows, _containers(catalog))
     annotation_rows = [*annotation_rows, *folded]
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
@@ -1388,11 +1385,9 @@ def _synthetic_annotations(
     )
     run_inheritance = type_annotation_fqns is not None
     inherited = (
-        inherited_rows(
+        inherited_rows_over(
+            workspace.once(_type_hierarchy),
             [*annotation_rows, *composed],
-            _implementation_rows(workspace),
-            _superclass_rows(workspace),
-            _method_declaration_rows(workspace),
             mapping_fqns,
             prefix_fqns,
         )
@@ -1420,6 +1415,31 @@ def _containers(catalog: Catalog) -> dict[str, str]:
         for entry in catalog.matches["mapping"]["annotations"]
         if entry.get(_CONTAINER) is not None
     }
+
+
+def _annotation_rows(workspace: Workspace) -> list[dict[str, Any]]:
+    """`annotations`'s rows with `args` decoded — the form `folded_rows`,
+    `composed_mapping_rows` and `inherited_rows` read. Built once per load
+    (`Workspace.once`): the decode ran once per catalog, thirty times over the same
+    text on `mall-admin`. Shared, so read and never written into."""
+    return [
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
+        }
+        for row in workspace.query("annotations")
+    ]
+
+
+def _type_hierarchy(workspace: Workspace) -> TypeHierarchy:
+    """The inheritance walk's `TypeHierarchy`, from the three reads below — built
+    once per load (`Workspace.once`) and read by every catalog's walk."""
+    return type_hierarchy(
+        _implementation_rows(workspace),
+        _superclass_rows(workspace),
+        _method_declaration_rows(workspace),
+    )
 
 
 def _implementation_rows(workspace: Workspace) -> list[dict[str, object]]:

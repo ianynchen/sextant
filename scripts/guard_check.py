@@ -206,8 +206,13 @@ GUARDS: dict[str, Guard] = {
                 # name (§3.1) — the class and the interface a codebase declares its
                 # field as. Still one conjunct, still the same guard: the receiver's
                 # type must be one the catalog names, rather than any type at all.
-                find='        if site["owner"] not in owners:',
-                replace="        if False:  # guard disabled by scripts/guard_check.py",
+                # A (`docs/performance.md`) turned the per-site test into a read of
+                # the owners' own positions in the shared `CallSiteIndex`; the guard
+                # is the same, and disabling it reads every position instead.
+                find="            index.positions_by_owner.get(owner, []) for owner in "
+                "dict.fromkeys(owners)",
+                replace="            range(len(call_sites)) for _ in [None]"
+                "  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),

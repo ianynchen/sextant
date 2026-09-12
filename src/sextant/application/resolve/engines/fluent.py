@@ -48,6 +48,7 @@ from sextant.application.resolve.shapes.arguments import (
     _capture_resolved,
     address_argument,
     argument_descriptor,
+    call_site_index,
     carries_expression,
     channel_of,
     declared_parameters_of,
@@ -215,10 +216,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `arguments` arrives decoded from the workspace (`_DECODED_COLUMNS`), as
     # single_call reads it: both the root scan below and the shared
     # `argument_descriptor`'s `call_wrappers` one-hop read the list, never text.
-    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
-    by_caller: dict[str, list[dict[str, Any]]] = {}
-    for site in call_sites:
-        by_caller.setdefault(str(site["caller"]), []).append(site)
+    # Indexed once per load, not once per catalog (`Workspace.once`, `CallSiteIndex`);
+    # the shared lists are read, never written into.
+    by_caller = workspace.once(call_site_index).by_caller
     # The same index keyed by BARE descriptor, for following a `lambda` argument into its
     # own body (`OI-73`): a call argument names the synthetic method without the module
     # coordinates the `caller` column carries, so the two spellings never match directly.
@@ -240,7 +240,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
-    caller_parameters = declared_parameters_of(workspace)
+    caller_parameters = workspace.once(declared_parameters_of)
     metadata: list[dict[str, Any]] = []
     for caller, sites in by_caller.items():
         # Chain reconstruction is within-method only (D00 §5): `by_receiver`

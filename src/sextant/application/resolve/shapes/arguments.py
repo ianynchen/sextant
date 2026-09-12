@@ -372,7 +372,8 @@ class FieldSources:
 class FieldFacts:
     """The workspace facts the field ladder joins through, read ONCE per
     engine run (the `_rules_of`/`_enum_symbols` precedent) rather than once
-    per address argument:
+    per address argument — and the four that depend on no catalog once per
+    load (`FieldDeclarations`):
 
     - `value_expressions` — the expression the `value_annotation` carries on
       one field (rung 1);
@@ -446,6 +447,62 @@ def carries_expression(text: str) -> bool:
     return start != -1 and close in text[start + len(open_) :]
 
 
+@dataclass(frozen=True)
+class FieldDeclarations:
+    """The four `FieldFacts` maps that depend on no catalog — `written_from_parameter`,
+    `constructor_parameters`, `declared_parameters`, `declared_fields`, each as
+    `FieldFacts` documents it — folded once per load (`Workspace.once`) and shared by
+    every `FieldFacts` built after: read, never written into. The two maps that read
+    the catalog's own annotation names stay with `field_facts`."""
+
+    written_from_parameter: dict[str, int]
+    constructor_parameters: dict[str, list[list[dict[str, Any]]]]
+    declared_parameters: dict[str, list[dict[str, Any]]]
+    declared_fields: dict[str, list[str]]
+
+
+def field_declarations(workspace: Workspace) -> FieldDeclarations:
+    """`FieldDeclarations` over `field_writes`, `constructor_declarations`,
+    `method_declarations` and `fields` — the builder `Workspace.once` keys on."""
+    written_from_parameter: dict[str, int] = {}
+    for row in workspace.query("field_writes"):
+        # First write wins, in the query's own (field, from_parameter) order:
+        # two constructors assigning one field from different positions are
+        # two candidate answers, and a deterministic first is the only honest
+        # pick without a fact linking a write to its constructor.
+        written_from_parameter.setdefault(str(row["field"]), int(str(row["from_parameter"])))
+    constructor_parameters: dict[str, list[list[dict[str, Any]]]] = {}
+    declared_parameters: dict[str, list[dict[str, Any]]] = {}
+    for row in workspace.query("constructor_declarations"):
+        enclosing = row["enclosing"]
+        if enclosing is None:
+            continue
+        signature = json.loads(str(row["signature"] or "{}")) or {}
+        parameters = list(signature.get("parameters") or [])
+        constructor_parameters.setdefault(bare_descriptor(str(enclosing)), []).append(parameters)
+        declared_parameters[str(row["symbol"])] = parameters
+    # Methods as well as constructors: a template configured from a
+    # `@Value`-annotated SETTER parameter is the same declaration shape as one
+    # configured from a constructor parameter, and which construct holds it is
+    # the framework's convention rather than a fact about the expression.
+    for row in workspace.query("method_declarations"):
+        signature = cast(dict[str, Any], row["signature"] or {})
+        declared_parameters[str(row["symbol"])] = list(signature.get("parameters") or [])
+    declared_fields: dict[str, list[str]] = {}
+    for row in workspace.query("fields"):
+        descriptor = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(descriptor)
+        if owner is None:
+            continue
+        declared_fields.setdefault(owner, []).append(member_name(descriptor))
+    return FieldDeclarations(
+        written_from_parameter=written_from_parameter,
+        constructor_parameters=constructor_parameters,
+        declared_parameters=declared_parameters,
+        declared_fields=declared_fields,
+    )
+
+
 def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
     """The field ladder's own facts for one catalog, or None where the
     catalog declares no `field_sources` block at all — the gate: a catalog
@@ -480,45 +537,15 @@ def field_facts(workspace: Workspace, catalog: Catalog) -> FieldFacts | None:
             value_expressions.setdefault(target, value)
         else:
             prefixes.setdefault(target, value)
-    written_from_parameter: dict[str, int] = {}
-    for row in workspace.query("field_writes"):
-        # First write wins, in the query's own (field, from_parameter) order:
-        # two constructors assigning one field from different positions are
-        # two candidate answers, and a deterministic first is the only honest
-        # pick without a fact linking a write to its constructor.
-        written_from_parameter.setdefault(str(row["field"]), int(str(row["from_parameter"])))
-    constructor_parameters: dict[str, list[list[dict[str, Any]]]] = {}
-    declared_parameters: dict[str, list[dict[str, Any]]] = {}
-    for row in workspace.query("constructor_declarations"):
-        enclosing = row["enclosing"]
-        if enclosing is None:
-            continue
-        signature = json.loads(str(row["signature"] or "{}")) or {}
-        parameters = list(signature.get("parameters") or [])
-        constructor_parameters.setdefault(bare_descriptor(str(enclosing)), []).append(parameters)
-        declared_parameters[str(row["symbol"])] = parameters
-    # Methods as well as constructors: a template configured from a
-    # `@Value`-annotated SETTER parameter is the same declaration shape as one
-    # configured from a constructor parameter, and which construct holds it is
-    # the framework's convention rather than a fact about the expression.
-    for row in workspace.query("method_declarations"):
-        signature = cast(dict[str, Any], row["signature"] or {})
-        declared_parameters[str(row["symbol"])] = list(signature.get("parameters") or [])
-    declared_fields: dict[str, list[str]] = {}
-    for row in workspace.query("fields"):
-        descriptor = bare_descriptor(str(row["symbol"]))
-        owner = owner_of(descriptor)
-        if owner is None:
-            continue
-        declared_fields.setdefault(owner, []).append(member_name(descriptor))
+    declarations = workspace.once(field_declarations)
     return FieldFacts(
         sources=sources,
         value_expressions=value_expressions,
-        written_from_parameter=written_from_parameter,
-        constructor_parameters=constructor_parameters,
+        written_from_parameter=declarations.written_from_parameter,
+        constructor_parameters=declarations.constructor_parameters,
         prefixes=prefixes,
-        declared_fields=declared_fields,
-        declared_parameters=declared_parameters,
+        declared_fields=declarations.declared_fields,
+        declared_parameters=declarations.declared_parameters,
     )
 
 
@@ -528,7 +555,9 @@ def declared_parameters_of(workspace: Workspace) -> dict[str, tuple[dict[str, An
 
     The same two queries `field_facts` reads for its own `declared_parameters`, split out
     because they are needed by a catalog that declares no `field_sources` block at all —
-    which `field_facts` returns `None` for, and which is most of them.
+    which `field_facts` returns `None` for, and which is most of them. Read through
+    `Workspace.once` — the fold over 22,059 method rows ran 31 times on `mall-admin` — so
+    the map is read and never written into.
     """
     found: dict[str, tuple[dict[str, Any], ...]] = {}
     for row in workspace.query("constructor_declarations"):
@@ -879,6 +908,42 @@ def _all_string_channels(
     if resolved and len(resolved) == len(entries):
         return resolved
     return [*resolved, (None, None, "unresolved")]
+
+
+@dataclass(frozen=True)
+class CallSiteIndex:
+    """`call_sites` indexed the ways the call-reading engines look it up, built once
+    per load (`Workspace.once`) rather than once per catalog: `single_call` ran the
+    same two folds over 24,815 rows for each of its 25 catalogs on `mall-admin`.
+
+    Every list keeps the query's own order (caller, then ordinal — NFR-1's row order
+    is read from it), and every value is shared by every catalog: read, never
+    written into.
+
+    - `by_caller` — each calling method's own sites, the pool `CallFacts.
+      caller_call_sites` searches;
+    - `bare_callers` — each bare descriptor's FULL caller symbols, for following a
+      `lambda` argument into the synthetic method it names (`OI-74`);
+    - `positions_by_owner` — the positions in `call_sites` of every site on one
+      owner type, so a catalog reads the sites of the owners it declares instead of
+      testing every site against them."""
+
+    by_caller: dict[str, list[dict[str, Any]]]
+    bare_callers: dict[str, set[str]]
+    positions_by_owner: dict[str, list[int]]
+
+
+def call_site_index(workspace: Workspace) -> CallSiteIndex:
+    """`CallSiteIndex` over `call_sites` — the builder `Workspace.once` keys on."""
+    by_caller: dict[str, list[dict[str, Any]]] = {}
+    bare_callers: dict[str, set[str]] = {}
+    positions_by_owner: dict[str, list[int]] = {}
+    for position, site in enumerate(workspace.query("call_sites")):
+        caller = str(site["caller"])
+        by_caller.setdefault(caller, []).append(site)
+        bare_callers.setdefault(bare_descriptor(caller), set()).add(caller)
+        positions_by_owner.setdefault(str(site["owner"]), []).append(position)
+    return CallSiteIndex(by_caller, bare_callers, positions_by_owner)
 
 
 def supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:

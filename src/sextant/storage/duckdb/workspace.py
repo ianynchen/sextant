@@ -1,10 +1,14 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar, cast
 
 import duckdb
 
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
+
+T = TypeVar("T")
 
 _SQL_DIR = Path(__file__).parent
 
@@ -1258,6 +1262,12 @@ class DuckDbWorkspace:
         # `_FACT_ONLY` rows already read since the last `load_facts`, keyed by the query
         # name and its bound values in order — the order `?` placeholders bind in.
         self._fact_reads: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        # What `once` built since the last `load_facts`, keyed by the builder (the
+        # port states the contract). The builder running right now, if any, so that
+        # `query` can refuse it a derived table — an answer folded from one would
+        # survive the derivation that changed it, silently, until the next load.
+        self._folds: dict[Callable[[DuckDbWorkspace], object], object] = {}
+        self._folding: Callable[[DuckDbWorkspace], object] | None = None
         # Every derivation that fell back to per-value binding (`derive`), in order —
         # the slow route, counted so a whole pipeline can assert it took none
         # (`tests/application/test_pipeline.py`).
@@ -1325,6 +1335,7 @@ class DuckDbWorkspace:
         # Before the table is touched, not after the load succeeds: a load that fails
         # half-way must not leave the previous facts' rows answering for it.
         self._fact_reads.clear()
+        self._folds.clear()
         self._per_value_retries.clear()
         self._staged_payloads = None
         self._connection.execute("DELETE FROM raw_facts")
@@ -1441,12 +1452,30 @@ class DuckDbWorkspace:
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         if name not in _FACT_ONLY:
+            if self._folding is not None:
+                raise ValueError(
+                    f"{self._folding!r} reads `{name}`, which is not a query over facts "
+                    f"alone: a value `once` keeps until the next load may read only the "
+                    f"fact tables, or a derivation run after it would leave it stale"
+                )
             return self._read(name, params)
         key = (name, *params.values())
         rows = self._fact_reads.get(key)
         if rows is None:
             rows = self._fact_reads[key] = self._read(name, params)
         return rows
+
+    def once(self, build: Callable[["DuckDbWorkspace"], T]) -> T:
+        if build in self._folds:
+            return cast(T, self._folds[build])
+        # Saved and restored rather than set and cleared, so a builder that reads
+        # another fold leaves the outer builder under the guard when the inner returns.
+        outer, self._folding = self._folding, build
+        try:
+            value = self._folds[build] = build(self)
+        finally:
+            self._folding = outer
+        return value
 
     def _read(self, name: str, params: dict[str, object]) -> list[dict[str, object]]:
         cursor = self._connection.execute(
