@@ -212,13 +212,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # None for a catalog declaring no `field_sources` block, which is exactly
     # what keeps such a catalog's rows what they were before 2F.
     field_sources = field_facts(workspace, catalog)
-    # Parsed once, as single_call does, for the same reason: both the root
-    # scan below and the shared `argument_descriptor`'s `call_wrappers`
-    # one-hop need the parsed list, never the raw JSON text.
-    call_sites = [
-        {**site, "arguments": json.loads(str(site["arguments"]))}
-        for site in workspace.query("call_sites")
-    ]
+    # `arguments` arrives decoded from the workspace (`_DECODED_COLUMNS`), as
+    # single_call reads it: both the root scan below and the shared
+    # `argument_descriptor`'s `call_wrappers` one-hop read the list, never text.
+    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)

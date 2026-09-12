@@ -26,7 +26,6 @@ argument read on the class that MAKES the call, never a read of the field
 that merely names it.
 """
 
-import json
 from typing import Any
 
 from sextant.application.ports.workspace import Workspace
@@ -107,13 +106,10 @@ def outer_of(descriptor: str, hosts: dict[str, str]) -> str:
 
 
 def parsed_call_sites(workspace: Workspace) -> list[dict[str, Any]]:
-    """`call_sites`, `arguments` decoded once — the `single_call`/
-    `interface_implementation` precedent, shared here because both styles
-    that read a marker call need the same parsed list."""
-    return [
-        {**site, "arguments": json.loads(str(site["arguments"]))}
-        for site in workspace.query("call_sites")
-    ]
+    """`call_sites`, with `arguments` decoded — which the workspace now does once
+    per load (`_DECODED_COLUMNS`); this used to decode it here for the two styles
+    that read a marker call, and keeps its name so both still read one list."""
+    return workspace.query("call_sites")
 
 
 def calling_classes(call_sites: list[dict[str, Any]], owner: str, name: str) -> set[str]:

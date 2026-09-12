@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import duckdb
@@ -979,6 +980,75 @@ _EXPORT_QUERIES = {
 # the manifest's `contents.tables` is deterministic too.
 _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 
+# The named queries whose answer depends on the loaded facts and nothing else: each
+# reads only `raw_facts` and the fact views (`_FACT_VIEWS`), and no derivation writes
+# any of those — `load_facts` is their one writer, which is why `query` can hand back
+# the rows it already read (`_fact_reads`) until the next load. Measured on
+# `mall-admin` before this existed: the resolve read `method_declarations` 59 times
+# (22,059 rows each, 1.3 million rows built into dicts), `call_sites` 39 times,
+# `declared_symbols_with_documents` 74 times — 11.8s of the 53.7s analyze, for rows
+# that could not have changed between one read and the next. A query that reads a
+# DERIVED table (`endpoints`, `shapes`, `call_edges`, `resolved_config`, ...) is not
+# here and is never cached: the passes that write those tables run between the reads.
+#
+# Rows served from the cache are the SAME list and dict objects every time, so a
+# caller reads them and never writes into them — the one discipline this asks, and
+# `tests/storage/test_workspace.py` pins the cache, its invalidation, and that a
+# derived-table query stays uncached.
+_FACT_ONLY = frozenset(
+    {
+        "documents",
+        "fields",
+        "enum_types",
+        "annotations_of",
+        "annotations",
+        "call_sites",
+        "field_writes",
+        "method_returns",
+        "supertypes",
+        "implementations",
+        "superclasses",
+        "method_visibility",
+        "declared_shapes",
+        "method_symbols",
+        "interface_symbols",
+        "method_declarations",
+        "accessor_declarations",
+        "constructor_declarations",
+        "declared_symbols",
+        "nest_hosts",
+        "interface_declarations",
+        "module_dependencies",
+        "coverage",
+        "config_entries",
+        "library_symbols",
+        "declared_symbols_with_documents",
+        "located_documents",
+        "located_annotations",
+        "located_symbols",
+        "type_parameters",
+        "facts",
+        "selected_documents",
+        "constants",
+    }
+)
+
+# JSON columns a named query hands over DECODED — Python objects, not the JSON text
+# DuckDB returns for a JSON column — decoded once, when the rows are first read, and
+# shared through `_fact_reads` from then on. Only where a measurement puts the parse
+# above everything else: `method_declarations`' two columns were parsed by every
+# annotation-driven catalog in turn — 2.6 million `json.loads` calls on `mall-admin`,
+# the profiler's single largest row, for 22,059 rows whose text never changed — and
+# `call_sites.arguments` was the next million, every call-reading engine decoding all
+# 24,815 sites for itself. Every other JSON column stays text, exactly as its readers
+# expect it; a query joins this map when a profile says its parse is the cost, and its
+# readers stop decoding it the same day. The decoded objects are shared like the rows:
+# read, never written into.
+_DECODED_COLUMNS = {
+    "method_declarations": ("signature", "modifiers"),
+    "call_sites": ("arguments",),
+}
+
 _NAMED_DERIVATIONS = {
     "endpoints": "derive_endpoints.sql",
     "call_endpoints": "derive_call_endpoints.sql",
@@ -1070,6 +1140,46 @@ def _fact_table(view: str) -> str:
     return f"fact_{view}"
 
 
+_JSON = duckdb.sqltype("JSON")
+
+
+def _bound(params: dict[str, object]) -> dict[str, object]:
+    """The parameters as they are handed to DuckDB: a list, tuple or dict travels as
+    ONE JSON value, everything else as itself.
+
+    A statement's `$rows::STRUCT(...)[]` or `$names::VARCHAR[]` cast reads the same
+    either way — DuckDB casts JSON to the declared type exactly as it casts a Python
+    list to it, checked value for value against the Python route (quotes, backslashes,
+    non-ASCII text, NULLs, empty lists, numbers into VARCHAR) — but the cost is not the
+    same. Handed a Python list, the DuckDB client converts it one element at a time and,
+    for each element, tries to `import pandas` to ask whether the element is a DataFrame;
+    with pandas not installed the failed import is retried every time (nothing caches
+    it: `PythonImportCacheItem::LoadModule` in duckdb-python sets the item to null and
+    the next call loads again), and each retry walks `sys.path`. Measured on
+    `mall-admin`: `call_edges_insert` handed 24,591 rows of ten columns and spent 8.9s in
+    the statement, 459,034 of those import attempts; the same rows as one JSON value take
+    60ms. Across a whole analyze the named derivations went from 18.3s to 1.8s of 53.7s
+    (`return_flows_insert` 3.8s to 0.1s, `method_resolution_insert` 2.7s to 0.02s). That
+    holds as long as the client behaves this way with pandas absent; with pandas
+    installed the per-element route is merely slow (1.5s for those rows) rather than
+    pathological, and this is still the faster one.
+
+    The value is typed `JSON` so the statement's own cast is JSON-to-type: bound as plain
+    text the cast would be VARCHAR-to-type, which reads DuckDB's own literal syntax and
+    mangles a backslash-u escape. The JSON-to-STRUCT cast is strict about keys — a row
+    missing a column the struct declares is an error rather than a NULL — and `derive`
+    says what it does about that.
+    """
+    return {
+        name: (
+            duckdb.Value(json.dumps(value), _JSON)
+            if isinstance(value, (list, tuple, dict))
+            else value
+        )
+        for name, value in params.items()
+    }
+
+
 class DuckDbWorkspace:
     """The Workspace port over DuckDB. Owns SQL and D01; knows nothing about
     frameworks, languages or protocols (ARCHITECTURE §10)."""
@@ -1087,6 +1197,9 @@ class DuckDbWorkspace:
         # is DuckDB's own parse of it, never a copy kept beside it.
         self._fact_view_definitions = self._fact_view_definitions_from_catalog()
         self._reuse_or_drop_materialized_facts()
+        # `_FACT_ONLY` rows already read since the last `load_facts`, keyed by the query
+        # name and its bound values in order — the order `?` placeholders bind in.
+        self._fact_reads: dict[tuple[object, ...], list[dict[str, object]]] = {}
 
     def _add_columns_the_schema_has_gained(self, schema: str) -> None:
         """Adds any column `schema.sql` declares that an EXISTING workspace file does
@@ -1138,6 +1251,9 @@ class DuckDbWorkspace:
         """One bulk statement over the whole tree. Per-row insertion is a
         defect under NFR-11 — the difference is orders of magnitude."""
         pattern = str(fact_root / "**" / "*.jsonl")
+        # Before the table is touched, not after the load succeeds: a load that fails
+        # half-way must not leave the previous facts' rows answering for it.
+        self._fact_reads.clear()
         self._connection.execute("DELETE FROM raw_facts")
         self._connection.execute(
             """
@@ -1226,13 +1342,43 @@ class DuckDbWorkspace:
 
     def derive(self, name: str, **params: object) -> None:
         sql = (_SQL_DIR / _NAMED_DERIVATIONS[name]).read_text(encoding="utf-8")
-        self._connection.execute(sql, params or None)
+        try:
+            self._connection.execute(sql, _bound(params) or None)
+        except duckdb.ConversionException:
+            # The one thing the JSON route answers differently (`_bound`): a struct
+            # key the statement declares and a bound row does not carry is NULL by
+            # the Python route and a conversion error by the JSON one. That contract
+            # — a row states what differs, the statement's own type supplies the rest
+            # — is what the hand-built rows in `tests/storage/test_workspace.py` and
+            # `tests/application/test_effective_annotations.py` pin, so it is kept
+            # by handing the statement the values the way it always took them. A
+            # value DuckDB genuinely cannot convert fails this second run too, with
+            # the statement's own error; nothing is masked. Every production row
+            # builder fills every key (`_mapping_annotation` and the insert passes),
+            # which is what keeps this branch a test-only path — it stops being one
+            # the day a builder omits a key, and then that list pays the slow route.
+            self._connection.execute(sql, params or None)
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
-        sql = _NAMED_QUERIES[name]
-        cursor = self._connection.execute(sql, list(params.values()) or None)
+        if name not in _FACT_ONLY:
+            return self._read(name, params)
+        key = (name, *params.values())
+        rows = self._fact_reads.get(key)
+        if rows is None:
+            rows = self._fact_reads[key] = self._read(name, params)
+        return rows
+
+    def _read(self, name: str, params: dict[str, object]) -> list[dict[str, object]]:
+        cursor = self._connection.execute(
+            _NAMED_QUERIES[name], list(_bound(params).values()) or None
+        )
         columns = [column[0] for column in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        for column in _DECODED_COLUMNS.get(name, ()):
+            for row in rows:
+                text = row[column]
+                row[column] = None if text is None else json.loads(str(text))
+        return rows
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         graph = destination / "graph"

@@ -70,7 +70,7 @@ bounded by the configuration it measured.
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -431,7 +431,7 @@ def _members(workspace: Workspace) -> dict[str, dict[_Selector, str]]:
         if enclosing is None:
             continue
         symbol = str(row["symbol"])
-        signature = json.loads(str(row["signature"])) if row["signature"] is not None else {}
+        signature = cast(dict[str, Any], row["signature"] or {})
         # `erased_symbol` — the DESCRIPTOR's own answer — not `type.symbol`, which
         # is the signature's where there is one and so reads a bare type VARIABLE
         # for a generic parameter. This selector is matched against a
