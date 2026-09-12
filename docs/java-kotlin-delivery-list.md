@@ -214,6 +214,16 @@ annotation. And no member of the closed `Protocol` set fits a workflow engine; a
 is a schema decision with its own precedent (`RSOCKET`, stated in `closed_sets.py`). Three
 engine words and a schema member is a spec, not a catalog.
 
+**Also moved to spec work, 2026-09-12 — measured off the direct list:** `G-44`'s SQS
+quarter. `SqsTemplate.receive` / `receiveMany` / `receiveAsync` / `receiveManyAsync`
+(spring-cloud-aws-sqs 3.1.1, `scripts/probes/w59_template_receive_halves.md`) all take
+`Consumer<SqsReceiveOptions>` at argument 0, and the queue is named inside that lambda —
+`opts.queue("orders")` — not at any argument `single_call` can read. That is the
+receiver-chain form, Category B of the register (§4), the same overload-discrimination
+work `G-37`/`G-30`/`GAP-1b` wait on — not a fixture-and-test item like the other three
+quarters. `RabbitTemplate`, `JmsTemplate` and `KafkaTemplate`'s receive halves already
+derive (Tasks 1-3, commits `371cfaf`, `760c884`, `7771be7`).
+
 **Named 2026-09-12 when the Pub/Sub cell's last blocker closed:** `pubsub-channel-adapter` —
 `PubSubInboundChannelAdapter` + `@ServiceActivator`, the one Java row COVERAGE §5.11 still
 tiers `B`. It is the Pub/Sub instance of §5.12's "the DESTINATION behind a channel" boundary:
@@ -312,7 +322,7 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 
 | # | issue |
 |---|---|
-| `G-44` | the receive half is unread. `RabbitTemplate` 1 of 88, `JmsTemplate` 1 of 49. The ratio overstates it — most of the remainder is configuration — but `receive()` is a real inbound boundary and none of it derives |
+| `G-44` | three of four halves derive (Tasks 1–3, commits `371cfaf`, `760c884`, `7771be7`): `RabbitTemplate`'s nine queue-naming overloads, `JmsTemplate`'s four, `KafkaTemplate`'s one. SQS's needs the lambda-body read — `SqsTemplate.receive*` buries the queue inside `Consumer<SqsReceiveOptions>`, Category B, moved to spec work (§4) |
 
 ### AWS SQS — NOT DELIVERED
 
