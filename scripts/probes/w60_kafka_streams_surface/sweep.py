@@ -211,7 +211,12 @@ def main() -> None:
         print("| # | method | descriptor | topic argument |")
         print("|---|---|---|---|")
         if not methods:
-            print(f"| — | *(no `{_NAME_PATTERN}` method found)* | — | — |")
+            # `_NAME_PATTERN` itself contains `|`, and inside a table ROW every
+            # unescaped `|` divides a cell — even inside backticks
+            # (`tests/architecture/test_markdown_tables.py`'s own rule). `\|` is the
+            # only thing that protects one.
+            escaped_pattern = _NAME_PATTERN.replace("|", r"\|")
+            print(f"| — | *(no `{escaped_pattern}` method found)* | — | — |")
             print()
             continue
         for n, (name, descriptor) in enumerate(methods, start=1):

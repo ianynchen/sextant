@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**60 of 75 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**62 of 77 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -737,6 +737,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
+| `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |
+| `kafka-streams-topology` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
@@ -2905,6 +2907,7 @@ Task 5):**
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)`, **with or without a `ConsumerRebalanceListener`** | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and resolves per topic too since **2O Task 13**, which taught `all_strings` to read the array slot's own `elements` (capability 9.15's `{kind: array, elements: […]}`) — it degraded to one unresolved row before that. An array the extractor cannot read end to end never reaches the `array` kind and still degrades that way | `registration_call` | ✅ shipped |
 | Java | **`KafkaProducer.send(ProducerRecord[, Callback])`** | **topic is a constructor argument of `ProducerRecord`**, not of `send`; the callback overload is a trailing argument and reads the same position (`A-M6`) | `fluent_chain` | ✅ shipped |
 | Java | `KafkaTemplate.send(Message)` with topic in a header | topic read from a `setHeader(KafkaHeaders.TOPIC, …)` value-guarded step | `fluent_chain` | ✅ shipped |
+| Java | **Kafka Streams** — `StreamsBuilder.stream/table/globalTable`, `KStream.to`, `Topology.addSource`/`addSink` (`G-31`) | split into three catalogs by owner — `kafka-streams.yml` (`StreamsBuilder`), `kafka-streams-sink.yml` (`KStream`), `kafka-streams-topology.yml` (`Topology`); the three are unrelated types with disjoint method sets, not one library reachable under more than one name (§3.1), the same reason `spring-websocket-client.yml`/`spring-stomp-client.yml` split | `call_site` | **supported** (3.6.2, w60): DSL sources (`stream`/`table`/`globalTable`, `Collection`/`Pattern` overloads included) and sinks (`KStream.to`), Processor API sink (`Topology.addSink`); `Topology.addSource`'s `String...` topics MEASURED to derive one inbound row per topic (w60 Step 4 — `single_call`'s `channel_arg` already reads an array argument element-wise, the `spring-websocket.yml` `addHandler` precedent) and read across its four `AutoOffsetReset`/`TimestampExtractor` prefixed forms; `to(TopicNameExtractor)` and the deprecated `through` are stated outside rather than read. Pinned by `tests/e2e/test_kafka_delivered.py` |
 | Java | **Spring Cloud Stream** functional `Consumer<T>`/`Supplier<T>` beans | topic in `spring.cloud.stream.bindings.<bean>-in-0.destination`; gated on the build declaring `org.springframework.cloud:spring-cloud-stream`, and **any** method returning one of the three function interfaces is a candidate — see the boundary note below | `config_join` | ✅ shipped |
 | Java | **SmallRye** `@Incoming("orders")` / `@Outgoing` | channel in code, topic in `application.properties` | `config_join` | **B** — rides 2F's `config_join` once catalogued |
 | Java | Alpakka / Pekko Connectors `Consumer.plainSource(s, Subscriptions.topics("t"))` | — | `registration_call` | B |
@@ -3437,14 +3440,14 @@ the clause it measures — and the SIXTH is the live requirement.
 ### 5.21 Out of scope for v1 (Q3)
 
 Q3 ruled that v1 builds **the five asymmetries only** — the missing half of a surface we
-already claim — and that everything else is a stated boundary. These are the four the gap
-analysis named, each `unsupported` with what it would take, so a reader meets them here
-rather than inferring them from silence.
+already claim — and that everything else is a stated boundary. These are the three still
+open of the four the gap analysis named — Kafka Streams shipped and moved to §5.8 — each
+`unsupported` with what it would take, so a reader meets them here rather than inferring
+them from silence.
 
 | Surface | What it is | Committed at | Support |
 |---|---|---|---|
 | **Spring Cloud Gateway** | Routes declared in a `RouteLocator` builder chain or in `spring.cloud.gateway.routes` configuration | `G-30`, and the design calls it *"the largest single hole"* | **unsupported.** Both halves are shapes this analysis has vocabulary for — a builder chain is `fluent`'s, a configuration list is `config_join`'s — and neither is catalogued. A gateway module publishes no routes at all, which for a gateway is its whole reason to exist |
-| **Kafka Streams** | `StreamsBuilder.stream(...)`/`.to(...)` topologies | `G-31` | **supported** (`kafka-streams.yml`, 3.6.2, w60): DSL sources (`stream`/`table`/`globalTable`, `Collection`/`Pattern` overloads included) and sinks (`KStream.to`), Processor API sink (`Topology.addSink`); `Topology.addSource`'s `String...` topics MEASURED to derive one inbound row per topic (w60 Step 4 — `single_call`'s `channel_arg` already reads an array argument element-wise, the `spring-websocket.yml` `addHandler` precedent) and read across its four `AutoOffsetReset`/`TimestampExtractor` prefixed forms; `to(TopicNameExtractor)` and the deprecated `through` are stated outside rather than read. Pinned by `tests/e2e/test_kafka_delivered.py` |
 | **Programmatic Jakarta WebSocket registration** | `ServerEndpointConfig.Builder.create(Class, "/path")` rather than `@ServerEndpoint` | `G-34` | **unsupported.** `jakarta-websocket.yml` reads the annotation only. The programmatic path is a `single_call` on a builder, and W46 read the CLIENT direction of this same library without touching it |
 | **`@DgsEntityFetcher`** | Netflix DGS federation entity resolution | `G-40` | **unsupported.** `netflix-dgs.yml` reads `@DgsQuery`, `@DgsMutation`, `@DgsData` and `@DgsSubscription`; the federation annotation names an entity type rather than a schema field, which is a different identity this catalog has no rule for |
 

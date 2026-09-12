@@ -315,7 +315,7 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 
 | # | issue |
 |---|---|
-| `G-31` | **Kafka Streams — catalog ships** (`kafka-streams.yml`, w60): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
+| `G-31` | **Kafka Streams — three catalogs ship** (`kafka-streams.yml`, `kafka-streams-sink.yml`, `kafka-streams-topology.yml`, w60, split by owner per D02 §3.1): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
 | — | batch listener generics: `@KafkaListener(batch = true)` takes `List<Foo>`; the payload publishes as the list, not the element |
 
 ### JMS / AMQP — NOT DELIVERED

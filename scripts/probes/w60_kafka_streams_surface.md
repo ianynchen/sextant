@@ -88,7 +88,7 @@ two and ABORTS when they disagree.
 
 | # | method | descriptor | topic argument |
 |---|---|---|---|
-| — | *(no `stream|table|globalTable|to|through|addSource|addSink` method found)* | — | — |
+| — | *(no `stream\|table\|globalTable\|to\|through\|addSource\|addSink` method found)* | — | — |
 
 **`org.apache.kafka.streams.Topology`** (org.apache.kafka:kafka-streams:3.6.2)
 
@@ -121,9 +121,10 @@ two and ABORTS when they disagree.
 
 `StreamsBuilder.stream/table/globalTable` and `KStream.to(String[, Produced])` carry
 their topic at argument 0, exactly as this column reports — `kafka-streams.yml`
-reads all of them at `channel_arg: 0`. `KStream.to(TopicNameExtractor[, Produced])`
-carries no topic-shaped argument at all (row 5/6): the catalog states this stated,
-never declared, and Step 6's declining test pins it.
+reads the first at `channel_arg: 0` and `kafka-streams-sink.yml` the second, the same
+position. `KStream.to(TopicNameExtractor[, Produced])` carries no topic-shaped
+argument at all (row 5/6): `kafka-streams-sink.yml` states it as outside and
+declares no row, and Step 6's declining test pins it.
 
 `Topology.addSink` (rows 15-22) and the four `addSource(String, String...)`-shaped
 rows (1, 3, 5, 7) both open with a `String` that this column reads as argument 0's
@@ -131,17 +132,19 @@ rows (1, 3, 5, 7) both open with a `String` that this column reads as argument 0
 topic; the real topic is the TRAILING `String...`/`Pattern` argument, one position
 later than this column's naive first-match answer (`AutoOffsetReset`/
 `TimestampExtractor` prefixes push it one and two further still, exactly as rows
-3-8 and 11-14 show). `kafka-streams.yml` reads `addSink` at `channel_arg: 1` and the
-four varargs `addSource` overloads at the position their OWN row lists (1, 2, 2 and
-3 respectively) — never at this column's raw answer — stated here so the disagreement
-between this table and the shipped catalog is not a silent one. The `Pattern`-taking
-`addSource` siblings (rows 2, 4, 6, 8) and the `Deserializer`-taking ones (rows
-9-14) are read by NEITHER this catalog's `matches.methods` nor any `channel_via`
-form; `kafka-streams.yml`'s own comment records why and that the gap is left open
-for later work, not fabricated around.
+3-8 and 11-14 show). `kafka-streams-topology.yml` reads `addSink` at
+`channel_arg: 1` and the four varargs `addSource` overloads at the position their
+OWN row lists (1, 2, 2 and 3 respectively) — never at this column's raw answer —
+stated here so the disagreement between this table and the shipped catalog is not a
+silent one. The `Pattern`-taking `addSource` siblings (rows 2, 4, 6, 8) and the
+`Deserializer`-taking ones (rows 9-14) are read by NEITHER this catalog's
+`matches.methods` nor any `channel_via` form; `kafka-streams-topology.yml`'s own
+comment records why and that the gap is left open for later work, not fabricated
+around.
 
 `through` (rows 1-2) is deprecated, a sink AND a source on one topic in one call, and
-is declared `slice.outside` rather than read as either half. `KTable` declares none
-of the seven matched names at all — measured here as the empty table above — which is
-why it is named in neither `kafka-streams.yml`'s `matches.owner` nor this probe's
+is declared `slice.outside` on `kafka-streams-sink.yml` rather than read as either
+half. `KTable` declares none of the seven matched names at all — measured here as
+the empty table above — which is
+why it is named in none of the three catalogs' `matches.owner` nor this probe's
 `w19_catalog_surface` Surface list.

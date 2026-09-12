@@ -1,8 +1,18 @@
 id: kafka-streams
-displayName: Apache Kafka Streams
+displayName: Apache Kafka Streams (topology sources)
 style: single_call
 protocol: kafka
 direction: inbound
+
+# Split by owner, one catalog each — `kafka-clients`/`kafka-consumer` and
+# `micronaut-http`/`micronaut-http-client`'s own precedent, applied for the same
+# reason: `StreamsBuilder` and `KStream` declare DISJOINT method sets — neither
+# declares the other's — rather than being one library reachable under more than one
+# name (D02 §3.1's own definition of a `matches.owner` LIST — an interface and the
+# class implementing it, e.g. `JmsTemplate`/`JmsOperations`). This file reads
+# `StreamsBuilder` only. `KStream.to` is `kafka-streams-sink.yml`; `Topology.
+# addSource`/`addSink` is `kafka-streams-topology.yml`. All are detected on the same
+# artifact and measured against the same probe.
 detect:
   coordinates: ["org.apache.kafka:kafka-streams"]
 measured:
@@ -10,29 +20,12 @@ measured:
       identity: reported, by: scripts/probes/w60_kafka_streams_surface.md }
 requires: [call_site, string_constants]
 matches:
-  # `KTable` is NOT here: `customers.toStream().to(...)` calls `to` on the `KStream`
-  # `toStream()` returns, so the call site's own owner is `KStream`, already named
-  # below — verified against the fixture (w60 Step 3/5), never assumed.
-  owner:
-    - org.apache.kafka.streams.StreamsBuilder
-    - org.apache.kafka.streams.kstream.KStream
-    - org.apache.kafka.streams.Topology
+  owner: org.apache.kafka.streams.StreamsBuilder
   methods:
     # SOURCES — the topic at argument 0. MEASURED kafka-streams 3.6.2 (w60).
-    #
-    # EACH ROW BELOW NAMES ITS OWN `owner`, narrower than the four-owner list above.
-    # `StreamsBuilder`, `KStream`, `KTable` and `Topology` are four UNRELATED types
-    # with disjoint method sets — not an interface/impl pair sharing one surface,
-    # `JmsTemplate`/`JmsOperations`'s shape — so a row with no owner of its own would
-    # be cross-checked against all four by `cp10_catalog_descriptors` and fail
-    # "declared" on the three that do not have it. The catalog-wide `owner:` list
-    # above is still what `single_call`'s own call-site filter reads (D02 §2: one
-    # flat set, checked once per call regardless of which row eventually matches);
-    # the per-row `owner` here narrows only the DESCRIPTOR-vs-bytecode measurement.
-    - { name: stream, owner: org.apache.kafka.streams.StreamsBuilder, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
-    - { name: stream, owner: org.apache.kafka.streams.StreamsBuilder, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
+    - { name: stream, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
+    - { name: stream, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;", channel_arg: 0 }
     - name: stream
-      owner: org.apache.kafka.streams.StreamsBuilder
       arity: 1
       descriptor: "(Ljava/util/Collection;)Lorg/apache/kafka/streams/kstream/KStream;"
       channel_arg: 0
@@ -41,7 +34,6 @@ matches:
         - { owner: java.util.Arrays, method: asList, arg: all_strings }
         - { owner: java.util.Collections, method: singletonList, arg: 0 }
     - name: stream
-      owner: org.apache.kafka.streams.StreamsBuilder
       arity: 2
       descriptor: "(Ljava/util/Collection;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;"
       channel_arg: 0
@@ -50,69 +42,21 @@ matches:
         - { owner: java.util.Arrays, method: asList, arg: all_strings }
         - { owner: java.util.Collections, method: singletonList, arg: 0 }
     - name: stream
-      owner: org.apache.kafka.streams.StreamsBuilder
       arity: 1
       descriptor: "(Ljava/util/regex/Pattern;)Lorg/apache/kafka/streams/kstream/KStream;"
       channel_arg: 0
       channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }]
     - name: stream
-      owner: org.apache.kafka.streams.StreamsBuilder
       arity: 2
       descriptor: "(Ljava/util/regex/Pattern;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KStream;"
       channel_arg: 0
       channel_via: [{ owner: java.util.regex.Pattern, method: compile, arg: 0 }]
-    - { name: table, owner: org.apache.kafka.streams.StreamsBuilder, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
-    - { name: table, owner: org.apache.kafka.streams.StreamsBuilder, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
-    - { name: table, owner: org.apache.kafka.streams.StreamsBuilder, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
-    - { name: table, owner: org.apache.kafka.streams.StreamsBuilder, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
-    - { name: globalTable, owner: org.apache.kafka.streams.StreamsBuilder, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
-    - { name: globalTable, owner: org.apache.kafka.streams.StreamsBuilder, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
-    - { name: globalTable, owner: org.apache.kafka.streams.StreamsBuilder, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
-    - { name: globalTable, owner: org.apache.kafka.streams.StreamsBuilder, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
-    # SINKS — `KStream.to(String[, Produced])`. `to(TopicNameExtractor…)` chooses the topic
-    # per record at runtime and derives nothing; `through` is deprecated and is a sink AND
-    # a source on one topic, so it is outside rather than half-read.
-    - { name: to, owner: org.apache.kafka.streams.kstream.KStream, arity: 1, descriptor: "(Ljava/lang/String;)V", channel_arg: 0, direction: outbound }
-    - { name: to, owner: org.apache.kafka.streams.kstream.KStream, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Produced;)V", channel_arg: 0, direction: outbound }
-    # PROCESSOR API. `addSink(name, topic, parents…)` — the topic at argument 1.
-    - { name: addSink, owner: org.apache.kafka.streams.Topology, arity: 3, descriptor: "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 1, direction: outbound }
-    # MEASURED (w60, Step 4): `addSource(name, topics…)`'s trailing `String...` compiles
-    # to ONE `array`-kind argument (extractor capability 9.15), and `single_call`
-    # already reads a `channel_arg` array element-wise without any `channel_via` —
-    # `channels_of` (`spring-websocket.yml`'s `addHandler(handler, String... paths)`
-    # is the shipped precedent) — so this derives one inbound row PER TOPIC, exactly
-    # the shape `subscribe(Collection<String>)` derives for a real collection. Four
-    # overloads carry the array in this shape; the `AutoOffsetReset`/
-    # `TimestampExtractor` prefixes push the name and the array one and two
-    # positions later. The `Pattern`-taking and `Deserializer`-taking siblings are
-    # NOT declared — same NAME, so `w19_catalog_surface`'s coverage still marks
-    # `addSource` read, and they are recorded here rather than silently dropped:
-    # `addSource(String, Pattern)` and its `AutoOffsetReset`/`TimestampExtractor`
-    # twins take a topic PATTERN, the same shape `stream(Pattern)` already reads —
-    # unclaimed by this row; `addSource(String, Deserializer, Deserializer,
-    # String...)` and its prefixed twins carry the same trailing array two
-    # positions later still — unclaimed too. Both are read-or-declare gaps a later
-    # task can close, not a fabrication risk today.
-    - { name: addSource, owner: org.apache.kafka.streams.Topology, arity: 2, descriptor: "(Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 1 }
-    - { name: addSource, owner: org.apache.kafka.streams.Topology, arity: 3, descriptor: "(Lorg/apache/kafka/streams/Topology$AutoOffsetReset;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 2 }
-    - { name: addSource, owner: org.apache.kafka.streams.Topology, arity: 3, descriptor: "(Lorg/apache/kafka/streams/processor/TimestampExtractor;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 2 }
-    - { name: addSource, owner: org.apache.kafka.streams.Topology, arity: 4, descriptor: "(Lorg/apache/kafka/streams/Topology$AutoOffsetReset;Lorg/apache/kafka/streams/processor/TimestampExtractor;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;", channel_arg: 3 }
+    - { name: table, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: table, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/KTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 1, descriptor: "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
+    - { name: globalTable, arity: 3, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Consumed;Lorg/apache/kafka/streams/kstream/Materialized;)Lorg/apache/kafka/streams/kstream/GlobalKTable;", channel_arg: 0 }
 shape_model: json
-slice:
-  outside:
-    - owner: org.apache.kafka.streams.kstream.KStream
-      method_names: [through]
-      why: >
-        `through(String[, Produced])` is deprecated and is a sink and a source on ONE
-        topic in one call; a row of either direction alone would be half of it.
-        `repartition` is NOT named here: it takes no topic argument at all (Streams
-        generates one), so it never reaches w60's "name at argument 0" candidate list
-        and a slice entry for it would be stale — measured, not assumed
-        (`scripts/probes/w19_catalog_surface.md`).
-    - owner: org.apache.kafka.streams.Topology
-      method_names: [addProcessor, connectProcessorAndStateStores]
-      why: >
-        Both take a processor/store NAME at argument 0, exactly like `addSource` and
-        `addSink`, but neither one names a TOPIC anywhere in its signature — a
-        processor name and the state-store names it connects to are not wire
-        addresses, and a row here would publish one as a Kafka topic.

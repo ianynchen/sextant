@@ -240,11 +240,13 @@ SURFACES = (
         "2.25.31",
         "G-43",
     ),
-    # `G-31` (w60). `KTable` is NOT enumerated: it names no method in
-    # `kafka-streams.yml`'s own `matches.methods` at all — `KStream.to()`, not
-    # `KTable`, is the call site `customers.toStream().to(...)` reaches — so it is
-    # not in that catalog's `matches.owner` either, and a slice measures a claimed
-    # surface, not an owner mentioned in passing.
+    # `G-31` (w60). Split into three catalogs, one scalar owner each
+    # (`kafka-streams.yml`'s own header comment carries the full rationale).
+    # `KTable` is NOT enumerated: it names no method in any of the three
+    # `matches.methods` lists at all — `KStream.to()`, not `KTable`, is the call
+    # site `customers.toStream().to(...)` reaches — so it is not in any of the
+    # three `matches.owner` either, and a slice measures a claimed surface, not
+    # an owner mentioned in passing.
     Surface(
         "kafka-streams",
         "org.apache.kafka.streams.StreamsBuilder",
@@ -253,14 +255,14 @@ SURFACES = (
         "G-31",
     ),
     Surface(
-        "kafka-streams",
+        "kafka-streams-sink",
         "org.apache.kafka.streams.kstream.KStream",
         "org.apache.kafka:kafka-streams",
         "3.6.2",
         "G-31",
     ),
     Surface(
-        "kafka-streams",
+        "kafka-streams-topology",
         "org.apache.kafka.streams.Topology",
         "org.apache.kafka:kafka-streams",
         "3.6.2",

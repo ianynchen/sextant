@@ -1,0 +1,35 @@
+id: kafka-streams-sink
+displayName: Apache Kafka Streams (KStream sink)
+style: single_call
+protocol: kafka
+direction: outbound
+
+# One of three catalogs split by owner (see `kafka-streams.yml`'s own comment for the
+# full rationale). This file reads `KStream.to` only — `StreamsBuilder`'s sources are
+# `kafka-streams.yml`; `Topology`'s Processor API is `kafka-streams-topology.yml`.
+detect:
+  coordinates: ["org.apache.kafka:kafka-streams"]
+measured:
+  - { artifact: org.apache.kafka:kafka-streams, versions: ["3.6.2"],
+      identity: reported, by: scripts/probes/w60_kafka_streams_surface.md }
+requires: [call_site, string_constants]
+matches:
+  owner: org.apache.kafka.streams.kstream.KStream
+  methods:
+    # `KStream.to(String[, Produced])`. `to(TopicNameExtractor…)` chooses the topic
+    # per record at runtime and derives nothing — stated, not declared (Step 6's
+    # declining test pins it). MEASURED kafka-streams 3.6.2 (w60).
+    - { name: to, arity: 1, descriptor: "(Ljava/lang/String;)V", channel_arg: 0 }
+    - { name: to, arity: 2, descriptor: "(Ljava/lang/String;Lorg/apache/kafka/streams/kstream/Produced;)V", channel_arg: 0 }
+shape_model: json
+slice:
+  outside:
+    - owner: org.apache.kafka.streams.kstream.KStream
+      method_names: [through]
+      why: >
+        `through(String[, Produced])` is deprecated and is a sink and a source on ONE
+        topic in one call; a row of either direction alone would be half of it.
+        `repartition` is NOT named here: it takes no topic argument at all (Streams
+        generates one), so it never reaches w60's "name at argument 0" candidate list
+        and a slice entry for it would be stale — measured, not assumed
+        (`scripts/probes/w19_catalog_surface.md`).

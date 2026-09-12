@@ -8450,9 +8450,11 @@ _CLAIMED_ARITIES = [
     # near-miss this table exists for: same name, same arity as `to(String)`, and
     # only the descriptor tells them apart. The extractor picks the topic per
     # RECORD at runtime, so there is no string constant here to publish; a row
-    # would have to fabricate one out of the class name.
+    # would have to fabricate one out of the class name. `to` is `kafka-streams-
+    # sink.yml`'s own row (the three-owner `kafka-streams` catalog was split by
+    # owner — see that file's header comment).
     pytest.param(
-        "kafka-streams",
+        "kafka-streams-sink",
         "org/apache/kafka/streams/kstream/KStream#",
         "to",
         "(Ljava/lang/String;)V",
@@ -8472,7 +8474,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("javax-jms")
 @pytest.mark.declines("kafka-clients")
 @pytest.mark.declines("kafka-consumer")
-@pytest.mark.declines("kafka-streams")
+@pytest.mark.declines("kafka-streams-sink")
 @pytest.mark.declines("spring-pubsub")
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")
@@ -8531,6 +8533,72 @@ def test_the_declared_overload_of_a_claimed_arity_still_derives(
     workspace.close()
 
     assert len(rows) == 1, f"{catalog_id}: {name} no longer derives its own declared overload"
+
+
+# `kafka-streams.yml` and `kafka-streams-topology.yml` (`G-31`, w60) have no
+# claimed-arity near-miss available: every `stream`/`table`/`globalTable` overload
+# at every arity `StreamsBuilder` declares is already read, so there is no
+# undeclared same-name-same-arity sibling to collide with. Their near-miss is the
+# OTHER conjunct `single_call` checks — the receiver's OWN type — the
+# `spring-rabbit-template`/`HomeGrownTemplate` precedent above, applied here.
+@pytest.mark.declines("kafka-streams")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_stream_call_on_an_owner_that_is_not_streamsbuilder_derives_nothing(
+    tmp_path: Path,
+):
+    """§10 near-miss, negating the catalog's `owner` conjunct while satisfying
+    every other one: the method name, arity and descriptor are exactly
+    `StreamsBuilder.stream(String)`'s own, and only the receiver's type differs.
+
+    `stream` is not a name Kafka Streams owns exclusively — any application
+    helper class is free to declare one — and a row derived here would publish
+    an unrelated call's argument as a Kafka topic."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/streams/HomeGrownBuilder#",
+                "stream",
+                "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KStream;",
+                [CallArgument(kind="string", value="not-a-real-topic")],
+            )
+        ],
+        "kafka-streams",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.declines("kafka-streams-topology")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_an_addsink_call_on_an_owner_that_is_not_topology_derives_nothing(
+    tmp_path: Path,
+):
+    """§10 near-miss for `kafka-streams-topology.yml`, the same shape as the
+    `StreamsBuilder` one above: `addSink`'s name, arity and descriptor are
+    exactly `Topology`'s own, and only the receiver's type differs."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/streams/HomeGrownTopology#",
+                "addSink",
+                "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;",
+                [
+                    CallArgument(kind="string", value="snk"),
+                    CallArgument(kind="string", value="not-a-real-topic"),
+                    CallArgument(kind="array", elements=[]),
+                ],
+            )
+        ],
+        "kafka-streams-topology",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 @pytest.mark.declines("spring-ws-template")

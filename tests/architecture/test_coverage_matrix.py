@@ -44,9 +44,11 @@ _MUST_BE_ENUMERATED = {
     "extension functions": "§5.13",
     "$default": "§5.13",
     "DefaultImpls": "§5.13",
-    # Q3 — the four surfaces ruled out of v1.
+    # Q3 — the four surfaces ruled out of v1. `Kafka Streams` shipped (`G-31`, w60)
+    # and moved to §5.8, so its row is there now rather than in §5.21 — `_names`
+    # matches anywhere in the document, so this still enforces a support level.
     "Spring Cloud Gateway": "§5.21",
-    "Kafka Streams": "§5.21",
+    "Kafka Streams": "§5.8",
     "Programmatic Jakarta WebSocket registration": "§5.21",
     "@DgsEntityFetcher": "§5.21",
     # F1 — the five attributes deliberately not read.
