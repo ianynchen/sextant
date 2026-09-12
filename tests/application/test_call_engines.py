@@ -9123,3 +9123,38 @@ def test_a_call_differing_only_in_return_type_still_matches(
         f"the Spring Kafka {label} call must derive its topic; the return type is not "
         f"part of method identity (JLS 8.4.2)"
     )
+
+
+@pytest.mark.declines("jakarta-websocket-programmatic")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_programmatic_registration_on_somebody_elses_builder_derives_nothing(tmp_path: Path):
+    """§10 near-miss for `G-34`'s catalog, measuring the OWNER conjunct alone.
+
+    `create(Class, String)` is an ordinary factory signature — an application's own
+    builder with a `create` taking a class and a string is not exotic — and every other
+    conjunct holds here: name, erased descriptor, a real path in the position the catalog
+    reads. Only the type the call is made ON differs. Without the owner conjunct that call
+    would publish a WebSocket endpoint at `resolved`/`compiler`.
+    """
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/app/WsConfig#getEndpointConfigs().",
+        target=CallTarget(
+            owner="com/acme/app/OwnEndpointBuilder#",
+            name="create",
+            descriptor="(Ljava/lang/Class;Ljava/lang/String;)Ljakarta/websocket/server/ServerEndpointConfig$Builder;",
+        ),
+        invoke_kind="static",
+        ordinal=0,
+        receiver=None,
+        result=1,
+        arguments=[
+            CallArgument(kind="instance", symbol="com/acme/app/TicketEndpoint#"),
+            CallArgument(kind="string", value="/ws/tickets"),
+        ],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("jakarta-websocket-programmatic"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "matched `create(Class, String)` on a type that is not the Builder"

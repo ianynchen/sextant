@@ -653,6 +653,17 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # `tests/e2e/test_soap_delivered.py`, which fails if either goes missing.
         (None, "{http://orders.example.com/ws}amendOrderRequest"),
         (None, "{http://orders.example.com/ws}reviseOrderRequest"),
+        # Five features delivered 2026-09-11, each with an intention test in
+        # `tests/e2e/test_*_delivered.py` that fails without it:
+        # `G-39` — `@DgsData` is `@Repeatable`; one resolver serves two fields.
+        (None, "Order.dgsTotal"),
+        (None, "Order.dgsSubtotal"),
+        # `G-40` — `@DgsEntityFetcher(name = "Order")`: Federation's entity path, keyed by TYPE.
+        (None, "Order"),
+        # `G-34` — `ServerEndpointConfig.Builder.create(Class, "/ws/tickets")`.
+        (None, "/ws/tickets"),
+        # `G-43` — the same `SendMessageRequest`, handed to `SqsAsyncClient`.
+        (None, "/123456789012/async-queue"),
         #
         # 2I Task 2 (controller ruling): the JAX-WS surface, `jakarta-jws.yml`.
         # `BillingWebService#charge`'s own `@WebMethod(operationName)`, scoped
@@ -950,7 +961,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 158 since `G-36`: `OrderSoapEndpoint#amendOrder` carries two `@PayloadRoot`,
     # which is how Spring-WS routes two message types to one handler, and the
     # container is now declared so both derive. +2 soap inbound.
-    assert len(report.endpoints) == 158
+    assert len(report.endpoints) == 163
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1214,6 +1225,11 @@ def test_the_graphql_surface_derives_its_eleven_operations(
         (None, "Customer.nickname"),
         (None, "Order.shipTo"),
         ("query", "dgsOrders"),
+        # `G-39`/`G-40` — fourteen now; the name is kept because renaming a test to its
+        # current count is the kind of drift a count in a name invites.
+        (None, "Order.dgsTotal"),
+        (None, "Order.dgsSubtotal"),
+        (None, "Order"),
         (None, "Order.dgsLines"),
         ("query", "mpOrders"),
     }
@@ -1328,7 +1344,17 @@ def test_dgs_and_microprofile_ride_the_shared_vocabulary_with_no_rules_of_their_
     _, report = resolved_fixture
     rows = _graphql_rows(report)
 
-    dgs = {("query", "dgsOrders"), (None, "Order.dgsLines")}
+    dgs = {
+        ("query", "dgsOrders"),
+        (None, "Order.dgsLines"),
+        # `G-39`/`G-40`, 2026-09-11, and still pure YAML: `container:` is the shared
+        # repeatable-annotation vocabulary five other catalogs use, and the entity
+        # fetcher's `name` is one more alias in the same `path_from` list — no engine
+        # branch either way, which is what this test exists to keep true.
+        (None, "Order.dgsTotal"),
+        (None, "Order.dgsSubtotal"),
+        (None, "Order"),
+    }
     assert {rows[key]["catalog_id"] for key in dgs} == {"netflix-dgs"}
     assert rows[("query", "mpOrders")]["catalog_id"] == "microprofile-graphql"
     assert {
@@ -1770,7 +1796,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         counts[row["protocol"]] = counts.get(row["protocol"], 0) + 1
 
     assert counts == {
-        "graphql": 11,
+        "graphql": 14,
         # 54 + 2: the prefix-seam controllers, one route each. They ride the
         # same `spring-web.yml` `protocol_hint` every other http row does and
         # are equally untouched by it.
@@ -1802,7 +1828,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         "kafka": 26,
         # `order-notifications`, published and subscribed here, is two rows since W27
         "pubsub": 7,
-        "sqs": 7,
+        "sqs": 8,
         # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
         # pass for the same reason the graphql and messaging buckets are —
         # only an http row carries a `protocol_hint` to be reclassified by.
@@ -1823,9 +1849,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # calls, which are `G-33`'s asymmetry — the module received STOMP and sent none.
         # 10 since W45: the three connect URLs `addEndpoint` registers.
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
-        "websocket": 13,
+        "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 158
+    assert sum(counts.values()) == len(report.endpoints) == 163
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3347,7 +3373,9 @@ def test_the_format_ladder_answers_every_live_row(
     assert {answer for key, answer in answers.items() if key[0] == "graphql"} == {
         ("json", "resolved")
     }
-    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 11
+    # 14 since `G-39`/`G-40`: two fields from one repeatable `@DgsData` resolver, and the
+    # `Order` entity fetcher — Federation's `_entities` path, keyed by type not field.
+    assert len([e for e in report.endpoints if e["protocol"] == "graphql"]) == 14
 
     # Rung 1 — SECOND LIVE SURFACE (2I Task 2), and the one that proves the
     # rung is protocol-generic rather than a GraphQL special case: a different
@@ -3551,7 +3579,11 @@ def test_the_format_ladder_answers_every_live_row(
     # 28 since W57 (`OI-74`): the SQS builder-lambda row LEFT this bucket for the
     # `narrowed` one above — the same single row, counted once on each side, which is
     # what makes these two assertions a pair rather than two numbers.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 28
+    # 30 since 2026-09-11: `/ws/tickets` (`G-34`) is a registration with no payload
+    # declaration, the same honest answer `/live`'s raw frame gets; and the async SQS send
+    # (`G-43`) carries a `String` body exactly as the synchronous one beside it does, and
+    # the two read identically — measured, so a divergence between the clients would show.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

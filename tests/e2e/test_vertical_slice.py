@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import duckdb
+import pytest
 from click.testing import CliRunner
 
 from fixture_build import compile_fixture
@@ -19,6 +20,24 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 REPO = Path(__file__).parents[2]
 FIXTURE = REPO / "fixtures" / "orders-service"
 COORDINATE = "com.example:orders-soap-client"
+
+
+@pytest.fixture(scope="module")
+def full_run(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """`analyze` + `render` + `export` over the fixture, ONCE, for the tests that only
+    read the result.
+
+    MEASURED 2026-09-11: `_run` was called sixteen times in this file, each a full
+    pipeline over a fixture whose source does not change during a run. The file sits at
+    76% of the suite, which is one of the two places a CI progress bar visibly stops.
+
+    Three tests keep their own run and must: one compares two runs byte for byte (NFR-1's
+    only enforcement), one re-reads the bundle after mutating the workspace, and one plants
+    credentials to check they are masked on the way out.
+    """
+    workspace = tmp_path_factory.mktemp("full-run")
+    _run(workspace)
+    return workspace
 
 
 def _run(workspace: Path) -> None:
@@ -66,10 +85,8 @@ def test_output_is_byte_identical_when_the_pipeline_runs_twice(tmp_path: Path):
         )
 
 
-def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
-    document = (tmp_path / "render" / "architecture.md").read_text()
+def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
+    document = (full_run / "render" / "architecture.md").read_text()
     for route in ("POST", "GET", "/v1/orders", "/v1/orders/{id}"):
         assert route in document
     # The prefix seam, live through `spring-web.yml` (`mapping.path_separator`).
@@ -196,11 +213,19 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     # `tests/cli` and `tests/egress` while these three lines silently vanished; the two
     # unit tests that exist hand-build the coverage dict and cannot see the composition.
     # Pinned HERE, at the end of the whole pipeline, because that is where the path is.
-    assert "Calls whose callee body this workspace read: 468 of 1474 (32%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1472." in document
+    # 1485 since the four features delivered 2026-09-11 — SOAP's repeatable `@PayloadRoot`,
+    # GraphQL's repeatable `@DgsData` and entity fetcher, the programmatic WebSocket
+    # registration and the async SQS send — each adding a fixture class and the calls it
+    # makes. The NUMERATOR is unmoved at 468: none of those reads a new callee BODY, so the
+    # percentage is flat at 32% while the denominator grows, which is the honest shape of
+    # "more of the module is visible and none of it is newly expanded".
+    # 1486 and 31%: `ShipmentRepository$Shipment`'s constructor adds one edge (its
+    # `Object.<init>` call); the numerator stays 468 and the rounding tips 32 -> 31.
+    assert "Calls whose callee body this workspace read: 468 of 1486 (31%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1484." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 339."
+        "inherited 2, owner_not_scanned 345."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -272,7 +297,7 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(tmp_path: Path):
     ) in document
 
 
-def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_path: Path):
+def test_every_fact_the_extractor_writes_validates_against_the_domain_model(full_run: Path):
     """The contract between the two halves of the fact stream (final review,
     M5). `load_facts` reads the JSONL straight into DuckDB — deliberately,
     for the bulk-load reason NFR-11 states — so nothing in the running
@@ -288,10 +313,8 @@ def test_every_fact_the_extractor_writes_validates_against_the_domain_model(tmp_
     raises on the first one the model refuses. The kind check keeps the test
     from passing vacuously on an empty or truncated tree; `module` is absent
     on purpose, being the detector's fact rather than the scanner's."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
 
-    files = sorted((tmp_path / "facts").rglob("*.jsonl"))
+    files = sorted((full_run / "facts").rglob("*.jsonl"))
     validated = [read_fact_file(path) for path in files]
     kinds = {fact.kind for _, facts in validated for fact in facts}
     total = sum(len(facts) for _, facts in validated)
@@ -477,7 +500,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # `soap` stays 6/2; `grpc` is new at 2/0.
     metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["endpoints"]["inbound"] == {
-        "graphql": 12,
+        "graphql": 15,
         "grpc": 2,
         # + 8: 2O Task 6's Spring Data REST rows (`test_app.py`'s own note
         # carries the breakdown).
@@ -493,7 +516,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
         # verb, which Spring registers because `params`/`headers` separate them.
         # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
-        "http": 54,
+        "http": 60,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -502,7 +525,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "sqs": 4,
         "sse": 2,
         # 6 since W45: the three connect URLs `addEndpoint` registers.
-        "websocket": 6,
+        "websocket": 7,
     }
     assert metadata["endpoints"]["outbound"] == {
         # 25 since W29: `InventoryWebClient#tagged`, whose three headers are the fixture's
@@ -519,7 +542,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 3: `BillingSoapClient#placeAt` calls a DIFFERENT host with the same payload
         # QName, and was being dropped as a duplicate of `#place`.
         "soap": 3,
-        "sqs": 3,
+        "sqs": 4,
         # 4 since W43: `OrderStompPublisher`'s two `SimpMessagingTemplate.convertAndSend`
         # calls beside the two `@SendTo`/dynamic replies `spring-stomp` already derived.
         # Before it the module was published receiving STOMP and never sending any.
@@ -702,7 +725,16 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     # 111 inbound since `G-36`: `amendOrder`'s two `@PayloadRoot` both derive now, where
     # only the first did. Outbound is untouched — a repeatable mapping annotation says
     # nothing about the direction of anything.
-    assert rows == [("inbound", 111), ("outbound", 60)]
+    assert (
+        rows
+        == [  # 115 = 111 + 3 GraphQL (`Order.dgsTotal`, `Order.dgsSubtotal`, the `Order` entity
+            # fetcher) + 1 WebSocket (`/ws/tickets`, programmatic registration); 61 = 60 + 1
+            # SQS (the async client's send). Each is a feature delivered 2026-09-11 and each
+            # has an intention test in `tests/e2e/test_*_delivered.py` that fails without it.
+            ("inbound", 121),
+            ("outbound", 61),
+        ]
+    )
 
 
 def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
@@ -946,6 +978,14 @@ def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_p
 
     assert {(str(row["method"]), str(row["path"])) for row in rows} == {
         ("GET", "/orderViews"),
+        # `G-45`: `ShipmentRepository`, a `MongoRepository` — the same six routes Spring
+        # Data REST exposes for any store, once the roster names the store contract.
+        ("GET", "/shipments"),
+        ("POST", "/shipments"),
+        ("GET", "/shipments/{id}"),
+        ("PUT", "/shipments/{id}"),
+        ("PATCH", "/shipments/{id}"),
+        ("DELETE", "/shipments/{id}"),
         ("POST", "/orderViews"),
         ("GET", "/orderViews/{id}"),
         ("PUT", "/orderViews/{id}"),
@@ -976,7 +1016,7 @@ def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_p
     assert str(search["handler"]).endswith("CatalogRepository#findByStatus(sig_b9c62fe1).")
 
 
-def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
+def test_a_schema_first_operation_reaches_the_rendered_document(full_run: Path):
     """The same row at the document a reader actually sees. `none recorded`
     rather than `unresolved`: the schema addressed this operation outright and
     names no code, which is an absence rather than a failed read — and the
@@ -987,9 +1027,8 @@ def test_a_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
     column shows — there is no full symbol to move for a row with no
     handler (fix round 1, MEDIUM 1: the identity stays in the header even
     where there is no symbol to append after it)."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)  # analyze + render + export
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    _run(full_run)  # analyze + render + export
+    document = (full_run / "render" / "architecture.md").read_text()
 
     assert "| `graphql query auditTrail` | none recorded | — → — | json | resolved |" in document
     assert (
@@ -1265,7 +1304,7 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     ]
 
 
-def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: Path):
+def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(full_run: Path):
     """The same row at the document a reader actually sees — 2I's mirror of
     `test_a_schema_first_operation_reaches_the_rendered_document` above.
     `none recorded` rather than `unresolved`: the schema addressed this
@@ -1281,9 +1320,8 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     misclassification rendered nothing live) through 2I Task 2's own rows,
     which is what let this row's first live pin carry the wrong,
     `(unresolved)`-prefixed form until this fix."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)  # analyze + render + export
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    _run(full_run)  # analyze + render + export
+    document = (full_run / "render" / "architecture.md").read_text()
 
     assert (
         "| `soap {http://orders.example.com/ws}quoteOrderRequest` | "
@@ -1337,7 +1375,7 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(tmp_path: P
     ) in document
 
 
-def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_path: Path):
+def test_format_field_number_and_open_questions_reach_the_rendered_document(full_run: Path):
     """2G Task 8, live and whole: the format ladder's three tiers each reach
     the document's Format column beside Media, the two refused parse-binding
     rows reach the "Open questions" section with their candidates, and a
@@ -1345,9 +1383,8 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     invariant `test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze`
     pins at the workspace level, pinned here at the document a reader
     actually sees."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)  # analyze + render + export
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    _run(full_run)  # analyze + render + export
+    document = (full_run / "render" / "architecture.md").read_text()
 
     # Rung 2 (declared media, `resolved`) — plain, no hedge. Human-spelled in
     # the table now (2M design §5c); the full symbol lives in the endpoint's
@@ -1404,13 +1441,13 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
     # `uncovered` already surfaces its own (FR-17) — empty here because the
     # fixture's schema sources all compile and interpret cleanly, which is
     # itself the honest answer, not an omission.
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    metadata = json.loads((full_run / "metadata.json").read_text())
     assert metadata["schema_sources_not_compiled"] == []
     assert metadata["descriptors_not_interpreted"] == []
 
     # `open_questions` joined the D06 bundle and its manifest (2G design §8).
     runner = CliRunner()
-    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(tmp_path)])
+    result = runner.invoke(cli, ["module", "export", str(FIXTURE), "--workspace", str(full_run)])
     assert result.exit_code == 0, result.output
     bundle = Path(result.output.strip())
     manifest = json.loads((bundle / "manifest.json").read_text())
@@ -1426,6 +1463,7 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(tmp_
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
+    _run(tmp_path)
     """2I Task 6, end to end through the real commands — and the only test in
     this suite whose evidence comes from a jar.
 
@@ -1445,8 +1483,6 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     what shows that opting out actually RETRACTS — the property a reader needs
     if the opt-in is to be a decision they can reverse.
     """
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
     document = (tmp_path / "render" / "architecture.md").read_text()
 
     # The row itself: verbless, address-less peer, and its caller a symbol
@@ -1505,8 +1541,14 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # + 2: W44's `mvcroutes/` pair — Spring MVC functional routing.
     # + 1: W45's `ws/StompBrokerConfig` — the URL a STOMP client opens.
     # + 1: W46's `ws/OrderFeedClient` — the client direction, which opens one.
-    assert (None, 134) in origins
+    # 136 since 2026-09-11: `ws/ProgrammaticWsConfig` and its nested `TicketEndpoint`,
+    # the fixture for the programmatic WebSocket registration (`G-34`).
+    # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
+    assert (None, 138) in origins
 
+    # This test MUTATES the fixture — it moves `.sextant.yml` aside and re-runs — so it
+    # cannot use the shared run and must not leave the shared fixture altered for whatever
+    # runs next. Its own workspace, and the rename undone in `finally`.
     config = FIXTURE / ".sextant.yml"
     moved = tmp_path / "sextant.yml.moved"
     config.rename(moved)
@@ -1591,7 +1633,7 @@ def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace
     assert any("hunter2-fixture" in path.read_text(encoding="utf-8") for path in local)
 
 
-def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
+def test_the_manifest_names_the_rule_set_that_masked_the_bundle(full_run: Path):
     """D06 §3 reserved `redaction_set_hash` and left it unwritten while nothing
     redacted. It has a producer now, and what it names is the EFFECTIVE set —
     the built-ins widened by this module's `redact:` — so a bundle masked under
@@ -1599,16 +1641,14 @@ def test_the_manifest_names_the_rule_set_that_masked_the_bundle(tmp_path: Path):
     adds a rule, so its hash must differ from the built-in-only one; editing
     that section changes the hash, and re-running without editing it does not
     (the byte-identity test above covers the second half)."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
-    bundle = next((tmp_path / "bundles").iterdir())
+    bundle = next((full_run / "bundles").iterdir())
     manifest = json.loads((bundle / "manifest.json").read_text())
     effective = Redactor.from_rules(read_redaction_rules(FIXTURE)).rule_set_hash
     assert manifest["producer"]["redaction_set_hash"] == effective
     assert effective != Redactor.from_rules().rule_set_hash
 
 
-def test_the_planted_decoy_config_file_never_reaches_resolved_config(tmp_path: Path):
+def test_the_planted_decoy_config_file_never_reaches_resolved_config(full_run: Path):
     """2K design §2, live: the fixture's `.sextantignore` names
     `src/main/resources/application-secret.yml` — an ordinary, valid Spring
     config source (`application{-profile}.yml` names it the "secret"
@@ -1616,10 +1656,8 @@ def test_the_planted_decoy_config_file_never_reaches_resolved_config(tmp_path: P
     resolve its own key into its own environment. Ignoring it means the
     file never reaches `YamlConfigReader` at all: not merely unresolved or
     masked, its key and its whole profile are simply never there."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     rows = workspace.query("resolved_config")
     keys = {str(row["key"]) for row in rows}
     environments = {str(row["environment"]) for row in rows}
@@ -1647,7 +1685,7 @@ def test_a_planted_dotenv_is_excluded_by_the_builtin_layer_alone(tmp_path: Path)
 # --- 2K Task 3: the golden overlay, live ----------------------------------
 
 
-def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp_path: Path):
+def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(full_run: Path):
     """The fixture overlay is hand-authored (fixture JSON is fine — it is a
     program format, 2K design §9), which is exactly why it has to be checked
     against a REAL analysis rather than a hand-built one: a golden file whose
@@ -1665,8 +1703,6 @@ def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp
     wall-clock at ingest time and is hand-pinned to a fixed value afterward —
     informational only, never compared, the same way every other field here
     is checked by what it grounds rather than by its own bytes."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
     overlay = load_overlay(FIXTURE)
     assert overlay is not None
     assert {claim.kind for claim in overlay.claims} == {
@@ -1676,7 +1712,7 @@ def test_every_claim_in_the_golden_overlay_is_grounded_in_the_live_workspace(tmp
         "verdict",
     }
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         accepted, refusals = validate_overlay(overlay, workspace, FIXTURE)
     finally:
@@ -1743,15 +1779,13 @@ def test_instructions_teach_the_config_verdict_shape_both_forms():
     )
 
 
-def test_the_golden_overlay_assembles_into_the_rendered_document(tmp_path: Path):
+def test_the_golden_overlay_assembles_into_the_rendered_document(full_run: Path):
     """Add-only assembly, end to end (2K design §6): every claim reaches the
     document under a provenance header, at its own anchor, and the machine
     rows the rest of this suite pins are still exactly where they were —
     `test_format_field_number_and_open_questions_reach_the_rendered_document`
     asserts those same lines against this same document."""
-    compile_fixture(FIXTURE)
-    _run(tmp_path)
-    document = (tmp_path / "render" / "architecture.md").read_text()
+    document = (full_run / "render" / "architecture.md").read_text()
 
     header = "**Enrichment — evidence: llm** (model fixture-model, agent fixture-agent)"
     assert document.count(header) == 3  # two anchors plus the verdict's own question

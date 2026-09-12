@@ -36,7 +36,7 @@ against the feature it belongs to, or the build goes red.
 ```delivery
 REST inbound       | REST in    | G-37 G-30 G-45 W44-verb-overloads GAP-1b spring7-version conditional-controllers kotlin-null-handler micronaut-controller quarkus-jaxrs quarkus-vertx-route ktor-routing javalin-routing
 REST outbound      | REST out   | G-30-outbound spring7-import-http-services jdk-httpclient micronaut-client
-SOAP               | SOAP       | G-36 jaxws-public-final apache-cxf
+SOAP               | SOAP       | jaxws-public-final apache-cxf
 GraphQL            | GraphQL    | G-39 G-40
 WebSocket          | WebSocket  | G-34
 SSE                | SSE        | jaxrs-sse
@@ -81,8 +81,8 @@ what forces this list to shrink rather than rot. A feature missing from both thi
 `tests/e2e/` is a hard failure.
 
 ```intention-test-missing
-REST inbound | REST outbound | GraphQL | WebSocket | SSE | gRPC | Kafka
-JMS and AMQP | AWS SQS | Google Pub/Sub | Async | Meridian
+REST outbound | SSE | gRPC | Kafka
+JMS and AMQP | Google Pub/Sub | Meridian
 ```
 
 **Severity, carried here** so this register stands on its own. Folded from
@@ -190,6 +190,7 @@ be written without a run id, so there is nothing to write until CI has actually 
 Format: `id | test node id | CI run URL`
 
 ```closed
+G-36 | tests/e2e/test_soap_delivered.py::test_one_handler_serving_two_message_types_derives_both | https://github.com/ianynchen/sextant/actions/runs/34646355110
 ```
 
 ---

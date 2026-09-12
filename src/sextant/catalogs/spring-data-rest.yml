@@ -115,6 +115,17 @@ matches:
     # `JpaRepository extends ListCrudRepository, ListPagingAndSortingRepository`
     # (javap, spring-data-jpa 4.1.1), so it reaches `findAll()` either way.
     org.springframework.data.jpa.repository.JpaRepository: [collection_read, item_read, save, delete]
+    # `G-45`. The other stores. Each extends a contract the roster already names — measured
+    # with `javap` at 4.2.5, `MongoRepository extends ListCrudRepository,
+    # ListPagingAndSortingRepository` — but the parent is reached through a JAR HOP the
+    # fact stream does not cross, so naming the parent was never enough. Spring Data REST
+    # exposes every one of these identically to a `JpaRepository`; it is store-neutral by
+    # design and MongoDB is one of its headline guides. Operations are the PARENT's, which
+    # is exactly what the store contract inherits.
+    #
+    # verify: javap -cp $(find ~/.m2 -name 'spring-data-mongodb-4*.jar' | grep -v sources | head -1) \
+    #         org.springframework.data.mongodb.repository.MongoRepository | head -2
+    org.springframework.data.mongodb.repository.MongoRepository: [collection_read, item_read, save, delete]
 
   # §2b's route table, verb by verb, each with the operation it needs. **Every
   # route needs one**, including the collection read — see `repositories` above
@@ -242,7 +253,7 @@ slice:
         NOT a roster line plus a rerun: what routes Data REST exposes for it has never
         been measured. Outside until it is.
     - owner: org.springframework.data:spring-data-mongodb
-      type_names: [MongoRepository, ReactiveMongoRepository]
+      type_names: [ReactiveMongoRepository]
       why: >
         A boundary this catalog does NOT model, and the largest single instance: a
         Mongo repository is an ordinary Spring Data REST resource and derives nothing.

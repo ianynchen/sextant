@@ -54,7 +54,26 @@ matches:
   # checkpoint), through the same `terminal_via_argument` join OkHttp's own
   # `build()` → `newCall()` split already uses.
   terminal:
-    - { method: build, terminal_via_argument: { owner: software.amazon.awssdk.services.sqs.SqsClient, method: sendMessage } }
+    # `G-43`. ONE terminal naming BOTH receivers — the same request object, handed to
+    # whichever client the module holds. Spring Cloud AWS 3.x
+    # auto-configures `SqsAsyncClient` and backs `SqsTemplate` with it, so this is the
+    # client a module receives unless it asks for the synchronous one — and it was 0 of
+    # its 28 methods, which made the ordinary case the invisible one.
+    #
+    # A second terminal rather than a widened owner list: the builder chain, the captures
+    # and the address are identical, and only the type receiving the finished request
+    # differs. Nothing here is mirrored from the synchronous row on the assumption that
+    # the two agree — `sendMessage(SendMessageRequest)` is declared on both, measured with
+    # `javap` at sqs 2.25.31.
+    #
+    # A LIST rather than two `build` entries: `terminal` is keyed by method name, so two
+    # entries sharing one would overwrite each other and the first would stop deriving —
+    # measured, and caught by this catalog's own control test.
+    - { method: build,
+        terminal_via_argument: {
+          owner: [software.amazon.awssdk.services.sqs.SqsClient,
+                  software.amazon.awssdk.services.sqs.SqsAsyncClient],
+          method: sendMessage } }
 
 # `queueUrl` captures the WHOLE queue URL, not a bare topic name — SQS's
 # `SendMessageRequest.Builder#queueUrl` genuinely takes an absolute
@@ -148,7 +167,7 @@ slice:
         individually anyway, so that a release adding a data-plane method to this
         client cannot arrive disguised as more administration.
     - owner: software.amazon.awssdk.services.sqs.SqsAsyncClient
-      method_names: [sendMessage, sendMessageBatch, receiveMessage, deleteMessage,
+      method_names: [sendMessageBatch, receiveMessage, deleteMessage,
                 deleteMessageBatch, changeMessageVisibility, changeMessageVisibilityBatch,
                 purgeQueue, createQueue, deleteQueue, getQueueUrl, getQueueAttributes,
                 setQueueAttributes, listQueues, listQueuesPaginator, listQueueTags,

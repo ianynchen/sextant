@@ -106,7 +106,11 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`) — inbound
     # http rows like any other, derived by the combinator engine rather than an
     # annotation.
-    assert metadata["endpoints"]["inbound"]["http"] == 54
+    # 60 since `G-45`: `ShipmentRepository`, a `MongoRepository` behind
+    # `@RepositoryRestResource`, derives its six-route table — Spring Data REST exposes
+    # a Mongo repository exactly as it does a JPA one, and the roster now names the store
+    # contract the fact stream cannot reach through the parent.
+    assert metadata["endpoints"]["inbound"]["http"] == 60
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -191,7 +195,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # + 1 (W45): `ws/StompBrokerConfig`, which registers the URL a STOMP client opens —
     # `G-42`: the destinations derived and the transport endpoint did not exist.
     # + 1 (W46): `ws/OrderFeedClient`, which opens one — `G-32`'s absent direction.
-    assert metadata["coverage"]["documents"] == 135
+    # 139 since 2026-09-11: `ProgrammaticWsConfig` + its nested `TicketEndpoint` (`G-34`),
+    # `ShipmentRepository` + its nested `Shipment` (`G-45`) — four class files.
+    assert metadata["coverage"]["documents"] == 139
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

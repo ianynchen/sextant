@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C, 13 open) | ◐ (2A 2B, 4 open) | ◐ (3 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C, 13 open) | ◐ (2A 2B, 4 open) | ◐ (2 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**49 of 64 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**50 of 65 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -730,6 +730,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
 | `jakarta-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50, 11.0.24 |
 | `jakarta-websocket-client` | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
+| `jakarta-websocket-programmatic` | `jakarta.websocket:jakarta.websocket-api` | 2.1.1 |
 | `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |

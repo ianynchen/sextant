@@ -34,6 +34,24 @@
       <artifactId>spring-data-rest-core</artifactId>
       <version>4.2.5</version>
     </dependency>
+    <!-- G-45: a repository over a store that is not JPA. `MongoRepository` extends the
+         same `ListCrudRepository` the catalog's roster names, and Spring Data REST
+         exposes it identically — but the parent is reached through a jar hop the fact
+         stream does not cross, so the roster has to name the store contract itself.
+         Same 2023.1 release train as the two above. -->
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-mongodb</artifactId>
+      <version>4.2.5</version>
+      <!-- The repository CONTRACT is all this fixture needs; a driver is a runtime
+           concern and is not in the offline repository this build runs against. -->
+      <exclusions>
+        <exclusion>
+          <groupId>org.mongodb</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
     <dependency>
       <groupId>org.jspecify</groupId>
       <artifactId>jspecify</artifactId>
