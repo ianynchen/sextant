@@ -288,9 +288,9 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 
 One row per blocker the ```delivery block above still carries, in that block's order. A
 closed item keeps a row only where its closing has to be read beside its neighbours, and
-every such row says `**closed**` with the CI run that proved it. Six blockers below
+every such row says `**closed**` with the CI run that proved it. Seven blockers below
 (`javalin-routing`, `jaxws-public-final`, `jaxws-inherited-unannotated`, `G-31`,
-`alpakka-pekko`, `micronaut-sqs`) are implemented and pinned by a test that is green
+`alpakka-pekko`, `micronaut-sqs`, `G-44`) are implemented and pinned by a test that is green
 locally; they stay on the register until that test has passed in CI, because that is the
 definition of done (§0, "Closed").
 
@@ -382,7 +382,7 @@ run 34669970510; the cell reads `✅`.
 
 | # | issue |
 |---|---|
-| `G-47` | Spring Integration read **2 of 11** channel-declaring annotations; **closed** — all seven missing ones (`@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter`, `@Transformer`) derive since `6f088be`, proven in CI run 34669970510 |
+| `G-47` | Spring Integration read **2 of 11** channel-declaring annotations; **closed** — five more (`@Aggregator`, `@Filter`, `@Router`, `@Splitter`, `@Transformer`) derive since `6f088be`, 7 of 11 now, proven in CI run 34669970510; `@BridgeFrom`/`@BridgeTo` carry their channel in a bare `value()` and stay a stated boundary (COVERAGE §5.12) |
 | `temporal-cadence` | spec work (§0, "Moved to spec work"): two naming rules the `path_fallback` vocabulary cannot say, a task queue named on `WorkerFactory.newWorker` rather than any annotation, and no `Protocol` member for a workflow engine |
 | `vertx-eventbus` | `EventBus.consumer(String, Handler)` / `send`, `publish`, `request(String, Object[, DeliveryOptions])` are `single_call` shapes exactly, but an event-bus address is none of the closed `Protocol` set's members; the same schema decision as `temporal-cadence`, Category C |
 
@@ -483,9 +483,10 @@ receiver chain. The spec is written and committed
 has two overloads with the lambda at different positions, so writing it as catalog
 data first would publish a lambda as a path.
 
-**These are one plan, not seven.** The first four are the whole of REST inbound's
-engine work; `javalin-apibuilder`, `ktor-routing` and `sqs-template-receive` are three
-more items elsewhere in the register that need the identical receiver-chain read — a
+**These are one plan, not seven.** The first four plus `javalin-apibuilder` and
+`ktor-routing` are REST inbound's receiver-chain work (its other open items,
+`quarkus-jaxrs` and the two Category C ones, are different mechanisms);
+`sqs-template-receive` is the same read one column over — a
 static or instance verb call named inside a lambda passed to an outer call
 (`ApiBuilder.get` inside `path(…)`; `RoutingBuilderKt.get` inside `route(…)`;
 `opts.queue(...)` inside `SqsTemplate.receive(Consumer<SqsReceiveOptions>)`) — so one
@@ -543,8 +544,9 @@ delivered by the definition at the top of this document.
    `javalin-routing`, and JMS/AMQP's `G-44` for its three delivered quarters.
 3. **Category B as one plan** — REST inbound and outbound engine work, `ktor-routing`,
    `javalin-apibuilder` and `sqs-template-receive`, on the spec that is already written
-   and waiting. This is what every `◐` in REST in, REST out, JMS/AMQP and SQS waits on
-   beyond the CI runs above.
+   and waiting. Beyond the CI runs above, REST out waits on this alone; REST in and SQS
+   wait on this plus their Category B/C items (`quarkus-jaxrs`, `conditional-controllers`,
+   `kotlin-null-handler`; `micronaut-jms-over-sqs`); JMS/AMQP waits on CI alone.
 4. **Category C** — the six that need their own design, `temporal-cadence` and
    `vertx-eventbus` among them; Async waits on those two, SQS on `micronaut-jms-over-sqs`.
 5. **`pubsub-channel-adapter`** — its own `config_join` extension; Pub/Sub's one open item.
