@@ -1893,11 +1893,23 @@ Counted across `src/`, excluding the declarations themselves, the readers are:
 | field | readers |
 |---|---|
 | `nest_host`, `nest_members`, `unread_attributes` | 0 |
-| `permits`, `signature.throws` | 0 |
+| `permits` | 0 |
 | `modifiers.abstract`, `varargs`, `final`, `native`, `synchronized`, `volatile`, `deprecated` | 0 |
+| `signature.throws` | 1 — the module document's `Fails with:` line, `G-74`, **closed 2026-09-12** |
 
-Every apparent hit is prose in a docstring or a SQL comment. The only W7 output
-with a live consumer is `construct_kind: annotation`, through `interface_symbols`.
+Eleven of the twelve remain at zero. `signature.throws` closed by
+`egress/render/document.py`'s `_fails_with_entry`, pairing the DECLARED clause with the
+OBSERVED throw-exit call sites `G-52` gave the call graph — `reachable_throws`
+(`storage/duckdb/workspace.py`) joins `reachability` to `call_sites` at the composition
+root, and `egress/render/document.py` renders the answer. Proved by
+`tests/egress/test_render.py`'s `test_a_handlers_declared_exception_renders_as_fails_with`,
+`test_a_reachable_throw_exit_joins_the_same_line_after_the_declared_half`,
+`test_a_throw_site_whose_target_was_unread_says_so_in_words` and
+`test_no_fails_with_line_where_neither_half_has_anything`.
+
+Every apparent hit among the remaining eleven is prose in a docstring or a SQL comment. The
+only other W7 output with a live consumer is `construct_kind: annotation`, through
+`interface_symbols`.
 
 **The rule was applied to three items and not to twelve.** `Module`,
 `LocalVariableTypeTable` and class-level type annotations were dropped for having

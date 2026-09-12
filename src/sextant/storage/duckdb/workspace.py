@@ -659,6 +659,22 @@ _NAMED_QUERIES = {
         FROM reachability
         ORDER BY root, depth, symbol
     """,
+    # `G-74`'s own join: every `invoke_kind: throw` call site whose CALLER is a symbol a
+    # root reaches (`reachability`, the root's own body at depth 0 included) — a throw
+    # site reachable from a handler, at whatever depth. `cs.owner` is the thrown TYPE,
+    # Task 16's own shape (`G-52`): non-NULL where the extractor read it (a `NEW`, an
+    # invoke's declared return) and NULL for a rethrow whose type lives in the try-catch
+    # table nothing here reads. `call_sites` is already scoped to `selected_documents` in
+    # its own view definition, so this join needs no filter of its own — the
+    # `default_bodies` precedent above scopes at `raw_facts`; this one scopes at the view
+    # built on it. `egress/render/document.py`'s `Fails with` line is the only reader.
+    "reachable_throws": """
+        SELECT r.root AS root, cs.caller AS caller, cs.ordinal AS ordinal, cs.owner AS target
+        FROM reachability r
+        JOIN call_sites cs ON cs.caller = r.symbol
+        WHERE cs.invoke_kind = 'throw'
+        ORDER BY root, caller, ordinal
+    """,
     # 2Q `G4`'s call graph. `caller, ordinal` alone is not total — a site whose
     # dispatch narrowed to two bodies is two rows — so `target` and `callee`
     # close it; `callee` is last because it is the column those two rows differ

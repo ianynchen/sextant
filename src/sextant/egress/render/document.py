@@ -756,6 +756,62 @@ def _via_entry(endpoint: dict[str, object], origin_by_symbol: dict[str, str]) ->
     return None if origin is None else DetailEntry(_text("Via"), _code(origin), None)
 
 
+def _declared_throws(endpoint: dict[str, object]) -> list[str]:
+    """The handler's own DECLARED exceptions (JVMS 4.7.5, `Signature.throws`), read off
+    the same `handler_signature` JSON `contracts.py`/`protocol_hint.py` already parse for
+    the Request/Response lines — never a second query for what one row already carries.
+    Empty wherever the row has no signature at all: a schema-declared operation, an
+    outbound-only row, or a handler this pass never named."""
+    raw = endpoint.get("handler_signature")
+    if raw is None:
+        return []
+    return [str(symbol) for symbol in json.loads(str(raw)).get("throws", [])]
+
+
+def _throws_by_root(rows: Sequence[dict[str, object]]) -> dict[str, tuple[str | None, ...]]:
+    """`reachable_throws` (`G-74`), grouped by the root it was walked from — the shape
+    `_fields_by_shape`/`origin_by_symbol` already group their own rows into before a
+    per-endpoint loop reads them. A NULL `target` is kept, once per row: it is a real
+    reachable throw whose type this pass could not read (`G-52`'s rethrow case), not an
+    absence to drop."""
+    by_root: dict[str, list[str | None]] = {}
+    for row in rows:
+        by_root.setdefault(str(row["root"]), []).append(cast(str | None, row.get("target")))
+    return {root: tuple(targets) for root, targets in by_root.items()}
+
+
+def _fails_with_entry(
+    endpoint: dict[str, object], throws_by_root: dict[str, tuple[str | None, ...]]
+) -> DetailEntry | None:
+    """The `Fails with:` detail line (`G-74`): what the handler DECLARES (`Signature.
+    throws`) beside what it is OBSERVED to throw — a reachable `invoke_kind: throw` call
+    site (`G-52`'s own fact, joined to the handler here by `reachable_throws`). Declared
+    first, each half sorted on its own (NFR-1) — the two halves answer different
+    questions and merging them would read as one claim rather than two.
+
+    `None` where both halves are empty: "declares nothing and none of its reachable calls
+    throw" is not a claim this renderer makes, the same restraint `_via_entry` already
+    keeps for a row with no library to name.
+
+    An unread throw target (a rethrow whose type lives in the try-catch table this pass
+    does not read) renders the same words `_call_cell` already settled on for it
+    (`bfece6f`) — `(type unread)` — collapsed to ONE mention however many unread rethrows
+    are reachable: every one of them says the identical "some type, not read", and
+    repeating a non-fact is not evidence."""
+    declared = sorted(simple_name(symbol) for symbol in _declared_throws(endpoint))
+    handler = endpoint.get("handler")
+    observed = throws_by_root.get(str(handler), ()) if handler is not None else ()
+    named = sorted({simple_name(target) for target in observed if target is not None})
+    unread = any(target is None for target in observed)
+    if not declared and not named and not unread:
+        return None
+    parts = [f"`{name}` (declared)" for name in declared]
+    parts += [f"`{name}` (thrown)" for name in named]
+    if unread:
+        parts.append("(type unread) (thrown)")
+    return DetailEntry(_text("Fails with"), _runs(", ".join(parts)), None)
+
+
 def _library_gap_item(what: str, entry: str) -> tuple[Run, ...]:
     """One unreachable library, as the runs of `<what>, so nothing above
     accounts for it: library `<coordinate>` — <reason>.` (minus the bullet's
@@ -904,6 +960,7 @@ def render_module_document(
     overlay: EnrichmentOverlay | None = None,
     stale: frozenset[int] = frozenset(),
     traces: Sequence[Trace] = (),
+    reachable_throws: Sequence[dict[str, object]] = (),
 ) -> str:
     """`architecture.md` — the markdown serialization of the assembled
     document. Kept as its own entry point because it is what every caller of
@@ -926,6 +983,7 @@ def render_module_document(
             overlay=overlay,
             stale=stale,
             traces=traces,
+            reachable_throws=reachable_throws,
         )
     )
 
@@ -967,6 +1025,11 @@ def assemble_module_document(
     # for a module that exposes nothing and schedules nothing, which renders
     # `None found.` the way the two non-wire sections above it do.
     traces: Sequence[Trace] = (),
+    # `G-74`'s own join, carried in the same way: `storage/duckdb/workspace.py`'s
+    # `reachable_throws` query joins `reachability` to `call_sites` at the composition
+    # root, and this renders the answer rather than re-deriving it — one row per (root,
+    # caller, ordinal), `target` the thrown type or NULL for an unread rethrow (`G-52`).
+    reachable_throws: Sequence[dict[str, object]] = (),
 ) -> AssembledDocument:
     """Adds no information. Every row comes from the graph, and every omission
     is stated (M07). Rendering the same report twice is byte-identical
@@ -982,6 +1045,7 @@ def assemble_module_document(
     one's."""
     fields_by_shape = _fields_by_shape(shape_fields)
     origin_by_symbol = {str(row["symbol"]): str(row["origin"]) for row in library_symbols}
+    throws_by_root = _throws_by_root(reachable_throws)
     # Wire identities already carrying a library attribution, so the outbound
     # section does not repeat one the inbound section stated (a `both` row is
     # listed in both).
@@ -1082,7 +1146,12 @@ def assemble_module_document(
             )
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
-            entries = [entry for entry in (via, request, response, streaming) if entry is not None]
+            fails_with = _fails_with_entry(endpoint, throws_by_root)
+            entries = [
+                entry
+                for entry in (via, request, response, streaming, fails_with)
+                if entry is not None
+            ]
             identity = _wire_identity(endpoint, redactor)
             header = _detail_header(identity, _handler_identity(endpoint))
             sections.append(MachineDetail((header, *entries)))

@@ -50,14 +50,16 @@ point rather than a shortfall. Those are not unclassified persistence; they are 
 library calls, and they carry `unresolved`, which says *this is a terminal we looked at and
 could not classify* rather than pretending they were never examined.
 
-**Two of `TerminalKind`'s eight members have a producer** — `persistence` and
-`unresolved` — because one catalog declares `terminals` and all twelve of its rules say
-`persistence`. Of `TargetKind`'s three, `database` and `cache` are produced and `file` is
-not. The six that are absent split in two, and the split is the honest part: `outbound_call`,
-`throws`, `async_handoff` and `TargetKind.FILE` are all a catalog rule away — an owner
-rule naming `ExecutorService` or `MinioClient` would mint one today — while `cycle`,
-`returns` and `ends_silently` are unreachable BY CONSTRUCTION. A cyclic edge has a
-non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
+**Three of `TerminalKind`'s eight members have a producer.** `persistence` and
+`unresolved` come from the one catalog that declares `terminals`, whose twelve rules all
+say `persistence`; `throws` is decided from `invoke_kind` rather than any catalog rule
+(`classify`'s own docstring below, `G-52`) — a second, stated producer beside the catalog
+one, not a third route through it. Of `TargetKind`'s three, `database` and `cache` are
+produced and `file` is not. The five that remain absent split in two, and the split is the
+honest part: `outbound_call`, `async_handoff` and `TargetKind.FILE` are all a catalog rule
+away — an owner rule naming `ExecutorService` or `MinioClient` would mint one today —
+while `cycle`, `returns` and `ends_silently` are unreachable BY CONSTRUCTION. A cyclic edge
+has a non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
 describe how a BODY exits, and all three routes here are predicates on the callee's TYPE,
 which cannot express that. `closed_sets.py` names them at the enum and
 `docs/open-issues.md` carries `OI-75`.

@@ -1204,3 +1204,61 @@ def test_a_module_with_no_call_graph_reports_no_percentage_of_nothing(tmp_path: 
 
     assert "Calls whose callee body" not in text
     assert "Documents analysed: 4" in text
+
+
+# --- `Fails with:` — the declared and observed exceptions pairing (G-74, Task 17) -------
+
+_THROWS_HANDLER = "s maven c 1 com/acme/C#exits()."
+
+_THROWS_ROW = {
+    "protocol": "http",
+    "direction": "inbound",
+    "method": "GET",
+    "path": "/v1/exits",
+    "handler": _THROWS_HANDLER,
+    "resolution": "resolved",
+    "evidence": "compiler",
+    "handler_signature": json.dumps({"throws": ["java/io/IOException#"]}),
+}
+
+
+def test_a_handlers_declared_exception_renders_as_fails_with():
+    """The DECLARED half alone (JVMS 4.7.5, `Signature.throws`), read off the same
+    `handler_signature` JSON the Request/Response lines already parse — no reachable
+    throw exit at all, so the line names only what the handler's own signature says."""
+    text = render_module_document(MODULE, _report_with(_THROWS_ROW), "a3f91c")
+    assert "  - Fails with: `IOException` (declared)" in text
+
+
+def test_a_reachable_throw_exit_joins_the_same_line_after_the_declared_half():
+    """The OBSERVED half (`G-52`'s throw-exit call sites, joined through
+    `reachability` in `reachable_throws`, `G-74`): declared first, both sorted."""
+    reachable = [
+        {
+            "root": _THROWS_HANDLER,
+            "caller": _THROWS_HANDLER,
+            "ordinal": 0,
+            "target": "java/lang/IllegalStateException#",
+        }
+    ]
+    text = render_module_document(
+        MODULE, _report_with(_THROWS_ROW), "a3f91c", reachable_throws=reachable
+    )
+    assert "  - Fails with: `IOException` (declared), `IllegalStateException` (thrown)" in text
+
+
+def test_a_throw_site_whose_target_was_unread_says_so_in_words():
+    """A rethrow whose type lives in the try-catch table nothing here reads (`G-52`)
+    still contributes a reachable exit — NULL target and all — and this renders the
+    same words `_call_cell` already settled on for it (`bfece6f`), never the type."""
+    row = {**_THROWS_ROW, "handler_signature": None}
+    reachable = [{"root": _THROWS_HANDLER, "caller": _THROWS_HANDLER, "ordinal": 0, "target": None}]
+    text = render_module_document(MODULE, _report_with(row), "a3f91c", reachable_throws=reachable)
+    assert "  - Fails with: (type unread) (thrown)" in text
+
+
+def test_no_fails_with_line_where_neither_half_has_anything():
+    """Nothing declared and nothing reachable renders no line at all — the same
+    restraint `_via_entry` keeps for a row with no library to name."""
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "Fails with" not in text
