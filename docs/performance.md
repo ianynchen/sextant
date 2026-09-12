@@ -15,7 +15,24 @@ is a defect in this document.
 
 ## P-1 — a reactor module analyses in 111s; alone, in 8s
 
-**Status:** open, cause profiled to the query, fix shape agreed, not started.
+**Status: shipped in two steps, 2026-09-12 — `mall-admin` 111s → 8.7s, `orders-service` 7.0s → 2.5s.**
+
+| step | change | `mall-admin` (+3 siblings) | `orders-service` |
+|---|---|---|---|
+| before | — | 108.6s (shapes 39.8s, endpoints 44.1s) | 7.0s |
+| **P-1a** `83f5867` | the nine fact VIEWS (JSON re-extracted on every query) are materialized once per `load_facts` into `fact_*` tables the views point at; 0.4s to build; no index moved any query, none kept | **55.6s** (shapes 5.4s, endpoints 27.8s) | **4.6s** |
+| **P-1b** `556d666` | the 33 fact-only named queries are read once per loaded fact set (cache keyed on name+params, cleared by `load_facts`; rows shared and read-only — the port says so); `method_declarations`/`call_sites` JSON parsed once; and a derivation's list parameter binds as ONE JSON value — DuckDB's client had tried `import pandas` for every value, 459,034 times in one derivation, 8.9s | **8.7s** | **2.5s** |
+
+Local full suite: 4:10 → **1:58**. Output identical on both corpora: every workspace table
+diffed row for row before and after each step. The retry route for a JSON bind that DuckDB's
+cast refuses is counted (`_per_value_retries`) and asserted empty by the pipeline test.
+
+**What remains, measured after P-1b** (`mall-admin` 8.7s): `derive_endpoints` 6.6s — of which
+the `endpoints` statement is 1.6s (28 executions, ~55ms each) and Python folds the rest
+(`single_call.run` 2.1s, `declared_parameters_of` 1.1s, `inherited_rows` 1.1s, `_origin_tiers`
+0.9s); `derive_endpoint_shapes` 1.3s; scan 1.1s; `interpret schemas` 0.7s. See P-4.
+
+*The original analysis, kept for the record:*
 
 **The rule the fix follows** (user, 2026-09-12). Every derivation has two sides. The **root
 side** is what it derives *for* — this module's own classes, their annotations, their call
@@ -268,11 +285,58 @@ is the analyses that cannot be shared, multiplied by P-1's per-analysis cost.
 
 **The fix, in order of expected value:**
 
-1. P-1 — every analysis in the suite pays the same 72-engine re-read.
-2. Cap DuckDB threads per worker (`SET threads = 1` under xdist) so four workers stop
-   oversubscribing four cores; measure before and after on one run.
+1. P-1 — every analysis in the suite pays the same 72-engine re-read. **Shipped**; local
+   suite 4:10 → 1:58. CI figure: the next run of this branch.
+2. ~~Cap DuckDB threads per worker~~ — **measured and refuted** (draft PR #22, run
+   34705066921): pytest 23:25 against the 20:19 baseline with `SET threads = 1` per xdist
+   worker. DuckDB's parallelism inside a pass is worth more than the oversubscription costs.
 3. Split `scripts/check.sh` into separate workflow steps (lint · extractor · pytest) so the
-   pytest log is readable while it runs and a failure is visible in minutes.
+   pytest log is readable while it runs and a failure is visible in minutes. Not started.
 
 **Falsified by** a run where the per-analysis cost on the runner is not the dominant term
 of the slowest tests.
+
+---
+
+## P-3 — export walks every fact payload for redaction, twice
+
+**Status: shipped `c36b360` + `abb98fb`, 2026-09-12 — `mall-admin` export 3.3s → 1.2s.**
+
+**Measured.** `DuckDbWorkspace._stage_fact_redactions` selected every non-`config_entry`
+payload (75,296 on `mall-admin`), parsed and walked each in Python through
+`Redactor.redact_json` (3.26M `_masked` calls, 1.49M regex passes), and ran twice per export —
+4.0s of a 5.4s export under the profiler.
+
+**Fix, the same rule twice.** Staged once per export (keyed on the redactor's rule-set hash,
+cleared by `load_facts`). And filtered early: a DuckDB `regexp_matches` predicate that is a
+measured SUPERSET of the three rules a payload can change under — URL userinfo, a value
+pattern's literal prefix, a key pattern spelled as `normalize_key` run backwards — so only
+payloads a rule can touch reach Python: 75,296 → 592 on `mall-admin`, 3,929 → 4 on
+`orders-service`. The superset is pinned by running the old path against the new over the
+fixture's whole fact set and an adversarial set that covers RE2-vs-Python case folds (the
+review found the Kelvin-sign fold entry was an ASCII `K` — one byte, one under-masked payload;
+fixed and pinned), HTML-safe JSON escapes, upper-case schemes, and matches that exist only
+after the userinfo strip. Bundles byte-identical on both corpora.
+
+## P-4 — the `endpoints` statement runs once per catalog
+
+**Status: measured, not started.** `derive_endpoints.sql` (1,332 lines, ~50 `$params`) executes
+once per annotation-driven catalog: 28–29 times, ~55ms each = 1.4s of `orders-service`'s 2.5s
+analyze (the suite pays this ~25× per run, CI ~5× slower again) and 1.6s of `mall-admin`'s.
+Benchmarked 2026-09-12: the cost is the statement's SIZE — 1,300 terms cost 26–33ms whether
+they are `$` placeholders, literals, a one-row CTE or a temp table — so a prepared statement,
+MATERIALIZED CTEs or comment stripping cannot move it (all measured). Only running it ONCE
+per resolve, over a table of every catalog's parameters joined in, cuts it. That is a rewrite
+of the largest SQL file, the design §8.7 would have asked for at the start; it is the biggest
+single item left for the suite and CI.
+
+## The whole flow, after P-1 and P-3 (analyze → render → export, 2026-09-12)
+
+| stage | `orders-service` | `mall-admin` (+3 siblings) |
+|---|---|---|
+| analyze — scan | 0.3s | 1.1s |
+| analyze — interpret schemas | 0.0s | 0.7s |
+| analyze — resolve | 1.9s | 6.9s |
+| render | 0.3s | 0.5s |
+| export | 0.2s | 1.2s |
+| **total** | **2.7s** | **10.4s** |

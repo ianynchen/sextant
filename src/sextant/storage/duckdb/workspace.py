@@ -1044,6 +1044,9 @@ _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 _FACT_ONLY = frozenset(
     {
         "documents",
+        # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
+        # every other declaration (the merge of the delivery branch added the query).
+        "default_bodies",
         "fields",
         "enum_types",
         "annotations_of",

@@ -63,6 +63,7 @@ wrote by hand.
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Any
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.closed_sets import MethodResolution
@@ -268,19 +269,29 @@ def dispatch_of(workspace: Workspace) -> Dispatch:
 type _Selector = tuple[str, tuple[str, ...]]
 
 
-def _selector_of(name: str, signature: str | None, *, drop: int = 0) -> _Selector:
+def _selector_of(name: str, signature: object, *, drop: int = 0) -> _Selector:
     """`name` plus the erased symbol of every parameter from `drop` on, bare.
 
     `erased_symbol` — the DESCRIPTOR's own answer — before `type.symbol`, for the
     reason `supertype_dispatch._members` gives: a generic parameter's `type` names a
     bare type variable, which is scoped to its own declaration and matches nothing.
+
+    `signature` arrives DECODED (a dict) from `method_declarations`, whose JSON columns the
+    storage parses once per resolve, and as TEXT from `default_bodies`, which it does not;
+    both are accepted here rather than one caller re-encoding what the other decoded.
     """
-    parsed = json.loads(signature) if signature is not None else {}
+    if signature is None:
+        parsed: dict[str, Any] = {}
+    elif isinstance(signature, dict):
+        parsed = signature
+    else:
+        parsed = json.loads(str(signature))
+    declared: list[dict[str, Any]] = list(parsed.get("parameters") or [])
     parameters = tuple(
         bare_descriptor(
             str(parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol", ""))
         )
-        for parameter in (parsed.get("parameters") or [])[drop:]
+        for parameter in declared[drop:]
     )
     return (name, parameters)
 
@@ -308,21 +319,14 @@ def _default_bodies(workspace: Workspace, bodies: dict[str, list[str]]) -> dict[
         if row["enclosing"] is None:
             continue
         symbol = str(row["symbol"])
-        selector = _selector_of(
-            method_name(bare_descriptor(symbol)),
-            str(row["signature"]) if row["signature"] is not None else None,
-        )
+        selector = _selector_of(method_name(bare_descriptor(symbol)), row["signature"])
         declared_by_type[bare_descriptor(str(row["enclosing"]))][selector] = bare_descriptor(symbol)
     result: dict[str, list[str]] = defaultdict(list)
     for row in holder_bodies:
         body = str(row["symbol"])
         if bare_descriptor(body) not in bodies:
             continue
-        selector = _selector_of(
-            str(row["stands_for"]),
-            str(row["signature"]) if row["signature"] is not None else None,
-            drop=1,
-        )
+        selector = _selector_of(str(row["stands_for"]), row["signature"], drop=1)
         interface_method = declared_by_type.get(bare_descriptor(str(row["interface"])), {}).get(
             selector
         )
