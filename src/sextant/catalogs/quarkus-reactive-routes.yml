@@ -1,0 +1,46 @@
+id: quarkus-reactive-routes
+displayName: Quarkus Reactive Routes
+style: annotation_driven
+protocol: http
+direction: inbound
+detect:
+  coordinates:
+    - "io.quarkus:quarkus-reactive-routes"
+measured:
+  - { artifact: io.quarkus:quarkus-reactive-routes, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+requires: [annotation_args]
+
+matches:
+  # NO `type_annotation`, and that is Quarkus's own rule rather than an omission: any
+  # class with a `@Route` method becomes a singleton bean, with or without a CDI scope
+  # annotation (Quarkus guide, "Reactive Routes"). The method annotation is the whole gate.
+  request_body: { annotation: io.quarkus.vertx.web.Body, fallback: none }
+  mapping:
+    # MEASURED at 3.17.5 (`javap`): `@Route` declares `path`, `regex`, `methods`
+    # (`HttpMethod[]`), `type`, `order`, `produces`, `consumes`; `@RouteBase` declares
+    # `path`, `produces`, `consumes`. No aliases on either.
+    path_from: [path]
+    prefix_from: [path]
+    # MEASURED in `ReactiveRoutesProcessor` (quarkus-reactive-routes-deployment 3.17.5):
+    # base + "/" + route, and a route path without a leading "/" gets one prepended.
+    path_separator: "/"
+    consumes_from: [consumes]
+    produces_from: [produces]
+    # The attribute is `methods`, plural, and an enum array — the shape Spring's
+    # `@RequestMapping(method = …)` has under a different name.
+    method_from: methods
+    # `Route$HttpMethod` enumerates exactly these six. A `@Route` without `methods` is
+    # registered for any method (Vert.x `Router.route(path)`), which the six name here.
+    all_methods: [GET, HEAD, POST, PUT, DELETE, OPTIONS]
+    prefix_annotation: io.quarkus.vertx.web.RouteBase
+    annotations:
+      # `@Repeatable(Route.Routes.class)`: two `@Route` on one handler reach the class
+      # file as the container, spelled with `$` as the scanner sees the nested type.
+      - { fqn: io.quarkus.vertx.web.Route, container: io.quarkus.vertx.web.Route$Routes }
+
+# STATED BOUNDARIES, both measured in the processor and neither derived:
+#   * `@Route` with no `path` and no `regex` serves `/` + dashify(method name) —
+#     `helloWorld()` at `/hello-world`. The engine's `construct_name` fallback has no
+#     dashify, so declaring it would publish `/helloWorld`, a wrong row; none is published.
+#   * `@Route(regex = …)` is a pattern, not a path; it derives nothing.

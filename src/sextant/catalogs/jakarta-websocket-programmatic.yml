@@ -1,0 +1,45 @@
+id: jakarta-websocket-programmatic
+displayName: Jakarta WebSocket (programmatic registration)
+# A SEPARATE catalog from `jakarta-websocket.yml` rather than a second block inside it,
+# because a catalog declares ONE style and these are two: the annotated route is
+# `annotation_driven` (an address on a type annotation) and this one is `single_call` (an
+# address in a call argument). Nothing about the two is shared except the protocol.
+style: single_call
+protocol: websocket
+direction: inbound
+detect:
+  coordinates:
+    - "jakarta.websocket:jakarta.websocket-api"
+    - "jakarta.websocket:jakarta.websocket-all"
+measured:
+  - { artifact: jakarta.websocket:jakarta.websocket-api, versions: ["2.1.1"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+requires: [call_site, string_constants]
+matches:
+  # `create` is declared on the nested Builder and is STATIC, so the call site names the
+  # builder type as its owner — `ServerEndpointConfig` itself declares no `create`.
+  owner: jakarta.websocket.server.ServerEndpointConfig$Builder
+  methods:
+    # The specification's other registration route (`@ServerEndpoint` is the first), and
+    # the one an application uses when it computes a path, or serves one endpoint class at
+    # several addresses. A container discovers these through `ServerApplicationConfig`.
+    #
+    # `descriptor` pinned rather than `arity` alone: `create` has exactly one overload at
+    # 2.1.1, and pinning it means a release that adds a second — with the path somewhere
+    # other than argument 1 — derives NOTHING rather than a wrong address. `G-13` is the
+    # cautionary case for the opposite mistake, where a pinned RETURN type silently
+    # dropped every call compiled against another version; this descriptor's return is the
+    # builder itself, which cannot change without the method changing.
+    #
+    # verify: javap -cp $(find ~/.m2 -name 'jakarta.websocket-api-*.jar' | grep -v sources \
+    #         | head -1) 'jakarta.websocket.server.ServerEndpointConfig$Builder' | grep create
+    - { name: create, arity: 2,
+        descriptor: "(Ljava/lang/Class;Ljava/lang/String;)Ljakarta/websocket/server/ServerEndpointConfig$Builder;",
+        url_arg: 1 }
+
+# NO `format_fixed`. `jakarta-websocket.yml` declares none either, and a WebSocket frame's
+# payload format is not a property of the registration — an endpoint may exchange text,
+# binary or JSON, and the class file says which only where a decoder names it. An earlier
+# draft of this file declared `websocket: json` with a comment claiming it was copied from
+# the annotated catalog; that catalog has no such block, the claim was fabricated, and the
+# effect was to give every WebSocket frame row a format nothing had read.

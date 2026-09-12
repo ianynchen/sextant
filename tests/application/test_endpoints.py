@@ -7613,3 +7613,150 @@ def test_a_slice_that_states_nothing_is_refused(tmp_path: Path, block: str, expe
 
     assert expected in str(failure.value)
     assert "invented.yml" in str(failure.value)
+
+
+# W58: the nine Micronaut and Quarkus catalogs, near-missed on the one conjunct an
+# `annotation_driven` catalog fails silently on — the annotation's PACKAGE. Each row is
+# (catalog, construct kind the catalog gates on, type annotation, real method annotation,
+# the address attribute) and the test derives the positive first so a decline on the
+# wrong-package twin is a decline on the name and not on some other conjunct.
+_W58_ANNOTATION_CATALOGS = [
+    pytest.param(
+        "micronaut-http",
+        ConstructKind.CLASS,
+        {"io/micronaut/http/annotation/Controller#": {"value": ["/mn"]}},
+        "io/micronaut/http/annotation/Get#",
+        {"value": ["/orders"]},
+        ("http", "inbound", "GET", "/mn/orders"),
+        id="micronaut-http",
+    ),
+    pytest.param(
+        "micronaut-http-client",
+        ConstructKind.INTERFACE,
+        {"io/micronaut/http/client/annotation/Client#": {"value": ["/inv"]}},
+        "io/micronaut/http/annotation/Get#",
+        {"value": ["/levels"]},
+        ("http", "outbound", "GET", "/inv/levels"),
+        id="micronaut-http-client",
+    ),
+    pytest.param(
+        "micronaut-kafka",
+        ConstructKind.CLASS,
+        {"io/micronaut/configuration/kafka/annotation/KafkaListener#": {}},
+        "io/micronaut/configuration/kafka/annotation/Topic#",
+        {"value": ["orders.placed"]},
+        ("kafka", "inbound", None, "orders.placed"),
+        id="micronaut-kafka",
+    ),
+    pytest.param(
+        "micronaut-kafka-client",
+        ConstructKind.INTERFACE,
+        {"io/micronaut/configuration/kafka/annotation/KafkaClient#": {}},
+        "io/micronaut/configuration/kafka/annotation/Topic#",
+        {"value": ["orders.shipped"]},
+        ("kafka", "outbound", None, "orders.shipped"),
+        id="micronaut-kafka-client",
+    ),
+    pytest.param(
+        "micronaut-jms",
+        ConstructKind.CLASS,
+        {"io/micronaut/jms/annotations/JMSListener#": {"value": ["activeMq"]}},
+        "io/micronaut/jms/annotations/Queue#",
+        {"value": ["orders.queue"]},
+        ("jms", "inbound", None, "orders.queue"),
+        id="micronaut-jms",
+    ),
+    pytest.param(
+        "micronaut-jms-producer",
+        ConstructKind.INTERFACE,
+        {"io/micronaut/jms/annotations/JMSProducer#": {"value": ["activeMq"]}},
+        "io/micronaut/jms/annotations/Queue#",
+        {"value": ["orders.audit"]},
+        ("jms", "outbound", None, "orders.audit"),
+        id="micronaut-jms-producer",
+    ),
+    pytest.param(
+        "micronaut-pubsub",
+        ConstructKind.CLASS,
+        {"io/micronaut/gcp/pubsub/annotation/PubSubListener#": {}},
+        "io/micronaut/gcp/pubsub/annotation/Subscription#",
+        {"value": ["orders-sub"]},
+        ("pubsub", "inbound", None, "orders-sub"),
+        id="micronaut-pubsub",
+    ),
+    pytest.param(
+        "micronaut-pubsub-client",
+        ConstructKind.INTERFACE,
+        {"io/micronaut/gcp/pubsub/annotation/PubSubClient#": {}},
+        "io/micronaut/gcp/pubsub/annotation/Topic#",
+        {"value": ["orders-topic"]},
+        ("pubsub", "outbound", None, "orders-topic"),
+        id="micronaut-pubsub-client",
+    ),
+    # No type annotation at all: any class with a `@Route` method is a Quarkus bean, so
+    # the method annotation's FQN is the ONLY gate this catalog has.
+    pytest.param(
+        "quarkus-reactive-routes",
+        ConstructKind.CLASS,
+        {},
+        "io/quarkus/vertx/web/Route#",
+        {"path": "/orders", "methods": ["io/quarkus/vertx/web/Route$HttpMethod#GET."]},
+        ("http", "inbound", "GET", "/orders"),
+        id="quarkus-reactive-routes",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _W58_ANNOTATION_CATALOGS,
+)
+def test_a_micronaut_or_quarkus_declaration_derives_its_row(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """The paired positive for the near-miss below: the same facts with the real
+    package derive exactly one row, so the decline below is on the name alone."""
+    assert _gate_rows(
+        tmp_path,
+        catalog_id,
+        owner_kind=owner_kind,
+        type_annotations=type_annotations,
+        method_annotation=method_annotation,
+        method_args=method_args,
+    ) == [row]
+
+
+@pytest.mark.declines("micronaut-http")
+@pytest.mark.declines("micronaut-http-client")
+@pytest.mark.declines("micronaut-kafka")
+@pytest.mark.declines("micronaut-kafka-client")
+@pytest.mark.declines("micronaut-jms")
+@pytest.mark.declines("micronaut-jms-producer")
+@pytest.mark.declines("micronaut-pubsub")
+@pytest.mark.declines("micronaut-pubsub-client")
+@pytest.mark.declines("quarkus-reactive-routes")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _W58_ANNOTATION_CATALOGS,
+)
+def test_a_micronaut_or_quarkus_annotation_from_another_package_derives_nothing(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """§10 near-miss for the nine W58 catalogs, on the fully-qualified NAME alone: the
+    type gate, the construct kind, the address attribute and the capability set are all
+    exactly as in the positive above; only the method annotation's package is
+    `com.acme.own`. A wrong FQN in an `annotation_driven` catalog is silent (W53,
+    `G-91`), and this is the test that makes the silence audible."""
+    simple_name = method_annotation.rsplit("/", 1)[1]
+    assert (
+        _gate_rows(
+            tmp_path,
+            catalog_id,
+            owner_kind=owner_kind,
+            type_annotations=type_annotations,
+            method_annotation=f"com/acme/own/{simple_name}",
+            method_args=method_args,
+        )
+        == []
+    ), f"{catalog_id} matched an annotation from another package"

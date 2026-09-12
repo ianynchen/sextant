@@ -106,28 +106,48 @@ def compiled_fixture(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return root
 
 
+@pytest.fixture(scope="module")
+def rendered_fixture(compiled_fixture: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The compiled copy, analysed and rendered ONCE for the module.
+
+    MEASURED 2026-09-12 (`--durations`): eighteen tests here each ran `analyze` + `render`
+    on their own copy, 15s apiece, on one worker — the single longest file in the suite
+    after the vertical slice. `enrich` is what these tests are about, and it reads a
+    workspace that is the same every time; the analysis is not under test.
+    """
+    root = tmp_path_factory.mktemp("rendered") / "orders-service"
+    shutil.copytree(compiled_fixture, root)
+    runner = CliRunner()
+    for command in ("analyze", "render"):
+        result = runner.invoke(cli, ["module", command, str(root)])
+        assert result.exit_code == 0, result.output
+    return root
+
+
 @pytest.fixture
-def module_root(compiled_fixture: Path, tmp_path: Path) -> Path:
-    """One test's own module root: the compiled tree is shared, but
-    `.sextant/` and `.sextant-enrichment.json` must not leak from one test
-    into the next, so each test gets a fresh copy of those two — the only
-    things `analyze`/`render`/`enrich` ever write."""
+def module_root(rendered_fixture: Path, tmp_path: Path) -> Path:
+    """One test's own module root, analysed and rendered: the tree is shared, but
+    `.sextant/` and `.sextant-enrichment.json` must not leak from one test into the next,
+    so each test gets a fresh copy — the only things `enrich` ever writes are in it."""
+    root = tmp_path / "orders-service"
+    shutil.copytree(rendered_fixture, root)
+    return root
+
+
+@pytest.fixture
+def unrendered_root(compiled_fixture: Path, tmp_path: Path) -> Path:
+    """A compiled copy with NO workspace at all, for the one test about what `enrich`
+    says before `render` has run."""
     root = tmp_path / "orders-service"
     shutil.copytree(compiled_fixture, root)
     return root
 
 
-def _analyzed_and_rendered(root: Path) -> None:
-    runner = CliRunner()
-    for command in ("analyze", "render"):
-        result = runner.invoke(cli, ["module", command, str(root)])
-        assert result.exit_code == 0, result.output
-
-
-def test_enrich_refuses_a_workspace_with_no_rendered_document(module_root: Path):
+def test_enrich_refuses_a_workspace_with_no_rendered_document(unrendered_root: Path):
     """2K design §8: the brief is built from the machine-rendered document,
     so a workspace that was only ever analysed is refused, loudly, naming
     `render` — before composing anything or touching an agent."""
+    module_root = unrendered_root
     result = CliRunner().invoke(cli, ["module", "analyze", str(module_root)])
     assert result.exit_code == 0, result.output
 
@@ -139,7 +159,6 @@ def test_enrich_refuses_a_workspace_with_no_rendered_document(module_root: Path)
 
 
 def test_an_unknown_agent_is_refused_naming_the_known_list(module_root: Path):
-    _analyzed_and_rendered(module_root)
     result = CliRunner().invoke(
         cli, ["module", "enrich", str(module_root), "--agent", "not-a-real-agent", "--model", "x"]
     )
@@ -157,7 +176,6 @@ def test_tradewind_api_key_with_no_key_refuses_loudly_naming_the_variable(
     — so this makes no network call even though it exercises the real
     adapter."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    _analyzed_and_rendered(module_root)
     result = CliRunner().invoke(
         cli,
         [
@@ -186,7 +204,6 @@ def test_max_turns_above_the_api_key_ceiling_refuses_via_the_agents_own_validati
     network: the `ValueError` fires in `__init__`, before `run` even checks
     for a key."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    _analyzed_and_rendered(module_root)
     result = CliRunner().invoke(
         cli,
         [
@@ -214,7 +231,6 @@ def test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted(
     a real, falsy-but-meaningful flag value — `is None`, never `or`, is what
     lets it reach the agent's own constructor as `0` rather than silently
     reading as "no flag given" and becoming the CLI's own default of 20."""
-    _analyzed_and_rendered(module_root)
     captured: dict[str, object] = {}
 
     def _constructor(**kwargs: object) -> FakeEnrichmentAgent:
@@ -243,7 +259,6 @@ def test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted(
 
 
 def test_dry_run_writes_only_the_brief_and_instructions_copy(module_root: Path):
-    _analyzed_and_rendered(module_root)
     markdown_path = module_root / ".sextant" / "render" / "architecture.md"
     before = markdown_path.read_bytes()
 
@@ -284,7 +299,6 @@ def test_a_second_runs_brief_carries_the_machine_document_not_the_enriched_one(
     document `render` writes with no overlay present, which is what makes
     "machine-only" a property of the assembly path rather than of this
     fixture's particular claims."""
-    _analyzed_and_rendered(module_root)
     markdown_path = module_root / ".sextant" / "render" / "architecture.md"
     machine_only = markdown_path.read_text(encoding="utf-8")
 
@@ -322,7 +336,6 @@ def test_a_relative_path_argument_resolves_before_the_jail_is_built(
     "relative to" a merely-relative one — and every jailed root is refused
     as a wiring mismatch even though it is genuinely contained. A revert of
     that one line breaks this test."""
-    _analyzed_and_rendered(module_root)
     monkeypatch.chdir(module_root.parent)
 
     result = CliRunner().invoke(cli, ["module", "enrich", module_root.name, "--dry-run"])
@@ -334,7 +347,6 @@ def test_a_relative_path_argument_resolves_before_the_jail_is_built(
 def test_the_happy_path_writes_the_overlay_and_both_assembled_outputs(
     module_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    _analyzed_and_rendered(module_root)
     fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
     _register_fake(monkeypatch, "fake-happy-path", fake)
 
@@ -378,7 +390,6 @@ def test_a_refused_claim_is_reported_and_excluded_from_the_written_overlay(
 ):
     """spec §10's refused-at-ingest case, live through the CLI: the phantom
     member is reported on stdout and never reaches the file (2K design §6)."""
-    _analyzed_and_rendered(module_root)
     claims = [_component(), _component(name="Phantom", members=[PHANTOM_MEMBER])]
     fake = FakeEnrichmentAgent(answers_text=json.dumps(claims))
     _register_fake(monkeypatch, "fake-refusal", fake)
@@ -410,7 +421,6 @@ def test_a_later_assembly_failure_still_prints_the_refusal_report_first(
     been validated — proving the refusal report for index 1 still reaches
     stdout even though the run then errors out, and reaches it BEFORE the
     error, never after."""
-    _analyzed_and_rendered(module_root)
     (module_root / ".sextant.yml").write_text(
         "redact:\n  value_patterns:\n    - llm\n", encoding="utf-8"
     )
@@ -453,7 +463,6 @@ def test_the_checked_in_refused_at_ingest_fixture_pins_its_refusal_report(module
     naming a class this module does not have), ingested for real and its
     refusal report pinned — the `--ingest` door's own proof of spec §10,
     independent of the dynamically-built refusal case above."""
-    _analyzed_and_rendered(module_root)
     answers_path = FIXTURE / "enrich-answers-refused.json"
 
     result = CliRunner().invoke(
@@ -485,7 +494,6 @@ def test_the_checked_in_refused_at_ingest_fixture_pins_its_refusal_report(module
 def test_a_partial_run_is_reported_and_recorded(module_root: Path, monkeypatch: pytest.MonkeyPatch):
     """2K Task 7 ruling 4: an honest record of a truncated run reaches both
     the user-visible report and the workspace's own transcript file."""
-    _analyzed_and_rendered(module_root)
     fake = FakeEnrichmentAgent(
         answers_text=json.dumps([_component()]), partial=True, partial_reason="max_turns"
     )
@@ -510,7 +518,6 @@ def test_a_partial_run_is_reported_and_recorded(module_root: Path, monkeypatch: 
 def test_ingest_validates_an_externally_authored_answers_file(module_root: Path, tmp_path: Path):
     """The universal door (2K design §3): no adapter runs, so `--agent`/
     `--model` label the overlay's provenance rather than selecting one."""
-    _analyzed_and_rendered(module_root)
     answers_path = tmp_path / "answers.json"
     answers_path.write_text(json.dumps([_component(name="Ingested claim")]), encoding="utf-8")
 
@@ -547,7 +554,6 @@ def test_ingest_validates_an_externally_authored_answers_file(module_root: Path,
 
 
 def test_ingest_without_agent_or_model_is_refused(module_root: Path, tmp_path: Path):
-    _analyzed_and_rendered(module_root)
     answers_path = tmp_path / "answers.json"
     answers_path.write_text(json.dumps([_component()]), encoding="utf-8")
 
@@ -575,7 +581,6 @@ def test_config_defaults_are_used_and_a_flag_overrides_them(
     """`.sextant.yml`'s `enrich:` section (2K design §3) supplies `--agent`/
     `--model`/`--max-turns` when a flag does not — flags win, live through
     both a defaulted and an overridden field in the same run."""
-    _analyzed_and_rendered(module_root)
     config_path = module_root / ".sextant.yml"
     config_path.write_text(
         config_path.read_text(encoding="utf-8")
@@ -616,7 +621,6 @@ def test_a_zero_max_turns_from_the_config_reaches_the_agent(
     tool execution. `is None`, never falsy-`or`, is what lets the config's
     own `0` reach the agent here too, mirroring the flag's own
     `test_max_turns_zero_reaches_the_agent_honestly_not_silently_defaulted`."""
-    _analyzed_and_rendered(module_root)
     config_path = module_root / ".sextant.yml"
     config_path.write_text(
         config_path.read_text(encoding="utf-8")
@@ -646,7 +650,6 @@ def test_config_auth_and_session_store_reach_the_agent_and_the_auth_flag_wins(
     over its default here, and `session_store` (config-only, no flag
     counterpart) reaches the agent as a `Path` (cli/app.py's own
     conversion), not the raw string `.sextant.yml` carries."""
-    _analyzed_and_rendered(module_root)
     config_path = module_root / ".sextant.yml"
     config_path.write_text(
         config_path.read_text(encoding="utf-8") + "enrich:\n"
@@ -687,7 +690,6 @@ def test_no_agent_flag_defaults_to_tradewind_so_the_run_fails_at_model_not_agent
     requirement (`--model`), never on an unset `--agent`, which is the only
     way to prove the default actually applies rather than merely being
     documented."""
-    _analyzed_and_rendered(module_root)
 
     result = CliRunner().invoke(cli, ["module", "enrich", str(module_root)])
 

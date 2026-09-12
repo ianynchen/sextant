@@ -140,6 +140,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ParsedPayloadListeners.jsonl",
         "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
+        "ProgrammaticWsConfig$TicketEndpoint.jsonl",
+        "ProgrammaticWsConfig.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -158,6 +160,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "SecondSplitter.jsonl",
         "SecretRepository.jsonl",
         "SharedPathClients.jsonl",
+        "ShipmentRepository$Shipment.jsonl",
+        "ShipmentRepository.jsonl",
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",
@@ -218,7 +222,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 121 since W45: `StompBrokerConfig`, which registers the URL a STOMP client opens.
     # 122 since W46: `OrderFeedClient`, which OPENS one — the direction `G-32` names, and
     # the one this fixture had no instance of at all.
-    assert report.documents == 122
+    # + 4 (2026-09-11): `ProgrammaticWsConfig` and its nested `TicketEndpoint` (`G-34`),
+    # `ShipmentRepository` and its nested `Shipment` (`G-45`).
+    assert report.documents == 126
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -335,6 +341,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ParsedPayloadListeners.jsonl",
         "PayloadShapeController.jsonl",
         "PlaceOrderRequest.jsonl",
+        "ProgrammaticWsConfig$TicketEndpoint.jsonl",
+        "ProgrammaticWsConfig.jsonl",
         "RawJmsBridge.jsonl",
         "RawKafkaConsumers.jsonl",
         "RawKafkaMessageSender.jsonl",
@@ -353,6 +361,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "SecondSplitter.jsonl",
         "SecretRepository.jsonl",
         "SharedPathClients.jsonl",
+        "ShipmentRepository$Shipment.jsonl",
+        "ShipmentRepository.jsonl",
         "ShipmentsSqsListener.jsonl",
         "SoleRefiner.jsonl",
         "Splitter.jsonl",

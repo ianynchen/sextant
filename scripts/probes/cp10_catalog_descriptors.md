@@ -20,7 +20,9 @@ would have waved all twenty-three through.
 jakarta.jms-api 3.1.0, javax.jms-api 2.0.1, spring-cloud-aws-sqs 3.1.1, spring-kafka 3.1.4,
 spring-rabbit 3.1.4, kafka-clients 3.6.2, spring-ws-core 4.1.4,
 spring-cloud-gcp-pubsub 5.1.2, spring-jms 6.1.6, spring-messaging 6.1.6,
-spring-web 6.1.6, spring-websocket 6.1.6 and jakarta.websocket-client-api 2.2.0**. `javax.jms-api 2.0.1` is the LAST release under that
+spring-web 6.1.6, spring-websocket 6.1.6, jakarta.websocket-client-api 2.2.0 and
+jakarta.websocket-api 2.1.1** (the last added 2026-09-11 for row 189, `G-34`; opened with
+`javap -s` rather than assumed from the client-api sibling). `javax.jms-api 2.0.1` is the LAST release under that
 coordinate — the line does not ship again — so it is the only version a Spring Boot 2
 codebase can be on, and W12's `javax-jms.yml` is measured against it here rather than
 being trusted as `jakarta-jms.yml` with the package swapped. A descriptor is
@@ -279,6 +281,7 @@ by a hand-written owner→artifact map.
 | 186 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 187 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 188 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 189 | `jakarta-websocket-programmatic` | `jakarta.websocket.server.ServerEndpointConfig$Builder` | `create` | 2 | `(Ljava/lang/Class;Ljava/lang/String;)Ljakarta/websocket/server/ServerEndpointConfig$Builder;` | `jakarta.websocket-api` | 2.1.1 | declared |
 
 
 ## Verdict

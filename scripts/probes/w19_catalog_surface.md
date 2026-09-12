@@ -423,7 +423,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `purgeQueue` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `receiveMessage` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `removePermission` | `request object` |
-| `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `sendMessage` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `sendMessageBatch` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `setQueueAttributes` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `startMessageMoveTask` | `request object` |

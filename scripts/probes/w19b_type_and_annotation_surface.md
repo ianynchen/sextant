@@ -164,17 +164,10 @@ Prose is what a reader needs and a table is what a test can hold to; this is the
 
 | catalog | kind | container | name |
 |---|---|---|---|
-| `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Aggregator` |
-| `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Filter` |
 | `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Gateway` |
 | `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `MessagingGateway` |
 | `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Poller` |
 | `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Publisher` |
-| `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Router` |
-| `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Splitter` |
-| `spring-integration` | `annotation` | `org.springframework.integration.annotation` | `Transformer` |
-| `spring-integration` | `annotation (channel in `value()`)` | `org.springframework.integration.annotation` | `BridgeFrom` |
-| `spring-integration` | `annotation (channel in `value()`)` | `org.springframework.integration.annotation` | `BridgeTo` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `RevisionRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `CoroutineCrudRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `CoroutineSortingRepository` |
@@ -182,7 +175,6 @@ Prose is what a reader needs and a table is what a test can hold to; this is the
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `ReactiveSortingRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `RxJava3CrudRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-commons` | `RxJava3SortingRepository` |
-| `spring-data-rest` | `type` | `org.springframework.data:spring-data-mongodb` | `MongoRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-mongodb` | `ReactiveMongoRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-r2dbc` | `R2dbcRepository` |
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-cassandra` | `CassandraRepository` |

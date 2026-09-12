@@ -110,6 +110,44 @@ matches:
         # at most one of these two is ever present.
         - { annotation: org.springframework.integration.annotation.InboundChannelAdapter,
             arg: value, direction: outbound }
+        # `G-47`. The seven remaining channel-bearing annotations, each with the attribute
+        # it ACTUALLY declares — read with `javap` at spring-integration-core 6.2.4 rather
+        # than assumed to match `@ServiceActivator`. Two do not: `@Router` declares no
+        # `outputChannel` (its routes are computed, and naming a static one would be a
+        # fabrication), and `@BridgeFrom`/`@BridgeTo` take a bare `value`. A Spring
+        # Integration flow is MADE of these five components plus the two bridges; a module
+        # written with them had every one of its channels absent from the document.
+        #
+        # verify: for a in Aggregator BridgeFrom BridgeTo Filter Router Splitter Transformer; do
+        #   javap -cp $(find ~/.m2 -name 'spring-integration-core-*.jar' | grep -v sources | head -1) \
+        #     org.springframework.integration.annotation.$a | grep -oE '(inputChannel|outputChannel|value)\('; done
+        - { annotation: org.springframework.integration.annotation.Transformer,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.Transformer,
+            arg: outputChannel, direction: outbound }
+        - { annotation: org.springframework.integration.annotation.Filter,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.Filter,
+            arg: outputChannel, direction: outbound }
+        - { annotation: org.springframework.integration.annotation.Splitter,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.Splitter,
+            arg: outputChannel, direction: outbound }
+        - { annotation: org.springframework.integration.annotation.Aggregator,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.Aggregator,
+            arg: outputChannel, direction: outbound }
+        # `@Router`'s `inputChannel` only. It also declares `defaultOutputChannel` and
+        # `channelMappings` — a routing TABLE of channel names — and neither is read: the
+        # channel vocabulary takes one attribute per entry, and a mapping's values are not
+        # one attribute. One read annotation still hides several destinations here, and
+        # that is stated rather than counted as closed.
+        - { annotation: org.springframework.integration.annotation.Router,
+            arg: inputChannel, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.BridgeFrom,
+            arg: value, direction: inbound }
+        - { annotation: org.springframework.integration.annotation.BridgeTo,
+            arg: value, direction: outbound }
 
 # D02's declared SLICE (F2 §3.8, G-47). Measured
 # (`scripts/probes/w19b_type_and_annotation_surface.md` §1): Spring Integration ships
@@ -131,15 +169,6 @@ matches:
 slice:
   outside:
     - owner: org.springframework.integration.annotation
-      annotation_names: [Aggregator, Filter, Splitter, Transformer]
-      why: >
-        Endpoint annotations this catalog does NOT read, each declaring `inputChannel`
-        and `outputChannel` (and `discardChannel` for `@Aggregator` and `@Filter`) —
-        the same attributes `@ServiceActivator` carries and this catalog already reads.
-        A module wiring its integration flow through these has those channels absent
-        from its question list, so a reader sees fewer unanswered destinations than
-        the module really has.
-    - owner: org.springframework.integration.annotation
       annotation_names: [Gateway, MessagingGateway]
       why: >
         The gateway pair, which name a request AND a reply channel
@@ -147,14 +176,6 @@ slice:
         `defaultReplyChannel`). Unread, and they are the shape most likely to matter:
         a messaging gateway is the boundary between an application's own interface and
         the flow behind it, so it is exactly where a reader looks for a destination.
-    - owner: org.springframework.integration.annotation
-      annotation_names: [Router]
-      why: >
-        Declares `inputChannel`, `defaultOutputChannel` AND `channelMappings` — NOT
-        `outputChannel`, which is why it is its own entry rather than grouped with the
-        endpoint annotations above. `channelMappings` is the interesting one: it holds
-        a routing table of channel names, so one unread annotation hides several
-        destinations rather than one.
     - owner: org.springframework.integration.annotation
       annotation_names: [Poller]
       why: >
@@ -168,11 +189,3 @@ slice:
         Declares the channel a method's return value is published to, in a `channel`
         attribute — the same attribute name `@InboundChannelAdapter` uses and this
         catalog reads. Unread.
-    - owner: org.springframework.integration.annotation
-      annotation_names: [BridgeFrom, BridgeTo]
-      why: >
-        Both name a channel, and both carry it in a bare `value()` rather than in an
-        attribute the framework named for a channel — so the enumeration's
-        attribute-name test cannot see them and reports ten where the real count is
-        twelve. Declared here so the two the measurement cannot reach are still on the
-        record, which is the whole reason a slice is written down.

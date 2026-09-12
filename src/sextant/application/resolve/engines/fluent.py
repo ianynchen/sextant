@@ -304,6 +304,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
 
 @dataclass(frozen=True)
+class _JoinFilter:
+    """The execute-join a `terminal_via_argument` mapping narrows to: the built value must
+    be consumed by a call to `method` on one of `owners`. Several owners because one
+    library routinely reaches a wire through more than one client — `SendMessageRequest`
+    goes to `SqsClient` or `SqsAsyncClient` — and a scalar stays valid (§3.1)."""
+
+    owners: tuple[str, ...]
+    method: str
+
+
+@dataclass(frozen=True)
 class _ChainContext:
     """Everything one caller's walk shares across every root and every step
     reached from it — grouped so the recursive walker's own signature stays
@@ -315,7 +326,7 @@ class _ChainContext:
     by_receiver: dict[Any, list[dict[str, Any]]]
     steps: list[dict[str, Any]]
     terminal_names: set[str]
-    via_argument_names: dict[str, dict[str, str] | None]
+    via_argument_names: dict[str, _JoinFilter | None]
     catalog: Catalog
     facts: CallFacts
     carrier_rules: CarrierRules
@@ -1001,7 +1012,7 @@ def _channel_via_forms(entry: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _terminal_index(
     entries: list[Any],
-) -> tuple[set[str], dict[str, dict[str, str] | None]]:
+) -> tuple[set[str], dict[str, _JoinFilter | None]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
     ruling: the catalog marks it `terminal_via_argument: true` on the
@@ -1013,7 +1024,7 @@ def _terminal_index(
     builder.build(); log.debug("…", r)` consumes `build`'s own result too,
     and without a filter that non-executing use would complete the chain."""
     plain: set[str] = set()
-    via_argument: dict[str, dict[str, str] | None] = {}
+    via_argument: dict[str, _JoinFilter | None] = {}
     for entry in entries:
         if isinstance(entry, str):
             plain.add(entry)
@@ -1022,8 +1033,18 @@ def _terminal_index(
         if not marker:
             plain.add(entry["method"])
             continue
+        # `owner` may name SEVERAL types, and a scalar stays valid — the same widening
+        # `matches.owner` already carries (§3.1). One library reaching a wire through two
+        # clients is the ordinary case, not an exotic one: `SendMessageRequest` is handed
+        # to `SqsClient` or to `SqsAsyncClient`, one builder chain, one address, two
+        # receivers. Before this, two entries sharing a method name silently overwrote
+        # each other in this dict and the FIRST one stopped deriving — which is how a
+        # widening can remove coverage instead of adding it.
         via_argument[entry["method"]] = (
-            {"owner": _catalog_symbol(marker["owner"]), "method": marker["method"]}
+            _JoinFilter(
+                owners=catalog_symbols(marker["owner"], "terminal_via_argument.owner"),
+                method=str(marker["method"]),
+            )
             if isinstance(marker, dict)
             else None
         )
@@ -1031,7 +1052,7 @@ def _terminal_index(
 
 
 def _has_execute_join(
-    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: dict[str, str] | None
+    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: _JoinFilter | None
 ) -> bool:
     """Whether some row in this same caller carries an argument whose
     `source` names `site`'s own `result` — the OkHttp `build()` → `newCall()`
@@ -1046,7 +1067,7 @@ def _has_execute_join(
         return False
     for candidate in sites:
         if join_filter is not None and (
-            candidate["owner"] != join_filter["owner"] or candidate["name"] != join_filter["method"]
+            candidate["owner"] not in join_filter.owners or candidate["name"] != join_filter.method
         ):
             continue
         if any(argument.get("source") == result for argument in candidate["arguments"]):

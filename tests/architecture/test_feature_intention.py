@@ -41,7 +41,17 @@ E2E = REPO / "tests" / "e2e"
 # pipeline over real bytecode and reads back what was derived. A file naming none of these
 # is asserting something other than the feature.
 _PIPELINE_MARKERS = ("module", "analyze")
-_DERIVED_MARKERS = ('workspace.query("endpoints")', 'workspace.query("call_edges")', "render")
+# `open_questions` belongs here because a catalog may derive NOTHING ELSE and still be
+# doing its job: `spring-integration.yml` files each channel as a `channel_destination`
+# question, since an in-process pipe has no wire identity to publish. The first version of
+# this list omitted it, and the Async intention test — correct, and asserting on exactly
+# what a reader sees — was rejected as "asserting on nothing derived".
+_DERIVED_MARKERS = (
+    'workspace.query("endpoints")',
+    'workspace.query("call_edges")',
+    'workspace.query("open_questions")',
+    "render",
+)
 
 
 def _fenced(language: str) -> list[str]:

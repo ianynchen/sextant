@@ -35,7 +35,12 @@ matches:
     path_separator: "/"
     # Declared media types (2E Task 5, evidence kind (a)): each mapping
     # annotation's own `consumes`/`produces` attribute, read scalar-or-array
-    # like `path_from`. Neither has an alias to worry about here.
+    # like `path_from`. Neither has an alias to worry about here. The SAME
+    # names are read off the class-level `@RequestMapping` and apply to every
+    # handler that declares none — `ProducesRequestCondition.combine` keeps
+    # the method's condition when non-empty and the class's otherwise (added
+    # 2026-09-12; until then a class-level `produces = "application/xml"`
+    # was dropped and the route read as JSON wherever Jackson was present).
     consumes_from: [consumes]
     produces_from: [produces]
     method_from: method
@@ -55,7 +60,16 @@ matches:
     # (`ParamsRequestCondition.combine` adds one expression set to the other), so two
     # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
     # other and not with a method outside it.
-    discriminators: [params, headers]
+    # `version` since Spring 7.0: API versioning is a REQUEST CONDITION
+    # (`VersionRequestCondition`) that `RequestMappingInfo.equals` compares exactly as it
+    # compares these two. Two handlers on one path with different versions are distinct
+    # mappings Spring serves both of; without this word here they read as identical and a
+    # `routing_conflict` is filed against a correct API. Absent on 6.x, where the attribute
+    # does not exist and so reads as unset — which is the same as not discriminating.
+    #
+    # verify: javap -cp $(find ~/.m2 -name 'spring-web-7*.jar' | grep -v sources | head -1) \
+    #         org.springframework.web.bind.annotation.RequestMapping | grep 'version('
+    discriminators: [params, headers, version]
     # The seventh condition, and the one no class file states: a custom `RequestCondition`
     # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
     # module declaring one is left alone entirely rather than told about a conflict it

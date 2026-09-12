@@ -116,12 +116,27 @@ def module_root(compiled_fixture: Path, tmp_path: Path) -> Path:
     return root
 
 
-def _analyzed_and_rendered(root: Path) -> None:
-    """Prepares `root` through the facade itself, not the CLI — these are
-    facade tests, and `analyze`/`render` are exactly as much "the facade" as
-    `enrich` is."""
+@pytest.fixture(scope="module")
+def rendered_fixture(compiled_fixture: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The compiled copy, analysed and rendered ONCE through the facade itself, not the
+    CLI — these are facade tests, and `analyze`/`render` are exactly as much "the facade"
+    as `enrich` is. MEASURED 2026-09-12 (`--durations`): eight `enrich` tests here each
+    re-ran both, 15s apiece, to reach a workspace that is the same every time."""
+    root = tmp_path_factory.mktemp("rendered") / "orders-service"
+    shutil.copytree(compiled_fixture, root)
     api.analyze(root)
     api.render(root)
+    return root
+
+
+@pytest.fixture
+def rendered_root(rendered_fixture: Path, tmp_path: Path) -> Path:
+    """One `enrich` test's own analysed-and-rendered module root, so what it writes never
+    leaks into the next. The tests OF `analyze` and `render` keep `module_root`, which has
+    no workspace yet — that is what they are testing."""
+    root = tmp_path / "orders-service"
+    shutil.copytree(rendered_fixture, root)
+    return root
 
 
 def _configure_a_model(root: Path) -> None:
@@ -313,15 +328,14 @@ def test_a_workspace_this_build_wrote_is_not_refused_as_stale(module_root: Path)
     assert result.html.is_file()
 
 
-def test_a_malformed_overlay_raises_configurationerror(module_root: Path):
+def test_a_malformed_overlay_raises_configurationerror(rendered_root: Path):
     """`.sextant-enrichment.json` is Sextant's own program artifact — one
     that does not parse is the same class of "written wrong" mistake a bad
     `.sextant.yml` is, and `render` refuses it as a `ConfigurationError`."""
-    _analyzed_and_rendered(module_root)
-    (module_root / ENRICHMENT_FILE).write_text("not json", encoding="utf-8")
+    (rendered_root / ENRICHMENT_FILE).write_text("not json", encoding="utf-8")
 
     with pytest.raises(api.ConfigurationError):
-        api.render(module_root)
+        api.render(rendered_root)
 
 
 # --------------------------------------------------------------------------
@@ -329,63 +343,59 @@ def test_a_malformed_overlay_raises_configurationerror(module_root: Path):
 # --------------------------------------------------------------------------
 
 
-def test_enrich_dry_run_returns_the_brief_path_and_validates_nothing(module_root: Path):
+def test_enrich_dry_run_returns_the_brief_path_and_validates_nothing(rendered_root: Path):
     """Step 1's own requirement. `dry_run=True` calls no agent — `overlay`
     stands in for the one artifact the call actually wrote (the composed
     brief), and `accepted`/`refused`/`partial_reason` are all the honest
     zero/`None` of a run that validated no answer."""
-    _analyzed_and_rendered(module_root)
 
-    result = api.enrich(module_root, dry_run=True)
+    result = api.enrich(rendered_root, dry_run=True)
 
     assert isinstance(result, api.EnrichResult)
-    assert result.overlay == module_root / ".sextant" / "enrich-brief.json"
+    assert result.overlay == rendered_root / ".sextant" / "enrich-brief.json"
     assert result.overlay is not None and result.overlay.is_file()
     assert result.accepted == 0
     assert result.refused == 0
     assert result.partial_reason is None
-    assert not (module_root / ENRICHMENT_FILE).exists()
+    assert not (rendered_root / ENRICHMENT_FILE).exists()
 
 
-def test_enrich_dry_run_and_ingest_together_raise_enrichmenterror(module_root: Path):
-    _analyzed_and_rendered(module_root)
-    answers = module_root / "answers.json"
+def test_enrich_dry_run_and_ingest_together_raise_enrichmenterror(rendered_root: Path):
+    answers = rendered_root / "answers.json"
     answers.write_text("[]", encoding="utf-8")
 
     with pytest.raises(api.EnrichmentError):
-        api.enrich(module_root, dry_run=True, ingest=answers)
+        api.enrich(rendered_root, dry_run=True, ingest=answers)
 
 
 def test_enrich_default_auth_is_api_key_a_library_host_has_no_login(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
+    rendered_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """Step 1's own requirement, and the v1 contract's own asymmetry
     (module docstring): the CLI's own default is `subscription`; embedding
     defaults the opposite way, deliberately, since a service host has no
     login to hand Tradewind. Proven by what actually reaches the agent's own
     constructor, not by reading the default off the signature."""
-    _analyzed_and_rendered(module_root)
-    _configure_a_model(module_root)
+    _configure_a_model(rendered_root)
     fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
     _register_fake(monkeypatch, "fake-default-auth", fake)
 
-    api.enrich(module_root, agent="fake-default-auth")
+    api.enrich(rendered_root, agent="fake-default-auth")
 
     assert fake.captured_kwargs is not None
     assert fake.captured_kwargs["auth"] == "api-key"
 
 
 def test_enrich_accepts_claims_and_writes_the_overlay(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
+    rendered_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    _analyzed_and_rendered(module_root)
-    _configure_a_model(module_root)
+    _configure_a_model(rendered_root)
     fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
     _register_fake(monkeypatch, "fake-happy-path", fake)
 
-    result = api.enrich(module_root, agent="fake-happy-path")
+    result = api.enrich(rendered_root, agent="fake-happy-path")
 
-    assert result.overlay == module_root / ENRICHMENT_FILE
+    assert result.overlay == rendered_root / ENRICHMENT_FILE
     assert result.overlay is not None and result.overlay.is_file()
     assert result.accepted == 1
     assert result.refused == 0
@@ -394,25 +404,23 @@ def test_enrich_accepts_claims_and_writes_the_overlay(
 
 
 def test_enrich_reports_refused_claims_and_partial_reason(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
+    rendered_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    _analyzed_and_rendered(module_root)
-    _configure_a_model(module_root)
+    _configure_a_model(rendered_root)
     claims = [_component(), _component(name="Phantom", members=[PHANTOM_MEMBER])]
     fake = FakeEnrichmentAgent(answers_text=json.dumps(claims))
     _register_fake(monkeypatch, "fake-refusal", fake)
 
-    result = api.enrich(module_root, agent="fake-refusal")
+    result = api.enrich(rendered_root, agent="fake-refusal")
 
     assert result.accepted == 1
     assert result.refused == 1
 
 
-def test_unknown_agent_raises_enrichmenterror_naming_the_known_list(module_root: Path):
-    _analyzed_and_rendered(module_root)
+def test_unknown_agent_raises_enrichmenterror_naming_the_known_list(rendered_root: Path):
 
     with pytest.raises(api.EnrichmentError) as excinfo:
-        api.enrich(module_root, agent="not-a-real-agent")
+        api.enrich(rendered_root, agent="not-a-real-agent")
     assert "not-a-real-agent" in str(excinfo.value)
     assert "tradewind" in str(excinfo.value)
 
@@ -436,28 +444,27 @@ def test_enrich_before_analyze_raises_notanalyzederror(tmp_path: Path):
 
 
 def test_enrich_async_awaited_in_a_running_loop_works_with_the_fake_agent(
-    module_root: Path, monkeypatch: pytest.MonkeyPatch
+    rendered_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """`enrich_async` is the facade's own async entry (module docstring):
     the same composition as `enrich`, run on a worker thread so it can be
     safely awaited from a caller that already has a running loop — an async
     service's own request handler, above all."""
-    _analyzed_and_rendered(module_root)
-    _configure_a_model(module_root)
+    _configure_a_model(rendered_root)
     fake = FakeEnrichmentAgent(answers_text=json.dumps([_component()]))
     _register_fake(monkeypatch, "fake-async", fake)
 
     async def _run() -> api.EnrichResult:
-        return await api.enrich_async(module_root, agent="fake-async")
+        return await api.enrich_async(rendered_root, agent="fake-async")
 
     result = asyncio.run(_run())
 
     assert result.accepted == 1
-    assert result.overlay == module_root / ENRICHMENT_FILE
+    assert result.overlay == rendered_root / ENRICHMENT_FILE
 
 
 def test_sync_enrich_called_from_a_running_loop_raises_the_adapters_own_message(
-    module_root: Path,
+    rendered_root: Path,
 ):
     """The failure `enrich_async` exists to avoid: calling the plain,
     synchronous `enrich` from a coroutine already running under
@@ -468,11 +475,10 @@ def test_sync_enrich_called_from_a_running_loop_raises_the_adapters_own_message(
     (`except Exception as failure: raise EnrichmentAgentError(f"tradewind
     run failed: {failure}")`) is what surfaces here, pinned by message,
     unchanged by this task."""
-    _analyzed_and_rendered(module_root)
-    _configure_a_model(module_root)
+    _configure_a_model(rendered_root)
 
     async def _run() -> None:
-        api.enrich(module_root, agent="tradewind", auth="api-key")
+        api.enrich(rendered_root, agent="tradewind", auth="api-key")
 
     with pytest.raises(api.EnrichmentError) as excinfo:
         asyncio.run(_run())
@@ -502,10 +508,9 @@ def test_sync_enrich_called_from_a_running_loop_raises_the_adapters_own_message(
 # --------------------------------------------------------------------------
 
 
-def test_export_writes_a_bundle_with_the_manifest(module_root: Path):
-    _analyzed_and_rendered(module_root)
+def test_export_writes_a_bundle_with_the_manifest(rendered_root: Path):
 
-    result = api.export(module_root)
+    result = api.export(rendered_root)
 
     assert isinstance(result, api.ExportResult)
     assert result.bundle.is_dir()

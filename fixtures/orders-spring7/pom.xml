@@ -1,0 +1,28 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-spring7</artifactId>
+  <version>1.0.0</version>
+  <!-- The Spring 7 surface, kept SEPARATE from `orders-service` (6.1.6) rather than
+       bumping it: `@RequestMapping(version = …)` exists only from 7.0, and moving the
+       main fixture's Spring would move every one of its pinned figures for a change that
+       exercises one attribute. One module, one framework version, one reason to exist. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-webmvc</artifactId>
+      <version>7.0.9</version>
+    </dependency>
+    <!-- JAX-RS: the API alone. Quarkus, Helidon, Jersey and RESTEasy all program against
+         it; a catalog reading the annotations reads all four. -->
+    <dependency>
+      <groupId>jakarta.ws.rs</groupId>
+      <artifactId>jakarta.ws.rs-api</artifactId>
+      <version>4.0.0</version>
+    </dependency>
+  </dependencies>
+</project>

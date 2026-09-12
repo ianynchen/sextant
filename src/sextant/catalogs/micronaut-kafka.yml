@@ -1,0 +1,30 @@
+id: micronaut-kafka
+displayName: Micronaut Kafka (listener)
+style: annotation_driven
+protocol: kafka
+direction: inbound
+detect:
+  coordinates:
+    - "io.micronaut.kafka:micronaut-kafka"
+measured:
+  - { artifact: io.micronaut.kafka:micronaut-kafka, versions: ["5.6.0"],
+      identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+requires: [annotation_args]
+# One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
+# and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
+# annotation for both sides and the class-level marker decides which. Two catalogs gating
+# on different markers derive each destination once.
+matches:
+  # `@KafkaListener` marks the CLASS; `@Topic` on each method names what it consumes.
+  type_annotation: io.micronaut.configuration.kafka.annotation.KafkaListener
+  # MEASURED (`javap` on micronaut-kafka 5.6.0 `KafkaMessagingBodyBinder`): the body
+  # binder keys on `@MessageBody`; an unannotated sole parameter is the message by default.
+  request_body: { annotation: io.micronaut.messaging.annotation.MessageBody, fallback: sole_unannotated }
+  mapping:
+    path_from: [value, patterns]
+    prefix_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: io.micronaut.configuration.kafka.annotation.Topic }

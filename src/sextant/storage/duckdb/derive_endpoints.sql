@@ -811,7 +811,30 @@ prefixes AS (
         list_extract(list_filter(list_transform(
             $peer_from::VARCHAR[],
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
-        ), v -> v IS NOT NULL), 1) AS peer
+        ), v -> v IS NOT NULL), 1) AS peer,
+        -- Class-level media, read off the prefix annotation with the SAME
+        -- attribute names ($consumes_from/$produces_from) the method
+        -- annotations use, because every framework catalogued so far spells
+        -- them identically on both levels. Applied below only where the
+        -- method declared none: the frameworks' own combine rule returns the
+        -- METHOD's declaration whenever it is non-empty and the class's
+        -- otherwise, never a union — which is what `coalesce` says and what a
+        -- union would get wrong (the measurement is recorded on the catalogs
+        -- that declare these words, 2026-09-12). Before this a class-level
+        -- `produces = "application/xml"` derived NULL, and a module with a
+        -- JSON converter present would have called that XML route `json`.
+        list_extract(list_filter(list_transform(
+            $consumes_from::VARCHAR[],
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1) AS consumes_list,
+        list_extract(list_filter(list_transform(
+            $produces_from::VARCHAR[],
+            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
+                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
+                                    [a.args ->> n]) END
+        ), v -> v IS NOT NULL), 1) AS produces_list
     FROM annotations_effective a
     WHERE list_contains($prefix_annotation, a.annotation)
 ),
@@ -1141,8 +1164,10 @@ derived AS (
         -- Raw per-row lists (evidence kind (a): mapping attributes) — still
         -- to be unioned and JSON-normalized below, per row group sharing a
         -- wire identity plus handler/caller/resolution/evidence/catalog_id.
-        m.consumes_list AS consumes_list,
-        m.produces_list AS produces_list
+        -- The method's own declaration first, the class's where the method
+        -- made none (`prefixes` above says why that is coalesce, not union).
+        coalesce(m.consumes_list, p.consumes_list) AS consumes_list,
+        coalesce(m.produces_list, p.produces_list) AS produces_list
     FROM mappings m
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
