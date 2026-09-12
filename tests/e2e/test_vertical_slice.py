@@ -11,9 +11,9 @@ from fixture_build import compile_fixture
 from sextant.application.enrich.validate import validate_overlay
 from sextant.cli.app import cli
 from sextant.domain.enrichment import load_overlay
-from sextant.domain.factfile import read_fact_file
+from sextant.domain.factfile import read_fact_file, redact_config_entry_line
 from sextant.domain.ignorefile import IgnoreRules
-from sextant.domain.redaction import REDACTED, Redactor
+from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.ingress.detect.sextant_config import read_redaction_rules
 from sextant.resources import instructions_path
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -1620,6 +1620,77 @@ def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace
     # masked this bundle — two hashes, two moments (D06 §3).
     local = (tmp_path / "facts").rglob("*.jsonl")
     assert any("hunter2-fixture" in path.read_text(encoding="utf-8") for path in local)
+
+
+def test_the_export_prefilter_admits_every_fact_payload_the_walk_would_change(
+    analyzed_workspace_copy: Path,
+):
+    """The export's redaction staging hands a fact payload to `redact_json`
+    only when a SQL predicate (`Redactor.json_text_prefilter`) says a rule
+    could touch it. The predicate is claimed to be a SUPERSET of "the walk
+    would change this payload"; this measures the claim on the fixture's
+    whole fact set — every fact kind it has, thousands of distinct payloads —
+    rather than arguing it: the map staged through the predicate equals the
+    map the old path computed by walking every payload, and every payload the
+    predicate turns away comes back from the walk unchanged.
+
+    Run under the fixture's own rules, which plant credentials the walk masks
+    (so the maps are not empty), and again with value patterns, which the
+    fixture does not add and which take the predicate's third branch. The
+    last assertion is the point of the exercise: the predicate turns away
+    more than ninety-nine payloads in a hundred here, which is the whole of
+    what it buys."""
+    redactors = [
+        Redactor.from_rules(read_redaction_rules(FIXTURE)),
+        Redactor.from_rules(
+            RedactionRules(value_patterns=("sk-live-[a-z0-9-]+", r"(?i)bearer\s+\S+"))
+        ),
+    ]
+    workspace = DuckDbWorkspace(analyzed_workspace_copy / "workspace.duckdb")
+    connection = workspace._connection
+    payloads = connection.execute(
+        "SELECT DISTINCT kind, payload::VARCHAR, (payload ->> 'value') IS NOT NULL FROM raw_facts"
+    ).fetchall()
+    kinds = {str(kind) for kind, _, _ in payloads}
+    assert {"call_site", "config_entry", "symbol", "annotation"} <= kinds
+    for redactor in redactors:
+        # The old path, exactly as `_stage_fact_redactions` walked it before the
+        # predicate existed: every payload, a `config_entry` through its own key
+        # rule first.
+        walked: dict[str, str] = {}
+        for kind, text, has_value in payloads:
+            text = str(text)
+            if kind == "config_entry":
+                if not has_value:
+                    continue
+                masked = redactor.redact_json(redact_config_entry_line(text, redactor))
+            else:
+                masked = redactor.redact_json(text)
+            if masked != text:
+                walked[text] = masked
+        assert walked, "the fixture plants credentials, so the walk masks something"
+
+        workspace._stage_fact_redactions(redactor)
+        staged = dict(
+            connection.execute("SELECT original, masked FROM redacted_payloads").fetchall()
+        )
+        assert staged == walked
+
+        prefilter = redactor.json_text_prefilter()
+        assert prefilter is not None
+        admitted = {
+            str(text)
+            for (text,) in connection.execute(
+                "SELECT DISTINCT payload::VARCHAR FROM raw_facts "
+                "WHERE kind <> 'config_entry' AND regexp_matches(payload::VARCHAR, ?)",
+                [prefilter],
+            ).fetchall()
+        }
+        for kind, text, _ in payloads:
+            if kind != "config_entry" and str(text) not in admitted:
+                assert redactor.redact_json(str(text)) == str(text)
+        assert len(admitted) * 100 < len(payloads)
+    workspace.close()
 
 
 def test_the_manifest_names_the_rule_set_that_masked_the_bundle(full_run: Path):

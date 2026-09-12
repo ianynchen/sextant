@@ -1196,6 +1196,173 @@ def test_two_exports_of_one_workspace_are_byte_identical(tmp_path: Path):
     workspace.close()
 
 
+def _call_site_facts_carrying(root: Path, value: str) -> None:
+    """One call_site fact whose single argument is `value` — the shape a
+    credential reaches the argument grammar in."""
+    document = Document(
+        document_id="doc_secret",
+        relative_path="com/acme/A.java",
+        module_id="com.acme:m",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=5,
+        scanner_id="sextant-jvm-extractor",
+        class_name="com/acme/A.class",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    write_fact_file(
+        root / "A.jsonl",
+        document,
+        [
+            CallSiteFact(
+                document_id="doc_secret",
+                caller="mod com/acme/A#go(sig_1).",
+                target=CallTarget(
+                    owner="x/Client#", name="post", descriptor="(Ljava/lang/String;)V"
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                arguments=[CallArgument(kind="string", value=value)],
+            ),
+        ],
+    )
+
+
+def _exported_argument_values(bundle: Path) -> set[str]:
+    """Every string-literal argument value the bundle's call-site facts carry."""
+    return {
+        str(value)
+        for (value,) in duckdb.sql(
+            "SELECT unnest(from_json(payload -> 'arguments', '[\"JSON\"]')) ->> 'value' "
+            f"FROM read_parquet('{bundle / 'facts' / '*.parquet'}') WHERE kind = 'call_site'"
+        ).fetchall()
+        if value is not None
+    }
+
+
+# The texts `test_the_prefilter_admits_every_payload_the_walk_would_change` runs,
+# spelled as a JSON writer spells them (the strings are Python source, so `\\/`
+# here is `\/` in the text). Each is a fact payload shape or a fragment of one;
+# what they are chosen for is the seam between the decoded string a rule reads
+# and the encoded text the predicate reads: escapes inside a URL's userinfo,
+# `/` spelled `\/`, a non-ASCII letter spelled both ways, a name in each
+# separator and case spelling `normalize_key` folds, and the prose and
+# expression shapes the rules deliberately leave alone.
+_PREFILTER_TEXTS = [
+    '{"value":"https://user:hunter2@billing.internal/pay"}',
+    '{"value":"https:\\/\\/user:hunter2@billing.internal"}',
+    '{"value":"http://us\\"er:p@host"}',
+    '{"value":"http://us\\ter:p@host"}',
+    '{"value":"user@host"}',
+    '{"value":"${jdbc.url}@x"}',
+    '{"value":"jdbc:postgresql://db/orders"}',
+    '[{"kind":"string","value":"Authorization"},{"kind":"string","value":"Bearer x"}]',
+    '[{"kind":"string","value":"api_key"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"API-KEY"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"X-Api-Key"},{"kind":"string","value":"k"}]',
+    '[{"kind":"string","value":"apiKey"},{"kind":"array","elements":[{"kind":"string","value":"k"}]}]',
+    '[{"kind":"string","value":"password"}]',
+    '[{"kind":"string","value":"Changed password for {}"},{"kind":"string","value":"bob"}]',
+    '[{"kind":"string","value":"a"},{"kind":"string","value":"b"}]',
+    '{"password":"/billing/invoices","token":"order-events"}',
+    '{"value":"sk-live-abc123"}',
+    '{"value":"SK-LIVE-abc123"}',
+    '{"value":"\u017fK-live-abc123"}',
+    '{"value":"\\u017fK-live-abc123"}',
+    '{"value":"BEARER tok"}',
+    '{"value":"beaRER\\ttok"}',
+    '{"value":"bearer"}',
+    '{"value":"x.env=1"}',
+    '{"value":"xaenv=1"}',
+    '{"value":"\u2014 \u00e9"}',
+    '{"value":"\\u2014 \\u00e9"}',
+    '{"value":"4111111111111111"}',
+    '{"kind":"symbol","symbol":"com/acme/Secret#","name":"Secret"}',
+]
+
+_PREFILTER_REDACTORS = [
+    Redactor.from_rules(),
+    Redactor.from_rules(RedactionRules(key_patterns=("dsn",))),
+    Redactor.from_rules(
+        RedactionRules(value_patterns=("sk-live-[a-z0-9]+", r"(?i)bearer\s+\S+", r"\.env="))
+    ),
+    Redactor.from_rules(RedactionRules(value_patterns=(r"(?i)sk-live-[a-z0-9]+",))),
+    Redactor.from_rules(RedactionRules(value_patterns=("[0-9]{16}",))),
+]
+
+
+def test_the_prefilter_admits_every_payload_the_walk_would_change():
+    """The one property `_stage_fact_redactions`' SQL prefilter rests on, run
+    where RE2 actually runs: for every text and every rule set, a payload the
+    walk changes is a payload the predicate matches. The reverse is not
+    claimed — the predicate is allowed to admit more, and does — so the two
+    counts at the end say the test is not vacuous: some texts change, and
+    more texts than those are turned away, on the same rule set.
+
+    Evaluated through DuckDB rather than Python's `re`, because the predicate
+    is written in RE2's dialect and the two disagree exactly where it matters
+    (case folding, `\\s`)."""
+    connection = duckdb.connect()
+    changed = 0
+    turned_away = 0
+    for redactor in _PREFILTER_REDACTORS:
+        prefilter = redactor.json_text_prefilter()
+        for text in _PREFILTER_TEXTS:
+            walk_changes_it = redactor.redact_json(text) != text
+            admitted = prefilter is None or bool(
+                connection.execute("SELECT regexp_matches(?, ?)", [text, prefilter]).fetchone()[0]
+            )
+            assert admitted or not walk_changes_it, (text, prefilter)
+            changed += walk_changes_it
+            turned_away += not admitted
+    connection.close()
+    assert changed >= 12 and turned_away >= 20
+
+
+def test_the_second_export_reuses_the_payloads_the_first_staged(tmp_path: Path):
+    """`export_tables` and `export_facts` join the same payload map, and
+    computing it was the largest cost of exporting a workspace (1.1s of
+    `mall-admin`'s 3.3s, paid twice). The second call re-stages the rows the
+    first computed: the redactor is not consulted again, and the bundle is
+    masked exactly as before."""
+    _call_site_facts_carrying(tmp_path / "facts", "https://user:hunter2@billing.internal/pay")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    redactor = Redactor.from_rules()
+    bundle = tmp_path / "bundle"
+    workspace.export_tables(bundle, redactor)
+
+    def not_again(text: str) -> str:
+        raise AssertionError("the second export re-derived the payload map")
+
+    redactor.redact_json = not_again  # type: ignore[method-assign]
+    workspace.export_facts(bundle, redactor)
+    workspace.close()
+    assert _exported_argument_values(bundle) == {"https://billing.internal/pay"}
+
+
+def test_reloading_facts_forgets_the_staged_payloads(tmp_path: Path):
+    """The kept rows describe one `raw_facts`; `load_facts` is its one writer
+    and clears them. Pinned on the failure that matters: a workspace exported
+    once with nothing to mask, then reloaded with a credential, must mask the
+    credential — a stale map would ship it in the clear."""
+    _call_site_facts(tmp_path / "first")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "first")
+    redactor = Redactor.from_rules()
+    workspace.export_facts(tmp_path / "one", redactor)
+    assert _exported_argument_values(tmp_path / "one") == {"/billing/invoices"}
+
+    _call_site_facts_carrying(tmp_path / "second", "https://user:hunter2@billing.internal/pay")
+    workspace.load_facts(tmp_path / "second")
+    workspace.export_facts(tmp_path / "two", redactor)
+    workspace.close()
+    assert _exported_argument_values(tmp_path / "two") == {"https://billing.internal/pay"}
+
+
 def test_module_dependencies_projects_the_versions_beside_the_coordinates(tmp_path: Path):
     """F1. The two travel on one `module` fact and must reach a reader on one
     row: a version with no coordinate beside it identifies nothing, and a

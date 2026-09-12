@@ -8,7 +8,14 @@ import json
 
 import pytest
 
-from sextant.domain.redaction import REDACTED, RedactionError, RedactionRules, Redactor
+from sextant.domain.redaction import (
+    BUILTIN_KEY_PATTERNS,
+    REDACTED,
+    RedactionError,
+    RedactionRules,
+    Redactor,
+    _literal_prefix,
+)
 
 
 def _plain() -> Redactor:
@@ -201,3 +208,92 @@ def test_redact_json_returns_an_untouched_document_character_for_character():
     nothing (NFR-1)."""
     text = '[ {"kind": "string",  "value": "/billing/invoices"} ]'
     assert _plain().redact_json(text) == text
+
+
+# `json_text_prefilter` and the literal-prefix reader under it. The claim that
+# matters — the predicate admits every document the walk changes — is pinned
+# where RE2 runs (`tests/storage/test_workspace.py`, over adversarial texts, and
+# `tests/e2e/test_vertical_slice.py`, over a whole analysed fact set). What is
+# pinned HERE is the reading of a pattern: which characters are taken as its
+# literal prefix and which shape gives up, because a prefix read one character
+# too long is a document excluded that the walk would have masked.
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("sk-live-[a-z0-9]+", ("sk-live-", False)),
+        (r"AKIA[0-9A-Z]{16}", ("AKIA", False)),
+        (r"(?i)bearer\s+\S+", ("bearer", True)),
+        (r"\.env=.*", (".env=", False)),
+        ("my_secret_[0-9]+", ("my_secret_", False)),
+        # A quantifier makes the character before it optional: `c` is not required.
+        ("abc?", ("ab", False)),
+        ("abc*d", ("ab", False)),
+        ("abc{0,3}", ("ab", False)),
+        # A group after the prefix does not disturb it, even one with alternation.
+        ("x(a|b)", ("x", False)),
+        # Characters JSON may not spell as themselves end the prefix.
+        ("ab/c", ("ab", False)),
+        ('q"r', ("q", False)),
+        ("ab\\\\c", ("ab", False)),
+        ("abé", ("ab", False)),
+    ],
+)
+def test_the_literal_prefix_of_a_value_pattern(pattern: str, expected: tuple[str, bool]):
+    assert _literal_prefix(pattern) == expected
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Nothing literal before the first thing that is not.
+        "[0-9]{16}",
+        "^xyz",
+        r"\d+",
+        "(abc)",
+        ".*secret",
+        # Alternation at the top: a match may begin with either branch.
+        "a|b",
+        r"a\|b|c",
+        # Verbose mode: whitespace and `#` are not literals, so nothing is read.
+        "(?x) a b",
+        # A quantifier on the only character.
+        "a?",
+    ],
+)
+def test_a_value_pattern_with_no_literal_prefix_gives_up(pattern: str):
+    assert _literal_prefix(pattern) is None
+
+
+def test_the_prefilter_names_every_built_in_rule_and_nothing_a_repo_did_not_add():
+    """One alternative per rule: the userinfo strip, and each built-in key
+    pattern with `-` and `_` allowed between its characters — `normalize_key`
+    run backwards, so `api_key`, `api-key` and `apiKey` all fall inside it."""
+    prefilter = _plain().json_text_prefilter()
+    assert prefilter is not None
+    alternatives = prefilter.split("|")
+    assert alternatives[0] == r":\\?/\\?/[^/?#\s@]*@"
+    assert alternatives[1:] == [
+        "(?i:" + "[-_]*".join(pattern) + ")" for pattern in BUILTIN_KEY_PATTERNS
+    ]
+
+
+def test_the_prefilter_gives_up_when_a_value_pattern_has_no_prefix():
+    """A value pattern nothing short of running it can rule out means no
+    document can be ruled out — the caller walks every one, as it did before
+    the prefilter existed. Refusing is the safe answer; a predicate that
+    ignored such a pattern would exclude documents that pattern masks."""
+    redactor = Redactor.from_rules(RedactionRules(value_patterns=("[0-9]{16}", "sk-live-.*")))
+    assert redactor.json_text_prefilter() is None
+
+
+def test_a_key_pattern_no_argument_literal_could_carry_adds_nothing():
+    """The paired rule reads only `_KEY_TOKEN`-shaped literals, so a key
+    pattern with a character outside that shape can never fire there; it is
+    still applied to configuration keys, which this predicate does not cover."""
+    widened = Redactor.from_rules(RedactionRules(key_patterns=("dsn", "clé", "a/b")))
+    prefilter = widened.json_text_prefilter()
+    assert prefilter is not None
+    assert "(?i:d[-_]*s[-_]*n)" in prefilter
+    assert "clé" not in prefilter and "a[-_]*/" not in prefilter
