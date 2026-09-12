@@ -240,6 +240,32 @@ SURFACES = (
         "2.25.31",
         "G-43",
     ),
+    # `G-31` (w60). `KTable` is NOT enumerated: it names no method in
+    # `kafka-streams.yml`'s own `matches.methods` at all — `KStream.to()`, not
+    # `KTable`, is the call site `customers.toStream().to(...)` reaches — so it is
+    # not in that catalog's `matches.owner` either, and a slice measures a claimed
+    # surface, not an owner mentioned in passing.
+    Surface(
+        "kafka-streams",
+        "org.apache.kafka.streams.StreamsBuilder",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
+    Surface(
+        "kafka-streams",
+        "org.apache.kafka.streams.kstream.KStream",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
+    Surface(
+        "kafka-streams",
+        "org.apache.kafka.streams.Topology",
+        "org.apache.kafka:kafka-streams",
+        "3.6.2",
+        "G-31",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and
@@ -297,11 +323,15 @@ def jar(artifact: str, version: str) -> Path:
 def self_reported_version(archive: Path) -> str:
     """The version the jar records about ITSELF (§5.4).
 
-    Two places, because different publishers use different ones and neither is
-    universal — the same pair CP-10's harness reads. The Spring artifacts write
+    THREE places, because different publishers use different ones and none is
+    universal — the same set CP-10's harness reads. The Spring artifacts write
     `Implementation-Version:` into the manifest; the AWS SDK writes none at all and
     records its version only in Maven's `pom.properties`, which is still the
-    archive's own statement about itself rather than the path it was cached at."""
+    archive's own statement about itself rather than the path it was cached at.
+    Kafka Streams (`G-31`, w60) writes neither: its own version lives in
+    `kafka/kafka-streams-version.properties`, at a DIFFERENT path than the raw
+    client's `kafka/kafka-version.properties` — measured with `unzip -l` rather
+    than assumed from the sibling artifact."""
     with zipfile.ZipFile(archive) as zf:
         try:
             manifest = zf.read("META-INF/MANIFEST.MF").decode("utf-8", "replace")
@@ -321,6 +351,15 @@ def self_reported_version(archive: Path) -> str:
             for line in zf.read(name).decode("utf-8", "replace").splitlines():
                 if line.startswith("version="):
                     return line.split("=", 1)[1].strip()
+        try:
+            kafka_properties = zf.read("kafka/kafka-streams-version.properties").decode(
+                "utf-8", "replace"
+            )
+        except KeyError:
+            kafka_properties = ""
+        for line in kafka_properties.splitlines():
+            if line.startswith("version="):
+                return line.split("=", 1)[1].strip()
     return "the archive records no version about itself"
 
 

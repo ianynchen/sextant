@@ -51,6 +51,10 @@ ARTIFACTS=(
   # against the jar rather than against that expectation.
   "javax.jms|javax.jms-api|2.0.1|pom.properties|version"
   "org.apache.kafka|kafka-clients|3.6.2|kafka/kafka-version.properties|version"
+  # G-31 (w60). Kafka Streams writes its OWN version file, at a different path than
+  # the raw client jar's `kafka/kafka-version.properties` — measured with `unzip -l`
+  # rather than assumed from the sibling artifact.
+  "org.apache.kafka|kafka-streams|3.6.2|kafka/kafka-streams-version.properties|version"
   "org.springframework|spring-jms|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   # W43. `SimpMessagingTemplate` lives here, and `convertAndSend` is declared one
   # level up on `MessageSendingOperations<D>` — so the harness's superclass walk is

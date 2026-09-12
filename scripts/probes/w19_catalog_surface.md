@@ -5,11 +5,13 @@ script's own output, pasted verbatim.
 
 **Version scope (§5.4).** Read against **spring-jms 6.1.6**, **spring-amqp 3.1.4**,
 **spring-rabbit 3.1.4**, **spring-cloud-aws-sqs 3.1.1**, **spring-cloud-gcp-pubsub
-5.1.2**, **spring-webflux 6.1.6** and **sqs 2.25.31** — each self-reported by the
-archive, from `Implementation-Version:` where the publisher writes one and from
+5.1.2**, **spring-webflux 6.1.6**, **sqs 2.25.31** and — added 2026-09-12 for `G-31`,
+w60 — **kafka-streams 3.6.2** — each self-reported by the
+archive, from `Implementation-Version:` where the publisher writes one, from
 Maven's `pom.properties` where it does not (the AWS SDK writes no manifest version at
-all). The run ABORTS when a jar's self-report disagrees with the coordinate that
-resolved it. Every version here is one the catalog it measures already names in its
+all), or from Kafka Streams' own `kafka/kafka-streams-version.properties` where it
+writes neither. The run ABORTS when a jar's self-report disagrees with the coordinate
+that resolved it. Every version here is one the catalog it measures already names in its
 own `measured:` block, except the three that had none — so a surface counted here is
 bounded by the same evidence as the rules it is counted against. A release between
 any two of these is unverified: a class gaining a method changes the denominator.
@@ -91,27 +93,30 @@ Methods every class carries are excluded from both sides of every count: <clinit
 
 ### 1. How much of each owner's surface the catalog reads
 
-| gap | catalog | owner | 2.25.31 | 3.1.1 | 3.1.4 | 5.1.2 | 6.1.6 | reads |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | 49 | **5 of 49** |
-| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | 10 | **5 of 10** |
-| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | **4 of 88** |
-| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | **4 of 8** |
-| G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | **1 of 12** |
-| G-44 | `spring-sqs-template` | `SqsOperations` | — | 4 | — | — | — | **1 of 4** |
-| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | 20 | — | **11 of 20** |
-| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | 14 | **3 of 14** |
-| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | 3 | **3 of 3** |
-| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | 6 | **1 of 6** |
-| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
-| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | 8 | **1 of 8** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | 42 | **10 of 42** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | 2 | **1 of 2** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | 45 | **10 of 45** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | 2 | **1 of 2** |
-| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | 20 | **0 of 20** |
-| G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | **1 of 29** |
-| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | **1 of 28** |
+| gap | catalog | owner | 2.25.31 | 3.1.1 | 3.1.4 | 3.6.2 | 5.1.2 | 6.1.6 | reads |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | — | 49 | **5 of 49** |
+| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | — | 10 | **5 of 10** |
+| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | 88 | — | — | — | **4 of 88** |
+| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | 8 | — | — | — | **4 of 8** |
+| G-44 | `spring-sqs-template` | `SqsTemplate` | — | 12 | — | — | — | — | **1 of 12** |
+| G-44 | `spring-sqs-template` | `SqsOperations` | — | 4 | — | — | — | — | **1 of 4** |
+| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | 20 | — | **11 of 20** |
+| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | 14 | **3 of 14** |
+| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | 3 | **3 of 3** |
+| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | 6 | **1 of 6** |
+| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | 20 | **0 of 20** |
+| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | 8 | **1 of 8** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | 42 | **10 of 42** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | 2 | **1 of 2** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | 45 | **10 of 45** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | 2 | **1 of 2** |
+| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | 20 | **0 of 20** |
+| G-43 | `aws-sqs-sdk` | `SqsClient` | 29 | — | — | — | — | — | **1 of 29** |
+| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | 28 | — | — | — | — | — | **1 of 28** |
+| G-31 | `kafka-streams` | `StreamsBuilder` | — | — | — | 6 | — | — | **3 of 6** |
+| G-31 | `kafka-streams` | `KStream` | — | — | — | 28 | — | — | **1 of 28** |
+| G-31 | `kafka-streams` | `Topology` | — | — | — | 7 | — | — | **2 of 7** |
 
 - A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
 
@@ -149,6 +154,9 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-webflux-router` | `RouterFunctions$Builder` | 20 | **10** | **0** | **11** | **14** |
 | `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
 | `aws-sqs-sdk` | `SqsAsyncClient` | 27 | **0** | **24** | **0** | **24** |
+| `kafka-streams` | `StreamsBuilder` | 3 | **0** | **0** | **0** | **0** |
+| `kafka-streams` | `KStream` | 27 | **1** | **0** | **0** | **1** |
+| `kafka-streams` | `Topology` | 5 | **2** | **0** | **0** | **2** |
 
 **`spring-jms-template` / `JmsTemplate`**
 
@@ -233,6 +241,16 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`aws-sqs-sdk` / `SqsAsyncClient`**
 
 > by a `*Request` object (24): `addPermission`, `cancelMessageMoveTask`, `changeMessageVisibility`, `changeMessageVisibilityBatch`, `createQueue`, `deleteMessage`, `deleteMessageBatch`, `deleteQueue`, `getQueueAttributes`, `getQueueUrl`, `listDeadLetterSourceQueues`, `listDeadLetterSourceQueuesPaginator`, `listMessageMoveTasks`, `listQueueTags`, `listQueues`, `listQueuesPaginator`, `purgeQueue`, `receiveMessage`, `removePermission`, `sendMessageBatch`, `setQueueAttributes`, `startMessageMoveTask`, `tagQueue`, `untagQueue`
+
+**`kafka-streams` / `StreamsBuilder`** — no unread method addresses a wire by either style.
+
+**`kafka-streams` / `KStream`**
+
+> by name at argument 0 (1): `through`
+
+**`kafka-streams` / `Topology`**
+
+> by name at argument 0 (2): `addProcessor`, `connectProcessorAndStateStores`
 
 ### 3. Every unread candidate, one per row
 
@@ -414,4 +432,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `startMessageMoveTask` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `tagQueue` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsAsyncClient` | `untagQueue` | `request object` |
+| `kafka-streams` | `org.apache.kafka.streams.kstream.KStream` | `through` | `argument 0` |
+| `kafka-streams` | `org.apache.kafka.streams.Topology` | `addProcessor` | `argument 0` |
+| `kafka-streams` | `org.apache.kafka.streams.Topology` | `connectProcessorAndStateStores` | `argument 0` |
 

@@ -315,7 +315,7 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 
 | # | issue |
 |---|---|
-| `G-31` | **Kafka Streams — no catalog exists.** `COVERAGE` asserts the shape is `fluent`'s without anyone measuring which builder methods address a topic, and `kafka-streams` is not in the local jar cache, so that measurement cannot be taken yet |
+| `G-31` | **Kafka Streams — catalog ships** (`kafka-streams.yml`, w60): DSL sources/sinks, Processor API sink, and the `addSource` varargs topics all derive; `to(TopicNameExtractor)` and `through` are stated outside. Stays open here only because closing needs a CI run URL (register discipline), not because work remains |
 | — | batch listener generics: `@KafkaListener(batch = true)` takes `List<Foo>`; the payload publishes as the list, not the element |
 
 ### JMS / AMQP — NOT DELIVERED
@@ -445,8 +445,6 @@ positions, so writing it as catalog data first would publish a lambda as a path.
 
 ### Category D — measure first, then decide · **NO PLAN YET**
 
-- **`G-31` Kafka Streams.** Cannot be specified past step one: the jar is not cached, so
-  "which builder methods address a topic" has never been measured.
 - **SOAP `public final` over-reporting.** `ACC_FINAL` became readable in W7; re-measure
   before writing anything.
 - **Apache CXF.** A version-scoping question, not a code change.

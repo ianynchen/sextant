@@ -98,13 +98,25 @@ def catalog_descriptors() -> list[dict[str, object]]:
         # some call sites and silently miss the rest, and a check that looked only
         # at the first name would never see it.
         declared_owner = matches.get("owner")
-        owners = (
+        catalog_owners = (
             [declared_owner]
             if isinstance(declared_owner, str) or declared_owner is None
             else list(declared_owner)
         )
         for method in matches.get("methods") or []:
             if isinstance(method, dict) and "descriptor" in method:
+                # A ROW may narrow the catalog's own flat owner list to the one (or
+                # few) it actually belongs to (`tests/architecture/
+                # test_catalog_descriptors.py::catalog_rows` carries the full
+                # rationale, and this must stay identical to it — the two are
+                # compared row for row). Falls back to the catalog's own list,
+                # unchanged for every catalog that does not narrow.
+                row_owner = method.get("owner")
+                owners = (
+                    catalog_owners
+                    if row_owner is None
+                    else ([row_owner] if isinstance(row_owner, str) else list(row_owner))
+                )
                 for owner in owners:
                     rows.append(
                         {

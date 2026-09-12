@@ -8445,6 +8445,25 @@ _CLAIMED_ARITIES = [
         id="RestTemplate.exchange(String, HttpMethod, HttpEntity, Class, Object...) — "
         "hypothetical arity-5 sibling",
     ),
+    # `G-31`. `KStream.to(TopicNameExtractor[, Produced])` is a REAL overload of the
+    # same jar (kafka-streams 3.6.2, w60) — not hypothetical — and it is exactly the
+    # near-miss this table exists for: same name, same arity as `to(String)`, and
+    # only the descriptor tells them apart. The extractor picks the topic per
+    # RECORD at runtime, so there is no string constant here to publish; a row
+    # would have to fabricate one out of the class name.
+    pytest.param(
+        "kafka-streams",
+        "org/apache/kafka/streams/kstream/KStream#",
+        "to",
+        "(Ljava/lang/String;)V",
+        "(Lorg/apache/kafka/streams/processor/TopicNameExtractor;)V",
+        [
+            CallArgument(
+                kind="instance", symbol="org/apache/kafka/streams/processor/TopicNameExtractor#"
+            )
+        ],
+        id="KStream.to(TopicNameExtractor) — the real overload with no declared row",
+    ),
 ]
 
 
@@ -8453,6 +8472,7 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("javax-jms")
 @pytest.mark.declines("kafka-clients")
 @pytest.mark.declines("kafka-consumer")
+@pytest.mark.declines("kafka-streams")
 @pytest.mark.declines("spring-pubsub")
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")

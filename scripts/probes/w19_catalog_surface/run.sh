@@ -14,7 +14,8 @@ for artifact in \
   "org.springframework:spring-webflux:6.1.6" \
   "org.springframework:spring-messaging:6.1.6" \
   "org.springframework:spring-webmvc:6.1.6" \
-  "software.amazon.awssdk:sqs:2.25.31"
+  "software.amazon.awssdk:sqs:2.25.31" \
+  "org.apache.kafka:kafka-streams:3.6.2"
 do
   echo "ensuring ${artifact}" >&2
   mvn -q -B dependency:get -Dtransitive=false -Dartifact="${artifact}" >/dev/null 2>&1 || true

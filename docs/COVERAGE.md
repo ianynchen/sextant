@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**59 of 74 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**60 of 75 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -737,6 +737,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
+| `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
 | `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |
@@ -3443,7 +3444,7 @@ rather than inferring them from silence.
 | Surface | What it is | Committed at | Support |
 |---|---|---|---|
 | **Spring Cloud Gateway** | Routes declared in a `RouteLocator` builder chain or in `spring.cloud.gateway.routes` configuration | `G-30`, and the design calls it *"the largest single hole"* | **unsupported.** Both halves are shapes this analysis has vocabulary for — a builder chain is `fluent`'s, a configuration list is `config_join`'s — and neither is catalogued. A gateway module publishes no routes at all, which for a gateway is its whole reason to exist |
-| **Kafka Streams** | `StreamsBuilder.stream(...)`/`.to(...)` topologies | `G-31` | **unsupported.** The topics are string literals at builder calls, so the shape is `fluent`'s; what is missing is the catalog and a measurement of which builder methods address a topic |
+| **Kafka Streams** | `StreamsBuilder.stream(...)`/`.to(...)` topologies | `G-31` | **supported** (`kafka-streams.yml`, 3.6.2, w60): DSL sources (`stream`/`table`/`globalTable`, `Collection`/`Pattern` overloads included) and sinks (`KStream.to`), Processor API sink (`Topology.addSink`); `Topology.addSource`'s `String...` topics MEASURED to derive one inbound row per topic (w60 Step 4 — `single_call`'s `channel_arg` already reads an array argument element-wise, the `spring-websocket.yml` `addHandler` precedent) and read across its four `AutoOffsetReset`/`TimestampExtractor` prefixed forms; `to(TopicNameExtractor)` and the deprecated `through` are stated outside rather than read. Pinned by `tests/e2e/test_kafka_delivered.py` |
 | **Programmatic Jakarta WebSocket registration** | `ServerEndpointConfig.Builder.create(Class, "/path")` rather than `@ServerEndpoint` | `G-34` | **unsupported.** `jakarta-websocket.yml` reads the annotation only. The programmatic path is a `single_call` on a builder, and W46 read the CLIENT direction of this same library without touching it |
 | **`@DgsEntityFetcher`** | Netflix DGS federation entity resolution | `G-40` | **unsupported.** `netflix-dgs.yml` reads `@DgsQuery`, `@DgsMutation`, `@DgsData` and `@DgsSubscription`; the federation annotation names an entity type rather than a schema field, which is a different identity this catalog has no rule for |
 

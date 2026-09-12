@@ -6809,11 +6809,14 @@ def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
         symbols = catalog_symbols(declared, f"{catalog.source}: matches.owner")
         assert len(set(symbols)) == len(symbols), f"{catalog.source} repeats an owner: {symbols}"
         assert all(symbol.endswith("#") for symbol in symbols), symbols
-    # §3.1 was applied to eight catalogs — seven, plus W43's `spring-stomp-template`,
+    # §3.1 was applied to nine catalogs — seven, plus W43's `spring-stomp-template`,
     # whose `SimpMessagingTemplate`/`SimpMessageSendingOperations` pair is the same
-    # class-and-interface shape the rule exists for. A test that silently found none would
-    # pass forever once the key was renamed.
-    assert listed == 8, f"expected eight catalogs with an owner list, found {listed}"
+    # class-and-interface shape the rule exists for, plus `kafka-streams.yml` (`G-31`,
+    # w60), whose three owners are unrelated types rather than a class/interface pair —
+    # `single_call`'s owner check is one flat set regardless, so a list here still
+    # means "any of these", not "these two agree". A test that silently found none
+    # would pass forever once the key was renamed.
+    assert listed == 9, f"expected nine catalogs with an owner list, found {listed}"
 
 
 def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_path):

@@ -106,13 +106,28 @@ def catalog_rows() -> list[dict[str, str]]:
         # check reading only the first name would never see it. The harness makes
         # the same split, and these two lists are compared against each other.
         declared_owner = matches.get("owner")
-        owners = (
+        catalog_owners = (
             [declared_owner]
             if isinstance(declared_owner, str) or declared_owner is None
             else list(declared_owner)
         )
         for method in matches.get("methods") or []:
             if isinstance(method, dict) and "descriptor" in method:
+                # A ROW may narrow the catalog's own flat owner list to the one (or
+                # few) it actually belongs to — `kafka-streams.yml`'s reason: its four
+                # owners are unrelated types with disjoint method sets (`StreamsBuilder`
+                # declares `stream`, `KStream` declares `to`, neither declares the
+                # other's), not an interface/impl pair sharing one surface, so the
+                # catalog-wide cross product this file otherwise takes would ask
+                # `javap` whether `KStream` declares `stream` and fail on the honest
+                # answer. Falls back to the catalog's own list — unchanged for every
+                # catalog that does not narrow, which is every one before this.
+                row_owner = method.get("owner")
+                owners = (
+                    catalog_owners
+                    if row_owner is None
+                    else ([row_owner] if isinstance(row_owner, str) else list(row_owner))
+                )
                 for owner in owners:
                     rows.append(
                         {
