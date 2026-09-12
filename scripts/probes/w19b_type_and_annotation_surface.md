@@ -27,7 +27,8 @@ error this wave keeps producing — the same one that made the first probe repor
 
 ## What each one found
 
-**G-47 — `spring-integration` reads 2 of the 11 channel-declaring annotations.**
+**G-47 — `spring-integration` reads 7 of the 11 channel-declaring annotations
+(re-measured 2026-09-12 after `G-47`/`G-45` shipped).**
 Measured from each annotation's own declared attributes rather than from a list: an
 annotation counts as channel-declaring when the framework NAMED an attribute for a
 channel (`inputChannel`, `outputChannel`, `channel`, `discardChannel`,
@@ -50,7 +51,8 @@ The cost here is bounded and worth stating plainly: this catalog mints no endpoi
 rows, it files `channel_destination` questions. So eight unread annotations are an
 under-reported QUESTION list, not eight wrong rows.
 
-**G-45 — `spring-data-rest`'s roster names 6 of the 28 repository contracts.**
+**G-45 — `spring-data-rest`'s roster names 7 of the 28 repository contracts
+(re-measured 2026-09-12 after `G-47`/`G-45` shipped).**
 Every store module ships its own: `MongoRepository`, `R2dbcRepository`,
 `CassandraRepository`, `ElasticsearchRepository`, `Neo4jRepository`, their reactive
 twins, plus the coroutine and RxJava3 contracts in `spring-data-commons` itself. A

@@ -1659,8 +1659,8 @@ enumerated separately (`scripts/probes/w19b_type_and_annotation_surface.md`):
 
 | catalog | surface | reads |
 |---|---|---|
-| `spring-integration` | channel-declaring annotations (spring-integration-core 6.2.4) | **2 of 13** |
-| `spring-data-rest` | repository contracts across 12 Spring Data artifacts | **6 of 28** |
+| `spring-integration` | channel-declaring annotations (spring-integration-core 6.2.4) | **7 of 11** |
+| `spring-data-rest` | repository contracts across 12 Spring Data artifacts | **7 of 28** |
 
 - **`spring-integration`'s cost is bounded**: it mints no endpoint rows, it files
   `channel_destination` questions, so nine unread annotations under-report a QUESTION
@@ -3475,8 +3475,8 @@ widening the distance between what a catalog claims and what it reads.
 | — | `spring-pubsub` | **NOTHING.** *This file was listed under `G-44` as reading "the send half only" and marked declared; both halves were false.* It declares TEN `direction: inbound` methods — `subscribe`, `subscribeAndConvert`, and the eight `pull*` forms — and derives a live inbound row on the fixture beside its outbound one. It has no `slice:` block because it needs none: the surface probe measures 11 of `PubSubTemplate`'s 20 read and records that **no unread method addresses a wire**, which is the one case the enumeration says needs no slice | ✅ **supported**, both directions |
 | `G-37` | `spring-webflux-router`, `spring-mvc-router` | `RouterFunctions$Builder` entirely — 0 of 20 on each side. `route()`'s builder DSL has been the reference documentation's recommended Java shape since Spring 5.2 | **partially supported**, declared |
 | `G-43` | `aws-sqs-sdk` | `SqsAsyncClient`'s other 27 methods (`sendMessage` is read on it too, since `G-43`), the batch forms, and the entire inbound direction including `receiveMessage` | **partially supported**, declared |
-| `G-45` | `spring-data-rest` | JPA repositories only | **partially supported**, declared |
-| `G-47` | `spring-integration` | 2 of roughly 12 channel annotations | **partially supported**, declared |
+| `G-45` | `spring-data-rest` | The base contracts plus `JpaRepository` and `MongoRepository` (7 of 28); every other store-specific contract (R2DBC, Cassandra, Elasticsearch, Neo4j, Couchbase, and every reactive/coroutine/RxJava variant) is outside | **partially supported**, declared |
+| `G-47` | `spring-integration` | 7 of 11 channel annotations | **partially supported**, declared |
 | `G-41` | `netflix-dgs` | **NOT a declared slice, and the row that said so was wrong three ways.** The file is `netflix-dgs.yml`, not `dgs-graphql.yml`; it carries no `slice:` block; and its own comment is headed *"Why this is not `slice.outside`"* — filing it as one *"would let a reader conclude the annotations themselves are unhandled, which is the opposite of true"*. The mechanism this cell used to name is one the catalog records as FALSE: `@Inherited` inherits from SUPERCLASSES and never through methods, and four of the five annotations are `@Target(METHOD)`, so the bit is inert. The real gap is a superclass METHOD walk — `docs/open-issues.md` `OI-67` | ✅ **supported** for the annotations it reads; the inherited-method case is `OI-67`, not a slice |
 | — | `spring-stomp-template` | 11 of `SimpMessagingTemplate`'s 14 methods, one of them addressing-shaped | **partially supported** (W43), declared |
 
