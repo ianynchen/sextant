@@ -123,6 +123,10 @@ def _resolved_fixture(
             "nested_annotation_args",
         },
     )
+    # Every derivation of the whole resolve bound its rows as one JSON value: none took
+    # the per-value route `derive` falls back to (`_per_value_retries`) — the 8.9s path
+    # a single undeclared struct key would silently put a whole list back on.
+    assert workspace._per_value_retries == []
     return workspace, report
 
 

@@ -26,7 +26,13 @@ class Workspace(Protocol):
         the catalog's literals."""
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
-        """Run one named query. Unknown names raise KeyError."""
+        """Run one named query. Unknown names raise KeyError.
+
+        The rows may be shared between calls — a query over facts alone is read once
+        per load and the same list handed back after that — so a caller reads them and
+        never writes into a row. A JSON column the storage names as decoded arrives as
+        an object (a dict, a list, or `None`), not as text; every other JSON column is
+        text and the caller decodes it."""
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         """Write the bundle's graph tables as Parquet, one file per table.

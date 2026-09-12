@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import duckdb
+import pytest
 
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -2166,7 +2167,14 @@ def _tables_read(sql: str) -> set[str]:
 
 def _tables_written(sql: str) -> set[str]:
     body = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
-    return set(re.findall(r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+)", body))
+    return set(
+        re.findall(
+            r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|"
+            r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP\s+|TEMPORARY\s+)?TABLE(?:\s+IF\s+NOT\s+EXISTS)?)"
+            r"\s+([a-z_]+)",
+            body,
+        )
+    )
 
 
 def test_the_cache_rule_holds_for_every_named_query_and_every_derivation():
@@ -2210,7 +2218,9 @@ def test_decoded_columns_arrive_as_objects_and_a_json_null_as_none(tmp_path: Pat
     workspace.close()
 
 
-def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(tmp_path: Path):
+def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """The rows a pass hands a derivation travel as one JSON value (`_bound`), and every
     value comes back exactly as it went in — quotes, backslashes, non-ASCII text, NULL —
     including a struct key the row does not carry, which the statement's own type
@@ -2232,6 +2242,9 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(tmp_pa
         {"caller": "c#", "ordinal": 1, "invoke_kind": "static", "target": "u#"},
     ]
     workspace.derive("call_edges_insert", rows=rows)
+    # The second row lacks six declared keys, so this list took the per-value route —
+    # recorded by name, which is what lets a whole pipeline assert it took none.
+    assert workspace._per_value_retries == ["call_edges_insert"]
     read = workspace.query("call_edges")
     assert read == [
         {
@@ -2248,4 +2261,16 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(tmp_pa
         },
         rows[0],
     ]
+    # Only a conversion error is retried: a statement that fails to bind for any other
+    # reason propagates from the first run, untouched and unrecorded. The statement lives
+    # under `tmp_path` — an absolute path, which `_SQL_DIR / <path>` resolves to as is.
+    broken = tmp_path / "broken.sql"
+    broken.write_text(
+        "INSERT INTO call_edges SELECT r.* "
+        "FROM (SELECT UNNEST($rows::STRUCT(no_such INTEGER)[]) AS r)"
+    )
+    monkeypatch.setitem(workspace_module._NAMED_DERIVATIONS, "_broken", str(broken))
+    with pytest.raises(duckdb.BinderException):
+        workspace.derive("_broken", rows=[{"no_such": 1}])
+    assert workspace._per_value_retries == ["call_edges_insert"]
     workspace.close()

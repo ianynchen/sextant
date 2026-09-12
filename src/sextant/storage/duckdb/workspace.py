@@ -994,7 +994,11 @@ _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 # Rows served from the cache are the SAME list and dict objects every time, so a
 # caller reads them and never writes into them — the one discipline this asks, and
 # `tests/storage/test_workspace.py` pins the cache, its invalidation, and that a
-# derived-table query stays uncached.
+# derived-table query stays uncached. The cache is per instance: a second
+# `DuckDbWorkspace` opened on the same file would not see this one's `load_facts`.
+# No caller opens two — `analyze` owns one workspace per module and `render`/`export`
+# reopen it only after `analyze` has closed — and two open handles writing one
+# DuckDB file would be a conflict the database refuses before the cache mattered.
 _FACT_ONLY = frozenset(
     {
         "documents",
@@ -1148,10 +1152,16 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
     ONE JSON value, everything else as itself.
 
     A statement's `$rows::STRUCT(...)[]` or `$names::VARCHAR[]` cast reads the same
-    either way — DuckDB casts JSON to the declared type exactly as it casts a Python
-    list to it, checked value for value against the Python route (quotes, backslashes,
-    non-ASCII text, NULLs, empty lists, numbers into VARCHAR) — but the cost is not the
-    same. Handed a Python list, the DuckDB client converts it one element at a time and,
+    either way — DuckDB casts JSON to the declared type as it casts a Python list to
+    it, checked value for value against the Python route (quotes, backslashes,
+    non-ASCII text, NULLs, empty lists, numbers into VARCHAR) — with one case where the
+    two routes answer DIFFERENTLY rather than fail: a dict or list placed in a VARCHAR
+    struct field, which the Python route writes in DuckDB's own literal spelling
+    (`{'k': [1, v]}`) and this route as JSON (`{"k":[1,"v"]}`). No production builder
+    hands a bare dict or list to a VARCHAR field — every such value is JSON text already
+    (`annotation_driven.py`'s synthetic `args` and `derived_resource.py`'s `candidates`
+    are `json.dumps`'d; `return_flow.py`'s `value` is `method_returns.value` carried
+    through as the text it was read as), so the column holds the same text either way. The cost is not the same. Handed a Python list, the DuckDB client converts it one element at a time and,
     for each element, tries to `import pandas` to ask whether the element is a DataFrame;
     with pandas not installed the failed import is retried every time (nothing caches
     it: `PythonImportCacheItem::LoadModule` in duckdb-python sets the item to null and
@@ -1168,7 +1178,10 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
     text the cast would be VARCHAR-to-type, which reads DuckDB's own literal syntax and
     mangles a backslash-u escape. The JSON-to-STRUCT cast is strict about keys — a row
     missing a column the struct declares is an error rather than a NULL — and `derive`
-    says what it does about that.
+    says what it does about that. That strictness, `duckdb.sqltype` and `duckdb.Value`
+    were checked on duckdb 1.5.5 (`uv.lock`'s pin); `pyproject.toml` admits `>=1.1`,
+    and on a release whose cast is looser the retry in `derive` is what still gives the
+    Python route's answer.
     """
     return {
         name: (
@@ -1200,6 +1213,10 @@ class DuckDbWorkspace:
         # `_FACT_ONLY` rows already read since the last `load_facts`, keyed by the query
         # name and its bound values in order — the order `?` placeholders bind in.
         self._fact_reads: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        # Every derivation that fell back to per-value binding (`derive`), in order —
+        # the slow route, counted so a whole pipeline can assert it took none
+        # (`tests/application/test_pipeline.py`).
+        self._per_value_retries: list[str] = []
         # The rows `_stage_fact_redactions` last computed, with the hash of the rule
         # set that computed them: `export_tables` and `export_facts` both stage the
         # same map over the same `raw_facts`, and computing it twice per export was
@@ -1355,18 +1372,25 @@ class DuckDbWorkspace:
         try:
             self._connection.execute(sql, _bound(params) or None)
         except duckdb.ConversionException:
-            # The one thing the JSON route answers differently (`_bound`): a struct
-            # key the statement declares and a bound row does not carry is NULL by
-            # the Python route and a conversion error by the JSON one. That contract
-            # — a row states what differs, the statement's own type supplies the rest
-            # — is what the hand-built rows in `tests/storage/test_workspace.py` and
-            # `tests/application/test_effective_annotations.py` pin, so it is kept
-            # by handing the statement the values the way it always took them. A
-            # value DuckDB genuinely cannot convert fails this second run too, with
-            # the statement's own error; nothing is masked. Every production row
-            # builder fills every key (`_mapping_annotation` and the insert passes),
-            # which is what keeps this branch a test-only path — it stops being one
-            # the day a builder omits a key, and then that list pays the slow route.
+            # Where the JSON route refuses and the Python route did not (`_bound`):
+            # a struct key the statement declares and a bound row does not carry
+            # (NULL by the Python route), a key the row carries and the struct does
+            # not declare (`has unknown key`, dropped by the Python route), and a key
+            # whose case differs from the declaration's (matched case-blind by the
+            # Python route). The first is a contract the hand-built rows in
+            # `tests/storage/test_workspace.py` and
+            # `tests/application/test_effective_annotations.py` pin — a row states
+            # what differs, the statement's own type supplies the rest — so all three
+            # are kept by handing the statement the values the way it always took
+            # them. A value DuckDB genuinely cannot convert fails this second run
+            # too, with the statement's own error; nothing is masked, and any other
+            # error (a binder error, say) propagates from the first run untouched.
+            # Every production row builder fills exactly the declared keys, which is
+            # what keeps this the slow route nobody takes — and because one
+            # undeclared key would put a whole list back on the 8.9s path, each
+            # retry is recorded by name and the pipeline test asserts there were
+            # none.
+            self._per_value_retries.append(name)
             self._connection.execute(sql, params or None)
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
