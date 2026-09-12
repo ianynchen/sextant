@@ -400,7 +400,7 @@ two functions plus a config object on `sextant.api` (FR-24).
 These are real and they are not on the path to any cell above. They are listed so that
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
-`GAP-7` ~100s per reactor module.
+`GAP-7` ~111s per reactor module (measured 2026-09-12: `mall-admin` 111s with its siblings, 8s alone; the cause is profiled in `OI-68`).
 `G-52` throw exits left this list on 2026-09-12: it blocked no feature, so it is not in
 the `closed` block above; it is recorded closed in `open-issues.md`, by the tests named there.
 `G-74` `signature.throws` gains its consumer left this list on 2026-09-12: it blocked no

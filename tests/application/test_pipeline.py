@@ -1,8 +1,10 @@
 import json
+import logging
 import re
 from pathlib import Path
 
-from fixture_module import write_fixture_module_fact
+import pytest
+from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact
 from shape_helpers import ORDER_REQUEST, ORDER_STATUS, shape_fields_of
 
 from fixture_build import compile_fixture
@@ -4159,3 +4161,52 @@ def test_the_reachability_table_is_written_by_the_pipeline(
     assert {row[0] for row in rows if row[2] == 0} == roots
     # And the walk really walked: some root reaches something other than itself.
     assert any(row[2] > 0 for row in rows)
+
+
+def test_every_resolve_pass_logs_its_seconds_at_info(
+    tmp_path: Path, fixture_facts: Path, caplog: pytest.LogCaptureFixture
+):
+    """`OI-68` (`GAP-7`). Every per-pass figure that entry quotes came from a throwaway
+    script, and the two profiles it holds disagree by seconds a pass because no two of
+    those scripts measured the same thing. `pipeline._timed` makes the instrument
+    standing: one INFO line per pass, in the order the pipeline runs them, shaped like
+    `RichProgress`'s plain fallback so a reader can lay the two side by side.
+
+    Pinned by NAME and ORDER, not by the seconds. The task that added this measured the
+    root filter it was meant to time and did not land it — the whole of
+    `derive_endpoints.sql` is 2.8s of `derive_endpoints`' 31.7s on `mall-admin` with its
+    siblings, and the filter drops two real routes
+    (`test_module_edge.py::test_an_exchange_interface_a_SIBLING_declares_still_serves_
+    this_modules_route`, `test_vertical_slice.py`'s opted-in `stubCharge`) — so a clock
+    bound here would alarm on a pass that did not change, and under `-n 4` on a shared
+    CPU it would alarm on nothing at all. What must not regress is that the instrument
+    reports every pass: a pass added to `resolve()` without `_timed` is a pass the next
+    profile cannot see, which is how the entry's numbers drifted in the first place.
+    """
+    caplog.set_level(logging.INFO, logger="sextant.application.resolve.pipeline")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        resolve(workspace, fixture_facts, YamlCatalogSource(CATALOGS), set(FIXTURE_CAPABILITIES))
+    finally:
+        workspace.close()
+
+    lines = [record.getMessage() for record in caplog.records]
+    shaped = [re.fullmatch(r"(\w+)  (\d+\.\d)s", line) for line in lines]
+    assert all(shaped), [line for line, match in zip(lines, shaped) if match is None]
+    assert [match.group(1) for match in shaped if match] == [
+        "load_facts",
+        "resolve_config",
+        "record_return_flows",
+        "record_call_edges",
+        "derive_endpoints",
+        "derive_endpoint_shapes",
+        "bind_parse_calls",
+        "record_service_identity_gaps",
+        "record_environment_divergence",
+        "apply_protocol_hints",
+        "record_self_exchange",
+        "record_routing_conflicts",
+        "record_roots",
+        "resolve_format",
+        "record_reachability",
+    ]

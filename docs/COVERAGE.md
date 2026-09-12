@@ -1326,9 +1326,11 @@ surface is what the person asked for. A sibling is scanned because it is on the 
 and nobody was asked. **Consent is the difference**, it is not readable from the tier, and
 that is why the module fact carries `sibling_coordinates` and the guardrail keys on those.
 
-**What it costs, measured:** `mall-admin` analyses in 67s against roughly 6s, 648
-documents against 161. Most of that is `derive_endpoints` doing work the guardrail then
-discards (`OI-68`). **Gradle is not implemented** — `GradleDetector` sets no sibling
+**What it costs, measured (2026-09-12):** `mall-admin` analyses in 111s against 8s, 648
+documents against 161. `derive_endpoints` is 47s of it and `derive_endpoint_shapes` 39s,
+and the cost is NOT work the guardrail then discards — the SQL the guardrail cleans up
+after is 2.8s of the 47; the rest is every catalog re-reading the fact tables from
+Python (`OI-68` has the profile to the query). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)

@@ -1,3 +1,7 @@
+import logging
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +22,27 @@ from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
+
+_log = logging.getLogger(__name__)
+
+
+@contextmanager
+def _timed(pass_name: str) -> Iterator[None]:
+    """Seconds one resolve pass took, logged at INFO once it returns (`OI-68`).
+
+    The per-pass table that entry carries was produced by a throwaway script every
+    time it was needed; this makes the instrument standing. It changes nothing the
+    pass does — the log line is the whole effect — and the line has the shape of
+    `RichProgress`'s plain fallback (label, then seconds to one decimal), so the two
+    read alike on a terminal that shows both. `logging` rather than the `Progress`
+    port because a pass is not a stage: the port renders five rows a user watches,
+    and fifteen more would be noise there and are a profile here, off by default
+    until a caller raises the level."""
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        _log.info("%s  %.1fs", pass_name, time.perf_counter() - started)
 
 
 @dataclass(frozen=True)
@@ -85,7 +110,8 @@ def resolve(
 ) -> ResolveReport:
     """Facts in, graph out. Language-blind: it branches on capabilities, never
     on names (M04)."""
-    loaded = workspace.load_facts(fact_root)
+    with _timed("load_facts"):
+        loaded = workspace.load_facts(fact_root)
     declared = catalogs.load()
     # M04 pass 2 (D01, D02 §2i): the generic config-model interpreter, run
     # before endpoint derivation — the `config_join` engine (2F design §3)
@@ -94,7 +120,8 @@ def resolve(
     # Unconditional, empty in and empty out (`resolve_config`'s own
     # contract), so a config-less run still leaves the table's earlier
     # contents cleared rather than stale.
-    resolve_config(workspace, declared)
+    with _timed("resolve_config"):
+        resolve_config(workspace, declared)
     # The first PIPELINE-declared capability (D02 §1): every capability
     # above it is scanner-declared, earned once up front by the scanner
     # that produced a module's facts. This one is earned by the pipeline
@@ -120,7 +147,8 @@ def resolve(
     # half, because it takes no catalog and gates on no capability: there is no
     # framework knowledge in a return, and a pass that cannot be skipped should
     # not read as though it might be.
-    record_return_flows(workspace)
+    with _timed("record_return_flows"):
+        record_return_flows(workspace)
     # 2Q `G4`, beside `G3` and for the same reason: it reads `call_sites` and
     # the type hierarchy — compiler facts, all loaded — takes no catalog and
     # gates on no capability. The two are independent (disjoint tables, one
@@ -129,18 +157,21 @@ def resolve(
     # `declared` for D00 §4's `terminal_kind` alone (F7 §8.2, W30): the edges themselves
     # are compiler facts, and only the classification of what a terminal REACHES needs a
     # catalog to have said what the callee is.
-    record_call_edges(workspace, declared)
+    with _timed("record_call_edges"):
+        record_call_edges(workspace, declared)
     # F5 §6.2 (W29): emptied once, here, ahead of every engine that writes it — the
     # `open_questions`/`resolved_config` discipline. More than one catalog contributes
     # entries, so a reset owned by an engine would erase whichever ran first, and a
     # resolve whose calls carry no metadata leaves an empty table rather than the previous
     # run's rows.
     workspace.derive("endpoint_metadata_reset")
-    skipped = derive_endpoints(workspace, declared, capabilities)
+    with _timed("derive_endpoints"):
+        skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
     # off its handler's signature, which is a column on the row derive_endpoints
     # just wrote.
-    expanded = derive_endpoint_shapes(workspace, declared, capabilities)
+    with _timed("derive_endpoint_shapes"):
+        expanded = derive_endpoint_shapes(workspace, declared, capabilities)
     # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
     # every pass that writes to it rather than inside one of them — the
     # `resolved_config` reset discipline, lifted out of the writing pass
@@ -154,7 +185,8 @@ def resolve(
     # the format ladder's rung 4 READS the payload column it binds — a bound
     # schema-described parse is what lifts a NULL format to that schema's own
     # format at `narrowed`.
-    bound = bind_parse_calls(workspace, declared)
+    with _timed("bind_parse_calls"):
+        bound = bind_parse_calls(workspace, declared)
     # 2O design §1b/§1c: `supertype_derived`/`injected_client`'s own
     # `service_identity` gaps, filed here for the same reason
     # `bind_parse_calls` sits here rather than inside `derive_endpoints` —
@@ -162,11 +194,13 @@ def resolve(
     # against `bind_parse_calls` itself does not matter (disjoint tables,
     # disjoint question kinds); it sits below it only because it was added
     # after it.
-    record_service_identity_gaps(workspace, declared)
+    with _timed("record_service_identity_gaps"):
+        record_service_identity_gaps(workspace, declared)
     # 2O design §2b, and it sits here for the same reason the two passes above
     # do: it WRITES `open_questions`, so it must run after the reset. Its order
     # against them does not matter — disjoint question kinds, disjoint tables.
-    record_environment_divergence(workspace, declared, capabilities)
+    with _timed("record_environment_divergence"):
+        record_environment_divergence(workspace, declared, capabilities)
     # Between the binding and the ladder, and both sides of that are the
     # pass's own contract (2H design §6). AFTER every engine: this pass
     # reclassifies rows others minted, so they must all exist. BEFORE
@@ -175,13 +209,15 @@ def resolve(
     # protocol it no longer has. (The "and its merge" half of the first
     # condition went with the merge in W27; two passes run BELOW this line
     # now instead, and each says why on its own call.)
-    apply_protocol_hints(workspace, declared)
+    with _timed("apply_protocol_hints"):
+        apply_protocol_hints(workspace, declared)
     # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
     # question-filing passes: `protocol` is part of the identity this question names,
     # and that pass reclassifies it on rows other engines minted. Filed above this line,
     # a question would name a wire the endpoint no longer speaks — the same defect the
     # roots pass was moved down to fix. Above the reset it would simply be erased.
-    record_self_exchange(workspace)
+    with _timed("record_self_exchange"):
+        record_self_exchange(workspace)
     # F5 §6.1 (W28), and below `apply_protocol_hints` — but NOT for the reason above.
     # Spring's registry knows nothing about SSE versus plain HTTP; `protocol` is in this
     # question's identity because a detector must not compare rows two different engines
@@ -190,7 +226,8 @@ def resolve(
     # a plain `@GetMapping("/events")` that Spring genuinely refuses. That is an
     # under-report, which is the direction NFR-2 asks for, and running below the pass
     # that moves it is what keeps the identity stable within one run.
-    record_routing_conflicts(workspace, list(declared))
+    with _timed("record_routing_conflicts"):
+        record_routing_conflicts(workspace, list(declared))
     # 2Q `I1`, and its position is a dependency rather than a preference: it
     # reads `endpoints.handler`/`direction`, `endpoints`' three WIRE columns
     # and `scheduled_work.handler`, and every one of those is final only here.
@@ -207,7 +244,8 @@ def resolve(
     # `endpoints` row it was copied from carried `sse` — one address, two
     # spellings, in one workspace. Nothing below writes any of the five
     # columns: `resolve_format` stamps format columns and MATCHES on the rest.
-    record_roots(workspace)
+    with _timed("record_roots"):
+        record_roots(workspace)
     # LAST, and the ordering is a property of the pass, not a preference (the
     # `_RUNS_LAST` precedent in `resolve/endpoints.py`): every rung of the
     # format ladder reads something an earlier pass wrote — the media columns
@@ -215,13 +253,15 @@ def resolve(
     # a format stamped before them would be answered from a table that was
     # still being written. Anything that BINDS a payload belongs above this
     # line and below the reset.
-    resolve_format(workspace, declared)
+    with _timed("resolve_format"):
+        resolve_format(workspace, declared)
     # F8 §9.4 (W37), and AFTER everything: the walk reads `roots` and `call_edges`, so a
     # reachability recorded earlier would be a walk over a graph nobody else saw —
     # `record_roots` above writes the roots and `apply_protocol_hints` moves rows the
     # roots were copied from. It is the walk `query/trace.py` performs for the renderer,
     # kept rather than thrown away.
-    record_reachability(workspace)
+    with _timed("record_reachability"):
+        record_reachability(workspace)
     return ResolveReport(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),

@@ -145,13 +145,15 @@ for them.
 `repositories` map is catalog data; the rule that reads it is store-neutral
 already.
 
-## GAP-7 — analysing a reactor module costs ~100s and the cause is not diagnosed
+## GAP-7 — analysing a reactor module costs ~111s and the cause is now diagnosed
 
 Tracked in full as `OI-68` below, listed here because it is a capability limit a
 reader will hit rather than a defect in output. Both mechanisms originally blamed
-were refuted by measurement in W56; the cost is real, has grown from the 67s that
-entry records, and sits in `derive_endpoints` and `derive_endpoint_shapes` at
-roughly 25-36s each.
+were refuted by measurement in W56, and the last lever it named was refuted again on
+2026-09-12: `mall-admin` with its three siblings analyses in 111s against 8s alone,
+`derive_endpoints` 47s against 3.6s, `derive_endpoint_shapes` 39s against 1.6s —
+and the SQL the lever would have filtered is 2.8s of the 47. The rest is 72 catalogs
+each re-reading the whole fact table from Python; that entry has the profile.
 
 ---
 
@@ -2486,7 +2488,7 @@ METHOD walk: the annotations sit on methods the subclass does not declare at all
 **Closes by** that walk, over `type_hierarchy` (W22). **Falsified by** a DGS codebase
 with no inheritance among its fetchers, for which today's rows are already complete.
 
-### OI-68 — analysing a reactor module costs 10× what it did · **OPEN; both proposed causes REFUTED by W56**
+### OI-68 — analysing a reactor module costs 14× what it did · **OPEN; every proposed cause REFUTED — W56, and lever 2 again on 2026-09-12; the profile below is where the cost is**
 
 *The title said "and most of it is avoidable" until W56 measured it. The cost is real and has
 GROWN; the two mechanisms this entry blamed are not it.*
@@ -2587,6 +2589,86 @@ and is why a single-run comparison misled this wave once already.*
 **Still closes by** attacking the two passes that actually dominate, which are shape
 expansion and endpoint derivation — not by the two levers named above. **Falsified by** a
 profile on another corpus putting the cost somewhere else entirely.
+
+---
+
+## Lever 2 was measured a second time on 2026-09-12, and the pass was profiled to the query. It is not the SQL.
+
+The pipeline now has a standing per-pass timer (`pipeline._timed`, one INFO line per pass,
+pinned by `tests/application/test_pipeline.py::test_every_resolve_pass_logs_its_seconds_
+at_info`), so these tables come from the instrument rather than from a script. Apple M4,
+24 GB, Python 3.14.7, DuckDB 1.5.5; `mall-admin`, 160 endpoints either way; two runs of
+each, the second within 1s a pass of the first.
+
+**Before anything was changed** — with its three siblings (648 documents) and alone (161):
+
+| pass | alone | with siblings |
+|---|---|---|
+| `record_return_flows` | 0.3s | 4.3s |
+| `record_call_edges` | 1.3s | 12.7s |
+| `derive_endpoints` | 3.6s | **47.4s** |
+| `derive_endpoint_shapes` | 1.5s | **39.7s** |
+| `record_service_identity_gaps` | 0.1s | 1.6s |
+| `record_routing_conflicts` | 0.1s | 1.4s |
+| `record_reachability` | 0.4s | 1.3s |
+| whole analyze | 8.0s | **111.9s** |
+
+**Lever 2, applied and measured.** `annotations_effective` in `derive_endpoints.sql`
+restricted to documents whose `origin_tier` is `module_output`, run over the same
+with-siblings workspace: `derive_endpoints` 32.0s against 31.7s without it (a resolve
+replayed over an already-loaded workspace runs the pass in ~32s; a fresh analyze runs it
+in ~47s — both are recorded, neither is explained here), the `endpoints` statement 3.07s
+against 2.82s, the 160 rows identical on this corpus. **And it drops two real routes on the
+fixture:** the sibling-declared exchange interface's `/orders/list`
+(`test_module_edge.py::test_an_exchange_interface_a_SIBLING_declares_still_serves_this_
+modules_route`) and the opted-in library's `{http://billing.example.com/ws}stubCharge`
+(four tests in `tests/e2e/test_vertical_slice.py`) — the second because `origin_tier` is
+`dependency` for a consented library and a sibling alike, which is the distinction
+`drop_borrowed_endpoints.sql` already explains it cannot read from the tier. The filter
+was reverted; the SQL is byte-identical to before.
+
+**After** (the same code plus the timer; the second full run):
+
+| pass | alone | with siblings |
+|---|---|---|
+| `record_return_flows` | 0.3s | 4.4s |
+| `record_call_edges` | 1.3s | 13.0s |
+| `derive_endpoints` | 3.6s | **47.4s** |
+| `derive_endpoint_shapes` | 1.6s | **38.7s** |
+| whole analyze | 8.1s | **111.3s** |
+
+**Where `derive_endpoints` actually spends its time**, replayed over the with-siblings
+workspace with every named query and derivation timed (31.7s in the replay):
+
+| what | seconds | calls | rows read |
+|---|---|---|---|
+| `derive_endpoints.sql` (the `endpoints` derivation, every annotation-driven catalog) | 2.8s | 29 | — |
+| every other named derivation together | 0.2s | | |
+| `method_declarations` query | 6.0s | 59 | 1,301,481 |
+| `call_sites` query | 4.7s | 38 | 952,166 |
+| `constructor_declarations` query | 1.6s | 36 | 29,448 |
+| `interface_symbols` query | 1.5s | 30 | 4,020 |
+| `annotations` query | 1.4s | 41 | 73,103 |
+| `enum_types` query | 1.3s | 32 | 32 |
+| `supertypes` query | 1.3s | 31 | 31 |
+| `implementations` query | 1.2s | 28 | 3,360 |
+| `superclasses` query | 1.0s | 24 | 2,184 |
+| all named queries together | 21.0s | 353 | |
+| `json.loads` over the rows those queries return (cProfile) | 7.7s | 2,647,512 | |
+
+The SQL that lever 2 would have narrowed is 2.8s of the pass, so **no root filter in
+`derive_endpoints.sql` can save more than that**, which is why W56 measured nothing and
+this did too. The 72 catalogs cost 0.5–1.1s EACH and the cost is the same shape in every
+one of them: each engine's Python pre-pass re-reads the whole `method_declarations`
+(22,059 rows × 59 reads) or `call_sites` table (25,000 rows × 38 reads) and re-parses
+every row's JSON, per catalog, when the table is the same table every time. A `supertypes`
+query that returns one row costs 41ms because it scans the fact table to find it.
+
+**What closes it, now that the number is measured:** the pass reads each fact table once
+per resolve rather than once per catalog — a read shared across the engines, or the JSON
+parsed once at load. That is a change to how engines read, not to any SQL, and it is not
+a root filter. `derive_endpoint_shapes` (39s) was not profiled to the query here.
+**`GAP-7` stays open**: 111s against the 10s the register calls acceptable.
 
 ### OI-69 — Gradle modules cross no module edge · **SCHEDULED as W55 (Wave 12)**
 
