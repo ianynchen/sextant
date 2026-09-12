@@ -62,11 +62,11 @@ wrote by hand.
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.closed_sets import MethodResolution
-from sextant.domain.symbols import bare_descriptor, method_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor, method_name
 
 # D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
 # The two that dispatch on the receiver's RUNTIME class are the two that admit
@@ -100,6 +100,12 @@ class Dispatch:
     # file was read, which is what separates "external boundary" from "unresolved".
     ancestors: dict[str, list[tuple[str, str, bool]]]
     scanned: set[str]
+    # The delivery register's `DefaultImpls` item. A bare INTERFACE-method descriptor to
+    # the module-prefixed symbols of the static bodies a compiler-emitted holder
+    # (`<Iface>$DefaultImpls`) carries for it — read only where `bodies` holds nothing
+    # for that method, see `candidates`. Defaulted so a `Dispatch` built by hand
+    # carries none.
+    default_bodies: dict[str, list[str]] = field(default_factory=dict)
 
     def resolve(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str]:
         """Which type declares the method a site names, and — always — why (JVMS
@@ -207,7 +213,23 @@ class Dispatch:
         declaring, _reason = self.resolve(owner, name, descriptor)
         if declaring is None:
             return []
-        found = list(self.bodies.get(method_descriptor(declaring, name, descriptor), ()))
+        declared_method = method_descriptor(declaring, name, descriptor)
+        found = list(self.bodies.get(declared_method, ()))
+        if not found:
+            # The register's `DefaultImpls` item: an interface method with no body of
+            # its own whose body the workspace DID read — in the `<Iface>$DefaultImpls`
+            # holder its compiler emits, where the scanner marked it `bridge_of: "<name>"`
+            # beside the holder's `implements_default_of`. Without this the site read as
+            # the third-party boundary about a body sitting in the module. ONLY where the
+            # interface holds no body, and that is a measurement, not caution: that
+            # compiler's 2.2.0 default mode (`-jvm-default=enable`) emits BOTH a JVM
+            # default method on the interface and a `@Deprecated` holder stub that calls
+            # back into it, so joining the holder unconditionally would turn every call
+            # to such an interface's default method from one candidate to two —
+            # `resolved` to `narrowed` — on every module built with a current compiler.
+            # Under `-jvm-default=disable` (2.4.10, measured) the interface method is
+            # abstract and the holder has the body, which is the case this reaches.
+            found = list(self.default_bodies.get(declared_method, ()))
         if site["invoke_kind"] not in VIRTUAL_DISPATCH:
             return found
         for subtype in self.subtypes.get(bare_descriptor(str(site["owner"])), ()):
@@ -222,13 +244,84 @@ def dispatch_of(workspace: Workspace) -> Dispatch:
     there is no framework knowledge in a call site, so nothing here gates on a
     capability or reads a catalog."""
     ancestors, scanned = ancestry_of(workspace)
+    bodies = _bodies_by_descriptor(workspace)
     return Dispatch(
-        bodies=_bodies_by_descriptor(workspace),
+        bodies=bodies,
         declared=_declared(workspace),
         subtypes=_subtypes(workspace),
         ancestors=ancestors,
         scanned=scanned,
+        default_bodies=_default_bodies(workspace, bodies),
     )
+
+
+# A method as a holder body is matched to its interface method: the name and the
+# erased parameter symbols, in order — `engines/supertype_dispatch._members`'
+# selector, copied rather than imported because that engine reads this module.
+type _Selector = tuple[str, tuple[str, ...]]
+
+
+def _selector_of(name: str, signature: str | None, *, drop: int = 0) -> _Selector:
+    """`name` plus the erased symbol of every parameter from `drop` on, bare.
+
+    `erased_symbol` — the DESCRIPTOR's own answer — before `type.symbol`, for the
+    reason `supertype_dispatch._members` gives: a generic parameter's `type` names a
+    bare type variable, which is scoped to its own declaration and matches nothing.
+    """
+    parsed = json.loads(signature) if signature is not None else {}
+    parameters = tuple(
+        bare_descriptor(
+            str(parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol", ""))
+        )
+        for parameter in (parsed.get("parameters") or [])[drop:]
+    )
+    return (name, parameters)
+
+
+def _default_bodies(workspace: Workspace, bodies: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Bare interface-method descriptor to the module-prefixed holder bodies that stand
+    for it, in symbol order (NFR-1) — the register's `DefaultImpls` item.
+
+    A holder body's own descriptor carries the interface instance at slot 0, so its
+    `sig_…` cannot be rewritten into the interface method's: the join is by SELECTOR —
+    the name the scanner recorded in `bridge_of`, and the body's erased parameter
+    symbols with slot 0 dropped — against the interface's own declared methods, the way
+    `supertype_dispatch._members` keys a member. A body is admitted only where the
+    workspace read it (`bodies` holds its own descriptor), the same rule every other
+    candidate meets; a holder whose interface declares no matching method contributes
+    nothing rather than a guess.
+    """
+    holder_bodies = workspace.query("default_bodies")
+    if not holder_bodies:
+        # A module with no holder — the common case — skips the pass over
+        # `method_declarations` below.
+        return {}
+    declared_by_type: dict[str, dict[_Selector, str]] = defaultdict(dict)
+    for row in workspace.query("method_declarations"):
+        if row["enclosing"] is None:
+            continue
+        symbol = str(row["symbol"])
+        selector = _selector_of(
+            method_name(bare_descriptor(symbol)),
+            str(row["signature"]) if row["signature"] is not None else None,
+        )
+        declared_by_type[bare_descriptor(str(row["enclosing"]))][selector] = bare_descriptor(symbol)
+    result: dict[str, list[str]] = defaultdict(list)
+    for row in holder_bodies:
+        body = str(row["symbol"])
+        if bare_descriptor(body) not in bodies:
+            continue
+        selector = _selector_of(
+            str(row["stands_for"]),
+            str(row["signature"]) if row["signature"] is not None else None,
+            drop=1,
+        )
+        interface_method = declared_by_type.get(bare_descriptor(str(row["interface"])), {}).get(
+            selector
+        )
+        if interface_method is not None and body not in result[interface_method]:
+            result[interface_method].append(body)
+    return {key: sorted(symbols) for key, symbols in result.items()}
 
 
 def _declared(workspace: Workspace) -> set[str]:

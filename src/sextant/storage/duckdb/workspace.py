@@ -164,6 +164,32 @@ _NAMED_QUERIES = {
           AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Every static body a compiler-emitted holder of an interface's default
+    # method bodies carries (D00 §5, the delivery register's `DefaultImpls`
+    # item): the body's own module-prefixed symbol, the interface its holder
+    # stands for (`implements_default_of`, module-prefixed as `superclass`
+    # above is), the interface method's NAME (`bridge_of`) and the body's
+    # `signature`, whose first parameter is the interface instance. Neither key
+    # is projected by `symbols`, so this reads `raw_facts` the way
+    # `superclasses` does. The join to the enclosing type's own fact is what
+    # keeps an ordinary `$default` bridge — which carries `bridge_of` too, on
+    # every data class — out: only a method whose TYPE carries
+    # `implements_default_of` is a holder body. `dispatch.py` reads this and
+    # nothing else does.
+    "default_bodies": """
+        SELECT m.payload ->> 'symbol'               AS symbol,
+               t.payload ->> 'implements_default_of' AS interface,
+               m.payload ->> 'bridge_of'            AS stands_for,
+               m.payload ->  'signature'            AS signature
+        FROM raw_facts m
+        JOIN raw_facts t
+          ON t.kind = 'symbol'
+         AND (t.payload ->> 'symbol') = (m.payload ->> 'enclosing')
+         AND (t.payload ->> 'implements_default_of') IS NOT NULL
+        WHERE m.kind = 'symbol' AND (m.payload ->> 'bridge_of') IS NOT NULL
+          AND m.document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and visibility (2O design
     # §1b, Task 5): `method_declarations` above carries `signature` instead,
     # which this join has no use for, and `method_symbols` carries neither

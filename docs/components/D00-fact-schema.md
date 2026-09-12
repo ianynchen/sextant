@@ -403,8 +403,25 @@ reason, and a reader supplies `false` for a scanner that reports neither. A Kotl
 `$default` bridge — the `static synthetic <fn>$default(receiver, <fn's slots…>, int mask,
 Object marker)` kotlinc emits beside a function with default arguments — is emitted with
 `modifiers.synthetic: true` AND `bridge_of: "<fn>"`, and its return and the function's own
-slots carry the types the FUNCTION declared rather than Java's rule (`OI-81`); `bridge_of`
-appears on no other fact. A Kotlin extension function's receiver (`fun String.shout()`) —
+slots carry the types the FUNCTION declared rather than Java's rule (`OI-81`). **A Kotlin
+`DefaultImpls` holder carries the same key on each body** (`kotlin-defaultimpls`): an
+interface with a default method body compiles to a nested `<Iface>$DefaultImpls` class —
+`public final`, NOT synthetic, no fields, no constructor, every method `static` with the
+interface at descriptor slot 0 — and that class's TYPE fact carries
+`implements_default_of: "<Iface>#"` (spelled as `enclosing` spells a type, and for the
+holder naming the same type `enclosing` does; the key is the statement), while each of its
+methods carries `bridge_of: "<interface method's name>"`, which for the `$default` bridge
+kotlinc puts inside the holder is the function's name, as it is anywhere else. The holder is
+recognised from all three of its name, the `InnerClasses` entry naming the interface as its
+outer class, and every method having that shape with at least one present — a hand-written
+nested class of that name fails at its own constructor. A method's `bridge_of` states that
+method's own shape and the type's `implements_default_of` states every method's, so a
+consumer reads the first beside the second. The holder's own `@Metadata` is a
+synthetic-class kind and declares no function, so a body's slots and return keep Java's
+rule: the declared types are in the INTERFACE's metadata, and the scanner reads one class
+at a time. `bridge_of` appears on no fact but those two shapes, and `implements_default_of`
+on no fact but the holder's; `resolve/dispatch.py` reads the pair, making a holder body the
+candidate for an interface method that declares no body of its own (COVERAGE §5.13). A Kotlin extension function's receiver (`fun String.shout()`) —
 descriptor slot 0 of the static method a top-level extension compiles into in its file
 facade, and of a member extension's instance method alike, and the first slot after the
 owner in its `$default` bridge — is published as a parameter carrying `receiver: true`, with

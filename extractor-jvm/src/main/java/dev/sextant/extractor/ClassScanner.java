@@ -140,6 +140,15 @@ public final class ClassScanner {
         private final List<String> permittedSubclasses = new ArrayList<>();
         private String[] classInterfaces;
         private String enclosingSymbol;
+        // `kotlin-defaultimpls`: the interface this class is the `$DefaultImpls` holder
+        // of, by name and `InnerClasses` entry (`KotlinDefaultImpls.holderOf`), or null.
+        // Whether its members have the holder's shape is settled per method as they are
+        // visited — `defaultImplsMethods` counts them and `defaultImplsShape` is cleared
+        // by the first that does not — so the class's own fact, emitted last, can state
+        // the whole conjunction.
+        private String defaultImplsOf;
+        private int defaultImplsMethods;
+        private boolean defaultImplsShape = true;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -263,6 +272,7 @@ public final class ClassScanner {
         public void visitInnerClass(String name, String outerName, String innerName, int access) {
             if (!name.equals(internalName) || outerName == null) return;
             if (enclosingSymbol == null) enclosingSymbol = symbolOf(outerName + "#");
+            defaultImplsOf = KotlinDefaultImpls.holderOf(internalName, outerName);
             // This table's `access` word is NOT read. It carries the source's own
             // nesting modifier — a `private` nested class reports package-private
             // in the class file's own word, and ACC_PRIVATE only here — but nothing
@@ -430,6 +440,23 @@ public final class ClassScanner {
             // the function it stands for. Null for every other method.
             KotlinDefaultBridge defaultBridge =
                 KotlinDefaultBridge.recognise(access, name, descriptor, kotlinNullability);
+            // `kotlin-defaultimpls`: inside a `$DefaultImpls` holder, a static method with
+            // the interface at slot 0 is the body of the interface method of its own name
+            // — or, for the `$default` bridge kotlinc puts beside a defaulted one, of the
+            // function that bridge already names. Either way the fact says which
+            // interface method it stands for, through the same `bridge_of` an ordinary
+            // bridge carries. Null for every method of every other class.
+            String standsFor = null;
+            if (defaultImplsOf != null) {
+                defaultImplsMethods++;
+                if (KotlinDefaultImpls.isBody(access, descriptor, defaultImplsOf)) {
+                    standsFor = defaultBridge == null ? name : defaultBridge.function();
+                } else {
+                    defaultImplsShape = false;
+                }
+            }
+            String bridgeOf = standsFor != null ? standsFor
+                : defaultBridge == null ? null : defaultBridge.function();
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -735,7 +762,7 @@ public final class ClassScanner {
                                        defaultBridge), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
                          annotationDefault, typeParametersJson(sig), lineStart, lineEnd, null,
-                         defaultBridge == null ? null : JsonOut.string(defaultBridge.function()));
+                         bridgeOf == null ? null : JsonOut.string(bridgeOf));
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -1701,11 +1728,14 @@ public final class ClassScanner {
             // empty list on all of them says nothing with a key on every fact (the same
             // rule `supertype` and `generic_interfaces` follow).
             if (permits != null) fact.put("permits", permits);
-            // `OI-81`: only a Kotlin `$default` bridge carries this — the name of the
-            // function it stands for, beside the `synthetic: true` its modifiers already
-            // say. Absent on every other fact, the same "nothing to say, no key" rule as
-            // `permits`. The bridge stays published as its own symbol: a call site names
-            // it by its own descriptor, and this is what lets a consumer follow it back.
+            // The name of the declared function this method stands for, on two shapes
+            // and no other: a Kotlin `$default` bridge (`OI-81`), beside the
+            // `synthetic: true` its modifiers already say, and a static body inside a
+            // `$DefaultImpls` holder (`kotlin-defaultimpls`), whose class carries
+            // `implements_default_of` below. Absent on every other fact, the same
+            // "nothing to say, no key" rule as `permits`. Both stay published as their
+            // own symbols: a call site names each by its own descriptor, and this is
+            // what lets a consumer follow it back.
             if (bridgeOf != null) fact.put("bridge_of", bridgeOf);
             // On the TYPE's own fact, never on its members — these are class-level
             // attributes, and `emit` is shared with fields and methods. Gated on the
@@ -1713,6 +1743,15 @@ public final class ClassScanner {
             // interface, record, enum or annotation has a nest host just the same.
             if (isType(constructKind)) {
                 if (nestHost != null) fact.put("nest_host", JsonOut.string(nestHost));
+                // `kotlin-defaultimpls`: the interface whose default bodies this class
+                // holds — all three conjuncts `KotlinDefaultImpls` states, the last of
+                // them (every method static with the interface at slot 0, and at least
+                // one) settled while the methods were visited. Spelled as `enclosing` and
+                // `interfaces` spell a type, and for the holder it names the same type
+                // `enclosing` does; the KEY is the statement.
+                if (defaultImplsOf != null && defaultImplsMethods > 0 && defaultImplsShape) {
+                    fact.put("implements_default_of", JsonOut.string(symbolOf(defaultImplsOf + "#")));
+                }
                 if (!nestMembers.isEmpty()) fact.put("nest_members", JsonOut.array(nestMembers));
                 if (!unreadAttributes.isEmpty()) {
                     fact.put("unread_attributes", JsonOut.array(List.copyOf(unreadAttributes)));

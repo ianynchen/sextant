@@ -247,12 +247,21 @@ class SymbolFact(BaseModel):
     # rather than an instance, and a declaration the language marks as not
     # serialized. Defaults empty for constructs that carry no modifiers.
     modifiers: dict[str, bool] = Field(default_factory=dict)
-    # `OI-81`: the name of the declared function a compiler-emitted
-    # default-argument bridge (`<fn>$default`) stands for, beside the
-    # `synthetic: true` its modifiers already carry; absent on every other
-    # fact, and read by nothing yet; the delivery register's `DefaultImpls`
-    # item will.
+    # The name of the declared method this one stands for, on two shapes and
+    # no other: a compiler-emitted default-argument bridge (`<fn>$default`,
+    # `OI-81`), beside the `synthetic: true` its modifiers already carry; and
+    # a static body inside a compiler-emitted holder of an interface's default
+    # method bodies, whose own type fact carries `implements_default_of`
+    # (the delivery register's `DefaultImpls` item). Absent on every other
+    # fact.
     bridge_of: str | None = None
+    # The interface whose default method bodies this TYPE holds, as a symbol
+    # spelled the way `enclosing` is — the compiler-emitted nested class whose
+    # every method is static with that interface at slot 0 and carries
+    # `bridge_of`. Absent on every other fact. Read by `resolve/dispatch.py`,
+    # which makes such a body the candidate for an interface method that
+    # declares no body of its own.
+    implements_default_of: str | None = None
     # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
     # element takes when a use omits it. Present only on such an element and
     # only where it has a default; absent everywhere else.
