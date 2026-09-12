@@ -329,6 +329,31 @@ Every link in that chain is either **a traced call** or **a measured framework r
 
 **This rule is only expressible because the call graph shipped.** Before 2Q, "follow the call to where it happens" was not something a catalog could ask for, and name-matching was the only available approximation. It is the first place the trace tier pays for itself inside derivation rather than in a document.  
 
+### 8.7 Optimize early: cost is a design input, decided in the spec, not fixed later  
+
+**A non-functional requirement is a requirement.** NFR-11 says data moves in bulk and a
+per-row operation across a fact set is a defect. That rule was on the page while every fact
+table was a VIEW re-extracting JSON on each of the hundreds of queries a resolve runs, and
+while 72 catalog engines each re-read the whole `method_declarations` table and re-parsed
+every row. The cost was visible in the design; nobody looked. It was found on 2026-09-12 by
+profiling, after it had made every local run and every CI run several times slower for weeks —
+hours of waiting, paid repeatedly, for a shape that a spec could have refused in a sentence.
+*(Ruled by the user that day: "keep performance in mind from the design phase; fixing it later
+is much more expensive; non-functional requirements are not a joke.")*  
+
+**The rule.** A spec or design that adds a read, a pass, a query, or a loop over facts states
+how many times it runs per resolve and over how many rows, and what that costs on the largest
+corpus in `examples/`. A shape that runs once per catalog when it depends on no catalog, a
+lookup that scans when it could index, a parse repeated on data that did not change — each is
+refused at the spec, not profiled out a month later. The plan carries the number; the review
+checks it against a run (`pipeline._timed` prints every pass's seconds at INFO).  
+
+**How it is checked.** `docs/performance.md` is the ledger: every item there carries the
+measurement, the cause profiled to the query, and the fix shape. A review that finds a pass
+grew by more than noise names it there before approving. The order of work stays the user's —
+gaps first, then gains — but *new* work does not get to add a gap of this kind: it arrives with
+its cost already known.  
+
 ## 9. Coding Standards  
 
 ### Documentation  
