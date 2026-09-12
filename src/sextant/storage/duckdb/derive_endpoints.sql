@@ -745,9 +745,11 @@ member_declarations AS (
       --
       -- Asked HERE, of the dedup's winner, and not in `exposed_members` of every
       -- declaration: `isWebMethodBySpec` tests what `getMethods()` returned, and
-      -- that is the NEAREST declaration (measured, JDK 21.0.12.1 — over
-      -- `C extends D extends E` with D plain and E annotated, both declaring
-      -- `op()`, `C.getMethods()` returns D's). Filtering before the dedup would
+      -- that is the NEAREST declaration (JLS 8.4.8.1: the middle class's
+      -- declaration OVERRIDES the ancestor's and is then the one member;
+      -- confirmed with `getMethods()` over `C extends D extends E`, D plain
+      -- and E annotated, both declaring `op()` — D's is returned). Filtering
+      -- before the dedup would
       -- drop D's row and let E's shadowed declaration win the partition — the
       -- same fabrication one level down. And this is a FILTER on the declaring
       -- class, not a stop in `gate_ancestry`: the walk continues past a plain

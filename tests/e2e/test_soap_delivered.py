@@ -72,7 +72,8 @@ def soap_final_paths(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
     """`orders-soap-final`, analysed on its own: a `@WebService` class declaring one
     ordinary public method and one `public final` method (Task 9, `jaxws-public-final`),
     and two more `@WebService` classes, one extending an annotated base and one a plain
-    one (Task 10b, `jaxws-inherited-unannotated`)."""
+    base that itself extends an annotated grandparent (Task 10b,
+    `jaxws-inherited-unannotated`)."""
     workspace_dir = tmp_path_factory.mktemp("soap-final")
     compile_fixture(SOAP_FINAL)
     result = CliRunner().invoke(
@@ -115,11 +116,16 @@ def test_an_operation_inherited_from_an_unannotated_superclass_is_not_published(
     plus `price` inherited from `@WebService PricedService`) publishes both under ITS
     namespace, which is what says the row came through the walk rather than from
     `PricedService`'s own gate; `PlainBasedService` (its own `own`, plus `audit` inherited
-    from plain `AbstractQuote`) publishes `own` alone."""
+    from plain `AbstractQuote`) publishes `own` — and `root`, which `AbstractQuote` inherits
+    from the `@WebService` `RootQuote` above it. That last row is the half of the rule the
+    others cannot show: the check filters by DECLARING class, the walk does not stop at
+    the first plain class, so a method declared by an annotated grandparent still reaches
+    the gate below through a plain parent."""
     tiered = "http://tiered.soapf.acme.com/"
     plain = "http://plain.soapf.acme.com/"
     assert f"{{{tiered}}}tier" in soap_final_paths, sorted(soap_final_paths)
     assert f"{{{tiered}}}price" in soap_final_paths, sorted(soap_final_paths)
     assert f"{{{plain}}}own" in soap_final_paths, sorted(soap_final_paths)
+    assert f"{{{plain}}}root" in soap_final_paths, sorted(soap_final_paths)
     assert f"{{{plain}}}audit" not in soap_final_paths, sorted(soap_final_paths)
     assert not any(p.endswith("audit") for p in soap_final_paths), sorted(soap_final_paths)

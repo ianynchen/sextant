@@ -1974,7 +1974,10 @@ def _member_base_facts(
     (scope `urn:root`) declaring the same `refund` signature, so the plain
     base SHADOWS an annotated declaration — the shape that says whether the
     declaring-class check is asked of the member the class actually has (the
-    base's) or of every declaration in the ancestry.
+    base's) or of every declaration in the ancestry — and a second method,
+    `rootOnly`, that nothing below shadows: the one the walk must still reach
+    THROUGH the plain base, which is what says the check filters by declaring
+    class rather than stopping the ancestry at the first plain class.
 
     A separate fact file rather than a parameter on `_member_facts`, so every
     test above sees exactly the facts it always did and the inheritance case
@@ -2029,6 +2032,14 @@ def _member_base_facts(
             SymbolFact(
                 document_id="doc_base",
                 symbol=f"{root_type}refund(sig_b17e0011).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=root_type,
+                visibility="public",
+                modifiers={},
+            ),
+            SymbolFact(
+                document_id="doc_base",
+                symbol=f"{root_type}rootOnly(sig_7c4e2a90).",
                 construct_kind=ConstructKind.METHOD,
                 enclosing=root_type,
                 visibility="public",
@@ -2245,19 +2256,23 @@ def test_an_unannotated_base_shadowing_an_annotated_ancestors_method_exposes_not
 
     `MemberService extends AbstractMemberService extends RootMemberService`;
     the middle class is plain, the root is annotated, and BOTH declare
-    `refund`. MEASURED (JDK 21.0.12.1, `Class.getMethods()` over exactly this
-    shape): the one `refund` returned is the middle class's — the nearest
-    declaration wins, as CP-13 Q5 measured one level up — and that method's
-    declaring class carries no gate annotation, so both runtimes exclude it
-    (w63, the `getDeclaringClass()` read cited above). Asking the check of
-    each declaration instead would drop the middle class's row and let the
-    root's win the partition: an operation attributed to the gated class that
-    neither runtime serves, the same fabrication one level down.
+    `refund`. JLS 8.4.8.1: the middle class's declaration OVERRIDES the
+    root's, and there is then one member — the middle class's (confirmed with
+    `Class.getMethods()` over exactly this shape, and CP-13 Q5 measured the
+    same one level up). That method's declaring class carries no gate
+    annotation, so both runtimes exclude it (w63, the `getDeclaringClass()`
+    read cited above). Asking the check of each declaration instead would drop
+    the middle class's row and let the root's win the partition: an operation
+    attributed to the gated class that neither runtime serves, the same
+    fabrication one level down.
 
-    The walk itself still CONTINUES past the plain class — the check filters
-    by declaring class, it does not stop the ancestry — which the root's OTHER
-    methods would show if it declared any; here the shadowed signature is the
-    whole point, so one method is enough.
+    AND THE WALK STILL CONTINUES PAST THE PLAIN CLASS — the check filters by
+    declaring class, it does not stop the ancestry. The root's `rootOnly`,
+    which nothing below shadows, is reached THROUGH the plain base and is
+    declared by an annotated class, so it IS a member of the gated class:
+    `{urn:acme}rootOnly` with the root's own handler. That one assertion
+    rejects the narrower rule "stop at the first unannotated class", which
+    every other assertion here would let pass.
 
     `{urn:root}refund` is asserted PRESENT: the annotated root is a gated class
     of its own and serves its own `refund`, and that row is the control that
@@ -2272,6 +2287,9 @@ def test_an_unannotated_base_shadowing_an_annotated_ancestors_method_exposes_not
 
     assert {"{urn:acme}bare", "{urn:root}refund"} <= {path for path, _ in rows}
     assert [row for row in rows if row[0] == "{urn:acme}refund"] == []
+    assert [handler for path, handler in rows if path == "{urn:acme}rootOnly"] == [
+        "com/acme/rpc/RootMemberService#rootOnly(sig_7c4e2a90)."
+    ]
 
 
 def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_path: Path):
