@@ -465,6 +465,10 @@ that reason.
   Category B's mechanism, which the spec should establish before assuming it.
 - **`@ConditionalOnProperty` / `@Profile` controllers** (tier C). No mechanism exists; a
   route's existence becomes conditional on configuration. Largest design question here.
+- **`micronaut-jms-over-sqs`.** `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")`
+  derives through `micronaut-jms.yml` with protocol `jms` even though the wire is SQS, and
+  choosing the protocol from the connection-factory attribute is a per-attribute switch no
+  engine word has (§5.10's DR-5 boundary note).
 
 ### Category D — measure first, then decide · **NO PLAN YET**
 

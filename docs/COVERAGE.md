@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -3201,7 +3201,7 @@ one.
 | **Python** | **`boto3`** `boto3.client("sqs").send_message(QueueUrl=…)` | **clients synthesised at runtime from JSON service models — `send_message` is defined in no Python file** | `runtime_dynamic` | **C — ceiling is a `name_match` on the service string; `resolution: narrowed` at best** |
 | Rust | `aws-sdk-rust` `client.send_message().queue_url(u).send()` | — | `fluent_chain` | B |
 | Swift | `Soto`, the community AWS SDK for Swift — actively maintained, Linux/macOS/iOS | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
-| Java | Micronaut | **no first-party annotations** — raw SDK or `micronaut-jms-sqs` | — | B |
+| Java | Micronaut | raw AWS SDK `SqsClient.sendMessage`, the same `aws-sqs-sdk.yml` chain as row above — Micronaut ships no first-party SQS annotation | `fluent_chain` | ✅ raw SDK (`aws-sqs-sdk.yml`, pinned in a Micronaut module by `test_aws_sqs_delivered.py`). **Boundary — JMS over SQS reads as `jms`:** `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms`; choosing the protocol from the factory attribute is a per-attribute switch no word has. A Spring SQS sender and a Micronaut JMS-over-SQS listener will not link (DR-5) |
 
 Raw AWS SDK v2 `SqsClient` ships as a `fluent` catalog reaching `SqsClient.sendMessage` through
 the OkHttp `terminal_via_argument` pattern verbatim. Its `queueUrl` capture is the one messaging
