@@ -67,3 +67,28 @@ def analyzed_workspace_copy(analyzed_orders_service: Path, tmp_path: Path) -> Pa
     private = tmp_path / "workspace"
     shutil.copytree(analyzed_orders_service, private)
     return private
+
+
+# The files that run the whole pipeline, dispatched FIRST under `--dist loadfile`.
+#
+# MEASURED on PR #20's CI run 34665949923 (2026-09-12): the last 3% of the suite took 3:30
+# — one worker on the slowest file while three sat idle. `loadfile` hands each file to one
+# worker whole, and the pipeline-running files sit late in collection order, so whichever
+# worker drew one last ran it alone. Putting them first lets the fast files fill in behind.
+# Same tests, same workers, same fixtures — only the order changes. (The nineteen-minute
+# stall at 78% in that run was a different thing: every e2e file analysing the same fixture
+# on its own worker at once; those now share the session's run.)
+_PIPELINE_FILES = (
+    "tests/cli/test_app.py",
+    "tests/e2e/test_vertical_slice.py",
+    "tests/application/test_pipeline.py",
+    "tests/api/test_facade.py",
+    "tests/cli/test_enrich_command.py",
+)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    root = Path(str(config.rootpath))
+    slow = [i for i in items if str(Path(i.path).relative_to(root)) in _PIPELINE_FILES]
+    fast = [i for i in items if str(Path(i.path).relative_to(root)) not in _PIPELINE_FILES]
+    items[:] = slow + fast

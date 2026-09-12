@@ -3,25 +3,23 @@
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
-import pytest
-from click.testing import CliRunner
+from pathlib import Path
 
-from fixture_build import FIXTURES, compile_fixture
-from sextant.cli.app import cli
+import pytest
+
+from fixture_build import FIXTURES
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 FIXTURE = FIXTURES / "orders-service"
 
 
 @pytest.fixture(scope="module")
-def sqs_addresses(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
-    workspace_dir = tmp_path_factory.mktemp("sqs")
-    compile_fixture(FIXTURE)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+def sqs_addresses(analyzed_orders_service: Path) -> set[str]:
+    # The session's one `module analyze` of `orders-service` (`tests/conftest.py`), not a
+    # run of its own: this fixture only reads rows. MEASURED on PR #20's CI run 34665949923:
+    # the e2e files each analysed the same fixture on their own worker at once, and the
+    # progress bar sat at 78% for nineteen minutes while all four did.
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
     try:
         return {
             str(row["path"])

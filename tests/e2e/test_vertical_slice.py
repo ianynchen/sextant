@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import duckdb
@@ -737,9 +738,7 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
     )
 
 
-def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(
-    tmp_path: Path,
-):
+def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze(full_run: Path):
     """2G Task 7's binding, end to end through the REAL command — and the one
     place rung 4 of the format ladder (2G design §5) has a live surface.
 
@@ -758,12 +757,9 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
     A test that only pinned the successes could not tell a refusal from a
     miss.
     """
-    compile_fixture(FIXTURE)
-    runner = CliRunner()
-    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    # Reads the module's one run: nothing here writes.
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         answers = {
             str(row["path"]): (row["request_shape"], row["format"], row["format_resolution"])
@@ -836,9 +832,7 @@ def test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze
     ]
 
 
-def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_analyze(
-    tmp_path: Path,
-):
+def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_analyze(full_run: Path):
     """2H Task 4 (`schema_operations`), live and whole, through the REAL
     command — the only path that reads `src/main/resources/graphql` at all.
 
@@ -861,12 +855,9 @@ def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_anal
       `json`/`resolved` and the column never receives a value D00's format set
       does not contain.
     """
-    compile_fixture(FIXTURE)
-    runner = CliRunner()
-    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    # Reads the module's one run: nothing here writes.
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         roots = {
             str(row["path"]): row
@@ -937,7 +928,7 @@ def test_the_schemas_own_root_operations_reach_the_endpoint_table_in_a_full_anal
     )
 
 
-def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_path: Path):
+def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(full_run: Path):
     """2O Task 6, live and whole, through the REAL command — the only path that
     builds the module fact the gate reads, so this is the only place the whole
     chain runs: the POM declares `spring-data-rest-core`, the detector records
@@ -962,12 +953,9 @@ def test_the_repository_interfaces_derive_their_rest_api_in_a_full_analyze(tmp_p
       ordinary generic interface: the near-miss that a synthetic test can only
       approximate.
     """
-    compile_fixture(FIXTURE)
-    runner = CliRunner()
-    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    # Reads the module's one run: nothing here writes.
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         rows = [
             row for row in workspace.query("endpoints") if row["catalog_id"] == "spring-data-rest"
@@ -1027,7 +1015,6 @@ def test_a_schema_first_operation_reaches_the_rendered_document(full_run: Path):
     column shows — there is no full symbol to move for a row with no
     handler (fix round 1, MEDIUM 1: the identity stays in the header even
     where there is no symbol to append after it)."""
-    _run(full_run)  # analyze + render + export
     document = (full_run / "render" / "architecture.md").read_text()
 
     assert "| `graphql query auditTrail` | none recorded | — → — | json | resolved |" in document
@@ -1037,7 +1024,7 @@ def test_a_schema_first_operation_reaches_the_rendered_document(full_run: Path):
 
 
 def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_full_analyze(
-    tmp_path: Path,
+    full_run: Path,
 ):
     """2I Task 4 (`schema_operations`'s SOAP branch), live and whole, through
     the REAL command — the only path that reads `orders.wsdl` at all. The
@@ -1063,12 +1050,9 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
       INPUT elements only, so there is no output linkage to honestly
       coalesce a response from — this task's own stated boundary.
     """
-    compile_fixture(FIXTURE)
-    runner = CliRunner()
-    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    # Reads the module's one run: nothing here writes.
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         # Keyed on the DIRECTION as well as the path since W27 (F5 §6.1):
         # `{...}placeOrderRequest` is two rows — the operation this module serves, and
@@ -1151,7 +1135,7 @@ def test_the_wsdl_schemas_own_root_operation_reaches_the_endpoint_table_in_a_ful
 
 
 def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_its_address(
-    tmp_path: Path,
+    full_run: Path,
 ):
     """2I Task 5 (`spring-ws-template.yml`), live and whole through the real
     command — the outbound half of this phase's SOAP surface.
@@ -1192,10 +1176,7 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
       exactly that reason: "the stub catalog is inert" was only ever a claim
       about local declarations.
     """
-    compile_fixture(FIXTURE)
-    runner = CliRunner()
-    result = runner.invoke(cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    # Reads the module's one run: nothing here writes.
 
     # "Selected and derived nothing" is a different claim from "never
     # selected", and only this distinguishes them: a catalog whose `requires`
@@ -1212,13 +1193,13 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # Before W16 neither was gated on anything that could tell them apart — the
     # annotation belongs to both frameworks, and Spring's own handlers scan for
     # it with the same predicate — so these rows were `websocket` on no evidence.
-    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    metadata = json.loads((full_run / "metadata.json").read_text())
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
         "spring-rsocket",
         "spring-integration",
     ]
 
-    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
     try:
         soap = [row for row in workspace.query("endpoints") if row["protocol"] == "soap"]
         peers = [
@@ -1320,7 +1301,6 @@ def test_a_wsdl_schema_first_operation_reaches_the_rendered_document(full_run: P
     misclassification rendered nothing live) through 2I Task 2's own rows,
     which is what let this row's first live pin carry the wrong,
     `(unresolved)`-prefixed form until this fix."""
-    _run(full_run)  # analyze + render + export
     document = (full_run / "render" / "architecture.md").read_text()
 
     assert (
@@ -1383,7 +1363,6 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(full
     invariant `test_a_bound_parse_reaches_the_format_ladders_payload_rung_in_a_full_analyze`
     pins at the workspace level, pinned here at the document a reader
     actually sees."""
-    _run(full_run)  # analyze + render + export
     document = (full_run / "render" / "architecture.md").read_text()
 
     # Rung 2 (declared media, `resolved`) — plain, no hedge. Human-spelled in
@@ -1546,22 +1525,32 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
     assert (None, 138) in origins
 
-    # This test MUTATES the fixture — it moves `.sextant.yml` aside and re-runs — so it
-    # cannot use the shared run and must not leave the shared fixture altered for whatever
-    # runs next. Its own workspace, and the rename undone in `finally`.
-    config = FIXTURE / ".sextant.yml"
-    moved = tmp_path / "sextant.yml.moved"
-    config.rename(moved)
-    try:
-        _run(tmp_path)
-    finally:
-        moved.rename(config)
-    plain = (tmp_path / "render" / "architecture.md").read_text()
+    # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
+    # to move the file aside and rename it back in `finally` — correct on one worker and a
+    # race on four: under `-n 4` any other worker analysing `fixtures/orders-service` in
+    # that ~15s window read a module with no library to extract and derived one row fewer.
+    # That is the `181 endpoints` / `182 endpoints` failure in PR #20's CI run
+    # 34665949923, in a test on another file that never touches this config at all.
+    # `tests/cli/test_enrich_command.py::compiled_fixture` copies for the same reason.
+    unconfigured = tmp_path / "orders-service"
+    shutil.copytree(
+        FIXTURE,
+        unconfigured,
+        ignore=shutil.ignore_patterns(".sextant", ".sextant.yml", ".sextant-enrichment.json"),
+    )
+    workspace = tmp_path / "ws"
+    runner = CliRunner()
+    for command in ("analyze", "render", "export"):
+        result = runner.invoke(
+            cli, ["module", command, str(unconfigured), "--workspace", str(workspace)]
+        )
+        assert result.exit_code == 0, result.output
+    plain = (workspace / "render" / "architecture.md").read_text()
     assert "stubCharge" not in plain
     assert "Via:" not in plain
     # The library's whole fact subtree is discarded before the scan, so nothing
     # is left for the resolve to read back as if it were still configured.
-    assert not (tmp_path / "facts" / "lib").exists()
+    assert not (workspace / "facts" / "lib").exists()
 
 
 def test_the_planted_credentials_leave_masked_and_stay_verbatim_in_the_workspace(tmp_path: Path):

@@ -52,5 +52,11 @@ step "extractor build and tests"; (cd extractor-jvm && ./gradlew --quiet build)
 #
 # `-n auto` would read the core count, and on a 10-core laptop it hides the CI number.
 # 4 is what CI has, so 4 is what is measured here.
-step "pytest"; "${BIN}pytest" -q -n 4 --dist loadfile
+#
+# `--durations=20` because the next stall has to be NAMED, not guessed at: PR #20's run
+# 34665949923 sat at 78% for nineteen minutes and the log could not say which tests those
+# were. `--maxfail=1` is CI's, not the laptop's: a run that is going to fail should say so
+# in minutes, not after the whole suite (ruled by the user 2026-09-12, "I can't wait until
+# 40 minutes later to see the CI job failed"). Locally the full picture is worth the wait.
+step "pytest"; "${BIN}pytest" -q -n 4 --dist loadfile --durations=20 ${CI:+--maxfail=1}
 printf '\n\033[32mall gates passed\033[0m\n'

@@ -9,10 +9,7 @@ satisfied by editing `COVERAGE.md`, and it goes green only when the feature work
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 
-from fixture_build import compile_fixture
-from sextant.cli.app import cli
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).resolve().parents[2]
@@ -21,14 +18,12 @@ NS = "http://orders.example.com/ws"
 
 
 @pytest.fixture(scope="module")
-def soap_addresses(tmp_path_factory) -> set[str]:
-    workspace_dir = tmp_path_factory.mktemp("soap")
-    compile_fixture(FIXTURE)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+def soap_addresses(analyzed_orders_service: Path) -> set[str]:
+    # The session's one `module analyze` of `orders-service` (`tests/conftest.py`), not a
+    # run of its own: this fixture only reads rows. MEASURED on PR #20's CI run 34665949923:
+    # the e2e files each analysed the same fixture on their own worker at once, and the
+    # progress bar sat at 78% for nineteen minutes while all four did.
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
     try:
         return {
             str(row["path"])

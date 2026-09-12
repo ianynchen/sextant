@@ -5,6 +5,8 @@ closed.
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -16,15 +18,13 @@ FIXTURE = FIXTURES / "orders-service"
 
 
 @pytest.fixture(scope="module")
-def http_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+def http_routes(analyzed_orders_service: Path) -> set[tuple[str, str, str]]:
     """`(catalog, method, path)` for every inbound HTTP row the fixture derives."""
-    workspace_dir = tmp_path_factory.mktemp("rest-in")
-    compile_fixture(FIXTURE)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    # The session's one `module analyze` of `orders-service` (`tests/conftest.py`), not a
+    # run of its own: this fixture only reads rows. MEASURED on PR #20's CI run 34665949923:
+    # the e2e files each analysed the same fixture on their own worker at once, and the
+    # progress bar sat at 78% for nineteen minutes while all four did.
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
     try:
         return {
             (str(row["catalog_id"]), str(row["method"]), str(row["path"]))

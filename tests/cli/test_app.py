@@ -1,6 +1,5 @@
 import json
 import shutil
-import uuid
 from pathlib import Path
 
 import pytest
@@ -317,12 +316,6 @@ def test_a_declared_protobuf_shape_expands_from_the_schema_not_the_generated_cla
 
 def test_export_writes_a_bundle_with_manifest_graph_and_facts(analyzed_workspace_copy: Path):
     runner = CliRunner()
-    assert (
-        runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
-        ).exit_code
-        == 0
-    )
     result = runner.invoke(
         cli, ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
     )
@@ -350,12 +343,6 @@ def test_render_also_writes_a_self_contained_offline_html_document(analyzed_work
     the real structure diagram in pan-zoom controls, and carries no CDN or
     external script URL."""
     runner = CliRunner()
-    assert (
-        runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
-        ).exit_code
-        == 0
-    )
     result = runner.invoke(
         cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
     )
@@ -408,12 +395,6 @@ def test_export_carries_both_rendered_documents_into_the_bundle(analyzed_workspa
     runner = CliRunner()
     assert (
         runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
-        ).exit_code
-        == 0
-    )
-    assert (
-        runner.invoke(
             cli, ["module", "render", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
         ).exit_code
         == 0
@@ -442,12 +423,6 @@ def test_export_without_a_prior_render_carries_no_render_directory(analyzed_work
     reads what `analyze` left) — a workspace that skipped it must still
     export cleanly, exactly as it did before this task."""
     runner = CliRunner()
-    assert (
-        runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
-        ).exit_code
-        == 0
-    )
     result = runner.invoke(
         cli, ["module", "export", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
     )
@@ -558,12 +533,6 @@ def test_analyze_reports_nothing_uncovered_now_that_the_nested_class_is_read(
     travels it — which is why the assertion is that it is empty here, not that
     it is gone."""
     runner = CliRunner()
-    assert (
-        runner.invoke(
-            cli, ["module", "analyze", str(FIXTURE), "--workspace", str(analyzed_workspace_copy)]
-        ).exit_code
-        == 0
-    )
     metadata = json.loads((analyzed_workspace_copy / "metadata.json").read_text())
     assert metadata["uncovered"] == []
 
@@ -772,36 +741,6 @@ REACTOR = REPO / "fixtures" / "orders-reactor"
 BILLING_LIB = REACTOR / "billing-lib"
 
 
-def _rmtree_if_exists(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path)
-
-
-def _snapshot(path: Path) -> Path | None:
-    """Move `path` aside if it exists, returning where it went (`None` if it
-    never existed) — restored via `_restore` regardless of what a test does
-    to `path` while it is out of the way (2M Task 2 fix round 1, F3). A
-    SESSION fixture elsewhere in the suite
-    (`tests/application/test_enrich_tools.py`) builds `fixtures/
-    orders-service/.sextant` once per session and depends on it staying
-    exactly as it left it for every later consumer — session-scoped meaning
-    it never rebuilds on its own. Deleting it without restoring the
-    ORIGINAL bytes would break that fixture for the rest of the session,
-    regardless of test order or which subset `-k` selects; moving it aside
-    and back never does."""
-    if not path.exists():
-        return None
-    backup = path.with_name(f"{path.name}.snapshot-{uuid.uuid4().hex}")
-    shutil.move(str(path), str(backup))
-    return backup
-
-
-def _restore(path: Path, backup: Path | None) -> None:
-    _rmtree_if_exists(path)
-    if backup is not None:
-        shutil.move(str(backup), str(path))
-
-
 def test_detection_reaches_the_detector_exactly_once_per_analyze(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -859,8 +798,22 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
     compile_fixture(FIXTURE)
     compile_fixture(BILLING_LIB)
 
+    # On a COPY of the two fixture trees, side by side so `../orders-service` still
+    # resolves from the reactor. The analysis writes `.sextant/` into every module it
+    # adopts, and this test used to move the real fixture's `.sextant/` aside and back —
+    # sound on one worker, a race on four: `tests/application/test_enrich_tools.py` reads
+    # `fixtures/orders-service/.sextant/facts` from another worker for the whole session.
+    # `copy2` keeps mtimes, so the copied `target/` is up to date and nothing recompiles.
+    fixtures = tmp_path / "fixtures"
+    ignore = shutil.ignore_patterns(".sextant", ".sextant-enrichment.json", ".tradewind")
+    shutil.copytree(FIXTURE, fixtures / "orders-service", ignore=ignore)
+    shutil.copytree(REACTOR, fixtures / "orders-reactor", ignore=ignore)
+    orders_service = fixtures / "orders-service"
+    reactor = fixtures / "orders-reactor"
+    billing_lib = reactor / "billing-lib"
+
     baseline = CliRunner().invoke(
-        cli, ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path / "baseline")]
+        cli, ["module", "analyze", str(orders_service), "--workspace", str(tmp_path / "baseline")]
     )
     assert baseline.exit_code == 0, baseline.output
     # `click.echo(json.dumps(...))` is the one line `module analyze` writes
@@ -869,61 +822,53 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
     # first one out.
     single_module_endpoints = json.loads(baseline.output.splitlines()[0])["endpoints"]
 
-    orders_service_backup = _snapshot(FIXTURE / ".sextant")
-    billing_lib_backup = _snapshot(BILLING_LIB / ".sextant")
-    reactor_backup = _snapshot(REACTOR / ".sextant")
-    try:
-        result = CliRunner().invoke(cli, ["module", "analyze", str(REACTOR)])
-        assert result.exit_code == 0, result.output
-        assert (
-            f"analyzed ../orders-service (com.acme:orders-service): "
-            f"{single_module_endpoints} endpoints" in result.output
-        )
-        assert "analyzed billing-lib (com.acme:billing-lib):" in result.output
-        # The table (2M Task 2 fix round 1, F8): lowercase `yes`, never
-        # Python's capitalized `str(True)`.
-        assert "yes" in result.output
-        assert "True" not in result.output
+    result = CliRunner().invoke(cli, ["module", "analyze", str(reactor)])
+    assert result.exit_code == 0, result.output
+    assert (
+        f"analyzed ../orders-service (com.acme:orders-service): "
+        f"{single_module_endpoints} endpoints" in result.output
+    )
+    assert "analyzed billing-lib (com.acme:billing-lib):" in result.output
+    # The table (2M Task 2 fix round 1, F8): lowercase `yes`, never
+    # Python's capitalized `str(True)`.
+    assert "yes" in result.output
+    assert "True" not in result.output
 
-        assert (FIXTURE / ".sextant" / "metadata.json").is_file()
-        assert (BILLING_LIB / ".sextant" / "metadata.json").is_file()
+    assert (orders_service / ".sextant" / "metadata.json").is_file()
+    assert (billing_lib / ".sextant" / "metadata.json").is_file()
 
-        modules_json = REACTOR / ".sextant" / "modules.json"
-        modules = json.loads(modules_json.read_text())["modules"]
-        assert modules == sorted(modules, key=lambda row: row["dir"])
-        by_dir = {row["dir"]: row for row in modules}
-        # Root-relative (2M Task 2 fix round 1, F5), not absolute: stable
-        # across however `path` was itself spelled on the command line.
-        assert by_dir["../orders-service"] == {
-            "dir": "../orders-service",
-            "module_id": "com.acme:orders-service",
-            "kind": "undetermined",
-            "analyzed": True,
-            "skip_reason": None,
-        }
-        assert by_dir["billing-lib"] == {
-            "dir": "billing-lib",
-            "module_id": "com.acme:billing-lib",
-            "kind": "undetermined",
-            "analyzed": True,
-            "skip_reason": None,
-        }
+    modules_json = reactor / ".sextant" / "modules.json"
+    modules = json.loads(modules_json.read_text())["modules"]
+    assert modules == sorted(modules, key=lambda row: row["dir"])
+    by_dir = {row["dir"]: row for row in modules}
+    # Root-relative (2M Task 2 fix round 1, F5), not absolute: stable
+    # across however `path` was itself spelled on the command line.
+    assert by_dir["../orders-service"] == {
+        "dir": "../orders-service",
+        "module_id": "com.acme:orders-service",
+        "kind": "undetermined",
+        "analyzed": True,
+        "skip_reason": None,
+    }
+    assert by_dir["billing-lib"] == {
+        "dir": "billing-lib",
+        "module_id": "com.acme:billing-lib",
+        "kind": "undetermined",
+        "analyzed": True,
+        "skip_reason": None,
+    }
 
-        # `render`/`enrich`/`export` never re-detect (M00); pointed at the
-        # reactor root itself — where `modules.json` sits and no workspace
-        # ever will, `--workspace` being refused there — they refuse by
-        # naming every module `modules.json` lists, root-relative, in the
-        # exact pinned form.
-        render_result = CliRunner().invoke(cli, ["module", "render", str(REACTOR)])
-        assert render_result.exit_code != 0
-        assert (
-            f"{REACTOR} is a multi-module root; analyze it, then run this command against "
-            "one of: ../orders-service, billing-lib" in render_result.output
-        )
-    finally:
-        _restore(FIXTURE / ".sextant", orders_service_backup)
-        _restore(BILLING_LIB / ".sextant", billing_lib_backup)
-        _restore(REACTOR / ".sextant", reactor_backup)
+    # `render`/`enrich`/`export` never re-detect (M00); pointed at the
+    # reactor root itself — where `modules.json` sits and no workspace
+    # ever will, `--workspace` being refused there — they refuse by
+    # naming every module `modules.json` lists, root-relative, in the
+    # exact pinned form.
+    render_result = CliRunner().invoke(cli, ["module", "render", str(reactor)])
+    assert render_result.exit_code != 0
+    assert (
+        f"{reactor} is a multi-module root; analyze it, then run this command against "
+        "one of: ../orders-service, billing-lib" in render_result.output
+    )
 
 
 _TRIVIAL_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
