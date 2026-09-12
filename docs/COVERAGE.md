@@ -1276,13 +1276,16 @@ which is the same standing `resolvable_superclass_calls` has, and for the same r
 Both are in the same package and both are terminals in `spring-petclinic-rest`. One is an
 API that reaches a store and one is a date. The package is not the evidence.
 
-**Six of the eight members have no producer, and for two different reasons** (`OI-75`).
-`outbound_call`, `throws` and `async_handoff` are one catalog rule away — an `owner` rule
+**Five of the eight members have no producer, and for two different reasons** (`OI-75`).
+`outbound_call` and `async_handoff` are one catalog rule away — an `owner` rule
 naming `ExecutorService` would mint `async_handoff` today, and none is declared, so all
 twelve shipped rules say `persistence`. `cycle`, `returns` and `ends_silently` are
 unreachable BY CONSTRUCTION and no rule can change that: a cyclic edge has a non-NULL
 `callee`, so `classify` returns NULL for it, and the other two describe how a BODY exits
-while every catalog route is a predicate on the callee's TYPE.
+while every catalog route is a predicate on the callee's TYPE. `throws` was the sixth until
+`G-52` (2026-09-12), and it closed by the second route, not the first: `classify` returns it
+for a `throw` site directly, from the instruction, because how a method exits is not
+something any library knows (§5.13's throw-exits row).
 
 `TargetKind.file` has no producer either, and it has live candidates:
 `io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are both called on `mall-admin` and
@@ -3342,6 +3345,7 @@ has been asserting a parity nobody measured.
 | Nested and inner classes | Ordinary class files with `InnerClasses` naming their enclosure | Phase 2C | **supported** — the phase-1 skip is lifted; annotations resolve the same nested or not **Live**: 594 nested-class symbols across the estate. |
 | Lambda bodies | `invokedynamic` plus a synthetic method holding the body | Scanner capability `lambda_body` (2Q, M03 9.17) | **supported** — a call made inside a lambda is an edge from the enclosing method **Live**: 15 lambda-body symbols, and FOUR endpoints are handled by one — `GET /other`, `GET`/`HEAD /fn/health`, and a Pub/Sub subscription. |
 | Formal type parameters | `Signature` (JVMS 4.7.9), which the erased descriptor discards | Scanner capability `type_parameters` (W5) | **supported** — see §5.14's substitution row for what is done with them |
+| Throw exits | An `ATHROW` instruction: the method leaves through it, and no method is called | `G-52` (F1 §2.3) | **supported** — shipped 2026-09-12. Every `ATHROW` is a `call_site` fact with `invoke_kind: "throw"` whose target is the thrown TYPE and no method (`name` and `descriptor` absent, D00 §5), so a trace that ends in a throw stops there and says so instead of looking like one that fell off the end. The type is read from the thrown value's producer — a `NEW` names it exactly, an invoke's declared return type is a bound the class file states — and is NULL for a rethrow, whose type lives in the try-catch table this pass does not read; the exit is published either way, because the exit is the fact and the type is the detail. `resolve/call_edges` gives the site a row with no candidates and `terminal_kind: throws`, decided from the instruction rather than by a catalog rule (the one member of `TerminalKind` produced that way — `OI-75`). Proved by `extractor-jvm/.../MethodFlowTest.java`'s `publishes_a_throw_as_an_exit_naming_the_thrown_type_and_no_method` (the three producers), `tests/domain/test_facts.py` (the shape and the invariant that only a throw names no method), `tests/egress/test_render_traces.py`'s `test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type` (the diagram arrow reads `throw`, into the type's lifeline) and `tests/e2e/test_vertical_slice.py` (the counts). **Not yet drawn**: a rethrow whose type is unread reaches no root on the fixture, and `query/trace.py` still spells a NULL target as a string before the renderer sees it — the step table's wording for it exists and is unreached. **Live**: 39 throw sites on the fixture — 8 named types, 5 rethrows unread — and all 39 read `throws`. |
 
 ### 5.14 Shape and contract
 

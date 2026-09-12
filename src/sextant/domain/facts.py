@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 
@@ -384,10 +384,29 @@ class CallArgument(BaseModel):
 
 
 class CallTarget(BaseModel):
+    """What a call site names. `name` and `descriptor` on every site that dispatches
+    to a method — which is every one except a THROW — and `owner` on all but a rethrow
+    whose type this pass could not read.
+
+    The invariant is enforced on `CallSiteFact` rather than here, because it is stated
+    in terms of `invoke_kind`, which lives there. A validator on this model can only see
+    three optional fields and would accept a bare `CallTarget()` — which is what the
+    first version of it did, while its own docstring claimed it stopped exactly that.
+
+    `G-52`: a throw site is call-site-shaped and its target is the thrown
+    exception TYPE (D00 §5), so the owner is the whole of it. There is no
+    method, and the two keys that name one are absent rather than empty — the
+    same rule `implementation` states below for the opposite case, and for the
+    same reason: an empty name matches nothing while looking like a name, so a
+    consumer joining `target` to method symbols would be reading a claim about
+    code that does not exist. `schema.sql`'s `->>` already yields NULL for an
+    absent key, so the projection needed no change.
+    """
+
     model_config = {"frozen": True}
-    owner: str
-    name: str
-    descriptor: str
+    owner: str | None = None
+    name: str | None = None
+    descriptor: str | None = None
 
 
 class CallSiteFact(BaseModel):
@@ -415,6 +434,27 @@ class CallSiteFact(BaseModel):
     # to code that does not exist.
     implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _only_a_throw_names_no_method(self) -> "CallSiteFact":
+        """`G-52`: a throw site names a TYPE and no method; every other site names both.
+
+        Enforced here and not on `CallTarget`, because both halves are only visible
+        together: the model that holds `name` and `descriptor` cannot see `invoke_kind`,
+        so a validator there accepts a bare target and guarantees nothing. Stated as an
+        equivalence rather than one implication, so neither a dispatching call that lost
+        its method nor a throw that acquired one can pass.
+        """
+        names_a_method = self.target.name is not None and self.target.descriptor is not None
+        if (self.invoke_kind == "throw") == names_a_method:
+            raise ValueError(
+                "a `throw` site names a thrown type and no method; every other site names "
+                f"both — got invoke_kind={self.invoke_kind!r} with "
+                f"name={self.target.name!r}, descriptor={self.target.descriptor!r}"
+            )
+        if self.invoke_kind != "throw" and self.target.owner is None:
+            raise ValueError("a dispatching call site must name an owner")
+        return self
 
 
 class MethodReturnFact(BaseModel):

@@ -924,8 +924,20 @@ implemented. Both are kept; the body is added beside them.
 
 **`invoke_kind`** is one of `virtual`, `static`, `interface`, `special`, `dynamic` — the
 five JVM dispatch forms — plus `throw`, which the row above already names: a throw site is
-a call-site-shaped observation whose target is the thrown exception type, and it is what
-gives traces their `throws` terminal.
+a call-site-shaped observation whose target is the thrown exception type. It carries no
+`name` and no `descriptor`, because there is no method: a throw dispatches to no body, and
+an empty name would match nothing while looking like one.
+
+**It gives traces their `throws` terminal by a path this paragraph used to misname.**
+Until `G-52` was built it said the throw site is "what gives traces their `throws`
+terminal" as if the catalog path did it, and measuring `resolve/terminals.py` showed that
+path never could: `rules.of(target)` keys on `owner_of(target)` — the callee's TYPE —
+through direct owner, then supertype, then scanned package, and never reads `invoke_kind`.
+A catalog rule naming an exception type would have classified the CONSTRUCTOR call, not
+the exit. So `classify()` reads the site's `invoke_kind` first and returns `throws` for a
+throw site directly, before any rule: how a method exits is a property of the instruction,
+not of any library. The catalog path is unchanged and still produces no `throws`. The
+false sentence was written when neither half existed and nobody could notice.
 
 **`ordinal`** is the invoke's index within its method, assigned in instruction order and
 therefore deterministic (NFR-1). It is **the v1 of the control-flow position** this schema

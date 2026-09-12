@@ -1652,6 +1652,12 @@ def _call_cell(step: Step) -> tuple[Run, ...]:
     shortening this column would delete the only evidence a reader has. The
     `Caller` column shortens because a caller is always a method in this
     module, already named elsewhere in the document."""
+    # `G-52`: a throw whose type the extractor could not read has NO target — there is
+    # no method, and the thrown type lives in a try-catch table nothing reads yet. Said
+    # in words rather than rendered as a symbol: `_code(None)` puts the string `None`
+    # into the document, which is a method nobody wrote and a name that matches nothing.
+    if step.target is None:
+        return _text("throws (type unread)")
     if step.callee is None:
         return _code(step.target)
     callee = bare_descriptor(step.callee)
@@ -1947,7 +1953,16 @@ def _message_label(step: Step) -> str:
 
     `[stop]` marks a lifeline the walk did not enter, which is where the trace
     ends on that branch; a step with no stop was expanded, and its own calls
-    follow."""
+    follow.
+
+    `throw` is the whole verb on a throw step (`G-52`). Its target is the thrown
+    TYPE and names no method, so `method_name` of it is empty — measured, the arrow
+    to `UninitializedMessageException` read `a2->>a7:  [boundary]`, a lifeline entered
+    by nothing a reader could name. The lifeline is the exception type, which is right:
+    the method leaves through it."""
+    if step.invoke_kind == "throw":
+        label = "throw"
+        return label if step.stop is None else f"{label} [{step.stop}]"
     label = method_name(step.target)
     declared = owner_of(step.target)
     landed = owner_of(_reached(step))

@@ -452,6 +452,24 @@ def test_an_ordinary_call_carries_no_dynamic_marker():
     assert "(dynamic)" not in _diagram(_trace(_step())).mermaid
 
 
+def test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type():
+    """`G-52`. A throw step's target is the thrown TYPE and names no method, so the
+    method-name rule every other arrow uses yields an empty label: measured on the
+    fixture, `a2->>a7:  [boundary]` into `UninitializedMessageException`. The verb is
+    `throw`, the lifeline is the type, and the stop marker still follows."""
+    trace = _trace(
+        _step(
+            invoke_kind="throw",
+            target="java/lang/IllegalStateException#",
+            callee=None,
+            stop=TraceStop.BOUNDARY,
+        )
+    )
+    mermaid = _diagram(trace).mermaid
+    assert "participant a1 as IllegalStateException" in mermaid
+    assert "a0->>a1: throw [boundary]" in mermaid
+
+
 @pytest.mark.pins("render_trace.an-arrow-says-where-the-walk-stopped")
 def test_each_stop_is_marked_on_the_arrow_that_hit_it():
     """Where a trace ENDS is the single most important fact in its diagram,

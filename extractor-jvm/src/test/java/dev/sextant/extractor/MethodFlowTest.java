@@ -788,6 +788,37 @@ class MethodFlowTest {
             "sextant-jvm maven c v o/P#missing().", abstractMethod));
     }
 
+    /** `G-52`: a throw is an exit, published as a call-site-shaped fact whose target
+     *  is the thrown TYPE and no method — `name` and `descriptor` ABSENT, not empty,
+     *  because an empty name would match nothing while looking like one. It shares
+     *  the ordinal sequence with the invokes before it, and it is not a
+     *  `method_return`. Three producers of the thrown value: a `NEW` names the exact
+     *  type, an invoke names its declared return type as a bound, and a rethrow's
+     *  catch-handler entry names none — and the exit is published in all three. */
+    @Test
+    void publishes_a_throw_as_an_exit_naming_the_thrown_type_and_no_method() throws Exception {
+        List<String> lines = callSites("throwsNew");
+        String site = last(lines);
+        assertTrue(site.contains("\"invoke_kind\":\"throw\""), site);
+        assertTrue(site.contains("\"target\":{\"owner\":\"java/lang/IllegalStateException#\"}"), site);
+        assertFalse(site.contains("\"name\""), site);
+        assertFalse(site.contains("\"descriptor\""), site);
+        assertTrue(site.contains("\"receiver\":null"), site);
+        assertTrue(site.contains("\"result\":null"), site);
+        // `<init>` is ordinal 0, the throw that follows it is ordinal 1: one sequence.
+        assertTrue(lines.get(0).contains("\"name\":\"<init>\""), lines.get(0));
+        assertTrue(site.contains("\"ordinal\":1"), site);
+        assertEquals(List.of(), methodReturns("throwsNew"));
+
+        String rethrow = last(callSites("rethrows"));
+        assertTrue(rethrow.contains("\"invoke_kind\":\"throw\""), rethrow);
+        assertTrue(rethrow.contains("\"target\":{\"owner\":null}"), rethrow);
+
+        String built = last(callSites("throwsBuilt"));
+        assertTrue(built.contains("\"invoke_kind\":\"throw\""), built);
+        assertTrue(built.contains("\"target\":{\"owner\":\"java/lang/RuntimeException#\"}"), built);
+    }
+
     /** Capability 9.18, and the whole point of it: the value a method hands
      *  back is another call's result, so the return NAMES that site. The chain
      *  a round trip needs was already extracted one hop short of this — an

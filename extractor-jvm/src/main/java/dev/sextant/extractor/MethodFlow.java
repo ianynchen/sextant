@@ -59,6 +59,37 @@ public final class MethodFlow {
         List<String> lines = new ArrayList<>();
         int ordinal = 0;
         for (int i = 0; i < insns.length; i++) {
+            // `G-52`. An `ATHROW` leaves the method, and dropping it dropped half of
+            // every exit path: MEASURED before this, a method whose only exit is a
+            // throw published NO exit at all — a `call_site` for the exception's
+            // CONSTRUCTOR and nothing saying the method then left through it. Building
+            // an exception and throwing it are different acts, and code that builds one
+            // to hand somewhere else read identically.
+            //
+            // It is still not a `method_return` — `methodReturns` refuses it for the
+            // reason stated there, that an exception in the position a caller reads as a
+            // returned value is a lie. D00 §5 reserves the other half and this produces
+            // it: "the invoke-kind set includes `throw`: a throw site is a call-site-
+            // shaped observation whose target is the thrown exception type".
+            //
+            // It shares the ORDINAL sequence, which renumbers the call sites that follow
+            // a throw in the same method — measured on the fixture, 13 methods of 750.
+            // That is forced rather than chosen: `ordinal` is D00's "index within its
+            // method, assigned in instruction order", `call_edges` carries `(caller,
+            // ordinal)` as its position, and a second sequence would put two rows there
+            // meaning different things.
+            if (insns[i].getOpcode() == Opcodes.ATHROW) {
+                Frame<SourceValue> throwFrame = frames[i];
+                // Unreachable, exactly as an unreachable invoke is: the ordinal is a
+                // property of the instruction list, not of what the analyser reached.
+                if (throwFrame == null) {
+                    ordinal++;
+                    continue;
+                }
+                lines.add(throwSiteJson(documentId, callerSymbol, ordinal++,
+                    thrownType(throwFrame)));
+                continue;
+            }
             Target target = targetOf(insns[i]);
             if (target == null) continue;
             Frame<SourceValue> frame = frames[i];
@@ -945,6 +976,95 @@ public final class MethodFlow {
         fact.put("receiver", receiver == null ? "null" : String.valueOf(receiver));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
+        return JsonOut.object(fact);
+    }
+
+    /** The type an {@code ATHROW} leaves with, or null where the stack value names
+     *  none. The exception object is the top of stack; its producing instruction is a
+     *  {@code NEW} for the overwhelmingly common `throw new Foo(...)`, and anything else
+     *  — a caught exception rethrown, a field read, a method result — does not name a
+     *  type here without a resolution pass this one is not.
+     *
+     *  <p>Null rather than a guess. A throw whose type could not be read still emits its
+     *  site, because the EXIT is the fact and the type is the detail: silence about the
+     *  exit is the defect being fixed, and replacing it with silence about unreadable
+     *  exits would fix half of it. */
+    private static String thrownType(Frame<SourceValue> frame) {
+        SourceValue thrown = frame.getStack(frame.getStackSize() - 1);
+        // EVERY producer, then exactly one distinct answer or none — never the first one
+        // iteration happens to reach. Two reasons, and either alone would be enough.
+        //
+        // Determinism (NFR-1). `SourceValue.insns` is ASM's `SmallSet` while it holds at
+        // most two producers and a `java.util.HashSet` beyond that, and
+        // `AbstractInsnNode` overrides neither `hashCode` nor `equals` — so past two
+        // branches the iteration order is IDENTITY-HASH order, which varies between runs
+        // of the same JVM on the same bytes. Measured: one class file, six runs under
+        // different `-XX:hashCode=` strategies, four different answers. Fact files are
+        // byte-compared across runs.
+        //
+        // And the rule this file already applies twice. `singleSource` refuses a value
+        // merged from two producers, and `methodReturns` refuses to pick between two
+        // `return` statements — "two possible answers and no single one; picking either
+        // would be a fact about code that may never run". A `throw` merged from two
+        // branches is the same shape and gets the same answer.
+        String only = null;
+        for (AbstractInsnNode source : thrown.insns) {
+            String candidate = typeOf(source);
+            if (candidate == null) return null;
+            if (only == null) {
+                only = candidate;
+            } else if (!only.equals(candidate)) {
+                return null;
+            }
+        }
+        return only;
+    }
+
+    /** The type one producer of a thrown value names, or null where it names none.
+     *
+     *  <p>{@code NEW} is the exact runtime type. An invoke's DECLARED RETURN type is a
+     *  BOUND — a subclass may be what actually flies — and it is recorded anyway because
+     *  the class file states it, which is the difference between a bound and a guess.
+     *  MEASURED on the fixture: the {@code NEW} walk alone read 14 of 39 sites and this
+     *  takes it to 34, because a helper-built exception is how Kotlin's {@code Intrinsics}
+     *  and most factory methods throw. The five that still read none are rethrows, whose
+     *  type lives in the try-catch table this pass does not read. */
+    private static String typeOf(AbstractInsnNode source) {
+        if (source.getOpcode() == Opcodes.NEW) {
+            return ((TypeInsnNode) source).desc;
+        }
+        if (source instanceof MethodInsnNode call) {
+            Type returned = Type.getReturnType(call.desc);
+            return returned.getSort() == Type.OBJECT ? returned.getInternalName() : null;
+        }
+        return null;
+    }
+
+    /** D00 §5's throw site: a call-site-shaped fact whose target is the thrown type.
+     *
+     *  <p>{@code name} and {@code descriptor} are ABSENT rather than empty. There is no
+     *  method here, and an empty string would be a name that matches nothing while
+     *  looking like one — the same reason {@code implementation} is absent on every site
+     *  that is not a lambda. Consumers joining `target` to method symbols therefore find
+     *  nothing, which is correct: a throw dispatches to no body.
+     *
+     *  <p>{@code receiver} and {@code result} are null for the same reason. A throw
+     *  returns nothing to anybody. */
+    private static String throwSiteJson(String documentId, String callerSymbol, int ordinal,
+                                         String thrownOwner) {
+        TreeMap<String, String> target = new TreeMap<>();
+        target.put("owner", thrownOwner == null ? "null" : JsonOut.string(thrownOwner + "#"));
+
+        TreeMap<String, String> fact = new TreeMap<>();
+        fact.put("kind", JsonOut.string("call_site"));
+        fact.put("document_id", JsonOut.string(documentId));
+        fact.put("caller", JsonOut.string(callerSymbol));
+        fact.put("target", JsonOut.object(target));
+        fact.put("invoke_kind", JsonOut.string("throw"));
+        fact.put("ordinal", String.valueOf(ordinal));
+        fact.put("receiver", "null");
+        fact.put("result", "null");
+        fact.put("arguments", JsonOut.array(List.of()));
         return JsonOut.object(fact);
     }
 

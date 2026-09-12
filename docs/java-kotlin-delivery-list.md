@@ -64,7 +64,6 @@ gRPC
 honestly at the end, and excluded from the per-feature check by being named here:
 
 ```unassigned
-G-52
 G-73 G-74 GAP-7 OI-85
 ```
 
@@ -401,9 +400,10 @@ two functions plus a config object on `sextant.api` (FR-24).
 These are real and they are not on the path to any cell above. They are listed so that
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
-`G-52` throw exits — *in flight, uncommitted, 2 Criticals from review already fixed* ·
 `G-73` `visibility` two-valued for a four-valued
 concept · `G-74` `signature.throws` has no consumer · `GAP-7` ~100s per reactor module.
+`G-52` throw exits left this list on 2026-09-12: it blocked no feature, so it is not in
+the `closed` block above; it is recorded closed in `open-issues.md`, by the tests named there.
 
 ## 3. Out of scope for this target
 

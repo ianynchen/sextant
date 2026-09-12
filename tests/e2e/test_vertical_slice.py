@@ -222,8 +222,23 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # "more of the module is visible and none of it is newly expanded".
     # 1486 and 31%: `ShipmentRepository$Shipment`'s constructor adds one edge (its
     # `Object.<init>` call); the numerator stays 468 and the rounding tips 32 -> 31.
-    assert "Calls whose callee body this workspace read: 468 of 1486 (31%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1484." in document
+    # MOVED by `G-52`, and the delta is the whole verification rather than a new
+    # baseline typed in from a failure message. A throw site is now a call edge, and
+    # the fixture has exactly 39 of them — measured on HEAD's jar and then on this one:
+    #
+    #   1525 - 1486 = 39   edges, one per throw site
+    #   1523 - 1484 = 39   all of them `resolved` (the compiler named the site exactly;
+    #                      5 of the 39 are rethrows whose TYPE is unread, and a row with
+    #                      no target is still a resolved exit)
+    #    468 -  468 =  0   numerator unmoved: no exception BODY is read, so the
+    #                      percentage stays at 31% while the denominator grows
+    #    345 -  345 =  0   `owner_not_scanned` unmoved: a throw dispatches to no method,
+    #                      so `_record_resolution` records no lookup for it
+    #
+    # verify: the 39 is reproducible by counting `call_site` facts whose `invoke_kind`
+    # is `throw` in the workspace's fact files (8 distinct named types plus the 5 rethrows).
+    assert "Calls whose callee body this workspace read: 468 of 1525 (31%)" in document
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1523." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
         "inherited 2, owner_not_scanned 345."

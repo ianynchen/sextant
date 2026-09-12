@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from pydantic import TypeAdapter
+import pytest
+from pydantic import TypeAdapter, ValidationError
 
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import read_fact_file, write_fact_file
@@ -334,11 +335,15 @@ def test_call_site_fact_round_trips_through_model_dump_and_validate():
 
 
 def test_call_site_fact_survives_a_fact_file_round_trip(tmp_path: Path):
+    # `invoke_kind` was `"throw"` here with a constructor target, chosen when `throw` was
+    # a value D00 declared and nothing produced — so no shape existed to get wrong. It
+    # has one now (`G-52`), and it is a thrown TYPE with no method, which is what the
+    # test below round-trips. This one goes back to the ordinary case it was always about.
     call_site = CallSiteFact(
         document_id="doc_1",
         caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
         target=CallTarget(owner="java/lang/RuntimeException#", name="<init>", descriptor="()V"),
-        invoke_kind="throw",
+        invoke_kind="special",
         ordinal=2,
     )
     path = tmp_path / "OrderController.jsonl"
@@ -348,6 +353,64 @@ def test_call_site_fact_survives_a_fact_file_round_trip(tmp_path: Path):
 
     assert document == DOCUMENT
     assert facts == [call_site]
+
+
+def test_a_throw_site_round_trips_naming_a_type_and_no_method(tmp_path: Path):
+    """`G-52`. A throw site names the thrown TYPE and dispatches to no body, so the two
+    keys that name a method are absent — not empty, which would match nothing while
+    looking like a name."""
+    thrown = CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+        target=CallTarget(owner="java/lang/IllegalStateException#"),
+        invoke_kind="throw",
+        ordinal=2,
+    )
+    path = tmp_path / "OrderController.jsonl"
+
+    write_fact_file(path, DOCUMENT, [thrown])
+    _, facts = read_fact_file(path)
+
+    assert facts == [thrown]
+    assert facts[0].target.name is None and facts[0].target.descriptor is None
+
+
+def test_a_throw_site_may_name_no_type_and_a_dispatching_call_may_not(tmp_path: Path):
+    """The two halves of the invariant, each with the case that would slip past a
+    validator written on `CallTarget` alone.
+
+    A rethrow's type lives in the try-catch table, which the extractor does not read, so
+    a throw site with NO owner is a real fact. A dispatching call that lost its method is
+    not, and before this invariant moved onto `CallSiteFact` it was accepted silently.
+    """
+    rethrow = CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+        target=CallTarget(),
+        invoke_kind="throw",
+        ordinal=3,
+    )
+    assert rethrow.target.owner is None
+
+    with pytest.raises(ValidationError):
+        CallSiteFact(
+            document_id="doc_1",
+            caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+            target=CallTarget(owner="com/acme/Service#"),
+            invoke_kind="virtual",
+            ordinal=4,
+        )
+
+    with pytest.raises(ValidationError):
+        CallSiteFact(
+            document_id="doc_1",
+            caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+            target=CallTarget(
+                owner="java/lang/IllegalStateException#", name="<init>", descriptor="()V"
+            ),
+            invoke_kind="throw",
+            ordinal=5,
+        )
 
 
 def test_config_entry_fact_survives_a_fact_file_round_trip(tmp_path: Path):

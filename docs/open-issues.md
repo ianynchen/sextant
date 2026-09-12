@@ -2847,7 +2847,7 @@ the destination is at `queue(arg0)` inside it`". That is what shipped, near enou
 `lambda_arg` and `lambda_steps` — and the paragraph is kept for that rather than repeated as
 an open question.*
 
-### OI-75 — six of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
+### OI-75 — five of `TerminalKind`'s eight members, and one of `TargetKind`'s three, have no producer
 
 **Found by** W30's review, which asked the question `RootKind`'s own docstring already
 answers for `entry_point` and this set did not answer for anything: which members are
@@ -2864,7 +2864,8 @@ one", which is true of half of them and false of the other half:
 
 | member | why it is absent |
 |---|---|
-| `outbound_call`, `throws`, `async_handoff` | one catalog rule away — an `owner` rule naming `ExecutorService` mints `async_handoff` today |
+| `outbound_call`, `async_handoff` | one catalog rule away — an `owner` rule naming `ExecutorService` mints `async_handoff` today |
+| ~~`throws`~~ | **produced since `G-52`, 2026-09-12** — and by the second route below, not a catalog rule: `resolve/terminals.classify` returns it for a `throw` site from the site's own `invoke_kind`, because how a body exits is not a property of any callee's type. This entry read "six" until then |
 | `TargetKind.file` | likewise: `io.minio.MinioClient` and `com.aliyun.oss.OSSClient` are live on `mall-admin` and read `unresolved` |
 | `cycle` | unreachable BY CONSTRUCTION — a cyclic edge has a non-NULL `callee`, so `resolve/terminals.classify` returns NULL for it and always will |
 | `returns`, `ends_silently` | unreachable by any rule — they describe how a BODY exits, and all three catalog routes are predicates on the callee's TYPE |
@@ -2874,10 +2875,11 @@ defect. It matters to a reader of `call_edges` deciding whether an absent value 
 analysis found nothing or cannot express it, and to a catalog author wondering whether a
 rule of theirs could produce one.
 
-**Closes by** two separate acts: declaring the rules for the first four (cheap, and
+**Closes by** two separate acts: declaring the rules for the first three (cheap, and
 `file` has live candidates waiting), and — for the last three — a mechanism that classifies
 a BODY's exit rather than a callee's type, which is a different pass, not a different rule.
-Either half may close on its own.
+Either half may close on its own. `throws` closed by the second: the throw site (`G-52`)
+is exactly such a mechanism for the one exit the instruction stream states.
 
 **Falsified by** finding that `returns`/`ends_silently` were never meant for `call_edges`
 at all, in which case the fix is to narrow the set the way `RootKind` was narrowed from six
@@ -3193,6 +3195,38 @@ Java's rule — the same shape `G-63` closed for getters, one position along; no
 re-opened here because no fixture exhibits it (§4.1). `GenericSignatureTest`'s pin on
 `batched(List<String>)`'s element moved from `nullable: true` to `false` — the pin was
 carrying the defect.
+
+### G-52 — a `throw` is an exit the call graph did not record · **CLOSED, 2026-09-12**
+
+**Found by** the completeness audit of 2026-09-06 (F1 §2.3): every `ATHROW` was dropped by
+`extractor-jvm/.../MethodFlow.java`, so a method whose only exit is a throw published a call
+to the exception's CONSTRUCTOR and nothing saying the method then left through it — the same
+facts as a method that builds an exception to hand somewhere else. A trace that ended in a
+throw looked like one that fell off the end. D00 §5 had reserved `invoke_kind: throw` for
+exactly this and nothing produced it; the same paragraph also claimed a throw site is "what
+gives traces their `throws` terminal", which was false — `terminal_kind` came only from
+`rules.of(target)`, which never reads an invoke kind.
+
+**CLOSED by** `feat(extractor): a throw is an exit — every ATHROW is a call-site fact whose
+target is the thrown type, and traces stop on it (G-52)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/MethodFlowTest.java`'s
+`publishes_a_throw_as_an_exit_naming_the_thrown_type_and_no_method`,
+`tests/domain/test_facts.py`'s `test_a_throw_site_round_trips_naming_a_type_and_no_method` and
+`test_a_throw_site_may_name_no_type_and_a_dispatching_call_may_not`,
+`tests/egress/test_render_traces.py`'s
+`test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type`, and the counts pinned in
+`tests/e2e/test_vertical_slice.py`. Every `ATHROW` is now a `call_site` fact with
+`invoke_kind: "throw"` whose target is the thrown TYPE — read from the value's producer, a
+`NEW` or an invoke's declared return type, and NULL for a rethrow whose type lives in the
+try-catch table this pass does not read — with no `name` and no `descriptor`, absent rather
+than empty; `CallSiteFact` enforces that only a throw omits them. `call_edges` skips dispatch
+for it and gives it a row with no candidates, `classify` returns `terminal_kind: throws` from
+the invoke kind rather than a catalog rule, and the document renders a type-unread throw in
+words rather than as a symbol named `None`. D00 §5 now states the shape and no longer claims
+the catalog path produces `throws`. Measured on the fixture: 39 throw sites, 8 named types,
+5 rethrows unread, call edges 1486 → 1525 and `resolved` 1484 → 1523, both by exactly 39;
+`owner_not_scanned` unmoved at 345, because a throw dispatches to no method and records no
+lookup.
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 
