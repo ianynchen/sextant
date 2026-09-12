@@ -76,6 +76,13 @@ VIRTUAL_DISPATCH = frozenset({"virtual", "interface"})
 # so every reader has to decide what to do with it and none of them can take
 # the target at face value — see the module docstring.
 DYNAMIC = "dynamic"
+# `G-52`: a throw site is call-site-shaped but dispatches to NO method — its target is
+# the thrown exception TYPE and it carries no `name` and no `descriptor` (D00 §5). Every
+# place that builds a method descriptor from a site, or asks dispatch to resolve one, has
+# to say so: `str(None)` is `"None"`, and a published symbol reading
+# `com/acme/OrderNotFound#None(sig_…)` is a method nobody wrote, matched by
+# nothing, rendered into the document as an arrow labelled `None`.
+THROW = "throw"
 # Names that are never inherited, so an ancestor walk for one is always wrong (JLS 8.8).
 _NOT_INHERITED = frozenset({"<init>", "<clinit>"})
 

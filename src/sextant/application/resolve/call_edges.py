@@ -81,15 +81,7 @@ from collections.abc import Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
-
-# `G-52`: a throw site is call-site-shaped but dispatches to NO method — its target is
-# the thrown exception TYPE and it carries no `name` and no `descriptor` (D00 §5). Every
-# place that builds a method descriptor from a site, or asks dispatch to resolve one, has
-# to say so: `str(None)` is `"None"`, and a published symbol reading
-# `com/acme/OrderNotFound#None(sig_…)` is a method nobody wrote, matched by
-# nothing, rendered into the document as an arrow labelled `None`.
-THROW = "throw"
+from sextant.application.resolve.dispatch import DYNAMIC, THROW, Dispatch, dispatch_of
 from sextant.application.resolve.terminals import TerminalRules, classify
 from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor

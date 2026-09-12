@@ -42,7 +42,7 @@ def _step(
     caller: str = "s maven c 1 a/Api#list().",
     ordinal: int = 0,
     invoke_kind: str = "virtual",
-    target: str = "a/Service#run().",
+    target: str | None = "a/Service#run().",
     callee: str | None = "s maven c 1 a/Service#run().",
     result: int | None = None,
     stop: TraceStop | None = None,
@@ -468,6 +468,22 @@ def test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type():
     mermaid = _diagram(trace).mermaid
     assert "participant a1 as IllegalStateException" in mermaid
     assert "a0->>a1: throw [boundary]" in mermaid
+
+
+def test_a_throw_whose_type_was_unread_is_a_self_arrow_said_in_words():
+    """`G-52`. A rethrow's step has no target: the type lives in the try-catch table the
+    extractor does not read. A lifeline is a type that holds state and receives calls,
+    and a type nobody named is not one — so the arrow lands on the method that exits,
+    the `(dynamic)` self-arrow's precedent, and says so in words. Before this the step
+    reached the renderer as the string `None`: a participant named `None`, a call cell
+    reading `` `None` ``."""
+    trace = _trace(_step(invoke_kind="throw", target=None, callee=None, stop=TraceStop.BOUNDARY))
+    mermaid = _diagram(trace).mermaid
+    assert "None" not in mermaid
+    assert "a0->>a0: throw (type unread) [boundary]" in mermaid
+    table = _step_table(trace)
+    assert "throws (type unread)" in str(table), table
+    assert "None" not in str(table), table
 
 
 @pytest.mark.pins("render_trace.an-arrow-says-where-the-walk-stopped")

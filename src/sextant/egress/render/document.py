@@ -1654,8 +1654,8 @@ def _call_cell(step: Step) -> tuple[Run, ...]:
     module, already named elsewhere in the document."""
     # `G-52`: a throw whose type the extractor could not read has NO target — there is
     # no method, and the thrown type lives in a try-catch table nothing reads yet. Said
-    # in words rather than rendered as a symbol: `_code(None)` puts the string `None`
-    # into the document, which is a method nobody wrote and a name that matches nothing.
+    # in words rather than rendered as a symbol: `_code(None)` would put the string
+    # `None` into the document, a method nobody wrote and a name that matches nothing.
     if step.target is None:
         return _text("throws (type unread)")
     if step.callee is None:
@@ -1931,7 +1931,14 @@ def _reached(step: Step) -> str:
     One function, because the diagram's arrow and the diagram's participant
     list must agree about it: computed twice, a lifeline could be registered
     for one descriptor and addressed by another, and mermaid would silently
-    draw an extra actor rather than fail."""
+    draw an extra actor rather than fail.
+
+    A `throw` whose type was unread (`G-52`) has neither: the arrow lands on the
+    method that exits, drawn as a self-arrow — the `(dynamic)` precedent — because a
+    lifeline is a type that holds state and receives calls, and a type nobody named
+    is not one."""
+    if step.target is None:
+        return bare_descriptor(step.caller)
     return step.target if step.callee is None else bare_descriptor(step.callee)
 
 
@@ -1961,10 +1968,12 @@ def _message_label(step: Step) -> str:
     by nothing a reader could name. The lifeline is the exception type, which is right:
     the method leaves through it."""
     if step.invoke_kind == "throw":
-        label = "throw"
+        label = "throw" if step.target is not None else "throw (type unread)"
         return label if step.stop is None else f"{label} [{step.stop}]"
-    label = method_name(step.target)
-    declared = owner_of(step.target)
+    # Only a throw step may lack a target (`query/trace.py`'s `Step`), and it returned.
+    target = step.target or ""
+    label = method_name(target)
+    declared = owner_of(target)
     landed = owner_of(_reached(step))
     if declared is not None and landed != declared:
         label = f"{label} (declared {simple_name(declared)})"

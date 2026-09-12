@@ -981,9 +981,10 @@ public final class MethodFlow {
 
     /** The type an {@code ATHROW} leaves with, or null where the stack value names
      *  none. The exception object is the top of stack; its producing instruction is a
-     *  {@code NEW} for the overwhelmingly common `throw new Foo(...)`, and anything else
-     *  — a caught exception rethrown, a field read, a method result — does not name a
-     *  type here without a resolution pass this one is not.
+     *  {@code NEW} for the overwhelmingly common `throw new Foo(...)`, an invoke for a
+     *  helper-built one ({@link #typeOf} reads its declared return type as a bound), and
+     *  anything else — a caught exception rethrown, a field read — does not name a type
+     *  here without a resolution pass this one is not.
      *
      *  <p>Null rather than a guess. A throw whose type could not be read still emits its
      *  site, because the EXIT is the fact and the type is the detail: silence about the

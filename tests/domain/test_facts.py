@@ -412,6 +412,17 @@ def test_a_throw_site_may_name_no_type_and_a_dispatching_call_may_not(tmp_path: 
             ordinal=5,
         )
 
+    # Half a method is not "no method": a throw carrying a `name` and no `descriptor`
+    # passed the first version of the invariant, which asked only whether both were set.
+    with pytest.raises(ValidationError):
+        CallSiteFact(
+            document_id="doc_1",
+            caller="sextant-jvm maven com.acme/orders 1.0 com/acme/OrderController#create().",
+            target=CallTarget(owner="java/lang/IllegalStateException#", name="<init>"),
+            invoke_kind="throw",
+            ordinal=6,
+        )
+
 
 def test_config_entry_fact_survives_a_fact_file_round_trip(tmp_path: Path):
     entry = ConfigEntryFact(

@@ -445,8 +445,13 @@ class CallSiteFact(BaseModel):
         equivalence rather than one implication, so neither a dispatching call that lost
         its method nor a throw that acquired one can pass.
         """
+        # A throw names NEITHER half and a dispatching call names BOTH — two tests, not
+        # one comparison of "names a method": under that, a throw carrying a `name` and no
+        # `descriptor` did not "name a method" and passed, half a claim about code that
+        # does not exist.
         names_a_method = self.target.name is not None and self.target.descriptor is not None
-        if (self.invoke_kind == "throw") == names_a_method:
+        names_half_of_one = self.target.name is not None or self.target.descriptor is not None
+        if names_half_of_one if self.invoke_kind == "throw" else not names_a_method:
             raise ValueError(
                 "a `throw` site names a thrown type and no method; every other site names "
                 f"both — got invoke_kind={self.invoke_kind!r} with "

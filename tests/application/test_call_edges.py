@@ -359,6 +359,68 @@ def test_every_hand_built_symbol_is_module_prefixed():
         assert bare_descriptor(str(fact.symbol)) != str(fact.symbol)
 
 
+_EXITS = _CALLER + "exits(" + disambiguator_of(_VOID_JVM) + ")."
+_BOOM = "com/acme/orders/gate/Boom#"
+
+
+@pytest.fixture(scope="module")
+def thrown(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """`Caller#exits` leaves twice (`G-52`): once through a `throw` whose type the
+    extractor read, once through a rethrow whose type it could not."""
+    tmp_path = tmp_path_factory.mktemp("call_edges_thrown")
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _CALLER, construct_kind=ConstructKind.CLASS
+            ),
+            _declared(_CALLER, "exits"),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _EXITS,
+                target=CallTarget(owner=_BOOM),
+                invoke_kind="throw",
+                ordinal=0,
+            ),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _EXITS,
+                target=CallTarget(),
+                invoke_kind="throw",
+                ordinal=1,
+            ),
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_call_edges(workspace)
+    rows = workspace.query("call_edges")
+    workspace.close()
+    return rows
+
+
+def test_a_throw_site_is_one_resolved_edge_to_the_thrown_type_and_reads_throws(thrown):
+    """`G-52`. A throw dispatches to no method, so the row's target is the thrown TYPE
+    whole, it has no callee, and it is `resolved` — the compiler named the exit exactly
+    and what is unknown is nothing. `terminal_kind` is `throws`, decided from the invoke
+    kind and not from any catalog rule. A rethrow whose type was unread keeps its row
+    with a NULL target: dropping it would lose an exit the fact stream recorded, and
+    spelling it `str(None)` would name a method nobody wrote."""
+    assert [row["ordinal"] for row in thrown] == [0, 1]
+    named, unread = thrown
+    assert named["target"] == _BOOM
+    assert unread["target"] is None
+    for row in thrown:
+        assert row["invoke_kind"] == "throw"
+        assert row["callee"] is None
+        assert row["resolution"] == str(Resolution.RESOLVED)
+        assert row["terminal_kind"] == "throws"
+        assert row["target_kind"] is None
+
+
 # ---- a compiler-emitted holder of an interface's default method bodies ----------------
 
 _PRICE = "com/acme/orders/price/"

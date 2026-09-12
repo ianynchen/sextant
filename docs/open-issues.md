@@ -2858,7 +2858,7 @@ catalog declares a `terminals` block, all twelve of its rules say `persistence`,
 measured output across `mall-admin`, `spring-petclinic-rest` and `jhipster-sample-app`
 contains no other value.
 
-**The six absentees are absent for two different reasons, and conflating them was the
+**The five absentees (six until `G-52`) are absent for two different reasons, and conflating them was the
 finding.** The published note said only that "no shipped catalog declares a rule that mints
 one", which is true of half of them and false of the other half:
 
@@ -3213,8 +3213,15 @@ target is the thrown type, and traces stop on it (G-52)`, proved by
 `publishes_a_throw_as_an_exit_naming_the_thrown_type_and_no_method`,
 `tests/domain/test_facts.py`'s `test_a_throw_site_round_trips_naming_a_type_and_no_method` and
 `test_a_throw_site_may_name_no_type_and_a_dispatching_call_may_not`,
+`tests/application/test_terminals.py`'s
+`test_a_throw_edge_is_throws_from_its_invoke_kind_and_not_from_a_rule`,
+`tests/application/test_call_edges.py`'s
+`test_a_throw_site_is_one_resolved_edge_to_the_thrown_type_and_reads_throws`,
+`tests/application/test_trace.py`'s `test_a_throw_with_no_target_stays_null_on_its_step`,
+`tests/application/test_reachability.py`'s `test_a_throw_whose_type_was_unread_reaches_no_symbol`,
 `tests/egress/test_render_traces.py`'s
-`test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type`, and the counts pinned in
+`test_a_throw_step_is_an_arrow_labelled_throw_into_the_thrown_type` and
+`test_a_throw_whose_type_was_unread_is_a_self_arrow_said_in_words`, and the counts pinned in
 `tests/e2e/test_vertical_slice.py`. Every `ATHROW` is now a `call_site` fact with
 `invoke_kind: "throw"` whose target is the thrown TYPE — read from the value's producer, a
 `NEW` or an invoke's declared return type, and NULL for a rethrow whose type lives in the
@@ -3222,11 +3229,22 @@ try-catch table this pass does not read — with no `name` and no `descriptor`, 
 than empty; `CallSiteFact` enforces that only a throw omits them. `call_edges` skips dispatch
 for it and gives it a row with no candidates, `classify` returns `terminal_kind: throws` from
 the invoke kind rather than a catalog rule, and the document renders a type-unread throw in
-words rather than as a symbol named `None`. D00 §5 now states the shape and no longer claims
-the catalog path produces `throws`. Measured on the fixture: 39 throw sites, 8 named types,
-5 rethrows unread, call edges 1486 → 1525 and `resolved` 1484 → 1523, both by exactly 39;
+words rather than as a symbol named `None`: the step's `target` stays NULL from
+`query/trace.py` onward, the step table's call cell reads `throws (type unread)`, the
+sequence diagram draws a self-arrow on the method that exits labelled `throw (type unread)`
+(a lifeline is a type that holds state and receives calls, and a type nobody named is not
+one), and `reachability` records no symbol for it — the exit is on the step row, and that
+table is what a root REACHES. D00 §5 now states the shape and no longer claims the catalog
+path produces `throws`. Measured on the fixture: 39 throw sites, 8 named types, 5 rethrows
+unread, call edges 1486 → 1525 and `resolved` 1484 → 1523, both by exactly 39;
 `owner_not_scanned` unmoved at 345, because a throw dispatches to no method and records no
 lookup.
+
+*Logged, not fixed, because no fixture needs either: `CHECKCAST` is transparent to the
+producer walk, so `throw supplier.get()` where the cast names `X` publishes the invoke's
+declared `java/lang/Object#` rather than `X`; and ASM's
+`Interpreter.newExceptionValue(TryCatchBlockNode, Frame, Type)` would hand the rethrow's
+type over at the source, closing the 5 unread. Both are one override away.*
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 
