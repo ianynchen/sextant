@@ -1631,7 +1631,7 @@ owner's declared methods out of the jar and cross-references the catalog as load
 | `spring-mvc-router` | `RouterFunctions$Builder` (spring-webmvc 6.1.6) | **0 of 20** | 14 |
 | `spring-mvc-router` | `RouterFunctions` (spring-webmvc 6.1.6) | **1 of 6** | 5 |
 | `aws-sqs-sdk` | `SqsClient` (sqs 2.25.31) | **1 of 29** | 24 |
-| `aws-sqs-sdk` | `SqsAsyncClient` | **0 of 28** | 25 |
+| `aws-sqs-sdk` | `SqsAsyncClient` | **1 of 28** | 24 |
 
 **A raw ratio overstates every one of these** — most of what a template declares is
 configuration and lifecycle, and a method taking no destination cannot address a wire.
@@ -1647,8 +1647,10 @@ individually in its catalog's `slice.outside` with the reason it is outside
   the reference documentation's recommended Java shape since Spring 5.2.
 - **An SDK-level SQS consumer is invisible** — `SqsClient.receiveMessage` is unread, so a
   module that only consumes looks like one that does not touch SQS.
-- **`SqsAsyncClient` is unread entirely**, `sendMessage` included — the same code written
-  against the async client derives nothing, while the sync client derives a row.
+- **`SqsAsyncClient` is read for one call only.** Since `G-43`, `sendMessage` is read on
+  BOTH clients — `matches.terminal` names `SqsClient` and `SqsAsyncClient` together as the
+  builder chain's terminal owner — but the other 27 methods on the async client, including
+  the entire inbound direction, are unread exactly as they are on the sync client.
 - **The JMS, AMQP and SQS templates model the send half only.** Every `receive`, every
   request/reply form, and — for SQS — every asynchronous and batch send, derives nothing.
 
@@ -3472,7 +3474,7 @@ widening the distance between what a catalog claims and what it reads.
 | `G-44` | `spring-jms-template`, `spring-rabbit-template`, `spring-sqs-template` | `spring-jms-template` and `spring-sqs-template` read their SEND half only and declare the rest outside; `spring-jms-template` is narrower still, since its own slice puts `send` and `sendAndReceive` outside too, beside the four `receive*` families that are a real inbound wire. `spring-rabbit-template` now reads BOTH halves — `convertAndSend` and the nine queue-naming `receive`/`receiveAndConvert`/`receiveAndReply` overloads (`scripts/probes/w59_template_receive_halves.md`) — and declares only the destination-less receive overloads, the request/reply forms and the setters outside | **partially supported**, declared |
 | — | `spring-pubsub` | **NOTHING.** *This file was listed under `G-44` as reading "the send half only" and marked declared; both halves were false.* It declares TEN `direction: inbound` methods — `subscribe`, `subscribeAndConvert`, and the eight `pull*` forms — and derives a live inbound row on the fixture beside its outbound one. It has no `slice:` block because it needs none: the surface probe measures 11 of `PubSubTemplate`'s 20 read and records that **no unread method addresses a wire**, which is the one case the enumeration says needs no slice | ✅ **supported**, both directions |
 | `G-37` | `spring-webflux-router`, `spring-mvc-router` | `RouterFunctions$Builder` entirely — 0 of 20 on each side. `route()`'s builder DSL has been the reference documentation's recommended Java shape since Spring 5.2 | **partially supported**, declared |
-| `G-43` | `aws-sqs-sdk` | `SqsAsyncClient`, the batch forms, and the entire inbound direction including `receiveMessage` | **partially supported**, declared |
+| `G-43` | `aws-sqs-sdk` | `SqsAsyncClient`'s other 27 methods (`sendMessage` is read on it too, since `G-43`), the batch forms, and the entire inbound direction including `receiveMessage` | **partially supported**, declared |
 | `G-45` | `spring-data-rest` | JPA repositories only | **partially supported**, declared |
 | `G-47` | `spring-integration` | 2 of roughly 12 channel annotations | **partially supported**, declared |
 | `G-41` | `netflix-dgs` | **NOT a declared slice, and the row that said so was wrong three ways.** The file is `netflix-dgs.yml`, not `dgs-graphql.yml`; it carries no `slice:` block; and its own comment is headed *"Why this is not `slice.outside`"* — filing it as one *"would let a reader conclude the annotations themselves are unhandled, which is the opposite of true"*. The mechanism this cell used to name is one the catalog records as FALSE: `@Inherited` inherits from SUPERCLASSES and never through methods, and four of the five annotations are `@Target(METHOD)`, so the bit is inert. The real gap is a superclass METHOD walk — `docs/open-issues.md` `OI-67` | ✅ **supported** for the annotations it reads; the inherited-method case is `OI-67`, not a slice |
