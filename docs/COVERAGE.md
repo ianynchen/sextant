@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 3B 4C, 13 open) | ◐ (2A 2B, 3 open) | ◐ (2 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 3B 4C, 9 open) | ◐ (2A 2B, 2 open) | ◐ (2 open) | ✅ | ✅ | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (2B, 4 open) | ◐ (2 open) | ◐ (1B, 2 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 3 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (2B, 3 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |

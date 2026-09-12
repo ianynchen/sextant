@@ -34,19 +34,19 @@ too — that is the check aimed at half-delivery: the half you did not do has to
 against the feature it belongs to, or the build goes red.
 
 ```delivery
-REST inbound       | REST in    | G-37 G-30 G-45 W44-verb-overloads GAP-1b spring7-version conditional-controllers kotlin-null-handler micronaut-controller quarkus-jaxrs quarkus-vertx-route ktor-routing javalin-routing
-REST outbound      | REST out   | G-30-outbound jdk-httpclient micronaut-client
+REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-routing
+REST outbound      | REST out   | G-30-outbound jdk-httpclient
 SOAP               | SOAP       | jaxws-public-final apache-cxf
-GraphQL            | GraphQL    | G-39 G-40
-WebSocket          | WebSocket  | G-34
+GraphQL            | GraphQL    |
+WebSocket          | WebSocket  |
 SSE                | SSE        | jaxrs-sse
 gRPC               | gRPC       |
-Kafka              | Kafka      | G-31 kafka-batch-generics micronaut-kafka alpakka-pekko
-JMS and AMQP       | JMS / AMQP | G-44 micronaut-jms
-AWS SQS            | SQS        | G-43 micronaut-sqs
-Google Pub/Sub     | Pub/Sub    | micronaut-pubsub
+Kafka              | Kafka      | G-31 kafka-batch-generics alpakka-pekko
+JMS and AMQP       | JMS / AMQP | G-44
+AWS SQS            | SQS        | micronaut-sqs
+Google Pub/Sub     | Pub/Sub    | pubsub-channel-adapter
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
-Async              | Async      | G-47 temporal-cadence vertx-eventbus
+Async              | Async      | temporal-cadence vertx-eventbus
 ```
 
 **Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
@@ -214,6 +214,13 @@ annotation. And no member of the closed `Protocol` set fits a workflow engine; a
 is a schema decision with its own precedent (`RSOCKET`, stated in `closed_sets.py`). Three
 engine words and a schema member is a spec, not a catalog.
 
+**Named 2026-09-12 when the Pub/Sub cell's last blocker closed:** `pubsub-channel-adapter` —
+`PubSubInboundChannelAdapter` + `@ServiceActivator`, the one Java row COVERAGE §5.11 still
+tiers `B`. It is the Pub/Sub instance of §5.12's "the DESTINATION behind a channel" boundary:
+the subscription name is a constructor argument of the adapter, and `config_join` reads
+configuration files, never call-site arguments. Same engine form as the AMQP and Kafka
+adapters — one spec for the three, not a catalog.
+
 **Closed** — a blocker leaves this register only when its intention test has passed **in
 the CI pipeline**, and the entry records the run that proves it. Ruled by the user
 2026-09-11: *"definition of done is when all tests pass in ci pipeline"*.
@@ -226,6 +233,19 @@ Format: `id | test node id | CI run URL`
 
 ```closed
 G-36 | tests/e2e/test_soap_delivered.py::test_one_handler_serving_two_message_types_derives_both | https://github.com/ianynchen/sextant/actions/runs/34646355110
+G-39 | tests/e2e/test_graphql_delivered.py::test_one_resolver_serving_two_fields_derives_both | https://github.com/ianynchen/sextant/actions/runs/34669970510
+G-40 | tests/e2e/test_graphql_delivered.py::test_a_federation_entity_fetcher_is_visible | https://github.com/ianynchen/sextant/actions/runs/34669970510
+G-34 | tests/e2e/test_websocket_delivered.py::test_a_programmatically_registered_endpoint_is_visible | https://github.com/ianynchen/sextant/actions/runs/34669970510
+G-43 | tests/e2e/test_aws_sqs_delivered.py::test_a_send_through_the_async_client_is_visible | https://github.com/ianynchen/sextant/actions/runs/34669970510
+G-47 | tests/e2e/test_async_delivered.py::test_every_channel_bearing_annotation_derives_its_channel | https://github.com/ianynchen/sextant/actions/runs/34669970510
+G-45 | tests/e2e/test_rest_inbound_delivered.py::test_a_data_rest_resource_over_mongodb_derives_its_route_table | https://github.com/ianynchen/sextant/actions/runs/34669970510
+spring7-version | tests/e2e/test_rest_inbound_delivered.py::test_two_versions_of_one_route_are_not_reported_as_a_conflict | https://github.com/ianynchen/sextant/actions/runs/34669970510
+micronaut-controller | tests/e2e/test_rest_inbound_delivered.py::test_a_micronaut_controller_derives_every_operation | https://github.com/ianynchen/sextant/actions/runs/34669970510
+micronaut-client | tests/e2e/test_rest_inbound_delivered.py::test_a_micronaut_declarative_client_derives_outbound | https://github.com/ianynchen/sextant/actions/runs/34669970510
+quarkus-vertx-route | tests/e2e/test_rest_inbound_delivered.py::test_quarkus_reactive_routes_derive_every_route | https://github.com/ianynchen/sextant/actions/runs/34669970510
+micronaut-kafka | tests/e2e/test_messaging_micronaut_delivered.py::test_micronaut_kafka_both_directions | https://github.com/ianynchen/sextant/actions/runs/34669970510
+micronaut-jms | tests/e2e/test_messaging_micronaut_delivered.py::test_micronaut_jms_both_directions | https://github.com/ianynchen/sextant/actions/runs/34669970510
+micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_micronaut_pubsub_both_directions | https://github.com/ianynchen/sextant/actions/runs/34669970510
 ```
 
 ---
@@ -310,7 +330,7 @@ G-36 | tests/e2e/test_soap_delivered.py::test_one_handler_serving_two_message_ty
 
 | # | issue |
 |---|---|
-| `G-47` | Spring Integration reads **2 of 9** channel-bearing annotations. Missing: `@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter`, `@Transformer` |
+| `G-47` | Spring Integration read **2 of 11** channel-declaring annotations; **closed** — all seven missing ones (`@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter`, `@Transformer`) derive since `6f088be`, proven in CI run 34669970510 |
 | — | 1 catalog narrower than the framework's rule |
 
 ### Meridian integration — NOT DELIVERED, and asked for four times
