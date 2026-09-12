@@ -81,7 +81,7 @@ what forces this list to shrink rather than rot. A feature missing from both thi
 `tests/e2e/` is a hard failure.
 
 ```intention-test-missing
-SSE | gRPC | Kafka
+SSE | gRPC
 Google Pub/Sub | Meridian
 ```
 

@@ -7564,6 +7564,67 @@ def test_a_jms_receive_selected_at_arity_one_reads_the_default_destination_deriv
     assert rows == []
 
 
+KAFKA_TEMPLATE = "org/springframework/kafka/core/KafkaTemplate#"
+
+
+def _kafka_template_catalog() -> Catalog:
+    return next(
+        c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-kafka-template"
+    )
+
+
+def test_a_kafka_receive_by_topic_partition_offsets_derives_nothing(tmp_path: Path):
+    """`G-44`'s other `KafkaTemplate.receive` overload:
+    `receive(Collection<TopicPartitionOffset>, Duration)` takes ADDRESSES built
+    elsewhere — each `TopicPartitionOffset` constructed from a topic, partition and
+    offset the caller already assembled — never a topic name the call site itself
+    carries. Its arity is 2, the addressable row's (`receive(String, int, long,
+    Duration)`) is 4, so `single_call`'s own name+arity filter
+    (`_matching_method`'s `candidates` comprehension) excludes this call from the
+    candidate list before any `descriptor` is even compared — the same "no row at
+    this arity at all" shape as JMS's arity-1 `receiveSelected` twin above. Not
+    `@pytest.mark.declines`: there is no same-name, same-arity descriptor collision
+    here for a guard to defend, so no `scripts/guard_check.py` id fits — measured,
+    not assumed: `python scripts/guard_check.py single_call.claimed-arity` reports
+    this test SURVIVED (not discriminating) while it carried
+    `@pytest.mark.pins("single_call.claimed-arity")`, because `candidates` is
+    already empty at that point and `any(_DESCRIPTOR in row for row in candidates)`
+    is `False` whether or not the guard's own conjunct is disabled — the same
+    finding Task 2 made for JMS's arity-1 twin. `tests/architecture/
+    test_guard_pins.py::test_every_declining_test_names_exactly_one_guard` is why
+    the marker cannot simply be added anyway: a `declines` test with no matching
+    guard is what that check exists to forbid. A row here would publish whatever
+    the collection's first element resolved to as a topic."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollByPartitionOffsets()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=KAFKA_TEMPLATE,
+                name="receive",
+                descriptor=(
+                    "(Ljava/util/Collection;Ljava/time/Duration;)"
+                    "Lorg/apache/kafka/clients/consumer/ConsumerRecords;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="java/util/List#"),
+                CallArgument(kind="instance", symbol="java/time/Duration#"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _kafka_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 # --- Descriptor sweep (2O), R1: the SAME overload collision as Task 7's, still
 # live in `spring-ws-template.yml`. `marshalSendAndReceive` overloads at arity 2
 # as `(String uri, Object payload)` and `(Object payload,
