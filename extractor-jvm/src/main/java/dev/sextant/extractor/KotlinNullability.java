@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 import kotlin.Metadata;
 import kotlin.metadata.Attributes;
+import kotlin.metadata.KmClass;
 import kotlin.metadata.KmClassifier;
 import kotlin.metadata.KmConstructor;
 import kotlin.metadata.KmFunction;
@@ -34,10 +35,10 @@ public final class KotlinNullability {
     /** The one annotation the Kotlin compiler writes to every class it compiles. */
     public static final String DESCRIPTOR = "Lkotlin/Metadata;";
 
-    /** What every non-Kotlin class decodes to: no properties, no parameters and no
-     *  suspend functions, so nothing overrides Java's rule. */
+    /** What every non-Kotlin class decodes to: no properties, no parameters, no
+     *  suspend functions and no extension receivers, so nothing overrides Java's rule. */
     public static final Decoded NONE =
-        new Decoded(Map.of(), Map.of(), Map.of(), Map.of(), Set.of());
+        new Decoded(Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Set.of());
 
     /** The eight Kotlin classifiers that compile to a JVM primitive when declared
      *  non-null, and to the box when declared nullable (`OI-80`). {@code kotlin/Int} is
@@ -105,13 +106,26 @@ public final class KotlinNullability {
      *  would stop reporting {@code returns: void#}. A Java method declaring a
      *  {@code Continuation} parameter, and a Kotlin {@code fun} that merely takes one,
      *  are the same error one step further out. Metadata cannot make either mistake:
-     *  neither appears in {@code getFunctions()} as suspend. */
+     *  neither appears in {@code getFunctions()} as suspend.
+     *
+     *  <p>{@code extensionReceivers} holds the same key for every function declared with
+     *  a receiver ({@code fun String.shout()}) — the ones whose
+     *  {@code KmFunction.getReceiverParameterType()} is non-null. MEASURED (kotlinc
+     *  2.2.0, {@code javap -p -s}): the receiver is descriptor slot 0 whether the
+     *  function is top-level ({@code static shout(Ljava/lang/String;)} in the file
+     *  facade) or a member ({@code total(Ljava/util/List;)} on the instance), a suspend
+     *  extension keeps it first with the {@code Continuation} last, and the class file
+     *  names it only in the {@code LocalVariableTable} ({@code $this$shout}) — so this
+     *  set is the only thing that says slot 0 was written as a receiver, not a
+     *  parameter. Metadata's {@code getValueParameters()} does NOT list it, so
+     *  {@code parameterTypes} for such a key describes the slots from 1 on. */
     public record Decoded(
             Map<String, Boolean> properties,
             Map<String, Boolean> returnNullable,
             Map<String, String> returnClassifier,
             Map<String, List<KmType>> parameterTypes,
-            Set<String> suspendMethods) {
+            Set<String> suspendMethods,
+            Set<String> extensionReceivers) {
 
         /** The JVM primitive the method keyed {@code key} declares it returns, or null
          *  where it declares none: a Java method, a reference, or a NULLABLE
@@ -198,14 +212,29 @@ public final class KotlinNullability {
     }
 
     /** Decodes one class's already-collected {@code @Metadata} elements into
-     *  {@code property name -> nullable}. Anything other than a class facade (a file
-     *  facade, a synthetic lambda class, ...) has no properties and decodes to the
-     *  empty map — the Kotlin compiler writes {@code @Metadata} to those too. */
+     *  {@code property name -> nullable} and the per-function maps. A class facade has
+     *  properties, functions and constructors; a FILE facade — the {@code <File>Kt}
+     *  class every top-level {@code fun} compiles into, and so where a top-level
+     *  extension lives — has functions and nothing else read here. Anything other than
+     *  those two (a synthetic lambda class, a multi-file part, ...) decodes to
+     *  {@link #NONE} — the Kotlin compiler writes {@code @Metadata} to those too. */
     private static Decoded decode(Metadata metadata) {
         KotlinClassMetadata parsed = KotlinClassMetadata.readStrict(metadata);
-        if (!(parsed instanceof KotlinClassMetadata.Class classMetadata)) return NONE;
+        KmClass kmClass = parsed instanceof KotlinClassMetadata.Class classMetadata
+            ? classMetadata.getKmClass()
+            : null;
+        List<KmFunction> functions;
+        if (kmClass != null) {
+            functions = kmClass.getFunctions();
+        } else if (parsed instanceof KotlinClassMetadata.FileFacade facade) {
+            functions = facade.getKmPackage().getFunctions();
+        } else {
+            return NONE;
+        }
+        List<KmProperty> kmProperties = kmClass == null ? List.of() : kmClass.getProperties();
+        List<KmConstructor> kmConstructors = kmClass == null ? List.of() : kmClass.getConstructors();
         Map<String, Boolean> properties = new HashMap<>();
-        for (KmProperty property : classMetadata.getKmClass().getProperties()) {
+        for (KmProperty property : kmProperties) {
             Boolean nullable = declaredNullable(property.getReturnType());
             if (nullable != null) properties.put(property.getName(), nullable);
         }
@@ -213,7 +242,8 @@ public final class KotlinNullability {
         Map<String, String> returnClassifier = new HashMap<>();
         Map<String, List<KmType>> parameterTypes = new HashMap<>();
         Set<String> suspend = new HashSet<>();
-        for (KmFunction function : classMetadata.getKmClass().getFunctions()) {
+        Set<String> receivers = new HashSet<>();
+        for (KmFunction function : functions) {
             // A function metadata describes but whose JVM signature it does not state
             // cannot be joined to the method being visited. Skipped rather than keyed on
             // the Kotlin name, which overloads share.
@@ -227,19 +257,20 @@ public final class KotlinNullability {
             }
             parameterTypes.put(key, declaredTypes(function.getValueParameters()));
             if (Attributes.isSuspend(function)) suspend.add(key);
+            if (function.getReceiverParameterType() != null) receivers.add(key);
         }
         // Constructors too: a data class's primary constructor is where a payload's
         // contract is declared, so a constructor parameter reading `nullable: true` for
         // a `val id: String` was the wrong answer at exactly the place a wire contract
         // is read from. Same key form — the signature's name is `<init>`.
-        for (KmConstructor constructor : classMetadata.getKmClass().getConstructors()) {
+        for (KmConstructor constructor : kmConstructors) {
             JvmMethodSignature signature = JvmExtensionsKt.getSignature(constructor);
             if (signature == null) continue;
             parameterTypes.put(
                 signature.getName() + signature.getDescriptor(),
                 declaredTypes(constructor.getValueParameters()));
         }
-        for (KmProperty property : classMetadata.getKmClass().getProperties()) {
+        for (KmProperty property : kmProperties) {
             // The GETTER, not the field: `KotlinOrder#id` the field already reads
             // correctly through `properties` above, while `getId()` is a method and took
             // Java's rule. Same declared type, two facts, and only one of them was right.
@@ -250,7 +281,7 @@ public final class KotlinNullability {
                 returns.put(getter.getName() + getter.getDescriptor(), getterNullable);
             }
         }
-        return new Decoded(properties, returns, returnClassifier, parameterTypes, suspend);
+        return new Decoded(properties, returns, returnClassifier, parameterTypes, suspend, receivers);
     }
 
     /** The nullability a declared type states, or null where it states none.

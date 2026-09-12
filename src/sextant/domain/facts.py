@@ -67,6 +67,15 @@ class Parameter(BaseModel):
     # None only for a fact written before the field existed.
     erased_symbol: str | None = None
     annotations: list[AnnotationUse] = Field(default_factory=list)
+    # This slot is the declaration's extension receiver: the runtime sees a
+    # parameter, the author wrote a receiver (`fun String.shout()`). Published
+    # so a consumer can drop it from the declared signature, and kept rather
+    # than dropped here because a call site names the method by its full
+    # descriptor and the receiver's type is real evidence. Absent means false,
+    # as `bridge_of` is absent rather than null; only ever the first slot the
+    # declaration owns. Unrelated to `CallSiteFact.receiver`, which is the
+    # argument SLOT a call's target object came from.
+    receiver: bool = False
 
 
 class TypeParameter(BaseModel):

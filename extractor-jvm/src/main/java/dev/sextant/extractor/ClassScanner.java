@@ -1240,17 +1240,36 @@ public final class ClassScanner {
             // the receiver, less the `Continuation` a suspend sibling's bridge still
             // carries there (its own read dropped it from `declaredParameters` above; the
             // bridge's last slot is the marker, so `continuationLast` cannot).
-            int alignedFrom = defaultBridge == null ? 0 : defaultBridge.receiverSlots();
-            int alignedCount = defaultBridge == null
+            int ownSlots = defaultBridge == null ? 0 : defaultBridge.receiverSlots();
+            // `kotlin-extension-functions`: an extension's receiver (`fun String.shout()`)
+            // is a parameter to the JVM and a receiver to the author. Measured (kotlinc
+            // 2.2.0): it is the FIRST slot the function owns — descriptor slot 0 of a
+            // top-level extension's static method in the file facade and of a member
+            // extension's instance method alike, and the first slot after the owner in a
+            // `$default` bridge (a member `fun String.m(n: Int = 1)`'s is
+            // `m$default(Owner;Ljava/lang/String;IILjava/lang/Object;)`; a top-level one's
+            // has no owner) — and metadata's value parameters do not list it, so the
+            // declared types are laid from the slot after it. The slot is emitted with
+            // `receiver: true` rather than dropped: a call site names the method by its
+            // full descriptor, and the receiver's type is real evidence; a consumer that
+            // wants the declared signature drops it by the flag. Its own type keeps
+            // Java's rule.
+            boolean extension = kotlinNullability.extensionReceivers().contains(methodKey);
+            int receiverSlot = extension ? ownSlots : -1;
+            int alignedFrom = ownSlots + (extension ? 1 : 0);
+            int alignedCount = (defaultBridge == null
                 ? declaredParameters
                 : defaultBridge.declaredSlots()
-                    - (kotlinNullability.suspendMethods().contains(methodKey) ? 1 : 0);
+                    - (kotlinNullability.suspendMethods().contains(methodKey) ? 1 : 0))
+                - (extension ? 1 : 0);
             boolean parametersAligned = kotlinParameterTypes != null
                 && kotlinParameterTypes.size() == alignedCount;
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < declaredParameters; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
+                // Absent means false, as `bridge_of` is absent rather than null.
+                if (i == receiverSlot) parameter.put("receiver", "true");
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 // The erased descriptor type wherever the alignment declined to answer.
                 // It is never wrong, only less specific.

@@ -404,7 +404,13 @@ reason, and a reader supplies `false` for a scanner that reports neither. A Kotl
 Object marker)` kotlinc emits beside a function with default arguments — is emitted with
 `modifiers.synthetic: true` AND `bridge_of: "<fn>"`, and its return and the function's own
 slots carry the types the FUNCTION declared rather than Java's rule (`OI-81`); `bridge_of`
-appears on no other fact.
+appears on no other fact. A Kotlin extension function's receiver (`fun String.shout()`) —
+descriptor slot 0 of the static method a top-level extension compiles into in its file
+facade, and of a member extension's instance method alike, and the first slot after the
+owner in its `$default` bridge — is published as a parameter carrying `receiver: true`, with
+the declared value parameters laid from the slot after it; absent means false, as
+`bridge_of` is absent rather than null, and the receiver slot's own type keeps Java's rule
+(`kotlin-extension-functions`).
 
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the

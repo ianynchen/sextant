@@ -64,7 +64,7 @@ gRPC
 honestly at the end, and excluded from the per-feature check by being named here:
 
 ```unassigned
-G-52 kotlin-extension-functions
+G-52
 kotlin-defaultimpls G-73 G-74 GAP-7
 ```
 
@@ -402,7 +402,7 @@ These are real and they are not on the path to any cell above. They are listed s
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
 `G-52` throw exits — *in flight, uncommitted, 2 Criticals from review already fixed* ·
-Kotlin extension functions / `DefaultImpls` unread · `G-73` `visibility` two-valued for a four-valued
+Kotlin `DefaultImpls` unread · `G-73` `visibility` two-valued for a four-valued
 concept · `G-74` `signature.throws` has no consumer · `GAP-7` ~100s per reactor module.
 
 ## 3. Out of scope for this target
