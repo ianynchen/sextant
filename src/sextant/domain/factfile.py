@@ -203,7 +203,11 @@ def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> No
 
 
 def read_fact_file(path: Path) -> tuple[Document, list[Fact]]:
-    raw = path.read_text(encoding="utf-8").splitlines()
+    return _parse_fact_file(path, path.read_text(encoding="utf-8"))
+
+
+def _parse_fact_file(path: Path, content: str) -> tuple[Document, list[Fact]]:
+    raw = content.splitlines()
     if not raw:
         raise ValueError(f"empty fact file: {path}")
     document = Document.model_validate_json(raw[0])
@@ -220,7 +224,9 @@ def schema_fact_target(fact_root: Path, relative_path: str) -> Path:
     return fact_root / "schema" / (relative_path + ".jsonl")
 
 
-def read_fact_tree(fact_root: Path) -> list[tuple[Path, Document, list[Fact]]]:
+def read_fact_tree(
+    fact_root: Path, *, containing: bytes | None = None
+) -> list[tuple[Path, Document, list[Fact]]]:
     """Every fact file already written under `fact_root`, read back — the
     path included, not only its content: a later stage that adds facts to a
     document already on disk (`analyze`'s descriptor interpretation) must
@@ -231,6 +237,26 @@ def read_fact_tree(fact_root: Path) -> list[tuple[Path, Document, list[Fact]]]:
     fact tree at all without touching the filesystem itself (ARCHITECTURE
     §10's application-reads-no-files rule, `test_application_reads_no_files`).
     Sorted by path for NFR-1: two runs over the same tree read facts in the
-    same order regardless of the filesystem's own directory-entry order."""
+    same order regardless of the filesystem's own directory-entry order.
+
+    `containing` narrows the answer to the files whose BYTES hold that token,
+    for a caller that wants only the documents carrying one kind of fact: a
+    file that does not spell the token anywhere cannot hold a fact whose
+    serialisation spells it, so the bytes are a superset test that costs one
+    read per file, and only the files that pass are parsed and validated —
+    which is where the time goes (docs/performance.md C: 648 files, 47MB,
+    parsed to find no descriptor at all). The token is the caller's to
+    choose, and it must be spelled exactly as the writer spells it, or the
+    test can miss: `test_the_descriptor_token_is_what_the_writer_spells` pins
+    the one caller's token against `write_fact_file`'s own output. The files
+    passed over are not read back and not returned, so a caller that
+    rewrites what it read cannot rewrite them either; the order of what IS
+    returned is the sorted order above, unchanged."""
     paths = sorted(fact_root.rglob("*.jsonl"))
-    return [(path, *read_fact_file(path)) for path in paths]
+    read: list[tuple[Path, Document, list[Fact]]] = []
+    for path in paths:
+        data = path.read_bytes()
+        if containing is not None and containing not in data:
+            continue
+        read.append((path, *_parse_fact_file(path, data.decode("utf-8"))))
+    return read

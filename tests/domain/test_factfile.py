@@ -11,7 +11,14 @@ import json
 import os
 from pathlib import Path
 
-from sextant.domain.factfile import discard_scanned_facts, redact_config_entry_line
+from sextant.domain.closed_sets import OriginTier
+from sextant.domain.factfile import (
+    discard_scanned_facts,
+    read_fact_tree,
+    redact_config_entry_line,
+    write_fact_file,
+)
+from sextant.domain.facts import ConstantFact, Document, EmbeddedDescriptorFact
 from sextant.domain.redaction import Redactor
 
 _REDACTOR = Redactor.from_rules()
@@ -178,3 +185,67 @@ def test_a_missing_fact_root_is_not_an_error(tmp_path: Path):
     """Nothing to retract is the ordinary first run, and it is the same answer as
     having retracted it — `discard_library_facts`' own rule."""
     discard_scanned_facts(tmp_path / "never-written", Path(_CLASSES))
+
+
+# `read_fact_tree(containing=...)`: a caller that wants only the documents carrying one
+# kind of fact names the bytes that kind's serialisation spells, and the files that do
+# not spell them are not parsed — which is where `analyze`'s descriptor search spent
+# 0.7s on `mall-admin` finding nothing (docs/performance.md C). The function is a
+# superset test on bytes and does not know what the token means; that the one caller's
+# token is spelled as the writer spells it is pinned beside that caller
+# (`tests/application/test_analyze_descriptor_wiring.py`).
+
+
+def _document(document_id: str, relative_path: str) -> Document:
+    return Document(
+        document_id=document_id,
+        relative_path=relative_path,
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:abc",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:def",
+    )
+
+
+_DESCRIPTOR = EmbeddedDescriptorFact(
+    document_id="holder", symbol="pkg.Widget", schema_format="avro", payload="{}"
+)
+_CONSTANT = ConstantFact(document_id="other", symbol="pkg.Other#N", value=1)
+# Any bytes the descriptor's line spells and the constant's does not.
+_TOKEN = b'"embedded_descriptor"'
+
+
+def test_a_tree_narrowed_to_a_token_returns_only_the_files_that_spell_it(tmp_path: Path):
+    root = tmp_path / "facts"
+    write_fact_file(root / "b" / "Other.jsonl", _document("other", "pkg/Other.class"), [_CONSTANT])
+    write_fact_file(
+        root / "a" / "Widget.jsonl", _document("holder", "pkg/Widget.class"), [_DESCRIPTOR]
+    )
+    write_fact_file(root / "c" / "Empty.jsonl", _document("empty", "pkg/Empty.class"), [])
+
+    narrowed = read_fact_tree(root, containing=_TOKEN)
+    everything = read_fact_tree(root)
+
+    assert [path.name for path, _, _ in narrowed] == ["Widget.jsonl"]
+    assert narrowed[0][2] == [_DESCRIPTOR]
+    # What is returned is exactly the matching subset of the unnarrowed read, in the
+    # unnarrowed read's own (sorted) order — the narrowing drops files, never reorders.
+    assert narrowed == [entry for entry in everything if _TOKEN in entry[0].read_bytes()]
+    assert [path.name for path, _, _ in everything] == [
+        "Widget.jsonl",
+        "Other.jsonl",
+        "Empty.jsonl",
+    ]
+
+
+def test_no_token_reads_every_file_as_before(tmp_path: Path):
+    root = tmp_path / "facts"
+    write_fact_file(root / "Other.jsonl", _document("other", "pkg/Other.class"), [_CONSTANT])
+
+    assert read_fact_tree(root) == read_fact_tree(root, containing=None)
+    assert [facts for _, _, facts in read_fact_tree(root)] == [[_CONSTANT]]

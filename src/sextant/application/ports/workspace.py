@@ -9,10 +9,13 @@ sites, and the failure it prevents — a mistyped name — raises immediately an
 is caught by any test that exercises the path. The reading cost at every call
 site outweighs it. Revisit if the sets grow or a second Workspace appears."""
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from sextant.domain.redaction import Redactor
+
+T = TypeVar("T")
 
 
 class Workspace(Protocol):
@@ -33,6 +36,22 @@ class Workspace(Protocol):
         never writes into a row. A JSON column the storage names as decoded arrives as
         an object (a dict, a list, or `None`), not as text; every other JSON column is
         text and the caller decodes it."""
+
+    def once(self, build: "Callable[[Workspace], T]") -> T:
+        """The value `build(self)` returns, built once per load and handed back on every
+        later call until the next `load_facts` — the same lifetime the shared rows of
+        `query` have, for the same reason: `build` reads fact tables alone, so nothing
+        between two loads can change its answer.
+
+        Keyed by `build` itself, so a module-level builder is one entry and there is no
+        name to collide on. The contract `build` keeps: it reads only queries over facts
+        (a read of a derived table is refused, because a derivation may have run between
+        the build and the next call), and what it returns is read by every consumer and
+        written by none — the same discipline the rows of `query` ask.
+
+        A structure that depends on no catalog is built here so that a resolve running
+        thirty catalogs folds the same 25,000 rows into the same index once, not thirty
+        times: GUIDELINES §8.7's "compute once, read many"."""
 
     def export_tables(self, destination: Path, redactor: Redactor) -> list[str]:
         """Write the bundle's graph tables as Parquet, one file per table.

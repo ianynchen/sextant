@@ -10,7 +10,37 @@
 -- says merge, so they are not inserted twice. The table is emptied once per
 -- resolve by reset_endpoints.sql, never once per catalog.
 --
+-- THIS STATEMENT RUNS ONCE PER RESOLVE, OVER EVERY ANNOTATION-DRIVEN CATALOG
+-- AT ONCE (P-4). It used to run once per catalog, and what it cost was its
+-- SIZE: binding these 1,300 lines took ~50ms whether the values were
+-- placeholders, literals or a table (measured; a prepared statement, comment
+-- stripping and MATERIALIZED CTEs each changed nothing), and 28 catalogs paid
+-- it 28 times — 1.4s of a 2.5s analyze. So the catalogs arrive together as
+-- `$catalogs`, one STRUCT per catalog, and the rows derive into the TEMP table
+-- `endpoint_candidates` with each row's `catalog_id`. Every CTE below carries
+-- `catalog_id` through its SELECT and its joins, so rows of different catalogs
+-- never mix — a catalog's derivation is exactly what it was when it ran alone.
+--
+-- What did NOT move here is the insert into `endpoints`. It is
+-- `insert_endpoints.sql`, run once per catalog at that catalog's own place in
+-- `resolve/endpoints.py::derive_endpoints`'s order, with the same
+-- earlier-catalog-wins guard this statement's final NOT EXISTS used to carry.
+-- The guard has to be asked at that moment and not here: the other engines
+-- run BETWEEN annotation-driven catalogs (the order is by filename within a
+-- direction), and a wire identity one of them minted in between is refused
+-- to a later annotation-driven catalog exactly as it always was.
+--
 -- Parameters:
+--   $catalogs            -- one STRUCT per annotation-driven catalog, with the
+--                           fields below. Each field is referred to in the
+--                           comments below by the name it was bound under when
+--                           the statement ran once per catalog — `$members`
+--                           means the `members` field of the catalog whose rows
+--                           are being derived, which the code reads as
+--                           `cp.members` off `catalog_params`.
+--   $catalog_id          -- the id of the catalog (2E-prep design §1a) —
+--                           provenance only, never part of wire identity, and
+--                           the key every per-catalog CTE below carries.
 --   $protocol            -- the catalog's declared protocol (D00's closed set)
 --   $direction           -- the catalog's declared direction (D00's closed set)
 --   $type_annotation     -- LIST of fqns for the type-level annotation that marks a
@@ -57,8 +87,6 @@
 --                           where the catalog declares no peer at all.
 --   $method_from         -- attribute name holding the method, where one is given
 --   $all_methods         -- the methods a mapping annotation means when it names none
---   $catalog_id          -- the id of the catalog running this derivation (2E-prep
---                           design §1a) — provenance only, never part of wire identity
 --   $consumes_from       -- attribute names the mapping annotation's declared
 --                           request media types are read from, scalar-or-array
 --                           (the $path_from pattern), or an empty list where the
@@ -226,14 +254,59 @@
 -- goes for format/format_resolution (2G design §5): a mapping annotation
 -- declares a MEDIA type, never a wire format, and the ladder that turns one
 -- into the other runs once over the finished table. Both columns are absent
--- from the insert list below and from `unioned`'s GROUP BY, so every row
+-- from the column list at the end and from `unioned`'s GROUP BY, so every row
 -- this engine writes starts at NULL and is answered later.
-INSERT INTO endpoints (
-    protocol, direction, method, path, handler, caller, peer,
-    handler_signature, resolution, evidence, catalog_id, consumes, produces
-)
-WITH RECURSIVE mapping_catalog AS (
-    SELECT s.fqn AS fqn, s.methods AS methods,
+--
+-- A TEMP table rather than a table `schema.sql` declares: it lives for the
+-- one resolve that reads it, is replaced by the next, and never reaches the
+-- workspace file or an export bundle (`DuckDbWorkspace.schema_objects` leaves
+-- it out by name, the way it leaves out the redaction staging tables).
+CREATE OR REPLACE TEMP TABLE endpoint_candidates AS
+WITH RECURSIVE catalog_params AS (
+    -- One row per catalog in the batch: the 32 values `annotation_driven.py::
+    -- params_for` builds, every one of them a field, the STRUCT spelled once.
+    -- `s.*` expands the struct into columns, so the rest of the file reads
+    -- `cp.<field>` where it used to read `$<field>`.
+    SELECT s.* FROM (SELECT UNNEST(
+        $catalogs::STRUCT(
+            catalog_id VARCHAR, protocol VARCHAR, direction VARCHAR,
+            type_annotation VARCHAR[], declared_on VARCHAR, locally_implemented VARCHAR[],
+            prefix_annotation VARCHAR[], class_level VARCHAR,
+            mapping_annotations STRUCT(
+                fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
+                unless_attribute VARCHAR, unless_equals VARCHAR,
+                path_fallback VARCHAR, path_fallback_prefixes VARCHAR[]
+            )[],
+            path_from VARCHAR[],
+            path_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
+            all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
+            path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
+            qualifier_from VARCHAR[], qualifier_separator VARCHAR, qualifier_format VARCHAR,
+            namespace_template VARCHAR, members VARCHAR, path_separator VARCHAR,
+            path_prefix VARCHAR, canonical_path BOOLEAN,
+            flip_direction VARCHAR, flip_owners VARCHAR[],
+            flip_handlers STRUCT(declaration VARCHAR, handler VARCHAR)[],
+            flip_canonical_path BOOLEAN,
+            synthetic_annotations STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
+        )[]
+    ) AS s)
+),
+-- The per-catalog lists, unnested once each into `(catalog_id, ...)` rows so
+-- every read below is an equi-join on `catalog_id` rather than a scan of the
+-- batch. `list_distinct` on the two gate lists keeps exactly the rows the
+-- `list_contains` they replace produced: a spelling listed twice matched an
+-- annotation row once, and unnested twice it would match it twice.
+type_gates AS (
+    SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.type_annotation)) AS fqn
+    FROM catalog_params cp
+),
+prefix_gates AS (
+    SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.prefix_annotation)) AS fqn
+    FROM catalog_params cp
+),
+mapping_catalog AS (
+    SELECT u.catalog_id AS catalog_id, s.fqn AS fqn, s.methods AS methods,
            coalesce(s.requires_qualifier, FALSE) AS requires_qualifier,
            -- 2I design §2, word 4: the attribute whose value withdraws this
            -- rule, and that value as TEXT — the one representation `json ->>`
@@ -252,13 +325,8 @@ WITH RECURSIVE mapping_catalog AS (
            -- binds one value on every entry and derives byte-identically.
            s.path_fallback AS path_fallback,
            s.path_fallback_prefixes AS path_fallback_prefixes
-    FROM (SELECT UNNEST(
-        $mapping_annotations::STRUCT(
-            fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
-            unless_attribute VARCHAR, unless_equals VARCHAR,
-            path_fallback VARCHAR, path_fallback_prefixes VARCHAR[]
-        )[]
-    ) AS s)
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.mapping_annotations) AS s
+          FROM catalog_params cp) u
 ),
 -- Task 6 (D02 §2, §3): widens the annotation set every CTE below reads from
 -- the catalog's own declared fqns to those plus the module-local composed
@@ -288,11 +356,24 @@ annotations_effective AS (
     -- So deriving from every document and deleting what the module does not own is
     -- LOAD-BEARING rather than wasteful, and the tidier-looking root filter is not
     -- equivalent to it.
-    SELECT target, annotation, args FROM annotations
+    --
+    -- `catalog_id` says WHOSE annotation set a row belongs to: NULL for a real
+    -- row, which every catalog reads, and the catalog's own id for a synthetic
+    -- row, which only that catalog may read — a composed mapping one catalog's
+    -- closure resolved is not evidence for another's. So every join below
+    -- that reads this CTE carries the conjunct
+    -- `(a.catalog_id IS NULL OR a.catalog_id = <the catalog>)`; it is what
+    -- keeps one catalog's effective annotations exactly the set it had alone.
+    -- The real rows are NOT multiplied by the batch (a CROSS JOIN over
+    -- `catalog_params` would be 5 million rows on the largest corpus): each
+    -- consumer first equi-joins `annotation` to a fqn a catalog declared,
+    -- which is what makes the batch cost the sum of the catalogs rather than
+    -- the product.
+    SELECT CAST(NULL AS VARCHAR) AS catalog_id, target, annotation, args FROM annotations
     UNION ALL
-    SELECT s.target, s.annotation, s.args::JSON FROM (SELECT UNNEST(
-        $synthetic_annotations::STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
-    ) AS s)
+    SELECT u.catalog_id AS catalog_id, s.target, s.annotation, s.args::JSON
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.synthetic_annotations) AS s
+          FROM catalog_params cp) u
 ),
 -- `OI-35`: the name sources that live on ANOTHER annotation of the same
 -- declaration, and the ONE of them a declaration is actually served under.
@@ -318,43 +399,47 @@ annotations_effective AS (
 -- Both CTEs are empty for every catalog that declares no sibling source, so the
 -- LEFT JOIN below finds nothing and the `coalesce` reduces to what it was.
 sibling_path_sources AS (
-    SELECT s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
-    FROM (SELECT UNNEST(
-        $path_from_siblings::STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[]
-    ) AS s)
+    SELECT u.catalog_id AS catalog_id,
+           s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.path_from_siblings) AS s
+          FROM catalog_params cp) u
 ),
 sibling_names AS (
-    SELECT a.target AS target,
+    SELECT sp.catalog_id AS catalog_id, a.target AS target,
            min_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]), [a.args ->> sp.arg]),
                   sp.ordinal) AS found
     FROM annotations_effective a
     JOIN sibling_path_sources sp ON sp.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = sp.catalog_id)
     WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
-    GROUP BY a.target
+    GROUP BY sp.catalog_id, a.target
 ),
 -- D02 §2c's direction resolution, as two lookups. Both UNNEST an empty list
 -- for every catalog that declares no rule, so both LEFT JOINs below find
 -- nothing and the flip predicate is false for every row — which is what keeps
 -- forty catalogs' derivations byte-identical.
 flip_owners AS (
-    SELECT UNNEST($flip_owners::VARCHAR[]) AS owner
+    SELECT cp.catalog_id AS catalog_id, UNNEST(cp.flip_owners) AS owner
+    FROM catalog_params cp
 ),
 flip_handlers AS (
-    SELECT s.declaration AS declaration, s.handler AS handler
-    FROM (SELECT UNNEST(
-        $flip_handlers::STRUCT(declaration VARCHAR, handler VARCHAR)[]
-    ) AS s)
+    SELECT u.catalog_id AS catalog_id, s.declaration AS declaration, s.handler AS handler
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.flip_handlers) AS s
+          FROM catalog_params cp) u
 ),
 -- The type-level gate is optional (D02 §2, amended): a catalog that declares
 -- none matches on method annotations alone — a Retrofit interface has no
--- type-level marker at all.
+-- type-level marker at all. `type_gates` is empty for such a catalog, exactly
+-- as `list_contains` over its NULL list matched nothing.
 controllers AS (
-    SELECT DISTINCT target AS type_symbol
-    FROM annotations_effective
-    WHERE list_contains($type_annotation::VARCHAR[], annotation)
+    SELECT DISTINCT g.catalog_id AS catalog_id, a.target AS type_symbol
+    FROM annotations_effective a
+    JOIN type_gates g ON g.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = g.catalog_id)
 ),
 declared AS (
     SELECT
+        mc.catalog_id AS catalog_id,
         a.target AS target,
         -- `member_declarations` fills this; an ANNOTATED declaration never
         -- needs it, because the type that annotated it IS its own enclosing
@@ -371,27 +456,27 @@ declared AS (
         -- grammar, and that boundary is in `docs/COVERAGE.md` rather than
         -- silent.
         coalesce(list_extract(list_filter(list_transform(
-            $path_from::VARCHAR[],
+            cp.path_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1), sn.found, ['']) AS paths,
         coalesce(
             CASE WHEN len(coalesce(
-                TRY_CAST(a.args -> $method_from AS VARCHAR[]),
-                CASE WHEN a.args ->> $method_from IS NOT NULL
-                     THEN [a.args ->> $method_from] END,
+                TRY_CAST(a.args -> cp.method_from AS VARCHAR[]),
+                CASE WHEN a.args ->> cp.method_from IS NOT NULL
+                     THEN [a.args ->> cp.method_from] END,
                 []::VARCHAR[]
             )) > 0
             THEN list_transform(
                 coalesce(
-                    TRY_CAST(a.args -> $method_from AS VARCHAR[]),
-                    [a.args ->> $method_from]
+                    TRY_CAST(a.args -> cp.method_from AS VARCHAR[]),
+                    [a.args ->> cp.method_from]
                 ),
                 v -> regexp_extract(v, '#([A-Za-z0-9_]+)\.$', 1)
             ) END,
             mc.methods,
-            $all_methods::VARCHAR[]
+            cp.all_methods
         ) AS methods,
         -- Task 5: the same scalar-or-array, first-alias-wins read as `paths`
         -- above, applied to the media attributes instead of the path ones.
@@ -400,13 +485,13 @@ declared AS (
         -- resulting empty list already yields NULL — no default needed, and
         -- none is a guessed one (D01 §4).
         list_extract(list_filter(list_transform(
-            $consumes_from::VARCHAR[],
+            cp.consumes_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1) AS consumes_list,
         list_extract(list_filter(list_transform(
-            $produces_from::VARCHAR[],
+            cp.produces_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
@@ -418,7 +503,7 @@ declared AS (
         -- composition below a no-op for the annotations that carry a bare
         -- name and for every catalog declaring no `$qualifier_from` at all.
         list_extract(list_filter(list_transform(
-            $qualifier_from::VARCHAR[],
+            cp.qualifier_from,
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS qualifier,
         mc.requires_qualifier AS requires_qualifier,
@@ -429,7 +514,9 @@ declared AS (
         mc.path_fallback_prefixes AS path_fallback_prefixes
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
-    LEFT JOIN sibling_names sn ON sn.target = a.target
+         AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = mc.catalog_id
+    LEFT JOIN sibling_names sn ON sn.catalog_id = mc.catalog_id AND sn.target = a.target
     -- THE WITHDRAWAL FILTER (2I design §2, word 4). A declaration whose named
     -- attribute carries the withdrawing value derives NOTHING: the framework
     -- itself does not expose it, so a row here would be an endpoint nobody
@@ -473,9 +560,10 @@ declared AS (
 -- gated class, not two: without it a class annotated with both spellings at
 -- once would enumerate each of its members twice.
 gate_types AS (
-    SELECT DISTINCT a.target AS type_symbol
+    SELECT DISTINCT mc.catalog_id AS catalog_id, a.target AS type_symbol
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
 ),
 -- `A-M15`: every type whose members a gated class EXPOSES — the gate type
 -- itself, then its superclass, then its superclass's, within what was scanned.
@@ -512,11 +600,12 @@ gate_types AS (
 -- the walk ends at it. That is the same within-module boundary every other
 -- closure in this codebase keeps.
 gate_ancestry AS (
-    SELECT type_symbol AS gate_symbol, type_symbol AS owner_symbol,
+    SELECT catalog_id AS catalog_id, type_symbol AS gate_symbol, type_symbol AS owner_symbol,
            0 AS depth, [type_symbol] AS walked
     FROM gate_types
     UNION ALL
-    SELECT a.gate_symbol AS gate_symbol, sc.superclass AS owner_symbol,
+    SELECT a.catalog_id AS catalog_id, a.gate_symbol AS gate_symbol,
+           sc.superclass AS owner_symbol,
            a.depth + 1 AS depth, list_append(a.walked, sc.superclass) AS walked
     FROM gate_ancestry a
     JOIN (
@@ -576,10 +665,12 @@ gate_ancestry AS (
 -- tie would drop the operation entirely.
 exposed_members AS (
     SELECT
+        g.catalog_id AS catalog_id,
         s.symbol AS symbol,
         g.gate_symbol AS gate_symbol,
         row_number() OVER (
             PARTITION BY
+                g.catalog_id,
                 g.gate_symbol,
                 split_part(regexp_extract(s.symbol, '[^#]*$'), '(', 1),
                 coalesce(
@@ -621,7 +712,8 @@ exposed_members AS (
         ) AS nearest
     FROM symbols s
     JOIN gate_ancestry g ON g.owner_symbol = s.enclosing
-    WHERE $members = 'public_methods'
+    JOIN catalog_params cp ON cp.catalog_id = g.catalog_id
+    WHERE cp.members = 'public_methods'
       AND s.construct_kind = 'method'
       AND s.visibility = 'public'
       AND coalesce(s.modifiers ->> 'synthetic', 'false') <> 'true'
@@ -689,6 +781,7 @@ exposed_members AS (
 --   been exercised, so it is untested behaviour rather than a decision.
 member_declarations AS (
     SELECT
+        em.catalog_id AS catalog_id,
         s.symbol AS target,
         -- The type whose ANNOTATION made this member an operation, which is
         -- not always the type that declares it (`A-M15`). `derived` composes a
@@ -699,7 +792,7 @@ member_declarations AS (
         -- then drop the row for having none.
         em.gate_symbol AS gate_type,
         [''] AS paths,
-        $all_methods::VARCHAR[] AS methods,
+        cp.all_methods AS methods,
         CAST(NULL AS VARCHAR[]) AS consumes_list,
         CAST(NULL AS VARCHAR[]) AS produces_list,
         -- A member states no scope of its own — it has no annotation to state
@@ -714,17 +807,19 @@ member_declarations AS (
         -- would publish its bare name as a top-level identity, which is the
         -- confidently-wrong-address failure `requires_qualifier` exists to
         -- close, reached by the one route that carries no annotation.
-        (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog)
+        (SELECT coalesce(bool_or(requires_qualifier), FALSE) FROM mapping_catalog
+         WHERE mapping_catalog.catalog_id = em.catalog_id)
             AS requires_qualifier,
         -- The CATALOG-level word, and never a per-annotation one: this row
         -- exists precisely because the member carries no annotation to read an
         -- override off (`OI-5`). `_validate_naming` already refuses `$members`
         -- declared without `$path_fallback`, so this is never NULL on a catalog
         -- that reaches here.
-        $path_fallback AS path_fallback,
-        $path_fallback_prefixes::VARCHAR[] AS path_fallback_prefixes
+        cp.path_fallback AS path_fallback,
+        cp.path_fallback_prefixes AS path_fallback_prefixes
     FROM exposed_members em
     JOIN symbols s ON s.symbol = em.symbol
+    JOIN catalog_params cp ON cp.catalog_id = em.catalog_id
     WHERE em.nearest = 1
       AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
       -- A `final` member is not exposed either: JAX-WS's `isWebMethodBySpec` (CP-13 Q4)
@@ -756,11 +851,14 @@ member_declarations AS (
       -- class, not a stop in `gate_ancestry`: the walk continues past a plain
       -- class, so E's OTHER public methods — declared by an annotated class —
       -- still derive for C, exactly as `getMethods()` still returns them.
-      AND s.enclosing IN (SELECT type_symbol FROM gate_types)
+      AND s.enclosing IN (SELECT type_symbol FROM gate_types
+                          WHERE gate_types.catalog_id = em.catalog_id)
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation
-          WHERE a.target = s.symbol
+               AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
+          WHERE mc.catalog_id = em.catalog_id
+            AND a.target = s.symbol
       )
 ),
 -- The same scope read, one level out: a catalog's mapping annotation sitting
@@ -788,10 +886,11 @@ member_declarations AS (
 -- method.
 qualifier_scopes AS (
     SELECT
+        mc.catalog_id AS catalog_id,
         a.target AS type_symbol,
         coalesce(
             list_extract(list_filter(list_transform(
-                $qualifier_from::VARCHAR[],
+                cp.qualifier_from,
                 n -> coalesce(a.args -> n ->> 0, a.args ->> n)
             ), v -> v IS NOT NULL), 1),
             -- The declaring type's own package, reversed and dot-joined, then
@@ -817,15 +916,17 @@ qualifier_scopes AS (
             -- in it: both implementations return null for the empty package,
             -- because there is nothing to reverse. A template filled with an
             -- empty package would be neither a scope nor an honest absence.
-            CASE WHEN $namespace_template IS NOT NULL
+            CASE WHEN cp.namespace_template IS NOT NULL
                       AND regexp_extract(a.target, '([^ ]*)/[^/ ]*#$', 1) <> ''
-                 THEN printf($namespace_template, array_to_string(list_reverse(str_split(
+                 THEN printf(cp.namespace_template, array_to_string(list_reverse(str_split(
                           regexp_extract(a.target, '([^ ]*)/[^/ ]*#$', 1), '/'
                       )), '.'))
             END
         ) AS qualifier
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = mc.catalog_id
 ),
 -- Type-level and method-level annotations are different roles: on
 -- @RequestMapping value/path both mean *path*, on @FeignClient value aliases
@@ -833,13 +934,14 @@ qualifier_scopes AS (
 -- peer_from keep the roles apart (spec ruling I2).
 prefixes AS (
     SELECT
+        pg.catalog_id AS catalog_id,
         a.target AS type_symbol,
         coalesce(list_extract(list_filter(list_transform(
-            $prefix_from::VARCHAR[],
+            cp.prefix_from,
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1), '') AS prefix,
         list_extract(list_filter(list_transform(
-            $peer_from::VARCHAR[],
+            cp.peer_from,
             n -> coalesce(a.args -> n ->> 0, a.args ->> n)
         ), v -> v IS NOT NULL), 1) AS peer,
         -- Class-level media, read off the prefix annotation with the SAME
@@ -854,26 +956,29 @@ prefixes AS (
         -- `produces = "application/xml"` derived NULL, and a module with a
         -- JSON converter present would have called that XML route `json`.
         list_extract(list_filter(list_transform(
-            $consumes_from::VARCHAR[],
+            cp.consumes_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1) AS consumes_list,
         list_extract(list_filter(list_transform(
-            $produces_from::VARCHAR[],
+            cp.produces_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
         ), v -> v IS NOT NULL), 1) AS produces_list
     FROM annotations_effective a
-    WHERE list_contains($prefix_annotation::VARCHAR[], a.annotation)
+    JOIN prefix_gates pg ON pg.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
 ),
 -- Cross product of methods and paths (a two-topic, two-method mapping is
 -- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit
 -- in the same SELECT (verified empirically), so methods are unnested in
 -- their own CTE first, and mapped_methods.paths is unnested from that.
 mapped_methods AS (
-    SELECT d.target AS target,
+    SELECT d.catalog_id AS catalog_id,
+           d.target AS target,
            d.gate_type AS gate_type,
            UNNEST(CASE WHEN len(d.methods) = 0
                        THEN [CAST(NULL AS VARCHAR)] ELSE d.methods END) AS wire_method,
@@ -887,7 +992,8 @@ mapped_methods AS (
     FROM (SELECT * FROM declared UNION ALL SELECT * FROM member_declarations) d
 ),
 mappings AS (
-    SELECT mm.target AS method_symbol,
+    SELECT mm.catalog_id AS catalog_id,
+           mm.target AS method_symbol,
            mm.gate_type AS gate_type,
            mm.wire_method AS wire_method,
            UNNEST(mm.paths) AS path_suffix,
@@ -901,7 +1007,7 @@ mappings AS (
 ),
 derived AS (
     SELECT
-        $protocol   AS protocol,
+        cp.protocol AS protocol,
         -- THE DIRECTION FLIP (D02 §2c), spelled ONCE as a column so the four
         -- places it decides something read one predicate rather than four
         -- copies of one. A row flips when the type ENCLOSING its declaration is
@@ -913,7 +1019,15 @@ derived AS (
         -- `handler`, `caller` and the canonical-address question, and none of
         -- those is a second identity column.
         (fl.owner IS NOT NULL) AS flipped,
-        CASE WHEN flipped THEN $flip_direction ELSE $direction END AS direction,
+        -- Computed as `resolved_direction` and read back under that name by
+        -- `handler` and `caller` below, then published as `direction`: the
+        -- published name is also a column of the joined `cp` row, and a
+        -- column of the FROM shadows a select-list alias — read as `direction`
+        -- the CASEs below would see the catalog's DECLARED direction and land a
+        -- flipped row's symbol on the wrong side. `resolved_direction` is
+        -- projected out of `unioned` exactly as `flipped` is.
+        CASE WHEN flipped THEN cp.flip_direction ELSE cp.direction END AS resolved_direction,
+        resolved_direction AS direction,
         m.wire_method AS method,
         -- Three fragments, in address order (2H design §1): the TYPE-level
         -- prefix, the scope this declaration names on its own annotation, and
@@ -961,9 +1075,9 @@ derived AS (
         -- accessor strip below reads it four times.
         regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1) AS construct_name,
         CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
-             THEN CASE WHEN $qualifier_format = 'qname'
+             THEN CASE WHEN cp.qualifier_format = 'qname'
                        THEN '{' || coalesce(m.qualifier, q.qualifier) || '}'
-                       ELSE coalesce(m.qualifier, q.qualifier) || $qualifier_separator END
+                       ELSE coalesce(m.qualifier, q.qualifier) || cp.qualifier_separator END
              ELSE '' END
             -- THE FALLBACK, and the ACCESSOR STRIP some words apply to it
             -- (`OI-5`). `m.path_fallback` is the word for THIS row's own
@@ -1018,11 +1132,11 @@ derived AS (
         -- type-level prefix is empty — the common case, since a framework
         -- with a fixed base rarely also carries a type-level prefix
         -- annotation.
-        CASE WHEN $path_prefix IS NULL THEN coalesce(p.prefix, '')
+        CASE WHEN cp.path_prefix IS NULL THEN coalesce(p.prefix, '')
              WHEN coalesce(p.prefix, '') = ''
-             THEN $path_prefix
-             ELSE rtrim($path_prefix, $path_separator) || $path_separator
-                  || ltrim(p.prefix, $path_separator) END AS type_prefix,
+             THEN cp.path_prefix
+             ELSE rtrim(cp.path_prefix, cp.path_separator) || cp.path_separator
+                  || ltrim(p.prefix, cp.path_separator) END AS type_prefix,
         -- THE PREFIX SEAM. What joins here, what does not, and why:
         --
         -- A catalog that declares `$path_separator` composes SEGMENTED
@@ -1081,13 +1195,13 @@ derived AS (
         -- either value, which is what keeps the polymorphic-handler shape
         -- working: such a member carries no address, so both values agree, and
         -- they agree by construction rather than by a second rule.
-        CASE WHEN $class_level = 'sibling' AND scoped_name <> ''
+        CASE WHEN cp.class_level = 'sibling' AND scoped_name <> ''
              THEN scoped_name
              WHEN type_prefix = '' OR scoped_name = ''
-                  OR $path_separator IS NULL
+                  OR cp.path_separator IS NULL
              THEN type_prefix || scoped_name
-             ELSE rtrim(type_prefix, $path_separator) || $path_separator
-                  || ltrim(scoped_name, $path_separator) END AS composed,
+             ELSE rtrim(type_prefix, cp.path_separator) || cp.path_separator
+                  || ltrim(scoped_name, cp.path_separator) END AS composed,
         -- WHICH canonical answer this row takes, decided by the direction the
         -- row ACTUALLY has rather than the one the catalog declared. Both
         -- values are `domain/paths.py::serves_urls`, asked once per direction
@@ -1097,7 +1211,7 @@ derived AS (
         -- mapping derives, so the two would not merge (ruling R12). Equal to
         -- `$canonical_path` for every row that did not flip, which is every row
         -- of every catalog declaring no rule.
-        CASE WHEN flipped THEN $flip_canonical_path ELSE $canonical_path END AS canonical,
+        CASE WHEN flipped THEN cp.flip_canonical_path ELSE cp.canonical_path END AS canonical,
         -- THE CANONICAL-ADDRESS GATE, wrapped around the whole seam above.
         -- `$canonical_path` says the composed address IS a URL this module
         -- serves rather than an address recorded as written, and the two
@@ -1158,9 +1272,9 @@ derived AS (
         -- framework really does invoke the declared member there (CP-7 Q3),
         -- so that is the handler rather than a gap. `$flip_handlers` is empty
         -- for every catalog with no rule, so this reduces to `s.symbol`.
-        CASE WHEN direction = 'outbound' THEN NULL
+        CASE WHEN resolved_direction = 'outbound' THEN NULL
              ELSE coalesce(fh.handler, s.symbol) END AS handler,
-        CASE WHEN direction = 'outbound' THEN s.symbol END AS caller,
+        CASE WHEN resolved_direction = 'outbound' THEN s.symbol END AS caller,
         p.peer      AS peer,
         s.signature AS handler_signature,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
@@ -1190,7 +1304,7 @@ derived AS (
         CASE WHEN contains(path, '${') OR contains(path, '#{')
              THEN 'unresolved' ELSE 'resolved' END AS resolution,
         'compiler'  AS evidence,
-        $catalog_id AS catalog_id,
+        m.catalog_id AS catalog_id,
         -- Raw per-row lists (evidence kind (a): mapping attributes) — still
         -- to be unioned and JSON-normalized below, per row group sharing a
         -- wire identity plus handler/caller/resolution/evidence/catalog_id.
@@ -1199,6 +1313,7 @@ derived AS (
         coalesce(m.consumes_list, p.consumes_list) AS consumes_list,
         coalesce(m.produces_list, p.produces_list) AS produces_list
     FROM mappings m
+    JOIN catalog_params cp ON cp.catalog_id = m.catalog_id
     -- A handler or caller is always a method. Without this, a TYPE-level
     -- mapping annotation (a prefix-carrying @HttpExchange, a class-level
     -- @RequestMapping) joins its own type symbol and, in a catalog with no
@@ -1219,18 +1334,26 @@ derived AS (
     -- written before the member rule carries `gate_type` NULL, so the coalesce
     -- reads `s.enclosing` and nothing about them changes.
     LEFT JOIN symbols e ON e.symbol = coalesce(m.gate_type, s.enclosing)
-    LEFT JOIN controllers c ON coalesce(m.gate_type, s.enclosing) = c.type_symbol
-    LEFT JOIN prefixes p ON p.type_symbol = coalesce(m.gate_type, s.enclosing)
-    LEFT JOIN qualifier_scopes q ON q.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- Every per-catalog lookup joins on `catalog_id` first: a controller,
+    -- prefix, scope or flip one catalog found is not one another catalog's
+    -- row may read, or a gateless catalog in the batch would inherit a gated
+    -- neighbour's controllers.
+    LEFT JOIN controllers c ON c.catalog_id = m.catalog_id
+           AND coalesce(m.gate_type, s.enclosing) = c.type_symbol
+    LEFT JOIN prefixes p ON p.catalog_id = m.catalog_id
+           AND p.type_symbol = coalesce(m.gate_type, s.enclosing)
+    LEFT JOIN qualifier_scopes q ON q.catalog_id = m.catalog_id
+           AND q.type_symbol = coalesce(m.gate_type, s.enclosing)
     -- D02 §2c's two flip lookups, both keyed on the BARE descriptor for
     -- `$locally_implemented`'s reason: the type this declaration sits on and
     -- the class implementing it are prefixed by whichever module's scan wrote
     -- them, and only the descriptor is ever compared (D00 §5a).
-    LEFT JOIN flip_owners fl
-           ON fl.owner = regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$')
-    LEFT JOIN flip_handlers fh ON fh.declaration = regexp_extract(s.symbol, '[^ ]*$')
-    WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)
-      AND ($declared_on IS NULL OR e.construct_kind = $declared_on)
+    LEFT JOIN flip_owners fl ON fl.catalog_id = m.catalog_id
+           AND fl.owner = regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$')
+    LEFT JOIN flip_handlers fh ON fh.catalog_id = m.catalog_id
+           AND fh.declaration = regexp_extract(s.symbol, '[^ ]*$')
+    WHERE (cp.type_annotation IS NULL OR c.type_symbol IS NOT NULL)
+      AND (cp.declared_on IS NULL OR e.construct_kind = cp.declared_on)
       -- THE IMPLEMENTED-INTERFACE FENCE (2I design §4). An outbound catalog
       -- reading INTERFACE declarations is describing a client stub — a
       -- declaration whose whole content is "somebody else answers this". An
@@ -1267,9 +1390,9 @@ derived AS (
       -- stands: an interface implemented by something the framework serves
       -- nothing through is neither called by this module nor served by it.
       AND NOT (
-          $direction = 'outbound' AND $declared_on = 'interface'
+          cp.direction = 'outbound' AND cp.declared_on = 'interface'
           AND fl.owner IS NULL
-          AND list_contains($locally_implemented::VARCHAR[],
+          AND list_contains(cp.locally_implemented,
                             regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$'))
       )
       -- A declaration whose annotation only means anything INSIDE a scope,
@@ -1304,7 +1427,9 @@ unioned AS (
     FROM derived
     GROUP BY ALL
 )
-SELECT * FROM unioned d
+SELECT protocol, direction, method, path, handler, caller, peer,
+       handler_signature, resolution, evidence, catalog_id, consumes, produces
+FROM unioned d
 -- THE ADDRESSES-NOTHING GATE (2O Task 7 Step 4; rewritten by the principles
 -- sweep's mechanism 3, §4 and §7.7). An empty address is not a destination:
 -- nothing subscribes to it and nothing publishes to it, so a row carrying one
@@ -1352,11 +1477,9 @@ SELECT * FROM unioned d
 -- address is a real destination AND the row carries no peer to say so — at
 -- which point the answer belongs in `domain/paths.py` beside `serves_urls`,
 -- which is where the protocol question already lives, rather than here.
-WHERE NOT (d.path = '' AND d.peer IS NULL)
-  AND NOT EXISTS (
-    SELECT 1 FROM endpoints existing
-    WHERE existing.protocol  = d.protocol
-      AND existing.direction = d.direction
-      AND existing.method IS NOT DISTINCT FROM d.method
-      AND existing.path      = d.path
-);
+WHERE NOT (d.path = '' AND d.peer IS NULL);
+-- The earlier-catalog-wins guard — `NOT EXISTS (SELECT 1 FROM endpoints
+-- existing WHERE … same wire identity)` — used to close this statement. It is
+-- `insert_endpoints.sql` now, asked per catalog at that catalog's own turn in
+-- the order (see the header): a candidate row is refused there exactly when a
+-- row minted before that turn, by any engine, already carries its identity.

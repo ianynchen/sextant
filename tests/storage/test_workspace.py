@@ -248,6 +248,15 @@ def _topic_annotation_facts(root: Path, args: dict) -> None:
     write_fact_file(root / "OrderListener.jsonl", document, facts)
 
 
+def _derive_endpoints_of_one(workspace: DuckDbWorkspace, **catalog: object) -> None:
+    """The endpoints derivation for ONE catalog, driven directly — the shape the
+    statement took when it ran once per catalog, spelled as what it is now: a
+    batch of one (`endpoints`, every catalog's rows in one statement), then that
+    catalog's turn (`endpoints_insert`), which is what the engine's `run` does."""
+    workspace.derive("endpoints", catalogs=[catalog])
+    workspace.derive("endpoints_insert", catalog_id=catalog["catalog_id"])
+
+
 # Shared across the derivation, unaffected by which path attribute is used —
 # no annotation in these fixtures carries $prefix_annotation, so `prefixes`
 # always resolves empty and $prefix_from/$peer_from's exact contents do not
@@ -344,8 +353,8 @@ def test_a_multi_valued_path_attribute_derives_one_row_per_value(tmp_path: Path)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topics"],
         all_methods=[],
@@ -370,8 +379,8 @@ def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
@@ -401,8 +410,8 @@ def test_null_method_rows_dedup_on_the_same_identity(tmp_path: Path):
     # Derived twice — D02 §5's "two catalogs may both match" case, or simply
     # a second resolve — must still leave one inbound row.
     for _ in range(2):
-        workspace.derive(
-            "endpoints",
+        _derive_endpoints_of_one(
+            workspace,
             **_TOPIC_ENDPOINT_KWARGS,
             path_from=["topic"],
             all_methods=[],
@@ -447,8 +456,8 @@ def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
@@ -493,8 +502,8 @@ def test_each_direction_keeps_the_catalog_id_that_derived_it(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
@@ -2171,6 +2180,70 @@ def test_a_query_over_a_derived_table_is_never_served_from_the_cache(tmp_path: P
         workspace_module._NAMED_QUERIES["endpoints"],
         workspace_module._NAMED_QUERIES["endpoints"],
     ]
+    workspace.close()
+
+
+def test_a_value_built_once_is_handed_back_until_the_next_load(tmp_path: Path):
+    """`once` keeps what a builder folded from the fact rows for as long as those rows
+    stand: one build serves every later call — the same object — and the next
+    `load_facts` makes the builder run again over the second tree."""
+    workspace = _loaded_workspace(tmp_path)
+    builds: list[int] = []
+
+    def symbols_by_length(space: DuckDbWorkspace) -> dict[int, list[str]]:
+        builds.append(1)
+        found: dict[int, list[str]] = {}
+        for row in space.query("declared_symbols"):
+            found.setdefault(len(str(row["symbol"])), []).append(str(row["symbol"]))
+        return found
+
+    first = workspace.once(symbols_by_length)
+    assert first == {23: ["s maven p 1 com/acme/A#"]}
+    assert workspace.once(symbols_by_length) is first
+    assert len(builds) == 1, "the second call built the value again"
+
+    _fixture_facts(tmp_path / "second")
+    document = Document(
+        document_id="doc_2",
+        relative_path="com/acme/B.java",
+        module_id="com.acme:orders",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:c",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    symbol = SymbolFact(
+        document_id="doc_2", symbol="s maven p 1 com/acme/B#", construct_kind=ConstructKind.CLASS
+    )
+    write_fact_file(tmp_path / "second" / "com" / "acme" / "B.jsonl", document, [symbol])
+    workspace.load_facts(tmp_path / "second")
+
+    second = workspace.once(symbols_by_length)
+    assert second is not first
+    assert second == {23: ["s maven p 1 com/acme/A#", "s maven p 1 com/acme/B#"]}
+    assert len(builds) == 2
+    workspace.close()
+
+
+def test_a_builder_that_reads_a_derived_table_is_refused(tmp_path: Path):
+    """A value kept until the next load may fold only fact rows: `endpoints` is
+    rewritten by derivations between two calls, so a builder reading it is refused
+    at the read, and nothing is kept for it."""
+    workspace = _workspace_with_an_endpoint(tmp_path)
+
+    def endpoint_paths(space: DuckDbWorkspace) -> list[str]:
+        return [str(row["path"]) for row in space.query("endpoints")]
+
+    with pytest.raises(ValueError, match="endpoint_paths.*`endpoints`.*facts alone"):
+        workspace.once(endpoint_paths)
+    assert endpoint_paths not in workspace._folds
+    # The guard is lifted with the builder: an ordinary read of the same table after
+    # the refusal is the read it always was.
+    assert len(workspace.query("endpoints")) == 1
     workspace.close()
 
 

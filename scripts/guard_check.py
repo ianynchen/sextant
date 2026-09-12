@@ -145,6 +145,7 @@ _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
+_ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
 _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
@@ -206,8 +207,13 @@ GUARDS: dict[str, Guard] = {
                 # name (§3.1) — the class and the interface a codebase declares its
                 # field as. Still one conjunct, still the same guard: the receiver's
                 # type must be one the catalog names, rather than any type at all.
-                find='        if site["owner"] not in owners:',
-                replace="        if False:  # guard disabled by scripts/guard_check.py",
+                # A (`docs/performance.md`) turned the per-site test into a read of
+                # the owners' own positions in the shared `CallSiteIndex`; the guard
+                # is the same, and disabling it reads every position instead.
+                find="            index.positions_by_owner.get(owner, []) for owner in "
+                "dict.fromkeys(owners)",
+                replace="            range(len(call_sites)) for _ in [None]"
+                "  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -423,7 +429,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DERIVE_ENDPOINTS,
-                find="    WHERE ($type_annotation IS NULL OR c.type_symbol IS NOT NULL)",
+                find="    WHERE (cp.type_annotation IS NULL OR c.type_symbol IS NOT NULL)",
                 replace="    WHERE TRUE  -- guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -460,6 +466,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.rows-land-at-the-catalogs-turn": Guard(
+        what="an annotation-driven catalog's staged rows reach `endpoints` at that catalog's "
+        "own turn in the sorted order, never as soon as the batch is derived",
+        why="B (`docs/performance.md`). The call-site styles take turns BETWEEN the "
+        "annotation-driven catalogs, and a wire identity belongs to whichever turn came "
+        "first. Inserting every staged catalog's rows right after the one statement hands "
+        "a route a call-site catalog registered to the annotation-driven catalog behind it "
+        "— a different `catalog_id` on the same identity, and the call-site row refused or "
+        "doubled — with no corpus in the repository able to tell",
+        edits=(
+            Edit(
+                path=_ENDPOINTS_DRIVER,
+                find="    annotation_driven.stage(\n"
+                "        workspace, [catalog for catalog, _ in running if catalog.style == _STAGED]\n"
+                "    )\n"
+                "    for catalog, engine in running:\n"
+                "        engine(workspace, catalog)\n",
+                replace="    staged = [catalog for catalog, _ in running if catalog.style == _STAGED]\n"
+                "    annotation_driven.stage(workspace, staged)\n"
+                "    for catalog in staged:  # guard disabled by scripts/guard_check.py\n"
+                "        annotation_driven.insert(workspace, catalog)\n"
+                "    for catalog, engine in running:\n"
+                "        if catalog.style != _STAGED:\n"
+                "            engine(workspace, catalog)\n",
+            ),
+        ),
+    ),
     "derive_endpoints.direction-flip-is-owner-scoped": Guard(
         what="a row takes the catalog's RESOLVED direction only where the type enclosing its "
         "declaration is one the catalog's own condition held for — never merely because the "
@@ -473,7 +506,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_DERIVE_ENDPOINTS,
                 find="        (fl.owner IS NOT NULL) AS flipped,",
-                replace="        ($flip_direction IS NOT NULL) AS flipped,  -- guard disabled",
+                replace="        (cp.flip_direction IS NOT NULL) AS flipped,  -- guard disabled",
             ),
         ),
     ),
@@ -568,8 +601,8 @@ GUARDS: dict[str, Guard] = {
                 path=_DERIVE_ENDPOINTS,
                 find="        mc.path_fallback AS path_fallback,\n"
                 "        mc.path_fallback_prefixes AS path_fallback_prefixes",
-                replace="        $path_fallback AS path_fallback,\n"
-                "        $path_fallback_prefixes::VARCHAR[] AS path_fallback_prefixes",
+                replace="        cp.path_fallback AS path_fallback,\n"
+                "        cp.path_fallback_prefixes AS path_fallback_prefixes",
             ),
         ),
     ),
@@ -693,7 +726,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DERIVE_ENDPOINTS,
-                find="      AND s.enclosing IN (SELECT type_symbol FROM gate_types)",
+                find="      AND s.enclosing IN (SELECT type_symbol FROM gate_types\n"
+                "                          WHERE gate_types.catalog_id = em.catalog_id)",
                 replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
             ),
         ),

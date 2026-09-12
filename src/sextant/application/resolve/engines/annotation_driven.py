@@ -14,9 +14,11 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
+    TypeHierarchy,
     composed_mapping_rows,
     folded_rows,
-    inherited_rows,
+    inherited_rows_over,
+    type_hierarchy,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -27,20 +29,83 @@ from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
-    """Passes the catalog's own protocol, direction, annotation identifiers and
-    mapping declaration through to the derivation as bound parameters. The
-    engine here is generic: it never names a framework or a protocol, only
+    """One catalog on its own: `stage` for a batch of one, then `insert`.
+
+    The per-catalog entry, kept for every caller that hands this engine one
+    catalog — the tests that pin a single catalog's rows, and any caller that
+    is not `derive_endpoints`. `derive_endpoints` itself does not call this: it
+    stages every annotation-driven catalog of the resolve at once and then
+    calls `insert` at each catalog's turn, which is what P-4 is."""
+    stage(workspace, [catalog])
+    insert(workspace, catalog)
+
+
+def stage(workspace: Workspace, catalogs: list[Catalog]) -> None:
+    """Derives every candidate row of every catalog in `catalogs` in ONE
+    execution of `derive_endpoints.sql`, into the `endpoint_candidates` table
+    `insert` then reads per catalog (P-4).
+
+    Once per resolve rather than once per catalog, because the statement's
+    cost is its size at bind time — ~50ms for its 1,300 lines whatever the
+    values, measured — and 28 catalogs paid it 28 times: 1.4s of a 2.5s
+    analyze. Every value is a pure function of the catalog and the FACT
+    tables (`params_for`), so nothing about a catalog's rows depends on which
+    other catalogs share the statement; the SQL carries `catalog_id` through
+    every CTE so their rows never mix.
+
+    A CORROBORATION-ONLY catalog is not in the batch (2O design §1b, fix
+    round 2's I-2): it declares `corroborates` and no `mapping` because its
+    annotation states that a class SERVES something without stating what —
+    no address, no member rule, nothing this derivation could bind — so its
+    whole contribution is the open question `gaps` files instead. Deriving a
+    row from it would mint an endpoint with no address, which is precisely
+    what the annotation cannot support. A batch with nothing in it runs
+    nothing: `insert` is never asked for a catalog that was not staged.
+    """
+    params = [params_for(workspace, catalog) for catalog in catalogs if _derives(catalog)]
+    if not params:
+        return
+    workspace.derive("endpoints", catalogs=params)
+
+
+def insert(workspace: Workspace, catalog: Catalog) -> None:
+    """This catalog's turn: its staged rows go into `endpoints` — every one
+    whose wire identity no earlier turn minted (`insert_endpoints.sql` states
+    the rule) — and then its declared replies.
+
+    Runs at the catalog's own place in `derive_endpoints`'s order, never
+    earlier: the other engines' catalogs run between annotation-driven ones,
+    and which row survives for a wire identity two of them share is decided
+    by whose turn came first. Asking the guard here, per turn, is what keeps
+    that answer exactly what it was when the whole derivation ran per turn."""
+    if not _derives(catalog):
+        return
+    workspace.derive("endpoints_insert", catalog_id=catalog.id)
+    # Optional (D02 §2, amended): a catalog with no `reply` block declares no
+    # second-row rule at all — the HTTP catalogs, which never see @SendTo.
+    if "reply" in catalog.matches:
+        _derive_replies(workspace, catalog)
+
+
+def _derives(catalog: Catalog) -> bool:
+    """Whether this catalog derives rows at all — false for a corroboration-only
+    catalog, which `stage` and `insert` both leave alone for the reason `stage`
+    states."""
+    return _corroboration(catalog) is None or "mapping" in catalog.matches
+
+
+def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
+    """The catalog's own protocol, direction, annotation identifiers and
+    mapping declaration, as the one STRUCT row `derive_endpoints.sql` reads
+    for it — every field a pure function of the catalog and the fact tables.
+    The engine here is generic: it never names a framework or a protocol, only
     forwards what the catalog declares.
 
-    A CORROBORATION-ONLY catalog derives nothing here and returns at once
-    (2O design §1b, fix round 2's I-2): it declares `corroborates` and no
-    `mapping` because its annotation states that a class SERVES something
-    without stating what — no address, no member rule, nothing this
-    derivation could bind — so its whole contribution is the open question
-    `gaps` files instead. Deriving a row from it would mint an endpoint with
-    no address, which is precisely what the annotation cannot support."""
-    if _corroboration(catalog) is not None and "mapping" not in catalog.matches:
-        return
+    Every field is filled, even where the catalog declares nothing (NULL, an
+    empty list): the rows travel as one JSON value, and a struct key the
+    statement declares that a row does not carry is the slow route
+    `DuckDbWorkspace.derive` keeps for hand-built test rows, not one a
+    production row may take."""
     mapping = catalog.matches["mapping"]
     _validate_naming(catalog, mapping)
     declared_on = _declared_on(catalog)
@@ -63,12 +128,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         )
     )
     mapping_annotations = [_mapping_annotation(mapping, m) for m in mapping["annotations"]]
-    workspace.derive(
-        "endpoints",
-        protocol=catalog.protocol,
-        direction=catalog.direction,
+    return {
+        "protocol": catalog.protocol,
+        "direction": catalog.direction,
         # Optional (D02 §2, amended): absence means "no type-level gate".
-        type_annotation=type_annotation_fqns,
+        "type_annotation": type_annotation_fqns,
         # 2I design §4: WHICH KIND of construct this catalog's rules describe,
         # or NULL where the catalog describes declarations on any construct —
         # which is every catalog written before it. One annotation family can
@@ -76,28 +140,28 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # two are opposite directions of the same wire; without this the two
         # catalogs would each derive both, and a module would be reported as
         # calling the very operations it serves.
-        declared_on=declared_on,
+        "declared_on": declared_on,
         # 2I design §4's SEI fence — `derive_endpoints.sql`'s own comment
         # states what it refuses and why it is scoped rather than universal.
         # Read only for the one catalog shape that can be wrong without it, so
         # every other catalog binds an empty list and the fence's own
         # `$direction`/`$declared_on` test already evaluates false for it.
-        locally_implemented=(
+        "locally_implemented": (
             _locally_implemented(workspace)
             if catalog.direction == "outbound" and declared_on == "interface"
             else []
         ),
-        prefix_annotation=prefix_fqns,
+        "prefix_annotation": prefix_fqns,
         # F2 §3.5's relationship conjunct. How a class-level annotation relates
         # to the methods inside it — `prefix` (compose, the HTTP shape) or
         # `sibling` (a method naming its own destination is its OWN
         # registration, the messaging shape). Defaults to `prefix`, which is
         # what every catalog written before it assumed.
-        class_level=_class_level(mapping, catalog),
+        "class_level": _class_level(mapping, catalog),
         # `method` is absent for an annotation that pre-sets none, and the
         # derivation reads that absence as "every method in all_methods".
-        mapping_annotations=mapping_annotations,
-        path_from=list(mapping["path_from"]),
+        "mapping_annotations": mapping_annotations,
+        "path_from": list(mapping["path_from"]),
         # `OI-35`: the name sources that live on OTHER annotations of the same
         # declaration, consulted in the order the catalog lists them and only
         # where every `path_from` alias was absent. Empty for every catalog that
@@ -106,31 +170,31 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # composed address is exactly what it was. The ordinal is attached HERE
         # rather than relied on in the query, because a list's order is not a
         # column and `min_by` needs one to be able to say "first present".
-        path_from_siblings=_sibling_sources(catalog, mapping),
-        prefix_from=list(mapping["prefix_from"]),
-        peer_from=list(mapping.get("peer_from", [])),
-        method_from=mapping["method_from"],
-        all_methods=list(mapping["all_methods"]),
-        catalog_id=catalog.id,
+        "path_from_siblings": _sibling_sources(catalog, mapping),
+        "prefix_from": list(mapping["prefix_from"]),
+        "peer_from": list(mapping.get("peer_from", [])),
+        "method_from": mapping["method_from"],
+        "all_methods": list(mapping["all_methods"]),
+        "catalog_id": catalog.id,
         # Optional (media evidence kind (a), spec §4): absent on every
         # catalog that declares neither, so it derives NULL with zero YAML
         # change — the HTTP catalogs are the only ones that declare these.
-        consumes_from=list(mapping.get("consumes_from", [])),
-        produces_from=list(mapping.get("produces_from", [])),
+        "consumes_from": list(mapping.get("consumes_from", [])),
+        "produces_from": list(mapping.get("produces_from", [])),
         # 2H design §1's two naming forms, both optional and both inert
         # unless declared. `path_fallback` says what the declared name is when
         # every `path_from` alias is absent; `qualifier_from`/
         # `qualifier_separator` compose a scope named on the SAME annotation
         # in front of that name. Absent on every catalog written before them,
         # which is what keeps their derivations byte-identical.
-        path_fallback=mapping.get("path_fallback"),
+        "path_fallback": mapping.get("path_fallback"),
         # The catalog-level word's own prefix data, for the one row shape that
         # carries no mapping annotation to read a per-annotation word off — an
         # unannotated exposed member (`$members`). Empty where the catalog
         # declares no fallback at all, and empty for `construct_name`.
-        path_fallback_prefixes=list(_PATH_FALLBACKS.get(str(mapping.get("path_fallback")), ())),
-        qualifier_from=list(mapping.get("qualifier_from", [])),
-        qualifier_separator=mapping.get("qualifier_separator"),
+        "path_fallback_prefixes": list(_PATH_FALLBACKS.get(str(mapping.get("path_fallback")), ())),
+        "qualifier_from": list(mapping.get("qualifier_from", [])),
+        "qualifier_separator": mapping.get("qualifier_separator"),
         # 2I design §2's two QName forms, both optional and both inert unless
         # declared. `qualifier_format` names a composition that is not a
         # separator at all — `{scope}name` is one bracketed token, and its
@@ -139,26 +203,26 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # says what the scope is when the attribute carrying it is absent,
         # which for a spec that defines that default is a fact about the
         # framework rather than a guess.
-        qualifier_format=mapping.get("qualifier_format"),
+        "qualifier_format": mapping.get("qualifier_format"),
         # The declared word's TEMPLATE, not the word: see `_NAMESPACE_DEFAULTS`.
         # NULL where the catalog declares no default, which is what keeps the
         # derivation below inert for every catalog but the ones that ask.
-        namespace_template=_NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
+        "namespace_template": _NAMESPACE_DEFAULTS.get(str(mapping.get("namespace_default"))),
         # 2I design §2, word 3: the class-gate MEMBER rule. NULL where a
         # catalog declares none, which is every catalog whose framework
         # exposes only what an annotation marks.
-        members=mapping.get("members"),
+        "members": mapping.get("members"),
         # What joins a TYPE-level prefix to the address it prefixes, and the
         # character deduped where both halves already spell it. Optional and
         # inert while absent, so a catalog composing a Kafka topic — which has
         # no segments to join — keeps the bare concatenation it always had.
-        path_separator=mapping.get("path_separator"),
+        "path_separator": mapping.get("path_separator"),
         # 2O Task 7 Step 3: a CONSTANT prefix the framework itself puts in
         # front of every address this catalog derives — not read from any
         # annotation, because no annotation states it. It joins the front of
         # the type-level prefix under the same seam rule, so a catalog
         # declaring none composes exactly what it always did.
-        path_prefix=mapping.get("path_prefix"),
+        "path_prefix": mapping.get("path_prefix"),
         # 2O design §8: this catalog's addresses are URLs THIS MODULE SERVES,
         # so the derivation composes the URL the framework serves rather than
         # the characters the two annotations happened to spell (CP-1). Decided
@@ -170,17 +234,17 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # those calls cannot answer differently. This engine's OTHER minting
         # site, `_reply_row`, asks it nowhere: that row's direction is a
         # literal `outbound`, so the seam can never reach it (R8).
-        canonical_path=serves_urls(catalog.protocol, catalog.direction),
+        "canonical_path": serves_urls(catalog.protocol, catalog.direction),
         # D02 §2c's `resolves.direction`, the ONE resolution rule that shipped:
         # what a row's direction becomes where the catalog's condition holds,
         # NULL where the catalog declares no rule — which is every catalog but
         # the one whose annotation family genuinely faces both ways, and what
         # keeps their derivations byte-identical.
-        flip_direction=flip.direction,
+        "flip_direction": flip.direction,
         # Which OWNERS the condition holds for, and what handles each flipped
         # declaration. Both empty where there is no rule.
-        flip_owners=flip.owners,
-        flip_handlers=flip.handlers,
+        "flip_owners": flip.owners,
+        "flip_handlers": flip.handlers,
         # `$canonical_path`'s twin for a FLIPPED row, decided the same way from
         # the same seam (`serves_urls`) — the resolved direction is the row's
         # direction, so it is the direction the address question is asked of.
@@ -190,7 +254,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # spelling the framework does not answer at — which also splits it from
         # the identical route a controller's own mapping derives, and stops the
         # two merging (ruling R12).
-        flip_canonical_path=flip.canonical_path,
+        "flip_canonical_path": flip.canonical_path,
         # 2E design §2, §3: the effective-annotations pre-pass UNFOLDS every
         # repeatable container the catalog names (`OI-36`, first, so the two
         # passes below see a folded use as an ordinary one) and widens
@@ -203,14 +267,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # (its own mapping fqns seed a different closure and a different
         # inheritance walk each time) and handed to the SQL as synthetic
         # `annotations` rows rather than as a second code path there.
-        synthetic_annotations=_synthetic_annotations(
+        "synthetic_annotations": _synthetic_annotations(
             workspace, catalog, mapping_annotations, prefix_fqns, type_annotation_fqns
         ),
-    )
-    # Optional (D02 §2, amended): a catalog with no `reply` block declares no
-    # second-row rule at all — the HTTP catalogs, which never see @SendTo.
-    if "reply" in catalog.matches:
-        _derive_replies(workspace, catalog)
+    }
 
 
 # D02 §2's `corroborates` block: an optional, catalog-declared list of
@@ -1356,14 +1416,9 @@ def _synthetic_annotations(
     fix. `composed_mapping_rows` carries no such scope limit — meta-annotation
     composition is a same-target rewrite, never a cross-type join, so it
     still runs for every catalog regardless of `run_inheritance`."""
-    annotation_rows = [
-        {
-            "target": row["target"],
-            "annotation": row["annotation"],
-            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
-        }
-        for row in workspace.query("annotations")
-    ]
+    # Decoded once per load and shared (`Workspace.once`): every row below is
+    # read from the shared list, and the lists built from it are new lists.
+    annotation_rows = workspace.once(_annotation_rows)
     folded = folded_rows(annotation_rows, _containers(catalog))
     annotation_rows = [*annotation_rows, *folded]
     scanned_targets = {str(row["symbol"]) for row in workspace.query("interface_symbols")}
@@ -1388,11 +1443,9 @@ def _synthetic_annotations(
     )
     run_inheritance = type_annotation_fqns is not None
     inherited = (
-        inherited_rows(
+        inherited_rows_over(
+            workspace.once(_type_hierarchy),
             [*annotation_rows, *composed],
-            _implementation_rows(workspace),
-            _superclass_rows(workspace),
-            _method_declaration_rows(workspace),
             mapping_fqns,
             prefix_fqns,
         )
@@ -1420,6 +1473,31 @@ def _containers(catalog: Catalog) -> dict[str, str]:
         for entry in catalog.matches["mapping"]["annotations"]
         if entry.get(_CONTAINER) is not None
     }
+
+
+def _annotation_rows(workspace: Workspace) -> list[dict[str, Any]]:
+    """`annotations`'s rows with `args` decoded — the form `folded_rows`,
+    `composed_mapping_rows` and `inherited_rows` read. Built once per load
+    (`Workspace.once`): the decode ran once per catalog, thirty times over the same
+    text on `mall-admin`. Shared, so read and never written into."""
+    return [
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.loads(str(row["args"])) if row["args"] is not None else {},
+        }
+        for row in workspace.query("annotations")
+    ]
+
+
+def _type_hierarchy(workspace: Workspace) -> TypeHierarchy:
+    """The inheritance walk's `TypeHierarchy`, from the three reads below — built
+    once per load (`Workspace.once`) and read by every catalog's walk."""
+    return type_hierarchy(
+        _implementation_rows(workspace),
+        _superclass_rows(workspace),
+        _method_declaration_rows(workspace),
+    )
 
 
 def _implementation_rows(workspace: Workspace) -> list[dict[str, object]]:

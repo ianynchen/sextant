@@ -51,19 +51,15 @@ jobs:
         # Maven resolves every dependency before compiling anything, and the
         # stub exists nowhere but the local repository this script installs
         # it into (the suite's conftest does the same, offline — too late for
-        # this step, which is why the script exists).
+        # this step, which is why the script exists). The second script
+        # compiles every fixture the suite compiles (`PRIMED_FIXTURES`) and
+        # stamps each `target/` with a fingerprint of its inputs, so the
+        # suite's own `compile_fixture` calls find nothing to do — without the
+        # stamps every one of the four workers would run Maven once per
+        # fixture (docs/performance.md D).
         run: |
           python tests/fixture_stub.py
-          mvn -q -B -f fixtures/orders-service/pom.xml compile
-          mvn -q -B -f fixtures/orders-soap-final/pom.xml compile
-          mvn -q -B -f fixtures/orders-spring7/pom.xml compile
-          mvn -q -B -f fixtures/spring-integration-probe/pom.xml compile
-          mvn -q -B -f fixtures/orders-micronaut/pom.xml compile
-          mvn -q -B -f fixtures/orders-quarkus/pom.xml compile
-          mvn -q -B -f fixtures/orders-receivers/pom.xml compile
-          mvn -q -B -f fixtures/orders-streams/pom.xml compile
-          mvn -q -B -f fixtures/orders-javalin/pom.xml compile
-          mvn -q -B -f fixtures/orders-pekko/pom.xml compile
+          python tests/fixture_build.py
 
       - name: Prime the Gradle fixture's dependencies
         # The Gradle counterpart of the step above — the ONE fetch-allowed

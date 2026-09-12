@@ -34,6 +34,7 @@ Left alone; a future phase widens that lookup the same way this one widens
 """
 
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from sextant.domain.symbols import bare_descriptor, member_name, method_name
@@ -205,6 +206,77 @@ def folded_rows(
     return synthetic
 
 
+@dataclass(frozen=True)
+class TypeHierarchy:
+    """What the inheritance walk reads of the module's own declarations, folded from
+    the `implementations`, `superclasses` and `method_declarations` rows: which type
+    declares which method under which name-and-descriptor key, each method's own
+    signature and modifiers, each type's directly implemented interfaces in
+    declaration order, each class's superclass, and every type any of those name.
+
+    Catalog-independent, so `annotation_driven` builds it once per load
+    (`Workspace.once`) and every catalog's walk reads the same one — on `mall-admin`
+    the fold over 22,059 method rows ran once per catalog, nineteen times. Read by
+    every walk, written by none."""
+
+    methods_by_type: dict[str, dict[str, str]]
+    signature_by_symbol: dict[str, dict[str, Any] | None]
+    modifiers_by_symbol: dict[str, dict[str, Any] | None]
+    interfaces_of: dict[str, list[str]]
+    supertype_of: dict[str, str]
+    classes: frozenset[str]
+
+
+def type_hierarchy(
+    implementation_rows: list[dict[str, Any]],
+    superclass_rows: list[dict[str, Any]],
+    method_rows: list[dict[str, Any]],
+) -> TypeHierarchy:
+    """`TypeHierarchy` over the plain-Python rows `inherited_rows` documents."""
+    methods_by_type: dict[str, dict[str, str]] = {}
+    signature_by_symbol: dict[str, dict[str, Any] | None] = {}
+    # D00 §5a's method `modifiers`, which carry `synthetic` — `ACC_BRIDGE`
+    # folded in, since javac sets the two together. Absent for a fact from a
+    # scanner that reports no modifiers, which is what `_is_synthetic`'s
+    # fallback exists for; NOT defaulted to `{}` here, because "no modifiers
+    # reported" and "reported, and not synthetic" are different answers.
+    modifiers_by_symbol: dict[str, dict[str, Any] | None] = {}
+    for row in method_rows:
+        symbol = str(row["symbol"])
+        signature_by_symbol[symbol] = row.get("signature")
+        modifiers_by_symbol[symbol] = row.get("modifiers")
+        enclosing = row.get("enclosing")
+        if enclosing is None:
+            continue
+        key = member_name(bare_descriptor(symbol))
+        methods_by_type.setdefault(str(enclosing), {})[key] = symbol
+
+    interfaces_of: dict[str, list[str]] = {
+        str(row["symbol"]): [str(entry) for entry in row["interfaces"]]
+        for row in implementation_rows
+    }
+
+    supertype_of = _superclass_of(superclass_rows)
+
+    # Every type this module has ANY evidence for as a subtype — declaring
+    # its own methods, implementing interfaces, or extending a superclass.
+    # A class needing only a prefix (no method of its own repeats or misses
+    # a mapping — a class implementing an interface entirely through
+    # inherited defaults, say) would otherwise never surface: prefix
+    # resolution cannot be nested inside "types that own at least one
+    # method" the way it read before this comment (Task 7 review,
+    # mutation-caught).
+    classes = frozenset(methods_by_type) | frozenset(interfaces_of) | frozenset(supertype_of)
+    return TypeHierarchy(
+        methods_by_type=methods_by_type,
+        signature_by_symbol=signature_by_symbol,
+        modifiers_by_symbol=modifiers_by_symbol,
+        interfaces_of=interfaces_of,
+        supertype_of=supertype_of,
+        classes=classes,
+    )
+
+
 def inherited_rows(
     annotation_rows: list[dict[str, Any]],
     implementation_rows: list[dict[str, Any]],
@@ -292,31 +364,31 @@ def inherited_rows(
     not read here, so §8 says produce none. That is finding I1, restated as
     a rule for an ambiguity rather than a consequence of discarding every
     bridge.
+
+    The three row lists are folded into a `TypeHierarchy` first; a caller running
+    many catalogs over one module folds them once and calls `inherited_rows_over`.
     """
-    methods_by_type: dict[str, dict[str, str]] = {}
-    signature_by_symbol: dict[str, dict[str, Any] | None] = {}
-    # D00 §5a's method `modifiers`, which carry `synthetic` — `ACC_BRIDGE`
-    # folded in, since javac sets the two together. Absent for a fact from a
-    # scanner that reports no modifiers, which is what `_is_synthetic`'s
-    # fallback exists for; NOT defaulted to `{}` here, because "no modifiers
-    # reported" and "reported, and not synthetic" are different answers.
-    modifiers_by_symbol: dict[str, dict[str, Any] | None] = {}
-    for row in method_rows:
-        symbol = str(row["symbol"])
-        signature_by_symbol[symbol] = row.get("signature")
-        modifiers_by_symbol[symbol] = row.get("modifiers")
-        enclosing = row.get("enclosing")
-        if enclosing is None:
-            continue
-        key = member_name(bare_descriptor(symbol))
-        methods_by_type.setdefault(str(enclosing), {})[key] = symbol
+    return inherited_rows_over(
+        type_hierarchy(implementation_rows, superclass_rows, method_rows),
+        annotation_rows,
+        mapping_fqns,
+        prefix_fqns,
+    )
 
-    interfaces_of: dict[str, list[str]] = {
-        str(row["symbol"]): [str(entry) for entry in row["interfaces"]]
-        for row in implementation_rows
-    }
 
-    supertype_of = _superclass_of(superclass_rows)
+def inherited_rows_over(
+    hierarchy: TypeHierarchy,
+    annotation_rows: list[dict[str, Any]],
+    mapping_fqns: set[str],
+    prefix_fqns: list[str] | None,
+) -> list[dict[str, Any]]:
+    """`inherited_rows` over an already-folded `TypeHierarchy` — the same rows, the
+    same order; the hierarchy is read and never written into."""
+    methods_by_type = hierarchy.methods_by_type
+    signature_by_symbol = hierarchy.signature_by_symbol
+    modifiers_by_symbol = hierarchy.modifiers_by_symbol
+    interfaces_of = hierarchy.interfaces_of
+    supertype_of = hierarchy.supertype_of
 
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for row in annotation_rows:
@@ -329,20 +401,10 @@ def inherited_rows(
     for entries in annotations_by_target.values():
         entries.sort(key=lambda entry: entry[0])
 
-    # Every type this module has ANY evidence for as a subtype — declaring
-    # its own methods, implementing interfaces, or extending a superclass.
-    # A class needing only a prefix (no method of its own repeats or misses
-    # a mapping — a class implementing an interface entirely through
-    # inherited defaults, say) would otherwise never surface: prefix
-    # resolution cannot be nested inside "types that own at least one
-    # method" the way it read before this comment (Task 7 review,
-    # mutation-caught).
-    classes = set(methods_by_type) | set(interfaces_of) | set(supertype_of)
-
     # Final NFR-1 ordering comes from the explicit sort below; iteration
     # order here only has to be exhaustive, not deterministic.
     rows: list[dict[str, Any]] = []
-    for type_symbol in classes:
+    for type_symbol in hierarchy.classes:
         methods = methods_by_type.get(type_symbol, {})
         # Keyed by the method the mapping BELONGS to, which is not always the
         # candidate that resolved it — see `_synthesis_target`. Insertion order

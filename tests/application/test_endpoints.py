@@ -16,6 +16,9 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
     Document,
     Signature,
     SymbolFact,
@@ -3272,6 +3275,116 @@ def test_derive_endpoints_merges_on_wire_identity_when_two_catalogs_match_the_sa
     workspace.close()
 
     assert len(rows) == 3
+
+
+def test_two_catalogs_in_one_batch_claiming_one_wire_identity_derive_the_earlier_ones_rows(
+    tmp_path: Path,
+):
+    """`docs/performance.md` B (P-4). Every annotation-driven catalog's rows are
+    derived in ONE statement per resolve, and which catalog's row survives for a
+    wire identity two of them claim is still decided by the order the catalogs
+    take their turns in — earlier catalog wins, as it did when the statement ran
+    once per catalog. Two copies of one catalog that differ only in id and
+    filename — the sort key within a direction — handed over in the SAME list
+    order both times with the filenames swapped, so the winner has to follow the
+    filename: a batch that let the later catalog's rows through, or attributed
+    the earlier's rows to the later, fails here rather than passing on a
+    coincidence of ids."""
+    _controller_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    spring = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "spring-web")
+
+    for a_file, b_file, winner in (("1.yml", "2.yml", "a"), ("2.yml", "1.yml", "b")):
+        a = Catalog(**{**vars(spring), "id": "a", "source": Path("tests") / a_file})
+        b = Catalog(**{**vars(spring), "id": "b", "source": Path("tests") / b_file})
+        derive_endpoints(workspace, [a, b], capabilities={"annotation_args", "type_annotations"})
+        rows = workspace.query("endpoints")
+        assert {(r["method"], r["path"]) for r in rows} == {
+            ("POST", "/v1/orders"),
+            ("GET", "/v1/orders/{id}"),
+            ("GET", "/v1/orders"),
+        }
+        assert {r["catalog_id"] for r in rows} == {winner}, (a_file, b_file)
+    workspace.close()
+
+
+@pytest.mark.pins("derive_endpoints.rows-land-at-the-catalogs-turn")
+def test_a_call_site_catalog_between_two_annotation_driven_ones_still_claims_the_route_first(
+    tmp_path: Path,
+):
+    """`docs/performance.md` B (P-4), the half the two-catalog test above cannot
+    pin. The annotation-driven catalogs are derived in ONE statement per resolve,
+    but their rows reach `endpoints` at each catalog's own TURN in the sorted
+    order — and the call-site styles take turns between them (the sort is by
+    filename within a direction). Here `1.yml` and `3.yml` are annotation-driven
+    and `2.yml` is a call-site catalog that names the same route as `3.yml`:
+    `2.yml`'s turn comes first, so the route is its row, and `3.yml`'s copy is
+    refused as it always was. A driver that inserted every staged catalog's rows
+    as soon as it had derived them — the natural mistake once the statement runs
+    once — hands the route to `3.yml` instead, and fails here."""
+    _controller_facts(tmp_path / "facts")
+    _invented_listener_facts(tmp_path / "facts")
+    write_fact_file(
+        tmp_path / "facts" / "Routes.jsonl",
+        Document(
+            document_id="doc_3",
+            relative_path="com/acme/http/Routes.java",
+            module_id="com.acme:orders-service",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=2,
+            scanner_id="asm",
+            content_hash="sha256:a",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:b",
+        ),
+        [
+            CallSiteFact(
+                document_id="doc_3",
+                caller="com/acme/http/Routes#register(sig_5c1d2e3f).",
+                target=CallTarget(
+                    owner="io/javalin/Javalin#",
+                    name="get",
+                    descriptor="(Ljava/lang/String;Lio/javalin/http/Handler;)"
+                    "Lio/javalin/router/RoutingApi;",
+                ),
+                invoke_kind="virtual",
+                ordinal=0,
+                receiver=3,
+                result=9,
+                arguments=[
+                    CallArgument(kind="string", value="/v1/orders"),
+                    CallArgument(kind="unresolved"),
+                ],
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    shipped = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    # `1.yml` matches the listener facts alone, `3.yml` the controller's routes;
+    # only `3.yml` and the call site name `GET /v1/orders`.
+    first = Catalog(**{**vars(_naming_forms_catalog()), "id": "a", "source": Path("tests/1.yml")})
+    call_site = Catalog(**{**vars(shipped["javalin"]), "id": "s", "source": Path("tests/2.yml")})
+    later = Catalog(**{**vars(shipped["spring-web"]), "id": "b", "source": Path("tests/3.yml")})
+
+    skipped = derive_endpoints(
+        workspace,
+        [later, first, call_site],
+        capabilities={"annotation_args", "type_annotations", "call_site", "string_constants"},
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert skipped == []
+    assert sorted((r["protocol"], r["method"], r["path"], r["catalog_id"]) for r in rows) == [
+        ("http", "GET", "/v1/orders", "s"),
+        ("http", "GET", "/v1/orders/{id}", "b"),
+        ("http", "POST", "/v1/orders", "b"),
+        ("kafka", None, "created", "a"),
+    ]
 
 
 def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missing(

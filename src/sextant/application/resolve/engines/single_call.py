@@ -15,6 +15,7 @@ catalog data; this module never names a framework.
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -29,6 +30,7 @@ from sextant.application.resolve.shapes.arguments import (
     _linked_constructor,
     address_argument,
     argument_descriptor,
+    call_site_index,
     channel_of,
     channels_of,
     declared_parameters_of,
@@ -339,13 +341,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `OI-77`. Read once per run beside `field_sources`, and separately from it: a catalog
     # with no `field_sources` block gets `None` above, and a payload handed through from
     # the caller's signature has nothing to do with the field ladder.
-    caller_parameters = declared_parameters_of(workspace)
+    caller_parameters = workspace.once(declared_parameters_of)
     # `arguments` arrives decoded, once per load, from the workspace
     # (`_DECODED_COLUMNS`): both the matching loop below and the `call_wrappers`
     # one-hop (over a *different* call site's own arguments,
     # `contracts._linked_constructor`) read the list, never the text.
     call_sites: list[dict[str, Any]] = workspace.query("call_sites")
-    by_caller: dict[str, list[dict[str, Any]]] = {}
+    # Indexed once per load, not once per catalog (`Workspace.once`, `CallSiteIndex`).
+    index = workspace.once(call_site_index)
+    by_caller = index.by_caller
     # A SECOND index, keyed by BARE descriptor, for `lambda_arg` (`OI-74`, W57).
     # `call_sites.caller` carries the module coordinates a fact writes (D00 §5a)
     # and a `lambda` argument's `symbol` does not — a call argument never repeats
@@ -358,12 +362,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # the wrong module could win by position. Where the bare name is ambiguous
     # the body is not read at all — an unresolved row is the honest answer and a
     # merged frame is not (W57 review).
-    bare_callers: dict[str, set[str]] = {}
-    for site in call_sites:
-        by_caller.setdefault(str(site["caller"]), []).append(site)
-        bare_callers.setdefault(bare_descriptor(str(site["caller"])), set()).add(
-            str(site["caller"])
-        )
+    bare_callers = index.bare_callers
     # Both read once per run, the `field_facts`/`_rules_of` precedent, and
     # both empty-and-inert for every catalog declaring neither word.
     identity_facts = (
@@ -385,9 +384,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # `resolution` column — a row can be `unresolved` because some OTHER
     # declared capture failed (I1) and still dedup on the path it did read.
     seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
-    for site in call_sites:
-        if site["owner"] not in owners:
-            continue
+    # The sites on this catalog's owners, in `call_sites`' own order — the order
+    # the rows are written in (NFR-1) — rather than a test of every site against
+    # the owners. Deduplicated: a catalog naming one owner twice visits a site once.
+    positions = sorted(
+        chain.from_iterable(
+            index.positions_by_owner.get(owner, []) for owner in dict.fromkeys(owners)
+        )
+    )
+    for position in positions:
+        site = call_sites[position]
         arguments = site["arguments"]
         method = _matching_method(methods, site["name"], site[_DESCRIPTOR], arguments)
         if method is None:

@@ -1,10 +1,14 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar, cast
 
 import duckdb
 
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.redaction import Redactor
+
+T = TypeVar("T")
 
 _SQL_DIR = Path(__file__).parent
 
@@ -806,6 +810,14 @@ _REDACTED_PAYLOADS = "redacted_payloads"
 # spellings: a raw entry's `key_path` and a resolved row's `key` are not
 # always the same string, and a join across them would silently miss.
 _REDACTED_ENTRY_VALUES = "redacted_entry_values"
+# The one temp table a DERIVATION stages (P-4): every annotation-driven
+# catalog's candidate endpoint rows, written by `derive_endpoints.sql` once per
+# resolve and read by `insert_endpoints.sql` once per catalog. Temp for the
+# reason the redaction maps are: it is working state of one resolve, never
+# part of the schema and never in a bundle — every row it holds that survives
+# its catalog's turn is in `endpoints`, and every row that does not was
+# refused by the earlier-catalog-wins rule.
+_ENDPOINT_CANDIDATES = "endpoint_candidates"
 
 # One query per table and view IN THE SCHEMA — all of them, with no exclusion
 # class. The ratchet runs the direction that catches the defect: an object in
@@ -1099,7 +1111,13 @@ _DECODED_COLUMNS = {
 }
 
 _NAMED_DERIVATIONS = {
+    # P-4: `endpoints` derives EVERY annotation-driven catalog's candidate rows
+    # in one execution, into the temp table `endpoint_candidates`, which
+    # `endpoints_insert` then reads one catalog at a time — the statement's
+    # cost is its size at bind time, so it runs once per resolve where it ran
+    # once per catalog.
     "endpoints": "derive_endpoints.sql",
+    "endpoints_insert": "insert_endpoints.sql",
     "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
@@ -1258,6 +1276,12 @@ class DuckDbWorkspace:
         # `_FACT_ONLY` rows already read since the last `load_facts`, keyed by the query
         # name and its bound values in order — the order `?` placeholders bind in.
         self._fact_reads: dict[tuple[object, ...], list[dict[str, object]]] = {}
+        # What `once` built since the last `load_facts`, keyed by the builder (the
+        # port states the contract). The builder running right now, if any, so that
+        # `query` can refuse it a derived table — an answer folded from one would
+        # survive the derivation that changed it, silently, until the next load.
+        self._folds: dict[Callable[[DuckDbWorkspace], object], object] = {}
+        self._folding: Callable[[DuckDbWorkspace], object] | None = None
         # Every derivation that fell back to per-value binding (`derive`), in order —
         # the slow route, counted so a whole pipeline can assert it took none
         # (`tests/application/test_pipeline.py`).
@@ -1325,6 +1349,7 @@ class DuckDbWorkspace:
         # Before the table is touched, not after the load succeeds: a load that fails
         # half-way must not leave the previous facts' rows answering for it.
         self._fact_reads.clear()
+        self._folds.clear()
         self._per_value_retries.clear()
         self._staged_payloads = None
         self._connection.execute("DELETE FROM raw_facts")
@@ -1441,12 +1466,30 @@ class DuckDbWorkspace:
 
     def query(self, name: str, **params: object) -> list[dict[str, object]]:
         if name not in _FACT_ONLY:
+            if self._folding is not None:
+                raise ValueError(
+                    f"{self._folding!r} reads `{name}`, which is not a query over facts "
+                    f"alone: a value `once` keeps until the next load may read only the "
+                    f"fact tables, or a derivation run after it would leave it stale"
+                )
             return self._read(name, params)
         key = (name, *params.values())
         rows = self._fact_reads.get(key)
         if rows is None:
             rows = self._fact_reads[key] = self._read(name, params)
         return rows
+
+    def once(self, build: Callable[["DuckDbWorkspace"], T]) -> T:
+        if build in self._folds:
+            return cast(T, self._folds[build])
+        # Saved and restored rather than set and cleared, so a builder that reads
+        # another fold leaves the outer builder under the guard when the inner returns.
+        outer, self._folding = self._folding, build
+        try:
+            value = self._folds[build] = build(self)
+        finally:
+            self._folding = outer
+        return value
 
     def _read(self, name: str, params: dict[str, object]) -> list[dict[str, object]]:
         cursor = self._connection.execute(
@@ -1497,11 +1540,12 @@ class DuckDbWorkspace:
 
         Staged redaction tables are excluded by name — they are temp tables
         this class creates and drops inside one export, never part of the
-        schema.
+        schema. So is the endpoint-candidates table the endpoints derivation
+        stages, for the same reason (`_ENDPOINT_CANDIDATES`).
         """
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?) "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1509,6 +1553,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _ENDPOINT_CANDIDATES,
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:

@@ -15,6 +15,19 @@ import yaml
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
 
+# The safe loader, compiled where the interpreter has the C library and pure
+# Python where it does not — the same YAML subset, the same Python objects
+# for every shipped catalog and shape model (`test_the_two_safe_loaders_read_
+# every_shipped_catalog_identically` pins that, because the two are known to
+# disagree on a few YAML 1.1 corners none of ours use). Pure Python read the
+# 79 catalogs in 0.18s on EVERY analyze, whichever module was being analysed
+# (docs/performance.md C).
+_SAFE_LOADER: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def _load(text: str) -> Any:
+    return yaml.load(text, Loader=_SAFE_LOADER)
+
 
 class YamlCatalogSource:
     """The CatalogSource port over a directory of `*.yml` files."""
@@ -41,7 +54,7 @@ class YamlCatalogSource:
         directory = self._directory / "shape-models"
         models: dict[str, dict[str, Any]] = {}
         for path in sorted(directory.glob("*.yml")):
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading shape model {path}: not a YAML mapping")
             models[str(_required(raw, "id", path))] = raw
@@ -57,7 +70,7 @@ class YamlCatalogSource:
         models = self._shape_models()
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+            raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
             shape = _shape_model_of(raw, models, path)
