@@ -294,6 +294,9 @@ is the analyses that cannot be shared, multiplied by P-1's per-analysis cost.
 3. `scripts/check.sh` split into three workflow steps (`--lint` · `--extractor` · `--tests`)
    so a lint or type failure is visible in seconds and the pytest log streams on its own.
    **Shipped** with this ledger; the local gate is unchanged.
+4. D — the suite's own overhead: Maven re-verifying compiled fixtures 25 times per run.
+   **Shipped**; local suite 104s → 90s, CPU 513s → 398s, Maven runs 25 → 6. On the runner
+   the priming step now writes the stamps, so the suite's compiles find nothing to do.
 
 **Falsified by** a run where the per-analysis cost on the runner is not the dominant term
 of the slowest tests.
@@ -421,6 +424,56 @@ SELECT is shadowed once the joined catalog row has a column of that name — a f
 row. Pinned by `test_two_catalogs_in_one_batch_claiming_one_wire_identity_derive_the_
 earlier_ones_rows` (both filename orders) and
 `test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_its_turn`.
+
+## D — a compiled fixture is compiled again only when its inputs change
+
+**Status: shipped 2026-09-12 — full suite 104.1s / 105.2s / 103.6s → 90.0s / 90.2s / 89.9s
+(pytest's own figure; Apple M4, `-n 4 --dist loadfile`, three runs each), 513s → 398s user
+CPU, Maven invocations 25 → 6 per run, Maven wall 50.7s → 7.0s.** No product code changed.
+
+**Measured.** A `mvn` shim on `PATH` logged every Maven call the suite made: 25, 50.7s of
+wall time between them, ~130s of the 510s CPU. `fixtures/orders-service` 4× (once per
+xdist worker, 4.6s each under load); `orders-micronaut`, `orders-spring7`,
+`orders-receivers` 2× each; the two module-scoped COPIES of `orders-service`
+(`tests/api/test_facade.py::compiled_fixture`, `tests/cli/test_enrich_command.py::
+compiled_fixture`) 5.5s each although `copytree` keeps `target/` and Maven finds nothing
+to do; seven other fixture roots once each; six synthetic one-module reactors in
+`tests/cli/test_app.py`, ~1.2s each, which write their own POM and must compile. One
+`compile_fixture(orders-service)` on an up-to-date tree costs 3.4–3.6s wall and 10–11s
+CPU — Maven's JVM plus its own incremental check — and 19 of the 25 verified a tree that
+had not changed.
+
+**Cause.** `tests/fixture_build.py::compile_fixture` memoised in a process-local set: per
+worker under xdist, and nothing across sessions. `fixture_stub.py::is_current` already
+solves the same problem for the stub jar with a currency check against its sources; the
+fixtures had no equivalent.
+
+**The fix.** After a compile, `target/sextant-fixture.stamp` records a sha256 over every
+compile input: the relative path and bytes of every file under the root except `target/`,
+`.sextant/`, `.sextant-enrichment.json`, `.tradewind/` and `.git/`; the parent directory's
+`pom.xml` when the root's POM declares a `<parent>` (`billing-lib` reaches the reactor
+parent by `<relativePath>`); and the stub jar's path, size and mtime (`orders-service`
+compiles against it, and the session fixture rebuilds it first). `compile_fixture` runs
+Maven only when `target/classes` is missing or the stamp differs from today's
+fingerprint. Content rather than mtimes, so a `copytree` of a stamped root is stamped
+too — that is what removes the two 5.5s copies — and a `touch` forces nothing. The
+fingerprint of `orders-service` (112 files) costs 4ms; every other fixture under 1ms.
+`python tests/fixture_build.py` compiles `PRIMED_FIXTURES` online and writes the stamps;
+`.github/workflows/pr.yml`'s priming step runs it in place of ten `mvn` lines, so the
+stamps exist before the suite starts — without them each worker would still compile every
+root once. Pinned by `tests/scripts/test_fixture_build.py`: a stamped root does not
+invoke Maven, a copy of one is current, one changed source byte re-invokes it and rewrites
+the stamp, a missing `target/classes` re-invokes it with a matching stamp, and the parent
+POM and stub jar are inputs.
+
+**After.** The shim on a stamped tree: 6 invocations, 7.0s — the six synthetic reactors,
+which have no stamp to find. The first run after the change, stamps absent: 17 (each root
+once, the copies already finding the stamp the real root's compile wrote), 21.9s. With
+`fixtures/orders-spring7/target` deleted: 7 invocations — that root compiled once, by the
+first of the two files that need it, and was stamped for the second; every other root
+untouched.
+
+**Falsified by** a shim run on a stamped tree that names a fixture root.
 
 ## The whole flow, after P-1 and P-3 (analyze → render → export, 2026-09-12)
 
