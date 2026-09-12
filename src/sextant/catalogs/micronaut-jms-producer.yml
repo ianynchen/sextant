@@ -1,0 +1,32 @@
+id: micronaut-jms-producer
+displayName: Micronaut JMS (producer)
+style: annotation_driven
+protocol: jms
+direction: outbound
+detect:
+  coordinates:
+    - "io.micronaut.jms:micronaut-jms-core"
+measured:
+  - { artifact: io.micronaut.jms:micronaut-jms-core, versions: ["4.2.0"],
+      identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+requires: [annotation_args]
+# One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
+# and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
+# annotation for both sides and the class-level marker decides which. Two catalogs gating
+# on different markers derive each destination once.
+matches:
+  declared_on: interface
+  # `@JMSProducer` marks an INTERFACE; `@Queue` or `@Topic` on each method names where it sends.
+  type_annotation: io.micronaut.jms.annotations.JMSProducer
+  # MEASURED (`javap` on micronaut-jms-core 4.2.0 `DefaultBodyArgumentBinder`): the body
+  # binder keys on `@MessageBody`; an unannotated sole parameter is the message by default.
+  request_body: { annotation: io.micronaut.messaging.annotation.MessageBody, fallback: sole_unannotated }
+  mapping:
+    path_from: [value]
+    prefix_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: io.micronaut.jms.annotations.Queue }
+      - { fqn: io.micronaut.jms.annotations.Topic }

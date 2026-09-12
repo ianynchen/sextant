@@ -35,7 +35,7 @@ against the feature it belongs to, or the build goes red.
 
 ```delivery
 REST inbound       | REST in    | G-37 G-30 G-45 W44-verb-overloads GAP-1b spring7-version conditional-controllers kotlin-null-handler micronaut-controller quarkus-jaxrs quarkus-vertx-route ktor-routing javalin-routing
-REST outbound      | REST out   | G-30-outbound spring7-import-http-services jdk-httpclient micronaut-client
+REST outbound      | REST out   | G-30-outbound jdk-httpclient micronaut-client
 SOAP               | SOAP       | jaxws-public-final apache-cxf
 GraphQL            | GraphQL    | G-39 G-40
 WebSocket          | WebSocket  | G-34
@@ -44,9 +44,9 @@ gRPC               | gRPC       |
 Kafka              | Kafka      | G-31 kafka-batch-generics micronaut-kafka alpakka-pekko
 JMS and AMQP       | JMS / AMQP | G-44 micronaut-jms
 AWS SQS            | SQS        | G-43 micronaut-sqs
-Google Pub/Sub     | Pub/Sub    | pubsub-receive-half micronaut-pubsub
+Google Pub/Sub     | Pub/Sub    | micronaut-pubsub
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
-Async              | Async      | G-47 async-limited temporal-cadence vertx-eventbus
+Async              | Async      | G-47 temporal-cadence vertx-eventbus
 ```
 
 **Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
@@ -81,7 +81,7 @@ what forces this list to shrink rather than rot. A feature missing from both thi
 `tests/e2e/` is a hard failure.
 
 ```intention-test-missing
-REST outbound | SSE | gRPC | Kafka
+SSE | gRPC | Kafka
 JMS and AMQP | Google Pub/Sub | Meridian
 ```
 
@@ -178,6 +178,41 @@ G-19 G-20 G-21 G-22 G-23 G-24 G-25 G-26 G-27 G-28 G-29 G-32 G-33 G-35 G-38
 G-41 G-42 G-46 G-48 G-49 G-50 G-51 G-53 G-54 G-55 G-56 G-57 G-58 G-59 G-60
 G-61 G-62 G-63 G-64 G-65 G-66 G-67 G-68 G-69 G-70
 ```
+
+**Retired as not-gaps, 2026-09-11 — measured, not fixed.** Two items on the direct list
+turned out to be nothing to build, found by reading what was already written down:
+
+- `pubsub-receive-half` — the probe's own conclusion, already in
+  `scripts/probes/w19_catalog_surface.md:177`: *"no unread method addresses a wire by
+  either style."* W18 read all ten inbound methods; the nine unread are `ack`, `nack`,
+  `modifyAckDeadline` and accessors. The "11 of 20" ratio put it on this list; the line
+  beneath the ratio should have kept it off.
+- `spring7-import-http-services` — measured: an `@HttpExchange` interface registered
+  through `@ImportHttpServices` derived its outbound row before any catalog read the
+  registration, because `spring-http-interface.yml` reads the interface itself
+  (`declared_on: interface`). "Registration unread" implied missing rows; there were none.
+  Pinned by `tests/e2e/test_rest_outbound_delivered.py`.
+- `async-limited` — `@Scheduled(cron = "${…}")` publishes the placeholder as `unresolved`
+  verbatim, and COVERAGE §5.12 says why: the value comes from configuration a deployment
+  overwrites, so substituting it would be a guess (`GUIDELINES` §8.2). That is the correct
+  output. The matrix counts it as `limited` because the generator counts any `◐ shipped`
+  row; a boundary that is correct by design is not a blocker.
+
+**Moved to engine work, 2026-09-11 — measured off the direct list:** `quarkus-jaxrs`,
+`jaxrs-sse` (attributes on sibling annotations of one method) and `kafka-batch-generics`
+(a wrapper conditional on an annotation attribute; `wrappers` are unconditional and
+global by type). Each keeps its fixture and a strict-xfail test where one was written.
+
+**Moved to spec work, 2026-09-12 — measured off the direct list:** `temporal-cadence`.
+`javap` on temporal-sdk 1.27.0: `@WorkflowMethod(name)` defaults to the *interface's*
+simple name and `@ActivityInterface(namePrefix)` + `@ActivityMethod(name)` defaults to
+prefix + the method name with its first letter capitalised — two naming rules the
+`path_fallback` vocabulary (`construct_name`, the accessor properties) cannot say. The
+task queue, which is the half of the wire identity a client actually addresses, is on
+`WorkerFactory.newWorker(String)` and `WorkflowOptions.Builder.setTaskQueue`, not on any
+annotation. And no member of the closed `Protocol` set fits a workflow engine; adding one
+is a schema decision with its own precedent (`RSOCKET`, stated in `closed_sets.py`). Three
+engine words and a schema member is a spec, not a catalog.
 
 **Closed** — a blocker leaves this register only when its intention test has passed **in
 the CI pipeline**, and the entry records the run that proves it. Ruled by the user
@@ -327,6 +362,19 @@ FR-14 unbuilt · `G-71` blast radius has no surface at all.
 ---
 
 ## 4. Categories, and what each needs
+
+**Measured off the direct list, 2026-09-11.** Three items COVERAGE tiered as `A` (a
+catalog file) turned out to need an engine form that does not exist, found by writing
+the fixture and watching what the existing vocabulary derives:
+
+- `G-30` Spring Cloud Gateway — two `route` overloads with the lambda at different
+  positions on a receiver chain. Needs the combinator overload discriminator (spec written).
+- **JAX-RS (Quarkus, Helidon, Jersey, RESTEasy) and JAX-RS SSE** — the verb is a marker
+  annotation, the path a separate `@Path`, the media separate `@Consumes`/`@Produces`,
+  all on ONE method. `annotation_driven` reads one annotation's attributes; it has no way
+  to read a sibling's. A catalog of the existing forms derives every GET onto the class
+  `@Path`, which is a wrong row, not a missing one. Fixture and tests exist and are
+  strict-xfail in `tests/e2e/test_rest_inbound_delivered.py`.
 
 ### Category A — catalog data, no engine change · **PLAN ONLY**
 

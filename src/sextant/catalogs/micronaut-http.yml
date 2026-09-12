@@ -1,0 +1,52 @@
+id: micronaut-http
+displayName: Micronaut HTTP (server)
+style: annotation_driven
+protocol: http
+direction: inbound
+detect:
+  coordinates:
+    - "io.micronaut:micronaut-http"
+    - "io.micronaut:micronaut-http-server"
+    - "io.micronaut.platform:micronaut-parent"
+measured:
+  - { artifact: io.micronaut:micronaut-http, versions: ["4.7.6"],
+      identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+requires: [annotation_args]
+
+# TWO catalogs, not one, and the split is Spring's own: `spring-web.yml` reads the same
+# verb annotations on a `@RestController` and `spring-http-interface.yml` reads them on an
+# `@HttpExchange` interface, each gating on a different type annotation so no route derives
+# twice. Micronaut has the identical shape — `@Get` on a `@Controller` serves, `@Get` on a
+# `@Client` interface calls — and `micronaut-http-client.yml` is the other half.
+matches:
+  # `@Controller` on the server, `@Client` on the client; either gates the type.
+  type_annotation: io.micronaut.http.annotation.Controller
+  request_body: { annotation: io.micronaut.http.annotation.Body, fallback: none }
+  mapping:
+    # MEASURED at 4.7.6 (`javap`): every verb annotation declares `value`, `uri` AND
+    # `uris` — `value` is the alias of `uri`, `uris` the multi-address form; `@Controller`
+    # and `@Client` declare `value`. First present wins, and `uris` last because it is the
+    # rare form and an alias list reads left to right.
+    path_from: [value, uri, uris]
+    prefix_from: [value, path]
+    path_separator: "/"
+    # Media on the SAME annotation as the path, as Spring's mapping annotations carry it.
+    # MEASURED (W58): `@Get`/`@Post`/`@Put`/`@Delete`/`@Patch` declare both; `@Options`
+    # declares `consumes` only; `@Head` and `@Trace` declare neither. `@Controller`
+    # declares both, and its values reach every method that declares none (the engine
+    # reads the same names off the prefix annotation, method-level winning — added
+    # 2026-09-12 with the class-level fix for Spring).
+    consumes_from: [consumes]
+    produces_from: [produces]
+    method_from: method
+    all_methods: []
+    prefix_annotation: io.micronaut.http.annotation.Controller
+    annotations:
+      - { fqn: io.micronaut.http.annotation.Get,     method: [GET] }
+      - { fqn: io.micronaut.http.annotation.Post,    method: [POST] }
+      - { fqn: io.micronaut.http.annotation.Put,     method: [PUT] }
+      - { fqn: io.micronaut.http.annotation.Delete,  method: [DELETE] }
+      - { fqn: io.micronaut.http.annotation.Patch,   method: [PATCH] }
+      - { fqn: io.micronaut.http.annotation.Head,    method: [HEAD] }
+      - { fqn: io.micronaut.http.annotation.Options, method: [OPTIONS] }
+      - { fqn: io.micronaut.http.annotation.Trace,   method: [TRACE] }

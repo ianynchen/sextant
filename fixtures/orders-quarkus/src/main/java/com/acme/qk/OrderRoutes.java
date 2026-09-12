@@ -1,0 +1,50 @@
+package com.acme.qk;
+
+import io.quarkus.vertx.web.Body;
+import io.quarkus.vertx.web.Param;
+import io.quarkus.vertx.web.Route;
+import io.quarkus.vertx.web.Route.HttpMethod;
+import io.quarkus.vertx.web.RouteBase;
+
+/**
+ * Quarkus reactive routes the way the Quarkus guide writes them: `@RouteBase` prefixes
+ * the class, each `@Route` names its path and verb(s). No CDI scope annotation — Quarkus
+ * makes any class with a `@Route` method a singleton bean, so there is nothing else to
+ * gate on.
+ *
+ * Measured at quarkus-reactive-routes 3.17.5 (`javap`): `@Route` declares `path`,
+ * `regex`, `methods` (an `HttpMethod[]`), `type`, `order`, `produces`, `consumes`;
+ * `@RouteBase` declares `path`, `produces`, `consumes`; `@Route.Routes` is the
+ * `@Repeatable` container.
+ */
+@RouteBase(path = "/qk/orders", produces = "application/json")
+public class OrderRoutes {
+
+    @Route(path = "/", methods = HttpMethod.GET)
+    public String list() {
+        return "[]";
+    }
+
+    @Route(path = "/:id", methods = HttpMethod.GET)
+    public String find(@Param String id) {
+        return "{}";
+    }
+
+    @Route(path = "/", methods = HttpMethod.POST, consumes = "application/json")
+    public String place(@Body String order) {
+        return order;
+    }
+
+    // Two verbs on one handler, the array form; and two routes on one handler, the
+    // repeatable form — both are ordinary in the guide.
+    @Route(path = "/:id", methods = {HttpMethod.PUT, HttpMethod.DELETE})
+    public String update(@Param String id, @Body String order) {
+        return order;
+    }
+
+    @Route(path = "/:id/cancel", methods = HttpMethod.POST)
+    @Route(path = "/:id/void", methods = HttpMethod.POST)
+    public String cancel(@Param String id) {
+        return "{}";
+    }
+}

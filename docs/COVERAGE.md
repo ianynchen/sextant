@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 4A 3B 4C, 13 open) | ◐ (2A 2B, 4 open) | ◐ (2 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 3B 4C, 13 open) | ◐ (2A 2B, 3 open) | ◐ (2 open) | ◐ (2 open) | ◐ (1 open) | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1A 2B, 4 open) | ◐ (1A, 2 open) | ◐ (1B, 2 open) | ◐ (1A 1B, 2 open) | ◐ (1 limited, 2A 1B 1C, 4 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (2B, 4 open) | ◐ (2 open) | ◐ (1B, 2 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 3 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**50 of 65 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**59 of 74 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -737,8 +737,17 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
+| `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
+| `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
+| `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |
+| `micronaut-jms` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |
+| `micronaut-kafka-client` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
+| `micronaut-kafka` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
+| `micronaut-pubsub-client` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
+| `micronaut-pubsub` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
+| `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
 | `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.0.1, 4.1.1 |
@@ -2001,10 +2010,11 @@ arrive there.
 | Java | `@RequestMapping` naming no method | Spring accepts every method, so it is one endpoint per method, not one with an unresolved method | `annotation` | ✅ shipped |
 | Java | `path =` alias for `value =` | `@AliasFor`, so only the one typed reaches the bytecode | `annotation` | ✅ shipped |
 | Java | `produces` / `consumes` | — | `annotation` | ✅ shipped |
+| Java | `produces` / `consumes` declared on the CLASS-level `@RequestMapping` | `ProducesRequestCondition.combine` keeps the method's declaration when non-empty and the class's otherwise, never a union | `annotation` | ✅ shipped (2026-09-12) — **read off the prefix annotation and applied where the method declares none.** Until then the class-level value was dropped: `produces = "application/xml"` on the class derived `produces` NULL, and a Boot module with Jackson present would have called that route `json`. Pinned by `tests/e2e/test_rest_inbound_delivered.py::test_class_level_produces_reaches_every_handler_that_declares_none` |
 | Java | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` | API versioning | `annotation` | A |
-| Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | — | `annotation` | A |
+| Java | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | `@Controller` carries the prefix and class-level media; the eight verb annotations carry the path (`value`/`uri`/`uris`) and, on five of them, media — `@Options` has `consumes` only, `@Head` and `@Trace` neither (W58 rows 33-44) | `annotation` | ✅ shipped (`micronaut-http.yml`, micronaut-http 4.7.6, `scripts/probes/w58_micronaut_quarkus_annotations.md`). Pinned on `fixtures/orders-micronaut` by `tests/e2e/test_rest_inbound_delivered.py`. **Boundary:** Micronaut's normalisation of `@Post(uri = "/")` under a prefix is unmeasured, so the fixture does not exercise it |
 | Java | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
-| Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style | `annotation` | A |
+| Java | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style: no type gate at all — any class with a `@Route` method is a bean; `@RouteBase(path)` is the prefix, `methods` is an `HttpMethod[]` of six (no `PATCH`), `@Route` is `@Repeatable` through `Route$Routes` | `annotation` | ✅ shipped (`quarkus-reactive-routes.yml`, 3.17.5, W58). Pinned on `fixtures/orders-quarkus`. **Two stated boundaries, both measured in `ReactiveRoutesProcessor`:** a `@Route` with no `path` serves `/` + the method name dashed (`helloWorld` → `/hello-world`), which no `path_fallback` word says, so it derives nothing rather than `/helloWorld`; and `@Route(regex = …)` is a pattern, not a path, and derives nothing |
 | Java | Actuator `@Endpoint` / `@ReadOperation` / `@WriteOperation` / `@DeleteOperation` | address is the type's `id` under a constant `/actuator` prefix; verb is the operation annotation's own | `annotation` | ✅ **shipped** (2O Task 7) — every row of CP-5 confirmed live on Boot 3.5.10 and 4.1.1 (`scripts/probes/cp5_actuator_paths.md`), each column identified by the run's own Boot banner. **Read with the exposure row below: the addresses are correct, and served only where the module opted in** |
 | Java | Actuator — `management.endpoints.web.base-path` moving the whole surface | CP-5 rows 7-8: `/manage/probe` is a 200 and `/actuator/probe` a 404 on both versions probed | `config_join` | **Boundary — OVER-reports the address.** `annotation_driven` never touches `resolved_config` — measured, it names the table nowhere — so a module that overrides the base path is published under `/actuator`. *The parenthesis here read "only `config_join.py:528` and `derived_resource.py:578` read it", which was false twice over: **five** modules read the table — `api.py`, the `config_join` and `derived_resource` engines, and `enrich/brief.py` and `enrich/validate.py`, every one of them by `workspace.query("resolved_config")` — and both line numbers had drifted. *(Corrected again on 2026-09-10: the first correction said SIX and named `resolve/config.py`, which WRITES the table and never reads it, and `resolve/pipeline.py`, which only carries the string as a capability name — while omitting `api.py`, which reads it twice. A replacement count reached by reading a grep for the table's name rather than for a read of it.)* The half that matters — that the ANNOTATION-driven engine does not — is what the boundary rests on, and it is checkable by name rather than by line.* Closes the day an annotation-derived row can read a configuration key |
 | Java | Actuator — `management.endpoints.web.exposure.include`, which decides whether a custom `@Endpoint` is served over HTTP AT ALL | CP-5 rows 9-10, measured on both versions: with Boot's DEFAULT exposure (`health` alone) `/actuator/probe` is a **404** and absent from the discovery document, while `/actuator/health` is a 200 | `config_join` | **Stated dependency, NOT an over-report.** The endpoint is a code fact — declared, registered, and correctly addressed — and we report code, never deployment. Whether it is PUBLISHED over HTTP depends on `exposure.include`, whose default is `health` alone but which any deployment routinely overrides; that is a runtime property we cannot read from a repository and must not predict. Contrast Spring Data REST, which we DO gate: absent that dependency no code path exists to serve those routes, so the rule's precondition is unmet and the rule does not apply. Here the rule applies and a runtime switch controls visibility. §8 also forbids the inverse error — excluding on inference — and a default is not proof of absence. **Partially knowable later:** the key can live in the module's own `application.yml`, so a row able to read `resolved_config` could sharpen this; `annotation_driven` cannot today. **Falsified by** a Boot release changing the default, or by this catalog gaining the ability to read configuration |
@@ -2314,7 +2324,8 @@ can name a plain-string attribute and `path_from` can be declared per annotation
 | Language | Library | Shape | Tier |
 |---|---|---|---|
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
-| Java | Micronaut `@Client`, MicroProfile `@RegisterRestClient` | `annotation` | A |
+| Java | Micronaut `@Client` + `@Get`/`@Post`… on an interface | `annotation` | ✅ shipped (`micronaut-http-client.yml`, `declared_on: interface`, W58). `@Client` declares `value` and `path` and no media (W58 rows 45-46) |
+| Java | MicroProfile `@RegisterRestClient` | `annotation` | A |
 | Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
 | Java | `RestTemplate` | `registration_call` | ✅ shipped |
 | Java | `RestClient`, `WebClient`, OkHttp | `fluent_chain` | ✅ shipped |
@@ -2884,7 +2895,7 @@ Task 5):**
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring `@KafkaListener` (`topics`, `topicPattern`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
-| Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` | — | `annotation` | A |
+| Java | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` (`value[]`, `patterns[]`) | the class marker decides the direction, so two catalogs gate on it — `micronaut-kafka.yml` inbound, `micronaut-kafka-client.yml` outbound on the interface | `annotation` | ✅ shipped (micronaut-kafka 5.6.0, W58). Pinned by `tests/e2e/test_messaging_micronaut_delivered.py` |
 | Java | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
 | Java | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | **all ten overloads** since `A-M6` — the partition- and timestamp-carrying `send` forms take the topic at argument 0 and the payload last, and every `sendDefault` form derives `path: NULL` at `unresolved` because its destination is config-borne | `registration_call` | ✅ shipped |
 | Java | `KafkaConsumer.subscribe(Collection<String>` \| `Pattern)`, **with or without a `ConsumerRebalanceListener`** | `List.of` (≤10 elements) resolves per topic; `Collections.singletonList`/`Pattern.compile` resolve their one argument; `Arrays.asList` is genuine varargs and resolves per topic too since **2O Task 13**, which taught `all_strings` to read the array slot's own `elements` (capability 9.15's `{kind: array, elements: […]}`) — it degraded to one unresolved row before that. An array the extractor cannot read end to end never reaches the `array` kind and still degrades that way | `registration_call` | ✅ shipped |
@@ -3083,7 +3094,7 @@ structural, not a gap. AMQP is the cross-language analogue and is listed here.
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
 | Java | Spring `@JmsListener` (`destination`, `selector`, `subscription`, `concurrency`) | — | `annotation` | ✅ shipped |
-| Java | Micronaut `@JMSListener` + `@Queue`/`@Topic` | — | `annotation` | A |
+| Java | Micronaut `@JMSListener` + `@Queue`/`@Topic`, `@JMSProducer` + the same on an interface | one catalog per direction, as for Kafka above | `annotation` | ✅ shipped (micronaut-jms-core 4.2.0, W58). Pinned by `tests/e2e/test_messaging_micronaut_delivered.py` |
 | Java | `JmsTemplate.send` / `convertAndSend` | the declared row is `convertAndSend(String destinationName, Object message)`, pinned to that overload by its `descriptor` | `registration_call` | ✅ shipped — **read with the two collision rows below**, which it shares with `RabbitTemplate` |
 | Java | Direct `jakarta.jms.{Session, MessageProducer, MessageConsumer}` | `createProducer` and **all eleven consumer factories** — plain, selector-carrying, shared, durable and shared-durable — linked to `createQueue`/`createTopic` via `channel_via`; `send()` deliberately unread, `createBrowser` deliberately undeclared | `registration_call` | ✅ shipped |
 | Java | Spring AMQP `@RabbitListener(queues = …)`, plus class-level `@RabbitListener` + `@RabbitHandler` | `queues` is a `String[]` (javap, spring-rabbit 3.1.4); the class-level form doubles as the destination prefix, `spring-kafka.yml`'s shape | `annotation` | ✅ **shipped** (2O Task 7) |
@@ -3199,7 +3210,7 @@ ten consuming methods alike, read directly with no annotation at all.
 
 | Language | Library | Form | Shape | Tier |
 |---|---|---|---|---|
-| Java | **Micronaut `@PubSubClient` / `@PubSubListener` + `@Subscription`** | the only first-party annotation surveyed | `annotation` | A |
+| Java | **Micronaut `@PubSubListener` + `@Subscription`, `@PubSubClient` + `@Topic`** | the only first-party annotation surveyed; one catalog per direction | `annotation` | ✅ shipped (micronaut-gcp-pubsub 5.8.0, W58). Pinned by `tests/e2e/test_messaging_micronaut_delivered.py` |
 | Java | Spring Cloud GCP `PubSubTemplate.publish(…)` | typed direct calls, not the channel-adapter indirection below | `registration_call` | ✅ shipped |
 | Java | Spring Cloud GCP `PubSubTemplate` INBOUND — `subscribe`, `subscribeAndConvert`, `pull`, `pullAsync`, `pullAndConvert`, `pullAndConvertAsync`, `pullAndAck`, `pullAndAckAsync`, `pullNext`, `pullNextAsync` | all ten consuming methods the class declares, enumerated from the 5.1.2 jar's own declared methods, then split into consuming and publishing by a name-prefix test the probe states (`scripts/probes/w18_pubsub_inbound.md` §1); each takes the subscription name at argument 0. **Two different §8.6 chains**: for the eight `pull*` methods the call IS the consumption, so a trace reaching it is the whole chain; for `subscribe`/`subscribeAndConvert`, which return a `Subscriber`, the chain is the call PLUS the measured rule that `PubSubSubscriberTemplate.subscribe` calls `Subscriber.startAsync()` itself before returning (`javap -c`, 5.1.2, offset 26) | `registration_call` | ✅ shipped since F2 §3.9. **This row read ONE of the ten until W18**, so every PULL-based consumer derived nothing at all — not a partial row, not a question, but the same silence a module consuming no Pub/Sub produces. Payload shape is stated by the THREE overloads that take a `Class<T>` — `subscribeAndConvert` at argument 2, `pullAndConvert` and `pullAndConvertAsync` at argument 3; the other seven derive an address with `request_shape` NULL, because their return type is an untyped envelope and deriving a shape from it would be invention. **The `handler` recorded is the calling method, not the lambda that receives** — true of `subscribeAndConvert` before W18 and now of `subscribe` too |
 | Java | `Publisher.newBuilder(TopicName.of(p, t)).build()`, `.publish(…)` | co-located build+publish chains resolve; a config-built/field-held `Publisher` derives an honest unresolved row instead of vanishing | `fluent_chain` | ✅ shipped |

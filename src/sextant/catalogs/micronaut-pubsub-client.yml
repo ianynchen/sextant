@@ -1,0 +1,31 @@
+id: micronaut-pubsub-client
+displayName: Micronaut Google Pub/Sub (client)
+style: annotation_driven
+protocol: pubsub
+direction: outbound
+detect:
+  coordinates:
+    - "io.micronaut.gcp:micronaut-gcp-pubsub"
+measured:
+  - { artifact: io.micronaut.gcp:micronaut-gcp-pubsub, versions: ["5.8.0"],
+      identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+requires: [annotation_args]
+# One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
+# and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
+# annotation for both sides and the class-level marker decides which. Two catalogs gating
+# on different markers derive each destination once.
+matches:
+  declared_on: interface
+  # `@PubSubClient` marks an INTERFACE; `@Topic` on each method names where it publishes.
+  type_annotation: io.micronaut.gcp.pubsub.annotation.PubSubClient
+  # MEASURED (`javap` on micronaut-gcp-pubsub 5.8.0 `PubSubBodyBinder`): the body
+  # binder keys on `@MessageBody`; an unannotated sole parameter is the message by default.
+  request_body: { annotation: io.micronaut.messaging.annotation.MessageBody, fallback: sole_unannotated }
+  mapping:
+    path_from: [value]
+    prefix_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: io.micronaut.gcp.pubsub.annotation.Topic }
