@@ -316,7 +316,7 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 |---|---|
 | `G-36` | `spring-ws.yml` declares no `container:`. **`@PayloadRoot` and `@SoapAction` are both `@Repeatable`** (confirmed in the class file); a second one on a method is lost. `@Namespace` is NOT repeatable — an earlier claim of "three pairs" here was wrong |
 | — | JAX-WS `public final` operation — **over-reports one row per such method**, `§5.3`'s own stated residual. `ACC_FINAL` has been readable since W7, so this may already be closeable: re-measure before planning |
-| `jaxws-inherited-unannotated` | both runtimes measured, w63; Sextant over-reports: `gate_ancestry` derives an operation inherited from a plain, unannotated superclass that NEITHER jaxws-rt nor Apache CXF would ever serve; fixed by Task 10b |
+| `jaxws-inherited-unannotated` | both runtimes measured, w63; Sextant over-reported: `gate_ancestry` derived an operation inherited from a plain, unannotated superclass that NEITHER jaxws-rt nor Apache CXF would ever serve. **Fixed in Task 10b, awaiting CI** — `derive_endpoints.sql`'s member rule now requires the DECLARING class to carry `@WebService`; pinned by `tests/e2e/test_soap_delivered.py::test_an_operation_inherited_from_an_unannotated_superclass_is_not_published` |
 
 > `verify: javap -v -cp $(find ~/.m2 -name 'spring-ws-core-*.jar'|grep -v sources|head -1) org.springframework.ws.server.endpoint.annotation.PayloadRoot | grep Repeatable`
 > `verify: grep -c container src/sextant/catalogs/spring-ws.yml` → 0

@@ -731,6 +731,29 @@ member_declarations AS (
       -- excludes it beside `static`, and both catalogs that declare `$members` are JAX-WS.
       -- `modifiers.final` is written for every method (`ClassScanner.methodModifiersJson`).
       AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'
+      -- THE DECLARING CLASS MUST ITSELF BE GATED (w63, `jaxws-inherited-unannotated`).
+      -- A member with no annotation of its own is an operation only if the class
+      -- that DECLARES it carries the gate annotation — not the class the walk
+      -- started from. Measured in both runtimes' bytecode and confirmed live
+      -- (`scripts/probes/w63_cxf_web_method_rule.md`): jaxws-rt 4.0.2's
+      -- `RuntimeModeler.isWebMethodBySpec` offsets 124-147 and Apache CXF 4.0.5's
+      -- `JaxWsServiceConfiguration.hasWebServiceAnnotation` offsets 0-17 both read
+      -- `method.getDeclaringClass()` then `getAnnotation(WebService.class)`, and
+      -- `ifnull` → not an operation; over `BillingWebService extends AbstractBilling`
+      -- (no `@WebService` on the base) both produced `charge` alone. Without this the
+      -- walk published the base's `refund` as an operation neither runtime serves.
+      --
+      -- Asked HERE, of the dedup's winner, and not in `exposed_members` of every
+      -- declaration: `isWebMethodBySpec` tests what `getMethods()` returned, and
+      -- that is the NEAREST declaration (measured, JDK 21.0.12.1 — over
+      -- `C extends D extends E` with D plain and E annotated, both declaring
+      -- `op()`, `C.getMethods()` returns D's). Filtering before the dedup would
+      -- drop D's row and let E's shadowed declaration win the partition — the
+      -- same fabrication one level down. And this is a FILTER on the declaring
+      -- class, not a stop in `gate_ancestry`: the walk continues past a plain
+      -- class, so E's OTHER public methods — declared by an annotated class —
+      -- still derive for C, exactly as `getMethods()` still returns them.
+      AND s.enclosing IN (SELECT type_symbol FROM gate_types)
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation

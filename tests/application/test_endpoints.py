@@ -1949,9 +1949,32 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     write_fact_file(root / "MemberService.jsonl", document, facts)
 
 
-def _member_base_facts(root: Path, base_visibility: str = "public") -> None:
-    """`A-M15`: the gated class gains a plain, UNANNOTATED superclass declaring
-    one public method of its own.
+def _member_base_facts(
+    root: Path,
+    base_visibility: str = "public",
+    base_annotated: bool = False,
+    grandparent: bool = False,
+) -> None:
+    """`A-M15`: the gated class gains a superclass declaring one public method
+    of its own — plain and UNANNOTATED by default, or carrying the catalog's own
+    gate annotation when `base_annotated` is set, under ITS OWN scope
+    (`urn:base`): an annotated base is a gated class in its own right and
+    publishes `refund` on its own account, and only a scope tells that row
+    apart from one attributed to the subclass. A test that annotates the base
+    therefore reads paths through `_qname_mapping`'s vocabulary.
+
+    Which of the two it is decides whether `refund` is a member at all: both
+    JAX-WS runtimes read the gate annotation off the method's OWN declaring
+    class (w63, `jaxws-inherited-unannotated`), so the tests that exercise the
+    walk's other conjuncts — visibility, one-per-signature, withdrawal — set
+    `base_annotated=True`, which is what keeps each of them measuring its own
+    conjunct rather than this one.
+
+    `grandparent=True` writes a further, ANNOTATED ancestor above the base
+    (scope `urn:root`) declaring the same `refund` signature, so the plain
+    base SHADOWS an annotated declaration — the shape that says whether the
+    declaring-class check is asked of the member the class actually has (the
+    base's) or of every declaration in the ancestry.
 
     A separate fact file rather than a parameter on `_member_facts`, so every
     test above sees exactly the facts it always did and the inheritance case
@@ -1970,21 +1993,57 @@ def _member_base_facts(root: Path, base_visibility: str = "public") -> None:
         redaction_set_hash="sha256:b",
     )
     base = "com/acme/rpc/AbstractMemberService#"
-    write_fact_file(
-        root / "AbstractMemberService.jsonl",
-        document,
-        [
-            SymbolFact(document_id="doc_base", symbol=base, construct_kind=ConstructKind.CLASS),
+    root_type = "com/acme/rpc/RootMemberService#"
+    facts: list[object] = [
+        SymbolFact(
+            document_id="doc_base",
+            symbol=base,
+            construct_kind=ConstructKind.CLASS,
+            **({"superclass": root_type} if grandparent else {}),
+        ),
+        SymbolFact(
+            document_id="doc_base",
+            symbol=f"{base}refund(sig_b17e0011).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=base,
+            visibility=base_visibility,
+            modifiers={},
+        ),
+    ]
+    if base_annotated:
+        facts.append(
+            AnnotationFact(
+                document_id="doc_base",
+                target=base,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#", args={"ns": "urn:base"}
+                ),
+            )
+        )
+    if grandparent:
+        facts += [
+            SymbolFact(
+                document_id="doc_base", symbol=root_type, construct_kind=ConstructKind.CLASS
+            ),
             SymbolFact(
                 document_id="doc_base",
-                symbol=f"{base}refund(sig_b17e0011).",
+                symbol=f"{root_type}refund(sig_b17e0011).",
                 construct_kind=ConstructKind.METHOD,
-                enclosing=base,
-                visibility=base_visibility,
+                enclosing=root_type,
+                visibility="public",
                 modifiers={},
             ),
-        ],
-    )
+            AnnotationFact(
+                document_id="doc_base",
+                target=root_type,
+                retention="runtime",
+                use=AnnotationUse(
+                    annotation="com/acme/rpc/annotation/Service#", args={"ns": "urn:root"}
+                ),
+            ),
+        ]
+    write_fact_file(root / "AbstractMemberService.jsonl", document, facts)
 
 
 def _member_override_facts(root: Path, withdrawn: bool = False) -> None:
@@ -2043,13 +2102,15 @@ def _member_rows(
     gated: bool = True,
     base: str | None = None,
     override: bool | None = None,
+    base_annotated: bool = False,
+    grandparent: bool = False,
 ) -> list[tuple[str, str]]:
     """`(path, handler)` for every derived row, in insertion order — the pair a
     set of paths cannot answer, since a rule that publishes ONE operation twice
     collapses into one entry there."""
     _member_facts(tmp_path / "facts", gated)
     if base is not None:
-        _member_base_facts(tmp_path / "facts", base)
+        _member_base_facts(tmp_path / "facts", base, base_annotated, grandparent)
     if override is not None:
         _member_override_facts(tmp_path / "facts", override)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -2066,8 +2127,15 @@ def _member_paths(
     gated: bool = True,
     base: str | None = None,
     override: bool | None = None,
+    base_annotated: bool = False,
+    grandparent: bool = False,
 ) -> set[str]:
-    return {path for path, _ in _member_rows(tmp_path, catalog, gated, base, override)}
+    return {
+        path
+        for path, _ in _member_rows(
+            tmp_path, catalog, gated, base, override, base_annotated, grandparent
+        )
+    }
 
 
 def test_a_catalog_declaring_no_member_rule_derives_only_what_is_annotated(
@@ -2102,10 +2170,12 @@ def test_a_class_gate_derives_every_public_member_that_no_rule_claims(tmp_path: 
     assert "bare" in paths
 
 
-def test_a_gated_classes_inherited_public_method_is_an_exposed_member(tmp_path: Path):
+def test_a_public_method_inherited_from_an_annotated_base_is_an_exposed_member(
+    tmp_path: Path,
+):
     """`A-M15`, the positive half. "The public methods of C" is not "the public
     methods DECLARED in C" (JLS 8.2), and the member join asked `s.enclosing`
-    — so a gated class extending a plain base published none of the base's
+    — so a gated class extending a base published none of the base's
     operations, silently, with no COVERAGE row.
 
     The catalog whose comment this contradicts is `jakarta-jws.yml`, which
@@ -2119,12 +2189,89 @@ def test_a_gated_classes_inherited_public_method_is_an_exposed_member(tmp_path: 
     `Class.getMethods()`, which returns inherited public methods, and drops
     only those declared by `java.lang.Object`.
 
-    `refund` is on the base and carries no annotation; `bare` is on the class
-    itself. Both derive, which is what says the widening ADDED the inherited
-    member rather than replacing the declared one."""
-    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="public")
+    The base carries the gate annotation itself, because that is the one shape
+    in which the inherited method IS a member (w63 — see the near-miss below).
+    `refund` is on that base and carries no annotation of its own; `bare` is on
+    the class itself. Both derive, which is what says the widening ADDED the
+    inherited member rather than replacing the declared one.
 
-    assert {"bare", "refund"} <= paths
+    Read under each gate's own scope, because the annotated base is a gated
+    class too and publishes `refund` on its own account (`{urn:base}refund`).
+    The row that proves the walk is `{urn:acme}refund` — the BASE's
+    declaration, attributed to the subclass (`gate_type`) — and its handler is
+    asserted, so a second declaration invented on the subclass would fail."""
+    rows = _member_rows(
+        tmp_path,
+        _member_catalog(**_qname_mapping(members="public_methods")),
+        base="public",
+        base_annotated=True,
+    )
+
+    assert {"{urn:acme}bare", "{urn:acme}refund", "{urn:base}refund"} <= {p for p, _ in rows}
+    assert [handler for path, handler in rows if path == "{urn:acme}refund"] == [
+        "com/acme/rpc/AbstractMemberService#refund(sig_b17e0011)."
+    ]
+
+
+def test_a_public_method_inherited_from_an_unannotated_base_is_not_an_exposed_member(
+    tmp_path: Path,
+):
+    """`A-M15`'s missing conjunct (w63, `jaxws-inherited-unannotated`). A public
+    method the gated class inherits WITHOUT overriding is a member only when
+    the class that DECLARES it carries the gate annotation. Both JAX-WS
+    runtimes say so in bytecode: jaxws-rt 4.0.2's `isWebMethodBySpec` (offsets
+    124-147) and Apache CXF 4.0.5's `hasWebServiceAnnotation` (offsets 0-17)
+    both end with `method.getDeclaringClass().getAnnotation(WebService.class)`,
+    and a live run of both over `BillingWebService extends AbstractBilling`
+    produced `charge` alone (`scripts/probes/w63_cxf_web_method_rule.md`).
+
+    Identical to the positive above in every respect but the base's own
+    annotation, so it measures the declaring-class check and nothing else.
+    `bare` is asserted present, which is what stops this passing because the
+    walk found nothing at all — and `refund` is asserted ABSENT under every
+    handler, because the fabrication was a row attributed to the gated class."""
+    rows = _member_rows(tmp_path, _member_catalog(members="public_methods"), base="public")
+
+    assert "bare" in {path for path, _ in rows}
+    assert [row for row in rows if row[0] == "refund"] == []
+
+
+def test_an_unannotated_base_shadowing_an_annotated_ancestors_method_exposes_nothing(
+    tmp_path: Path,
+):
+    """WHERE the declaring-class check runs, pinned: on the member the class
+    actually has, after the one-per-signature dedup — never on every
+    declaration in the ancestry.
+
+    `MemberService extends AbstractMemberService extends RootMemberService`;
+    the middle class is plain, the root is annotated, and BOTH declare
+    `refund`. MEASURED (JDK 21.0.12.1, `Class.getMethods()` over exactly this
+    shape): the one `refund` returned is the middle class's — the nearest
+    declaration wins, as CP-13 Q5 measured one level up — and that method's
+    declaring class carries no gate annotation, so both runtimes exclude it
+    (w63, the `getDeclaringClass()` read cited above). Asking the check of
+    each declaration instead would drop the middle class's row and let the
+    root's win the partition: an operation attributed to the gated class that
+    neither runtime serves, the same fabrication one level down.
+
+    The walk itself still CONTINUES past the plain class — the check filters
+    by declaring class, it does not stop the ancestry — which the root's OTHER
+    methods would show if it declared any; here the shadowed signature is the
+    whole point, so one method is enough.
+
+    `{urn:root}refund` is asserted PRESENT: the annotated root is a gated class
+    of its own and serves its own `refund`, and that row is the control that
+    the root's facts were read at all. `{urn:acme}refund` — the same signature
+    attributed to the subclass — is what must not exist."""
+    rows = _member_rows(
+        tmp_path,
+        _member_catalog(**_qname_mapping(members="public_methods")),
+        base="public",
+        grandparent=True,
+    )
+
+    assert {"{urn:acme}bare", "{urn:root}refund"} <= {path for path, _ in rows}
+    assert [row for row in rows if row[0] == "{urn:acme}refund"] == []
 
 
 def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_path: Path):
@@ -2139,8 +2286,12 @@ def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_pat
     `s.visibility = 'public'` from the member rule makes this fail with a
     `refund` operation the container does not serve. The class's own `bare` is
     asserted present in both, which is what stops this passing because the walk
-    found nothing at all."""
-    paths = _member_paths(tmp_path, _member_catalog(members="public_methods"), base="other")
+    found nothing at all. The base carries the gate annotation, so the ONLY
+    reason `refund` is absent is its visibility (w63's declaring-class check
+    would otherwise exclude it too, and this test would stop measuring)."""
+    paths = _member_paths(
+        tmp_path, _member_catalog(members="public_methods"), base="other", base_annotated=True
+    )
 
     assert "bare" in paths
     assert "refund" not in paths
@@ -2162,12 +2313,23 @@ def test_an_overridden_inherited_member_is_one_exposed_member_and_not_two(tmp_pa
 
     The handler assertion is the load-bearing half: the count alone would still
     pass if the walk kept the BASE's declaration and dropped the override's,
-    which is the same wrong attribution one row further down."""
+    which is the same wrong attribution one row further down.
+
+    The base carries the gate annotation: with a plain base the second
+    declaration would be excluded by w63's declaring-class check before the
+    dedup had anything to decide, and this would stop measuring the dedup.
+    An annotated base is a service of its own, so its `{urn:base}refund` is
+    a legitimate row beside the subclass's — the assertion reads the
+    subclass's scope alone."""
     rows = _member_rows(
-        tmp_path, _member_catalog(members="public_methods"), base="public", override=False
+        tmp_path,
+        _member_catalog(**_qname_mapping(members="public_methods")),
+        base="public",
+        override=False,
+        base_annotated=True,
     )
 
-    assert [handler for path, handler in rows if path == "refund"] == [
+    assert [handler for path, handler in rows if path == "{urn:acme}refund"] == [
         "com/acme/rpc/MemberService#refund(sig_b17e0011)."
     ]
 
@@ -2189,25 +2351,34 @@ def test_an_override_that_withdraws_itself_withdraws_the_member_it_overrides(tmp
     because the walk found nothing at all — the near-miss's paired positive is
     `test_an_overridden_inherited_member_is_one_exposed_member_and_not_two`
     above, the same input with the withdrawal removed, where the operation DOES
-    derive."""
+    derive.
+
+    The base carries the gate annotation for the guard this pins: with a plain
+    base, disabling the dedup would republish nothing — w63's declaring-class
+    check excludes the base's declaration on its own — and this test would
+    keep passing with its guard gone. Its own `{urn:base}refund` is the
+    base's own service and stays; `{urn:acme}refund` is the withdrawn one."""
     paths = _member_paths(
         tmp_path,
         _member_catalog(
-            members="public_methods",
-            annotations=[
-                {"fqn": "com.acme.rpc.annotation.Service"},
-                {
-                    "fqn": "com.acme.rpc.annotation.Operation",
-                    "unless": {"attribute": "skip", "equals": True},
-                },
-            ],
+            **_qname_mapping(
+                members="public_methods",
+                annotations=[
+                    {"fqn": "com.acme.rpc.annotation.Service"},
+                    {
+                        "fqn": "com.acme.rpc.annotation.Operation",
+                        "unless": {"attribute": "skip", "equals": True},
+                    },
+                ],
+            )
         ),
         base="public",
         override=True,
+        base_annotated=True,
     )
 
-    assert "bare" in paths
-    assert "refund" not in paths
+    assert "{urn:acme}bare" in paths
+    assert "{urn:acme}refund" not in paths
 
 
 def test_a_member_level_rule_overrides_the_member_rule_for_the_member_it_names(
@@ -5864,6 +6035,7 @@ def _gate_facts(
     method_annotation: str | None,
     method_args: dict,
     method_modifiers: dict[str, bool] | None = None,
+    inherited_from: tuple[str, dict[str, dict]] | None = None,
 ) -> None:
     """One type of the given construct kind carrying the given type-level
     annotations, and one method on it carrying one mapping annotation.
@@ -5877,7 +6049,13 @@ def _gate_facts(
     `jakarta-jws` `members: public_methods` shape, whose gate is `@WebService`
     on the class rather than anything stated on the member. `method_modifiers`
     lets a near-miss vary the method's own `SymbolFact.modifiers`, unset by
-    every other caller here."""
+    every other caller here.
+
+    `inherited_from=(symbol, type_annotations)` moves the method OFF the
+    subject and onto a superclass with that symbol and those type-level
+    annotations, which the subject then `extends` — the inherited-member shape
+    `A-M15`'s walk reaches, where the subject and the declaring class are two
+    different types and the framework's gate may sit on either."""
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/gate/Subject.java",
@@ -5892,14 +6070,20 @@ def _gate_facts(
         redaction_set_hash="sha256:b",
     )
     owner = "com/acme/gate/Subject#"
-    handler = "com/acme/gate/Subject#onMessage(sig_5a5a5a5a)."
+    declaring = owner if inherited_from is None else inherited_from[0]
+    handler = f"{declaring}onMessage(sig_5a5a5a5a)."
     facts: list = [
-        SymbolFact(document_id="doc_1", symbol=owner, construct_kind=owner_kind),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=owner,
+            construct_kind=owner_kind,
+            **({"superclass": declaring} if inherited_from is not None else {}),
+        ),
         SymbolFact(
             document_id="doc_1",
             symbol=handler,
             construct_kind=ConstructKind.METHOD,
-            enclosing=owner,
+            enclosing=declaring,
             # A void return, spelled rather than omitted: a catalog with a
             # `reply` block reads the handler's own signature, and a method
             # fact carrying none is a shape the extractor never emits.
@@ -5916,6 +6100,19 @@ def _gate_facts(
         )
         for fqn, args in type_annotations.items()
     ]
+    if inherited_from is not None:
+        facts.append(
+            SymbolFact(document_id="doc_1", symbol=declaring, construct_kind=ConstructKind.CLASS)
+        )
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=declaring,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in inherited_from[1].items()
+        ]
     if method_annotation is not None:
         facts.append(
             AnnotationFact(
@@ -7795,6 +7992,65 @@ def test_a_final_public_method_on_a_web_service_derives_nothing(tmp_path: Path):
             method_annotation=None,
             method_args={},
             method_modifiers={"final": True},
+        )
+        == []
+    )
+
+
+def test_a_method_inherited_from_a_web_service_base_is_an_operation_of_the_subclass(
+    tmp_path: Path,
+):
+    """The positive the near-miss below differs from in one annotation. `Subject
+    extends Base`, `Base` carries `@WebService` and declares the method; the
+    subject inherits it without overriding. Both runtimes serve it (w63: the
+    `getDeclaringClass()` read finds `@WebService` on `Base`), so it derives
+    under the SUBJECT's namespace — the walk attributes the base's declaration
+    to the gated class that exposes it."""
+    rows = _gate_rows(
+        tmp_path,
+        "jakarta-jws",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"jakarta/jws/WebService#": {"targetNamespace": "urn:subject"}},
+        method_annotation=None,
+        method_args={},
+        inherited_from=("com/acme/gate/Base#", {"jakarta/jws/WebService#": {}}),
+    )
+
+    assert set(rows) == {
+        ("soap", "inbound", None, "{urn:subject}onMessage"),
+        # `Base` is a web service of its own and serves the method it declares,
+        # under its own (reversed-package) default namespace.
+        ("soap", "inbound", None, "{http://gate.acme.com/}onMessage"),
+    }
+
+
+@pytest.mark.declines("jakarta-jws")
+@pytest.mark.pins("derive_endpoints.members-declaring-type-is-gated")
+def test_a_method_inherited_from_a_plain_base_is_not_an_operation_of_the_subclass(
+    tmp_path: Path,
+):
+    """w63, `jaxws-inherited-unannotated`: a public method the `@WebService` class
+    inherits WITHOUT overriding is an operation only when the class that DECLARES
+    it carries `@WebService`. jaxws-rt 4.0.2's `RuntimeModeler.isWebMethodBySpec`
+    (offsets 124-147) and Apache CXF 4.0.5's
+    `JaxWsServiceConfiguration.hasWebServiceAnnotation` (offsets 0-17) both end
+    with `method.getDeclaringClass().getAnnotation(WebService.class)`, and a live
+    run of both over `BillingWebService extends AbstractBilling` produced `charge`
+    alone (`scripts/probes/w63_cxf_web_method_rule.md`).
+
+    Identical to the positive above but for `Base`'s own `@WebService`, so it
+    measures the declaring-class check and nothing else: the base is plain, the
+    subject is gated, and nothing derives — not under the subject's namespace,
+    and not under the base's, which is not a service at all."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "jakarta-jws",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={"jakarta/jws/WebService#": {"targetNamespace": "urn:subject"}},
+            method_annotation=None,
+            method_args={},
+            inherited_from=("com/acme/gate/Base#", {}),
         )
         == []
     )

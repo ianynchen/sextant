@@ -70,7 +70,9 @@ def test_the_single_payload_root_and_soap_action_forms_still_derive(soap_address
 @pytest.fixture(scope="module")
 def soap_final_paths(tmp_path_factory: pytest.TempPathFactory) -> set[str]:
     """`orders-soap-final`, analysed on its own: a `@WebService` class declaring one
-    ordinary public method and one `public final` method (Task 9, `jaxws-public-final`)."""
+    ordinary public method and one `public final` method (Task 9, `jaxws-public-final`),
+    and two more `@WebService` classes, one extending an annotated base and one a plain
+    one (Task 10b, `jaxws-inherited-unannotated`)."""
     workspace_dir = tmp_path_factory.mktemp("soap-final")
     compile_fixture(SOAP_FINAL)
     result = CliRunner().invoke(
@@ -94,3 +96,30 @@ def test_a_public_final_method_is_not_an_operation(soap_final_paths):
     operation nobody serves. `modifiers.final` has been in the facts since W7."""
     assert any(p.endswith("quote") for p in soap_final_paths), sorted(soap_final_paths)
     assert not any(p.endswith("internalAudit") for p in soap_final_paths), sorted(soap_final_paths)
+
+
+def test_an_operation_inherited_from_an_unannotated_superclass_is_not_published(
+    soap_final_paths,
+):
+    """A public method a `@WebService` class inherits WITHOUT overriding is an operation
+    only when the class that DECLARES it carries `@WebService`: jaxws-rt 4.0.2's
+    `RuntimeModeler.isWebMethodBySpec` (offsets 124-147) and Apache CXF 4.0.5's
+    `JaxWsServiceConfiguration.hasWebServiceAnnotation` (offsets 0-17) both end with
+    `method.getDeclaringClass().getAnnotation(WebService.class)`, and a live run of both
+    over `BillingWebService extends AbstractBilling` produced `charge` only (w63,
+    `scripts/probes/w63_cxf_web_method_rule.md`). `gate_ancestry` published every scanned
+    ancestor's public methods regardless, so `audit` derived as a SOAP operation neither
+    runtime serves.
+
+    Two inheritance shapes, told apart by namespace: `TieredQuoteService` (its own `tier`,
+    plus `price` inherited from `@WebService PricedService`) publishes both under ITS
+    namespace, which is what says the row came through the walk rather than from
+    `PricedService`'s own gate; `PlainBasedService` (its own `own`, plus `audit` inherited
+    from plain `AbstractQuote`) publishes `own` alone."""
+    tiered = "http://tiered.soapf.acme.com/"
+    plain = "http://plain.soapf.acme.com/"
+    assert f"{{{tiered}}}tier" in soap_final_paths, sorted(soap_final_paths)
+    assert f"{{{tiered}}}price" in soap_final_paths, sorted(soap_final_paths)
+    assert f"{{{plain}}}own" in soap_final_paths, sorted(soap_final_paths)
+    assert f"{{{plain}}}audit" not in soap_final_paths, sorted(soap_final_paths)
+    assert not any(p.endswith("audit") for p in soap_final_paths), sorted(soap_final_paths)

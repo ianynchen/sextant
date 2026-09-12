@@ -162,18 +162,22 @@ matches:
     # method by `ClassScanner.methodModifiersJson` (W7), so nothing here waits
     # on the extractor.
     #
-    # **`gate_ancestry` OVER-REPORTS, measured 2026-09-12 (w63,
-    # `scripts/probes/w63_cxf_web_method_rule.md`).** `isWebMethodBySpec` does
-    # not stop at excluding `static`/`final`: for a method with no `@WebMethod`
-    # of its own, it reads `@WebService` off THAT METHOD'S OWN declaring class
-    # (`getDeclaringClass().getAnnotation(WebService.class)`), not off the
-    # implementor class the walk is gated on — and CXF's `hasWebServiceAnnotation`
-    # makes the identical read. A live run of both runtimes over
-    # `BillingWebService extends AbstractBilling` (no `@WebService` on
-    # `AbstractBilling`) confirms it: neither runtime exposes the inherited
-    # `refund()`. `gate_ancestry`'s walk carries no such check, so it derives
-    # `refund` as an operation — a row neither runtime would ever serve.
-    # Tracked as `jaxws-inherited-unannotated`; NOT fixed here (next task).
+    # **AND THE DECLARING CLASS MUST CARRY `@WebService` ITSELF, measured
+    # 2026-09-12 (w63, `scripts/probes/w63_cxf_web_method_rule.md`).**
+    # `isWebMethodBySpec` does not stop at excluding `static`/`final`: for a
+    # method with no `@WebMethod` of its own, it reads `@WebService` off THAT
+    # METHOD'S OWN declaring class (offsets 124-147:
+    # `getDeclaringClass().getAnnotation(WebService.class)`, `ifnull` → no),
+    # not off the implementor class the walk is gated on — and CXF's
+    # `hasWebServiceAnnotation` (offsets 0-17) makes the identical read. A live
+    # run of both runtimes over `BillingWebService extends AbstractBilling` (no
+    # `@WebService` on `AbstractBilling`) confirms it: neither exposes the
+    # inherited `refund()`. `gate_ancestry`'s walk used to publish it anyway
+    # (`jaxws-inherited-unannotated`, fixed 2026-09-12): `derive_endpoints.sql`'s
+    # member rule now asks `s.enclosing IN (SELECT type_symbol FROM gate_types)`
+    # of the member the dedup chose. The walk still CONTINUES past a plain
+    # class — an annotated grandparent's methods derive — because the rule is
+    # a filter on the declaring class, not a stop in the ancestry.
     #
     # AND THE RI IS ONE IMPLEMENTATION. This file used to claim it was
     # "verified against BOTH reference implementations" while naming neither
