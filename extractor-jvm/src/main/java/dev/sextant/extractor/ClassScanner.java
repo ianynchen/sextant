@@ -426,6 +426,10 @@ public final class ClassScanner {
             // same value. Same answer either way; naming which one is meant keeps it
             // that way if either ever stops being true.
             int methodAccess = access;
+            // `OI-81`: a Kotlin `$default` bridge, recognised from its shape and joined to
+            // the function it stands for. Null for every other method.
+            KotlinDefaultBridge defaultBridge =
+                KotlinDefaultBridge.recognise(access, name, descriptor, kotlinNullability);
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -727,9 +731,11 @@ public final class ClassScanner {
                          signatureJson(name, descriptor, sig, parameterNames, parameterFlags,
                                        throwsJson,
                                        parameterAnnotations,
-                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
+                                       parameterTypeAnnotations, returnTypeAnnotations,
+                                       defaultBridge), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
-                         annotationDefault, typeParametersJson(sig), lineStart, lineEnd);
+                         annotationDefault, typeParametersJson(sig), lineStart, lineEnd, null,
+                         defaultBridge == null ? null : JsonOut.string(defaultBridge.function()));
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -1138,7 +1144,8 @@ public final class ClassScanner {
                                       String declaredThrows,
                                       List<List<String>> parameterAnnotations,
                                       List<List<String>> parameterTypeAnnotations,
-                                      List<String> returnTypeAnnotations) {
+                                      List<String> returnTypeAnnotations,
+                                      KotlinDefaultBridge defaultBridge) {
             Type[] argumentTypes = Type.getArgumentTypes(descriptor);
             // W5: the descriptor has already erased every type argument and every type
             // variable by the time it reaches here — `List<String>` is `List`, and `T` is
@@ -1166,7 +1173,23 @@ public final class ClassScanner {
             // so dropping it here cannot move an identity or break descriptor matching.
             // Null for every Java method and for any Kotlin one `@Metadata` did not name —
             // Java's rule still applies to those, and it is right for them.
-            String methodKey = methodName + descriptor;
+            //
+            // `OI-81`: a `$default` bridge is one metadata never names — it is compiler
+            // output, not a declaration — so `copy` read `nullable: false` beside a
+            // `copy$default` reading `true`, for one declared type. The bridge is read
+            // under its SIBLING's key: the function it stands for declared its return
+            // and its parameters, and the bridge's own slots are the sibling's
+            // (measured, kotlinc 2.2.0: `greet$default` is
+            // `(Ldev/sextant/extractor/KotlinDefaultsSample;Ljava/lang/String;ZILjava/lang/Object;)Ljava/lang/String;`
+            // — receiver, the function's slots, an `int` mask per 32 parameters, an
+            // `Object` marker). The receiver, masks and marker are nobody's declaration
+            // and keep Java's rule, which is what `defaultBridge.receiverSlots()` and
+            // `declaredSlots()` bound below. The `Continuation` a suspend sibling's
+            // bridge carries sits INSIDE the declared range and is subtracted from it
+            // the way the sibling's own read drops it, so the slots still line up.
+            String methodKey = defaultBridge == null
+                ? methodName + descriptor
+                : defaultBridge.siblingKey();
             Boolean kotlinReturnNullable = kotlinNullability.returnNullable().get(methodKey);
             // TWO conjuncts, and each rules out a measured class of wrong answer.
             //
@@ -1210,8 +1233,18 @@ public final class ClassScanner {
             // would move a nullability onto the wrong parameter, which is worse than not
             // reading it, so where the counts differ every parameter keeps Java's rule.
             List<KmType> kotlinParameterTypes = kotlinNullability.parameterTypes().get(methodKey);
+            // The descriptor slots metadata's list is laid against: every declared one for
+            // an ordinary method; for a `$default` bridge, the sibling's own slots past
+            // the receiver, less the `Continuation` a suspend sibling's bridge still
+            // carries there (its own read dropped it from `declaredParameters` above; the
+            // bridge's last slot is the marker, so `continuationLast` cannot).
+            int alignedFrom = defaultBridge == null ? 0 : defaultBridge.receiverSlots();
+            int alignedCount = defaultBridge == null
+                ? declaredParameters
+                : defaultBridge.declaredSlots()
+                    - (kotlinNullability.suspendMethods().contains(methodKey) ? 1 : 0);
             boolean parametersAligned = kotlinParameterTypes != null
-                && kotlinParameterTypes.size() == declaredParameters;
+                && kotlinParameterTypes.size() == alignedCount;
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < declaredParameters; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
@@ -1222,8 +1255,9 @@ public final class ClassScanner {
                 TypeRefs.Node type = genericOf[i] >= 0
                     ? genericParameters.get(genericOf[i])
                     : TypeRefs.nodeFromType(argumentTypes[i]);
-                if (parametersAligned) {
-                    type = TypeRefs.withDeclaredNullability(type, kotlinParameterTypes.get(i));
+                if (parametersAligned && i >= alignedFrom && i < alignedFrom + alignedCount) {
+                    type = TypeRefs.withDeclaredNullability(
+                        type, kotlinParameterTypes.get(i - alignedFrom));
                 }
                 parameter.put("type", TypeRefs.toJson(type));
                 // The DESCRIPTOR's own symbol for this position, kept beside the
@@ -1610,6 +1644,16 @@ public final class ClassScanner {
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass, String annotationDefault,
                            String typeParameters, int lineStart, int lineEnd, String permits) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, annotationDefault, typeParameters,
+                 lineStart, lineEnd, permits, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault,
+                           String typeParameters, int lineStart, int lineEnd, String permits,
+                           String bridgeOf) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -1636,6 +1680,12 @@ public final class ClassScanner {
             // empty list on all of them says nothing with a key on every fact (the same
             // rule `supertype` and `generic_interfaces` follow).
             if (permits != null) fact.put("permits", permits);
+            // `OI-81`: only a Kotlin `$default` bridge carries this — the name of the
+            // function it stands for, beside the `synthetic: true` its modifiers already
+            // say. Absent on every other fact, the same "nothing to say, no key" rule as
+            // `permits`. The bridge stays published as its own symbol: a call site names
+            // it by its own descriptor, and this is what lets a consumer follow it back.
+            if (bridgeOf != null) fact.put("bridge_of", bridgeOf);
             // On the TYPE's own fact, never on its members — these are class-level
             // attributes, and `emit` is shared with fields and methods. Gated on the
             // construct being a type rather than on `class` specifically: a nested

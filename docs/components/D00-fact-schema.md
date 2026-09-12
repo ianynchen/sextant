@@ -399,7 +399,12 @@ nested class's private member. **Unlike a synthetic field, a synthetic METHOD do
 fact**, on purpose: the effective-annotations inheritance walk's bridge rule can only
 recognise a bridge by seeing it, so the flag — not omission — is what lets a later pass tell
 one from a method a human declared. Both keys are always written, for the field rule's
-reason, and a reader supplies `false` for a scanner that reports neither.
+reason, and a reader supplies `false` for a scanner that reports neither. A Kotlin
+`$default` bridge — the `static synthetic <fn>$default(receiver, <fn's slots…>, int mask,
+Object marker)` kotlinc emits beside a function with default arguments — is emitted with
+`modifiers.synthetic: true` AND `bridge_of: "<fn>"`, and its return and the function's own
+slots carry the types the FUNCTION declared rather than Java's rule (`OI-81`); `bridge_of`
+appears on no other fact.
 
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the

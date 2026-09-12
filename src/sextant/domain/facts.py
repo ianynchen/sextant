@@ -238,6 +238,11 @@ class SymbolFact(BaseModel):
     # rather than an instance, and a declaration the language marks as not
     # serialized. Defaults empty for constructs that carry no modifiers.
     modifiers: dict[str, bool] = Field(default_factory=dict)
+    # `OI-81`: the name of the declared function a compiler-emitted
+    # default-argument bridge (`<fn>$default`) stands for, beside the
+    # `synthetic: true` its modifiers already carry; absent on every other
+    # fact, and read by nothing yet — Task 15 dispatches on it.
+    bridge_of: str | None = None
     # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
     # element takes when a use omits it. Present only on such an element and
     # only where it has a default; absent everywhere else.

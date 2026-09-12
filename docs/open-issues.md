@@ -3068,7 +3068,7 @@ field of one declared type do not disagree, which is the intra-class disagreemen
 was opened for; `T?` still reads `true`. A bound that would settle it (`T : Any`) is not
 read.
 
-### OI-81 — a `$default` bridge and the function beside it disagree about one declared type
+### OI-81 — a `$default` bridge and the function beside it disagree about one declared type · **CLOSED, 2026-09-12**
 
 **Found by** the review of `G-63` (`7716ab3`).
 
@@ -3083,6 +3083,35 @@ states the bridge is read as a second symbol at all.
 
 **Closes by** the same work that closes `$default` generally: recognising the suffix and the
 mask parameter, at which point the bridge stops being published as an independent declaration.
+
+**CLOSED by** `feat(extractor): a Kotlin $default bridge names the function it stands for and
+takes its declared types (OI-81)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinDefaultBridgeTest.java`. Measured
+first, on kotlinc 2.2.0: `fun greet(name: String = "x", loud: Boolean = false): String` emits
+`greet$default`, flags `ACC_PUBLIC | ACC_STATIC | ACC_SYNTHETIC`, descriptor
+`(Ldev/sextant/extractor/KotlinDefaultsSample;Ljava/lang/String;ZILjava/lang/Object;)Ljava/lang/String;`
+— the receiver, the function's own slots, one `int` mask per 32 parameters (a 33-parameter
+function carries two), an `Object` marker; a `@JvmStatic` function's bridge has no receiver
+slot, and a `suspend fun`'s carries its `Continuation` before the mask. `KotlinDefaultBridge`
+recognises that shape (the mask count is solved from the slot count, not counted as trailing
+`int`s, which a function whose last parameters are `Int` would defeat), derives the sibling's
+`name + descriptor` by dropping the receiver and the masks and marker, and settles the
+receiver question by which candidate `@kotlin.Metadata` keyed. The bridge is then read under
+its sibling's key: `greet$default` reads `name: String` as `nullable: false` and its return
+`false`, where both read `true`; `maybe$default` borrows `true` for `note: String?` and `String?`.
+The receiver, the masks, the marker and a suspend sibling's `Continuation` are nobody's
+declaration and keep Java's rule.
+
+**Departing from the "closes by" above in one respect, deliberately:** the bridge is still
+published as its own symbol, now carrying `bridge_of: "greet"` beside its `synthetic: true`
+(D00 §5a). A call site names the bridge by its own descriptor, so a fact for it has to exist
+for the call to resolve to anything; `bridge_of` is what lets a consumer follow it back to the
+declaration. Every consumer that filters `synthetic: true` (`derive_endpoints.sql`'s
+member rule, `shapes/expansion.py`, `effective_annotations._is_synthetic`) already excludes
+it, so the field is informational until dispatch reuses it. The bridge's parameterized slots
+stay erased at the type level — it carries no `Signature`, and a `List<String?>`'s element
+is not invented from metadata; only the declared nullability at each level the two agree on
+is applied, which for an erased `List` is the top.
 
 ### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule · **CLOSED, 2026-09-12**
 
