@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.function.Consumer;
-import kotlin.metadata.Attributes;
 import kotlin.metadata.KmType;
 import kotlin.metadata.KmTypeProjection;
 import org.objectweb.asm.Type;
@@ -199,18 +198,29 @@ public final class TypeRefs {
      *  state the type; only the signature states it in JVM spelling, already projected onto
      *  a wire type by the same collector every other reference here is walked by. Metadata
      *  spells it in Kotlin's own classifier names — {@code kotlin/String}, {@code kotlin/Int} —
-     *  and mapping those back would mean a builtin table whose boxed-versus-primitive answer
-     *  depends on nullability. Nullability is the one thing the signature CANNOT state
-     *  (kotlinc writes {@code Continuation<? super Order>} identically for a declared
-     *  {@code Order} and {@code Order?}), so that arrives as {@code nullableOverride} from
-     *  the metadata read instead. Each source supplies what it alone is authoritative for.
+     *  and mapping those back in general would mean a builtin table. Nullability is the one
+     *  thing the signature CANNOT state (kotlinc writes {@code Continuation<? super Order>}
+     *  identically for a declared {@code Order} and {@code Order?}), so that arrives as
+     *  {@code nullableOverride} from the metadata read instead. Each source supplies what
+     *  it alone is authoritative for.
+     *
+     *  <p>The one place the signature is authoritative and still WRONG is a primitive
+     *  (`OI-80`): a type argument cannot be one, so {@code suspend fun count(): Int} is
+     *  spelled {@code Continuation<? super Integer>} while {@code fun count(): Int}'s
+     *  descriptor says {@code I} — two symbols for one declared type. That is the eight-row
+     *  table {@link KotlinNullability#KOTLIN_PRIMITIVES} is, and its boxed-versus-primitive
+     *  answer is exactly the nullability metadata already supplies: {@code declaredPrimitive}
+     *  arrives non-null only for a classifier in that table declared NON-null, and then the
+     *  reference is the primitive's, as the non-suspending twin reads. {@code Int?} boxes and
+     *  keeps the {@code Integer} the signature spelled.
      *
      *  <p>{@code kotlin/Unit} is mapped to {@code void}: a {@code suspend fun} returning
      *  {@code Unit} is a function returning nothing, and an ordinary Kotlin {@code fun}
      *  returning {@code Unit} already reports {@code void} here. Leaving it as
      *  {@code kotlin/Unit#} would make the same declaration read two different ways
      *  depending on a modifier the reader is being told to ignore. */
-    public static String coroutineReturnFromSignature(String signature, Boolean nullableOverride) {
+    public static String coroutineReturnFromSignature(String signature, Boolean nullableOverride,
+                                                      Type declaredPrimitive) {
         if (signature == null) return null;
         // The LAST parameter and its sole type argument, both as live nodes: the argument
         // has to survive as a Node rather than as the JSON a Node normally serializes to,
@@ -245,6 +255,11 @@ public final class TypeRefs {
         // refused here rather than flipping a primitive's nullability and publishing a
         // fact that contradicts the rule the same file states.
         if ("kotlin/Unit#".equals(declared.symbol())) return toJson(nodeFromType(Type.VOID_TYPE));
+        // `suspend fun count(): Int` (`OI-80`): the type argument can only say `Integer`,
+        // and `fun count(): Int`'s descriptor says `I`. Metadata's classifier plus its
+        // nullability is what `declaredPrimitive` carries, so `Int?` — which boxes — does
+        // not arrive here and keeps the `Integer` the signature spelled, nullable.
+        if (declaredPrimitive != null) return toJson(nodeFromType(declaredPrimitive));
         return toJson(nullableOverride == null ? declared : declared.withNullable(nullableOverride));
     }
 
@@ -403,9 +418,17 @@ public final class TypeRefs {
      *  child-first where metadata's walk is parent-first; the first version of this
      *  matched the two by position over the JSON and inverted every nested argument.
      *  Two trees of the same shape walked together cannot disagree about which level is
-     *  which. */
+     *  which.
+     *
+     *  <p>A bare type variable ({@code x: T}) is left as the node already reads — Java's
+     *  rule — because metadata's "not nullable" on it is a statement about the variable,
+     *  whose implicit bound is {@code Any?}, and not about what a caller binds it to.
+     *  {@code T?} is applied: it is nullable whatever {@code T} is
+     *  ({@link KotlinNullability#declaredNullable}). At every level, so {@code List<T>}'s
+     *  element keeps Java's rule too. */
     static Node withDeclaredNullability(Node node, KmType declared) {
-        Node out = node.withNullable(Attributes.isNullable(declared));
+        Boolean nullable = KotlinNullability.declaredNullable(declared);
+        Node out = nullable == null ? node : node.withNullable(nullable);
         List<KmTypeProjection> args = declared.getArguments();
         if (args.size() != node.arguments().size()) return out;
         List<Node> applied = new ArrayList<>();

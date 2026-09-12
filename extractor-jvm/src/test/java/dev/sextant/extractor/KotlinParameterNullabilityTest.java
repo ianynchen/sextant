@@ -51,6 +51,21 @@ class KotlinParameterNullabilityTest {
         assertEquals(true,  parameters(copy).get(1).get("nullable"));
     }
 
+    @Test
+    void aBareTypeVariableKeepsJavasRuleAndANullableOneReadsNullable() throws Exception {
+        // `fun <T> ranked(x: T, y: T?): T`. A bare `T` is implicitly bounded by `Any?`,
+        // so metadata's "not nullable" on `x: T` describes the variable, not what a caller
+        // binds it to — `ranked<String?>(null, null)` is legal. Java's rule (a type
+        // variable is a reference, and every reference permits null) is the right answer
+        // there and is left standing. `T?` is nullable whatever `T` is.
+        var ranked = methodFact("KotlinParameterSample", "ranked");
+        assertEquals(true, parameters(ranked).get(0).get("nullable"));   // x: T
+        assertEquals(true, parameters(ranked).get(1).get("nullable"));   // y: T?
+        assertEquals(true, returns(ranked).get("nullable"));             // : T
+        assertEquals("T", returns(ranked).get("symbol"));
+        assertEquals(true, returns(methodFact("KotlinParameterSample", "rankedMaybe")).get("nullable"));
+    }
+
     // ---- reading the emitted facts -------------------------------------------------
 
     private Map<String, Object> methodFact(String className, String member) throws Exception {
@@ -73,6 +88,10 @@ class KotlinParameterNullabilityTest {
             parameters.add(object(object(parameter).get("type")));
         }
         return parameters;
+    }
+
+    private static Map<String, Object> returns(Map<String, Object> methodFact) {
+        return object(object(methodFact.get("signature")).get("returns"));
     }
 
     private static Map<String, Object> argument(Map<String, Object> typeRef, int index) {

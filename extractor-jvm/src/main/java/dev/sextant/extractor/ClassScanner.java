@@ -1187,9 +1187,13 @@ public final class ClassScanner {
                 && argumentTypes[argumentTypes.length - 1].getSort() == Type.OBJECT
                 && "kotlin/coroutines/Continuation".equals(
                     argumentTypes[argumentTypes.length - 1].getInternalName());
+            // `OI-80`: the `Continuation`'s type argument spells `Int` as `Integer`, because
+            // a type argument cannot be a primitive. Metadata's classifier and nullability
+            // together say whether the source wrote the primitive — `Int?` did not.
             String coroutineReturn =
                 kotlinNullability.suspendMethods().contains(methodKey) && continuationLast
-                    ? TypeRefs.coroutineReturnFromSignature(genericSignature, kotlinReturnNullable)
+                    ? TypeRefs.coroutineReturnFromSignature(genericSignature, kotlinReturnNullable,
+                                                            kotlinNullability.primitiveReturn(methodKey))
                     : null;
             int declaredParameters = coroutineReturn == null
                 ? argumentTypes.length

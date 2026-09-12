@@ -3026,7 +3026,7 @@ resolved classpath under both build systems. #12 is an emission to delete when a
 build-script change is next authorised. #14 is the `filesystem` engine, deliberately ahead
 of implementation.
 
-### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive
+### OI-80 — a suspending function's primitive return publishes the BOXED type, its non-suspending twin the primitive · **CLOSED, 2026-09-12**
 
 **Found by** the review of `G-63` (`7716ab3`), measured rather than reasoned.
 
@@ -3046,6 +3046,24 @@ the class file genuinely says `Ljava/lang/Integer;` there.
 return, so this is an unfinished improvement rather than a regression. **Closes by** reading
 the declared return's classifier from `@kotlin.Metadata` for the primitive cases only, where
 the boxed-versus-primitive answer is exactly what `Attributes.isNullable` already supplies.
+
+**CLOSED by** `feat(extractor): a suspend fun returning Int reads as int, not Integer, where
+the source declared it non-null (OI-80)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinSuspendPrimitiveTest.java`.
+`KotlinNullability.Decoded` now keeps each function's declared return CLASSIFIER beside its
+nullability, and `KOTLIN_PRIMITIVES` names the eight classifiers (`kotlin/Int`, `Long`,
+`Boolean`, `Double`, `Float`, `Short`, `Byte`, `Char`) that compile to a JVM primitive when
+declared non-null. Where a suspend function's classifier is one of those AND its declared
+return is non-null, the recovered reference is the primitive's — `suspCount(): Int` reads
+`int#` with the same whole reference as `plainCount(): Int`. `suspMaybeCount(): Int?` keeps
+`java/lang/Integer#`, nullable: a nullable `Int` genuinely boxes, so the `Integer` the
+signature spelled is the right answer there.
+
+Found and closed in the same change, one position along: a return declared as a bare type
+variable (`fun <T> ranked(x: T): T`) read `nullable: false` from metadata, which describes the
+variable and not what a caller binds it to (`ranked<String?>(null)` is legal). A bare `T`
+now keeps Java's rule on both the return and (`OI-82`'s walk) the parameter side; `T?` still
+reads `true`. A bound that would settle it (`T : Any`) is not read.
 
 ### OI-81 — a `$default` bridge and the function beside it disagree about one declared type
 

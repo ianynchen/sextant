@@ -10,6 +10,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 import kotlin.Metadata;
 import kotlin.metadata.Attributes;
+import kotlin.metadata.KmClassifier;
 import kotlin.metadata.KmConstructor;
 import kotlin.metadata.KmFunction;
 import kotlin.metadata.KmProperty;
@@ -20,6 +21,7 @@ import kotlin.metadata.jvm.JvmMethodSignature;
 import kotlin.metadata.jvm.KotlinClassMetadata;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 
 /** Kotlin's nullability lives in the type system, not in any annotation a scanner could
  *  read the way JSpecify's {@code @Nullable} is read (D00 §5a) — the compiler states it
@@ -34,7 +36,24 @@ public final class KotlinNullability {
 
     /** What every non-Kotlin class decodes to: no properties, no parameters and no
      *  suspend functions, so nothing overrides Java's rule. */
-    public static final Decoded NONE = new Decoded(Map.of(), Map.of(), Map.of(), Set.of());
+    public static final Decoded NONE =
+        new Decoded(Map.of(), Map.of(), Map.of(), Map.of(), Set.of());
+
+    /** The eight Kotlin classifiers that compile to a JVM primitive when declared
+     *  non-null, and to the box when declared nullable (`OI-80`). {@code kotlin/Int} is
+     *  {@code I} in a descriptor and {@code Ljava/lang/Integer;} wherever the JVM cannot
+     *  hold a primitive — a type argument, which is exactly where a {@code suspend fun}'s
+     *  declared return survives. Which of the two the source meant is the nullability
+     *  beside the classifier, and nothing else. */
+    static final Map<String, Type> KOTLIN_PRIMITIVES = Map.of(
+        "kotlin/Int", Type.INT_TYPE,
+        "kotlin/Long", Type.LONG_TYPE,
+        "kotlin/Boolean", Type.BOOLEAN_TYPE,
+        "kotlin/Double", Type.DOUBLE_TYPE,
+        "kotlin/Float", Type.FLOAT_TYPE,
+        "kotlin/Short", Type.SHORT_TYPE,
+        "kotlin/Byte", Type.BYTE_TYPE,
+        "kotlin/Char", Type.CHAR_TYPE);
 
     /** One class's Kotlin-declared facts, as far as the scanner consumes them.
      *
@@ -53,7 +72,15 @@ public final class KotlinNullability {
      *  <p>This is {@code G-63}'s RETURN half. Before it, a Kotlin function's return
      *  carried {@code nullable: true, nullable_resolution: "resolved"} — a certainty
      *  marker on a value the same fact contradicts, since kotlinc writes {@code @NotNull}
-     *  on the method beside it.
+     *  on the method beside it. Absent for a return declared as a bare type variable
+     *  ({@link #declaredNullable}), so that return keeps Java's rule.
+     *
+     *  <p>{@code returnClassifier} maps the same key to the NAME of the class the declared
+     *  return names ({@code kotlin/Int}, {@code dev/acme/Order}), absent where the
+     *  classifier is a type variable. Read for one purpose (`OI-80`): a {@code suspend
+     *  fun}'s return is recovered from a type argument, where {@code Int} can only be
+     *  spelled {@code Integer}, and only the classifier beside {@code returnNullable} says
+     *  whether the source wrote the primitive — {@link Decoded#primitiveReturn}.
      *
      *  <p>{@code parameterTypes} is the PARAMETER half (`OI-82`): the same key maps to
      *  the declared type of each value parameter, in declaration order — every Kotlin
@@ -79,8 +106,20 @@ public final class KotlinNullability {
     public record Decoded(
             Map<String, Boolean> properties,
             Map<String, Boolean> returnNullable,
+            Map<String, String> returnClassifier,
             Map<String, List<KmType>> parameterTypes,
-            Set<String> suspendMethods) {}
+            Set<String> suspendMethods) {
+
+        /** The JVM primitive the method keyed {@code key} declares it returns, or null
+         *  where it declares none: a Java method, a reference, or a NULLABLE
+         *  {@code Int?} — which genuinely boxes, so the {@code Integer} a type argument
+         *  spells is then the right answer. */
+        public Type primitiveReturn(String key) {
+            if (!Boolean.FALSE.equals(returnNullable.get(key))) return null;
+            String classifier = returnClassifier.get(key);
+            return classifier == null ? null : KOTLIN_PRIMITIVES.get(classifier);
+        }
+    }
 
     /** Collects {@code @Metadata}'s elements as ASM visits them, then decodes property
      *  nullability once the annotation is fully read and hands the result to
@@ -167,6 +206,7 @@ public final class KotlinNullability {
             properties.put(property.getName(), Attributes.isNullable(property.getReturnType()));
         }
         Map<String, Boolean> returns = new HashMap<>();
+        Map<String, String> returnClassifier = new HashMap<>();
         Map<String, List<KmType>> parameterTypes = new HashMap<>();
         Set<String> suspend = new HashSet<>();
         for (KmFunction function : classMetadata.getKmClass().getFunctions()) {
@@ -176,7 +216,11 @@ public final class KotlinNullability {
             JvmMethodSignature signature = JvmExtensionsKt.getSignature(function);
             if (signature == null) continue;
             String key = signature.getName() + signature.getDescriptor();
-            returns.put(key, Attributes.isNullable(function.getReturnType()));
+            Boolean returnNullable = declaredNullable(function.getReturnType());
+            if (returnNullable != null) returns.put(key, returnNullable);
+            if (function.getReturnType().getClassifier() instanceof KmClassifier.Class named) {
+                returnClassifier.put(key, named.getName());
+            }
             parameterTypes.put(key, declaredTypes(function.getValueParameters()));
             if (Attributes.isSuspend(function)) suspend.add(key);
         }
@@ -197,11 +241,28 @@ public final class KotlinNullability {
             // Java's rule. Same declared type, two facts, and only one of them was right.
             JvmMethodSignature getter = JvmExtensionsKt.getGetterSignature(property);
             if (getter == null) continue;
-            returns.put(
-                getter.getName() + getter.getDescriptor(),
-                Attributes.isNullable(property.getReturnType()));
+            Boolean getterNullable = declaredNullable(property.getReturnType());
+            if (getterNullable != null) {
+                returns.put(getter.getName() + getter.getDescriptor(), getterNullable);
+            }
         }
-        return new Decoded(properties, returns, parameterTypes, suspend);
+        return new Decoded(properties, returns, returnClassifier, parameterTypes, suspend);
+    }
+
+    /** The nullability a declared type states, or null where it states none.
+     *
+     *  <p>A bare type variable {@code T} is implicitly bounded by {@code Any?}, so
+     *  metadata's "not nullable" on it describes the VARIABLE and not what a caller binds
+     *  it to — {@code ranked<String?>(null)} is legal against {@code fun <T> ranked(x: T):
+     *  T}. Java's rule (a type variable is a reference, and every reference permits null)
+     *  is the right answer there and a caller receiving null leaves it standing.
+     *  {@code T?} is nullable whatever {@code T} is, and a class is what it says. A bound
+     *  that would settle it ({@code T : Any}) is not read: Java's rule is less specific
+     *  and never wrong, and no fixture declares one. */
+    static Boolean declaredNullable(KmType type) {
+        boolean nullable = Attributes.isNullable(type);
+        if (!nullable && type.getClassifier() instanceof KmClassifier.TypeParameter) return null;
+        return nullable;
     }
 
     /** One declaration's value parameters' declared types, in declaration order. */
