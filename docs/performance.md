@@ -290,8 +290,9 @@ is the analyses that cannot be shared, multiplied by P-1's per-analysis cost.
 2. ~~Cap DuckDB threads per worker~~ — **measured and refuted** (draft PR #22, run
    34705066921): pytest 23:25 against the 20:19 baseline with `SET threads = 1` per xdist
    worker. DuckDB's parallelism inside a pass is worth more than the oversubscription costs.
-3. Split `scripts/check.sh` into separate workflow steps (lint · extractor · pytest) so the
-   pytest log is readable while it runs and a failure is visible in minutes. Not started.
+3. `scripts/check.sh` split into three workflow steps (`--lint` · `--extractor` · `--tests`)
+   so a lint or type failure is visible in seconds and the pytest log streams on its own.
+   **Shipped** with this ledger; the local gate is unchanged.
 
 **Falsified by** a run where the per-analysis cost on the runner is not the dominant term
 of the slowest tests.

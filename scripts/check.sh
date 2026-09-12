@@ -28,6 +28,14 @@ if [ "${1:-}" = "--guards" ]; then
     exit 0
 fi
 
+# `--tests` runs ONLY the test stage: CI runs each stage as its own workflow step so a
+# lint failure shows in seconds and the pytest log streams on its own while it runs
+# (docs/performance.md P-2). Locally, no flag runs every stage in one go, as before.
+if [ "${1:-}" = "--tests" ]; then
+    step "pytest"; "${BIN}pytest" -q -n 4 --dist loadfile --durations=20 ${CI:+--maxfail=1}
+    printf '\n\033[32mtest gate passed\033[0m\n'
+    exit 0
+fi
 step "ruff format"; "${BIN}ruff" format --check .
 step "ruff lint";   "${BIN}ruff" check .
 step "mypy";        "${BIN}mypy" src
@@ -41,6 +49,10 @@ fi
 # Before pytest, not after: the end-to-end tests load the shaded jar, so a
 # stale one makes them pass or fail on the previous build's extractor.
 step "extractor build and tests"; (cd extractor-jvm && ./gradlew --quiet build)
+if [ "${1:-}" = "--extractor" ]; then
+    printf '\n\033[32mlint and extractor gates passed\033[0m\n'
+    exit 0
+fi
 # Parallel, by FILE. `--dist loadfile` keeps every test in a file on one worker, which
 # is what lets the module-scoped shared-workspace fixtures run once per file rather than
 # once per worker — and what keeps the two determinism tests, each of which needs its own

@@ -80,8 +80,13 @@ jobs:
           ./gradlew --init-script ../../src/sextant/ingress/detect/sextant-model.init.gradle \
             --no-configuration-cache -q sextantModel -Psextant.out=/tmp/sextant-model-prime.json
 
-      - name: Gates
-        # ruff, mypy, the import contracts, the extractor build and both test
-        # suites — in that order, cheapest first, and the extractor before the
-        # tests that load it.
-        run: scripts/check.sh
+      # One step per stage, cheapest first (docs/performance.md P-2): a lint or type
+      # failure is visible in seconds instead of after a twenty-minute test run, and the
+      # pytest step's log streams on its own while it runs. Locally `scripts/check.sh`
+      # still runs every stage in one go; each flag below runs exactly one of them.
+      - name: Lint, types, import contracts
+        run: scripts/check.sh --lint
+      - name: Extractor build and tests
+        run: scripts/check.sh --extractor
+      - name: Tests
+        run: scripts/check.sh --tests
