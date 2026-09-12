@@ -15,7 +15,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
-from sextant.application.stages.analyze import analyze
+from sextant.application.stages.analyze import _DESCRIPTOR_TOKEN, analyze
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import read_fact_tree, write_fact_file
 from sextant.domain.facts import DeclaredShapeFact, Document, EmbeddedDescriptorFact
@@ -450,3 +450,25 @@ def test_the_ingress_import_contract_still_holds():
     assert script.exists(), f"import-linter is not installed beside {sys.executable}"
     result = subprocess.run([str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_descriptor_token_is_what_the_writer_spells(tmp_path: Path):
+    """`analyze` reads back only the fact files whose bytes hold
+    `_DESCRIPTOR_TOKEN` (docs/performance.md C) — a superset test, sound only
+    while the token is spelled exactly as the writer spells a descriptor's
+    line. Pinned against `write_fact_file`'s own output rather than a second
+    literal, so a change to either the kind or the line's spelling fails
+    here instead of silently leaving every descriptor uninterpreted. The
+    extractor's own spelling is the same quoted value, and the fixture's
+    descriptors reaching their shapes in `tests/e2e` is what pins that."""
+    path = tmp_path / "widget.jsonl"
+    fact = EmbeddedDescriptorFact(
+        document_id="fake-compiled-widget", symbol="pkg.Widget", schema_format="avro", payload="{}"
+    )
+    write_fact_file(path, _compiled_document("com.acme:orders"), [fact])
+
+    assert _DESCRIPTOR_TOKEN == b'"embedded_descriptor"'
+    assert _DESCRIPTOR_TOKEN in path.read_bytes()
+    assert read_fact_tree(tmp_path, containing=_DESCRIPTOR_TOKEN) == [
+        (path, _compiled_document("com.acme:orders"), [fact])
+    ]

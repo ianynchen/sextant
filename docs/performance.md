@@ -475,13 +475,98 @@ untouched.
 
 **Falsified by** a shim run on a stamped tree that names a fixture root.
 
-## The whole flow, after P-1 and P-3 (analyze → render → export, 2026-09-12)
+## C — analyze reads the whole fact tree to find descriptors, and parses the catalogs in pure Python
+
+**Status: shipped 2026-09-12 — whole `api._analyze`, `mall-admin` (+3 siblings) 5.6s → 3.8s,
+`orders-service` 1.15s → 1.0s** (Apple M4, on top of A+B, three runs each, the per-phase
+timer over `api._analyze`).
+
+**Measured, before.** Two reads that do no work, on every analyze of every module:
+
+| phase | `mall-admin` (+3 siblings) | `orders-service` |
+|---|---|---|
+| scan (4 JVM launches / 2) | 1.05s | 0.31s |
+| interpret schemas | **0.71s** | 0.02s |
+| resolve | 3.67s | 0.67s |
+| of which `load_facts` | 0.45s | 0.03s |
+| catalog load (`YamlCatalogSource.load`) | **0.19s** | **0.18s** |
+| total | 5.6s | 1.15s |
+
+1. **"interpret schemas" interprets nothing on `mall-admin`.** The corpus holds no
+   `embedded_descriptor` fact at all (`orders-service` holds one in 11 of its 139 files), and
+   `interpret_descriptors` runs in 0.000s under cProfile. The 0.71s is `read_fact_tree` in
+   `stages/analyze.py`: every fact file — 648 files, 47MB, 124k lines — read, JSON-parsed and
+   validated through pydantic, to find the descriptors; `load_facts` then reads the same tree
+   again inside resolve. Only a document that DOES carry a descriptor is ever written back.
+   And the cost did not end with the phase: the parsed facts stayed alive in the stage's
+   locals through the whole resolve, and the collector walked them on every pass — dropping
+   them before resolve, nothing else changed, took `mall-admin`'s resolve 3.50s → 2.52s. The
+   interpret step is now a function of its own, so what it parses dies with it by
+   construction: a module with hundreds of generated schema classes still retains hundreds
+   of parsed files after the prefilter, and would have carried them through resolve.
+2. **The catalogs are parsed with the pure-Python loader.** 79 catalogs and the shape model
+   through `yaml.safe_load`: 0.18s on every analyze, whatever the module — 16% of an
+   `orders-service` analyze, ~40 analyses per suite run — with libyaml installed beside it
+   (`yaml.CSafeLoader`; PyYAML's published wheels bundle it — every 6.0.x manylinux and macOS
+   wheel).
+
+**Fix.** (1) `read_fact_tree` takes a `containing: bytes` token and parses only the files
+whose bytes hold it — the P-3 pattern, an exact byte-level superset test before the parse. The
+stage passes the descriptor kind's JSON spelling (`"embedded_descriptor"`, derived from the
+model's own `kind` default, not a second literal), which is what both writers put on disk — the
+quoted value rather than the `"kind":...` pair, because the pair's spelling depends on a
+writer's separators and the value's does not. A skipped file is one no interpreter could have
+produced a shape for (every interpreter stamps a shape with its descriptor's own document id),
+so it is one the stage would not have rewritten. Sorted order kept; the stage still reads
+through the domain function (`test_application_reads_no_files`). (2) `YamlCatalogSource`
+loads through `yaml.CSafeLoader` where the interpreter has it. `.sextant.yml`
+(`sextant_config.py`) is one small file per module, usually absent, and left alone; the
+repository-config reader (`read/yaml_config.py`) uses its own loader subclass that keeps every
+scalar's raw spelling and key order, and a C-backed subclass is a different loader with its
+own construction path — out of this item's scope, and not on the per-catalog path.
+
+**Proof of identity.** Every workspace table (`ORDER BY ALL`, every column as text) and
+`metadata.json` compare equal before and after on both corpora; both fact trees compare equal
+byte for byte after a run (`diff -r`), `orders-service`'s 11 descriptor files and the 7 that
+carry interpreted shapes included. The two loaders: every shipped catalog and shape model is
+read with both and the objects compared equal, scalar types included
+(`tests/ingress/test_catalog_source.py`) — libyaml and the pure loader differ on a few YAML
+1.1 corners, and that test is the whole claim that none of ours hits one. The token: pinned
+against `write_fact_file`'s own output (`test_the_descriptor_token_is_what_the_writer_spells`).
+
+**After** (three runs each; the resolve column is where the retained facts had been):
+
+| phase | `mall-admin` (+3 siblings) | `orders-service` |
+|---|---|---|
+| scan | 1.04–1.20s | 0.29–0.33s |
+| interpret schemas | **0.02–0.03s** | 0.01s |
+| resolve | **2.53–2.55s** | **0.50s** |
+| of which `load_facts` | 0.44–0.46s | 0.03s |
+| catalog load | **0.02s** | **0.02s** |
+| total | **3.73–3.80s** | **0.94–0.98s** |
+
+The gate's pytest line after the change: 3233 passed in 65.3s, one run (D's three runs were
+90.0–90.2s; the suite analyzes ~40 modules, each of which paid the catalog parse).
+
+**Scan — measured, not started.** `mall-admin`'s scan is 4 JVM launches, 1.05s; the
+`mall-mbg` sibling alone is 0.59s wall / 2.2s user standalone for 458 classes → 42MB of facts
+(`Main.java:441` joins every line into one string and then writes the bytes); the JVM startup
+floor is ~0.05s (`--capabilities`). Nothing cheap and exact here; it needs a profile inside
+the extractor.
+
+**Falsified by** a fact file that holds a descriptor whose bytes do not spell
+`"embedded_descriptor"`, or a shipped catalog the two loaders read differently.
+
+## The whole flow, after A, B and C (analyze → render → export, 2026-09-12)
+
+Each corpus analyzed in place on a copy under `/tmp/perf/corpora/`, two runs, the analyze
+row split by the per-phase timer. The previous table (after P-1 and P-3) read 2.7s / 10.4s.
 
 | stage | `orders-service` | `mall-admin` (+3 siblings) |
 |---|---|---|
 | analyze — scan | 0.3s | 1.1s |
-| analyze — interpret schemas | 0.0s | 0.7s |
-| analyze — resolve | 1.9s | 6.9s |
-| render | 0.3s | 0.5s |
-| export | 0.2s | 1.2s |
-| **total** | **2.7s** | **10.4s** |
+| analyze — interpret schemas | 0.0s | 0.0s |
+| analyze — resolve | 0.5s | 2.6s |
+| render | 0.1s | 0.3s |
+| export | 0.2s | 1.3s |
+| **total** | **1.3–1.4s** | **5.2–5.5s** |

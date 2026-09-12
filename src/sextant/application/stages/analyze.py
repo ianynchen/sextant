@@ -10,6 +10,7 @@ already leaves for a construct it never emits — no catalog's `requires`
 needs a name for that."""
 
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -409,37 +410,7 @@ def analyze(
     progress.start("interpret")
     descriptors_not_interpreted: tuple[str, ...] = ()
     if interpret is not None:
-        # Every prior declared_shape fact is dropped here, kept nowhere —
-        # this run's own interpretation is about to recompute the complete,
-        # current answer, and a fact file is written WHOLE below, never
-        # appended to. Without this, a second `analyze` into the same
-        # workspace would read back the first run's own declared_shape facts
-        # alongside the fresh ones and pile up a duplicate set every time.
-        by_document_id: dict[str, tuple[Path, Document, list[Fact]]] = {}
-        descriptors: list[EmbeddedDescriptorFact] = []
-        for target, document, facts in read_fact_tree(fact_root):
-            carried: list[Fact] = [
-                fact for fact in facts if not isinstance(fact, DeclaredShapeFact)
-            ]
-            by_document_id[document.document_id] = (target, document, carried)
-            descriptors.extend(fact for fact in carried if isinstance(fact, EmbeddedDescriptorFact))
-
-        shapes, failed = interpret.interpret(descriptors)
-        descriptors_not_interpreted = tuple(failed)
-        kept_shapes: dict[str, list[DeclaredShapeFact]] = {}
-        for shape in _prefer_compiled(shapes):
-            kept_shapes.setdefault(shape.document_id, []).append(shape)
-        # Sorted so the write order — and therefore nothing observable about
-        # it — never depends on dict iteration order (NFR-1).
-        for document_id in sorted(kept_shapes):
-            target, document, carried = by_document_id[document_id]
-            # Written into the document's OWN fact file, wherever it already
-            # is — a compiled document's own file the scanner wrote, or a
-            # schema reader's own file from the read step above — never a
-            # NEW file: a second `Document` record for a document that
-            # already has one would double it in the workspace's own
-            # document count (D00 §7's one-record-per-source-file rule).
-            write_fact_file(target, document, [*carried, *kept_shapes[document_id]])
+        descriptors_not_interpreted = _interpret_into_the_fact_tree(fact_root, interpret)
     progress.finish("interpret", f"{len(descriptors_not_interpreted)} not interpreted")
 
     progress.start("resolve")
@@ -545,6 +516,70 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         sibling_coordinates=list(module.sibling_coordinates),
     )
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
+
+
+def _interpret_into_the_fact_tree(
+    fact_root: Path, interpret: DescriptorInterpreter
+) -> tuple[str, ...]:
+    """The interpret step: every descriptor in the fact tree read, interpreted,
+    and the shapes written back into their documents' own files. Returns the
+    symbols that could not be interpreted.
+
+    A function of its own so that everything parsed here dies with it. The
+    collector walks whatever is alive on every pass, and the resolve that
+    follows this step runs for seconds: while the parsed documents stayed in
+    the stage's own locals through it, `mall-admin`'s resolve cost 1.0s more
+    than the same resolve with them released (3.50s → 2.52s, nothing else
+    changed; docs/performance.md C). A module with hundreds of generated
+    schema classes retains hundreds of parsed files here even after the
+    prefilter below, so the release is by construction, not by corpus."""
+    # Every prior declared_shape fact is dropped here, kept nowhere —
+    # this run's own interpretation is about to recompute the complete,
+    # current answer, and a fact file is written WHOLE below, never
+    # appended to. Without this, a second `analyze` into the same
+    # workspace would read back the first run's own declared_shape facts
+    # alongside the fresh ones and pile up a duplicate set every time.
+    by_document_id: dict[str, tuple[Path, Document, list[Fact]]] = {}
+    descriptors: list[EmbeddedDescriptorFact] = []
+    # Only the files that can hold a descriptor are read back: the block
+    # below rewrites a document's file only when a shape was interpreted
+    # FOR that document, and every interpreter stamps a shape with the
+    # document id of the descriptor it read — so a file holding no
+    # descriptor is never rewritten, and reading it here found nothing
+    # (docs/performance.md C: 0.7s of `mall-admin`'s analyze parsing 648
+    # files to find no descriptor). The token is the kind's own JSON
+    # spelling, which is what both writers put on disk.
+    for target, document, facts in read_fact_tree(fact_root, containing=_DESCRIPTOR_TOKEN):
+        carried: list[Fact] = [fact for fact in facts if not isinstance(fact, DeclaredShapeFact)]
+        by_document_id[document.document_id] = (target, document, carried)
+        descriptors.extend(fact for fact in carried if isinstance(fact, EmbeddedDescriptorFact))
+
+    shapes, failed = interpret.interpret(descriptors)
+    kept_shapes: dict[str, list[DeclaredShapeFact]] = {}
+    for shape in _prefer_compiled(shapes):
+        kept_shapes.setdefault(shape.document_id, []).append(shape)
+    # Sorted so the write order — and therefore nothing observable about
+    # it — never depends on dict iteration order (NFR-1).
+    for document_id in sorted(kept_shapes):
+        target, document, carried = by_document_id[document_id]
+        # Written into the document's OWN fact file, wherever it already
+        # is — a compiled document's own file the scanner wrote, or a
+        # schema reader's own file from the read step above — never a
+        # NEW file: a second `Document` record for a document that
+        # already has one would double it in the workspace's own
+        # document count (D00 §7's one-record-per-source-file rule).
+        write_fact_file(target, document, [*carried, *kept_shapes[document_id]])
+    return tuple(failed)
+
+
+# The bytes a fact file holds where it holds an `embedded_descriptor` fact —
+# the kind's value as JSON, quotes included, derived from the model rather
+# than spelled a second time so a renamed kind cannot leave this pointing at
+# a token nothing writes any more. The quoted VALUE rather than the whole
+# `"kind":"..."` pair: the pair's spelling depends on the writer's separators
+# and the value's does not, and the extractor writes these files as well as
+# `write_fact_file` does.
+_DESCRIPTOR_TOKEN = json.dumps(EmbeddedDescriptorFact.model_fields["kind"].default).encode()
 
 
 def _prefer_compiled(shapes: list[DeclaredShapeFact]) -> list[DeclaredShapeFact]:
