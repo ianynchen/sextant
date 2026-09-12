@@ -36,7 +36,7 @@ against the feature it belongs to, or the build goes red.
 ```delivery
 REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-routing javalin-apibuilder
 REST outbound      | REST out   | G-30-outbound jdk-httpclient
-SOAP               | SOAP       | jaxws-public-final apache-cxf
+SOAP               | SOAP       | jaxws-public-final jaxws-inherited-unannotated
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
 SSE                | SSE        | jaxrs-sse
@@ -198,6 +198,17 @@ turned out to be nothing to build, found by reading what was already written dow
   output. The matrix counts it as `limited` because the generator counts any `◐ shipped`
   row; a boundary that is correct by design is not a blocker.
 
+**Retired as not-gaps, 2026-09-12 — measured, not fixed.**
+
+- `apache-cxf` — measured (w63, `scripts/probes/w63_cxf_web_method_rule.md`): CXF's
+  `JaxWsServiceConfiguration.isWebMethod` excludes `static`/`final` the same pair
+  `RuntimeModeler.isWebMethodBySpec` invokes, honours `@WebMethod(exclude = true)`
+  identically, and reads `@WebService` off a method's own declaring class the same way
+  the RI's `isWebMethodBySpec` does (both bytecode-read AND live-run confirmed, over the
+  identical `BillingWebService`/`AbstractBilling` fixture). "Version-scoped, not settled"
+  implied a live divergence; there is none. `jakarta-jws.yml`'s `measured:` block now
+  carries both implementations.
+
 **Moved to engine work, 2026-09-11 — measured off the direct list:** `quarkus-jaxrs`,
 `jaxrs-sse` (attributes on sibling annotations of one method) and `kafka-batch-generics`
 (a wrapper conditional on an annotation attribute; `wrappers` are unconditional and
@@ -223,23 +234,6 @@ receiver-chain form, Category B of the register (§4), the same overload-discrim
 work `G-37`/`G-30`/`GAP-1b` wait on — not a fixture-and-test item like the other three
 quarters. `RabbitTemplate`, `JmsTemplate` and `KafkaTemplate`'s receive halves already
 derive (Tasks 1-3, commits `371cfaf`, `760c884`, `7771be7`).
-
-**Also moved to spec work, 2026-09-12 — measured, and it disagrees:** `apache-cxf`.
-`javap -p -c` on `cxf-rt-frontend-jaxws`/`cxf-rt-wsdl` 4.0.5, cross-checked by booting a
-real `JaxWsServiceFactoryBean` (`scripts/probes/w63_cxf_web_method_rule.md`): CXF's
-`JaxWsServiceConfiguration.isWebMethod` agrees with the RI on two of the three axes —
-it excludes `static` and `final` the same way and honours `@WebMethod(exclude = true)`
-— but its `hasWebServiceAnnotation` check reads `@WebService` off the METHOD'S OWN
-declaring class rather than the implementor class CXF was configured with, so an
-operation inherited from a plain (unannotated) superclass is silently dropped. The live
-run confirms it: a `refund()` declared only in an unannotated `AbstractBilling` and
-inherited by `@WebService class BillingWebService extends AbstractBilling` derives
-under jaxws-rt (`A-M15`) and does not derive under CXF. `jakarta-jws.yml`'s
-`members: public_methods` rule has no per-implementation switch — it cannot know which
-JAX-WS runtime will load a given module — so closing this needs either a config knob
-naming the runtime (`.sextant.yml`, per D04) or a structural signal this scanner can read
-without one (neither exists today); a schema/vocabulary decision, not a catalog edit.
-`jakarta-jws.yml` is unchanged and carries no CXF `measured:` row.
 
 **Also named 2026-09-12, alongside `javalin-routing` shipping:**
 `javalin-apibuilder`. `config.router.apiBuilder(() -> path("/orders", () ->
@@ -322,7 +316,7 @@ micronaut-pubsub | tests/e2e/test_messaging_micronaut_delivered.py::test_microna
 |---|---|
 | `G-36` | `spring-ws.yml` declares no `container:`. **`@PayloadRoot` and `@SoapAction` are both `@Repeatable`** (confirmed in the class file); a second one on a method is lost. `@Namespace` is NOT repeatable — an earlier claim of "three pairs" here was wrong |
 | — | JAX-WS `public final` operation — **over-reports one row per such method**, `§5.3`'s own stated residual. `ACC_FINAL` has been readable since W7, so this may already be closeable: re-measure before planning |
-| — | Apache CXF rather than the reference implementation — measured (`w63`): agrees on `static`/`final`/`exclude`, diverges on an operation inherited from a plain superclass; no per-implementation switch exists |
+| `jaxws-inherited-unannotated` | both runtimes measured, w63; Sextant over-reports: `gate_ancestry` derives an operation inherited from a plain, unannotated superclass that NEITHER jaxws-rt nor Apache CXF would ever serve; fixed by Task 10b |
 
 > `verify: javap -v -cp $(find ~/.m2 -name 'spring-ws-core-*.jar'|grep -v sources|head -1) org.springframework.ws.server.endpoint.annotation.PayloadRoot | grep Repeatable`
 > `verify: grep -c container src/sextant/catalogs/spring-ws.yml` → 0
@@ -486,11 +480,6 @@ that reason.
   derives through `micronaut-jms.yml` with protocol `jms` even though the wire is SQS, and
   choosing the protocol from the connection-factory attribute is a per-attribute switch no
   engine word has (§5.10's DR-5 boundary note).
-- **Apache CXF's inherited-operation gap.** Measured 2026-09-12 (`w63`,
-  `scripts/probes/w63_cxf_web_method_rule.md`): CXF drops an operation inherited from a
-  plain, unannotated superclass, which the RI derives. `jakarta-jws.yml`'s member rule has
-  no per-implementation switch; needs either a `.sextant.yml` knob naming the runtime or a
-  structural signal, neither of which exists (§ above, "Also moved to spec work").
 
 ### Category D — measure first, then decide · **NO PLAN YET**
 
