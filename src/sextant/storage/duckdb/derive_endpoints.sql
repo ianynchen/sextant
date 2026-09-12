@@ -728,7 +728,8 @@ member_declarations AS (
     WHERE em.nearest = 1
       AND coalesce(s.modifiers ->> 'static', 'false') <> 'true'
       -- A `final` member is not exposed either: JAX-WS's `isWebMethodBySpec` (CP-13 Q4)
-      -- excludes it beside `static`, and both catalogs that declare `$members` are JAX-WS.
+      -- excludes it beside `static`, and the one catalog that declares
+      -- `members: public_methods`, `jakarta-jws.yml`, is JAX-WS.
       -- `modifiers.final` is written for every method (`ClassScanner.methodModifiersJson`).
       AND coalesce(s.modifiers ->> 'final', 'false') <> 'true'
       -- THE DECLARING CLASS MUST ITSELF BE GATED (w63, `jaxws-inherited-unannotated`).

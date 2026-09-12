@@ -60,7 +60,7 @@ framework and applied to a set that is not that framework's set.
 ## What the split does and does not decide
 
 A raw ratio overstates every gap: most of what a template declares is configuration
-and lifecycle. `RabbitTemplate`'s 83 include `setChannelTransacted`,
+and lifecycle. `RabbitTemplate`'s 84 unread (§2 below) include `setChannelTransacted`,
 `afterPropertiesSet` and every getter, and a method that takes no destination cannot
 address a wire. So the unread half is split by two **measured** properties rather than
 by judgement.
@@ -138,7 +138,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 
 ### 2. Of the unread, which could carry a destination
 
-A raw ratio overstates every gap here: most of what a template class declares is configuration and lifecycle, not boundaries. `RabbitTemplate`'s 83 include `setChannelTransacted`, `afterPropertiesSet` and every getter. So the unread half is split by a MEASURED property rather than by judgement — **does the method take a `String` at argument 0**, the position every destination-carrying method in these APIs uses (measured across all ten owners; it is the position `spring-pubsub.yml`, `spring-jms-template.yml` and `spring-sqs-template.yml` already read). A method that takes no name cannot address a wire, so it is not a candidate boundary and its absence needs no slice.
+A raw ratio overstates every gap here: most of what a template class declares is configuration and lifecycle, not boundaries. `RabbitTemplate`'s 84 include `setChannelTransacted`, `afterPropertiesSet` and every getter. So the unread half is split by a MEASURED property rather than by judgement — **does the method take a `String` at argument 0**, the position every destination-carrying method in these APIs uses (measured across all ten owners; it is the position `spring-pubsub.yml`, `spring-jms-template.yml` and `spring-sqs-template.yml` already read). A method that takes no name cannot address a wire, so it is not a candidate boundary and its absence needs no slice.
 
 **This split does not decide the slice**, it bounds the work of writing one: a candidate may still be deliberately outside (a `receive` with no payload capture, a batch form), and a non-candidate may still be a boundary reached another way (a destination-less `send` on a template configured with a default). Those are judgements a catalog states; this table says which methods the judgement is about.
 

@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 3 open) | ◐ (1 open) | ◐ (3 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -1329,7 +1329,8 @@ that is why the module fact carries `sibling_coordinates` and the guardrail keys
 **What it costs, measured (2026-09-12):** `mall-admin` analyses in 111s against 8s, 648
 documents against 161. `derive_endpoints` is 47s of it and `derive_endpoint_shapes` 39s,
 and the cost is NOT work the guardrail then discards — the SQL the guardrail cleans up
-after is 2.8s of the 47; the rest is every catalog re-reading the fact tables from
+after is 2.8s of the 31.7s replay (the fresh run's 47s was not profiled to the query); the
+rest is every catalog re-reading the fact tables from
 Python (`OI-68` has the profile to the query). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 

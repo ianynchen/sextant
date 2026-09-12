@@ -286,14 +286,17 @@ class TerminalKind(StrEnum):
     `unresolved` is the honest member: a terminal the catalogs could not classify. It is
     not the same as NULL, which means the edge is not a terminal at all.
 
-    **Two of the eight have a producer, and that is stated rather than glossed** (§5.3,
-    GUIDELINES §2, the `RootKind` precedent above). `persistence` and `unresolved` are
-    written; the other six are not, and they are absent for two different reasons that a
+    **Three of the eight have a producer, and that is stated rather than glossed** (§5.3,
+    GUIDELINES §2, the `RootKind` precedent above). `persistence` and `unresolved` come
+    from the one catalog that declares `terminals`, whose twelve rules all say
+    `persistence`; `throws` is decided from a throw site's `invoke_kind` rather than by
+    any catalog rule (`resolve/terminals.classify`, `G-52`) — a second, stated producer
+    beside the catalog one. The other five are absent for two different reasons that a
     reader has to be able to tell apart:
 
-    * `outbound_call`, `throws` and `async_handoff` are one catalog rule away. An `owner`
-      rule naming `ExecutorService` would mint an `async_handoff` today, and no shipped
-      catalog declares one — all twelve rules in `spring-web.yml` say `persistence`.
+    * `outbound_call` and `async_handoff` are one catalog rule away. An `owner` rule
+      naming `ExecutorService` would mint an `async_handoff` today, and no shipped
+      catalog declares one.
     * `cycle`, `returns` and `ends_silently` are unreachable BY CONSTRUCTION, and no
       catalog can change that. A cyclic edge has a non-NULL `callee`, so
       `resolve/terminals.classify` returns NULL for it and always will; the other two

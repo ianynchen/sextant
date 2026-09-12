@@ -335,17 +335,6 @@ public final class ClassScanner {
                 || "record".equals(constructKind);
         }
 
-        /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
-         *  the type's own fact is the only place the distinction survives: a type
-         *  reference to an enumeration is indistinguishable from a reference to a
-         *  record. Called `class`, a closed set of constants is expanded structurally
-         *  by a consumer that has no way to know better, and each constant becomes a
-         *  field of a payload nobody sends — where D00 §5b's `enum` wire type says the
-         *  whole thing in one value.
-         *
-         *  <p>The interface test comes first because an annotation type is both, and
-         *  the enum test before the fallback because an enum is a class in the JVM's
-         *  own model. */
         /** JVMS 4.1's four access levels — `public`, `protected`, package (no keyword,
          *  no bit of its own) and `private` — read from the one JVM access word every
          *  method, field and type carries (`G-73`). Tested `PUBLIC` before `PROTECTED`
@@ -367,6 +356,17 @@ public final class ClassScanner {
             return "package";
         }
 
+        /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
+         *  the type's own fact is the only place the distinction survives: a type
+         *  reference to an enumeration is indistinguishable from a reference to a
+         *  record. Called `class`, a closed set of constants is expanded structurally
+         *  by a consumer that has no way to know better, and each constant becomes a
+         *  field of a payload nobody sends — where D00 §5b's `enum` wire type says the
+         *  whole thing in one value.
+         *
+         *  <p>The interface test comes first because an annotation type is both, and
+         *  the enum test before the fallback because an enum is a class in the JVM's
+         *  own model. */
         private String constructKindOf(int access) {
             // BEFORE the interface test, because an annotation type carries
             // ACC_INTERFACE too — `@interface` compiles to an interface extending

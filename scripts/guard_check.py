@@ -667,7 +667,8 @@ GUARDS: dict[str, Guard] = {
         what="a `$members` row excludes a `final` method the same way it already excludes "
         "a `static` one",
         why="JAX-WS RI 4.0.2's `isWebMethodBySpec` excludes `static` AND `final` (CP-13 "
-        "Q4), and both catalogs that declare `members: public_methods` are JAX-WS. Without "
+        "Q4), and the one catalog that declares `members: public_methods`, "
+        "`jakarta-jws.yml`, is JAX-WS. Without "
         "this a `public final` helper method on a `@WebService` class — a common way to "
         "mark one non-overridable — is published as a SOAP operation nobody serves "
         "(`jaxws-public-final`)",

@@ -94,54 +94,65 @@ traffic, and has never been used for this.
 **Closes by** M05/M06. This is phase L work and was never a row in the Java/Kotlin
 completeness plan, which is why finishing that plan did not produce it.
 
-## GAP-3 — the async SQS client is unread · **0 of 28**
+## GAP-3 — the async SQS client is read for one call · **1 of 28**
 
-`SqsAsyncClient` — every method, including `sendMessage` — is outside
-`aws-sqs-sdk`'s declared slice. `SqsClient` itself is **1 of 29**: the synchronous
-`sendMessage` only. The entire inbound direction, including `receiveMessage`, and
-every batch form are outside on both.
+`SqsAsyncClient.sendMessage` derives since `G-43` (closed on CI run 34669970510):
+`aws-sqs-sdk`'s `matches.terminal` names `SqsClient` and `SqsAsyncClient` together as
+the builder chain's terminal owner. `SqsClient` itself is still **1 of 29**. What is
+still outside, on both clients: the entire inbound direction, including
+`receiveMessage`, and every batch form.
 
 **Closes by** widening the slice, which is catalog data rather than engine work —
 the request-object shape each of these takes is the same one `sendMessage` already
 reads.
 
-## GAP-4 — the messaging templates read their SEND half only
+## GAP-4 — the messaging templates' receive halves: three of four read, SQS's not
 
-Measured, read of declared:
+Measured, read of declared (COVERAGE §3b):
 
 | Owner | Read |
 |---|---|
-| `RabbitTemplate` | 1 of 88 |
-| `JmsTemplate` | 1 of 49 |
+| `RabbitTemplate` | 4 of 88 |
+| `JmsTemplate` | 5 of 49 |
 | `SimpMessagingTemplate` | 3 of 14 |
 | `SqsTemplate` | 1 of 12 |
 | `PubSubTemplate` | 11 of 20 |
 
 **The raw ratio overstates every row here and the probe says so.** Most of what a
-template declares is configuration and lifecycle — `RabbitTemplate`'s 83 unread
-include `setChannelTransacted` and its kin, which address no wire. The honest
-statement is that the SEND half is read and the RECEIVE half is not, plus the
-batch and async forms.
+template declares is configuration and lifecycle — `RabbitTemplate`'s 84 unread
+include `setChannelTransacted` and its kin, which address no wire. `RabbitTemplate`'s
+and `JmsTemplate`'s receive halves derive since `G-44`'s Tasks 1–2 (`371cfaf`,
+`760c884`): the overloads that name the queue or destination at an argument, one
+inbound row each. What is still outside: `SqsTemplate`'s receive half, where the
+queue is named inside a `Consumer<SqsReceiveOptions>` lambda rather than at any
+argument — the delivery register's `sqs-template-receive`, Category B — plus the
+request/reply, batch and async forms on every template.
 
-**Closes by** a per-template pass declaring the receive half, which needs a fixture
-for each: a `receive` with no payload capture is a boundary whose contract nobody
-can read, and deriving it would publish a row with no shape.
+**Closes by** the receiver-chain read the combinator overload spec describes, for
+SQS; the other three templates needed only a fixture each, and have one.
 
-## GAP-5 — Spring Integration reads 2 of roughly 12 channel annotations
+## GAP-5 — Spring Integration reads 7 of 11 channel annotations
 
-`spring-integration` declares two; the framework has about twelve. A module using
-`@ServiceActivator`, `@Splitter`, `@Aggregator` or `@Router` has those channels
-absent.
+`spring-integration` declares seven of the eleven channel-declaring annotations in
+spring-integration-core 6.2.4 (COVERAGE §3b); `G-47` closed on CI run 34669970510
+when `@Aggregator`, `@BridgeFrom`, `@BridgeTo`, `@Filter`, `@Router`, `@Splitter` and
+`@Transformer` began deriving. What is still outside: `@Gateway`, `@MessagingGateway`,
+`@Poller` and `@Publisher`, whose cost is bounded — this catalog files
+`channel_destination` questions and mints no endpoint rows, so each under-reports a
+question list rather than producing a wrong row.
 
-**Closes by** enumerating the annotation set from the jar and widening the catalog.
+**Closes by** widening the catalog to the remaining four, from the same enumeration.
 
-## GAP-6 — Spring Data REST derives for JPA repositories only
+## GAP-6 — Spring Data REST derives for JPA and MongoDB repositories, 7 of 28 contracts
 
-`spring-data-rest` reads the JPA repository contracts. A module exposing
-MongoDB, Cassandra or R2DBC repositories through Spring Data REST derives nothing
-for them.
+`spring-data-rest` reads the base contracts plus `JpaRepository` and
+`MongoRepository` (COVERAGE §3b); `G-45` closed on CI run 34669970510 when a Data
+REST resource over MongoDB derived its route table. What is still outside: every
+R2DBC, Cassandra, Elasticsearch and Neo4j repository contract, and every reactive,
+coroutine and RxJava3 variant — `ReactiveMongoRepository` included — which derive
+nothing.
 
-**Closes by** enumerating each store module's own repository contracts. The
+**Closes by** enumerating each remaining store module's own repository contracts. The
 `repositories` map is catalog data; the rule that reads it is store-neutral
 already.
 
@@ -152,7 +163,8 @@ reader will hit rather than a defect in output. Both mechanisms originally blame
 were refuted by measurement in W56, and the last lever it named was refuted again on
 2026-09-12: `mall-admin` with its three siblings analyses in 111s against 8s alone,
 `derive_endpoints` 47s against 3.6s, `derive_endpoint_shapes` 39s against 1.6s —
-and the SQL the lever would have filtered is 2.8s of the 47. The rest is 72 catalogs
+and the SQL the lever would have filtered is 2.8s of the 31.7s replay (the fresh
+run's 47s was not profiled to the query). The rest is 72 catalogs
 each re-reading the whole fact table from Python; that entry has the profile.
 
 ---
@@ -3353,8 +3365,8 @@ file `visibility` already reads; there was never a reason to fold them together.
 **CLOSED by** `feat(extractor): visibility is the four words the language has, not
 public-or-other (G-73)`, proved by
 `extractor-jvm/src/test/java/dev/sextant/extractor/AccessFlagTest.java`'s
-`visibility_is_the_four_words_the_language_has_not_public_or_other` and the same file's
-`MethodModifierScanTest.java` pin, `reports_a_private_method_as_private`, corrected rather
+`visibility_is_the_four_words_the_language_has_not_public_or_other` and the sibling
+`MethodModifierScanTest.java`'s pin, `reports_a_private_method_as_private`, corrected rather
 than left asserting the two-valued reading. `ClassScanner.visibilityOf` now tests
 `ACC_PUBLIC`, `ACC_PROTECTED` and `ACC_PRIVATE` in turn and falls back to `package`, the one
 case none of the three is set — the same JVM word every scanner emits for the symbol,

@@ -699,9 +699,15 @@ def main() -> None:
         print()
 
     print("### 2. Of the unread, which could carry a destination\n")
+    # The count is the table's own, read from the same dict the rows print — it was
+    # once a literal, and the literal stayed at 83 after the receive half shipped
+    # and the row beneath it said 84.
+    rabbit_unread = sum(
+        len(missing) for (_, owner), missing in unread.items() if owner.endswith(".RabbitTemplate")
+    )
     print(
         "A raw ratio overstates every gap here: most of what a template class declares is "
-        "configuration and lifecycle, not boundaries. `RabbitTemplate`'s 83 include "
+        f"configuration and lifecycle, not boundaries. `RabbitTemplate`'s {rabbit_unread} include "
         "`setChannelTransacted`, `afterPropertiesSet` and every getter. So the unread half "
         "is split by a MEASURED property rather than by judgement — **does the method take a "
         "`String` at argument 0**, the position every destination-carrying method in these "

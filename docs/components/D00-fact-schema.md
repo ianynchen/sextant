@@ -249,12 +249,15 @@ exactly as the other two do the day something writes one.
 > [D01](D01-graph-schema.md) §3's Traces) answers why the WALK stopped and is decided
 > entirely from what the walk did. One edge carries both and they say different things:
 > `boundary` because this workspace read no body, `persistence` because a catalog knows
-> what the callee is. **Six of the eight have no producer, for two different reasons**
-> (`OI-75`): `outbound_call`, `throws` and `async_handoff` are one catalog rule away and
-> none is declared, while `cycle`, `returns` and `ends_silently` are unreachable by any
-> rule — a cyclic edge has a non-NULL `callee` so the classification is NULL for it, and
-> the other two describe how a BODY exits while every catalog route is a predicate on the
-> callee's TYPE.
+> what the callee is. **Three of the eight have a producer**: `persistence` and
+> `unresolved` come from the one catalog that declares `terminals`, and `throws` is
+> decided from a throw site's `invoke_kind` rather than by any catalog rule
+> (`resolve/terminals.classify`, `G-52`) — a second, stated producer beside the catalog
+> one. **The other five have none, for two different reasons** (`OI-75`): `outbound_call`
+> and `async_handoff` are one catalog rule away and none is declared, while `cycle`,
+> `returns` and `ends_silently` are unreachable by any rule — a cyclic edge has a non-NULL
+> `callee` so the classification is NULL for it, and the other two describe how a BODY
+> exits while every catalog route is a predicate on the callee's TYPE.
 
 `persistence` carries `target_kind`: `database`, `cache`, `file`. A sub-field, so that
 splitting it later is a rendering choice rather than a re-index. Measured on `mall-admin`:

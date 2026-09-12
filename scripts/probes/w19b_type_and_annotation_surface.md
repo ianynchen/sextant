@@ -33,8 +33,9 @@ Measured from each annotation's own declared attributes rather than from a list:
 annotation counts as channel-declaring when the framework NAMED an attribute for a
 channel (`inputChannel`, `outputChannel`, `channel`, `discardChannel`,
 `requestChannel`, `replyChannel`, `defaultRequestChannel`, `defaultReplyChannel`).
-`@Aggregator`, `@Filter`, `@Gateway`, `@MessagingGateway`, `@Poller`, `@Publisher`,
-`@Router`, `@Splitter` and `@Transformer` are all unread.
+`@Aggregator`, `@Filter`, `@Router`, `@Splitter` and `@Transformer` are read since
+`G-47` shipped; `@Gateway`, `@MessagingGateway`, `@Poller` and `@Publisher` are the
+four still unread.
 
 *The attribute list was written out by hand first and missed `errorChannel`, which
 removed `@Poller` from the table, the count and the slice together; it also missed
@@ -48,17 +49,18 @@ is a reading of the annotation's name. That makes thirteen. The gap analysis est
 `@Poller`, which no hand-written list contained.
 
 The cost here is bounded and worth stating plainly: this catalog mints no endpoint
-rows, it files `channel_destination` questions. So eight unread annotations are an
-under-reported QUESTION list, not eight wrong rows.
+rows, it files `channel_destination` questions. So four unread annotations are an
+under-reported QUESTION list, not four wrong rows.
 
 **G-45 — `spring-data-rest`'s roster names 7 of the 28 repository contracts
 (re-measured 2026-09-12 after `G-47`/`G-45` shipped).**
 Every store module ships its own: `MongoRepository`, `R2dbcRepository`,
 `CassandraRepository`, `ElasticsearchRepository`, `Neo4jRepository`, their reactive
-twins, plus the coroutine and RxJava3 contracts in `spring-data-commons` itself. A
-repository interface extending any of them derives NOTHING, because the roster is the
-whole rule — this style's evidence mentions no HTTP anywhere, so what turns an
-interface into an API is exactly the contract it extends.
+twins, plus the coroutine and RxJava3 contracts in `spring-data-commons` itself. The
+roster names `MongoRepository` since `G-45` shipped, beside `JpaRepository` and five
+base contracts; a repository interface extending any of the other 21 derives NOTHING,
+because the roster is the whole rule — this style's evidence mentions no HTTP
+anywhere, so what turns an interface into an API is exactly the contract it extends.
 
 **G-41 — the recorded mechanism does not exist, and the real one now does.** The gap
 analysis says `@DgsData` and `@DgsQuery` are `@Inherited`. All five are, measured — and
