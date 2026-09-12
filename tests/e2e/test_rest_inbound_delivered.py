@@ -346,12 +346,17 @@ def test_javalin_flat_registrations_derive_every_route(javalin_routes):
     """`app.get("/path", handler)` on a `Javalin` — the form the Javalin front page
     shows. javalin 6.4.0: the verbs are default methods on `JavalinDefaultRoutingApi`,
     path at argument 0, handler a lambda at 1 (the handler recorded is the calling
-    method, as for every `single_call` inbound row)."""
+    method, as for every `single_call` inbound row). The SECOND flat form,
+    `config.router.mount(router -> router.get(...))`, calls the identical descriptors
+    on `JavalinDefaultRouting` — the other type `JavalinDefaultRoutingApi` implements —
+    with no nesting at all, so it derives exactly like `app.get(...)` does."""
     expected = {
         ("inbound", "GET", "/jv/orders"),
         ("inbound", "GET", "/jv/orders/{id}"),
         ("inbound", "POST", "/jv/orders"),
         ("inbound", "DELETE", "/jv/orders/{id}"),
+        ("inbound", "GET", "/jv/mounted"),
+        ("inbound", "POST", "/jv/mounted"),
     }
     missing = expected - javalin_routes
     assert missing == set(), f"missing {sorted(missing)}. Derived: {sorted(javalin_routes)}"

@@ -1,13 +1,19 @@
 """W61 — Javalin's registration methods, and which argument position (if any)
 carries the route.
 
-`javalin.yml` (`javalin-routing`) reads `Javalin`/`JavalinDefaultRoutingApi`'s flat
-verb methods — `get`, `post`, `put`, `delete`, `patch`, `head`, `options` — each a
-`default` method on `JavalinDefaultRoutingApi<API>`, the interface `Javalin`
-implements. Before any row is written the question is mechanical: of every method
-matching `get|post|put|delete|patch|head|options|addHttpHandler|path|sse|ws` on
-`JavalinDefaultRoutingApi`, `ApiBuilder` and `Javalin` itself, which parameter
-position (if any) carries a value shaped like a route — a plain `String` path?
+`javalin.yml` (`javalin-routing`) reads `Javalin`/`JavalinDefaultRoutingApi`/
+`JavalinDefaultRouting`'s flat verb methods — `get`, `post`, `put`, `delete`,
+`patch`, `head`, `options` — each a `default` method on
+`JavalinDefaultRoutingApi<API>`, an interface exactly two types implement:
+`Javalin` (`app.get(...)`) and `public final class JavalinDefaultRouting`, reached
+through `RouterConfig.mount(Consumer<JavalinDefaultRouting>)`
+(`config.router.mount(router -> router.get(...))`) — found on review, the SECOND
+flat registration form, no nesting, same descriptors. Before any row is written the
+question is mechanical: of every method matching
+`get|post|put|delete|patch|head|options|addHttpHandler|path|sse|ws` on
+`JavalinDefaultRoutingApi`, `JavalinDefaultRouting`, `ApiBuilder` and `Javalin`
+itself, which parameter position (if any) carries a value shaped like a route — a
+plain `String` path?
 
 **Version scope (§5.4).** Read against **javalin 6.4.0** — the version the jar
 reports for itself, checked against the coordinate before any table is printed.
@@ -25,11 +31,12 @@ REPO = Path(__file__).resolve().parents[3]
 M2 = Path.home() / ".m2" / "repository"
 
 # (coordinate, internal class, the method-name regex this class's registration
-# methods are read through — the same pattern across all three types, per w61's
+# methods are read through — the same pattern across all four types, per w61's
 # brief).
 _NAME_PATTERN = r"get|post|put|delete|patch|head|options|addHttpHandler|path|sse|ws"
 CLASSES = (
     ("io.javalin:javalin:6.4.0", "io/javalin/router/JavalinDefaultRoutingApi"),
+    ("io.javalin:javalin:6.4.0", "io/javalin/router/JavalinDefaultRouting"),
     ("io.javalin:javalin:6.4.0", "io/javalin/apibuilder/ApiBuilder"),
     ("io.javalin:javalin:6.4.0", "io/javalin/Javalin"),
 )

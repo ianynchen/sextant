@@ -1,15 +1,20 @@
 # W61 — Javalin's registration methods, and which argument (if any) carries the route
 
 **Question.** `javalin.yml` (`javalin-routing`) reads `Javalin`/
-`JavalinDefaultRoutingApi`'s flat verb methods — `get`, `post`, `put`, `delete`,
-`patch`, `head`, `options` — each a `default` method declared on
-`JavalinDefaultRoutingApi<API>`, the interface `Javalin` implements. A
-`single_call` row can only address a wire off an argument the call site itself
-carries, so before any row is written the question is mechanical: of every
-method matching `get|post|put|delete|patch|head|options|addHttpHandler|path|
-sse|ws` on `JavalinDefaultRoutingApi`, `ApiBuilder` and `Javalin` itself, which
-parameter position (if any) carries a value shaped like a route — a plain
-`String` path?
+`JavalinDefaultRoutingApi`/`JavalinDefaultRouting`'s flat verb methods — `get`,
+`post`, `put`, `delete`, `patch`, `head`, `options` — each a `default` method
+declared on `JavalinDefaultRoutingApi<API>`, an interface exactly TWO types
+implement: `Javalin` (`app.get(...)`, the shape the front page shows) and
+`public final class JavalinDefaultRouting`, reached through
+`RouterConfig.mount(Consumer<JavalinDefaultRouting>)` —
+`config.router.mount(router -> router.get(...))` — the SECOND flat registration
+form, found on review of the first cut of this catalog, same descriptors, no
+nesting. A `single_call` row can only address a wire off an argument the call
+site itself carries, so before any row is written the question is mechanical:
+of every method matching `get|post|put|delete|patch|head|options|
+addHttpHandler|path|sse|ws` on `JavalinDefaultRoutingApi`,
+`JavalinDefaultRouting`, `ApiBuilder` and `Javalin` itself, which parameter
+position (if any) carries a value shaped like a route — a plain `String` path?
 
 **Version scope (§5.4).** Read against **javalin 6.4.0** — the version the jar
 reports for itself, checked against the coordinate before any table is printed.
@@ -17,7 +22,7 @@ reports for itself, checked against the coordinate before any table is printed.
 
 **How to run.** `bash scripts/probes/w61_javalin_surface/run.sh`. Resolves the
 artifact through Maven (network on the first run only), reads the version the
-jar states for itself, and asks `javap -p -s` for every method on the three
+jar states for itself, and asks `javap -p -s` for every method on the four
 classes matching the shared name pattern above.
 
 ## Expectation table
@@ -82,6 +87,12 @@ list asked for**; `checked` compares the two and ABORTS when they disagree.
 | 20 | `ws` | `(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/javalin/router/RoutingApi;` | 0 |
 | 21 | `ws` | `(Ljava/lang/String;Ljava/util/function/Consumer;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;` | 0 |
 
+**`io.javalin.router.JavalinDefaultRouting`** (io.javalin:javalin:6.4.0)
+
+| # | method | descriptor | route argument |
+|---|---|---|---|
+| — | *(no `get\|post\|put\|delete\|patch\|head\|options\|addHttpHandler\|path\|sse\|ws` method found)* | — | — |
+
 **`io.javalin.apibuilder.ApiBuilder`** (io.javalin:javalin:6.4.0)
 
 | # | method | descriptor | route argument |
@@ -126,17 +137,25 @@ list asked for**; `checked` compares the two and ABORTS when they disagree.
 |---|---|---|---|
 | — | *(no `get\|post\|put\|delete\|patch\|head\|options\|addHttpHandler\|path\|sse\|ws` method found)* | — | — |
 
-`io.javalin.Javalin` prints no matching method at all — measured, not an
-oversight: `javap -p -s` on the class file lists only what the class ITSELF
-declares, and `Javalin` never overrides `get`/`post`/etc; they run purely as
-`default` methods inherited from `JavalinDefaultRoutingApi<Javalin>`. A call
-through a `Javalin`-typed local still compiles to a call ON `Javalin` — `javap
--c` on `fixtures/orders-javalin`'s own `OrderApp.class` shows `invokevirtual
-io/javalin/Javalin.get:(Ljava/lang/String;Lio/javalin/http/Handler;)…` — which
-is why `javalin.yml`'s `owner` names both `io.javalin.Javalin` and
-`io.javalin.router.JavalinDefaultRoutingApi`: the constant pool records
-whichever type the call site's receiver was DECLARED as, not where the method
-body lives.
+`io.javalin.Javalin` and `io.javalin.router.JavalinDefaultRouting` both print no
+matching method at all — measured, not an oversight, and true for the SAME
+reason on both: `javap -p -s` on a class file lists only what the class ITSELF
+declares, and neither type overrides `get`/`post`/etc; both run purely as
+`default` methods inherited from `JavalinDefaultRoutingApi<API>`. A call still
+compiles to a call ON the receiver's DECLARED type regardless — `javap -c` on
+`fixtures/orders-javalin`'s own `OrderApp.class` shows `invokevirtual
+io/javalin/Javalin.get:(Ljava/lang/String;Lio/javalin/http/Handler;)…` for
+`app.get(...)` on a `Javalin`-typed local, AND `invokevirtual
+io/javalin/router/JavalinDefaultRouting.get:(Ljava/lang/String;Lio/javalin/http/
+Handler;)…` for `router.get(...)` inside `config.router.mount(router -> …)` —
+which is why `javalin.yml`'s `owner` names all three: `io.javalin.Javalin`,
+`io.javalin.router.JavalinDefaultRoutingApi` and
+`io.javalin.router.JavalinDefaultRouting`. The constant pool records whichever
+type the call site's receiver was DECLARED as, not where the method body lives,
+and `RouterConfig.mount(Consumer<JavalinDefaultRouting>)` is exactly such a
+second declared type — found only because the jar was re-checked for every
+implementer of the interface (`grep`-shaped: which types `implements
+JavalinDefaultRoutingApi`), not assumed to be `Javalin` alone.
 
 ## Verdict
 
@@ -145,6 +164,18 @@ route at argument 0 on `JavalinDefaultRoutingApi` exactly as this column
 reports — `javalin.yml` reads all fourteen at `url_arg: 0`, the same word
 `spring-resttemplate.yml` and `jakarta-websocket-programmatic.yml` use for an
 HTTP-addressed `single_call`.
+
+**The SECOND flat form derives identically, and needed its own owner rather
+than a wider one.** `RouterConfig.mount(Consumer<JavalinDefaultRouting>)` hands
+the lambda a `JavalinDefaultRouting` — the interface's OTHER implementer — and
+`router.get("/x", h)` inside it compiles to the identical fourteen descriptors
+at the identical position, with no nesting: unlike `ApiBuilder`, `mount`'s
+lambda argument IS the routing receiver itself, not a static-method namespace
+composing a prefix. `javalin.yml`'s `owner` list names
+`io.javalin.router.JavalinDefaultRouting` for exactly this reason, and its
+`slice.outside` entry for that owner cross-references `Javalin`'s rather than
+repeating the reasoning, since both are the SAME `default` methods reached
+through the SAME interface.
 
 `addHttpHandler` (rows 1-2) carries its VERB at argument 0 as a `HandlerType`
 enum, with the route one position later — no `single_call` word reads a verb
@@ -167,10 +198,12 @@ which is exactly the trap this probe exists to catch: the shape alone cannot
 tell a flat registration from one that only means anything nested inside
 `path(prefix, () -> { … })`. `path` (row 1) is the nesting primitive itself,
 composing the prefix these verbs are called under; reading either on its own
-publishes a wrong row, not a missing one — measured live on
-`fixtures/orders-javalin`'s `nested()` method, where `ApiBuilder.get("/{id}",
-h)` sits inside `path("/jv/nested", …)` and the composed address is
-`/jv/nested/{id}`, never bare `/{id}`. `javalin.yml`'s own
+publishes a wrong row, not a missing one — by Javalin's own `path` rule (the
+fixture's `nested()` method never runs; the composed address,
+`/jv/nested/{id}` rather than bare `/{id}`, is what the library itself would
+serve for `ApiBuilder.get("/{id}", h)` sitting inside `path("/jv/nested", …)`,
+per Javalin's own documented behaviour, not an observation off a live process).
+`javalin.yml`'s own
 `test_javalin_flat_registrations_derive_every_route` pins the negative;
 `javalin-apibuilder` (Category B, the register §4) is what closes it, needing
 the same receiver-chain walk `G-37`/`GAP-1b`/`G-30` wait on.

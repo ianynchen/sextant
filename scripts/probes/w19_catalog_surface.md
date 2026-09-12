@@ -121,6 +121,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-31 | `kafka-streams-topology` | `Topology` | — | — | — | 7 | — | — | — | **2 of 7** |
 | javalin-routing | `javalin` | `Javalin` | — | — | — | — | — | — | 32 | **7 of 32** |
 | javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | 23 | **7 of 23** |
+| javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | 23 | **7 of 23** |
 | javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | 18 | **0 of 18** |
 
 - A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
@@ -164,6 +165,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `kafka-streams-topology` | `Topology` | 5 | **2** | **0** | **0** | **2** |
 | `javalin` | `Javalin` | 25 | **11** | **0** | **0** | **11** |
 | `javalin` | `JavalinDefaultRoutingApi` | 16 | **10** | **0** | **0** | **10** |
+| `javalin` | `JavalinDefaultRouting` | 16 | **10** | **0** | **0** | **10** |
 | `javalin` | `ApiBuilder` | 18 | **15** | **0** | **0** | **15** |
 
 **`spring-jms-template` / `JmsTemplate`**
@@ -265,6 +267,10 @@ A raw ratio overstates every gap here: most of what a template class declares is
 > by name at argument 0 (11): `after`, `afterMatched`, `before`, `beforeMatched`, `sse`, `start`, `ws`, `wsAfter`, `wsAfterUpgrade`, `wsBefore`, `wsBeforeUpgrade`
 
 **`javalin` / `JavalinDefaultRoutingApi`**
+
+> by name at argument 0 (10): `after`, `afterMatched`, `before`, `beforeMatched`, `sse`, `ws`, `wsAfter`, `wsAfterUpgrade`, `wsBefore`, `wsBeforeUpgrade`
+
+**`javalin` / `JavalinDefaultRouting`**
 
 > by name at argument 0 (10): `after`, `afterMatched`, `before`, `beforeMatched`, `sse`, `ws`, `wsAfter`, `wsAfterUpgrade`, `wsBefore`, `wsBeforeUpgrade`
 
@@ -476,6 +482,16 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `javalin` | `io.javalin.router.JavalinDefaultRoutingApi` | `wsAfterUpgrade` | `argument 0` |
 | `javalin` | `io.javalin.router.JavalinDefaultRoutingApi` | `wsBefore` | `argument 0` |
 | `javalin` | `io.javalin.router.JavalinDefaultRoutingApi` | `wsBeforeUpgrade` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `after` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `afterMatched` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `before` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `beforeMatched` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `sse` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `ws` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `wsAfter` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `wsAfterUpgrade` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `wsBefore` | `argument 0` |
+| `javalin` | `io.javalin.router.JavalinDefaultRouting` | `wsBeforeUpgrade` | `argument 0` |
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `after` | `argument 0` |
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `before` | `argument 0` |
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `crud` | `argument 0` |

@@ -21,4 +21,13 @@ public class OrderApp {
             });
         }));
     }
+
+    /** The SECOND flat form — `RouterConfig.mount`, the same descriptors as {@link #flat()}
+     * on a different implementing type ({@code JavalinDefaultRouting}), no nesting. */
+    public Javalin mounted() {
+        return Javalin.create(config -> config.router.mount(router -> {
+            router.get("/jv/mounted", ctx -> ctx.result("[]"));
+            router.post("/jv/mounted", ctx -> ctx.status(201));
+        }));
+    }
 }

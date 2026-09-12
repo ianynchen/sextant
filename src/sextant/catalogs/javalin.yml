@@ -1,8 +1,12 @@
 id: javalin
 displayName: Javalin
 # The flat registration form (`javalin-routing`) — `app.get("/path", handler)` on a
-# `Javalin` instance, the shape the Javalin front page shows. The NESTED form,
-# `ApiBuilder.get(…)` called inside a lambda passed to `path(…)` inside
+# `Javalin` instance, the shape the Javalin front page shows, AND
+# `config.router.mount(router -> router.get("/path", handler))`, the second flat
+# form (found on review): both call the identical fourteen descriptors, at the
+# identical argument position, with no nesting — only the receiver's DECLARED type
+# differs, which is why `owner:` below names three types rather than one. The
+# NESTED form, `ApiBuilder.get(…)` called inside a lambda passed to `path(…)` inside
 # `config.router.apiBuilder(…)`, is a receiver-chain read this style cannot do —
 # filed separately as `javalin-apibuilder`, Category B, and stated `slice.outside`
 # below rather than matched wrongly.
@@ -20,14 +24,18 @@ measured:
 requires: [call_site, string_constants]
 
 matches:
-  # `Javalin implements JavalinDefaultRoutingApi<Javalin>` (measured, w61): the verbs
-  # are `default` methods declared on the INTERFACE, so a call site typed by either
-  # the concrete class or the interface reaches the same method — both spellings are
-  # named, per §3.1, the same shape `spring-resttemplate.yml`'s
-  # `RestTemplate`/`RestOperations` pair already uses.
+  # `JavalinDefaultRoutingApi<API>` declares the verbs as `default` methods, and
+  # exactly TWO types implement it (measured, w61): `io.javalin.Javalin` — the
+  # top-level app, `app.get(...)` — and `public final class
+  # io.javalin.router.JavalinDefaultRouting`, reached through
+  # `RouterConfig.mount(Consumer<JavalinDefaultRouting>)`, `config.router.mount(router
+  # -> router.get(...))`. A call site's owner is the receiver's DECLARED type, so all
+  # three spellings are named per §3.1, the same shape `spring-resttemplate.yml`'s
+  # `RestTemplate`/`RestOperations` pair already uses — one library, three names.
   owner:
     - io.javalin.Javalin
     - io.javalin.router.JavalinDefaultRoutingApi
+    - io.javalin.router.JavalinDefaultRouting
   methods:
     - { name: get, arity: 2, http_method: GET, url_arg: 0,
         descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
@@ -72,7 +80,7 @@ slice:
         route. A row here would publish a host address as an HTTP endpoint path.
     - owner: io.javalin.Javalin
       method_names: [sse, ws, before, beforeMatched, after, afterMatched, wsBefore, wsBeforeUpgrade, wsAfter, wsAfterUpgrade]
-      why: &filters_and_other_protocols >
+      why: >
         `sse`/`ws` register OTHER protocols this catalog does not derive as `http`
         (SSE and WebSocket have their own catalogs); `before`/`beforeMatched`/
         `after`/`afterMatched` and their `ws*` twins are FILTERS — cross-cutting
@@ -81,7 +89,16 @@ slice:
         endpoint, the same ruling `jakarta-servlet.yml` makes for `@WebFilter`.
     - owner: io.javalin.router.JavalinDefaultRoutingApi
       method_names: [sse, ws, before, beforeMatched, after, afterMatched, wsBefore, wsBeforeUpgrade, wsAfter, wsAfterUpgrade]
-      why: *filters_and_other_protocols
+      why: >
+        The interface `Javalin` implements, carried as an owner alternate (§3.1). Its
+        slice is its implementation's slice: each name here is outside for the reason
+        given above for the same name on `Javalin`.
+    - owner: io.javalin.router.JavalinDefaultRouting
+      method_names: [sse, ws, before, beforeMatched, after, afterMatched, wsBefore, wsBeforeUpgrade, wsAfter, wsAfterUpgrade]
+      why: >
+        The SECOND type implementing that interface, reached through
+        `RouterConfig.mount(Consumer<JavalinDefaultRouting>)` — same names, same
+        reason as `Javalin`'s entry above.
     # `addHttpHandler(HandlerType, String, Handler[, RouteRole...])` carries its verb
     # as an ENUM at argument 0 rather than in the method NAME — no `single_call` word
     # reads a verb off an argument, so this row would need one that does not exist
@@ -89,11 +106,12 @@ slice:
     # `HandlerType`, not `String`, so w19's own "name at argument 0" measurement does
     # not count it as a candidate, and declaring it here would be a STALE entry
     # `test_no_slice_names_a_method_the_enumeration_does_not_list` refuses (Task 5's
-    # `repartition` precedent). Stated here in prose instead, on both owners.
+    # `repartition` precedent). Stated here in prose instead, on all three owners.
     #
-    # `io.javalin.apibuilder.ApiBuilder` is not named as an outside owner here at
-    # all, for the same reason: NONE of its methods are read by this catalog's
-    # `matches.owner`, so it needs its own mechanical entry, immediately below.
+    # `io.javalin.apibuilder.ApiBuilder` is not in this catalog's `matches.owner` at
+    # all — it is a DIFFERENT type, read by no row above — so its whole addressable
+    # surface needs its own mechanical entry, immediately below, rather than riding
+    # on the three owners' entries above.
     - owner: io.javalin.apibuilder.ApiBuilder
       method_names: [get, post, put, patch, delete, head, before, after, ws, wsBefore, wsAfter, sse, crud, path, prefixPath]
       why: >

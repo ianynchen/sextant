@@ -435,16 +435,27 @@ contract.
 ### Category B — needs the overload discriminator first · **SPEC EXISTS, THEN PLAN**
 
 `G-37` builder routing (both stacks) · `GAP-1b` WebFlux `router { }` · W44's wrong verb
-rules · `G-30` Spring Cloud Gateway
+rules · `G-30` Spring Cloud Gateway · `javalin-apibuilder` nested `ApiBuilder` ·
+`G-44`'s SQS quarter (`SqsTemplate.receive*`)
 
-All four need the same two things: telling same-name overloads apart, and walking a
+All six need the same two things: telling same-name overloads apart, and walking a
 receiver chain. The spec is written and committed
 (`docs/superpowers/specs/2026-09-11-combinator-overload-discrimination-design.md`) and is
-**awaiting your review**. `G-30` was measured into this group today —
-`RouteLocatorBuilder$Builder.route` has two overloads with the lambda at different
-positions, so writing it as catalog data first would publish a lambda as a path.
+**awaiting your review**. `G-30` was measured into this group at the same time as
+`javalin-apibuilder` and `G-44`'s SQS quarter — `RouteLocatorBuilder$Builder.route`
+has two overloads with the lambda at different positions, so writing it as catalog
+data first would publish a lambda as a path.
 
-**These four are one plan, not four**, and they are the whole of REST inbound's engine work.
+**These six are one plan, not six.** The first four are the whole of REST inbound's
+engine work; `javalin-apibuilder` and `G-44`'s SQS quarter are two more items
+elsewhere in the register that need the identical receiver-chain read — a static or
+instance verb call named inside a lambda passed to an outer call
+(`ApiBuilder.get` inside `path(…)`; `opts.queue(...)` inside
+`SqsTemplate.receive(Consumer<SqsReceiveOptions>)`) — so one spec closes all six,
+not only the REST-inbound four. `pubsub-channel-adapter` (§ above, "Named
+2026-09-12") is a DIFFERENT engine form — a `config_join` extension to read a
+constructor argument, not a receiver-chain walk — and stays out of this list for
+that reason.
 
 ### Category C — needs a spec of its own · **SPEC THEN PLAN**
 
