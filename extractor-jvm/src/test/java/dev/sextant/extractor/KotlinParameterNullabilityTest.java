@@ -1,0 +1,142 @@
+package dev.sextant.extractor;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.Test;
+
+/** `OI-82`, the PARAMETER half of `G-63`.
+ *
+ * <p>A Kotlin parameter's nullability is in its type, and kotlinc erases it: `sku: String`
+ * and `note: String?` reach the descriptor as one `Ljava/lang/String;`, and
+ * `List&lt;String?&gt;` and `List&lt;String&gt;?` reach the `Signature` attribute as one
+ * `Ljava/util/List&lt;Ljava/lang/String;&gt;;`. Java's rule — every reference permits null —
+ * then read every one of them as `nullable: true`. Only `@kotlin.Metadata` states what
+ * was declared, and it states it at every level of the type, so the assertions here reach
+ * into the type arguments too.
+ */
+class KotlinParameterNullabilityTest {
+
+    @Test
+    void parametersCarryTheDeclaredNullability() throws Exception {
+        var method = methodFact("KotlinParameterSample", "place");
+        List<Map<String, Object>> params = parameters(method);
+        assertEquals(false, params.get(0).get("nullable"));                 // sku: String
+        assertEquals(true,  params.get(1).get("nullable"));                 // qty: Int?
+        assertEquals(false, params.get(2).get("nullable"));                 // tags: List<String?>
+        assertEquals(true,  argument(params.get(2), 0).get("nullable"));    // …String?
+        assertEquals(true,  params.get(3).get("nullable"));                 // meta: Map<…>?
+        assertEquals(false, argument(params.get(3), 0).get("nullable"));    // String
+        assertEquals(true,  argument(params.get(3), 1).get("nullable"));    // List<Int>?
+        assertEquals(false, argument(argument(params.get(3), 1), 0).get("nullable")); // Int
+    }
+
+    @Test
+    void constructorParametersToo() throws Exception {
+        var ctor = methodFact("KotlinParameterSample", "<init>");
+        assertEquals(false, parameters(ctor).get(0).get("nullable"));
+        assertEquals(true,  parameters(ctor).get(1).get("nullable"));
+    }
+
+    @Test
+    void aDefaultedParameterIsTheOrdinaryCase() throws Exception {
+        // `copy(id: String = this.id, note: String? = this.note)`: the defaults live in a
+        // separate `copy$default` bridge; the function itself is declared like any other.
+        var copy = methodFact("KotlinParameterSample", "copy");
+        assertEquals(false, parameters(copy).get(0).get("nullable"));
+        assertEquals(true,  parameters(copy).get(1).get("nullable"));
+    }
+
+    @Test
+    void aBareTypeVariableKeepsJavasRuleAndANullableOneReadsNullable() throws Exception {
+        // `fun <T> ranked(x: T, y: T?): T`. A bare `T` is implicitly bounded by `Any?`,
+        // so metadata's "not nullable" on `x: T` describes the variable, not what a caller
+        // binds it to — `ranked<String?>(null, null)` is legal. Java's rule (a type
+        // variable is a reference, and every reference permits null) is the right answer
+        // there and is left standing. `T?` is nullable whatever `T` is.
+        var ranked = methodFact("KotlinParameterSample", "ranked");
+        assertEquals(true, parameters(ranked).get(0).get("nullable"));   // x: T
+        assertEquals(true, parameters(ranked).get(1).get("nullable"));   // y: T?
+        assertEquals(true, returns(ranked).get("nullable"));             // : T
+        assertEquals("T", returns(ranked).get("symbol"));
+        assertEquals(true, returns(methodFact("KotlinParameterSample", "rankedMaybe")).get("nullable"));
+    }
+
+    @Test
+    void aBareTypeVariablesFieldCarriesNoKotlinClaimAtAll() throws Exception {
+        // `class KotlinBoxSample<T>(val x: T, val y: T?)`. The field `x`, its getter and
+        // its constructor parameter are one declared type and must not disagree: all
+        // three keep Java's rule. On the field that means NO `ext.kotlin` block — "no
+        // Kotlin claim" is the honest output for a type whose nullability is its bound's
+        // — and the shared `nullable` at Java's `true`. `y: T?` is a claim, and reads as one.
+        var x = fieldFact("KotlinBoxSample", "x");
+        assertEquals(null, x.get("ext"));
+        assertEquals(true, returns(x).get("nullable"));
+        var y = fieldFact("KotlinBoxSample", "y");
+        assertEquals(true, object(object(y.get("ext")).get("kotlin")).get("nullable"));
+        assertEquals(true, returns(y).get("nullable"));
+        // The other two projections of `x`, so the three are asserted together.
+        assertEquals(true, returns(methodFact("KotlinBoxSample", "getX")).get("nullable"));
+        assertEquals(true, parameters(methodFact("KotlinBoxSample", "<init>")).get(0).get("nullable"));
+    }
+
+    // ---- reading the emitted facts -------------------------------------------------
+
+    private Map<String, Object> methodFact(String className, String member) throws Exception {
+        try (InputStream in =
+                getClass().getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
+            List<String> lines = new ClassScanner("com.acme/orders", "1.0.0")
+                .scan(in.readAllBytes(), "doc-kotlin-parameters");
+            String line = lines.stream()
+                .filter(l -> l.contains("\"kind\":\"symbol\"")
+                    && l.contains(className + "#" + member + "("))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no symbol fact for " + member));
+            return object(JsonFacts.parse(line));
+        }
+    }
+
+    /** A field's symbol fact, whose symbol ends in {@code .} where a method's has {@code (}. */
+    private Map<String, Object> fieldFact(String className, String member) throws Exception {
+        try (InputStream in =
+                getClass().getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
+            List<String> lines = new ClassScanner("com.acme/orders", "1.0.0")
+                .scan(in.readAllBytes(), "doc-kotlin-parameters");
+            String line = lines.stream()
+                .filter(l -> l.contains("\"kind\":\"symbol\"")
+                    && l.contains(className + "#" + member + "."))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no field fact for " + member));
+            return object(JsonFacts.parse(line));
+        }
+    }
+
+    private static List<Map<String, Object>> parameters(Map<String, Object> methodFact) {
+        List<Map<String, Object>> parameters = new ArrayList<>();
+        for (Object parameter : list(object(methodFact.get("signature")).get("parameters"))) {
+            parameters.add(object(object(parameter).get("type")));
+        }
+        return parameters;
+    }
+
+    private static Map<String, Object> returns(Map<String, Object> methodFact) {
+        return object(object(methodFact.get("signature")).get("returns"));
+    }
+
+    private static Map<String, Object> argument(Map<String, Object> typeRef, int index) {
+        return object(list(typeRef.get("arguments")).get(index));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> object(Object value) {
+        return (Map<String, Object>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> list(Object value) {
+        return (List<Object>) value;
+    }
+}

@@ -42,5 +42,37 @@
       <groupId>io.micronaut.gcp</groupId><artifactId>micronaut-gcp-pubsub</artifactId><version>5.8.0</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
     </dependency>
+    <!-- `@jakarta.inject.Singleton` on `SqsPoller`: `micronaut-inject`'s own transitive
+         copy is excluded above like everything else in this file, so it has to be
+         declared directly. Version matches what `micronaut-inject:4.7.6`'s own POM
+         names. -->
+    <dependency>
+      <groupId>jakarta.inject</groupId><artifactId>jakarta.inject-api</artifactId><version>2.0.1</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- The raw AWS SDK client, the same coordinate `aws-sqs-sdk.yml` detects on
+         `orders-service` — a Micronaut module reaching SQS with no first-party
+         annotation at all (`micronaut-jms-sqs` is a JMS `ConnectionFactory`, not an SQS
+         annotation; see `OrderMessaging`'s `@JMSListener`/`@JMSProducer` pair, which reads
+         as protocol `jms`, not `sqs`). `utils`/`sdk-core`/`aws-core` are declared
+         alongside it, each with the whole-tree exclusion this file always uses, because
+         `SqsClient`'s and `SendMessageRequest`'s own supertypes live in those three jars
+         and `sqs`'s transitives are excluded like everything else here. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId><artifactId>sqs</artifactId><version>2.25.31</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId><artifactId>utils</artifactId><version>2.25.31</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId><artifactId>sdk-core</artifactId><version>2.25.31</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId><artifactId>aws-core</artifactId><version>2.25.31</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
   </dependencies>
 </project>

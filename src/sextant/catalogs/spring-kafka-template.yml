@@ -10,6 +10,10 @@ detect:
 measured:
   - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
       identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
+  # The RECEIVE half (`G-44`): the one `receive` overload that names the topic at
+  # argument 0.
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/w59_template_receive_halves.md }
 
 requires: [call_site, string_constants]
 
@@ -111,6 +115,27 @@ matches:
     - { name: sendDefault, arity: 4,
         descriptor: "(Ljava/lang/Integer;Ljava/lang/Long;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;",
         body_arg: 3 }
+    # `G-44`, the RECEIVE half. MEASURED spring-kafka 3.1.4 (w59): `KafkaTemplate`
+    # declares TWO `receive` overloads and only this one puts the topic at argument 0
+    # as a plain `String` — a synchronous read of one record. The other,
+    # `receive(Collection<TopicPartitionOffset>, Duration)`, takes addresses built
+    # elsewhere (each `TopicPartitionOffset` constructed from a topic, partition and
+    # offset the caller already assembled), stated in prose rather than as a
+    # `slice.outside` entry, for two reasons: it shares the `receive` NAME with the row
+    # below (that key is keyed on name alone, so a released fix cannot name `receive`
+    # both read and outside on the same owner — Task 2's `spring-jms-template.yml` hit
+    # the identical shape and made the same call), and `KafkaTemplate`/`KafkaOperations`
+    # are not owners `scripts/probes/w19_catalog_surface/sweep.py` enumerates at all
+    # (spring-kafka is not in that probe's artifact list), so no `slice:` block is
+    # mechanically required here in the first place. A `channel_via` on
+    # `TopicPartitionOffset.<init>(String, int, long)` would read the outside overload,
+    # but constructor `channel_via` is not a form `single_call` has
+    # (`kafka-consumer.yml`'s `channel_via` rows are all static factories) — so it
+    # derives nothing, verified by the declining test in
+    # `tests/application/test_call_engines.py`.
+    - { name: receive, arity: 4,
+        descriptor: "(Ljava/lang/String;IJLjava/time/Duration;)Lorg/apache/kafka/clients/consumer/ConsumerRecord;",
+        channel_arg: 0, direction: inbound }
   # `ReplyingKafkaTemplate.sendAndReceive` gets its own file
   # (`spring-kafka-replying.yml`). The reason used to be that `matches.owner` is
   # single-valued; W9 made that false, so the real one: it is a DIFFERENT

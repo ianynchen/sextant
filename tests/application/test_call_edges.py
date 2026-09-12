@@ -33,6 +33,7 @@ from sextant.domain.facts import (
     CallTarget,
     Document,
     MethodReturnFact,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -356,3 +357,232 @@ def test_every_hand_built_symbol_is_module_prefixed():
     for fact in (_declared(_CALLER, "run"), _declared(_CALLER, "lambda$run$0")):
         assert str(fact.symbol).startswith(_MODULE)
         assert bare_descriptor(str(fact.symbol)) != str(fact.symbol)
+
+
+_EXITS = _CALLER + "exits(" + disambiguator_of(_VOID_JVM) + ")."
+_BOOM = "com/acme/orders/gate/Boom#"
+
+
+@pytest.fixture(scope="module")
+def thrown(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """`Caller#exits` leaves twice (`G-52`): once through a `throw` whose type the
+    extractor read, once through a rethrow whose type it could not."""
+    tmp_path = tmp_path_factory.mktemp("call_edges_thrown")
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "gate.jsonl",
+        _document(),
+        [
+            SymbolFact(
+                document_id="doc_gate", symbol=_MODULE + _CALLER, construct_kind=ConstructKind.CLASS
+            ),
+            _declared(_CALLER, "exits"),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _EXITS,
+                target=CallTarget(owner=_BOOM),
+                invoke_kind="throw",
+                ordinal=0,
+            ),
+            CallSiteFact(
+                document_id="doc_gate",
+                caller=_MODULE + _EXITS,
+                target=CallTarget(),
+                invoke_kind="throw",
+                ordinal=1,
+            ),
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_call_edges(workspace)
+    rows = workspace.query("call_edges")
+    workspace.close()
+    return rows
+
+
+def test_a_throw_site_is_one_resolved_edge_to_the_thrown_type_and_reads_throws(thrown):
+    """`G-52`. A throw dispatches to no method, so the row's target is the thrown TYPE
+    whole, it has no callee, and it is `resolved` — the compiler named the exit exactly
+    and what is unknown is nothing. `terminal_kind` is `throws`, decided from the invoke
+    kind and not from any catalog rule. A rethrow whose type was unread keeps its row
+    with a NULL target: dropping it would lose an exit the fact stream recorded, and
+    spelling it `str(None)` would name a method nobody wrote."""
+    assert [row["ordinal"] for row in thrown] == [0, 1]
+    named, unread = thrown
+    assert named["target"] == _BOOM
+    assert unread["target"] is None
+    for row in thrown:
+        assert row["invoke_kind"] == "throw"
+        assert row["callee"] is None
+        assert row["resolution"] == str(Resolution.RESOLVED)
+        assert row["terminal_kind"] == "throws"
+        assert row["target_kind"] is None
+
+
+# ---- a compiler-emitted holder of an interface's default method bodies ----------------
+
+_PRICE = "com/acme/orders/price/"
+_PRICER = _PRICE + "Pricer#"
+_PRICER_HOLDER = _PRICE + "Pricer$DefaultImpls#"
+_TAXER = _PRICE + "Taxer#"
+_TAXER_HOLDER = _PRICE + "Taxer$DefaultImpls#"
+_FLAT = _PRICE + "FlatPricer#"
+_SHOP = _PRICE + "Shop#"
+_INT_JVM = "()I"
+_QUOTE = _SHOP + "quote(" + disambiguator_of(_INT_JVM) + ")."
+
+
+def _holder_body(holder: str, iface: str, name: str) -> tuple[SymbolFact, MethodReturnFact]:
+    """A holder's static body for `iface#name()`: slot 0 is the interface instance,
+    as the scanner reads it (`bridge_of` on the method, `implements_default_of` on
+    the holder's own type fact), and a return, because the workspace read it."""
+    jvm = "(L" + iface[:-1] + ";)I"
+    symbol = _MODULE + method_descriptor(holder, name, jvm)
+    return (
+        SymbolFact(
+            document_id="doc_price",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + holder,
+            signature=Signature(
+                parameters=[Parameter(type=TypeRef(symbol=iface), erased_symbol=iface)],
+                returns=TypeRef(symbol="int#"),
+            ),
+            modifiers={"static": True, "synthetic": False},
+            bridge_of=name,
+        ),
+        MethodReturnFact(document_id="doc_price", method=symbol, ordinal=0, value=None),
+    )
+
+
+def _interface_method(iface: str, name: str) -> SymbolFact:
+    return SymbolFact(
+        document_id="doc_price",
+        symbol=_MODULE + method_descriptor(iface, name, _INT_JVM),
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + iface,
+        signature=Signature(parameters=[], returns=TypeRef(symbol="int#")),
+    )
+
+
+@pytest.fixture(scope="module")
+def default_impls(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """`Shop#quote` calls `price()` on a `Pricer` — an interface whose `price` has NO
+    body of its own and whose default body lives in `Pricer$DefaultImpls` — and
+    `rate()` on a `Taxer`, whose `rate` HAS a body of its own beside a holder stub.
+    `FlatPricer` implements `Pricer` and overrides nothing."""
+    tmp_path = tmp_path_factory.mktemp("call_edges_default_impls")
+    facts = tmp_path / "facts"
+    document = _document().model_copy(
+        update={"document_id": "doc_price", "relative_path": _PRICE + "Shop.kt"}
+    )
+    pricer_body, pricer_return = _holder_body(_PRICER_HOLDER, _PRICER, "price")
+    taxer_body, taxer_return = _holder_body(_TAXER_HOLDER, _TAXER, "rate")
+    taxer_rate = _interface_method(_TAXER, "rate")
+    write_fact_file(
+        facts / "price.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _PRICER,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            _interface_method(_PRICER, "price"),
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _PRICER_HOLDER,
+                construct_kind=ConstructKind.CLASS,
+                enclosing=_MODULE + _PRICER,
+                implements_default_of=_MODULE + _PRICER,
+            ),
+            pricer_body,
+            pricer_return,
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _TAXER,
+                construct_kind=ConstructKind.INTERFACE,
+            ),
+            taxer_rate,
+            MethodReturnFact(
+                document_id="doc_price", method=str(taxer_rate.symbol), ordinal=0, value=None
+            ),
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _TAXER_HOLDER,
+                construct_kind=ConstructKind.CLASS,
+                enclosing=_MODULE + _TAXER,
+                implements_default_of=_MODULE + _TAXER,
+            ),
+            taxer_body,
+            taxer_return,
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _FLAT,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_MODULE + _PRICER],
+            ),
+            SymbolFact(
+                document_id="doc_price", symbol=_MODULE + _SHOP, construct_kind=ConstructKind.CLASS
+            ),
+            SymbolFact(
+                document_id="doc_price",
+                symbol=_MODULE + _QUOTE,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + _SHOP,
+                signature=Signature(parameters=[], returns=TypeRef(symbol="int#")),
+            ),
+            MethodReturnFact(
+                document_id="doc_price", method=_MODULE + _QUOTE, ordinal=0, value=None
+            ),
+            CallSiteFact(
+                document_id="doc_price",
+                caller=_MODULE + _QUOTE,
+                target=CallTarget(owner=_PRICER, name="price", descriptor=_INT_JVM),
+                invoke_kind="interface",
+                ordinal=0,
+                result=None,
+            ),
+            CallSiteFact(
+                document_id="doc_price",
+                caller=_MODULE + _QUOTE,
+                target=CallTarget(owner=_TAXER, name="rate", descriptor=_INT_JVM),
+                invoke_kind="interface",
+                ordinal=1,
+                result=None,
+            ),
+        ],
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_call_edges(workspace)
+    rows = workspace.query("call_edges")
+    workspace.close()
+    return rows
+
+
+def test_a_default_body_holder_is_the_interface_methods_body_where_it_has_none(default_impls):
+    """`kotlin-defaultimpls`. `Pricer#price` declares no body; the workspace read one,
+    in `Pricer$DefaultImpls#price(Pricer)`, and the scanner said which method it
+    stands for. Without the join the site is a row with `callee` NULL — the
+    third-party boundary, claimed about a body this workspace holds."""
+    rows = [row for row in default_impls if row["ordinal"] == 0]
+    assert [str(row["callee"]) for row in rows] == [
+        _MODULE + method_descriptor(_PRICER_HOLDER, "price", "(L" + _PRICER[:-1] + ";)I")
+    ]
+    assert [str(row["resolution"]) for row in rows] == ["resolved"]
+
+
+def test_an_interface_method_with_its_own_body_keeps_its_single_candidate(default_impls):
+    """Measured on kotlinc 2.2.0's default mode: the interface carries `rate()` as a
+    JVM default method AND the holder carries a deprecated stub calling back into
+    it. Joining the stub too would turn every such call from `resolved` to
+    `narrowed`. The holder stands in only where the interface declares no body."""
+    rows = [row for row in default_impls if row["ordinal"] == 1]
+    assert [str(row["callee"]) for row in rows] == [
+        _MODULE + method_descriptor(_TAXER, "rate", _INT_JVM)
+    ]
+    assert [str(row["resolution"]) for row in rows] == ["resolved"]

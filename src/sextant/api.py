@@ -856,6 +856,10 @@ def _assembled_sections(
         redactor=redactor,
         overlay=overlay,
         stale=stale,
+        # `G-74`'s join, read back rather than re-derived: `reachable_throws` is a
+        # `call_edges`/`reachability`-shaped answer, and deciding it a second time here
+        # would be the same derivation-in-egress `traces` below already refuses.
+        reachable_throws=workspace.query("reachable_throws"),
         # The walk runs HERE, at the composition root, and its answer is
         # handed to the renderer as data (2Q `G4`/`I3`). `traces_of` reads the
         # workspace once for all roots — the three projections it builds are

@@ -33,13 +33,13 @@ alone would publish an address the container answers 405 to. Arity is a
 consequence of the parameter list, never the rule.
 
 **It reads no visibility at all, and that is mirroring rather than relaxing.**
-CP-9 row 24: D00 §5a's `visibility` column is two-valued, so a handler
-declared at a reduced-but-legal visibility is recorded as `other` and the
-column cannot say which. It need not: an override may only widen the
-visibility of the member it overrides, never narrow it, so a member declared
-under the supertype's own name and parameter types IS the override at every
-visibility the language permits. Checking the column would exclude the common
-case and prove nothing about the rest.
+CP-9 row 24: an override may only widen the visibility of the member it
+overrides, never narrow it, so a member declared under the supertype's own
+name and parameter types IS the override at every visibility the language
+permits, whichever of `Visibility`'s four words it carries. Checking the
+column would exclude the common case and prove nothing about the rest. (Before
+`G-73` the column was two-valued and a reduced-but-legal declaration read
+`other` with no way to say which — the same conclusion, for a cruder reason.)
 
 **One row per handler the MODULE DECLARES** — which is the ruling CP-9 was run
 to settle (`scripts/probes/cp9_servlet_shapes.md`, verdict 5). A dispatch

@@ -27,13 +27,15 @@ error this wave keeps producing — the same one that made the first probe repor
 
 ## What each one found
 
-**G-47 — `spring-integration` reads 2 of the 11 channel-declaring annotations.**
+**G-47 — `spring-integration` reads 7 of the 11 channel-declaring annotations
+(re-measured 2026-09-12 after `G-47`/`G-45` shipped).**
 Measured from each annotation's own declared attributes rather than from a list: an
 annotation counts as channel-declaring when the framework NAMED an attribute for a
 channel (`inputChannel`, `outputChannel`, `channel`, `discardChannel`,
 `requestChannel`, `replyChannel`, `defaultRequestChannel`, `defaultReplyChannel`).
-`@Aggregator`, `@Filter`, `@Gateway`, `@MessagingGateway`, `@Poller`, `@Publisher`,
-`@Router`, `@Splitter` and `@Transformer` are all unread.
+`@Aggregator`, `@Filter`, `@Router`, `@Splitter` and `@Transformer` are read since
+`G-47` shipped; `@Gateway`, `@MessagingGateway`, `@Poller` and `@Publisher` are the
+four still unread.
 
 *The attribute list was written out by hand first and missed `errorChannel`, which
 removed `@Poller` from the table, the count and the slice together; it also missed
@@ -47,16 +49,18 @@ is a reading of the annotation's name. That makes thirteen. The gap analysis est
 `@Poller`, which no hand-written list contained.
 
 The cost here is bounded and worth stating plainly: this catalog mints no endpoint
-rows, it files `channel_destination` questions. So eight unread annotations are an
-under-reported QUESTION list, not eight wrong rows.
+rows, it files `channel_destination` questions. So four unread annotations are an
+under-reported QUESTION list, not four wrong rows.
 
-**G-45 — `spring-data-rest`'s roster names 6 of the 28 repository contracts.**
+**G-45 — `spring-data-rest`'s roster names 7 of the 28 repository contracts
+(re-measured 2026-09-12 after `G-47`/`G-45` shipped).**
 Every store module ships its own: `MongoRepository`, `R2dbcRepository`,
 `CassandraRepository`, `ElasticsearchRepository`, `Neo4jRepository`, their reactive
-twins, plus the coroutine and RxJava3 contracts in `spring-data-commons` itself. A
-repository interface extending any of them derives NOTHING, because the roster is the
-whole rule — this style's evidence mentions no HTTP anywhere, so what turns an
-interface into an API is exactly the contract it extends.
+twins, plus the coroutine and RxJava3 contracts in `spring-data-commons` itself. The
+roster names `MongoRepository` since `G-45` shipped, beside `JpaRepository` and five
+base contracts; a repository interface extending any of the other 21 derives NOTHING,
+because the roster is the whole rule — this style's evidence mentions no HTTP
+anywhere, so what turns an interface into an API is exactly the contract it extends.
 
 **G-41 — the recorded mechanism does not exist, and the real one now does.** The gap
 analysis says `@DgsData` and `@DgsQuery` are `@Inherited`. All five are, measured — and
@@ -89,19 +93,19 @@ Cells are the channel-naming attributes the annotation declares, under the versi
 
 | annotation | 6.2.4 | read by the catalog |
 |---|---|---|
-| `Aggregator` | `discardChannel`, `inputChannel`, `outputChannel` | **NO** |
-| `Filter` | `discardChannel`, `inputChannel`, `outputChannel` | **NO** |
+| `Aggregator` | `discardChannel`, `inputChannel`, `outputChannel` | yes |
+| `Filter` | `discardChannel`, `inputChannel`, `outputChannel` | yes |
 | `Gateway` | `replyChannel`, `requestChannel` | **NO** |
 | `InboundChannelAdapter` | `channel` | yes |
 | `MessagingGateway` | `defaultReplyChannel`, `defaultRequestChannel`, `errorChannel` | **NO** |
 | `Poller` | `errorChannel` | **NO** |
 | `Publisher` | `channel` | **NO** |
-| `Router` | `channelMappings`, `defaultOutputChannel`, `inputChannel` | **NO** |
+| `Router` | `channelMappings`, `defaultOutputChannel`, `inputChannel` | yes |
 | `ServiceActivator` | `inputChannel`, `outputChannel` | yes |
-| `Splitter` | `inputChannel`, `outputChannel` | **NO** |
-| `Transformer` | `inputChannel`, `outputChannel` | **NO** |
+| `Splitter` | `inputChannel`, `outputChannel` | yes |
+| `Transformer` | `inputChannel`, `outputChannel` | yes |
 
-- **2 of 11** channel-declaring annotations are read; 9 are not.
+- **7 of 11** channel-declaring annotations are read; 4 are not.
 - The package holds 34 annotations in total (of 35 classes — the difference is `AnnotationConstants`, a plain final class); the rest declare no channel attribute.
 - Invisible to the attribute-name test, and carrying a channel in a bare `value()`: `BridgeFrom`, `BridgeTo`. Counted separately because 'the framework named this attribute a channel' is a measurement and 'this `value()` means a channel' is a reading of the name.
 
@@ -117,8 +121,7 @@ Cells are the channel-naming attributes the annotation declares, under the versi
 | | | `ReactiveSortingRepository` | **NO** |
 | | | `RxJava3CrudRepository` | **NO** |
 | | | `RxJava3SortingRepository` | **NO** |
-| `org.springframework.data:spring-data-mongodb` | 4.2.5 | 2 | **0** |
-| | | `MongoRepository` | **NO** |
+| `org.springframework.data:spring-data-mongodb` | 4.2.5 | 2 | **1** |
 | | | `ReactiveMongoRepository` | **NO** |
 | `org.springframework.data:spring-data-r2dbc` | 3.2.5 | 1 | **0** |
 | | | `R2dbcRepository` | **NO** |
@@ -191,4 +194,3 @@ Prose is what a reader needs and a table is what a test can hold to; this is the
 | `spring-data-rest` | `type` | `org.springframework.data:spring-data-couchbase` | `ReactiveCouchbaseRepository` |
 
 **G-41 is deliberately absent from this table.** `netflix-dgs`'s gap is not a set of names the catalog fails to read — it names all five annotations. It is a USE SITE we cannot see: an `@Inherited` annotation on a superclass method registers a fetcher the subclass never declares, and this analysis reads annotations where they are written. `slice.outside`'s vocabulary is "names this catalog does not read", and forcing a use-site gap into it would make the key mean two different things. It is stated in the catalog and in COVERAGE instead.
-

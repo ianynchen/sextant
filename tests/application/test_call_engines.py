@@ -7391,6 +7391,38 @@ def test_the_rabbit_arity_two_routing_key_overload_still_derives(tmp_path: Path)
     assert (endpoint["path"], endpoint["resolution"]) == ("order.created", "resolved")
 
 
+@pytest.mark.declines("spring-rabbit-template")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_a_rabbit_receive_from_the_default_queue_derives_nothing(tmp_path: Path):
+    """§10 near-miss for `G-44`'s receive rows: `receive(long)` — a timeout, no queue —
+    reads the template's configured default queue. It shares its NAME and its ARITY with
+    the addressable `receive(String)` overload and differs only in descriptor, which is
+    what the descriptor pin (`single_call.claimed-arity`) is for. A row here would
+    publish a queue nobody named."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollDefaultQueue()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RABBIT_TEMPLATE,
+                name="receive",
+                descriptor="(J)Lorg/springframework/amqp/core/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="long", value=500)],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _rabbit_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
 JMS_TEMPLATE = "org/springframework/jms/core/JmsTemplate#"
 
 
@@ -7456,6 +7488,141 @@ def test_the_jms_arity_two_destination_name_overload_still_derives(tmp_path: Pat
     workspace.close()
 
     assert (endpoint["path"], endpoint["resolution"]) == ("orders.queue", "resolved")
+
+
+@pytest.mark.declines("spring-jms-template")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_a_jms_receive_selected_from_a_destination_object_derives_nothing(tmp_path: Path):
+    """`G-44`'s receive-half arity collision: `receiveSelected(Destination, String)`
+    shares its NAME and its ARITY with the addressable `receiveSelected(String,
+    String)` row and differs only in descriptor — argument 0 is a `Destination`
+    object built elsewhere, never a string constant a call site carries (measured,
+    w59). A row here would read that object as if it were the destination name,
+    the same fabrication `single_call.claimed-arity` exists to stop."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollSelectedFromDestination()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=JMS_TEMPLATE,
+                name="receiveSelected",
+                descriptor="(Ljakarta/jms/Destination;Ljava/lang/String;)Ljakarta/jms/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="jakarta/jms/Queue#"),
+                CallArgument(kind="string", value="priority > 5"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_jms_receive_selected_at_arity_one_reads_the_default_destination_derives_nothing(
+    tmp_path: Path,
+):
+    """`G-44`'s other trap, on the same method name: `receiveSelected(String)` — arity
+    1 — takes a SELECTOR and reads the default destination (spring-jms's own javadoc).
+    Its descriptor, `(Ljava/lang/String;)Ljakarta/jms/Message;`, happens to equal
+    `receive(String)`'s, but the catalog separates overloads by NAME first, so this
+    call never reaches a `receiveSelected` candidate at all — the catalog declares no
+    arity-1 row for this name (`tests/e2e/test_jms_and_amqp_delivered.py` asserts the
+    same fact against real bytecode). Not `@pytest.mark.declines`: there is no
+    same-name, same-arity descriptor collision here for a guard to defend, so no
+    `scripts/guard_check.py` id fits — the boundary is the catalog's own `methods:`
+    list declaring no row, not a removable conjunct in the engine. A row here would
+    publish `priority > 5` as a queue."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollDefaultSelected()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=JMS_TEMPLATE,
+                name="receiveSelected",
+                descriptor="(Ljava/lang/String;)Ljakarta/jms/Message;",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="priority > 5")],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _jms_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+KAFKA_TEMPLATE = "org/springframework/kafka/core/KafkaTemplate#"
+
+
+def _kafka_template_catalog() -> Catalog:
+    return next(
+        c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-kafka-template"
+    )
+
+
+def test_a_kafka_receive_by_topic_partition_offsets_derives_nothing(tmp_path: Path):
+    """`G-44`'s other `KafkaTemplate.receive` overload:
+    `receive(Collection<TopicPartitionOffset>, Duration)` takes ADDRESSES built
+    elsewhere — each `TopicPartitionOffset` constructed from a topic, partition and
+    offset the caller already assembled — never a topic name the call site itself
+    carries. Its arity is 2, the addressable row's (`receive(String, int, long,
+    Duration)`) is 4, so `single_call`'s own name+arity filter
+    (`_matching_method`'s `candidates` comprehension) excludes this call from the
+    candidate list before any `descriptor` is even compared — the same "no row at
+    this arity at all" shape as JMS's arity-1 `receiveSelected` twin above. Not
+    `@pytest.mark.declines`: there is no same-name, same-arity descriptor collision
+    here for a guard to defend, so no `scripts/guard_check.py` id fits — measured,
+    not assumed: `python scripts/guard_check.py single_call.claimed-arity` reports
+    this test SURVIVED (not discriminating) while it carried
+    `@pytest.mark.pins("single_call.claimed-arity")`, because `candidates` is
+    already empty at that point and `any(_DESCRIPTOR in row for row in candidates)`
+    is `False` whether or not the guard's own conjunct is disabled — the same
+    finding Task 2 made for JMS's arity-1 twin. `tests/architecture/
+    test_guard_pins.py::test_every_declining_test_names_exactly_one_guard` is why
+    the marker cannot simply be added anyway: a `declines` test with no matching
+    guard is what that check exists to forbid. A row here would publish whatever
+    the collection's first element resolved to as a topic."""
+    caller = "com/acme/orders/messaging/OrderPoller#pollByPartitionOffsets()."
+    facts = [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=KAFKA_TEMPLATE,
+                name="receive",
+                descriptor=(
+                    "(Ljava/util/Collection;Ljava/time/Duration;)"
+                    "Lorg/apache/kafka/clients/consumer/ConsumerRecords;"
+                ),
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=3,
+            result=None,
+            arguments=[
+                CallArgument(kind="instance", symbol="java/util/List#"),
+                CallArgument(kind="instance", symbol="java/time/Duration#"),
+            ],
+        )
+    ]
+    workspace = _resolve(tmp_path, facts, _kafka_template_catalog())
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 # --- Descriptor sweep (2O), R1: the SAME overload collision as Task 7's, still
@@ -8278,6 +8445,48 @@ _CLAIMED_ARITIES = [
         id="RestTemplate.exchange(String, HttpMethod, HttpEntity, Class, Object...) — "
         "hypothetical arity-5 sibling",
     ),
+    # `G-31`. `KStream.to(TopicNameExtractor[, Produced])` is a REAL overload of the
+    # same jar (kafka-streams 3.6.2, w60) — not hypothetical — and it is exactly the
+    # near-miss this table exists for: same name, same arity as `to(String)`, and
+    # only the descriptor tells them apart. The extractor picks the topic per
+    # RECORD at runtime, so there is no string constant here to publish; a row
+    # would have to fabricate one out of the class name. `to` is `kafka-streams-
+    # sink.yml`'s own row (the three-owner `kafka-streams` catalog was split by
+    # owner — see that file's header comment).
+    pytest.param(
+        "kafka-streams-sink",
+        "org/apache/kafka/streams/kstream/KStream#",
+        "to",
+        "(Ljava/lang/String;)V",
+        "(Lorg/apache/kafka/streams/processor/TopicNameExtractor;)V",
+        [
+            CallArgument(
+                kind="instance", symbol="org/apache/kafka/streams/processor/TopicNameExtractor#"
+            )
+        ],
+        id="KStream.to(TopicNameExtractor) — the real overload with no declared row",
+    ),
+    # `alpakka-pekko` (w62). `Consumer.plainSource(ConsumerSettings, Subscription)`'s
+    # own arity-2 shape is unique in pekko-connectors-kafka 1.1.0 — no sibling
+    # overload shares its name and arity — so the near-miss is hypothetical, stated as
+    # such in the case id: a caller passing a plain object at argument 1, never built
+    # by `Subscriptions`, is exactly the shape a release adding a same-name-same-arity
+    # overload with a wider parameter type would produce, and the row must not read it.
+    pytest.param(
+        "pekko-connectors-kafka",
+        "org/apache/pekko/kafka/javadsl/Consumer#",
+        "plainSource",
+        "(Lorg/apache/pekko/kafka/ConsumerSettings;Lorg/apache/pekko/kafka/Subscription;)"
+        "Lorg/apache/pekko/stream/javadsl/Source;",
+        "(Lorg/apache/pekko/kafka/ConsumerSettings;Ljava/lang/Object;)"
+        "Lorg/apache/pekko/stream/javadsl/Source;",
+        [
+            CallArgument(kind="instance", symbol="org/apache/pekko/kafka/ConsumerSettings#"),
+            CallArgument(kind="instance", symbol="java/lang/Object#"),
+        ],
+        id="Consumer.plainSource(ConsumerSettings, Object) — hypothetical arity-2 sibling, "
+        "argument 1 a plain object",
+    ),
 ]
 
 
@@ -8286,6 +8495,8 @@ _CLAIMED_ARITIES = [
 @pytest.mark.declines("javax-jms")
 @pytest.mark.declines("kafka-clients")
 @pytest.mark.declines("kafka-consumer")
+@pytest.mark.declines("kafka-streams-sink")
+@pytest.mark.declines("pekko-connectors-kafka")
 @pytest.mark.declines("spring-pubsub")
 @pytest.mark.declines("spring-sqs-template")
 @pytest.mark.declines("spring-kafka-template")
@@ -8344,6 +8555,140 @@ def test_the_declared_overload_of_a_claimed_arity_still_derives(
     workspace.close()
 
     assert len(rows) == 1, f"{catalog_id}: {name} no longer derives its own declared overload"
+
+
+# `kafka-streams.yml` and `kafka-streams-topology.yml` (`G-31`, w60) have no
+# claimed-arity near-miss available: every `stream`/`table`/`globalTable` overload
+# at every arity `StreamsBuilder` declares is already read, so there is no
+# undeclared same-name-same-arity sibling to collide with. Their near-miss is the
+# OTHER conjunct `single_call` checks — the receiver's OWN type — the
+# `spring-rabbit-template`/`HomeGrownTemplate` precedent above, applied here.
+@pytest.mark.declines("kafka-streams")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_stream_call_on_an_owner_that_is_not_streamsbuilder_derives_nothing(
+    tmp_path: Path,
+):
+    """§10 near-miss, negating the catalog's `owner` conjunct while satisfying
+    every other one: the method name, arity and descriptor are exactly
+    `StreamsBuilder.stream(String)`'s own, and only the receiver's type differs.
+
+    `stream` is not a name Kafka Streams owns exclusively — any application
+    helper class is free to declare one — and a row derived here would publish
+    an unrelated call's argument as a Kafka topic."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/streams/HomeGrownBuilder#",
+                "stream",
+                "(Ljava/lang/String;)Lorg/apache/kafka/streams/kstream/KStream;",
+                [CallArgument(kind="string", value="not-a-real-topic")],
+            )
+        ],
+        "kafka-streams",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.declines("kafka-streams-topology")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_an_addsink_call_on_an_owner_that_is_not_topology_derives_nothing(
+    tmp_path: Path,
+):
+    """§10 near-miss for `kafka-streams-topology.yml`, the same shape as the
+    `StreamsBuilder` one above: `addSink`'s name, arity and descriptor are
+    exactly `Topology`'s own, and only the receiver's type differs."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/streams/HomeGrownTopology#",
+                "addSink",
+                "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)Lorg/apache/kafka/streams/Topology;",
+                [
+                    CallArgument(kind="string", value="snk"),
+                    CallArgument(kind="string", value="not-a-real-topic"),
+                    CallArgument(kind="array", elements=[]),
+                ],
+            )
+        ],
+        "kafka-streams-topology",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_javalin_add_http_handler_derives_nothing(tmp_path: Path):
+    """`javalin.yml` (`javalin-routing`, w61): `addHttpHandler(HandlerType, String,
+    Handler)` carries the verb as an ENUM at argument 0 and the path at argument 1 —
+    the near miss `get`/`post`/etc.'s own descriptors would be if Javalin named the
+    verb this way instead of in the method name. No `single_call` row declares
+    `addHttpHandler` at all (`javalin.yml`'s own comment states why: no word reads a
+    verb off an argument), so this is a "no row at this NAME" near-miss, not a same-
+    name-same-arity collision. Not `@pytest.mark.declines`: there is no descriptor
+    collision here for a guard to defend — `_matching_method`'s name+arity filter
+    already excludes `addHttpHandler` from every candidate list before any descriptor
+    is compared, so `python scripts/guard_check.py single_call.call-site-owner` and
+    `single_call.claimed-arity` would both report this test SURVIVING while
+    discriminating nothing, the same finding Task 2 made for JMS's arity-1 twin and
+    Task 5 restated for `SqsTemplate.receive(Collection, Duration)` above. A row here
+    would publish whatever the caller passed as `HandlerType.GET` as a path."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "io/javalin/router/JavalinDefaultRoutingApi#",
+                "addHttpHandler",
+                "(Lio/javalin/http/HandlerType;Ljava/lang/String;Lio/javalin/http/Handler;)"
+                "Lio/javalin/router/RoutingApi;",
+                [
+                    CallArgument(kind="enum", symbol="io/javalin/http/HandlerType#GET."),
+                    CallArgument(kind="string", value="/jv/orders"),
+                    CallArgument(kind="unresolved"),
+                ],
+            )
+        ],
+        "javalin",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.declines("javalin")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_javalin_get_call_on_an_owner_that_is_not_javalin_derives_nothing(tmp_path: Path):
+    """§10 near-miss, negating `javalin.yml`'s `owner` conjunct while satisfying every
+    other one: the method name, arity and descriptor are exactly `Javalin.get(String,
+    Handler)`'s own, and only the receiver's type differs. `get` is not a name
+    Javalin owns exclusively — any application router helper is free to declare
+    one — and a row derived here would publish an unrelated call's argument as an
+    HTTP route."""
+    workspace = _resolve_shipped(
+        tmp_path,
+        [
+            _call_to(
+                "com/acme/own/Router#",
+                "get",
+                "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;",
+                [
+                    CallArgument(kind="string", value="/not-a-real-route"),
+                    CallArgument(kind="unresolved"),
+                ],
+            )
+        ],
+        "javalin",
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 @pytest.mark.declines("spring-ws-template")

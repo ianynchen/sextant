@@ -97,7 +97,12 @@ class Step:
     caller: str
     ordinal: int
     invoke_kind: str
-    target: str
+    # NULL on exactly one shape (`G-52`): a `throw` whose type this pass could not read —
+    # a rethrow, whose type lives in the try-catch table. Kept NULL rather than spelled
+    # `str(None)`, which put a participant named `None` into the diagram and a symbol
+    # named `None` into `reachability`; a step with no target and no callee is a method
+    # leaving through an exception nobody named, and every reader says that in words.
+    target: str | None
     callee: str | None
     result: int | None
     resolution: Resolution
@@ -267,7 +272,7 @@ def _walk(
                 caller=caller,
                 ordinal=int(str(row["ordinal"])),
                 invoke_kind=str(row["invoke_kind"]),
-                target=str(row["target"]),
+                target=None if row["target"] is None else str(row["target"]),
                 callee=callee,
                 result=None if row["result"] is None else int(str(row["result"])),
                 resolution=Resolution(str(row["resolution"])),

@@ -80,6 +80,28 @@ def test_a_terminal_is_recorded_by_the_target_the_compiler_wrote(tmp_path: Path)
     assert (_API, "java/lang/String#length().", 1, True) in rows
 
 
+def test_a_throw_whose_type_was_unread_reaches_no_symbol(tmp_path: Path):
+    """`G-52`. A rethrow's row has neither callee nor target: the method exits and
+    reaches nothing a row could name. It is skipped rather than recorded as the symbol
+    `"None"` — and a NULL key sorted beside `str` keys would have raised. The positive
+    control is the named throw beside it, recorded by its type like any terminal."""
+    workspace = _workspace(tmp_path, [(_API, "/orders")], [])
+    for ordinal, target in ((0, "com/acme/Boom#"), (1, None)):
+        workspace._connection.execute(
+            "INSERT INTO call_edges (caller, ordinal, invoke_kind, target, callee, "
+            "result, resolution, evidence, terminal_kind) "
+            "VALUES (?, ?, 'throw', ?, NULL, NULL, 'resolved', 'compiler', 'throws')",
+            [_API, ordinal, target],
+        )
+
+    record_reachability(workspace)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == [(_API, _API, 0, False), (_API, "com/acme/Boom#", 1, True)]
+    assert "None" not in {symbol for _, symbol, _, _ in rows}
+
+
 def test_depth_counts_edges_from_the_root(tmp_path: Path):
     """The root's own body is depth 0 and what it calls is depth 1, which is the same
     counting `## Traces` renders — two answers to "how far" would be one too many."""

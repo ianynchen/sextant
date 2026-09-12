@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import kotlin.metadata.KmType;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.FieldVisitor;
@@ -139,6 +140,15 @@ public final class ClassScanner {
         private final List<String> permittedSubclasses = new ArrayList<>();
         private String[] classInterfaces;
         private String enclosingSymbol;
+        // `kotlin-defaultimpls`: the interface this class is the `$DefaultImpls` holder
+        // of, by name and `InnerClasses` entry (`KotlinDefaultImpls.holderOf`), or null.
+        // Whether its members have the holder's shape is settled per method as they are
+        // visited — `defaultImplsMethods` counts them and `defaultImplsShape` is cleared
+        // by the first that does not — so the class's own fact, emitted last, can state
+        // the whole conjunction.
+        private String defaultImplsOf;
+        private int defaultImplsMethods;
+        private boolean defaultImplsShape = true;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -262,6 +272,7 @@ public final class ClassScanner {
         public void visitInnerClass(String name, String outerName, String innerName, int access) {
             if (!name.equals(internalName) || outerName == null) return;
             if (enclosingSymbol == null) enclosingSymbol = symbolOf(outerName + "#");
+            defaultImplsOf = KotlinDefaultImpls.holderOf(internalName, outerName);
             // This table's `access` word is NOT read. It carries the source's own
             // nesting modifier — a `private` nested class reports package-private
             // in the class file's own word, and ACC_PRIVATE only here — but nothing
@@ -322,6 +333,27 @@ public final class ClassScanner {
                 || "annotation".equals(constructKind)
                 || "enum".equals(constructKind)
                 || "record".equals(constructKind);
+        }
+
+        /** JVMS 4.1's four access levels — `public`, `protected`, package (no keyword,
+         *  no bit of its own) and `private` — read from the one JVM access word every
+         *  method, field and type carries (`G-73`). Tested `PUBLIC` before `PROTECTED`
+         *  before `PRIVATE` because the three bits are mutually exclusive by
+         *  construction (JVMS 4.1, 4.5, 4.6): javac never sets two, so the order only
+         *  matters for the one case nothing sets any of them, which is what makes
+         *  `package` the fallback rather than a fourth bit to test.
+         *
+         *  <p>For a NESTED type this reads the CLASS FILE's own word, which is the
+         *  coarse one — a `private` or `protected` nested type states that modifier
+         *  in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a
+         *  private nested type package-private and a protected one public. Recovering
+         *  the source modifier is `OI-51`; until then a nested type's visibility is
+         *  its outer word. */
+        private String visibilityOf(int access) {
+            if ((access & Opcodes.ACC_PUBLIC) != 0) return "public";
+            if ((access & Opcodes.ACC_PROTECTED) != 0) return "protected";
+            if ((access & Opcodes.ACC_PRIVATE) != 0) return "private";
+            return "package";
         }
 
         /** D00 §4's construct kinds carry `enum` beside `class` and `interface`, and
@@ -425,6 +457,27 @@ public final class ClassScanner {
             // same value. Same answer either way; naming which one is meant keeps it
             // that way if either ever stops being true.
             int methodAccess = access;
+            // `OI-81`: a Kotlin `$default` bridge, recognised from its shape and joined to
+            // the function it stands for. Null for every other method.
+            KotlinDefaultBridge defaultBridge =
+                KotlinDefaultBridge.recognise(access, name, descriptor, kotlinNullability);
+            // `kotlin-defaultimpls`: inside a `$DefaultImpls` holder, a static method with
+            // the interface at slot 0 is the body of the interface method of its own name
+            // — or, for the `$default` bridge kotlinc puts beside a defaulted one, of the
+            // function that bridge already names. Either way the fact says which
+            // interface method it stands for, through the same `bridge_of` an ordinary
+            // bridge carries. Null for every method of every other class.
+            String standsFor = null;
+            if (defaultImplsOf != null) {
+                defaultImplsMethods++;
+                if (KotlinDefaultImpls.isBody(access, descriptor, defaultImplsOf)) {
+                    standsFor = defaultBridge == null ? name : defaultBridge.function();
+                } else {
+                    defaultImplsShape = false;
+                }
+            }
+            String bridgeOf = standsFor != null ? standsFor
+                : defaultBridge == null ? null : defaultBridge.function();
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -726,9 +779,11 @@ public final class ClassScanner {
                          signatureJson(name, descriptor, sig, parameterNames, parameterFlags,
                                        throwsJson,
                                        parameterAnnotations,
-                                       parameterTypeAnnotations, returnTypeAnnotations), methodAccess,
+                                       parameterTypeAnnotations, returnTypeAnnotations,
+                                       defaultBridge), methodAccess,
                          null, methodModifiersJson(methodAccess), null, null, null, null,
-                         annotationDefault, typeParametersJson(sig), lineStart, lineEnd);
+                         annotationDefault, typeParametersJson(sig), lineStart, lineEnd, null,
+                         bridgeOf == null ? null : JsonOut.string(bridgeOf));
                     // After the method's own symbol, never before: a call site
                     // names its caller, and a fact file reads top-down.
                     lines.addAll(MethodFlow.callSites(documentId, methodSymbol, this));
@@ -1137,14 +1192,15 @@ public final class ClassScanner {
                                       String declaredThrows,
                                       List<List<String>> parameterAnnotations,
                                       List<List<String>> parameterTypeAnnotations,
-                                      List<String> returnTypeAnnotations) {
+                                      List<String> returnTypeAnnotations,
+                                      KotlinDefaultBridge defaultBridge) {
             Type[] argumentTypes = Type.getArgumentTypes(descriptor);
             // W5: the descriptor has already erased every type argument and every type
             // variable by the time it reaches here — `List<String>` is `List`, and `T` is
             // whatever it happens to erase to. The `Signature` attribute is the only place
             // either survives, and it was read for the RETURN type and for fields while
             // parameters kept taking the erased one.
-            List<String> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
+            List<TypeRefs.Node> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
             int[] genericOf = alignedSignature(argumentTypes.length, genericParameters.size(),
                                                 parameterFlags);
             // Q2's `suspend fun` obligation. kotlinc erases a suspending function's
@@ -1165,7 +1221,25 @@ public final class ClassScanner {
             // so dropping it here cannot move an identity or break descriptor matching.
             // Null for every Java method and for any Kotlin one `@Metadata` did not name —
             // Java's rule still applies to those, and it is right for them.
-            String methodKey = methodName + descriptor;
+            //
+            // `OI-81`: a `$default` bridge is one metadata never names — it is compiler
+            // output, not a declaration — so `copy` read `nullable: false` beside a
+            // `copy$default` reading `true`, for one declared type. The bridge is read
+            // under its SIBLING's key: the function it stands for declared its return
+            // and its parameters, and the bridge's own slots are the sibling's
+            // (measured, kotlinc 2.2.0: `greet$default` is
+            // `(Ldev/sextant/extractor/KotlinDefaultsSample;Ljava/lang/String;ZILjava/lang/Object;)Ljava/lang/String;`
+            // — receiver, the function's slots, an `int` mask per 32 parameters, an
+            // `Object` marker). The receiver, masks and marker are nobody's declaration
+            // and keep Java's rule, which is what `defaultBridge.receiverSlots()` and
+            // `declaredSlots()` bound below. The `Continuation` a suspend sibling's
+            // bridge carries sits INSIDE the declared range and is subtracted from it
+            // the way the sibling's own read drops it, so the slots still line up.
+            // A bridge whose sibling could not be settled (`siblingKey() == null`) is read
+            // under its own key, which metadata never holds: Java's rule everywhere.
+            String methodKey = defaultBridge == null || defaultBridge.siblingKey() == null
+                ? methodName + descriptor
+                : defaultBridge.siblingKey();
             Boolean kotlinReturnNullable = kotlinNullability.returnNullable().get(methodKey);
             // TWO conjuncts, and each rules out a measured class of wrong answer.
             //
@@ -1186,24 +1260,75 @@ public final class ClassScanner {
                 && argumentTypes[argumentTypes.length - 1].getSort() == Type.OBJECT
                 && "kotlin/coroutines/Continuation".equals(
                     argumentTypes[argumentTypes.length - 1].getInternalName());
+            // `OI-80`: the `Continuation`'s type argument spells `Int` as `Integer`, because
+            // a type argument cannot be a primitive. Metadata's classifier and nullability
+            // together say whether the source wrote the primitive — `Int?` did not.
             String coroutineReturn =
                 kotlinNullability.suspendMethods().contains(methodKey) && continuationLast
-                    ? TypeRefs.coroutineReturnFromSignature(genericSignature, kotlinReturnNullable)
+                    ? TypeRefs.coroutineReturnFromSignature(genericSignature, kotlinReturnNullable,
+                                                            kotlinNullability.primitiveReturn(methodKey))
                     : null;
             int declaredParameters = coroutineReturn == null
                 ? argumentTypes.length
                 : argumentTypes.length - 1;
+            // `OI-82`, the PARAMETER half of `G-63`. Kotlin states a parameter's
+            // nullability in its TYPE, and Java's rule — every reference permits null —
+            // is wrong for every Kotlin declaration that does not write `?`. Applied only
+            // where metadata's parameter count matches the slots this rule is confident
+            // about, because metadata lists what the SOURCE declared while the descriptor
+            // may carry synthetics, and those are not always trailing: javac puts an
+            // inner class's enclosing instance and an enum's name/ordinal FIRST, a local
+            // class's captures LAST, and kotlinc appends a suspend function's
+            // `Continuation` (already removed from the count above). A partial alignment
+            // would move a nullability onto the wrong parameter, which is worse than not
+            // reading it, so where the counts differ every parameter keeps Java's rule.
+            List<KmType> kotlinParameterTypes = kotlinNullability.parameterTypes().get(methodKey);
+            // The descriptor slots metadata's list is laid against: every declared one for
+            // an ordinary method; for a `$default` bridge, the sibling's own slots past
+            // the receiver, less the `Continuation` a suspend sibling's bridge still
+            // carries there (its own read dropped it from `declaredParameters` above; the
+            // bridge's last slot is the marker, so `continuationLast` cannot).
+            int ownSlots = defaultBridge == null ? 0 : defaultBridge.receiverSlots();
+            // `kotlin-extension-functions`: an extension's receiver (`fun String.shout()`)
+            // is a parameter to the JVM and a receiver to the author. Measured (kotlinc
+            // 2.2.0): it is the FIRST slot the function owns — descriptor slot 0 of a
+            // top-level extension's static method in the file facade and of a member
+            // extension's instance method alike, and the first slot after the owner in a
+            // `$default` bridge (a member `fun String.m(n: Int = 1)`'s is
+            // `m$default(Owner;Ljava/lang/String;IILjava/lang/Object;)`; a top-level one's
+            // has no owner) — and metadata's value parameters do not list it, so the
+            // declared types are laid from the slot after it. The slot is emitted with
+            // `receiver: true` rather than dropped: a call site names the method by its
+            // full descriptor, and the receiver's type is real evidence; a consumer that
+            // wants the declared signature drops it by the flag. Its own type keeps
+            // Java's rule.
+            boolean extension = kotlinNullability.extensionReceivers().contains(methodKey);
+            int receiverSlot = extension ? ownSlots : -1;
+            int alignedFrom = ownSlots + (extension ? 1 : 0);
+            int alignedCount = (defaultBridge == null
+                ? declaredParameters
+                : defaultBridge.declaredSlots()
+                    - (kotlinNullability.suspendMethods().contains(methodKey) ? 1 : 0))
+                - (extension ? 1 : 0);
+            boolean parametersAligned = kotlinParameterTypes != null
+                && kotlinParameterTypes.size() == alignedCount;
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < declaredParameters; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
+                // Absent means false, as `bridge_of` is absent rather than null.
+                if (i == receiverSlot) parameter.put("receiver", "true");
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 // The erased descriptor type wherever the alignment declined to answer.
                 // It is never wrong, only less specific.
-                parameter.put("type",
-                    genericOf[i] >= 0
-                        ? genericParameters.get(genericOf[i])
-                        : TypeRefs.fromType(argumentTypes[i]));
+                TypeRefs.Node type = genericOf[i] >= 0
+                    ? genericParameters.get(genericOf[i])
+                    : TypeRefs.nodeFromType(argumentTypes[i]);
+                if (parametersAligned && i >= alignedFrom && i < alignedFrom + alignedCount) {
+                    type = TypeRefs.withDeclaredNullability(
+                        type, kotlinParameterTypes.get(i - alignedFrom));
+                }
+                parameter.put("type", TypeRefs.toJson(type));
                 // The DESCRIPTOR's own symbol for this position, kept beside the
                 // signature's rather than replaced by it.
                 //
@@ -1588,6 +1713,16 @@ public final class ClassScanner {
                            String ext, String modifiers, String supertype, String interfaces,
                            String genericInterfaces, String superclass, String annotationDefault,
                            String typeParameters, int lineStart, int lineEnd, String permits) {
+            emit(symbol, constructKind, enclosing, signature, access, ext, modifiers, supertype,
+                 interfaces, genericInterfaces, superclass, annotationDefault, typeParameters,
+                 lineStart, lineEnd, permits, null);
+        }
+
+        private void emit(String symbol, String constructKind, String enclosing, String signature, int access,
+                           String ext, String modifiers, String supertype, String interfaces,
+                           String genericInterfaces, String superclass, String annotationDefault,
+                           String typeParameters, int lineStart, int lineEnd, String permits,
+                           String bridgeOf) {
             TreeMap<String, String> fact = new TreeMap<>();
             fact.put("kind", JsonOut.string("symbol"));
             fact.put("document_id", JsonOut.string(documentId));
@@ -1595,7 +1730,7 @@ public final class ClassScanner {
             fact.put("construct_kind", JsonOut.string(constructKind));
             fact.put("enclosing", enclosing == null ? "null" : JsonOut.string(enclosing));
             fact.put("signature", signature == null ? "null" : signature);
-            fact.put("visibility", JsonOut.string((access & Opcodes.ACC_PUBLIC) != 0 ? "public" : "other"));
+            fact.put("visibility", JsonOut.string(visibilityOf(access)));
             fact.put("line_start", String.valueOf(lineStart));
             fact.put("line_end", String.valueOf(lineEnd));
             if (ext != null) fact.put("ext", ext);
@@ -1614,12 +1749,30 @@ public final class ClassScanner {
             // empty list on all of them says nothing with a key on every fact (the same
             // rule `supertype` and `generic_interfaces` follow).
             if (permits != null) fact.put("permits", permits);
+            // The name of the declared function this method stands for, on two shapes
+            // and no other: a Kotlin `$default` bridge (`OI-81`), beside the
+            // `synthetic: true` its modifiers already say, and a static body inside a
+            // `$DefaultImpls` holder (`kotlin-defaultimpls`), whose class carries
+            // `implements_default_of` below. Absent on every other fact, the same
+            // "nothing to say, no key" rule as `permits`. Both stay published as their
+            // own symbols: a call site names each by its own descriptor, and this is
+            // what lets a consumer follow it back.
+            if (bridgeOf != null) fact.put("bridge_of", bridgeOf);
             // On the TYPE's own fact, never on its members — these are class-level
             // attributes, and `emit` is shared with fields and methods. Gated on the
             // construct being a type rather than on `class` specifically: a nested
             // interface, record, enum or annotation has a nest host just the same.
             if (isType(constructKind)) {
                 if (nestHost != null) fact.put("nest_host", JsonOut.string(nestHost));
+                // `kotlin-defaultimpls`: the interface whose default bodies this class
+                // holds — all three conjuncts `KotlinDefaultImpls` states, the last of
+                // them (every method static with the interface at slot 0, and at least
+                // one) settled while the methods were visited. Spelled as `enclosing` and
+                // `interfaces` spell a type, and for the holder it names the same type
+                // `enclosing` does; the KEY is the statement.
+                if (defaultImplsOf != null && defaultImplsMethods > 0 && defaultImplsShape) {
+                    fact.put("implements_default_of", JsonOut.string(symbolOf(defaultImplsOf + "#")));
+                }
                 if (!nestMembers.isEmpty()) fact.put("nest_members", JsonOut.array(nestMembers));
                 if (!unreadAttributes.isEmpty()) {
                     fact.put("unread_attributes", JsonOut.array(List.copyOf(unreadAttributes)));

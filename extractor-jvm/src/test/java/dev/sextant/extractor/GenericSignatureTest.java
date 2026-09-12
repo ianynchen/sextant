@@ -336,9 +336,13 @@ class GenericSignatureTest {
         // gap, `names` would fall back to the erased `java/util/List#` carrying NO type
         // argument, and the assertion below would fail. What is measured is the same
         // thing; only the shape it is read through has moved.
+        //
+        // The element reads `nullable: false` since `OI-82`: `List<String>` declares a
+        // non-null element, and this pin used to carry Java's `true` for it — the
+        // parameter half of the defect `G-63` closed for returns.
         String suspending = symbol("KotlinGenericSignature", "batched");
         assertTrue(
-            suspending.contains("\"arguments\":[{\"arguments\":[],\"nullable\":true,"
+            suspending.contains("\"arguments\":[{\"arguments\":[],\"nullable\":false,"
                 + "\"nullable_resolution\":\"resolved\",\"symbol\":\"java/lang/String#\""),
             "the declared parameter lost its type argument, which is what a SHORT "
                 + "signature from kotlinc would look like");

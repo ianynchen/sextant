@@ -134,12 +134,18 @@ slice:
     - owner: io.awspring.cloud.sqs.operations.SqsTemplate
       method_names: [receive, receiveMany, receiveAsync, receiveManyAsync]
       why: >
-        A boundary this catalog does NOT model: the entire inbound direction.
-        `receive(String, Class<T>)` and `receiveMany` take the queue name at argument
-        0 and a payload type at argument 1 — the exact shape this file already reads
-        for `send`, so the gap is a fixture and a descriptor sweep rather than a
-        design question. A module that only consumes derives nothing at all from
-        this catalog, which reads as a module that does not use SQS.
+        A boundary this catalog does NOT model: the entire inbound direction, and
+        MEASURED rather than assumed (`G-44`, SQS quarter, W59:
+        `scripts/probes/w59_template_receive_halves.md`). Every overload —
+        `receive`, `receiveMany`, `receiveAsync`, `receiveManyAsync` — takes
+        `Consumer<SqsReceiveOptions>` at argument 0 (spring-cloud-aws-sqs 3.1.1);
+        the queue is named INSIDE that lambda, `opts -> opts.queue("orders")`, and
+        no argument carries a string. Reading a call inside a lambda body that the
+        argument names is the receiver-chain form, Category B of the register
+        (`docs/java-kotlin-delivery-list.md` §4) — the same overload-discrimination
+        work `G-37`/`G-30` wait on, not this file's `single_call` style. A module
+        that only consumes derives nothing at all from this catalog, which reads as
+        a module that does not use SQS.
     - owner: io.awspring.cloud.sqs.operations.SqsTemplate
       method_names: [sendAsync, sendManyAsync, sendMany]
       why: >

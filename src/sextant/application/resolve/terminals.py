@@ -50,14 +50,16 @@ point rather than a shortfall. Those are not unclassified persistence; they are 
 library calls, and they carry `unresolved`, which says *this is a terminal we looked at and
 could not classify* rather than pretending they were never examined.
 
-**Two of `TerminalKind`'s eight members have a producer** — `persistence` and
-`unresolved` — because one catalog declares `terminals` and all twelve of its rules say
-`persistence`. Of `TargetKind`'s three, `database` and `cache` are produced and `file` is
-not. The six that are absent split in two, and the split is the honest part: `outbound_call`,
-`throws`, `async_handoff` and `TargetKind.FILE` are all a catalog rule away — an owner
-rule naming `ExecutorService` or `MinioClient` would mint one today — while `cycle`,
-`returns` and `ends_silently` are unreachable BY CONSTRUCTION. A cyclic edge has a
-non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
+**Three of `TerminalKind`'s eight members have a producer.** `persistence` and
+`unresolved` come from the one catalog that declares `terminals`, whose twelve rules all
+say `persistence`; `throws` is decided from `invoke_kind` rather than any catalog rule
+(`classify`'s own docstring below, `G-52`) — a second, stated producer beside the catalog
+one, not a third route through it. Of `TargetKind`'s three, `database` and `cache` are
+produced and `file` is not. The five that remain absent split in two, and the split is the
+honest part: `outbound_call`, `async_handoff` and `TargetKind.FILE` are all a catalog rule
+away — an owner rule naming `ExecutorService` or `MinioClient` would mint one today —
+while `cycle`, `returns` and `ends_silently` are unreachable BY CONSTRUCTION. A cyclic edge
+has a non-NULL `callee`, so `classify` returns NULL for it and always will; the other two
 describe how a BODY exits, and all three routes here are predicates on the callee's TYPE,
 which cannot express that. `closed_sets.py` names them at the enum and
 `docs/open-issues.md` carries `OI-75`.
@@ -146,16 +148,39 @@ class TerminalRules:
         return None, None
 
 
-def classify(rules: TerminalRules | None, target: str, callee: str | None) -> dict[str, str | None]:
+def classify(
+    rules: TerminalRules | None,
+    target: str | None,
+    callee: str | None,
+    invoke_kind: str | None = None,
+) -> dict[str, str | None]:
     """The two columns for one `call_edges` row.
 
     **Both NULL where the edge is not a terminal.** An edge whose callee's body was read
     is expanded by the walk, so there is nothing to classify and `unresolved` would be
     wrong — it would say a terminal was examined and could not be named.
+
+    **A THROW edge is `throws`, decided here rather than by a catalog rule** (`G-52`).
+    Every other terminal kind answers "what does this call REACH", which a catalog knows
+    because it knows the callee's type; a throw reaches nothing, and how the method exits
+    is a property of the instruction, not of any library. Left to `rules.of` it came back
+    `unresolved` — "this IS a terminal, and it was looked at, and could not be named" —
+    which is false twice over: nothing was looked at, and `TerminalKind.THROWS` is the
+    member that exists for precisely this.
+
+    This does NOT resurrect the claim `D00` used to make, that `invoke_kind: throw` is
+    what gives traces their `throws` terminal *through the catalog path*. It does not:
+    `rules.of` still keys on the callee's type and still never sees an invoke kind. This
+    is a second, stated producer beside it, and the two do not meet.
     """
+    if invoke_kind == "throw":
+        return {"terminal_kind": str(TerminalKind.THROWS), "target_kind": None}
     if callee is not None:
         return {"terminal_kind": None, "target_kind": None}
-    kind, target_kind = (None, None) if rules is None else rules.of(target)
+    # `target` is NULL only on a throw row whose type was unread, and that row returned
+    # above; `call_edges._rows_for` writes no other row without a target. The guard here
+    # states the type, not a path that runs.
+    kind, target_kind = (None, None) if rules is None or target is None else rules.of(target)
     return {
         # `unresolved` rather than NULL: this IS a terminal, and it was looked at. A
         # reader distinguishing "not classified" from "not a terminal" is the whole

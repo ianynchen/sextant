@@ -130,41 +130,62 @@ def _javap(classpath: str, owner: str) -> str:
     return result.stdout
 
 
-def _superclass(header: str) -> str | None:
-    """The `extends` target on `javap`'s own class header, generics stripped.
+def _supertypes(header: str) -> list[str]:
+    """Every `extends`/`implements` target on `javap`'s own class header,
+    generics stripped, both walked — a concrete class need not redeclare a
+    `default` interface method at all (measured for `javalin.yml`,
+    `javalin-routing`: `io.javalin.Javalin implements
+    JavalinDefaultRoutingApi<Javalin>` and `javap -p -s` on `Javalin.class`
+    alone shows no `get`/`post`/etc — they exist only as `default` methods on
+    the interface), so a walk that followed `extends` alone would report every
+    one of them `NOT DECLARED` for a call site whose receiver IS the class.
+    W19's `declared_methods` already walks both edges for the same reason
+    (`scripts/probes/w19_catalog_surface/sweep.py::_supertypes`); this mirrors
+    it rather than inventing a second technique for the same fact.
 
-    Stripped first and repeatedly, because a type parameter may itself say
-    `extends` (`class Foo<T extends Bar> extends Baz`) and a split on the bare
-    word would then name a bound rather than a superclass.
+    Stripped of generics first and repeatedly, because a type parameter may
+    itself say `extends` (`class Foo<T extends Bar> extends Baz`) and a split
+    on the bare word would then name a bound rather than a supertype.
     """
     previous = None
     while previous != header:
         previous, header = header, _GENERICS.sub("", header)
-    if " extends " not in header:
-        return None
-    tail = header.split(" extends ", 1)[1].strip()
-    return tail.split(" ")[0].rstrip("{").strip() or None
+    found: list[str] = []
+    for keyword in (" extends ", " implements "):
+        if keyword not in header:
+            continue
+        tail = header.split(keyword, 1)[1].strip()
+        tail = tail.split(" implements ", 1)[0] if keyword == " extends " else tail
+        for name in tail.rstrip("{").split(","):
+            name = name.strip()
+            if name:
+                found.append(name)
+    return found
 
 
 def declared_descriptors(classpath: str, owner: str) -> dict[str, set[str]]:
     """Method name -> every erased descriptor reachable on `owner`, inherited
-    ones included while the superclass is on this classpath.
+    ones included while the supertype (superclass OR interface) is on this
+    classpath.
 
-    A supertype the classpath does not carry ends the walk silently: the run can
-    only speak for what it read, and a descriptor it could not see is reported
-    as NOT DECLARED rather than assumed present.
+    A supertype the classpath does not carry ends that branch of the walk
+    silently: the run can only speak for what it read, and a descriptor it
+    could not see is reported as NOT DECLARED rather than assumed present.
     """
     found: dict[str, set[str]] = defaultdict(set)
     seen: set[str] = set()
-    current: str | None = owner
-    while current and current not in seen and current != "java.lang.Object":
+    pending: list[str] = [owner]
+    while pending:
+        current = pending.pop()
+        if current in seen or current == "java.lang.Object":
+            continue
         seen.add(current)
         try:
             output = _javap(classpath, current)
         except ProbeError:
             if current == owner:
                 raise
-            return found
+            continue
         header = ""
         name = None
         for line in output.splitlines():
@@ -179,7 +200,7 @@ def declared_descriptors(classpath: str, owner: str) -> dict[str, set[str]]:
                 continue
             declaration = _DECLARATION.search(line)
             name = declaration.group(1) if declaration is not None else None
-        current = _superclass(header)
+        pending.extend(_supertypes(header))
     return found
 
 
