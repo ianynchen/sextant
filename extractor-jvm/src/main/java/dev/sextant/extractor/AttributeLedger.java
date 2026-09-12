@@ -134,15 +134,12 @@ public final class AttributeLedger {
         // ledger's own test compares against every flag ASM defines, which is what
         // surfaced that the attribute could be read in one place instead of two.
         read("ACC_RECORD", "ASM, from 4.7.30", "construct_kind"),
-        skipped("ACC_PRIVATE", "4.5/4.6",
-            "`visibility` is two-valued by D00 §5a — `public` or `other` — because the "
-            + "question it answers is whether a member is callable from outside, and "
-            + "private, protected and package-private all answer no. Reading three more "
-            + "flags to collapse them again would add a distinction no consumer makes."),
-        skipped("ACC_PROTECTED", "4.5/4.6",
-            "Folded into `other` with ACC_PRIVATE, for the reason given there: the "
-            + "question `visibility` answers is whether a member is callable from "
-            + "outside its own type, and protected answers no to that."),
+        // G-73: `visibility` was two-valued — `public` or `other` — folding private,
+        // protected and package-private into one word that said nothing about which.
+        // D00 §5 gives it all four of JVMS 4.1/4.5/4.6's words, and these two flags are
+        // now read alongside ACC_PUBLIC above rather than skipped.
+        read("ACC_PRIVATE", "4.5/4.6", "visibility"),
+        read("ACC_PROTECTED", "4.5/4.6", "visibility"),
         skipped("ACC_SUPER", "4.1",
             "Set on essentially every class since Java 1.1 and ignored by every JVM since "
             + "8 — it selects the old `invokespecial` semantics. It distinguishes nothing "

@@ -196,9 +196,9 @@ _NAMED_QUERIES = {
     # `enclosing` nor `visibility` at all — `supertype_derived`'s own
     # `overridden_public_methods` evidence needs both, to tell an
     # implementer's own override from an unrelated same-named method
-    # elsewhere in the module AND to gate it on visibility (D00 §5a: `public`
-    # or `other`, the same column `mapping.members: public_methods` already
-    # reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
+    # elsewhere in the module AND to gate it on visibility (D00 §5, `Visibility`'s
+    # four members — `G-73` — the same column `mapping.members: public_methods`
+    # already reads SQL-side in `derive_endpoints.sql`). Both `symbol` and `enclosing`
     # share the module-prefixed coordinate space `effective_annotations.py`'s
     # own `method_declarations` join already relies on. Ordered by symbol for
     # the same reason every other declaration-level query here is.

@@ -80,6 +80,23 @@ class ConstructKind(StrEnum):
     ACCESSOR = "accessor"
 
 
+class Visibility(StrEnum):
+    """The four access levels a declaration can have (`G-73`), carried on every
+    symbol fact. Closed because a fifth word is not a value this set is missing —
+    it is a language stating something none of the four says, which is a schema
+    change (NFR-5), not a member to add on the strength of one scanner's output.
+
+    A NESTED type is the one case this reads coarser than the source: the flag a
+    class file states for a nested type is not always the one its declaration
+    wrote (`OI-51`), so a nested type's visibility is its OUTER word until that
+    is recovered."""
+
+    PUBLIC = "public"
+    PROTECTED = "protected"
+    PACKAGE = "package"
+    PRIVATE = "private"
+
+
 class OriginTier(StrEnum):
     MODULE_OUTPUT = "module_output"
     # A declared dependency's own archive, read because the module asked for it

@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from sextant.domain.closed_sets import ConstructKind, OriginTier
+from sextant.domain.closed_sets import ConstructKind, OriginTier, Visibility
 
 # D00 §5a's literal model: string, number, boolean, enum reference, class
 # reference (both spelled as symbol references) and arrays of these — plus,
@@ -240,7 +240,7 @@ class SymbolFact(BaseModel):
     construct_kind: ConstructKind
     enclosing: str | None = None
     signature: Signature | None = None
-    visibility: str = "public"
+    visibility: Visibility = Visibility.PUBLIC
     line_start: int = 0
     line_end: int = 0
     # D00 §5a: always written on a field fact — a value bound to the type

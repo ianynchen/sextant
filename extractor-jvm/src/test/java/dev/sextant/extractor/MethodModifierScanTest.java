@@ -82,11 +82,14 @@ class MethodModifierScanTest {
      *  somebody wrote the method — and {@code visibility} is what lets a
      *  member rule leave it alone. */
     @Test
-    void reports_a_private_method_as_other_than_public() throws Exception {
+    void reports_a_private_method_as_private() throws Exception {
         List<String> hidden = methodFacts(scanSample(), "hidden");
 
         assertEquals(1, hidden.size());
-        assertTrue(hidden.get(0).contains("\"visibility\":\"other\""));
+        // G-73: this pinned `"other"` — the two-valued reading — until `visibility`
+        // gained the other three JVMS 4.1 access levels; a private method reports
+        // its own word now rather than the same catch-all a package-private one gets.
+        assertTrue(hidden.get(0).contains("\"visibility\":\"private\""));
     }
 
     /** The bridge {@code MethodModifierBase}'s erasure forces javac to emit:

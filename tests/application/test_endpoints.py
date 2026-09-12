@@ -1910,7 +1910,7 @@ def _member_facts(root: Path, gated: bool = True) -> None:
     )
     members = {
         "bare": {"visibility": "public", "modifiers": {}},
-        "hidden": {"visibility": "other", "modifiers": {}},
+        "hidden": {"visibility": "private", "modifiers": {}},
         "helper": {"visibility": "public", "modifiers": {"static": True, "synthetic": False}},
         "bridge": {"visibility": "public", "modifiers": {"static": False, "synthetic": True}},
         "named": {"visibility": "public", "modifiers": {}},
@@ -2296,7 +2296,7 @@ def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_pat
     """`A-M15`'s near-miss, and the conjunct a widened join is most likely to
     lose: the exclusions apply to an INHERITED member exactly as they do to a
     declared one. `refund` is the same method in the same place, one cell
-    different — `visibility: other` — and it is not callable from outside the
+    different — `visibility: private` — and it is not callable from outside the
     type, so it is not exposed.
 
     Identical to the positive in every other respect, so it measures the
@@ -2308,7 +2308,7 @@ def test_an_inherited_method_that_is_not_public_is_not_an_exposed_member(tmp_pat
     reason `refund` is absent is its visibility (w63's declaring-class check
     would otherwise exclude it too, and this test would stop measuring)."""
     paths = _member_paths(
-        tmp_path, _member_catalog(members="public_methods"), base="other", base_annotated=True
+        tmp_path, _member_catalog(members="public_methods"), base="private", base_annotated=True
     )
 
     assert "bare" in paths

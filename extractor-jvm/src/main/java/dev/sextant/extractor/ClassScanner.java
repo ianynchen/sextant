@@ -346,6 +346,27 @@ public final class ClassScanner {
          *  <p>The interface test comes first because an annotation type is both, and
          *  the enum test before the fallback because an enum is a class in the JVM's
          *  own model. */
+        /** JVMS 4.1's four access levels — `public`, `protected`, package (no keyword,
+         *  no bit of its own) and `private` — read from the one JVM access word every
+         *  method, field and type carries (`G-73`). Tested `PUBLIC` before `PROTECTED`
+         *  before `PRIVATE` because the three bits are mutually exclusive by
+         *  construction (JVMS 4.1, 4.5, 4.6): javac never sets two, so the order only
+         *  matters for the one case nothing sets any of them, which is what makes
+         *  `package` the fallback rather than a fourth bit to test.
+         *
+         *  <p>For a NESTED type this reads the CLASS FILE's own word, which is the
+         *  coarse one — a `private` or `protected` nested type states that modifier
+         *  in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a
+         *  private nested type package-private and a protected one public. Recovering
+         *  the source modifier is `OI-51`; until then a nested type's visibility is
+         *  its outer word. */
+        private String visibilityOf(int access) {
+            if ((access & Opcodes.ACC_PUBLIC) != 0) return "public";
+            if ((access & Opcodes.ACC_PROTECTED) != 0) return "protected";
+            if ((access & Opcodes.ACC_PRIVATE) != 0) return "private";
+            return "package";
+        }
+
         private String constructKindOf(int access) {
             // BEFORE the interface test, because an annotation type carries
             // ACC_INTERFACE too — `@interface` compiles to an interface extending
@@ -1709,7 +1730,7 @@ public final class ClassScanner {
             fact.put("construct_kind", JsonOut.string(constructKind));
             fact.put("enclosing", enclosing == null ? "null" : JsonOut.string(enclosing));
             fact.put("signature", signature == null ? "null" : signature);
-            fact.put("visibility", JsonOut.string((access & Opcodes.ACC_PUBLIC) != 0 ? "public" : "other"));
+            fact.put("visibility", JsonOut.string(visibilityOf(access)));
             fact.put("line_start", String.valueOf(lineStart));
             fact.put("line_end", String.valueOf(lineEnd));
             if (ext != null) fact.put("ext", ext);

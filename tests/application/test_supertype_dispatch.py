@@ -6,7 +6,8 @@ Facts are hand-built to mirror CP-9's real, checkpoint-recorded shapes exactly
 10.1.50, 11.0.24 and 9.0.121): `@WebServlet` arrives as a TYPE-level
 annotation whose `args` carry `urlPatterns` or `value` as a LIST even when one
 string was written (rows 20-23); a `protected` handler's recorded `visibility`
-is `other`, never `protected` (row 24); a handler's parameter types are
+is `protected` (row 24 — measured as `other` before `G-73` fixed the
+two-valued extraction the probe ran against); a handler's parameter types are
 readable off its own signature (rows 25-26); and the `extends` edge is present
 and module-prefixed even though `HttpServlet` lives in a container jar the
 workspace never scanned (rows 27-28). Rather than compiling real class files
@@ -135,13 +136,14 @@ def _class(symbol: str = SERVLET, *, superclass: str = DISPATCH_BASE) -> SymbolF
 
 
 def _method(
-    name: str, *parameters: str, owner: str = SERVLET, visibility: str = "other"
+    name: str, *parameters: str, owner: str = SERVLET, visibility: str = "protected"
 ) -> SymbolFact:
     """One declared method with its parameter types.
 
-    `visibility` defaults to `other`, which is what CP-9 row 24 measured for a
-    `protected` handler: D00 §5a's column is two-valued and cannot say
-    `protected`, so no test here may depend on it saying so.
+    `visibility` defaults to `protected`, CP-9 row 24's handler — `other` before
+    `G-73` gave `visibility` its other three JVMS 4.1 words. The engine reads
+    none of them regardless (`supertype_dispatch.py`'s own note), so no test
+    here may depend on this value saying anything in particular.
     """
     return SymbolFact(
         document_id="doc_1",

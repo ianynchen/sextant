@@ -340,6 +340,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 |---|---|---|
 | `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs | Dispatch tiering, noise filtering, coverage |
 | `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
+| — | **`visibility` is four-valued** (`G-73`): `public`, `protected`, `package` or `private` — the four access levels a declaration can have, closed by `Visibility` (NFR-5). For a NESTED type this is the class file's OWN word, which is the coarse one: a `private` or `protected` nested type states that modifier in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a private nested type package-private and a protected one public. Recovering the source modifier is `OI-51`; until then a nested type's visibility is its outer word. | Member-exposure rules (D02's `mapping.members`), endpoint derivation |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |

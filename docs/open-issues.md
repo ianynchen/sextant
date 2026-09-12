@@ -1976,9 +1976,11 @@ in the local dependency cache). Two wrong consumers is a signal that the right o
 has to be chosen deliberately, not that the data is worthless.
 
 **Consequence:** measured over javac 21 output, a `private record Inner(int y)`
-reports `visibility: other` and no `private` modifier — the same as a
-package-private one. Nothing downstream distinguishes them today, which is why
-this is Minor rather than Major.
+reports `visibility: package` (`G-73` gave the class-file word its other three
+values; the class file itself still writes a private nested type
+package-private, so the word this reports did not change) and no `private`
+modifier — the same as a package-private one. Nothing downstream distinguishes
+them today, which is why this is Minor rather than Major.
 
 **Closes by** `visitInnerClass` reading `access` into a field that feeds
 `modifiers` ONLY for the nesting modifiers (`ACC_PRIVATE`, `ACC_PROTECTED`,
@@ -3257,6 +3259,49 @@ producer walk, so `throw supplier.get()` where the cast names `X` publishes the 
 declared `java/lang/Object#` rather than `X`; and ASM's
 `Interpreter.newExceptionValue(TryCatchBlockNode, Frame, Type)` would hand the rethrow's
 type over at the source, closing the 5 unread. Both are one override away.*
+
+### G-73 — `visibility` was two-valued for a four-valued concept · **CLOSED, 2026-09-12**
+
+**Found by** the completeness audit of 2026-09-06 (F1 §2.3): `ClassScanner.java` wrote
+`(access & ACC_PUBLIC) != 0 ? "public" : "other"` on every symbol fact — method, field and
+type alike — collapsing `protected`, package-private and `private` into one word that says
+nothing about which. JVMS 4.1 states all three of the other access flags in the same class
+file `visibility` already reads; there was never a reason to fold them together.
+
+**CLOSED by** `feat(extractor): visibility is the four words the language has, not
+public-or-other (G-73)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/AccessFlagTest.java`'s
+`visibility_is_the_four_words_the_language_has_not_public_or_other` and the same file's
+`MethodModifierScanTest.java` pin, `reports_a_private_method_as_private`, corrected rather
+than left asserting the two-valued reading. `ClassScanner.visibilityOf` now tests
+`ACC_PUBLIC`, `ACC_PROTECTED` and `ACC_PRIVATE` in turn and falls back to `package`, the one
+case none of the three is set — the same JVM word every scanner emits for the symbol,
+whether method, field or type, since all three share the one `emit`. `AttributeLedger`'s
+`ACC_PRIVATE` and `ACC_PROTECTED` entries move from `skipped` to `read("visibility")`,
+naming the reader that now exists rather than the reason it did not. `Visibility`
+(`src/sextant/domain/closed_sets.py`) is the new closed set (NFR-5) and
+`SymbolFact.visibility` (`src/sextant/domain/facts.py`) is typed to it rather than to `str`,
+so a fact naming a fifth word fails validation rather than being silently accepted.
+
+**Left exactly where it was: a NESTED type's visibility.** The class file's own word for a
+nested type is still the coarse one — a `private` or `protected` nested type is written
+package-private or public respectively at that level (`OI-51`, unchanged by this) — so a
+nested type's `visibility` fact is its OUTER word until `OI-51` recovers `InnerClasses`'
+own source modifier. D00 §5 states this beside the four-valued rule so the two are not read
+as one claim.
+
+**`fact_schema_version` is not bumped.** `src/sextant/domain/version.py`'s own ruling (user,
+2026-09-07) freezes both schema stamps until release — "a fact-shape change lands WITHOUT an
+increment, deliberately" — and this change rides at the same integer every value-level
+change since has. The one place that matters: within a single `analyze` run the JVM
+extractor's own JSONL output is parsed straight back through `SymbolFact` (`factfile.py`'s
+`read_fact_tree`), so a STALE, unrebuilt extractor jar run beside the rebuilt Python would
+still emit `"other"` and now fail that validation instead of silently writing it — the
+`./gradlew build` this task's own gate runs before `check.sh` is what prevents that in
+practice. A previously-analyzed `workspace.duckdb` is unaffected either way: render, enrich
+and export read its `visibility` column as a plain string over SQL and never reconstruct a
+`SymbolFact` from it, so an old workspace simply keeps answering `other` for anything that
+was not `public` until it is re-analyzed.
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 
