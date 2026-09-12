@@ -18,3 +18,13 @@ class KotlinDefaultsSample {
      *  BEFORE the mask and marker, and the sibling is keyed with it. */
     suspend fun fetch(id: String = "0"): String = id
 }
+
+/** The collision a receiver guess would get wrong. `js$default` has NO receiver slot —
+ *  `(Ljava/lang/String;IILjava/lang/Object;)Ljava/lang/String;` — so reading its first
+ *  slot as a receiver derives `js(I)Ljava/lang/String;`, which the arity overload beside
+ *  it keys. Both candidates key; neither may be taken. The overload's return is declared
+ *  non-null so that borrowing it reads `false` where Java's rule reads `true`. */
+object KotlinDefaultsObject {
+    @JvmStatic fun js(a: String, b: Int = 0): String = a + b
+    fun js(b: Int): String = b.toString()
+}

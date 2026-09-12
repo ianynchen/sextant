@@ -3096,11 +3096,17 @@ slot, and a `suspend fun`'s carries its `Continuation` before the mask. `KotlinD
 recognises that shape (the mask count is solved from the slot count, not counted as trailing
 `int`s, which a function whose last parameters are `Int` would defeat), derives the sibling's
 `name + descriptor` by dropping the receiver and the masks and marker, and settles the
-receiver question by which candidate `@kotlin.Metadata` keyed. The bridge is then read under
-its sibling's key: `greet$default` reads `name: String` as `nullable: false` and its return
-`false`, where both read `true`; `maybe$default` borrows `true` for `note: String?` and `String?`.
-The receiver, the masks, the marker and a suspend sibling's `Continuation` are nobody's
-declaration and keep Java's rule.
+receiver question by which ONE candidate `@kotlin.Metadata` keyed — where it keys both
+(review case: an `object`'s `@JvmStatic fun js(a: String, b: Int = 0): String` beside an
+arity overload `fun js(b: Int): String`, whose key the receiver-dropped candidate derives),
+there is no sibling and the bridge carries only its name, because ambiguity is not a guess.
+The bridge is then read under its sibling's key: `greet$default` reads `name: String` as
+`nullable: false` and its return `false`, where both read `true`; `maybe$default` borrows
+`true` for `note: String?` and `String?`. The receiver, the masks, the marker and a suspend
+sibling's `Continuation` are nobody's declaration and keep Java's rule. A suspend sibling's
+bridge returns the erased `java/lang/Object#` with the declared nullability over it —
+accurate for the erased protocol, not the declared type, which only the sibling's
+`Signature` holds.
 
 **Departing from the "closes by" above in one respect, deliberately:** the bridge is still
 published as its own symbol, now carrying `bridge_of: "greet"` beside its `synthetic: true`

@@ -241,7 +241,8 @@ class SymbolFact(BaseModel):
     # `OI-81`: the name of the declared function a compiler-emitted
     # default-argument bridge (`<fn>$default`) stands for, beside the
     # `synthetic: true` its modifiers already carry; absent on every other
-    # fact, and read by nothing yet — Task 15 dispatches on it.
+    # fact, and read by nothing yet; the delivery register's `DefaultImpls`
+    # item will.
     bridge_of: str | None = None
     # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
     # element takes when a use omits it. Present only on such an element and

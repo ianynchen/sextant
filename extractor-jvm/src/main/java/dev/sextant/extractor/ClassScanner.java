@@ -1187,7 +1187,9 @@ public final class ClassScanner {
             // `declaredSlots()` bound below. The `Continuation` a suspend sibling's
             // bridge carries sits INSIDE the declared range and is subtracted from it
             // the way the sibling's own read drops it, so the slots still line up.
-            String methodKey = defaultBridge == null
+            // A bridge whose sibling could not be settled (`siblingKey() == null`) is read
+            // under its own key, which metadata never holds: Java's rule everywhere.
+            String methodKey = defaultBridge == null || defaultBridge.siblingKey() == null
                 ? methodName + descriptor
                 : defaultBridge.siblingKey();
             Boolean kotlinReturnNullable = kotlinNullability.returnNullable().get(methodKey);

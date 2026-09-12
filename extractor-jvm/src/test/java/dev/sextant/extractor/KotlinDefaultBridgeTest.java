@@ -68,6 +68,24 @@ class KotlinDefaultBridgeTest {
     }
 
     @Test
+    void twoCandidateSiblingsIsNoSibling() throws Exception {
+        // `object KotlinDefaultsObject { @JvmStatic fun js(a: String, b: Int = 0): String;
+        // fun js(b: Int): String }`. The bridge is `js$default(Ljava/lang/String;IILjava/lang/Object;)`
+        // with no receiver; read WITH one it derives `js(I)Ljava/lang/String;`, which the
+        // arity overload keys, and the bridge would publish that overload's declared
+        // return (`nullable: false`) as its own. Both candidates key, so neither is taken:
+        // `bridge_of` is certain from the shape, and every slot and the return keep Java's
+        // rule — the projection a bridge with no sibling in metadata already has.
+        var bridge = methodFact("KotlinDefaultsObject", "js$default");
+        assertEquals("js", bridge.get("bridge_of"));
+        assertEquals(4, parameters(bridge).size());
+        assertEquals(true, parameters(bridge).get(0).get("nullable"));    // a: String
+        assertEquals(false, parameters(bridge).get(1).get("nullable"));   // b: Int (primitive)
+        assertEquals(true, returns(bridge).get("nullable"));              // Java's rule, not the overload's
+        assertEquals(null, bridge.get("ext"));
+    }
+
+    @Test
     void theFunctionItselfIsUntouched() throws Exception {
         var greet = methodFact("KotlinDefaultsSample", "greet");
         assertEquals(null, greet.get("bridge_of"));
