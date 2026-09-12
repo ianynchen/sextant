@@ -3063,7 +3063,7 @@ states the bridge is read as a second symbol at all.
 **Closes by** the same work that closes `$default` generally: recognising the suffix and the
 mask parameter, at which point the bridge stops being published as an independent declaration.
 
-### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule
+### OI-82 — `G-63`'s PARAMETER half: a Kotlin function's and constructor's value parameters still take Java's rule · **CLOSED, 2026-09-12**
 
 **Found by** implementing `G-63`'s return half (`7716ab3`), which closed the half it names and
 left this one measurable.
@@ -3080,6 +3080,23 @@ where a synthetic leads or trails.
 **Recorded rather than absorbed into the return half's commit**, because a claim that `G-63`
 is closed when half of what its row names is still live is the register defect this file
 exists against. `docs/java-kotlin-delivery-list.md`:241`'s `G-63` row names both.
+
+**CLOSED by** `feat(extractor): a Kotlin parameter carries the nullability its source
+declared, type arguments included (OI-82)`, proved by
+`extractor-jvm/src/test/java/dev/sextant/extractor/KotlinParameterNullabilityTest.java`.
+`KotlinNullability.Decoded` now keeps each function's and constructor's declared parameter
+types (`KmType`, whole — not a boolean), and `TypeRefs.withDeclaredNullability` walks that
+tree beside the `Node` tree built from `Signature`, before serialization, applying the
+declared nullability at every level where the two trees agree on shape: `List<String?>` and
+`List<String>?` now read differently, where one descriptor and one signature spelled them
+the same. Where metadata's parameter count differs from the descriptor's declared slots
+(an extension function's receiver, an inner class's enclosing instance, an enum's
+name/ordinal), nothing is applied and every parameter keeps Java's rule. A `var`
+property's SETTER is neither a function nor a constructor in metadata and still takes
+Java's rule — the same shape `G-63` closed for getters, one position along; not
+re-opened here because no fixture exhibits it (§4.1). `GenericSignatureTest`'s pin on
+`batched(List<String>)`'s element moved from `nullable: true` to `false` — the pin was
+carrying the defect.
 
 ### OI-79 — a figure DERIVED is published as a figure MEASURED, and nothing checks the difference · **§13.8 VIOLATION COUNT: 8**
 

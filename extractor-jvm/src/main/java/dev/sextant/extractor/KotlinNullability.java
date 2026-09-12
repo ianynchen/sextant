@@ -10,8 +10,11 @@ import java.util.Set;
 import java.util.function.Consumer;
 import kotlin.Metadata;
 import kotlin.metadata.Attributes;
+import kotlin.metadata.KmConstructor;
 import kotlin.metadata.KmFunction;
 import kotlin.metadata.KmProperty;
+import kotlin.metadata.KmType;
+import kotlin.metadata.KmValueParameter;
 import kotlin.metadata.jvm.JvmExtensionsKt;
 import kotlin.metadata.jvm.JvmMethodSignature;
 import kotlin.metadata.jvm.KotlinClassMetadata;
@@ -29,9 +32,9 @@ public final class KotlinNullability {
     /** The one annotation the Kotlin compiler writes to every class it compiles. */
     public static final String DESCRIPTOR = "Lkotlin/Metadata;";
 
-    /** What every non-Kotlin class decodes to: no properties and no suspend
-     *  functions, so nothing overrides Java's rule. */
-    public static final Decoded NONE = new Decoded(Map.of(), Map.of(), Set.of());
+    /** What every non-Kotlin class decodes to: no properties, no parameters and no
+     *  suspend functions, so nothing overrides Java's rule. */
+    public static final Decoded NONE = new Decoded(Map.of(), Map.of(), Map.of(), Set.of());
 
     /** One class's Kotlin-declared facts, as far as the scanner consumes them.
      *
@@ -50,9 +53,17 @@ public final class KotlinNullability {
      *  <p>This is {@code G-63}'s RETURN half. Before it, a Kotlin function's return
      *  carried {@code nullable: true, nullable_resolution: "resolved"} — a certainty
      *  marker on a value the same fact contradicts, since kotlinc writes {@code @NotNull}
-     *  on the method beside it. The remaining half is PARAMETERS: a function's and a
-     *  constructor's value parameters still take Java's rule. Stated rather than implied,
-     *  and this class is where it would be closed.
+     *  on the method beside it.
+     *
+     *  <p>{@code parameterTypes} is the PARAMETER half (`OI-82`): the same key maps to
+     *  the declared type of each value parameter, in declaration order — every Kotlin
+     *  function, plus every constructor. The declared {@code KmType} is kept whole rather
+     *  than flattened to a boolean, because nullability is stated at EVERY level of the
+     *  type: {@code List<String?>} and {@code List<String>?} erase to one descriptor and
+     *  one {@code Signature}, and only this tree tells them apart. {@link TypeRefs} walks
+     *  it beside the reference it built from the signature. Metadata lists what the
+     *  SOURCE declared while the descriptor may carry synthetics, so aligning an index
+     *  here to a descriptor slot is the scanner's decision, not this class's.
      *
      *  <p>{@code suspendMethods} holds the JVM {@code name + descriptor} of every function
      *  metadata marks {@code suspend}. It is the ONLY admissible answer to "is this a
@@ -68,6 +79,7 @@ public final class KotlinNullability {
     public record Decoded(
             Map<String, Boolean> properties,
             Map<String, Boolean> returnNullable,
+            Map<String, List<KmType>> parameterTypes,
             Set<String> suspendMethods) {}
 
     /** Collects {@code @Metadata}'s elements as ASM visits them, then decodes property
@@ -155,6 +167,7 @@ public final class KotlinNullability {
             properties.put(property.getName(), Attributes.isNullable(property.getReturnType()));
         }
         Map<String, Boolean> returns = new HashMap<>();
+        Map<String, List<KmType>> parameterTypes = new HashMap<>();
         Set<String> suspend = new HashSet<>();
         for (KmFunction function : classMetadata.getKmClass().getFunctions()) {
             // A function metadata describes but whose JVM signature it does not state
@@ -164,7 +177,19 @@ public final class KotlinNullability {
             if (signature == null) continue;
             String key = signature.getName() + signature.getDescriptor();
             returns.put(key, Attributes.isNullable(function.getReturnType()));
+            parameterTypes.put(key, declaredTypes(function.getValueParameters()));
             if (Attributes.isSuspend(function)) suspend.add(key);
+        }
+        // Constructors too: a data class's primary constructor is where a payload's
+        // contract is declared, so a constructor parameter reading `nullable: true` for
+        // a `val id: String` was the wrong answer at exactly the place a wire contract
+        // is read from. Same key form — the signature's name is `<init>`.
+        for (KmConstructor constructor : classMetadata.getKmClass().getConstructors()) {
+            JvmMethodSignature signature = JvmExtensionsKt.getSignature(constructor);
+            if (signature == null) continue;
+            parameterTypes.put(
+                signature.getName() + signature.getDescriptor(),
+                declaredTypes(constructor.getValueParameters()));
         }
         for (KmProperty property : classMetadata.getKmClass().getProperties()) {
             // The GETTER, not the field: `KotlinOrder#id` the field already reads
@@ -176,7 +201,14 @@ public final class KotlinNullability {
                 getter.getName() + getter.getDescriptor(),
                 Attributes.isNullable(property.getReturnType()));
         }
-        return new Decoded(properties, returns, suspend);
+        return new Decoded(properties, returns, parameterTypes, suspend);
+    }
+
+    /** One declaration's value parameters' declared types, in declaration order. */
+    private static List<KmType> declaredTypes(List<KmValueParameter> parameters) {
+        List<KmType> types = new ArrayList<>();
+        for (KmValueParameter parameter : parameters) types.add(parameter.getType());
+        return List.copyOf(types);
     }
 
     /** A plain implementation of the annotation interface {@code kotlin-metadata-jvm}

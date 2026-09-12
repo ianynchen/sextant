@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import kotlin.metadata.KmType;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.FieldVisitor;
@@ -1144,7 +1145,7 @@ public final class ClassScanner {
             // whatever it happens to erase to. The `Signature` attribute is the only place
             // either survives, and it was read for the RETURN type and for fields while
             // parameters kept taking the erased one.
-            List<String> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
+            List<TypeRefs.Node> genericParameters = TypeRefs.parametersFromSignature(genericSignature);
             int[] genericOf = alignedSignature(argumentTypes.length, genericParameters.size(),
                                                 parameterFlags);
             // Q2's `suspend fun` obligation. kotlinc erases a suspending function's
@@ -1193,6 +1194,20 @@ public final class ClassScanner {
             int declaredParameters = coroutineReturn == null
                 ? argumentTypes.length
                 : argumentTypes.length - 1;
+            // `OI-82`, the PARAMETER half of `G-63`. Kotlin states a parameter's
+            // nullability in its TYPE, and Java's rule — every reference permits null —
+            // is wrong for every Kotlin declaration that does not write `?`. Applied only
+            // where metadata's parameter count matches the slots this rule is confident
+            // about, because metadata lists what the SOURCE declared while the descriptor
+            // may carry synthetics, and those are not always trailing: javac puts an
+            // inner class's enclosing instance and an enum's name/ordinal FIRST, a local
+            // class's captures LAST, and kotlinc appends a suspend function's
+            // `Continuation` (already removed from the count above). A partial alignment
+            // would move a nullability onto the wrong parameter, which is worse than not
+            // reading it, so where the counts differ every parameter keeps Java's rule.
+            List<KmType> kotlinParameterTypes = kotlinNullability.parameterTypes().get(methodKey);
+            boolean parametersAligned = kotlinParameterTypes != null
+                && kotlinParameterTypes.size() == declaredParameters;
             List<String> parameters = new ArrayList<>();
             for (int i = 0; i < declaredParameters; i++) {
                 TreeMap<String, String> parameter = new TreeMap<>();
@@ -1200,10 +1215,13 @@ public final class ClassScanner {
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 // The erased descriptor type wherever the alignment declined to answer.
                 // It is never wrong, only less specific.
-                parameter.put("type",
-                    genericOf[i] >= 0
-                        ? genericParameters.get(genericOf[i])
-                        : TypeRefs.fromType(argumentTypes[i]));
+                TypeRefs.Node type = genericOf[i] >= 0
+                    ? genericParameters.get(genericOf[i])
+                    : TypeRefs.nodeFromType(argumentTypes[i]);
+                if (parametersAligned) {
+                    type = TypeRefs.withDeclaredNullability(type, kotlinParameterTypes.get(i));
+                }
+                parameter.put("type", TypeRefs.toJson(type));
                 // The DESCRIPTOR's own symbol for this position, kept beside the
                 // signature's rather than replaced by it.
                 //

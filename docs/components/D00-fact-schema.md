@@ -596,7 +596,12 @@ every unannotated Java field look uncertain and downgrade every link built on it
 **Kotlin's nullability is in its type system, not an annotation**, so it arrives through
 `ext.kotlin.nullable` (§6) — but the adapter **projects it into the shared field** rather than
 leaving it in the extension. Nullability crosses languages; anything DR-5 compares cannot live
-behind an extension read boundary.
+behind an extension read boundary. The projection reaches a method's `returns` (`G-63`) and,
+since `OI-82`, each of a function's and a constructor's `parameters` — at every level of the
+type reference, so `List<String?>` and `List<String>?` carry different `nullable` values on
+different levels where the descriptor and the `Signature` attribute spell them the same.
+Where the declared type and the signature disagree on shape, the reference keeps Java's rule
+at that level and below: less specific, never wrong.
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is

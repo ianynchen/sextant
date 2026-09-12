@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import kotlin.metadata.Attributes;
+import kotlin.metadata.KmType;
+import kotlin.metadata.KmTypeProjection;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.signature.SignatureReader;
 import org.objectweb.asm.signature.SignatureVisitor;
@@ -12,17 +15,6 @@ import org.objectweb.asm.signature.SignatureVisitor;
  *  (D00 §5a). Recorded verbatim — unwrapping envelopes is catalog knowledge. */
 public final class TypeRefs {
     private TypeRefs() {}
-
-    /** A type reference built from an erased descriptor — a method parameter, or a return
-     *  type whose method carries no {@code Signature} attribute. Fully projected, exactly
-     *  like {@link #fieldRef}: a signature-level reference and a field's reference describe
-     *  the same thing, and a consumer that has to ask which of the two it is holding before
-     *  it can read {@code wire_type} has two grammars where D00 §5a states one. What the
-     *  descriptor genuinely lost — the type arguments — stays lost; the projection is not a
-     *  claim about arguments that were never there. */
-    public static String fromType(Type type) {
-        return toJson(nodeFromType(type));
-    }
 
     // Package-private: ClassScanner's field type references share this exact
     // symbol grammar rather than keeping their own copy of it.
@@ -114,7 +106,7 @@ public final class TypeRefs {
         });
         if (collected.isEmpty()) return null;
         Node superclass = collected.get(0);
-        return superclass.argumentsJson().isEmpty() ? null : toJson(superclass);
+        return superclass.arguments().isEmpty() ? null : toJson(superclass);
     }
 
     /** The generic superinterface references from a class {@code Signature} — D00 §5a's
@@ -144,7 +136,7 @@ public final class TypeRefs {
         });
         List<String> generic = new ArrayList<>();
         for (Node node : collected) {
-            if (!node.argumentsJson().isEmpty()) generic.add(toJson(node));
+            if (!node.arguments().isEmpty()) generic.add(toJson(node));
         }
         return generic;
     }
@@ -174,13 +166,18 @@ public final class TypeRefs {
      *  VARIABLE, which {@code returnFromSignature} has already been able to yield since
      *  the collector existed. {@code accept(List<String>, T)} keeps both {@code String}
      *  and the name {@code T}; the descriptor keeps neither, having erased them to
-     *  {@code List} and {@code Comparable}. */
-    public static List<String> parametersFromSignature(String signature) {
+     *  {@code List} and {@code Comparable}.
+     *
+     *  <p>Handed back as live {@link Node}s rather than as JSON, because the scanner
+     *  still has to align each one to a descriptor slot before it can say which Kotlin
+     *  declaration it belongs to, and {@link #withDeclaredNullability} has to reach the
+     *  node before {@link #toJson} does. */
+    static List<Node> parametersFromSignature(String signature) {
         if (signature == null) return List.of();
-        List<String> parameters = new ArrayList<>();
+        List<Node> parameters = new ArrayList<>();
         new SignatureReader(signature).accept(new SignatureVisitor(org.objectweb.asm.Opcodes.ASM9) {
             @Override public SignatureVisitor visitParameterType() {
-                return new NodeCollector(node -> parameters.add(toJson(node)));
+                return new NodeCollector(parameters::add);
             }
         });
         return parameters;
@@ -353,7 +350,18 @@ public final class TypeRefs {
         return collected.isEmpty() ? null : collected.get(0);
     }
 
-    private static Node nodeFromType(Type type) {
+    /** A type reference built from an erased descriptor — a method parameter, or a return
+     *  type whose method carries no {@code Signature} attribute. Fully projected, exactly
+     *  like {@link #fieldRef}: a signature-level reference and a field's reference describe
+     *  the same thing, and a consumer that has to ask which of the two it is holding before
+     *  it can read {@code wire_type} has two grammars where D00 §5a states one. What the
+     *  descriptor genuinely lost — the type arguments — stays lost; the projection is not a
+     *  claim about arguments that were never there.
+     *
+     *  <p>A live {@link Node} rather than its JSON, because a parameter's caller may still
+     *  have a declared nullability to apply ({@link #withDeclaredNullability}) before
+     *  {@link #toJson}. */
+    static Node nodeFromType(Type type) {
         boolean nullable = type.getSort() == Type.OBJECT || type.getSort() == Type.ARRAY;
         return new Node(descriptorName(type), elementArguments(type), nullable,
             WireTypes.of(type), WireTypes.format(type));
@@ -367,20 +375,57 @@ public final class TypeRefs {
      *  it failed to expand, and DR-5 matches a caller sending strings against a callee
      *  expecting records. A collection expressed as {@code List<E>} has carried its element
      *  since D00 §5a; an array is the same claim in different syntax. */
-    private static List<String> elementArguments(Type type) {
+    private static List<Node> elementArguments(Type type) {
         // `componentType`, not `getElementType()` (`A-M10`): a `String[][]` holds ONE
         // `String[]`, and reporting it as holding a `String` is the same lost dimension
         // `descriptorName` had — reached through the argument list instead of the symbol,
         // and read by `shapes/expansion.py::_described`, which hashes what it finds.
         return type.getSort() == Type.ARRAY
-            ? List.of(toJson(nodeFromType(componentType(type))))
+            ? List.of(nodeFromType(componentType(type)))
             : List.of();
     }
 
-    private static String toJson(Node node) {
+    /** The declared nullability of {@code declared} and of every type argument, applied
+     *  to {@code node} by walking both trees together — Kotlin's answer, read from
+     *  {@code @kotlin.Metadata}, laid over the reference the {@code Signature} attribute
+     *  gave (`OI-82`).
+     *
+     *  <p>Applied ONLY where the two agree on the shape at every level. Metadata spells a
+     *  raw type, a type variable or a projection differently from the signature, and
+     *  where the argument counts differ NOTHING below that point is applied — Java's rule
+     *  stands there, which is less specific and never wrong. A star projection
+     *  ({@code List<*>}) has no type to read, so that argument is left as the signature
+     *  stated it. A partial or positional application would put one type's nullability
+     *  on another, which is worse than not reading it.
+     *
+     *  <p>On the TREE, before serialization, deliberately. {@link #toJson} writes keys in
+     *  sorted order, so `arguments` precedes `nullable` and the serialized text runs
+     *  child-first where metadata's walk is parent-first; the first version of this
+     *  matched the two by position over the JSON and inverted every nested argument.
+     *  Two trees of the same shape walked together cannot disagree about which level is
+     *  which. */
+    static Node withDeclaredNullability(Node node, KmType declared) {
+        Node out = node.withNullable(Attributes.isNullable(declared));
+        List<KmTypeProjection> args = declared.getArguments();
+        if (args.size() != node.arguments().size()) return out;
+        List<Node> applied = new ArrayList<>();
+        for (int i = 0; i < args.size(); i++) {
+            KmType argType = args.get(i).getType();
+            applied.add(argType == null
+                ? node.arguments().get(i)
+                : withDeclaredNullability(node.arguments().get(i), argType));
+        }
+        return out.withArguments(applied);
+    }
+
+    /** One {@link Node} as the JSON object a caller keeps, its arguments serialized the
+     *  same way beneath it. */
+    static String toJson(Node node) {
         TreeMap<String, String> fields = new TreeMap<>();
         fields.put("symbol", JsonOut.string(node.symbol()));
-        fields.put("arguments", JsonOut.array(node.argumentsJson()));
+        List<String> arguments = new ArrayList<>();
+        for (Node argument : node.arguments()) arguments.add(toJson(argument));
+        fields.put("arguments", JsonOut.array(arguments));
         fields.put("wire_type", JsonOut.string(node.wireType()));
         fields.put("wire_format", JsonOut.string(node.wireFormat()));
         fields.put("nullable", String.valueOf(node.nullable()));
@@ -392,12 +437,17 @@ public final class TypeRefs {
         return JsonOut.object(fields);
     }
 
-    /** One level of an augmented type reference, pre-serialization — {@link #toJson}
-     *  turns exactly one of these into the JSON object a caller keeps. */
-    private record Node(String symbol, List<String> argumentsJson, boolean nullable,
-                         String wireType, String wireFormat) {
+    /** One level of an augmented type reference, pre-serialization, its type arguments
+     *  the same shape beneath it — {@link #toJson} turns the tree into the JSON object a
+     *  caller keeps. */
+    record Node(String symbol, List<Node> arguments, boolean nullable,
+                String wireType, String wireFormat) {
         Node withNullable(boolean value) {
-            return new Node(symbol, argumentsJson, value, wireType, wireFormat);
+            return new Node(symbol, arguments, value, wireType, wireFormat);
+        }
+
+        Node withArguments(List<Node> value) {
+            return new Node(symbol, value, nullable, wireType, wireFormat);
         }
     }
 
@@ -410,7 +460,7 @@ public final class TypeRefs {
     private static final class NodeCollector extends SignatureVisitor {
         private final Consumer<Node> onDone;
         private String owner;
-        private final List<String> arguments = new ArrayList<>();
+        private final List<Node> arguments = new ArrayList<>();
 
         NodeCollector(Consumer<Node> onDone) {
             super(org.objectweb.asm.Opcodes.ASM9);
@@ -435,7 +485,7 @@ public final class TypeRefs {
         // surviving only as the `[]` suffix on the symbol.
         @Override public SignatureVisitor visitArrayType() {
             return new NodeCollector(element -> onDone.accept(
-                new Node(element.symbol() + "[]", List.of(toJson(element)), true, "array", "")));
+                new Node(element.symbol() + "[]", List.of(element), true, "array", "")));
         }
 
         @Override public void visitClassType(String name) {
@@ -450,13 +500,13 @@ public final class TypeRefs {
         // the bound is recorded, exactly as the signature states it. Resolving variance is
         // not this task's job any more than resolving a type variable's bound is.
         @Override public SignatureVisitor visitTypeArgument(char wildcard) {
-            return new NodeCollector(node -> arguments.add(toJson(node)));
+            return new NodeCollector(arguments::add);
         }
 
         // An unbounded wildcard (`?`) has no bound to recurse into — recorded rather than
         // silently dropped from the argument list.
         @Override public void visitTypeArgument() {
-            arguments.add(toJson(new Node("?", List.of(), true, "object", "")));
+            arguments.add(new Node("?", List.of(), true, "object", ""));
         }
 
         @Override public void visitEnd() {
