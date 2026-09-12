@@ -248,6 +248,15 @@ def _topic_annotation_facts(root: Path, args: dict) -> None:
     write_fact_file(root / "OrderListener.jsonl", document, facts)
 
 
+def _derive_endpoints_of_one(workspace: DuckDbWorkspace, **catalog: object) -> None:
+    """The endpoints derivation for ONE catalog, driven directly — the shape the
+    statement took when it ran once per catalog, spelled as what it is now: a
+    batch of one (`endpoints`, every catalog's rows in one statement), then that
+    catalog's turn (`endpoints_insert`), which is what the engine's `run` does."""
+    workspace.derive("endpoints", catalogs=[catalog])
+    workspace.derive("endpoints_insert", catalog_id=catalog["catalog_id"])
+
+
 # Shared across the derivation, unaffected by which path attribute is used —
 # no annotation in these fixtures carries $prefix_annotation, so `prefixes`
 # always resolves empty and $prefix_from/$peer_from's exact contents do not
@@ -344,8 +353,8 @@ def test_a_multi_valued_path_attribute_derives_one_row_per_value(tmp_path: Path)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topics"],
         all_methods=[],
@@ -370,8 +379,8 @@ def test_an_empty_all_methods_derives_one_null_method_row(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
@@ -401,8 +410,8 @@ def test_null_method_rows_dedup_on_the_same_identity(tmp_path: Path):
     # Derived twice — D02 §5's "two catalogs may both match" case, or simply
     # a second resolve — must still leave one inbound row.
     for _ in range(2):
-        workspace.derive(
-            "endpoints",
+        _derive_endpoints_of_one(
+            workspace,
             **_TOPIC_ENDPOINT_KWARGS,
             path_from=["topic"],
             all_methods=[],
@@ -447,8 +456,8 @@ def test_endpoints_carry_the_catalog_id_that_derived_them(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],
@@ -493,8 +502,8 @@ def test_each_direction_keeps_the_catalog_id_that_derived_it(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         **_TOPIC_ENDPOINT_KWARGS,
         path_from=["topic"],
         all_methods=[],

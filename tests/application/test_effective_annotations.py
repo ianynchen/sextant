@@ -163,6 +163,14 @@ def test_a_plain_direct_use_of_a_mapping_fqn_yields_no_synthetic_row():
     assert result == []
 
 
+def _derive_endpoints_of_one(workspace: DuckDbWorkspace, **catalog: object) -> None:
+    """The endpoints derivation for ONE catalog, driven directly: a batch of one
+    (`endpoints`, every catalog's rows in one statement), then that catalog's
+    turn (`endpoints_insert`) — what the engine's `run` does."""
+    workspace.derive("endpoints", catalogs=[catalog])
+    workspace.derive("endpoints_insert", catalog_id=catalog["catalog_id"])
+
+
 def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: Path):
     """Regression (Task 6 review, round 1): the docstring above states the
     invariant this pins — a type-targeted synthetic row (a composing type's
@@ -214,8 +222,8 @@ def test_a_type_targeted_synthetic_prefix_row_does_not_leak_a_prefix(tmp_path: P
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
-    workspace.derive(
-        "endpoints",
+    _derive_endpoints_of_one(
+        workspace,
         protocol="http",
         direction="inbound",
         type_annotation=None,

@@ -322,7 +322,8 @@ after the userinfo strip. Bundles byte-identical on both corpora.
 
 ## P-4 — the `endpoints` statement runs once per catalog
 
-**Status: measured, not started.** `derive_endpoints.sql` (1,332 lines, ~50 `$params`) executes
+**Status: shipped 2026-09-12 as B, below.** The measurement that opened it, kept for the
+record: `derive_endpoints.sql` (1,332 lines, ~50 `$params`) executes
 once per annotation-driven catalog: 28–29 times, ~55ms each = 1.4s of `orders-service`'s 2.5s
 analyze (the suite pays this ~25× per run, CI ~5× slower again) and 1.6s of `mall-admin`'s.
 Benchmarked 2026-09-12: the cost is the statement's SIZE — 1,300 terms cost 26–33ms whether
@@ -373,7 +374,53 @@ catalog's mapping annotations — and the per-target annotation map it reads, bo
 take the catalog's fqns as input; the catalog-independent half is the hierarchy, and that is
 step 2. `fluent.run`'s own 0.15s is its per-caller receiver index, 25k `setdefault`s per
 catalog over six catalogs; below the threshold this round set. The `endpoints` statement
-(P-4) is now the largest item inside `derive_endpoints` on both corpora.
+(P-4) was then the largest item inside `derive_endpoints` on both corpora — B, below.
+
+## B — the `endpoints` statement runs once per resolve (P-4)
+
+**Status: shipped 2026-09-12 — whole `api.analyze`, `orders-service` 2.4s → 1.3s,
+`mall-admin` (+3 siblings) 6.9s → 6.0s** (Apple M4, three runs each; the `derive_endpoints`
+pass 1.5s → 0.3s and 2.5s → 1.4s; the statement itself 1.4s over 29 executions → 0.11s over
+ONE on `orders-service`, 1.4s over 28 → 0.12s over one on `mall-admin`).
+
+**Measured before designing.** The order `derive_endpoints` runs catalogs in was logged on
+both corpora rather than read off the code: 30 annotation-driven catalogs run on
+`orders-service` (`spring-rsocket` skipped on its dependency gate), 29 on `mall-admin`
+(`spring-stomp` too), and they are NOT contiguous — the sort is by filename within a
+direction, so `jakarta-servlet`, `javalin`, `kafka-consumer`, `pekko-connectors-kafka`,
+`spring-mvc-router`, `spring-stomp-endpoint`, `spring-websocket` and the outbound call-site
+catalogs sit between them, 11 contiguous runs in all. That matters because the statement's
+closing `NOT EXISTS (… FROM endpoints …)` is earlier-catalog-wins over the wire identity,
+and `derive_call_endpoints.sql`'s guard is the same rule for the other engines: a topic a
+`@KafkaListener` and a programmatic consumer both name belongs to whichever ran first. A
+batch that merged across one of those boundaries would swap the winner; a batch per
+contiguous run would have executed the statement 11 times.
+
+**Fix — derive once, insert per turn.** `derive_endpoints.sql` takes every catalog at once
+(`$catalogs`, one STRUCT per catalog, the P-1b binding shape) and writes every catalog's
+candidate rows to the temp table `endpoint_candidates`, `catalog_id` carried through every
+CTE so rows never mix; the earlier-catalog-wins guard moved, unchanged, into the 30-line
+`insert_endpoints.sql`, which `derive_endpoints` runs at each catalog's own turn in the
+unchanged order. So the guard is asked at exactly the moment it always was, against exactly
+the table it always saw — the interleaving, the reply rows a catalog derives after its own
+insert, and the content-negotiation pairs one catalog mints for one route (which the
+brief's `row_number()` shape would have collapsed to one) all come out as before, by
+construction rather than by proof. The engine is `params_for` (the 32 values, a pure
+function of the catalog and the fact tables — `_direction_flip` reads facts only),
+`stage(workspace, catalogs)` and `insert(workspace, catalog)`; `run` is a batch of one for
+a caller with one catalog. The per-catalog statement costs ~1ms; the batch statement ~110ms
+for 30 catalogs.
+
+**Identity.** Every workspace table (`ORDER BY ALL`, every column as text) and
+`metadata.json` equal before and after on both corpora; the `endpoints` rows dumped WITH
+`catalog_id` equal line for line (a row minted by a different catalog would be a wrong
+order even at the same wire identity); the full suite. The one difference the suite caught
+and the corpora could not: a select-list alias (`direction`) read back inside the same
+SELECT is shadowed once the joined catalog row has a column of that name — a flipped
+`@HttpExchange` row landed its symbol on the wrong side, and neither corpus has a flipped
+row. Pinned by `test_two_catalogs_in_one_batch_claiming_one_wire_identity_derive_the_
+earlier_ones_rows` (both filename orders) and
+`test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_its_turn`.
 
 ## The whole flow, after P-1 and P-3 (analyze → render → export, 2026-09-12)
 

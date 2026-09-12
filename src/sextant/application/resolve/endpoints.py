@@ -68,6 +68,14 @@ _DERIVES_ROWS: dict[str, Callable[[Catalog], bool]] = {
     "config_join": config_join.derives_rows,
 }
 
+# The one style whose derivation runs once per resolve over every catalog of
+# the style, with a per-catalog half at each catalog's turn (P-4). Named here
+# because `derive_endpoints` calls the style's `stage` before the turns begin;
+# `_ENGINES` maps the style to the turn's half. Which statement is worth
+# staging is a measured property of the statement — its bind cost — and
+# `annotation_driven.stage` carries the number.
+_STAGED = "annotation_driven"
+
 
 @dataclass(frozen=True)
 class SkippedCatalog:
@@ -123,6 +131,7 @@ def derive_endpoints(
         ),
     )
     skipped = []
+    running = []
     for catalog, engine in ordered:
         missing = missing_capabilities(catalog, capabilities)
         if missing:
@@ -138,6 +147,26 @@ def derive_endpoints(
         if unmet is not None:
             skipped.append(SkippedCatalog(catalog.id, (unmet,)))
             continue
+        running.append((catalog, engine))
+    # Both gates are asked before any engine runs, so that the staged style
+    # below knows its whole batch up front. That moves no answer: each gate
+    # reads the catalog and the fact tables only, and no engine writes those.
+    #
+    # P-4: the annotation-driven statement costs its SIZE at bind time (~50ms
+    # for 1,300 lines, whatever the values) and ran once per catalog — 1.4s of
+    # a 2.5s analyze. So every annotation-driven catalog that will run is
+    # derived in ONE execution here, and `_ENGINES` maps the style to the
+    # per-catalog half, which at each catalog's turn moves its rows into
+    # `endpoints`. The turn is what keeps earlier-catalog-wins exact: the
+    # call-site styles run BETWEEN annotation-driven catalogs in this order,
+    # and a wire identity one of them minted in between still refuses a later
+    # annotation-driven catalog's row, as it did when the whole statement ran
+    # at that turn. A skipped catalog is not in the batch and contributes no
+    # row; a batch with nothing in it stages nothing.
+    annotation_driven.stage(
+        workspace, [catalog for catalog, _ in running if catalog.style == _STAGED]
+    )
+    for catalog, engine in running:
         engine(workspace, catalog)
     # Once per resolve, after every catalog. F4 §5.2 (W24): a sibling module's own
     # rows are this module's to drop, never to publish.
@@ -377,7 +406,12 @@ def _engine_for(catalog: Catalog) -> "Callable[[Workspace, Catalog], None]":
 
 # One entry per engine style D02 §2 declares and this codebase implements.
 _ENGINES: dict[str, Callable[[Workspace, Catalog], None]] = {
-    "annotation_driven": annotation_driven.run,
+    # The per-catalog HALF of the staged style (`_STAGED`): `derive_endpoints`
+    # stages every annotation-driven catalog's rows in one statement before
+    # the turns begin, and this moves one catalog's rows into `endpoints` at
+    # its turn. `annotation_driven.run` — stage a batch of one, then insert —
+    # is the entry for a caller that hands the engine a single catalog.
+    "annotation_driven": annotation_driven.insert,
     "single_call": single_call.run,
     "fluent": fluent.run,
     "interface_implementation": interface_implementation.run,

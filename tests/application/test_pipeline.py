@@ -4217,6 +4217,43 @@ def test_every_shared_fold_is_built_once_per_resolve_and_again_after_the_next_lo
         workspace.close()
 
 
+def test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_its_turn(
+    tmp_path: Path, fixture_facts: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`docs/performance.md` B (P-4). `derive_endpoints.sql` costs its size at bind
+    time (~50ms) and ran once per annotation-driven catalog; it runs ONCE per resolve
+    now, and each catalog's turn is the small `endpoints_insert`. Pinned as counts over
+    the whole `resolve()` with every shipped catalog, so a driver that went back to
+    staging per contiguous run — or per catalog — fails here rather than being found
+    by the next profile. The turn count is every annotation-driven catalog that ran
+    minus the corroboration-only one, which stages nothing and takes no turn."""
+    executions: dict[str, int] = {}
+    real_derive = DuckDbWorkspace.derive
+
+    def counting(self: DuckDbWorkspace, name: str, **params: object) -> None:
+        executions[name] = executions.get(name, 0) + 1
+        real_derive(self, name, **params)
+
+    monkeypatch.setattr(DuckDbWorkspace, "derive", counting)
+    catalogs = YamlCatalogSource(CATALOGS)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        report = resolve(workspace, fixture_facts, catalogs, set(FIXTURE_CAPABILITIES))
+    finally:
+        workspace.close()
+    skipped_ids = {entry.catalog_id for entry in report.skipped_catalogs}
+    turns = [
+        catalog
+        for catalog in catalogs.load()
+        if catalog.style == "annotation_driven"
+        and catalog.id not in skipped_ids
+        and "mapping" in catalog.matches
+    ]
+
+    assert executions["endpoints"] == 1
+    assert executions["endpoints_insert"] == len(turns) >= 28
+
+
 def test_every_resolve_pass_logs_its_seconds_at_info(
     tmp_path: Path, fixture_facts: Path, caplog: pytest.LogCaptureFixture
 ):

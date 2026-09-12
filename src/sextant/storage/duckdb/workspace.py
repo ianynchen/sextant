@@ -810,6 +810,14 @@ _REDACTED_PAYLOADS = "redacted_payloads"
 # spellings: a raw entry's `key_path` and a resolved row's `key` are not
 # always the same string, and a join across them would silently miss.
 _REDACTED_ENTRY_VALUES = "redacted_entry_values"
+# The one temp table a DERIVATION stages (P-4): every annotation-driven
+# catalog's candidate endpoint rows, written by `derive_endpoints.sql` once per
+# resolve and read by `insert_endpoints.sql` once per catalog. Temp for the
+# reason the redaction maps are: it is working state of one resolve, never
+# part of the schema and never in a bundle — every row it holds that survives
+# its catalog's turn is in `endpoints`, and every row that does not was
+# refused by the earlier-catalog-wins rule.
+_ENDPOINT_CANDIDATES = "endpoint_candidates"
 
 # One query per table and view IN THE SCHEMA — all of them, with no exclusion
 # class. The ratchet runs the direction that catches the defect: an object in
@@ -1103,7 +1111,13 @@ _DECODED_COLUMNS = {
 }
 
 _NAMED_DERIVATIONS = {
+    # P-4: `endpoints` derives EVERY annotation-driven catalog's candidate rows
+    # in one execution, into the temp table `endpoint_candidates`, which
+    # `endpoints_insert` then reads one catalog at a time — the statement's
+    # cost is its size at bind time, so it runs once per resolve where it ran
+    # once per catalog.
     "endpoints": "derive_endpoints.sql",
+    "endpoints_insert": "insert_endpoints.sql",
     "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
@@ -1526,11 +1540,12 @@ class DuckDbWorkspace:
 
         Staged redaction tables are excluded by name — they are temp tables
         this class creates and drops inside one export, never part of the
-        schema.
+        schema. So is the endpoint-candidates table the endpoints derivation
+        stages, for the same reason (`_ENDPOINT_CANDIDATES`).
         """
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?) "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1538,6 +1553,7 @@ class DuckDbWorkspace:
                 _REDACTED_JSON,
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
+                _ENDPOINT_CANDIDATES,
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:
