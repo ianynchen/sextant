@@ -225,7 +225,8 @@ def test_redact_json_returns_an_untouched_document_character_for_character():
         ("sk-live-[a-z0-9]+", ("sk-live-", False)),
         (r"AKIA[0-9A-Z]{16}", ("AKIA", False)),
         (r"(?i)bearer\s+\S+", ("bearer", True)),
-        (r"\.env=.*", (".env=", False)),
+        # `=` is one of the five an HTML-safe writer escapes, so it ends the prefix.
+        (r"\.env=.*", (".env", False)),
         ("my_secret_[0-9]+", ("my_secret_", False)),
         # A quantifier makes the character before it optional: `c` is not required.
         ("abc?", ("ab", False)),
@@ -272,6 +273,9 @@ def test_the_prefilter_names_every_built_in_rule_and_nothing_a_repo_did_not_add(
     run backwards, so `api_key`, `api-key` and `apiKey` all fall inside it."""
     prefilter = _plain().json_text_prefilter()
     assert prefilter is not None
+    # Splitting on `|` reads the built-in set only: a value pattern's
+    # case-insensitive prefix carries `(?:…|…)` groups of its own, which this
+    # split would cut through. The built-ins have no value patterns.
     alternatives = prefilter.split("|")
     assert alternatives[0] == r":\\?/\\?/[^/?#\s@]*@"
     assert alternatives[1:] == [

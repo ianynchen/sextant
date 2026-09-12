@@ -1280,6 +1280,7 @@ class DuckDbWorkspace:
         # Before the table is touched, not after the load succeeds: a load that fails
         # half-way must not leave the previous facts' rows answering for it.
         self._fact_reads.clear()
+        self._per_value_retries.clear()
         self._staged_payloads = None
         self._connection.execute("DELETE FROM raw_facts")
         self._connection.execute(

@@ -1282,6 +1282,22 @@ _PREFILTER_TEXTS = [
     '{"value":"\\u2014 \\u00e9"}',
     '{"value":"4111111111111111"}',
     '{"kind":"symbol","symbol":"com/acme/Secret#","name":"Secret"}',
+    # The scheme in either case and with the `+.-` a scheme may carry.
+    '{"value":"HTTPS://u:p@h"}',
+    '{"value":"svn+ssh://u:p@h"}',
+    # A value pattern (`https://host`) that matches only AFTER the userinfo
+    # strip: admitted through the userinfo alternative, which is why the
+    # value-pattern branch need not see through the strip itself.
+    '{"value":"https://u:p@host"}',
+    # The four non-ASCII letters Python's case fold maps onto `i`, `k` and
+    # `s`, each spelled raw (as the extractor writes them) and escaped —
+    # against a `(?i)` prefix carrying `k` and `i`.
+    '{"value":"\u212aelvin-42"}',
+    '{"value":"\\u212aelvin-42"}',
+    '{"value":"kelv\u0131n-42"}',
+    '{"value":"kelv\\u0131n-42"}',
+    '{"value":"kelv\u0130n-42"}',
+    '{"value":"kelv\\u0130n-42"}',
 ]
 
 _PREFILTER_REDACTORS = [
@@ -1291,6 +1307,7 @@ _PREFILTER_REDACTORS = [
         RedactionRules(value_patterns=("sk-live-[a-z0-9]+", r"(?i)bearer\s+\S+", r"\.env="))
     ),
     Redactor.from_rules(RedactionRules(value_patterns=(r"(?i)sk-live-[a-z0-9]+",))),
+    Redactor.from_rules(RedactionRules(value_patterns=(r"(?i)kelvin-[0-9]+", "https://host"))),
     Redactor.from_rules(RedactionRules(value_patterns=("[0-9]{16}",))),
 ]
 
@@ -1320,7 +1337,7 @@ def test_the_prefilter_admits_every_payload_the_walk_would_change():
             changed += walk_changes_it
             turned_away += not admitted
     connection.close()
-    assert changed >= 12 and turned_away >= 20
+    assert changed >= 20 and turned_away >= 30
 
 
 def test_the_second_export_reuses_the_payloads_the_first_staged(tmp_path: Path):

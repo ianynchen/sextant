@@ -113,17 +113,23 @@ _NORMALIZED_TOKEN_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789."
 # non-ASCII letter that folds to them (Unicode simple case folding: the dotted
 # and dotless `I`, the long `s`, the Kelvin sign). RE2 folds only two of the
 # four, and a JSON writer may spell any of them as a `\u` escape, so a
-# case-insensitive literal lists every spelling itself.
+# case-insensitive literal lists every spelling itself. The raw letters are
+# written as Python escapes so the code points are checkable by eye: the
+# Kelvin sign once shipped here as the ASCII letter `K` it looks like, and a
+# `(?i)kelvin-…` pattern then excluded `Kelvin-42`, which the walk masks.
 _FOLDS_TO_ASCII = {
-    "i": ("İı", r"\\u013[01]"),
-    "k": ("K", r"\\u212[aA]"),
-    "s": ("ſ", r"\\u017[fF]"),
+    "i": ("\u0130\u0131", r"\\u013[01]"),
+    "k": ("\u212a", r"\\u212[aA]"),
+    "s": ("\u017f", r"\\u017[fF]"),
 }
 # Characters a literal prefix stops at: JSON spells them with an escape (`"`,
 # `\`, control characters), may spell them with one (`/`, and any non-ASCII
-# character as `\uXXXX`), so the decoded and the encoded text differ there
-# and a literal that needs one is not a substring of the text.
-_NOT_SPELLED_AS_ITSELF = frozenset('"\\/')
+# character as `\uXXXX`; `<>&='` as `\u003c` and so on by an HTML-safe writer,
+# which a third-party scanner named in `scanner_id` may be), so the decoded
+# and the encoded text differ there and a literal that needs one is not a
+# substring of the text. Every other printable ASCII character is assumed
+# spelled as itself — the residual stated above.
+_NOT_SPELLED_AS_ITSELF = frozenset("\"\\/<>&='")
 
 
 def _re2_literal(text: str) -> str:
