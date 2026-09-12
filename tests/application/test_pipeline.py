@@ -4166,7 +4166,7 @@ def test_the_reachability_table_is_written_by_the_pipeline(
 def test_every_resolve_pass_logs_its_seconds_at_info(
     tmp_path: Path, fixture_facts: Path, caplog: pytest.LogCaptureFixture
 ):
-    """`OI-68` (`GAP-7`). Every per-pass figure that entry quotes came from a throwaway
+    """`docs/performance.md` P-1 (formerly `OI-68`/`GAP-7`). Every per-pass figure that entry quotes came from a throwaway
     script, and the two profiles it holds disagree by seconds a pass because no two of
     those scripts measured the same thing. `pipeline._timed` makes the instrument
     standing: one INFO line per pass, in the order the pipeline runs them, shaped like

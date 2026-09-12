@@ -1331,7 +1331,8 @@ documents against 161. `derive_endpoints` is 47s of it and `derive_endpoint_shap
 and the cost is NOT work the guardrail then discards — the SQL the guardrail cleans up
 after is 2.8s of the 31.7s replay (the fresh run's 47s was not profiled to the query); the
 rest is every catalog re-reading the fact tables from
-Python (`OI-68` has the profile to the query). **Gradle is not implemented** — `GradleDetector` sets no sibling
+Python (`docs/performance.md` P-1 has the profile to the query and the fix shape; it is
+a performance item, not a gap, and is worked after the delivery register is empty). **Gradle is not implemented** — `GradleDetector` sets no sibling
 roots, so every Gradle multi-project build keeps the empty-envelope defect (`OI-69`).
 
 ### 3a-vii. What an outbound call carries besides its address (F5 §6.2)

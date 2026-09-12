@@ -423,8 +423,9 @@ These are real and they are not on the path to any cell above. They are listed s
 "no open Critical or Major" can be claimed honestly at the end, not so they are done first.
 
 `GAP-7` left this register on 2026-09-12: it is a performance cost (a reactor module
-analyses in 111s, 8s alone — `OI-68` has the profile), not a missing feature, and the user
-ruled that a slow correct answer is not a gap. It stays open as a performance issue there.
+analyses in 111s, 8s alone), not a missing feature, and the user ruled that a slow correct
+answer is not a gap. It lives in [`performance.md`](performance.md) P-1, worked after the
+register is empty.
 `G-52` throw exits left this list on 2026-09-12: it blocked no feature, so it is not in
 the `closed` block above; it is recorded closed in `open-issues.md`, by the tests named there.
 `G-74` `signature.throws` gains its consumer left this list on 2026-09-12: it blocked no
