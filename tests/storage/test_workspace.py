@@ -13,6 +13,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     ConfigEntryFact,
+    ConstantFact,
     Document,
     FieldWriteFact,
     MethodReturnFact,
@@ -23,7 +24,7 @@ from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
 from sextant.egress.export.index import write_index
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
-from sextant.storage.duckdb.workspace import DuckDbWorkspace
+from sextant.storage.duckdb.workspace import _FACT_VIEWS, DuckDbWorkspace
 
 
 def _fixture_facts(root: Path) -> None:
@@ -823,7 +824,9 @@ def test_every_table_and_view_in_the_schema_is_exported(tmp_path: Path):
     There is no exclusion class. `raw_facts` travels twice — as this table and
     as the per-document `facts/*.parquet` stream — because those are two
     shapes of one thing a reader wants for two different reasons, not an
-    exemption.
+    exemption. The `fact_*` tables `load_facts` builds are not one either:
+    each is the storage behind one fact view, and that view exports under its
+    own name, so its rows travel exactly once.
     """
     workspace = _workspace_with_an_endpoint(tmp_path)
     written = workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
@@ -1751,3 +1754,129 @@ def test_the_coverage_distributions_group_the_columns_that_already_exist(tmp_pat
     # `resolution` cannot give: two of these are `resolved` and one of those two reached
     # nothing.
     assert reach == {"body_read": 3, "boundary": 1}
+
+
+# --------------------------------------------------------------------------
+# The fact views are materialized once per load (P-1a)
+# --------------------------------------------------------------------------
+
+
+def _view_sql(workspace: DuckDbWorkspace) -> dict[str, str]:
+    rows = workspace._connection.execute(
+        "SELECT view_name, sql FROM duckdb_views() WHERE NOT internal"
+    ).fetchall()
+    return {str(name): str(sql) for name, sql in rows}
+
+
+def _rows_of(workspace: DuckDbWorkspace, sql: str) -> list[tuple[object, ...]]:
+    return sorted(workspace._connection.execute(sql).fetchall(), key=repr)
+
+
+def _fact_tables(workspace: DuckDbWorkspace) -> set[str]:
+    rows = workspace._connection.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE starts_with(table_name, 'fact_')"
+    ).fetchall()
+    return {str(name) for (name,) in rows}
+
+
+def test_every_fact_view_is_materialized_on_load_and_answers_exactly_as_its_json_form_did(
+    tmp_path: Path,
+):
+    """The correctness pin for P-1a. Measured on `mall-admin`, every fact view
+    re-extracted JSON from `raw_facts` on every query, and one pass ran one of
+    them 629 times; `load_facts` now builds a `fact_<view>` table per view and
+    points the view at it. The JSON-form SELECT is captured from an EMPTY
+    workspace — `schema.sql`'s own definition, before anything was loaded —
+    and re-run against the loaded workspace beside each materialized view, so
+    a table that drifted from the definition by one column or one row fails
+    here. The multi-release fixture is used because its selection actually
+    excludes rows, and a config entry and a constant ride along so every view
+    has something to hold — asserted, because an empty view compares equal to
+    anything."""
+    empty = DuckDbWorkspace(tmp_path / "empty.duckdb")
+    json_form = {view: _view_sql(empty)[view].split(" AS ", 1)[1] for view in _FACT_VIEWS}
+    empty.close()
+    _config_entry_facts(tmp_path / "facts")
+    write_fact_file(
+        tmp_path / "facts" / "Topics.jsonl",
+        Document(
+            document_id="doc_constants",
+            relative_path="com/acme/Topics.java",
+            module_id="com.acme:m",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=5,
+            scanner_id="asm",
+            content_hash="sha256:t",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:none",
+        ),
+        [
+            ConstantFact(
+                document_id="doc_constants", symbol="mod com/acme/Topics#TOPIC.", value="orders"
+            )
+        ],
+    )
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    defined = _view_sql(workspace)
+    for view in _FACT_VIEWS:
+        assert defined[view] == f"CREATE VIEW {view} AS SELECT * FROM fact_{view};"
+        materialized = _rows_of(workspace, f"SELECT * FROM {view}")
+        assert materialized == _rows_of(workspace, json_form[view]), view
+        assert materialized, f"{view} holds no rows, so the comparison proves nothing"
+    workspace.close()
+
+
+def test_reopening_a_workspace_keeps_the_fact_views_on_their_tables(tmp_path: Path):
+    """`__init__` re-runs `schema.sql`, which re-issues every fact view in its
+    JSON form — so without the reopen rule, every command that opens an
+    analyzed workspace would run the slow views while the tables sat unused."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    before = {view: _rows_of(workspace, f"SELECT * FROM {view}") for view in _FACT_VIEWS}
+    workspace.close()
+
+    reopened = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    defined = _view_sql(reopened)
+    for view in _FACT_VIEWS:
+        assert defined[view] == f"CREATE VIEW {view} AS SELECT * FROM fact_{view};"
+        assert _rows_of(reopened, f"SELECT * FROM {view}") == before[view], view
+    reopened.close()
+
+
+def test_a_fact_table_that_no_longer_matches_the_schema_is_dropped_on_reopen(
+    tmp_path: Path,
+):
+    """A schema that gained a column since the tables were written must not be
+    masked by a stale table: the views fall back to the JSON form and every
+    `fact_*` table goes, so the next `load_facts` rebuilds them. Simulated from
+    the other side — a table missing a column the view declares — which is the
+    same mismatch."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    expected = _rows_of(workspace, "SELECT * FROM symbols")
+    workspace.close()
+    stale = duckdb.connect(str(tmp_path / "ws.duckdb"))
+    stale.execute("ALTER TABLE fact_symbols DROP COLUMN line_end")
+    stale.close()
+
+    reopened = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    assert "FROM raw_facts" in _view_sql(reopened)["symbols"]
+    assert _fact_tables(reopened) == set()
+    assert _rows_of(reopened, "SELECT * FROM symbols") == expected
+    reopened.close()
+
+
+def test_loading_facts_twice_rebuilds_the_tables_from_the_second_tree(tmp_path: Path):
+    """`raw_facts` has one writer, and the tables are rebuilt at the end of
+    every write — never left over from the previous one."""
+    workspace = _multi_release_workspace(tmp_path, declared_release=21)
+    assert workspace._connection.execute("SELECT count(*) FROM documents").fetchone() == (4,)
+    _fixture_facts(tmp_path / "second")
+    workspace.load_facts(tmp_path / "second")
+
+    assert workspace._connection.execute("SELECT count(*) FROM documents").fetchone() == (1,)
+    assert workspace._connection.execute("SELECT symbol FROM symbols").fetchall() == [
+        ("s maven p 1 com/acme/A#",)
+    ]
+    assert _view_sql(workspace)["symbols"] == "CREATE VIEW symbols AS SELECT * FROM fact_symbols;"
+    workspace.close()

@@ -1035,6 +1035,40 @@ _NAMED_DERIVATIONS = {
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
 }
 
+# The fact "tables" `schema.sql` defines as VIEWS over `raw_facts`, in dependency
+# order: `documents` first, `selected_documents` reads it, and every view after
+# those filters on `selected_documents`. Measured on `mall-admin` (648 documents,
+# 75,614 facts), a view is re-evaluated on EVERY query — the JSON extraction and
+# the selection subquery both — and `derive_endpoint_shapes` ran `annotations_of`
+# 629 times at 32ms each to fetch 369 rows. Each of these is materialized into a
+# `fact_<view>` table once per load (`_materialize_facts`), and the view is
+# re-pointed at that table, so the named queries and the derivations stay exactly
+# as written. `call_edges_by_callee` and `roots_by_address` are not here: they
+# are orderings of derived tables, and read no JSON.
+_FACT_VIEWS = (
+    "documents",
+    "selected_documents",
+    "symbols",
+    "annotations",
+    "config_entries",
+    "call_sites",
+    "method_returns",
+    "constants",
+    "field_writes",
+)
+# No index on any of them, which was measured rather than assumed: with
+# `annotations(target)`, `symbols(symbol)`, `symbols(enclosing)`,
+# `call_sites(caller)` and `method_returns(method)` all built, no pass moved on
+# either corpus (`derive_endpoint_shapes` 5.4s either way on `mall-admin`, the one
+# pass with a point lookup — `annotations_of` — and it reads 369 rows across 629
+# calls at 0.1s total once the table exists), and building them added 0.1s to
+# every load. That holds as long as no named query or derivation looks a fact up
+# by equality against a table too large to scan in the time a lookup takes.
+
+
+def _fact_table(view: str) -> str:
+    return f"fact_{view}"
+
 
 class DuckDbWorkspace:
     """The Workspace port over DuckDB. Owns SQL and D01; knows nothing about
@@ -1046,6 +1080,13 @@ class DuckDbWorkspace:
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._connection.execute(schema)
         self._add_columns_the_schema_has_gained(schema)
+        # Read HERE, while every fact view is still the form `schema.sql` just gave
+        # it: once `_materialize_facts` has re-pointed a view at its table, the
+        # catalog holds `SELECT * FROM fact_<view>` and the defining SELECT is gone
+        # from it until the next open. `schema.sql` stays the single source — this
+        # is DuckDB's own parse of it, never a copy kept beside it.
+        self._fact_view_definitions = self._fact_view_definitions_from_catalog()
+        self._reuse_or_drop_materialized_facts()
 
     def _add_columns_the_schema_has_gained(self, schema: str) -> None:
         """Adds any column `schema.sql` declares that an EXISTING workspace file does
@@ -1108,7 +1149,80 @@ class DuckDbWorkspace:
         )
         row = self._connection.execute("SELECT count(*) FROM raw_facts").fetchone()
         assert row is not None
+        self._materialize_facts()
         return int(row[0])
+
+    def _fact_view_definitions_from_catalog(self) -> dict[str, str]:
+        """Each fact view's defining SELECT, as DuckDB stores it: `CREATE VIEW <name>
+        AS <select>;`, normalized and stripped of comments, so the text after the
+        first ` AS ` is the SELECT itself."""
+        rows = self._connection.execute(
+            "SELECT view_name, sql FROM duckdb_views() WHERE view_name IN "
+            f"({', '.join('?' for _ in _FACT_VIEWS)})",
+            list(_FACT_VIEWS),
+        ).fetchall()
+        return {str(name): str(sql).split(" AS ", 1)[1] for name, sql in rows}
+
+    def _materialize_facts(self) -> None:
+        """Each fact view becomes a `fact_<view>` table holding the view's rows, and
+        the view is re-pointed at it, so no query re-extracts JSON from `raw_facts`.
+
+        Called at the end of `load_facts` and nowhere else, which is what makes the
+        tables stale-proof: `raw_facts` has exactly one writer, and this runs after
+        it. In `_FACT_VIEWS` order, so a definition that reads `selected_documents`
+        reads the table just built for it rather than the JSON form. Measured on
+        `mall-admin`: 0.4s to build; `derive_endpoint_shapes` went from 39.8s to 5.4s
+        and `derive_endpoints` from 44.1s to 27.7s. On `fixtures/orders-service` it
+        costs 20ms and the same two passes go from 5.1s to 2.8s.
+        """
+        for view in _FACT_VIEWS:
+            table = _fact_table(view)
+            self._connection.execute(
+                f"CREATE OR REPLACE TABLE {table} AS {self._fact_view_definitions[view]}"
+            )
+            self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM {table}")
+
+    def _reuse_or_drop_materialized_facts(self) -> None:
+        """A REOPENED workspace keeps its `fact_*` tables only while they still match
+        the schema; otherwise they are dropped and the next `load_facts` rebuilds them.
+
+        `__init__` has just run `schema.sql`, which re-issues every fact view in its
+        JSON form — so without this, every command that opens an analyzed workspace
+        (render, export, every test that reopens the file) would run the slow views
+        while the tables sat unused. The rule: the views are re-pointed at the tables
+        only if EVERY table exists and its column list — names and types, in order —
+        equals the view's as the schema defines it now. A schema that gained a column
+        since the tables were written must not be masked by a stale table, and a
+        table that lost one must not answer for a view that still declares it.
+        """
+        held = {
+            str(name)
+            for (name,) in self._connection.execute(
+                "SELECT table_name FROM duckdb_tables() WHERE table_name IN "
+                f"({', '.join('?' for _ in _FACT_VIEWS)})",
+                [_fact_table(view) for view in _FACT_VIEWS],
+            ).fetchall()
+        }
+        if all(_fact_table(view) in held for view in _FACT_VIEWS) and all(
+            self._columns_of(view) == self._columns_of(_fact_table(view)) for view in _FACT_VIEWS
+        ):
+            for view in _FACT_VIEWS:
+                self._connection.execute(
+                    f"CREATE OR REPLACE VIEW {view} AS SELECT * FROM {_fact_table(view)}"
+                )
+            return
+        for table in held:
+            self._connection.execute(f"DROP TABLE {table}")
+
+    def _columns_of(self, name: str) -> list[tuple[str, str]]:
+        return [
+            (str(column), str(data_type))
+            for column, data_type in self._connection.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = 'main' AND table_name = ? ORDER BY ordinal_position",
+                [name],
+            ).fetchall()
+        ]
 
     def derive(self, name: str, **params: object) -> None:
         sql = (_SQL_DIR / _NAMED_DERIVATIONS[name]).read_text(encoding="utf-8")
@@ -1171,7 +1285,12 @@ class DuckDbWorkspace:
                 _REDACTED_PAYLOADS,
             ],
         ).fetchall()
-        return [str(name) for (name,) in rows]
+        # The `fact_*` tables are excluded for the same reason the staged tables are:
+        # not objects `schema.sql` created. Each holds the rows of one fact view, and
+        # that view exports under its own name, so nothing is dropped — a second
+        # export of the same rows would be the copy that could fall out of step.
+        materialized = {_fact_table(view) for view in _FACT_VIEWS}
+        return [str(name) for (name,) in rows if str(name) not in materialized]
 
     def _drop_staged(self, *names: str) -> None:
         """Dropped rather than left behind: these hold the very values the
