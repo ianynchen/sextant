@@ -1124,6 +1124,46 @@ Recorded rather than fixed silently because it is a rule that would have
 rejected honest evidence, which is the failure mode a rule about provenance can
 least afford.
 
+### OI-85 — three inputs the `DefaultImpls` holder rule would misread, none of which a real module presents
+**Minor · logged 2026-09-12 at Task 15's review (`kotlin-defaultimpls`, `b6be0e1`) ·
+`extractor-jvm/.../KotlinDefaultImpls.java`, `ClassScanner.java`, `workspace.py`**
+
+Logged rather than fixed, under the ruling of 2026-09-12 that an issue whose triggering
+input does not occur in real codebases is recorded, not worked. The holder is recognised
+from three conjuncts — the `<Iface>$DefaultImpls` name, the `InnerClasses` entry naming
+the interface as the outer class, and every method `static` with the interface at slot 0
+(COVERAGE §5.13, D00 §5). Each bullet names the input that gets past one of them, and why
+it is not seen in practice.
+
+- **A hand-written nested class named `<Iface>$DefaultImpls`** whose static methods take
+  the interface first and are declared BEFORE an explicit constructor. The method facts are
+  emitted as the methods are visited, so those methods carry `bridge_of` while the type's
+  `implements_default_of` is withheld at `visitEnd` by the constructor. No compiler emits
+  this and nobody writes it: the name is the Kotlin compiler's own reserved spelling, and a
+  Java author declaring a nested `DefaultImpls` with that method shape is copying kotlinc by
+  hand. **Fix when wanted:** a fourth conjunct in `holderOf`'s gate — `@kotlin.Metadata`
+  kind `k=3` (a synthetic class), which `KotlinNullability.collector` already reads off the
+  annotation before any method is visited.
+- **A losing multi-release overlay copy of the holder's TYPE fact.** `workspace.py`'s
+  `default_bodies` query filters its method side (`m`) by `selected_documents` and joins the
+  enclosing type's side (`t`) without that filter, so a holder type fact from a losing
+  overlay copy can pair with the winning copy's method fact. The projected columns come from
+  the pair's `t.implements_default_of` and `m.*`, which the two copies agree on, so the
+  result is a DUPLICATE row and never a different one; `dispatch._default_bodies` keys a
+  set-like list and dedupes it. A Kotlin holder in a `META-INF/versions/` overlay is the
+  input, and no module here or in the corpora carries one.
+- **Under `-jvm-default=disable`, a default body containing a lambda.** A non-capturing
+  lambda inside the body is expected to put its `private static synthetic` body method into
+  the holder, with slot 0 not the interface; "every method shaped" then fails and the holder
+  is silently unrecognised — it fails CLOSED, with no `implements_default_of` and no
+  `bridge_of`, never a wrong fact. Unmeasured (§5.4: the shape is assumed from how kotlinc
+  places a lambda body in its enclosing class, not read from a class file): the mode has not
+  been any supported compiler's default since 2.2, and no scanned module was built under it.
+
+**Verify** each by building the input and scanning it; **closes** when the fourth conjunct
+lands for (a), when the `t` side takes the `selected_documents` filter for (b), and when (c)
+is measured.
+
 
 ## CLOSED
 

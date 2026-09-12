@@ -65,7 +65,7 @@ honestly at the end, and excluded from the per-feature check by being named here
 
 ```unassigned
 G-52
-G-73 G-74 GAP-7
+G-73 G-74 GAP-7 OI-85
 ```
 
 **Out of scope for this target** — neither blocking nor tracked for delivery:
