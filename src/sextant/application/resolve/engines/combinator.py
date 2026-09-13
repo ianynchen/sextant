@@ -500,7 +500,8 @@ def _is_root_candidate(site: dict[str, Any], scope: _Scope) -> bool:
     by nothing, and each roots and derives its route where before only
     `build()` rooted and derived nothing. In the chained form every
     intermediate verb's result IS consumed, so the root scan skips it and
-    `build()` alone roots, unchanged.
+    `build()` alone roots, unchanged. A receiver-extending PREFIX (the
+    builder's `path`/`nest`) is a candidate on the same terms.
 
     A vocabulary call inside a BODY is deliberately NOT a candidate. That is
     the whole of checkpoint F4: bodies hold nothing but vocabulary calls, and
@@ -524,19 +525,23 @@ def _is_root_candidate(site: dict[str, Any], scope: _Scope) -> bool:
         _matching_entry(site, context) is not None
         or _matching_body_entry(site, context) is not None
         or (continuation is not None and continuation.owner is not None)
-        or _is_statement_verb(site, scope)
+        or _is_statement_verb_or_prefix(site, scope)
     )
 
 
-def _is_statement_verb(site: dict[str, Any], scope: _Scope) -> bool:
-    """A receiver-extending verb rule accepting this call, whose receiver a call
-    in this same method produced (never itself), and whose chain does not begin
-    on one of this method's own parameters — that head is a builder body's,
-    and the body walk folds it (checkpoint F4)."""
+def _is_statement_verb_or_prefix(site: dict[str, Any], scope: _Scope) -> bool:
+    """A receiver-extending verb OR prefix rule accepting this call — a builder's
+    `path`/`nest` are prefixes and are written as statements exactly as its verbs
+    are — whose receiver a call in this same method produced (never itself), and
+    whose chain does not begin on one of this method's own parameters: that
+    head is a builder body's, and the body walk folds it (checkpoint F4)."""
     key = (str(site["owner"]), str(site["name"]))
-    if key not in scope.context.verb_names:
+    if key in scope.context.verb_names:
+        rule = _matching_rule(site, scope.context.verbs)
+    elif key in scope.context.prefix_names:
+        rule = _matching_rule(site, scope.context.prefixes)
+    else:
         return False
-    rule = _matching_rule(site, scope.context.verbs)
     if rule is None or not rule.get("extends_receiver"):
         return False
     extended = _producing_site(site["receiver"], scope, exclude=site)
@@ -625,6 +630,11 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
             return _nest_continuation_routes(site, continuation, scope)
         return _declared_routes(site, context.continuation_handlers, scope, extends_receiver=True)
     return []
+
+
+def _is_pass_through(site: dict[str, Any], context: _TreeContext) -> bool:
+    continuation = _matching_continuation(site, context)
+    return continuation is not None and continuation.pass_through
 
 
 def _declares_a_route(rule: dict[str, Any]) -> bool:
@@ -720,10 +730,17 @@ def _chained_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     receiver produced by a DECLARED ORIGIN contributes nothing and poisons
     nothing — that is the difference between "the chain starts here" and "I
     could not read the receiver", which nothing could draw until a builder made
-    every chain start somewhere (spec §4b)."""
+    every chain start somewhere (spec §4b). A pass-through in between is
+    stepped THROUGH before deciding: it contributes nothing by definition, so
+    its own empty route set must never read as an unread receiver —
+    `route().filter(f).GET(…)` starts at the origin, clean."""
     if site["receiver"] is None:
         return []
     extended = _producing_site(site["receiver"], scope, exclude=site)
+    while extended is not None and _is_pass_through(extended, scope.context):
+        if extended["receiver"] is None:
+            return []
+        extended = _producing_site(extended["receiver"], scope, exclude=extended)
     if extended is not None and _matching_rule(extended, scope.context.origins) is not None:
         return []
     chained = _routes_of(extended, scope) if extended is not None else []

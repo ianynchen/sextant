@@ -2435,6 +2435,151 @@ def test_a_body_verb_never_roots_and_derives_once_prefixed(tmp_path: Path):
     ]
 
 
+def _prefixed_body_facts(*, statement: bool) -> list:
+    """`route().path("/api", api -> api.GET("/x", h)).build()` chained, or as the statement
+    form `var b = route(); b.path("/api", …); return b.build();` — the prefix's receiver
+    is the origin's result either way; only what consumes the prefix's own result
+    differs (`build()` in the chain, nothing in the statement)."""
+    caller = DECLARER + "routes(sig_r)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=101),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=20 if statement else 21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+        _site(
+            _BUILDER_BODY,
+            0,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=None,
+            receiver_parameter=1,
+            result=None,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=102),
+            ],
+        ),
+    ]
+
+
+def test_a_statement_form_prefix_roots_like_a_verb(tmp_path: Path):
+    """Fix round 3: `var b = route(); b.path("/api", api -> api.GET("/x", h)); return
+    b.build();` rooted NOWHERE — the statement-form rule admitted verbs only, and the
+    builder's `path`/`nest` are prefix rules. A receiver-extending prefix roots under the
+    same head test, and the chained spelling still derives the route once: the prefix
+    is a candidate there too, but `build()` consumes its result."""
+    for statement in (True, False):
+        workspace = _resolve(
+            tmp_path / str(statement),
+            _prefixed_body_facts(statement=statement),
+            _catalog(_builder_matches()),
+        )
+        assert _identities(_rows(workspace)) == [("GET", "/api/x", _MODULE + HEALTH, "resolved")], (
+            statement
+        )
+
+
+def _pass_through_on_the_origin(*, head_read: bool) -> list:
+    """`route().filter(f).GET("/a", h).build()`; with `head_read=False` the `filter` sits
+    on a call this method cannot read (`routeFrom()`, no origin declares it)."""
+    caller = DECLARER + "routes(sig_r)."
+    return [
+        *_handler_symbols(),
+        _site(
+            caller,
+            0,
+            ROUTERS,
+            "route" if head_read else "routeFrom",
+            result=0,
+            descriptor=f"(){_BUILDER_DESC}",
+        ),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "filter",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Lcom/example/web/Filter;){_BUILDER_DESC}",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=101)],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/a"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=102),
+            ],
+        ),
+        _site(
+            caller,
+            3,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=2,
+            result=3,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+
+
+def test_a_pass_through_directly_on_the_origin_contributes_nothing(tmp_path: Path):
+    """Fix round 3: `route().filter(f).GET("/a", h).build()` derived a spurious
+    unresolved row — `filter`'s own routes are `[]` because its chain reaches the
+    origin, and the verb after it read that `[]` as an unread receiver. A pass-through
+    contributes nothing by definition, so the chain steps THROUGH it to its own
+    receiver before deciding, and reaches the origin clean."""
+    workspace = _resolve(
+        tmp_path, _pass_through_on_the_origin(head_read=True), _catalog(_builder_matches())
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/a", _MODULE + LIST_ORDERS, "resolved")]
+
+
+def test_a_pass_through_whose_own_receiver_is_unread_still_poisons_once(tmp_path: Path):
+    """The other side of stepping through: the pass-through hides nothing. Its receiver
+    unread is one unresolved row, exactly once, beside the verb's own route."""
+    workspace = _resolve(
+        tmp_path, _pass_through_on_the_origin(head_read=False), _catalog(_builder_matches())
+    )
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+
+
 def test_two_equal_verbs_merge_to_that_verb(tmp_path: Path):
     """Spec §4 as ruled: `resource(RequestPredicates.GET("/favicon.ico"), r)` folds the
     `resource` rule's own `GET` against the predicate's, and `GET` ∧ `GET` is `GET` —
