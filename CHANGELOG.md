@@ -14,6 +14,25 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A call site says which parameter its receiver is, and a lambda argument how many
+  captured values lead its body's parameters** (combinator spec §10, PR A1). Two optional
+  keys, absent everywhere they do not apply: `receiver_parameter` on a call site whose
+  receiver is the enclosing method's parameter N — the same numbering the `parameter`
+  argument kind uses — and `captures` on every `lambda` entry of the argument grammar (a
+  call's arguments, an array's elements, a returned value alike): the `invokedynamic`'s
+  argument count, minus one for an instance implementation handle, `-1` for an unbound
+  instance reference. Together they let a walk into a lambda body tell "this call is on
+  the lambda's own parameter" from "this receiver could not be read", which is what
+  reading a route built in a lambda needs. Projected as one nullable `call_sites` column
+  and inside the decoded `arguments` JSON; D00 §5 describes both. No stamp bump —
+  `FACT_SCHEMA_VERSION` stays 5, an older workspace reads NULL where it always did. Proved
+  the only difference by a double scan of every compiled fixture directory with the jar
+  built before and the jar built after (`scripts/probes/fact_additivity/run.py`: every
+  line without a new key byte-identical, every line with one identical once it is
+  removed) and by a table diff of both corpora (`mall-admin` with its siblings,
+  `spring-petclinic-rest`): every derived table and `metadata.json` equal as they stand,
+  the fact tables equal once the two keys are stripped.
+
 - **A WebClient URL built inside a `uri(Function)` lambda went unread** (`OI-73`, W29).
   `uri(b -> b.path("/orders").queryParam("q", term).build())` is the idiomatic way to build
   a URL with query parameters, and the row derived with `path` NULL and

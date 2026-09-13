@@ -673,6 +673,53 @@ def test_call_site_fact_kind_literal_serialises_as_call_site():
     assert json.loads(call_site.model_dump_json())["kind"] == "call_site"
 
 
+def test_a_call_site_round_trips_its_receiver_parameter_and_a_lambdas_captures(tmp_path: Path):
+    """The two keys Part II reads (spec §10): a receiver that is the method's parameter
+    N, and the number of captured values that lead a lambda body's parameters. Both
+    optional, both absent by default — a fact written before them reads exactly as it
+    did."""
+    site = CallSiteFact(
+        document_id="doc_1",
+        caller="com/example/Routes#lambda$routes$0(sig_1).",
+        target=CallTarget(
+            owner="com/example/Spec#",
+            name="path",
+            descriptor="(Ljava/lang/String;)Lcom/example/Spec;",
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=None,
+        receiver_parameter=1,
+        result=0,
+        arguments=[
+            CallArgument(
+                kind="lambda",
+                symbol="com/example/Routes#lambda$routes$0(sig_1).",
+                source=3,
+                captures=1,
+            )
+        ],
+    )
+    plain = CallSiteFact(
+        document_id="doc_1",
+        caller="c",
+        target=CallTarget(owner="o", name="n", descriptor="()V"),
+        invoke_kind="static",
+        ordinal=0,
+    )
+    path = tmp_path / "Routes.jsonl"
+
+    write_fact_file(path, DOCUMENT, [site, plain])
+    _document_line, site_line, plain_line = path.read_text(encoding="utf-8").splitlines()
+    _document, facts = read_fact_file(path)
+
+    assert json.loads(site_line)["receiver_parameter"] == 1
+    assert json.loads(site_line)["arguments"][0]["captures"] == 1
+    assert facts == [site, plain]
+    assert plain.receiver_parameter is None
+    assert json.loads(plain_line).get("receiver_parameter") is None
+
+
 def test_a_constant_fact_keeps_its_value_in_the_type_the_class_file_recorded():
     """D00 §5's `constant` gained its first producer in W4 and had no model test.
 

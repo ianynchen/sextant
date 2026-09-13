@@ -742,10 +742,11 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
     assert row["implementation"] is None
     # Every optional key of the argument grammar is dumped, null included —
     # `elements` (capability 9.15) among them, which is None on every kind but
-    # `array`. Pinned exactly rather than by subset: this view is what a
-    # consumer reads, and a key silently appearing or vanishing here is the
-    # drift the round trip exists to catch. Read back decoded: `arguments` is
-    # one of the columns the workspace hands over as objects (`_DECODED_COLUMNS`).
+    # `array`, and `captures` (spec §10b), None on every kind but `lambda`.
+    # Pinned exactly rather than by subset: this view is what a consumer reads,
+    # and a key silently appearing or vanishing here is the drift the round trip
+    # exists to catch. Read back decoded: `arguments` is one of the columns the
+    # workspace hands over as objects (`_DECODED_COLUMNS`).
     assert row["arguments"] == [
         {
             "kind": "string",
@@ -753,9 +754,58 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
             "symbol": None,
             "source": None,
             "elements": None,
+            "captures": None,
         },
-        {"kind": "unresolved", "value": None, "symbol": None, "source": 7, "elements": None},
+        {
+            "kind": "unresolved",
+            "value": None,
+            "symbol": None,
+            "source": 7,
+            "elements": None,
+            "captures": None,
+        },
     ]
+
+
+def test_call_sites_projects_the_receiver_parameter_and_keeps_captures_inside_arguments(
+    tmp_path: Path,
+):
+    """Spec §10's two keys at the projection: `receiver_parameter` is its own
+    nullable column, and `captures` stays inside the decoded `arguments` JSON —
+    an engine reads `argument.get("captures")`."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/example/Routes.java",
+        module_id="com.example:routes",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    site = CallSiteFact(
+        document_id="doc_1",
+        caller="com/example/Routes#lambda$routes$0(sig_1).",
+        target=CallTarget(
+            owner="com/example/Spec#",
+            name="path",
+            descriptor="(Ljava/lang/String;)Lcom/example/Spec;",
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver_parameter=0,
+        arguments=[CallArgument(kind="lambda", symbol="s", source=1, captures=2)],
+    )
+    write_fact_file(tmp_path / "facts" / "a.jsonl", document, [site])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    (row,) = workspace.query("call_sites")
+    workspace.close()
+    assert row["receiver_parameter"] == 0
+    assert row["arguments"][0]["captures"] == 2
 
 
 def test_the_method_returns_view_keeps_a_void_return_distinct_from_an_unread_one(
