@@ -288,6 +288,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.url-via-follows-only-a-declared-call": Guard(
+        what="a `url_via` (or `channel_via`) form follows the argument's linked call only "
+        "where that call's OWNER is the one the form declares — `URI.create`, never any "
+        "`create` the value happens to come from",
+        why="the ladder is the one place an address is read off a call OTHER than the one "
+        "the catalog matched, and the owner is what vouches for that call; without it a "
+        '`uri(Urls.create("…"))` on a helper the catalog knows nothing about publishes '
+        "that helper's argument as the request's address at `resolved`/`compiler` — a "
+        "resolved address on evidence about a different type. The anchor is the shared "
+        "reader (`shapes/arguments.py`), so the same edit weakens `channel_via`; this id "
+        "is named for the capture whose near-miss pins it",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find='            and site.get("owner") == owner_symbol\n',
+                replace="            and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- `combinator` -------------------------------------------------------
     "combinator.unrecognised-overload-is-a-row": Guard(
         what="a call the vocabulary names but no overload rule accepts derives one unresolved row",

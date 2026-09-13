@@ -44,6 +44,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     )
     written = sorted(p.name for p in tmp_path.rglob("*.jsonl"))
     assert written == [
+        # A2 Task 8: `httpclient/ApacheOrdersClient`, the Apache HttpClient 5 fixture.
+        "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
@@ -79,6 +81,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "FirstSplitter.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
+        # A2 Task 8: `httpclient/JdkOrdersClient`, the JDK `HttpClient` fixture.
+        "JdkOrdersClient.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",
@@ -236,7 +240,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # router DSL on both stacks — one class file each, their lambdas all `invokedynamic`.
     # 131 since A2 Task 2: `OrderPoller`, the `SqsTemplate.receive*` fixture — one class
     # file, its four options lambdas `invokedynamic`.
-    assert report.documents == 131
+    # 133 since A2 Task 8: `JdkOrdersClient` and `ApacheOrdersClient`, the JDK and Apache
+    # HttpClient fixtures — one class file each; the Apache response-handler lambdas are
+    # `invokedynamic`.
+    assert report.documents == 133
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -257,6 +264,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         )
     )
     assert sorted(p.name for p in out.rglob("*.jsonl")) == [
+        # A2 Task 8: `httpclient/ApacheOrdersClient`, the Apache HttpClient 5 fixture.
+        "ApacheOrdersClient.jsonl",
         "ApiGet.jsonl",
         "ApiScopedDetail.jsonl",
         "AuditEvent$Builder.jsonl",
@@ -292,6 +301,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "FirstSplitter.jsonl",
         "InventoryExchange.jsonl",
         "InventoryWebClient.jsonl",
+        # A2 Task 8: `httpclient/JdkOrdersClient`, the JDK `HttpClient` fixture.
+        "JdkOrdersClient.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",

@@ -110,6 +110,23 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         "(`scripts/probes/cp11_sweep_round1.md`). It stops being right the day "
         "OkHttp adds a ninth this catalog does not declare."
     ),
+    ("jdk-httpclient", "roots", "newBuilder", "http_method", "GET"): (
+        "a fresh `java.net.http.HttpRequest.Builder` really does issue GET — the platform's "
+        "own documented default (`HttpRequest.Builder`: the request method is GET unless "
+        "a verb method is called), and the reason the seed must NOT simply be deleted "
+        "(deleting it under-reports every `newBuilder(uri).build()` chain). Admissible "
+        "only while every builder method that SETS the verb is a declared step, because "
+        "an unmatched step passes through uncaptured and leaves this literal standing. "
+        "That condition is met at JDK 21.0.12.1: `javap -p -s --module java.net.http` "
+        "gives six verb-setting methods — `GET() HEAD() DELETE() POST(BodyPublisher) "
+        "PUT(BodyPublisher) method(String, BodyPublisher)` — and `jdk-httpclient.yml` "
+        "declares a step for every one (`scripts/probes/a2t8_http_client_builders.md`, "
+        "whose verdict line is 'verb setters declared and not encoded: none'). It stops "
+        "being right the day a JDK adds a seventh this catalog does not declare. One "
+        "stated boundary rides on the same seed: the `newBuilder(HttpRequest, "
+        "BiPredicate)` overload copies another request's verb, and the catalog says its "
+        "GET is wrong there."
+    ),
 }
 
 

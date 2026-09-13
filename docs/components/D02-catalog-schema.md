@@ -1338,7 +1338,11 @@ argument link completes the chain. Where a builder's own value could reach more 
 consumer — `Request r = builder.build(); log.debug("…", r);` alongside the real
 `client.newCall(r)` — a catalog instead writes `terminal_via_argument: {owner, method}`, and
 the join narrows to that one declared call; every other consumer of the same value no longer
-counts.
+counts. Both halves take one name or a list (§3.1's scalar-or-list, A2 Task 8): `owner`
+because one library reaches a wire through more than one client, `method` because one
+client issues a built request through more than one call — the JDK's `send` OR
+`sendAsync`, one builder chain, one address — and two `build` entries in `terminal` would
+silently overwrite each other rather than widen the join. An empty list is refused at load.
 
 **A step's own `captures` may also name `base`** — the other half of ONE address, not a
 second address (2F). A builder states its base address once
@@ -1395,6 +1399,25 @@ root's own `channel_via` ladder rides forward the same way, available to resolve
 chain's `channel` wherever the walk finally derives, with no need to repeat it on a later
 step.
 
+**A `url`-declaring entry may also declare `url_via`** (A2 Task 8, spec §12) — `channel_via`'s
+ladder applied to the `url` capture, verbatim: a `[{owner, method, arg}]` list, tried in
+order, followed only once the captured position itself is not a string literal, and joined
+to the linked call in the same method by owner AND method (`_linked_constructor`: a named
+method through its `result`, `<init>` through the constructed value's `receiver`). The JDK
+client's address step is `uri(URI)` and its argument is never a string — `URI.create("…")`
+reaches the step as `unresolved`+`source` — so `jdk-httpclient.yml` writes
+`url_via: [{owner: java.net.URI, method: create, arg: 0}]` and the address is read off
+`URI.create`'s own argument. The answer is then read exactly as a literal written at the
+capture: CP-2 splits an absolute one into peer and path, and a `base` composes with it. Two
+differences from `channel_via`, both from what a URL is: `arg` is an `int` only (a URL is
+one string; `all_strings` is for a list of topics), and a ladder that answers nothing — no
+`source`, a linked call no form names, a linked call whose own argument is a `concat` —
+leaves the row exactly as a direct read would, `path` NULL at `unresolved`: the ladder can
+add an answer, never take one away. **A form matches by owner and method with no arity**,
+which is a boundary a catalog author has to weigh: `java.net.URI` declares four
+multi-argument constructors whose argument 0 is the scheme, so a `<init>` form would read
+`https` as an address, and the shipped catalogs follow `URI.create` alone.
+
 **A step may declare `when`** — `{arg: int, equals: str}`, exactly those two keys — a value
 guard on one of the *matched call's own* arguments, for the builder shape where the
 capturing method is generic and only the argument says what it set:
@@ -1417,7 +1440,7 @@ could not be read" are different facts:
   must never let a chain keep an earlier confident answer. A later step that writes the same
   key unambiguously supersedes the poison: "can't tell" is an answer this pass records, not
   a state it locks. The step's *literal* declarations (`http_method`, `response_is`, a
-  `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
+  `channel_via` or `url_via` ladder) are not argument reads and carry no `unresolved` form at all, so
   they are left out of the fold rather than poisoned into a value their readers cannot
   interpret.
 

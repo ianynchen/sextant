@@ -717,10 +717,12 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**69 of 84 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**71 of 86 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
+| `apache-httpclient` | `org.apache.httpcomponents.client5:httpclient5` | 5.2.3 |
+|  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
@@ -738,6 +740,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javalin` | `io.javalin:javalin` | 6.4.0 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
+| `jdk-httpclient` | `jmod:java.net.http` | 21.0.12.1 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |

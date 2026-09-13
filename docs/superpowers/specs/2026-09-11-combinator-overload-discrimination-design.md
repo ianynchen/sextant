@@ -645,7 +645,11 @@ input (§14).
    improving one.
 9. **A JDK request built in one method and sent in another** — `HttpRequest build()` in a
    helper, `client.send(helper())` elsewhere — one unresolved row at the helper, per §7
-   case 4. Same for a request stored in a field.
+   case 4. Same for a request stored in a field. *Ruled 2026-09-13 (A2 Task 8): the JDK
+   and Apache clients are `fluent` catalogs, and `fluent`'s stated rule governs them —
+   a request built in one method and sent in another derives NOTHING, as OkHttp's does
+   (D02 §4, guard `fluent.a-built-request-is-not-an-issued-one`); §7 case 4's unresolved
+   row is `combinator`'s alone. Pinned absent in `tests/e2e/test_rest_outbound_delivered.py`.*
 10. **A lambda the extractor did not link** — Kotlin `-Xlambdas=class`, the default before
     Kotlin 2.0: the body-linked entry's argument is `kind: instance`, not `lambda`; the
     entry roots and derives zero routes, which under §4b is poison, so one unresolved row

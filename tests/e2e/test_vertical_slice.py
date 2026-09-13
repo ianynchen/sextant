@@ -300,7 +300,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `Object.<init>`, four `receive*` calls, four options-lambda bodies, four
     # `SqsReceiveOptions.queue` calls inside them), the four lambda bodies into this
     # module. Still 30%.
-    assert "Calls whose callee body this workspace read: 516 of 1705 (30%)" in document
+    # 520 of 1758 since A2 Task 8: `JdkOrdersClient` and `ApacheOrdersClient` — 53 edges,
+    # four of them into this module (the JDK `deleteRequest()` helper and the three Apache
+    # response-handler lambda bodies). Still 30%.
+    assert "Calls whose callee body this workspace read: 520 of 1758 (30%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -315,10 +318,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 1703 and 396 since A2 Task 2: `OrderPoller`'s thirteen edges, all `resolved`; five
     # new lookups land on the framework's own `SqsTemplate.receive*` (four) and
     # `SqsReceiveOptions.queue` (one), none of which this module scans.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1703." in document
+    # 1756 and 420 since A2 Task 8: the two HTTP clients' 53 edges, all `resolved`;
+    # `declared_here` gains the `deleteRequest()` helper (194); 24 new lookups land on
+    # the JDK's own `HttpRequest`/`HttpRequest$Builder`/`HttpClient`/`URI`/
+    # `BodyPublishers`/`BodyHandlers` and Apache's `ClassicRequestBuilder`/`HttpGet`/
+    # `HttpPost`/`CloseableHttpClient`, none of which this module scans.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1756." in document
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
-        "inherited 2, owner_not_scanned 396."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 194, "
+        "inherited 2, owner_not_scanned 420."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -638,7 +646,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # (`OI-73`).
         # 29 since W27's review: four second callers the outbound dedup had been
         # deleting outright (F5 §6.1 rule 1).
-        "http": 29,
+        # 33 since A2 Task 8: the JDK client's three chains and the Apache client's
+        # builder-form chain (`jdk-httpclient`, `apache-httpclient`).
+        "http": 33,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -844,7 +854,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 155 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
             # `SqsTemplate.receive*` rows, inbound `orders-poll`.
             ("inbound", 155),
-            ("outbound", 61),
+            # 65 outbound since A2 Task 8: the JDK client's three chains and the Apache
+            # client's builder-form chain (`jdk-httpclient`, `apache-httpclient`).
+            ("outbound", 65),
         ]
     )
 
@@ -1637,7 +1649,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
     # 142: + `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` (A1 Task 5).
     # 143: + `messaging/OrderPoller` (`sqs-template-receive`, A2 Task 2).
-    assert (None, 143) in origins
+    # 145: + `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
+    # (`jdk-httpclient`, `apache-httpclient`, A2 Task 8).
+    assert (None, 145) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

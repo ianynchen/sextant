@@ -210,7 +210,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # one class file each, every lambda in them an `invokedynamic` body of the same class.
     # 144 since A2 Task 2: `messaging/OrderPoller` — one class file, its four options
     # lambdas `invokedynamic` bodies of the same class.
-    assert metadata["coverage"]["documents"] == 144
+    # 146 since A2 Task 8: `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
+    # — one class file each; the Apache response-handler lambdas are `invokedynamic`
+    # bodies of the same class.
+    assert metadata["coverage"]["documents"] == 146
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

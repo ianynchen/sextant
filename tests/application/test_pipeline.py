@@ -320,6 +320,14 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # absolute, so CP-2 splits them into `peer`+`path` (asserted below).
         ("GET", "/legacy/exports"),
         ("POST", "/legacy/exports"),
+        # A2 Task 8: `JdkOrdersClient` (`jdk-httpclient`) and `ApacheOrdersClient`
+        # (`apache-httpclient`), the same split-builder shape joined through
+        # `terminal_via_argument`, both absolute URLs. `POST` and `GET` on
+        # `/v1/dispatches` are two rows (a different caller each); the JDK GET whose
+        # address is a `concat` is one more contributor to the `(None, None)` tuple.
+        ("POST", "/v1/dispatches"),
+        ("GET", "/v1/dispatches"),
+        ("PATCH", "/v1/dispatches/42"),
         # Inbound (Phase 2D, Task 10): the three listener catalogs.
         # `method` is always NULL — a listener declares no HTTP-style verb
         # (D02 §2, amended) — so every messaging route below shares that
@@ -1028,7 +1036,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `GET /bld/sup/inner` and `GET /mvcbld/sup/inner` — each once, under its prefix.
     # 197 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
     # `SqsTemplate.receive*` forms, inbound `orders-poll`, one row per polling method.
-    assert len(report.endpoints) == 197
+    # 201 since A2 Task 8 (`jdk-httpclient`, `apache-httpclient`): `JdkOrdersClient`'s
+    # three inline chains (the helper-built DELETE derives nothing, `fluent`'s rule) and
+    # `ApacheOrdersClient`'s one builder-form chain (its two constructor-form requests
+    # derive nothing until the execute-join reads a constructor's chain key —
+    # `apache-httpclient-constructors`).
+    assert len(report.endpoints) == 201
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1902,7 +1915,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
         # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
         # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
-        "http": 105,
+        # 109 since A2 Task 8: the JDK client's three chains and the Apache client's
+        # builder-form chain, outbound, every one a `fluent` row.
+        "http": 109,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -1946,7 +1961,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 197
+    assert sum(counts.values()) == len(report.endpoints) == 201
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3709,7 +3724,10 @@ def test_the_format_ladder_answers_every_live_row(
     # carries no request body — the `Class` at argument 1 is the payload TYPE the
     # template converts INTO, not a payload — so the rows declare no `body_arg` and the
     # ladder has nothing to answer off, the same honest answer a handshake path gets.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 60
+    # 64 since A2 Task 8: the four JDK/Apache client rows. A JDK `body` capture reads a
+    # `BodyPublisher`, never a payload type, and the Apache builder form captures no body
+    # at all, so none of the four carries a declared payload the ladder could answer off.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 64
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

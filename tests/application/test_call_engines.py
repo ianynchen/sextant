@@ -6032,6 +6032,437 @@ def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(
     assert "invented-pubsub-bad-channel-via.yml" in str(raised.value)
 
 
+# --- `url_via` (A2 Task 8, spec §12): the `channel_via` ladder on the `url` capture ---
+#
+# The JDK client's address step is `uri(URI)`, and its argument is never a string: the
+# `URI` comes from `URI.create("…")` or `new URI("…")`, so the step reads the compiler's
+# `unresolved`/`instance` argument carrying only a `source`. `url_via` follows that
+# source to the linked call in this same method and reads ITS argument as the address —
+# `linked_channels`, the very call `channel_via` makes, with the answer fed to `url_of`
+# as a string literal so the peer/path split and the `base` composition see it exactly
+# as a literal written at the capture.
+
+JDK_REQUEST = "java/net/http/HttpRequest#"
+JDK_BUILDER = "java/net/http/HttpRequest$Builder#"
+JDK_CLIENT = "java/net/http/HttpClient#"
+JDK_URI = "java/net/URI#"
+
+_JDK_SHAPED_MATCHES = {
+    "roots": [
+        {
+            "owner": "java.net.http.HttpRequest",
+            "method": "newBuilder",
+            "captures": {"http_method": "GET", "url": "arg0"},
+            "url_via": [
+                {"owner": "java.net.URI", "method": "create", "arg": 0},
+                {"owner": "java.net.URI", "method": "<init>", "arg": 0},
+            ],
+        }
+    ],
+    "steps": [
+        {
+            "method": "uri",
+            "captures": {"url": "arg0"},
+            "url_via": [
+                {"owner": "java.net.URI", "method": "create", "arg": 0},
+                {"owner": "java.net.URI", "method": "<init>", "arg": 0},
+            ],
+        },
+        {"method": "GET", "captures": {"http_method": "GET"}},
+    ],
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {
+                "owner": "java.net.http.HttpClient",
+                "method": ["send", "sendAsync"],
+            },
+        }
+    ],
+}
+
+
+def _send(caller: str, ordinal: int, built: int, name: str = "send") -> CallSiteFact:
+    """`client.send(request, handler)` / `sendAsync(…)`: the built request at argument 0,
+    joined to `build()` through `source` alone."""
+    return _call(
+        caller,
+        JDK_CLIENT,
+        name,
+        ordinal,
+        receiver=99,
+        result=ordinal + 100,
+        arguments=[
+            CallArgument(kind="unresolved", source=built),
+            CallArgument(kind="unresolved", source=98),
+        ],
+    )
+
+
+def _shipped(catalog_id: str) -> Catalog:
+    return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
+
+
+def test_a_uri_step_reads_its_address_off_the_uri_create_call_it_was_handed(tmp_path: Path):
+    """The positive half: `newBuilder().uri(URI.create("https://h/p")).build()` handed to
+    `sendAsync`. The step's argument is `unresolved`+`source`; the ladder follows the
+    source to `URI.create`'s own site and reads its argument 0, and the row carries the
+    peer and path split off it exactly as a literal `uri("https://h/p")` would. The root's
+    own `url: arg0` read nothing (`newBuilder()` takes no argument) and the step
+    overwrote it — last wins. `sendAsync` is the SECOND name of the terminal's `method`
+    list, which is what lets one `build` entry join either executing call."""
+    caller = "com/acme/http/Client#viaCreate()."
+    facts = [
+        _call(caller, JDK_REQUEST, "newBuilder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            JDK_URI,
+            "create",
+            1,
+            receiver=None,
+            result=6,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            JDK_BUILDER,
+            "uri",
+            2,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="unresolved", source=6)],
+        ),
+        _call(caller, JDK_BUILDER, "build", 3, receiver=7, result=20),
+        _send(caller, 4, built=20, name="sendAsync"),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_JDK_SHAPED_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "h", "/p", "resolved")
+    ]
+
+
+def test_a_root_handed_a_constructed_uri_reads_its_address_off_the_constructor(tmp_path: Path):
+    """`newBuilder(new URI("https://h/p")).GET().build()` handed to `send`: the root's
+    argument is an `instance` whose `source` is the constructor's own `receiver` (CP-3:
+    a constructor's `result` is void), and the `<init>` form of the ladder joins on
+    exactly that — `_linked_constructor`'s own rule, shared with `channel_via`."""
+    caller = "com/acme/http/Client#viaConstructor()."
+    facts = [
+        _call(
+            caller,
+            JDK_URI,
+            "<init>",
+            0,
+            receiver=4,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="special",
+        ),
+        _call(
+            caller,
+            JDK_REQUEST,
+            "newBuilder",
+            1,
+            receiver=None,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=4, symbol=JDK_URI)],
+            invoke_kind="static",
+        ),
+        _call(caller, JDK_BUILDER, "GET", 2, receiver=9, result=10),
+        _call(caller, JDK_BUILDER, "build", 3, receiver=10, result=11),
+        _send(caller, 4, built=11),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_JDK_SHAPED_MATCHES))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "h", "/p", "resolved")
+    ]
+
+
+@pytest.mark.declines("jdk-httpclient")
+@pytest.mark.pins("fluent.url-via-follows-only-a-declared-call")
+def test_a_uri_from_a_call_no_url_via_form_names_derives_an_unresolved_address(tmp_path: Path):
+    """§10 near-miss for the SHIPPED `jdk-httpclient` catalog. Every conjunct of the
+    positive holds — a real `newBuilder`, `uri`, `build`, `send` — and the only thing
+    different is WHOSE `create` produced the URI: `com.acme.net.Urls.create("https://h/p")`,
+    a helper on another type, same method name, a string at argument 0. The ladder's form
+    names `java.net.URI` and the linked call's owner is not that, so the form does not
+    join and the address is unread: `path` NULL at `unresolved`.
+
+    The guard is the OWNER comparison in `_linked_constructor`. Without it the ladder
+    would follow any same-named call the value happens to come from and publish
+    `/p` at `resolved` for a URL a helper this catalog knows nothing about built — a
+    resolved address on evidence about a different type."""
+    caller = "com/acme/http/Client#viaHelper()."
+    facts = [
+        _call(caller, JDK_REQUEST, "newBuilder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            "com/acme/net/Urls#",
+            "create",
+            1,
+            receiver=None,
+            result=6,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            JDK_BUILDER,
+            "uri",
+            2,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="unresolved", source=6)],
+        ),
+        _call(caller, JDK_BUILDER, "build", 3, receiver=7, result=20),
+        _send(caller, 4, built=20),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("jdk-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", None, None, "unresolved")
+    ]
+
+
+def test_a_multi_argument_uri_constructor_is_not_read_as_an_address(tmp_path: Path):
+    """The boundary `jdk-httpclient.yml` states, pinned: `new URI("https", "h", "/p",
+    null)` puts the SCHEME at argument 0, and a `url_via` form matches by owner and
+    method with no arity — so the shipped catalog declares only `URI.create`, and a
+    constructed URI reads as unread. The row is `path` NULL at `unresolved`, never
+    `https` at `resolved`, which is what declaring `<init>` would publish."""
+    caller = "com/acme/http/Client#viaParts()."
+    facts = [
+        _call(
+            caller,
+            JDK_URI,
+            "<init>",
+            0,
+            receiver=4,
+            result=None,
+            arguments=[
+                CallArgument(kind="string", value="https"),
+                CallArgument(kind="string", value="h"),
+                CallArgument(kind="string", value="/p"),
+                CallArgument(kind="null"),
+            ],
+            invoke_kind="special",
+        ),
+        _call(
+            caller,
+            JDK_REQUEST,
+            "newBuilder",
+            1,
+            receiver=None,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=4, symbol=JDK_URI)],
+            invoke_kind="static",
+        ),
+        _call(caller, JDK_BUILDER, "build", 2, receiver=9, result=11),
+        _send(caller, 3, built=11),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("jdk-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", None, None, "unresolved")
+    ]
+
+
+@pytest.mark.declines("jdk-httpclient")
+@pytest.mark.pins("fluent.root-is-a-declared-request-starter")
+def test_a_builder_method_the_jdk_does_not_declare_roots_no_request(tmp_path: Path):
+    """§10 near-miss for the SHIPPED `jdk-httpclient` catalog: `HttpRequest.builder()` —
+    the name every other Java builder answers to, on the RIGHT owner, with a real
+    `uri`/`build`/`send` chain after it — is a method the JDK does not declare
+    (`javap --module java.net.http`: `newBuilder` in three overloads and nothing else
+    static). The root matches owner AND method; on the owner alone every static call on
+    `HttpRequest` would mint a request the platform never builds."""
+    caller = "com/acme/http/Client#viaGuessedName()."
+    facts = [
+        _call(caller, JDK_REQUEST, "builder", 0, receiver=None, result=2, invoke_kind="static"),
+        _call(
+            caller,
+            JDK_URI,
+            "create",
+            1,
+            receiver=None,
+            result=6,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            JDK_BUILDER,
+            "uri",
+            2,
+            receiver=2,
+            result=7,
+            arguments=[CallArgument(kind="unresolved", source=6)],
+        ),
+        _call(caller, JDK_BUILDER, "build", 3, receiver=7, result=20),
+        _send(caller, 4, built=20),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("jdk-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+APACHE_BUILDER = "org/apache/hc/core5/http/io/support/ClassicRequestBuilder#"
+APACHE_CLIENT = "org/apache/hc/client5/http/impl/classic/CloseableHttpClient#"
+
+
+def _apache_builder_chain(caller: str) -> list:
+    """`ClassicRequestBuilder.get("https://h/p").build()`, not yet executed."""
+    return [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="static",
+        ),
+        _call(caller, APACHE_BUILDER, "build", 1, receiver=3, result=4),
+    ]
+
+
+@pytest.mark.declines("apache-httpclient")
+@pytest.mark.pins("fluent.a-built-request-is-not-an-issued-one")
+def test_an_apache_request_built_and_never_executed_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the SHIPPED `apache-httpclient` catalog: every conjunct of the
+    rule holds — `ClassicRequestBuilder.get` on the real owner, a real URL, `build()`
+    reached — and only the execution join is missing: nothing hands the built request
+    to `CloseableHttpClient.execute`. A request assembled and dropped is not a call
+    anyone makes. Paired with the positive below, which differs in exactly the
+    `execute` row."""
+    caller = "com/acme/http/Client#abandoned()."
+    workspace = _resolve_fluent(
+        tmp_path, _apache_builder_chain(caller), _shipped("apache-httpclient")
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
+
+
+def test_an_apache_request_handed_to_execute_derives_the_factorys_own_verb(tmp_path: Path):
+    """The positive half: the same chain, plus `client.execute(request, handler)` whose
+    argument 0's `source` is `build()`'s result. GET is the factory's own name, not a
+    seeded default; the peer is split off the URL."""
+    caller = "com/acme/http/Client#issued()."
+    facts = [
+        *_apache_builder_chain(caller),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=12,
+            arguments=[
+                CallArgument(kind="unresolved", source=4),
+                CallArgument(
+                    kind="lambda", source=11, symbol="com/acme/http/Client#lambda$issued$0()."
+                ),
+            ],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "h", "/p", "resolved")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("entry", "reason"),
+    [
+        (
+            {
+                "method": "uri",
+                "captures": {},
+                "url_via": [{"owner": "java.net.URI", "method": "create", "arg": 0}],
+            },
+            "without a `url` capture",
+        ),
+        (
+            {
+                "method": "uri",
+                "captures": {"url": "arg0"},
+                "url_via": [{"owner": "java.net.URI", "method": "create", "arg": "all_strings"}],
+            },
+            "arg: int",
+        ),
+    ],
+)
+def test_a_url_via_ladder_that_reads_no_position_is_refused_at_run_start(
+    tmp_path: Path, entry: dict, reason: str
+):
+    """`url_via` says HOW to read an instance already named by `url` — it is not itself a
+    position, the same refusal `channel_via` gets without `channel` — and it reads ONE
+    position: a URL is one string, where `all_strings` is for a list of topics, so the
+    `channel_via`-only spelling is refused here rather than answering several
+    addresses for one request."""
+    matches = {
+        "roots": [{"owner": "java.net.http.HttpRequest", "method": "newBuilder", "captures": {}}],
+        "steps": [entry],
+        "terminal": ["build"],
+    }
+    catalog = _fluent_catalog(matches, "invented-bad-url-via")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "invented-bad-url-via.yml" in str(raised.value)
+    assert reason in str(raised.value)
+
+
+def test_a_terminal_join_naming_no_executing_method_is_refused_at_run_start(tmp_path: Path):
+    """`terminal_via_argument.method` may name one executing call or several; an EMPTY
+    list is a terminal no chain can ever reach, refused by name rather than deriving
+    nothing with no error saying why."""
+    matches = {
+        "roots": [{"owner": "java.net.http.HttpRequest", "method": "newBuilder", "captures": {}}],
+        "steps": [],
+        "terminal": [
+            {
+                "method": "build",
+                "terminal_via_argument": {"owner": "java.net.http.HttpClient", "method": []},
+            }
+        ],
+    }
+    catalog = _fluent_catalog(matches, "invented-empty-join")
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    with pytest.raises(CatalogError) as raised:
+        derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
+    workspace.close()
+
+    assert "EMPTY list" in str(raised.value)
+
+
 def test_a_url_and_a_channel_capture_on_the_same_entry_is_refused_at_run_start(
     tmp_path: Path,
 ):
