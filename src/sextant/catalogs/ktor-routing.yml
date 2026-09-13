@@ -52,10 +52,13 @@ requires: [call_site, string_constants, chain_reconstruction]
 # `route("/api") { get("orders") { } }` serves `/api/orders`: `path_join: leading_slash`
 # is that rule, applied to every literal this catalog reads. Without it the slashless
 # spelling read back as `/apiorders`, resolved — a wrong row (the Javalin lesson, Task 3
-# fix round 1). One boundary of the join, stated: `leading_slash` leaves the bare `*`
-# unprefixed (Javalin's exception), where Ktor's parse would make it one wildcard
-# segment under the prefix; the fixture does not write a bare `*` and this catalog was
-# not measured for what the engine publishes for it.
+# fix round 1). One WRONG-ROW boundary of the join, stated: `leading_slash` leaves the
+# bare `*` unprefixed (Javalin's exception, where `*` is the whole pattern), so
+# `route("/api") { get("*") { } }` publishes `/api*`, resolved — where Ktor's parse
+# makes `*` one wildcard segment and serves `/api/<one segment>`. A resolved wrong
+# row, not a missing one; rare real input (Ktor's documented wildcard forms are `*`
+# and `{...}` INSIDE a longer path, which read correctly). Logged: `path_join` needs a
+# per-catalog exception list before this reads right.
 #
 # Handlers are `suspend RoutingContext.() -> Unit` — a `Function2` the compiler emits as
 # a `SuspendLambda` CLASS, `new`ed at the call site, not an `invokedynamic` — so
@@ -66,10 +69,18 @@ requires: [call_site, string_constants, chain_reconstruction]
 # by a `String` at argument 0, and every name here carries its `Route` receiver there,
 # so the audit would refuse a `slice.outside` naming them:
 #   * the four-argument `route(Route, String, HttpMethod, Function1)` — a prefix that
-#     ALSO sets the verb — and `method(Route, HttpMethod, Function1)`: both are one
-#     unresolved row today (an arity no `route` rule accepts; `method` is not named),
-#     never a resolved prefix that forgot its verb. A `verb_arg` word on a prefix (A2
-#     Task 6's word, on a verb) would read them; logged rather than guessed.
+#     ALSO sets the verb — is one unresolved row today (an arity no `route` rule accepts,
+#     spec §7 case 1), never a resolved prefix that forgot its verb. A `verb_arg` word on
+#     a prefix (A2 Task 6's word, on a verb) would read it.
+#   * the six SELECTOR blocks — `method`, `param`, `optionalParam`, `header`, `accept`,
+#     `contentType`, each `(Route, …, Function1)` — derive NOTHING, not even an
+#     unresolved row, and every route nested under one is LOST: `method(Get) { get { } }`
+#     and `accept(JSON) { get("/x") { } }` both derive `[]` (measured on hand-built facts
+#     through this catalog, Task 5 review). A name the vocabulary does not carry is not
+#     an unrecognised overload — the walk returns nothing for it and never enters its
+#     body — so the G-13 row does not fire. A real-input gap: `accept`/`contentType`
+#     blocks are Ktor's content-negotiation idiom. Logged, not guessed — Task 9 registers
+#     it as `ktor-selector-blocks`, Major.
 #   * a Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from
 #     `routing { api() }`, Ktor's own recommended way to split a large routing tree —
 #     derives nothing, not even an unresolved row: spec §7 case 4's stated boundary (a

@@ -310,7 +310,11 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 **`ktor-routing` / `RoutingRootKt`** — no unread method addresses a wire by either style.
 
+> The zero is the measurement's shape, not the owner's: `routing` is a Kotlin extension whose `Application` receiver is argument 0 and whose block is argument 1 — no name, no request object, no predicate — and the three unread names are the `RoutingFailureStatusCode` and `LOGGER` getters and `getApplication(Route)`, none of which declares a route.
+
 **`ktor-routing` / `RoutingBuilderKt`** — no unread method addresses a wire by either style.
+
+> The zero is the measurement's shape, not the owner's: every method here is a Kotlin extension whose `Route` receiver is argument 0, and its path — where it takes one — is argument 1. The three styles above read argument 0, so none of them can see a candidate on this owner. The unread names that take a path or a selector at argument 1 (`route` with an `HttpMethod`, `param`, `optionalParam`, `header`) and the selector blocks that take none (`method`, `accept`, `contentType`) are stated in `ktor-routing.yml`'s header; a slice entry would be refused, since section 3 lists nothing to name.
 
 ### 3. Every unread candidate, one per row
 

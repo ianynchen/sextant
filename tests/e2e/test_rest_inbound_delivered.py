@@ -614,8 +614,11 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         ("GET", "/health", "resolved", None),
     } <= rows, sorted(rows, key=str)
     assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
+    # Exactly eight rows — the seven above and the stray — so an extra row (a helper route
+    # read one day, a selector block's nested route, a duplicate) cannot pass silently.
+    assert len(ktor_rows) == 8, sorted(rows, key=str)
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
-    assert stray and all(r["resolution"] == "unresolved" for r in stray), stray
+    assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
     assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
     assert not any("#api(" in str(r["caller"]) or r["path"] == "/helper" for r in ktor_rows), (
