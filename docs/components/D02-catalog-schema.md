@@ -1587,7 +1587,12 @@ framework:**
   words read it. **`chain_composers: {and: [{owner, method}], or: […]}`** are the
   composers written ON the chain: `and()` is the merge that happens anyway, `or()`
   makes the next contribution a branch of its own — left-associative, as the
-  framework composes it, so `a.or().b.and().c` is `(a or b) and c`. **`negators:
+  framework composes it, so `a.or().b.and().c` is `(a or b) and c`. The alternative
+  an `or()` opens may be a pass-through — `path("/a").or().host(h)` — and a predicate
+  the walk reads as nothing is a branch constraining nothing, which serves every
+  path: that route is `/a` AND `/**`, two rows, never `/a` alone; an `or()` followed
+  by nothing but the terminal opened no alternative, and the route is what stood
+  before it. **`negators:
   [{owner, method}]`** — `not(fn)`, `negate()` — poison every branch of the route
   they sit in: a negated predicate still serves something, and what it serves is
   not readable from the negation, so the row is `unresolved` rather than the
@@ -1606,13 +1611,17 @@ framework:**
   with only `method(GET)` publishes `GET /**`, and `r.uri(x)` alone `/**` with no
   verb — and only where the catalog serves URLs (inbound HTTP): an outbound catalog
   serves nothing, so a terminal route there that read no path has its path
-  poisoned instead. A terminal extends its receiver as a builder verb does, so the
-  calls before it are never trees of their own; a chain composer or a negator whose
-  chain reaches no terminal declares nothing. A chain composer or a negator on an
-  (owner, method) a verb, prefix or media rule already names — or a continuation on
-  a chain composer's or negator's name, as on a composer's — is refused at load, as
-  is `terminal` without a handler answer, on anything but a verb, or on a name a
-  prefix or media rule claims.
+  poisoned instead. (A NON-terminal route-declaring form — a verb with `handler_arg`,
+  an entry — is not gated that way and would publish `/**` under an outbound catalog
+  too; the decision is that a terminal is the only route-emitting form an outbound
+  combinator catalog is expected to use, and no shipped one exists.) A terminal
+  extends its receiver as a builder verb does, so the calls before it are never trees
+  of their own; a chain composer or a negator whose chain reaches no terminal declares
+  nothing. A chain composer or a negator on an (owner, method) a verb, prefix, media
+  or argument-`composers` rule already names — or a continuation on a chain
+  composer's or negator's name, as on a composer's — is refused at load, as is
+  `terminal` without a handler answer, beside `extends_receiver`, on anything but a
+  verb, or on a name a prefix or media rule claims.
 - **`continuations`** are the calls that merge route SETS along `result` →
   `receiver`, `fluent`'s own steps discipline extended: a plain name matches any
   owner, useful for reaching a step inside a chain already known to be this

@@ -766,9 +766,9 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         # predicate, not a handler, and poisoning it would invent a route.
         return []
     if key in context.chain_composers or key in context.negators:
-        # A chain-form composer or a negator declares nothing on its own: the route
-        # it takes part in is emitted by the chain's terminal, which folds it there
-        # (`_chained_constraints`); reached here, the chain ends without one.
+        # A chain-form composer or a negator declares nothing here: the route it
+        # takes part in is emitted by the chain's terminal, which folds it there
+        # (`_chained_constraints`).
         return []
     entry = _matching_entry(site, context)
     if entry is not None:
@@ -1150,7 +1150,10 @@ def _chained_constraints(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     constraints merge into each branch; a chain-form `or()` makes the NEXT
     contribution a branch of its own — the framework composes left to right,
     so `a.or().b.and().c` is `(a or b) and c` — and `and()` is the merge that
-    was happening anyway; a pass-through contributes nothing; a negator
+    was happening anyway; a pass-through contributes nothing, and where it is
+    the alternative an `or()` opened it is a branch constraining nothing (a
+    `host`-only alternative serves every path); an `or()` followed by nothing
+    but the terminal opened no alternative at all; a negator
     poisons every branch, since what a negated predicate serves is not
     readable from the negation (word 3); and a call the vocabulary does not
     know, or one that contributes nothing, poisons too — what it constrains is
@@ -1184,6 +1187,13 @@ def _chained_constraints(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         if key in context.negators:
             return [_Route(poisons=_IDENTITY_POISON)]
         if _is_pass_through(call, context):
+            # The alternative an `or()` opened may BE the pass-through — `a.or().host(h)`
+            # — and a predicate the walk reads as nothing is a branch constraining
+            # nothing, which serves every path; leaving it pending would drop the
+            # catch-all half of the route.
+            if opening:
+                branches = [*branches, _Route()]
+                opening = False
             continue
         composer = context.chain_composers.get(key)
         if composer is not None:
@@ -1668,16 +1678,19 @@ def _validate_matches(catalog: Catalog) -> None:
     `verb_arg` is held to the same shape, on a verb rule alone, and is that
     rule's ONE answer for its verb — beside `verb` it is two. `terminal` sits
     on a verb rule that says where its handler is or that there is none: it
-    declares a whole route. A chain-form composer or a negator on an (owner,
-    method) a verb, prefix or media rule already names is two readings of one
-    call, decided by dispatch order rather than by the catalog — refused, as a
-    composer sharing a continuation's name is; a terminal on a prefix's or a
-    media rule's name is the same collision from the verb side."""
+    declares a whole route, and folds its chain as constraints where a builder
+    verb carries routes on — `extends_receiver` beside it is two readings of one
+    call. A chain-form composer or a negator on an (owner, method) a verb,
+    prefix, media or argument-composer rule already names is the same two
+    readings, decided by dispatch order rather than by the catalog — refused,
+    as a composer sharing a continuation's name is; a terminal on a prefix's or
+    a media rule's name is the same collision from the verb side."""
     _validate_continuations(catalog)
     vocabulary = catalog.matches.get("vocabulary", {})
-    # Every mapping-shaped rule the two words could be written on, so a word on a
-    # rule that cannot read it — `origin_param` on a verb, `receiver_arg` on an
-    # entry or a continuation — is refused rather than silently ignored.
+    # Every mapping-shaped rule the four words could be written on, so a word on a
+    # rule that cannot read it — `origin_param` on a verb, `receiver_arg` or
+    # `verb_arg` or `terminal` on an entry or a continuation — is refused rather
+    # than silently ignored.
     placed: list[tuple[str, dict[str, Any]]] = [
         *(("entries", rule) for rule in catalog.matches.get("entries", [])),
         *(("verbs", rule) for rule in vocabulary.get("verbs", [])),
@@ -1738,6 +1751,9 @@ def _validate_matches(catalog: Catalog) -> None:
     for role in ("verbs", "prefixes", "media"):
         for rule in vocabulary.get(role, []):
             named.setdefault((_catalog_symbol(rule["owner"]), rule["method"]), role)
+    for declared in vocabulary.get("composers", {}).values():
+        for rule in declared:
+            named.setdefault((_catalog_symbol(rule["owner"]), rule["method"]), "composers")
     for role, rules in (
         *(
             ("chain_composers", declared)
@@ -1760,6 +1776,13 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
                 f"`terminal` without `handler_arg` or `handler: none` — a terminal "
                 f"declares a whole route (D02 §2's `combinator` style)"
+            )
+        if rule.get("terminal") and rule.get("extends_receiver"):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                f"`terminal` beside `extends_receiver` — a terminal folds its chain as "
+                f"constraints, a builder verb carries its routes on; one call is not "
+                f"both (D02 §2's `combinator` style)"
             )
         if rule.get("terminal") and named.get(
             (_catalog_symbol(rule["owner"]), rule["method"])

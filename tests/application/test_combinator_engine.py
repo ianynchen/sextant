@@ -4712,6 +4712,7 @@ def _gateway_matches() -> dict[str, object]:
         "continuations": [
             {"name": "build", "owner": "com.example.gw.Routes"},
             {"name": "filters", "owner": "com.example.gw.BooleanSpec", "pass_through": True},
+            {"name": "host", "owner": "com.example.gw.BooleanSpec", "pass_through": True},
         ],
     }
 
@@ -4887,6 +4888,68 @@ def test_a_negator_anywhere_in_the_chain_poisons_the_route(tmp_path: Path):
     assert [(row["path"], row["resolution"]) for row in rows] == [(None, "unresolved")]
 
 
+def test_an_or_branch_opened_onto_a_pass_through_is_a_branch_of_its_own(tmp_path: Path):
+    """`path("/a").or().host(h)`: the alternative `or()` opened is the host predicate,
+    which the walk reads as nothing — a branch with NO path constraint, which serves
+    every path (spec §12 word 4). The framework serves `/a` AND `/**`; a fold that left
+    the branch pending across the pass-through would publish `/a` alone, and the
+    catch-all half of the route would vanish (Task 6 review, Important). Left-associative
+    still: `((a or host) and b)` merges `/b` into both branches."""
+    opened = _resolve(
+        tmp_path / "opened",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "or", []),
+                (BOOL, "host", [CallArgument(kind="string", value="**.x.com")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(opened)) == [
+        (None, "/**", None, "resolved"),
+        (None, "/a", None, "resolved"),
+    ]
+    opened.close()
+    bound = _resolve(
+        tmp_path / "bound",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "or", []),
+                (BOOL, "host", [CallArgument(kind="string", value="**.x.com")]),
+                (BOOL, "and", []),
+                (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(bound)) == [
+        (None, "/a/b", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    bound.close()
+
+
+def test_an_or_dangling_before_the_terminal_opens_nothing(tmp_path: Path):
+    """`path("/a").or().uri(x)`: the `or()` is followed by no predicate at all, so no
+    alternative was written — one route, `/a`. The terminal is not a predicate and is
+    never the branch an `or()` opens."""
+    workspace = _resolve(
+        tmp_path,
+        _gateway_body(
+            [(SPEC, "path", [CallArgument(kind="string", value="/a")]), (BOOL, "or", []), _uri()]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/a", None, "resolved")]
+
+
 def test_a_pass_through_in_the_chain_contributes_nothing(tmp_path: Path):
     """`filters(fn)` between the predicates and the terminal is a declared pass-through:
     stepped over, its lambda never read as a handler or a route."""
@@ -5038,3 +5101,13 @@ def test_a_chain_word_on_a_name_another_role_claims_and_a_terminal_without_a_han
     beyond["vocabulary"]["verbs"][0]["verb_arg"] = 1  # type: ignore[index]
     with pytest.raises(CatalogError, match="`method`.*verb_arg"):
         _resolve(tmp_path / "beyond", _gateway_body([_uri()]), _catalog(beyond))
+    both_forms = _gateway_matches()
+    both_forms["vocabulary"]["composers"] = {  # type: ignore[index]
+        "and": [{"owner": "com.example.gw.BooleanSpec", "method": "and"}]
+    }
+    with pytest.raises(CatalogError, match="`and`.*chain_composers.*composers"):
+        _resolve(tmp_path / "both_forms", _gateway_body([_uri()]), _catalog(both_forms))
+    extending = _gateway_matches()
+    extending["vocabulary"]["verbs"][1]["extends_receiver"] = True  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`uri`.*terminal.*extends_receiver"):
+        _resolve(tmp_path / "extending", _gateway_body([_uri()]), _catalog(extending))
