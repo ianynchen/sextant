@@ -349,6 +349,36 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.origin-parameter-is-the-chains-head": Guard(
+        what="inside a body whose linking rule declares `origin_param`, a chain's head is "
+        "clean only when it sits on the body's parameter `captures + k` — the one the "
+        "framework handed the block",
+        why="without the comparison every head with no producing call reads as the origin: "
+        "a route registered on a field's builder, on another parameter, or on a value the "
+        "extractor could not follow is published under this body's prefix as resolved, "
+        "the fixed-index design's wrong row with nothing saying the receiver was not read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='    if site["receiver"] is None and site.get("receiver_parameter") == origin:',
+                replace='    if site["receiver"] is None and True:  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
+    "combinator.receiver-arg-is-the-origin": Guard(
+        what="a rule naming `receiver_arg` reads its route only when that argument is the "
+        "enclosing body's origin parameter",
+        why="without the comparison any parameter at that position passes: "
+        '`get(someOtherRoute, "/x")` inside `route("/api") { }` is published as '
+        "`GET /api/x`, an address the framework never serves, resolved",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='        and argument.get("value") == scope.origin_parameter',
+                replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "combinator.entry-owner-is-the-declared-type": Guard(
         what="an entry of either shape — argument-rooted or body-linked — matches a call "
         "only on the owner AND method the catalog declares",

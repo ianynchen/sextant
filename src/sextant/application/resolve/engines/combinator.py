@@ -141,6 +141,9 @@ _ANY_PATH = "/**"
 # here so a typo in a catalog is refused at load rather than silently read as
 # verbatim — which would publish the glued address the word exists to prevent.
 _LEADING_SLASH = "leading_slash"
+# The dispatch form of a call that has no receiver (D00 §5's `invoke_kind`): the
+# one form the origin check of spec §12 word 1 has nothing to read on.
+_STATIC = "static"
 
 # The two roles a `media` rule may fill. Validated at load rather than
 # discovered at derive time: a typo here silently mislabels every media value
@@ -306,6 +309,12 @@ class _Scope:
     sites: tuple[dict[str, Any], ...]
     by_result: dict[int, dict[str, Any]]
     consumed: frozenset[int]
+    # Which of this method's parameters a route-declaring call must sit on — set
+    # only for a BODY whose linking rule declares `origin_param`, resolved through
+    # `captures + k` (spec §10, §12 word 1). None everywhere else: a root method
+    # has no origin, and a body linked without the word keeps the permissive
+    # reading, where a null receiver is taken to be the body's own parameter.
+    origin_parameter: int | None = None
 
 
 def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
@@ -714,7 +723,11 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         )
     body_entry = _matching_body_entry(site, context)
     if body_entry is not None:
-        return _body_routes(_arg_at(site["arguments"], body_entry["body_arg"]), scope)
+        return _body_routes(
+            _arg_at(site["arguments"], body_entry["body_arg"]),
+            scope,
+            origin_param=body_entry.get("origin_param"),
+        )
     continuation = _matching_continuation(site, context)
     if continuation is not None:
         if continuation.pass_through:
@@ -826,8 +839,10 @@ def _chained_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     carries on. A receiver naming no routing call this method can see — its
     producing call is in another method, or is not a routing call at all — is
     one honest unresolved row rather than a silently shorter route set; a call
-    with no receiver at all extends nothing and says nothing (a builder body's
-    verbs sit on the body's own parameter, which is exactly this case); and a
+    with no receiver at all extends nothing and says nothing — a builder body's
+    verbs sit on the body's own parameter, which is exactly this case — unless
+    the body's rule named that parameter, in which case the head is checked
+    against it (`_head_on_the_origin`, spec §12 word 1); and a
     receiver produced by a DECLARED ORIGIN contributes nothing and poisons
     nothing — that is the difference between "the chain starts here" and "I
     could not read the receiver", which nothing could draw until a builder made
@@ -836,11 +851,11 @@ def _chained_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     its own empty route set must never read as an unread receiver —
     `route().filter(f).GET(…)` starts at the origin, clean."""
     if site["receiver"] is None:
-        return []
+        return _poisoned_alone(_head_on_the_origin(site, scope))
     extended = _producing_site(site["receiver"], scope, exclude=site)
     while extended is not None and _is_pass_through(extended, scope.context):
         if extended["receiver"] is None:
-            return []
+            return _poisoned_alone(_head_on_the_origin(extended, scope))
         extended = _producing_site(extended["receiver"], scope, exclude=extended)
     if extended is not None and _matching_rule(extended, scope.context.origins) is not None:
         return []
@@ -870,17 +885,25 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
 
     Inside a body the builder is the body's own parameter, so its verbs carry
     no receiver this method can see; their chain contributes nothing (never a
-    poison), and the body's routes fold cleanly under this prefix.
+    poison) unless the body's rule named its origin parameter and the chain's
+    head is not it, and the body's routes fold cleanly under this prefix. A
+    prefix that does NOT extend its receiver is its own chain's head, and is
+    held to the same origin check where one is declared (spec §12 word 1).
     """
     arguments = site["arguments"]
     if "subtree_arg" in rule:
         subtree = _argument_routes(_arg_at(arguments, rule["subtree_arg"]), scope)
     elif "body_arg" in rule:
-        subtree = _body_routes(_arg_at(arguments, rule["body_arg"]), scope)
+        subtree = _body_routes(
+            _arg_at(arguments, rule["body_arg"]), scope, origin_param=rule.get("origin_param")
+        )
     else:
         return []
     routes = list(_chained_routes(site, scope)) if rule.get("extends_receiver") else []
     prefixes = _prefix_constraints(site, rule, scope)
+    if not rule.get("extends_receiver"):
+        head = _head_on_the_origin(site, scope)
+        prefixes = [_merged(head, prefix) for prefix in prefixes]
     routes.extend(_merged(prefix, route) for prefix in prefixes for route in subtree)
     return routes
 
@@ -888,12 +911,17 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
 def _prefix_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
     """What a prefix rule contributes: a literal path at `path_arg`, or the
     constraints of the predicate at `predicate_arg` — a path prefix or a media
-    guard alike, whatever the predicate's producing call folds in."""
+    guard alike, whatever the predicate's producing call folds in. A rule naming
+    a `receiver_arg` reads nothing unless that argument is the origin."""
+    if not _receiver_argument_is_the_origin(site, rule, scope):
+        return [_Route(poisons=_IDENTITY_POISON)]
     position = rule["path_arg"] if "path_arg" in rule else rule["predicate_arg"]
     return _argument_constraints(_arg_at(site["arguments"], position), scope, (_PATH,))
 
 
-def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]:
+def _body_routes(
+    argument: dict[str, Any] | None, scope: _Scope, *, origin_param: int | None = None
+) -> list[_Route]:
     """The routes declared by the method a `lambda`-kind argument names — the
     jump a body-linked entry and a body-linked prefix both make (checkpoint
     (1b): both arities carry the body's method symbol exactly, so no heuristic
@@ -903,6 +931,14 @@ def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]
     sequence of route declarations rather than an expression, so there is no
     single root to start from. A body the facts do not carry — the block
     compiled into a container this scan never saw — is one unresolved row.
+
+    `origin_param` is the linking rule's word for which of the lambda's own
+    parameters the routes sit on (spec §12 word 1). The body method's parameter
+    is `captures + k` — the metafactory lays captured values out first, then
+    the interface's parameters (spec §10) — and `captures` is read off THIS
+    linking argument, never guessed. A fact written before the extractor
+    carried `captures` cannot be resolved that way, so the body keeps the
+    permissive reading exactly as a rule declaring nothing does.
     """
     if argument is None or argument.get("kind") != "lambda":
         return [_Route(poisons=_IDENTITY_POISON)]
@@ -911,6 +947,8 @@ def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]
     if not sites:
         return [_Route(poisons=_IDENTITY_POISON)]
     body = _scope_of(sites, scope.context)
+    if origin_param is not None and argument.get("captures") is not None:
+        body = replace(body, origin_parameter=int(argument["captures"]) + origin_param)
     routes: list[_Route] = []
     for site in body.sites:
         result = site["result"]
@@ -918,6 +956,48 @@ def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]
             continue
         routes.extend(_routes_of(site, body))
     return routes
+
+
+def _head_on_the_origin(site: dict[str, Any], scope: _Scope) -> _Route:
+    """Spec §12 word 1, on the HEAD of a chain — the call whose receiver no call
+    in this method produced. The body's chain starts on the lambda's own
+    parameter, and the rule said which one (`_Scope.origin_parameter`): a head
+    on that parameter is clean, and the empty route returned folds into
+    anything as nothing; any other head — a field, another parameter, a value
+    the extractor could not follow — is not the origin, and the identity
+    poison returned says so wherever the caller folds it. A body linked
+    without the word has no origin to check against and keeps the permissive
+    reading. A STATIC call has no receiver at all, so there is nothing to hold
+    to the origin; the static form names its route through `receiver_arg`
+    instead (word 2)."""
+    origin = scope.origin_parameter
+    if origin is None or site["invoke_kind"] == _STATIC:
+        return _Route()
+    if site["receiver"] is None and site.get("receiver_parameter") == origin:
+        return _Route()
+    return _Route(poisons=_IDENTITY_POISON)
+
+
+def _poisoned_alone(route: _Route) -> list[_Route]:
+    """A chain contribution: the poisoned head as one row of its own, or nothing."""
+    return [route] if route.poisons else []
+
+
+def _receiver_argument_is_the_origin(
+    site: dict[str, Any], rule: dict[str, Any], scope: _Scope
+) -> bool:
+    """`receiver_arg` (spec §12 word 2): the argument at that position must be
+    the enclosing body's origin parameter — the extension receiver the framework
+    handed the block — or the route is not under this body's prefix at all."""
+    if "receiver_arg" not in rule:
+        return True
+    argument = _arg_at(site["arguments"], rule["receiver_arg"])
+    return (
+        argument is not None
+        and argument.get("kind") == "parameter"
+        and scope.origin_parameter is not None
+        and argument.get("value") == scope.origin_parameter
+    )
 
 
 def _verb_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
@@ -940,7 +1020,12 @@ def _verb_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> l
     ]
     if rule.get("extends_receiver"):
         return [*_chained_routes(site, scope), *own]
-    return own
+    # A verb that carries no chain is its own chain's head: a DSL's `GET("/x") { }`
+    # registers on whatever it was called on, so where the body's rule named the
+    # origin parameter, the verb must sit on it (spec §12 word 1) — and where it
+    # does not, its OWN row is the wrong one, so the poison lands on it.
+    head = _head_on_the_origin(site, scope)
+    return [_merged(head, route) for route in own]
 
 
 def _served(route: _Route) -> _Route:
@@ -969,6 +1054,8 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     front of nothing (A2 Task 3). A rule whose `verb` is null names no verb of its
     own — the builder's `route(predicate, handler)` — and the predicate supplies one,
     or none; `method` then reads NULL without being poisoned."""
+    if not _receiver_argument_is_the_origin(site, rule, scope):
+        return [_Route(poisons=_IDENTITY_POISON)]
     verb = rule.get("verb")
     branches = [_Route(verb=None if verb is None else str(verb))]
     arguments = site["arguments"]
@@ -1361,8 +1448,37 @@ def _validate_matches(catalog: Catalog) -> None:
     names an owner and a method, or it names nothing a receiver could match. A
     `path_join` is `leading_slash` or absent — a misspelt one read as absent
     would glue every slashless segment to its parent, the address the word
-    exists to prevent."""
+    exists to prevent. `origin_param` names a parameter of a BODY, so it sits
+    only on a rule that links one (`body_arg`); `receiver_arg` names an
+    argument position, so where the rule declares an `arity` it lies inside
+    it — a position the call cannot carry would poison every row (spec §12)."""
     _validate_continuations(catalog)
+    vocabulary = catalog.matches.get("vocabulary", {})
+    for role in ("verbs", "prefixes"):
+        for rule in vocabulary.get(role, []):
+            receiver_arg = rule.get("receiver_arg")
+            if "receiver_arg" in rule and (
+                not isinstance(receiver_arg, int)
+                or receiver_arg < 0
+                or (rule.get("arity") is not None and receiver_arg >= rule["arity"])
+            ):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                    f"`receiver_arg: {receiver_arg!r}` — a position from 0 below the "
+                    f"rule's arity {rule.get('arity')} (D02 §2's `combinator` style)"
+                )
+    for rule in [*catalog.matches.get("entries", []), *vocabulary.get("prefixes", [])]:
+        if "origin_param" in rule and (
+            "body_arg" not in rule
+            or not isinstance(rule["origin_param"], int)
+            or rule["origin_param"] < 0
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                f"`origin_param: {rule.get('origin_param')!r}` — a parameter index of "
+                f"the body a `body_arg` links, so it sits only beside one "
+                f"(D02 §2's `combinator` style)"
+            )
     for rule in catalog.matches.get("vocabulary", {}).get("verbs", []):
         handler_less = rule.get("handler") == "none"
         if "handler" in rule and not handler_less:

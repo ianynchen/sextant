@@ -1442,7 +1442,7 @@ matches:
     - { owner: org.springframework.web.reactive.function.server.RouterFunctions,
         methods: [route, nest], handler_arg: 1 }
     - { owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt,
-        method: coRouter, body_arg: 0 }
+        method: coRouter, body_arg: 0, origin_param: 0 }
   vocabulary:
     verbs:
       - { owner: "…RequestPredicates", method: GET, verb: GET, path_arg: 0 }
@@ -1462,9 +1462,10 @@ matches:
     prefixes:
       - { owner: "…RequestPredicates", method: path, path_arg: 0 }
       - { owner: "…RouterFunctions", method: nest, path_arg: 0, subtree_arg: 1 }
-      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1 }
+      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1, origin_param: 0 }
       - { owner: "…RouterFunctions$Builder", method: path, arity: 2,
-          arg_types: { 1: java.util.function.Consumer }, path_arg: 0, body_arg: 1, extends_receiver: true }
+          arg_types: { 1: java.util.function.Consumer }, path_arg: 0, body_arg: 1,
+          extends_receiver: true, origin_param: 0 }
     media:
       - { owner: "…RequestPredicates", method: accept, fills: produces }
     media_values:
@@ -1580,6 +1581,45 @@ framework:**
   path("{id}", () -> get(h)))` reads `/users/{id}`, never `/users{id}` glued and
   resolved. The empty literal `path: ""` above is one of the three exceptions and is
   never prefixed. Any other value is refused at load.
+
+**Where a body's chain starts — `origin_param` and `receiver_arg` (spec §10, §12
+words 1–2).** Inside a linked body the builder is one of the body method's own
+parameters, and a call on it carries no producing call — its `receiver` is null and
+its `receiver_parameter` (D00 §5) is that parameter's index. A null `receiver` is
+ALSO what a field receiver and a value the extractor could not follow get, so
+"no receiver" alone cannot say the call sits on the builder the framework handed
+the block. `origin_param: k` on a body-linked entry or on a prefix carrying
+`body_arg` says which of the lambda's parameters the routes sit on, and the engine
+resolves it against the body method exactly: the functional interface's parameter
+`k` is the body method's parameter **`captures + k`**, `captures` read off the
+linking site's own `lambda` argument (D00 §5) — both compilers lay captured values
+out before the interface's parameters, so the index is not a catalog constant, and
+a rule that named the body method's index directly would be wrong for every lambda
+that captures something. In such a body every route-declaring call is checked at
+the HEAD of its chain — the receiver-extending verb or prefix the chain begins on,
+or the call itself where it extends nothing (a DSL's `GET("/x") { }` is a chain of
+one): a head on the origin parameter is clean and contributes nothing; a head
+that is a field, another parameter, or a value the extractor could not follow is
+not the origin, and the row is `unresolved` — the poison lands on the head's own
+routes where the head extends nothing, and is one row beside the chain's routes
+where the head carries a chain (the unread-head rule of the builder form,
+unchanged). A STATIC call has no receiver and is never held to the origin. **The permissive rule, stated:** a body linked by a rule
+WITHOUT `origin_param` — and one whose linking argument carries no `captures`, a
+fact written before the extractor recorded it — reads a null receiver as the
+body's own parameter, as every shipped rule did before this word existed; that is
+exact only while a body never holds a field receiver, which is why the shipped
+`coRouter`, `router`, DSL `nest` and `Consumer`-bodied `path`/`nest` rules all
+declare `origin_param: 0`. A `Supplier` body has no parameter and declares none.
+`origin_param` sits only beside a `body_arg` and is refused at load anywhere else.
+
+`receiver_arg: n` on a verb or a prefix is the same check for the
+extension-receiver form, where the framework hands the block its receiver as an
+ARGUMENT of a static call (Kotlin's `get(route, "/x") { }` under `route("/api") { }`):
+argument `n` must be `{kind: parameter, value: captures + k}` of the enclosing body
+— the origin parameter — or the route is not under this body's prefix at all and
+the row is `unresolved`. `get(someOtherRoute, "/x")` inside that block is not under
+`/api`, and the engine will not say it is. `receiver_arg` is an index from 0 and,
+where the rule declares an `arity`, lies below it; anything else is refused at load.
 
 **The walk, one core for both shapes.** From an argument-rooted entry, or from a
 body-linked entry's own named method, every argument is resolved through its

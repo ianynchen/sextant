@@ -4188,3 +4188,191 @@ def test_leading_slash_never_prefixes_the_wildcard_segment(tmp_path: Path):
     workspace.close()
 
     assert paths == ["/users", "/users*", "/users*/items"]
+
+
+# --- origin_param / receiver_arg (spec §12 words 1–2) ---------------------------
+
+
+def _origin_matches(origin_param: int | None) -> dict[str, object]:
+    matches = _overload_matches()
+    entry = {"owner": "com.example.web.RouterDslFacade", "method": "router", "body_arg": 0}
+    if origin_param is not None:
+        entry["origin_param"] = origin_param
+    matches["entries"] = [e for e in matches["entries"] if e.get("method") != "router"] + [entry]  # type: ignore[index]
+    return matches
+
+
+def _dsl_body(*, receiver_parameter: int | None, captures: int) -> list:
+    """`router { GET("/x") { h } }` where the DSL call sits on the body's parameter —
+    `receiver_parameter` — and the linking lambda captured `captures` values."""
+    entry = _site(
+        DECLARER + "routes(sig_r).",
+        0,
+        DSL_FACADE,
+        "router",
+        result=1,
+        arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0, captures=captures)],
+    )
+    verb = _site(
+        INLINE_BODY,
+        0,
+        DSL,
+        "GET",
+        invoke_kind="virtual",
+        receiver=None,
+        receiver_parameter=receiver_parameter,
+        descriptor="(Ljava/lang/String;Lkotlin/jvm/functions/Function1;)V",
+        arguments=[
+            CallArgument(kind="string", value="/x"),
+            CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+        ],
+    )
+    return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, verb]
+
+
+def test_a_body_chain_on_the_declared_origin_parameter_derives_clean(tmp_path: Path):
+    """`captures + k`: the lambda captured one value, so the DSL parameter is the body's
+    parameter 1; a rule declaring `origin_param: 0` accepts a head on parameter 1."""
+    workspace = _resolve(
+        tmp_path, _dsl_body(receiver_parameter=1, captures=1), _catalog(_origin_matches(0))
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+
+
+@pytest.mark.pins("combinator.origin-parameter-is-the-chains-head")
+def test_a_body_chain_on_a_field_or_another_parameter_poisons(tmp_path: Path):
+    """A null receiver is a field or an unreadable value; another index is not the origin.
+    Both are one unresolved row — the fixed-index design's wrong row, refused."""
+    for head in (None, 0):
+        workspace = _resolve(
+            tmp_path / str(head),
+            _dsl_body(receiver_parameter=head, captures=1),
+            _catalog(_origin_matches(0)),
+        )
+        assert [row["resolution"] for row in _rows(workspace)] == ["unresolved"], head
+
+
+def test_a_body_linked_without_an_origin_parameter_keeps_the_permissive_rule(tmp_path: Path):
+    """Stated in D02: without `origin_param` a null receiver in a body is read as the body's
+    own parameter, as every shipped rule did before this word existed."""
+    workspace = _resolve(
+        tmp_path, _dsl_body(receiver_parameter=None, captures=0), _catalog(_origin_matches(None))
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+
+
+@pytest.mark.pins("combinator.receiver-arg-is-the-origin")
+def test_a_receiver_argument_must_be_the_origin_parameter(tmp_path: Path):
+    """The extension-receiver form: `get(route, "/x", h)` is a STATIC call whose argument 0
+    is the route; inside `route("/api") { … }` that argument must be the body's own
+    parameter, else the row is not under `/api` and poisons (spec §12 word 2)."""
+    matches = _origin_matches(0)
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.RoutingKt",
+            "method": "get",
+            "verb": "GET",
+            "arity": 3,
+            "receiver_arg": 0,
+            "path_arg": 1,
+            "handler_arg": 2,
+        }
+    )
+
+    def body(argument: CallArgument) -> list:
+        entry = _site(
+            DECLARER + "routes(sig_r).",
+            0,
+            DSL_FACADE,
+            "router",
+            result=1,
+            arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0, captures=0)],
+        )
+        verb = _site(
+            INLINE_BODY,
+            0,
+            "com/example/web/RoutingKt#",
+            "get",
+            descriptor="(Lcom/example/web/Route;Ljava/lang/String;Lkotlin/jvm/functions/Function2;)Lcom/example/web/Route;",
+            arguments=[
+                argument,
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        )
+        return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, verb]
+
+    good = _resolve(
+        tmp_path / "good", body(CallArgument(kind="parameter", value=0)), _catalog(matches)
+    )
+    assert _identities(_rows(good)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+    bad = _resolve(
+        tmp_path / "bad", body(CallArgument(kind="parameter", value=1)), _catalog(matches)
+    )
+    assert [row["resolution"] for row in _rows(bad)] == ["unresolved"]
+    unread = _resolve(tmp_path / "unread", body(CallArgument(kind="unresolved")), _catalog(matches))
+    assert [row["resolution"] for row in _rows(unread)] == ["unresolved"]
+
+
+def test_a_body_linked_entry_handed_no_lambda_derives_one_unresolved_row(tmp_path: Path):
+    """Spec §14 test 16 (§13 case 10): the entry's `body_arg` is an `instance`-kind
+    argument — a lambda a Kotlin 1.x compiler wrote as a class, so no `lambda` link
+    names a body — and the walk has nothing to jump into. One unresolved row, never
+    silence: a router the source declares is reported as unread, not absent. Pinned so
+    the register's Kotlin 1.x item has a measurable starting point."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _site(caller, 0, DECLARER + "Routes$routes$1#", "<init>", result=8, invoke_kind="special"),
+        _site(
+            caller,
+            1,
+            DSL_FACADE,
+            "router",
+            result=9,
+            arguments=[
+                CallArgument(kind="instance", source=8, symbol=DECLARER + "Routes$routes$1#")
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, None, None, "unresolved")]
+    assert [row["caller"] for row in rows] == [caller]
+
+
+def test_an_origin_param_away_from_a_body_and_a_receiver_arg_beyond_the_arity_are_refused(
+    tmp_path: Path,
+):
+    """`origin_param` names a parameter of the BODY a `body_arg` links — on a rule that
+    links none it names nothing, and a rule that meant to declare a body's origin would
+    check nothing. `receiver_arg` names an argument position: at or beyond a declared
+    `arity` no call the rule accepts carries it, so every row it reads would poison
+    with nothing saying the rule was miswritten."""
+    matches = _matches()
+    matches["vocabulary"]["prefixes"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.Predicates",
+            "method": "prefix",
+            "path_arg": 0,
+            "origin_param": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`origin_param: 0` — a parameter index of the body"):
+        _resolve(tmp_path / "origin", [], _catalog(matches))
+    matches = _matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.RoutingKt",
+            "method": "get",
+            "verb": "GET",
+            "arity": 2,
+            "receiver_arg": 2,
+            "path_arg": 1,
+            "handler_arg": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`receiver_arg: 2` — a position from 0 below"):
+        _resolve(tmp_path / "receiver", [], _catalog(matches))
