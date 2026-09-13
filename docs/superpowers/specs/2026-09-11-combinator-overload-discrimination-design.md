@@ -147,13 +147,15 @@ named are unconstrained, so a rule stays as loose as it can afford to be — whi
 is what keeps it alive across Spring releases. Leading with arity rather than
 with types keeps the version-brittle surface as small as possible.
 
-**3c. Selection, and what happens when it cannot decide.** Among applicable rules:
-arity match first, then the most specific `arg_types` (most positions named), then
-**a catalog load error naming both rules**. Never file order — order-dependence
-makes a catalog's behaviour unreadable from the catalog, which is the recurring
-defect this register keeps recording. A catalog author's obligation follows from
-this: a rule must type enough positions to be unambiguous, and the load error is
-what enforces it.
+**3c. Selection, and what happens when it cannot decide.** Never file order —
+order-dependence makes a catalog's behaviour unreadable from the catalog, which is
+the recurring defect this register keeps recording. *Ruled 2026-09-13 (plan Task 3),
+replacing a "most specific `arg_types` wins" tie-break this paragraph used to state:*
+there is **no tie-break at match time**. Two rules sharing owner, method and arity
+must type at least one shared position with different types, or the catalog is
+**refused at load, naming both** — a call has one type per position, so at most one
+rule can then ever accept it. A catalog author's obligation follows: a rule must type
+enough positions to be unambiguous, and the load error is what enforces it.
 
 ### The G-13 guard
 
