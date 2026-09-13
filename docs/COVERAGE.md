@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**65 of 80 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**66 of 81 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -734,6 +734,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `jakarta-websocket-programmatic` | `jakarta.websocket:jakarta.websocket-api` | 2.1.1 |
 | `jakarta-websocket` | `jakarta.websocket:jakarta.websocket-api` | 2.2.0 |
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
+| `javalin-apibuilder` | `io.javalin:javalin` | 6.4.0 |
 | `javalin` | `io.javalin:javalin` | 6.4.0 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |

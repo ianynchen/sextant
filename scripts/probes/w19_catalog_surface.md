@@ -127,6 +127,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | 23 | **7 of 23** |
 | javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | 23 | **7 of 23** |
 | javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **0 of 18** |
+| javalin-apibuilder | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **7 of 18** |
 | alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | **5 of 14** |
 | alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | **0 of 6** |
 
@@ -176,6 +177,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `javalin` | `JavalinDefaultRoutingApi` | 16 | **10** | **0** | **0** | **10** |
 | `javalin` | `JavalinDefaultRouting` | 16 | **10** | **0** | **0** | **10** |
 | `javalin` | `ApiBuilder` | 18 | **15** | **0** | **0** | **15** |
+| `javalin-apibuilder` | `ApiBuilder` | 11 | **8** | **0** | **0** | **8** |
 | `pekko-connectors-kafka` | `Consumer` | 9 | **0** | **0** | **0** | **0** |
 | `pekko-connectors-kafka` | `Producer` | 6 | **0** | **0** | **0** | **0** |
 
@@ -292,6 +294,10 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`javalin` / `ApiBuilder`**
 
 > by name at argument 0 (15): `after`, `before`, `crud`, `delete`, `get`, `head`, `patch`, `path`, `post`, `prefixPath`, `put`, `sse`, `ws`, `wsAfter`, `wsBefore`
+
+**`javalin-apibuilder` / `ApiBuilder`**
+
+> by name at argument 0 (8): `after`, `before`, `crud`, `prefixPath`, `sse`, `ws`, `wsAfter`, `wsBefore`
 
 **`pekko-connectors-kafka` / `Consumer`** — no unread method addresses a wire by either style.
 
@@ -494,4 +500,12 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `ws` | `argument 0` |
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `wsAfter` | `argument 0` |
 | `javalin` | `io.javalin.apibuilder.ApiBuilder` | `wsBefore` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `after` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `before` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `crud` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `prefixPath` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `sse` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `ws` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `wsAfter` | `argument 0` |
+| `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `wsBefore` | `argument 0` |
 

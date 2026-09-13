@@ -24,8 +24,10 @@ is therefore a fold over that tree rather than a walk along a line.
   owner and the vocabulary owner are routinely two different types, so the
   catalog declares both.
 - `vocabulary` — owner+method to role: `verbs` (a verb plus whichever of a
-  literal-path `path_arg`, a `predicate_arg` whose producing call's constraints
-  fold in, and a `handler_arg` the overload carries), `prefixes` (a path
+  literal-path `path_arg`, a `path` the rule states itself — the empty string,
+  for an overload that serves exactly the prefix it sits under — a
+  `predicate_arg` whose producing call's constraints fold in, and a
+  `handler_arg` the overload carries), `prefixes` (a path
   contribution, plus optionally the `subtree_arg`/`body_arg` holding the
   routes it prefixes), `media` (which of `consumes`/`produces` the call fills),
   `media_values` (an enum type's member names to their wire values), and
@@ -941,13 +943,19 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     """The verb, merged with whatever its declared positions contribute: a literal path
     at `path_arg`, a predicate's own constraints at `predicate_arg`, both, or neither —
     a verb naming no position at all is a catch-all, and it is RESOLVED: nothing was
-    poisoned, the author wrote the route open (spec §7 case 3). A rule whose `verb` is
-    null names no verb of its own — the builder's `route(predicate, handler)` — and
-    the predicate supplies one, or none; `method` then reads NULL without being
-    poisoned."""
+    poisoned, the author wrote the route open (spec §7 case 3). A rule may instead
+    state its path ITSELF, `path: ""` — a literal contribution the call carries no
+    argument for, which is how a framework whose path-less overload registers the
+    enclosing prefix plus the empty string is told apart from a catch-all: the route
+    read a path, the empty one, so `_served` leaves it alone and the prefix folds in
+    front of nothing (A2 Task 3). A rule whose `verb` is null names no verb of its
+    own — the builder's `route(predicate, handler)` — and the predicate supplies one,
+    or none; `method` then reads NULL without being poisoned."""
     verb = rule.get("verb")
     branches = [_Route(verb=None if verb is None else str(verb))]
     arguments = site["arguments"]
+    if "path" in rule:
+        branches = [_merged(branch, _Route(path_parts=(str(rule["path"]),))) for branch in branches]
     if "path_arg" in rule:
         paths = _argument_constraints(_arg_at(arguments, rule["path_arg"]), scope, (_PATH,))
         branches = [_merged(branch, path) for branch in branches for path in paths]

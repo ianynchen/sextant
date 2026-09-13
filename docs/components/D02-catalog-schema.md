@@ -1514,9 +1514,13 @@ framework:**
   verb and whichever positions the overload has: `path_arg` (a literal path),
   `predicate_arg` (the position whose producing call's constraints — a path, a
   media guard, a composed predicate — fold into the route), both, or neither, which
-  is a catch-all serving every path and publishing `/**` at `resolved` (§7 case 3);
-  a one-position predicate factory becomes a route only once some entry attaches a
-  handler to it, while a rule naming `handler_arg` — or `handler: none`, a route
+  is a catch-all serving every path and publishing `/**` at `resolved` (§7 case 3).
+  A rule may instead state a literal path itself — `path: ""`, the empty string —
+  for an overload that serves exactly the prefix it sits under (Javalin's
+  `ApiBuilder.get(Handler)` registers `prefix + ""`, measured on 6.4.0): that route
+  READ a path, so it is never a catch-all, and under `path("/x", …)` it is `/x`
+  rather than `/x/**`. A one-position predicate factory becomes a route only once
+  some entry attaches a handler to it, while a rule naming `handler_arg` — or `handler: none`, a route
   SERVED with no handler method, which is what a static-resource pattern is (§6) —
   declares the whole route itself. `extends_receiver: true` on a verb or a prefix
   is the builder form (§4): the call declares its own route AND carries on the

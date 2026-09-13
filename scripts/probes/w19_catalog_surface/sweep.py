@@ -336,6 +336,17 @@ SURFACES = (
         "6.4.0",
         "javalin-routing",
     ),
+    # The nested form (A2 Task 3, `javalin-apibuilder`): its own `combinator` catalog
+    # on the same `ApiBuilder` owner, so its own enumeration — it reads the six verbs
+    # and `path`; the unread names with a `String` at argument 0 are the filters, the
+    # other protocols, `crud` and `prefixPath`, each named in that file's slice.
+    Surface(
+        "javalin-apibuilder",
+        "io.javalin.apibuilder.ApiBuilder",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-apibuilder",
+    ),
     # `alpakka-pekko` (w62). `Consumer` is the owner `pekko-connectors-kafka.yml`
     # declares in `matches.owner`; `Producer` is named nowhere in `matches` at all —
     # its inbound-only catalog reads none of it — and is enumerated here anyway so

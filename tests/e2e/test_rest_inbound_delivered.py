@@ -532,9 +532,18 @@ def test_javalin_flat_registrations_derive_every_route(javalin_routes):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="javalin-apibuilder: nested ApiBuilder needs the receiver-chain walk (Category B)",
-)
 def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
-    assert ("inbound", "GET", "/jv/nested/{id}") in javalin_routes
+    """`javalin-apibuilder`, spec §14 test 12: two nesting levels; a path-less verb serves
+    its prefix and nothing more (Javalin's `prefixPath("")`, measured on the 6.4.0 jar —
+    `POST /jv/nested`, never `/jv/nested/**`); the role-carrying overload reads the same
+    positions; every row's caller is the method holding `apiBuilder`, which is the
+    `config -> …` lambda `Javalin.create` was handed."""
+    expected = {
+        ("inbound", "GET", "/jv/nested/{id}"),
+        ("inbound", "POST", "/jv/nested"),
+        ("inbound", "GET", "/jv/nested/{id}/items"),
+        ("inbound", "DELETE", "/jv/nested/{id}/items/{itemId}"),
+    }
+    assert expected <= javalin_routes, sorted(javalin_routes)
+    assert ("inbound", "GET", "/{id}") not in javalin_routes
+    assert ("inbound", "POST", "/jv/nested/**") not in javalin_routes

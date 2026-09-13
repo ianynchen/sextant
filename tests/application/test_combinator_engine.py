@@ -3054,6 +3054,111 @@ def test_a_prefix_over_a_catch_all_derives_the_prefix_plus_the_any_path_pattern(
     ]
 
 
+# An all-static nesting DSL (A2 Task 3): the entry links a body, the prefix links a body
+# one level deeper, and every verb inside is a static call with no receiver at all. The
+# framework this mirrors keeps its own prefix stack, and its path-less verb overload
+# registers the prefix ITSELF — `join(prefixes) + ""` — not every path under it.
+STATIC_CONFIG = "com/example/web/StaticConfig#"
+STATIC_ROUTES = "com/example/web/StaticRoutes#"
+_STATIC_BODY = DECLARER + "lambda$staticRoutes$0(sig_b0)."
+_STATIC_INNER = DECLARER + "lambda$staticRoutes$1(sig_b0)."
+
+
+def _static_dsl_matches(*, path_less_serves_the_prefix: bool) -> dict[str, object]:
+    verb: dict[str, object] = {
+        "owner": "com.example.web.StaticRoutes",
+        "method": "get",
+        "verb": "GET",
+        "arity": 1,
+        "handler_arg": 0,
+    }
+    if path_less_serves_the_prefix:
+        verb["path"] = ""
+    return {
+        "entries": [{"owner": "com.example.web.StaticConfig", "method": "routes", "body_arg": 0}],
+        "vocabulary": {
+            "verbs": [verb],
+            "prefixes": [
+                {
+                    "owner": "com.example.web.StaticRoutes",
+                    "method": "path",
+                    "arity": 2,
+                    "path_arg": 0,
+                    "body_arg": 1,
+                }
+            ],
+        },
+    }
+
+
+def _static_dsl_facts() -> list:
+    """`config.routes(() -> { path("/x", () -> { get(h); }); })`."""
+    caller = DECLARER + "staticRoutes(sig_r)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_STATIC_BODY),
+        _method_symbol(_STATIC_INNER),
+        _site(
+            caller,
+            0,
+            STATIC_CONFIG,
+            "routes",
+            invoke_kind="virtual",
+            receiver=None,
+            result=None,
+            descriptor="(Lcom/example/web/Group;)V",
+            arguments=[CallArgument(kind="lambda", symbol=_STATIC_BODY, source=0)],
+        ),
+        _site(
+            _STATIC_BODY,
+            0,
+            STATIC_ROUTES,
+            "path",
+            result=None,
+            descriptor="(Ljava/lang/String;Lcom/example/web/Group;)V",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=_STATIC_INNER, source=0),
+            ],
+        ),
+        _site(
+            _STATIC_INNER,
+            0,
+            STATIC_ROUTES,
+            "get",
+            result=None,
+            descriptor="(Lcom/example/web/Handler;)V",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=0)],
+        ),
+    ]
+
+
+def test_a_verb_rule_declaring_the_empty_literal_path_serves_its_prefix_alone(tmp_path: Path):
+    """The one engine word A2 Task 3 adds: `path: ""` on a verb rule is a literal path
+    contribution — the empty string — so the route DID read a path and `_served` never
+    fills in the any-path pattern. `path("/x", () -> get(h))` is `GET /x`: the prefix
+    alone, which is what a framework whose path-less overload registers
+    `prefix + ""` serves it at. Without the word the same rule is the catch-all of the
+    test above and publishes `/x/**` — every path under the prefix, which that framework
+    never serves; the sibling assertion pins that the word, not the shape, is what
+    tells the two apart."""
+    workspace = _resolve(
+        tmp_path,
+        _static_dsl_facts(),
+        _catalog(_static_dsl_matches(path_less_serves_the_prefix=True)),
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + HEALTH, "resolved")]
+    workspace.close()
+
+    workspace = _resolve(
+        tmp_path / "catch_all",
+        _static_dsl_facts(),
+        _catalog(_static_dsl_matches(path_less_serves_the_prefix=False)),
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x/**", _MODULE + HEALTH, "resolved")]
+    workspace.close()
+
+
 # --- (10) dedup: identity-known only, and the handler is part of it -------
 
 
@@ -3829,3 +3934,116 @@ def test_the_kotlin_router_dsl_reads_every_verb_the_framework_declares(tmp_path:
     workspace.close()
 
     assert derived == sorted((verb, f"/kt/{verb.lower()}") for verb in verbs)
+
+
+# --- `javalin-apibuilder` (A2 Task 3): the all-static nesting form on the shipped catalog ---
+
+_ROUTER_CONFIG = "io/javalin/config/RouterConfig#"
+_API_BUILDER = "io/javalin/apibuilder/ApiBuilder#"
+_HANDLER_DESC = "Lio/javalin/http/Handler;"
+_GROUP_DESC = "Lio/javalin/apibuilder/EndpointGroup;"
+_CONFIG_LAMBDA = DECLARER + "lambda$nested$0(sig_c0)."
+_GROUP_BODY = DECLARER + "lambda$nested$1(sig_g0)."
+_GROUP_INNER = DECLARER + "lambda$nested$2(sig_g0)."
+
+
+def _shipped_apibuilder_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "javalin-apibuilder")
+
+
+def _apibuilder_facts(entry_owner: str) -> list:
+    """`config.router.apiBuilder(() -> { path("/orders", () -> { get("/{id}", h);
+    post(h); }); })` — the shape `fixtures/orders-javalin/.../OrderApp.java`'s `nested()`
+    compiles to (`javap -c`, 2026-09-13): the entry call in the `config -> …` lambda, each
+    `EndpointGroup` block a method of its own, every `ApiBuilder` call `invokestatic` with
+    no receiver. `entry_owner` is the one cell the near-miss below varies."""
+    return [
+        *_handler_symbols(),
+        _method_symbol(_GROUP_BODY),
+        _method_symbol(_GROUP_INNER),
+        _site(
+            _CONFIG_LAMBDA,
+            0,
+            entry_owner,
+            "apiBuilder",
+            invoke_kind="virtual",
+            receiver=None,
+            result=1,
+            descriptor=f"({_GROUP_DESC})Lio/javalin/config/RouterConfig;",
+            arguments=[CallArgument(kind="lambda", symbol=_GROUP_BODY, source=0)],
+        ),
+        _site(
+            _GROUP_BODY,
+            0,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="lambda", symbol=_GROUP_INNER, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/{id}"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            1,
+            _API_BUILDER,
+            "post",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=CREATE_ORDER, source=1)],
+        ),
+    ]
+
+
+def test_the_apibuilder_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
+    owner. `get("/{id}", h)` under `path("/orders", …)` is `GET /orders/{id}`; the
+    path-less `post(h)` is `POST /orders` — the prefix alone, Javalin's `prefixPath("")`
+    — and both rows' caller is the method holding `apiBuilder`."""
+    workspace = _resolve(tmp_path, _apibuilder_facts(_ROUTER_CONFIG), _shipped_apibuilder_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {_CONFIG_LAMBDA}
+
+
+@pytest.mark.declines("javalin-apibuilder")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_apibuilder_catalog_declines_an_api_builder_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `apiBuilder` name, the same `EndpointGroup` lambda, the same static
+    `path`/`get`/`post` inside it — and only the entry's OWNER differs:
+    `com.example.NotRouter#apiBuilder`, which is not `io.javalin.config.RouterConfig`.
+
+    Nothing is the required answer. A body-linked entry is the ONLY place this catalog
+    roots — every `ApiBuilder` call is static, receiver-less and never a root of its own —
+    so with the owner check gone any method named `apiBuilder` handed a lambda would
+    root a tree, and a router nobody registered with Javalin would be published under
+    this catalog's id."""
+    workspace = _resolve(
+        tmp_path, _apibuilder_facts("com/example/NotRouter#"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []

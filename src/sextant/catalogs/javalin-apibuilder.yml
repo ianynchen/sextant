@@ -1,0 +1,116 @@
+id: javalin-apibuilder
+displayName: Javalin (ApiBuilder nested routing)
+style: combinator
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["io.javalin:javalin"]
+
+measured:
+  - { artifact: io.javalin:javalin, versions: ["6.4.0"],
+      identity: reported, by: scripts/probes/w61_javalin_surface.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# The NESTED registration form, the one `javalin.yml` (`javalin-routing`) states outside
+# its slice: `config.router.apiBuilder(() -> { path("/orders", () -> { get("/{id}", h);
+# }); })`. `EndpointGroup` is a functional interface with one method (`addEndpoints()`,
+# measured), so each block is a lambda the extractor links as a `lambda`-kind argument
+# naming the compiler's own method for it; `ApiBuilder` keeps its own prefix stack
+# (`pathDeque`, a `ThreadLocal<Deque<String>>`) and every member is STATIC — a verb
+# inside a body has no receiver, contributes no chain, and folds under the `path` that
+# linked the body. The entry is on `RouterConfig`, the vocabulary on `ApiBuilder`: two
+# owners for one tree, as every `combinator` catalog declares.
+#
+# MEASURED, `javap -p -s -cp ~/.m2/repository/io/javalin/javalin/6.4.0/javalin-6.4.0.jar`
+# (A2 Task 3, 2026-09-13). `io.javalin.config.RouterConfig`: `apiBuilder(EndpointGroup)`
+# → `RouterConfig`. `io.javalin.apibuilder.ApiBuilder`, forty-nine public members:
+#   path(String, EndpointGroup)                                   the nesting primitive
+#   prefixPath(String), staticInstance(), setStaticJavalin(JavalinDefaultRoutingApi),
+#   clearStaticJavalin()                                          the builder's plumbing
+#   SIX verbs — get, post, put, patch, delete, head — each in FOUR overloads:
+#     (String, Handler)  (String, Handler, RouteRole...)  (Handler)  (Handler, RouteRole...)
+#   before/after ×2 each, ws ×4, sse ×4, crud ×4, wsBefore/wsAfter ×2 each (instance)
+# There is NO `options` on `ApiBuilder` at 6.4.0 (the flat API has one; this type does
+# not), so the vocabulary below is twenty-four verb rules, not twenty-eight.
+#
+# The path-less overloads, read off `javap -c`: `get(Handler h)` is
+# `staticInstance().get(prefixPath(""), h)`, and `prefixPath(p)` is
+# `String.join("", pathDeque.get()) + p` after `p` — unless it is `*`, starts with `/`,
+# or is empty — gains a leading `/`. So a path-less verb under `path("/x", …)`
+# registers exactly `/x`: the prefix itself, not every path under it. The catalog says
+# so with `path: ""` — a literal contribution of the empty string, which keeps the
+# engine from reading "no `path_arg`" as a catch-all and publishing `/x/**`, an address
+# Javalin never serves for that call (spec §7 case 3 is the catch-all; this is not one).
+#
+# Two boundaries, stated rather than read: a path-less verb with NO enclosing `path`
+# registers the empty string, and this catalog was not measured for what Javalin serves
+# that at (the fixture does not write it; the engine would publish `/`); and a segment
+# written WITHOUT its leading slash — `path("orders", …)` — is re-punctuated by
+# `prefixPath`/`path` (a `/` is prepended) where the engine concatenates literals
+# verbatim, so such a router reads back joined without the slash Javalin inserts.
+# Both hold as long as `prefixPath` keeps the shape measured above.
+matches:
+  entries:
+    - owner: io.javalin.config.RouterConfig
+      method: apiBuilder
+      body_arg: 0
+  vocabulary:
+    verbs:
+      # Four overloads per verb, told apart by `arity` and the type at position 0 (the
+      # arity-2 pair is `(String, Handler)` against `(Handler, RouteRole...)`, whose
+      # vararg array is one argument to the call). A role-carrying overload reads the
+      # same positions as its role-less twin; the roles are not a route's identity.
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: get, verb: GET, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: get, verb: GET, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: get, verb: GET, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: get, verb: GET, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: post, verb: POST, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: post, verb: POST, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: post, verb: POST, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: post, verb: POST, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: put, verb: PUT, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: put, verb: PUT, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: put, verb: PUT, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: put, verb: PUT, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: patch, verb: PATCH, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: patch, verb: PATCH, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: patch, verb: PATCH, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: patch, verb: PATCH, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: delete, verb: DELETE, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: delete, verb: DELETE, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: delete, verb: DELETE, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: delete, verb: DELETE, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: head, verb: HEAD, arity: 2, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: head, verb: HEAD, arity: 3, arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: head, verb: HEAD, arity: 1, path: "", handler_arg: 0 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: head, verb: HEAD, arity: 2, arg_types: { 0: io.javalin.http.Handler }, path: "", handler_arg: 0 }
+    prefixes:
+      # `path(String, EndpointGroup)`: the prefix pushed onto every route the linked body
+      # declares, recursing through nested `path` calls the same way.
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: path, arity: 2, path_arg: 0, body_arg: 1 }
+
+# Measured against `scripts/probes/w19_catalog_surface.md` (regenerated for this
+# catalog): `ApiBuilder` declares eighteen names, this file reads seven (six verbs and
+# `path`), and every unread name that takes a `String` at argument 0 is listed here.
+# `staticInstance`/`setStaticJavalin`/`clearStaticJavalin` are unread too and are NOT
+# listed: none takes a `String` at argument 0, so the enumeration does not count them
+# as addressable, and naming them would be a stale entry the audit refuses. They are
+# the builder's own plumbing — the thread-local instance every verb registers on — and
+# never a route.
+slice:
+  outside:
+    - owner: io.javalin.apibuilder.ApiBuilder
+      method_names: [before, after, ws, wsBefore, wsAfter, sse, crud, prefixPath]
+      why: >
+        `before`/`after` and `wsBefore`/`wsAfter` are filters — interceptors matched
+        against a path pattern, never routes a client can address on their own, the
+        same ruling `javalin.yml` and `jakarta-servlet.yml` make. `ws`/`sse` register
+        the WebSocket and SSE protocols, which this `http` catalog does not derive
+        (their own catalogs read them, or will). `crud` registers FIVE routes from one
+        `CrudHandler` — `crud("/users/{id}", h)` is `GET /users`, `POST /users`,
+        `GET`/`PATCH`/`DELETE /users/{id}` — a one-call-to-many-rows shape with no
+        per-verb path to read here; a real GAP, logged on the register as
+        `javalin-crud` rather than matched wrongly. `prefixPath` is the prefix
+        computation the verbs above call internally, not a registration.

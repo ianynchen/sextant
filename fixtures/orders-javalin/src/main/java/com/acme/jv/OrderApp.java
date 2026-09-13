@@ -2,6 +2,7 @@ package com.acme.jv;
 
 import io.javalin.Javalin;
 import io.javalin.apibuilder.ApiBuilder;
+import io.javalin.security.RouteRole;
 
 public class OrderApp {
     public Javalin flat() {
@@ -13,11 +14,25 @@ public class OrderApp {
         return app;
     }
 
-    /** The nested form — Category B (`javalin-apibuilder`); derives nothing until then. */
+    /** A role for the role-carrying verb overload below; `RouteRole` is a marker interface,
+     *  and an enum is how Javalin's own documentation implements it. */
+    enum Role implements RouteRole { ADMIN }
+
+    /** The nested form (`javalin-apibuilder`, spec §14): two nesting levels, a path-less verb,
+     *  and the role-carrying overload. Javalin's own rule, read off `ApiBuilder.prefixPath` in
+     *  the 6.4.0 jar: every verb registers `join("", pathDeque) + path`, and `post(handler)`
+     *  is `post(prefixPath(""), handler)` — so a path-less verb serves exactly the prefix it
+     *  sits under. `post(ctx -> …)` here registers `POST /jv/nested`, not `/jv/nested/**`,
+     *  and the inner `get(ctx -> …)` registers `GET /jv/nested/{id}/items`. */
     public Javalin nested() {
         return Javalin.create(config -> config.router.apiBuilder(() -> {
             ApiBuilder.path("/jv/nested", () -> {
                 ApiBuilder.get("/{id}", ctx -> ctx.result("{}"));
+                ApiBuilder.post(ctx -> ctx.status(201));                     // post(Handler): no path of its own
+                ApiBuilder.path("/{id}/items", () -> {
+                    ApiBuilder.get(ctx -> ctx.result("[]"));                 // get(Handler): both prefixes, nothing more
+                    ApiBuilder.delete("/{itemId}", ctx -> ctx.status(204), Role.ADMIN);
+                });
             });
         }));
     }
