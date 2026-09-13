@@ -858,6 +858,10 @@ SELECT document_id,
        payload ->> 'implementation'            AS implementation,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        (payload ->> 'receiver')::INTEGER       AS receiver,
+       -- Spec §10a: the receiver as the enclosing method's parameter N, where it is one.
+       -- `->>` on an absent key is SQL NULL, which is today's meaning for every site
+       -- that carries no such parameter.
+       (payload ->> 'receiver_parameter')::INTEGER AS receiver_parameter,
        (payload ->> 'result')::INTEGER         AS result,
        payload ->  'arguments'                 AS arguments
 FROM raw_facts WHERE kind = 'call_site'

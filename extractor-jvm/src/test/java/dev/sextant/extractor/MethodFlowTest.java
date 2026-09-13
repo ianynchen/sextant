@@ -290,6 +290,46 @@ class MethodFlowTest {
         assertNamesLambdaOf(line, "symbol", "lambdaArgument");
     }
 
+    /** `value -> sink(value)` reads `this` (sink is an instance method), so javac makes
+     *  an INSTANCE synthetic method and passes `this` as the indy's one argument: one
+     *  captured value, and it became the receiver, not a parameter — `captures` is 0. */
+    @Test
+    void counts_a_captured_this_as_no_leading_parameter() throws Exception {
+        String line = last(callSites("lambdaArgument"));
+        assertTrue(line.contains("\"captures\":0,\"kind\":\"lambda\""), line);
+    }
+
+    @Test
+    void counts_a_captured_local_as_one_leading_parameter() throws Exception {
+        String line = last(callSites("lambdaCapturingLocal"));
+        assertTrue(line.contains("\"captures\":1,\"kind\":\"lambda\""), line);
+    }
+
+    @Test
+    void counts_nothing_for_a_lambda_that_captures_nothing() throws Exception {
+        String line = last(callSites("lambdaCapturingNothing"));
+        assertTrue(line.contains("\"captures\":0,\"kind\":\"lambda\""), line);
+    }
+
+    /** `this::sink`: the bound receiver is the indy's one argument and the handle is
+     *  `H_INVOKEVIRTUAL`, so it becomes the body's `this` — `captures` 0, and `sink`'s
+     *  own parameter is the interface's parameter 0. */
+    @Test
+    void counts_a_bound_method_references_receiver_as_no_leading_parameter() throws Exception {
+        String line = last(callSites("methodReferenceArgument"));
+        assertTrue(line.contains("\"captures\":0,\"kind\":\"lambda\""), line);
+    }
+
+    /** `String::trim` is UNBOUND: the indy carries no argument and the handle is an
+     *  instance kind, so the interface's first parameter becomes the body's receiver.
+     *  `captures` is -1 — the interface's parameter k is the body's parameter k-1, and
+     *  parameter 0 is no parameter of the body at all. */
+    @Test
+    void reports_minus_one_for_an_unbound_instance_method_reference() throws Exception {
+        String line = last(callSites("jdkMethodReferenceArgument"));
+        assertTrue(line.contains("\"captures\":-1,\"kind\":\"lambda\""), line);
+    }
+
     /** Capability 9.17, on the site itself rather than on a slot that happens
      *  to hold it: a `dynamic` call site names the body its dispatch will run.
      *  Before it, a traversal following call targets stopped at
@@ -484,18 +524,35 @@ class MethodFlowTest {
             + field(builder, "result") + "}]"), consumer);
     }
 
-    /** The stated cost of that transparency, asserted rather than assumed: a
-     *  receiver that arrives as a method parameter has no producing instruction
-     *  in this method at all, so it degrades from "the index of the load" to
-     *  null. Nothing consumes it — a fluent root matches by owner and method,
-     *  and a step join runs call-result to receiver — but it is a real change
-     *  and it must be visible here rather than discovered downstream. */
+    /** A receiver that arrives as a parameter still has no producing instruction, so
+     *  `receiver` stays null — and the fact now also says WHICH parameter it is, the
+     *  same index the argument grammar has carried since capability 9.8. */
     @Test
-    void leaves_the_receiver_null_when_it_is_a_method_parameter() throws Exception {
+    void names_the_parameter_a_receiver_was_handed_straight_from() throws Exception {
         List<String> lines = callSites("parameterReceiver");
         assertEquals(1, lines.size());
-        assertTrue(lines.get(0).contains("\"name\":\"third\""), lines.get(0));
         assertTrue(lines.get(0).contains("\"receiver\":null"), lines.get(0));
+        assertTrue(lines.get(0).contains("\"receiver_parameter\":0"), lines.get(0));
+    }
+
+    @Test
+    void counts_a_static_methods_parameter_receiver_from_slot_zero() throws Exception {
+        String line = callSites("staticParameterReceiver").get(0);
+        assertTrue(line.contains("\"receiver_parameter\":0"), line);
+    }
+
+    @Test
+    void maps_a_receiver_after_a_two_slot_parameter_to_the_right_index() throws Exception {
+        String line = callSites("wideParameterReceiver").get(0);
+        assertTrue(line.contains("\"receiver_parameter\":1"), line);
+    }
+
+    /** A receiver produced by a call carries `receiver` and NO `receiver_parameter`:
+     *  the key is written only where there is a parameter to name. */
+    @Test
+    void writes_no_receiver_parameter_where_the_receiver_is_a_calls_result() throws Exception {
+        String line = last(callSites("chain"));
+        assertFalse(line.contains("receiver_parameter"), line);
     }
 
     @Test
@@ -503,6 +560,19 @@ class MethodFlowTest {
         String line = callSites("staticCall").get(0);
         assertTrue(line.contains("\"invoke_kind\":\"static\""), line);
         assertTrue(line.contains("\"receiver\":null"), line);
+    }
+
+    /** `this` is slot 0 of an instance method and a parameter of neither the descriptor
+     *  nor D00 §5's numbering, and a static call has no receiver at all: neither writes
+     *  the key. A walk reading `receiver_parameter` as "the lambda's own parameter" must
+     *  never see one on a `this`-receiver call. */
+    @Test
+    void writes_no_receiver_parameter_for_this_or_for_a_static_call() throws Exception {
+        String onThis = callSites("stringLiteral").get(0);
+        assertTrue(onThis.contains("\"name\":\"sink\""), onThis);
+        assertFalse(onThis.contains("receiver_parameter"), onThis);
+        String stat = callSites("staticCall").get(0);
+        assertFalse(stat.contains("receiver_parameter"), stat);
     }
 
     /** Chain reconstruction is a within-method join on these ids: the receiver
@@ -542,7 +612,7 @@ class MethodFlowTest {
      *  unaryOperation} (which the reviewer confirmed still passes every
      *  other test in this suite). {@code box} is a method parameter — no
      *  producing instruction, so its own id is absent (`"receiver":null`,
-     *  the same rule {@link #leaves_the_receiver_null_when_it_is_a_method_parameter}
+     *  the same rule {@link #names_the_parameter_a_receiver_was_handed_straight_from}
      *  pins) — and a {@code GETFIELD} genuinely computes a new value from
      *  the object it reads, so {@code third()}'s own receiver must be that
      *  {@code GETFIELD}'s own real id, never {@code box}'s absent one. */
@@ -906,7 +976,9 @@ class MethodFlowTest {
     @Test
     void reads_a_returned_lambda_as_the_body_it_names() throws Exception {
         String line = methodReturns("returnedLambda").get(0);
-        assertTrue(line.contains("\"value\":{\"kind\":\"lambda\",\"source\":"), line);
+        // `() -> url` reads `this`, so the body is an instance method and the one
+        // captured value became its receiver: `captures` 0, sorted ahead of `kind`.
+        assertTrue(line.contains("\"value\":{\"captures\":0,\"kind\":\"lambda\",\"source\":"), line);
         assertNamesLambdaOf(line, "symbol", "returnedLambda");
     }
 

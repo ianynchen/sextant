@@ -520,6 +520,52 @@ def q12_co_router_dsl_verbs(artifacts: list[Artifact]) -> list[tuple[str, str, s
     ]
 
 
+def _router_dsl_verbs(
+    artifacts: list[Artifact], name: str, owner: str
+) -> list[tuple[str, str, str]]:
+    """The upper-case (verb-named) members one Kotlin router DSL type declares — every
+    overload, route-declaring (`void`) and predicate-building (`RequestPredicate`) alike,
+    exactly as Q12 prints them."""
+    return [
+        (
+            artifact.name,
+            artifact.observed,
+            ", ".join(
+                sorted(
+                    _signature(member, descriptor)
+                    for member, descriptor in _declared(artifact, owner)
+                    if member.isupper()
+                )
+            ),
+        )
+        for artifact in _named(artifacts, name)
+    ]
+
+
+def q13_webflux_router_dsl_verbs(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q13 (`GAP-1b`, `W44-verb-overloads`; A1 Task 5). The reactive Kotlin DSL WITHOUT
+    coroutines — `RouterFunctionDsl`, `router { }`'s receiver — which the catalog did
+    not read at all. Five overloads per verb where `CoRouterFunctionDsl` has four:
+    the extra one is the bare `(Function1)V` catch-all."""
+    return _router_dsl_verbs(
+        artifacts,
+        "spring-webflux",
+        "org.springframework.web.reactive.function.server.RouterFunctionDsl",
+    )
+
+
+def q14_webmvc_router_dsl_verbs(artifacts: list[Artifact]) -> list[tuple[str, str, str]]:
+    """Q14 (`W44-verb-overloads`; A1 Task 5). The servlet twin, `org.springframework.web.
+    servlet.function.RouterFunctionDsl`, whose catalog read ONE of the five overloads
+    per verb and mis-graded the other four. Measured on its own jar rather than
+    mirrored from Q13 — W43 is the case where the twin's descriptor was wrong."""
+    return _router_dsl_verbs(
+        artifacts,
+        "spring-webmvc",
+        "org.springframework.web.servlet.function.RouterFunctionDsl",
+    )
+
+
 _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str, str]]]]] = [
     ("1", "`WebClient` request-starting methods", q1_webclient_request_starters),
     ("2", "`WebClient$RequestHeadersSpec` response-obtaining methods", q2_webclient_terminals),
@@ -533,6 +579,8 @@ _QUESTIONS: list[tuple[str, str, Callable[[list[Artifact]], list[tuple[str, str,
     ("10", "`@SqsListener` attributes and their aliases", q10_sqs_listener_destination_attributes),
     ("11", "`RequestPredicates` verb factories", q11_request_predicates_verbs),
     ("12", "`CoRouterFunctionDsl` verb functions", q12_co_router_dsl_verbs),
+    ("13", "reactive `RouterFunctionDsl` verb functions", q13_webflux_router_dsl_verbs),
+    ("14", "servlet `RouterFunctionDsl` verb functions", q14_webmvc_router_dsl_verbs),
 ]
 
 

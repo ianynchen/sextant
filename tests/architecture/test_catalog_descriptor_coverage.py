@@ -70,6 +70,14 @@ _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE = frozenset(
         # is what has no `descriptor` key. Both files say so beside the entry.
         ("spring-mvc-router", "route"),
         ("spring-mvc-router", "nest"),
+        # A1 Task 4 (spec §6): the static `resources`/`resource` join the same entry
+        # list, for the same reason — the list is what ROOTS them, and it has no
+        # `descriptor` key. Their overloads are told apart where they are READ: the
+        # `verbs` rules for both names carry `arity` and `arg_types`.
+        ("spring-webflux-router", "resources"),
+        ("spring-webflux-router", "resource"),
+        ("spring-mvc-router", "resources"),
+        ("spring-mvc-router", "resource"),
     }
 )
 

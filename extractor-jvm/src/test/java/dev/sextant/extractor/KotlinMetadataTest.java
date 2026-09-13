@@ -12,9 +12,9 @@ import org.junit.jupiter.api.Test;
  *  build output, without a dependency this module's build doesn't express. */
 class KotlinMetadataTest {
 
-    private List<String> scan(String className) throws Exception {
-        try (InputStream in =
-                getClass().getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
+    static List<String> scan(String className) throws Exception {
+        try (InputStream in = KotlinMetadataTest.class
+                .getResourceAsStream("/dev/sextant/extractor/" + className + ".class")) {
             return new ClassScanner("com.acme/orders", "1.0.0")
                 .scan(in.readAllBytes(), "doc-kotlin-sample");
         }

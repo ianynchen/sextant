@@ -1447,10 +1447,24 @@ matches:
     verbs:
       - { owner: "…RequestPredicates", method: GET, verb: GET, path_arg: 0 }
       - { owner: "…CoRouterFunctionDsl", method: GET, verb: GET, path_arg: 0, handler_arg: 1 }
+      # The builder's four `GET` overloads, one rule each (spec §3, §4):
+      - { owner: "…RouterFunctions$Builder", method: GET, verb: GET, arity: 1,
+          handler_arg: 0, extends_receiver: true }
+      - { owner: "…RouterFunctions$Builder", method: GET, verb: GET, arity: 2,
+          arg_types: { 0: java.lang.String }, path_arg: 0, handler_arg: 1, extends_receiver: true }
+      - { owner: "…RouterFunctions$Builder", method: GET, verb: GET, arity: 2,
+          arg_types: { 0: "…RequestPredicate" }, predicate_arg: 0, handler_arg: 1, extends_receiver: true }
+      - { owner: "…RouterFunctions$Builder", method: GET, verb: GET, arity: 3,
+          path_arg: 0, predicate_arg: 1, handler_arg: 2, extends_receiver: true }
+      # A served route with no handler method (spec §6):
+      - { owner: "…RouterFunctions$Builder", method: resources, verb: GET, arity: 2,
+          arg_types: { 0: java.lang.String }, path_arg: 0, handler: none, extends_receiver: true }
     prefixes:
       - { owner: "…RequestPredicates", method: path, path_arg: 0 }
       - { owner: "…RouterFunctions", method: nest, path_arg: 0, subtree_arg: 1 }
       - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1 }
+      - { owner: "…RouterFunctions$Builder", method: path, arity: 2,
+          arg_types: { 1: java.util.function.Consumer }, path_arg: 0, body_arg: 1, extends_receiver: true }
     media:
       - { owner: "…RequestPredicates", method: accept, fills: produces }
     media_values:
@@ -1463,9 +1477,13 @@ matches:
     - { name: andRoute, owner: "…RouterFunction" }
     - { name: andNest,  owner: "…RouterFunction", path_arg: 0, subtree_arg: 1 }
     - { name: and,      owner: "…RouterFunction" }
+    - { name: build,    owner: "…RouterFunctions$Builder" }
+    - { name: filter,   owner: "…RouterFunctions$Builder", pass_through: true }
+  origins:
+    - { owner: "…RouterFunctions", method: route, arity: 0 }
 ```
 
-**Three grammar blocks, and each is catalog data alone — nothing below names a
+**Four grammar blocks, and each is catalog data alone — nothing below names a
 framework:**
 
 - **`entries`** declares where trees start, in two shapes. An **argument-rooted**
@@ -1483,14 +1501,31 @@ framework:**
   types — `CoRouterFunctionDslKt` (the file facade with the static entry point) is
   not `CoRouterFunctionDsl` (the DSL type every builder call carries) — so a
   catalog declares both.
-- **`vocabulary`** maps owner+method to a role: `verbs` (a verb plus the argument
-  its path sits at, and — the two-argument form — its handler position, ONE
-  vocabulary read at two arities: a one-argument predicate becomes a route only
-  once some entry attaches a handler to it, a two-argument call declares the whole
-  route itself), `prefixes` (a path contribution, plus optionally the
-  `subtree_arg`/`body_arg` holding the routes it prefixes — declaring both on one
+- **`vocabulary`** maps owner+method to a role. `verbs` and `prefixes` are LISTS,
+  scanned per call, so one name may carry several rules — a builder declares four
+  `GET`s — and two keys tell same-name overloads apart (design spec
+  `2026-09-11-combinator-overload-discrimination-design.md` §3): `arity` is the
+  call's argument count, and `arg_types` maps a position to the dotted type the
+  call's own erased descriptor must carry there. Two rules sharing owner, method
+  and arity must type some shared position DIFFERENTLY, or the catalog is refused
+  at load naming both — never file order (§3c). A call the vocabulary names that no
+  rule accepts derives ONE row, `resolution: unresolved` — never silence, never a
+  position read off a sibling overload (§3's G-13 guard). A verb rule carries its
+  verb and whichever positions the overload has: `path_arg` (a literal path),
+  `predicate_arg` (the position whose producing call's constraints — a path, a
+  media guard, a composed predicate — fold into the route), both, or neither, which
+  is a catch-all serving every path and publishing `/**` at `resolved` (§7 case 3);
+  a one-position predicate factory becomes a route only once some entry attaches a
+  handler to it, while a rule naming `handler_arg` — or `handler: none`, a route
+  SERVED with no handler method, which is what a static-resource pattern is (§6) —
+  declares the whole route itself. `extends_receiver: true` on a verb or a prefix
+  is the builder form (§4): the call declares its own route AND carries on the
+  chain its receiver holds, so the routes to its left are folded in front of its
+  own, exactly as a continuation folds them. `prefixes` contribute a path
+  (`path_arg`) or a predicate's constraints (`predicate_arg`), plus optionally the
+  `subtree_arg`/`body_arg` holding the routes they prefix — declaring both on one
   row is nonsensical and never arises, since a subtree is a same-method expression
-  and a body is a compiler-moved one), `media` (which of `consumes`/`produces` a
+  and a body is a compiler-moved one. `media` (which of `consumes`/`produces` a
   predicate fills — `accept` is request-matching semantics: a route guarded by
   `accept(JSON)` *serves* clients that accept JSON, not the reverse), `media_values`
   (an enum type's member names to their declared wire values), and `composers`
@@ -1503,12 +1538,33 @@ framework:**
   catalog's; a mapping narrows the same name to one `owner`, and — for the
   nest-shaped form — adds `path_arg`/`subtree_arg`, which fold the *whole router* at
   that argument under this call's own prefix rather than reading a handler it does
-  not have. **Every continuation that can END a chain needs an `owner`.** A bare
-  `and` matches a method name half the libraries on a classpath declare; rooting at
-  every one of them would invent a router out of any two-argument call that happens
-  to share the name. The cost is stated rather than hidden: an owner-free
-  continuation extends a walk some real root already reaches, but never roots one
-  by itself.
+  not have; a mapping declaring `pass_through: true` carries the chain on and reads
+  NO argument — a filter, an attribute, an error handler is never a route, and an
+  undeclared one costs every route to its left (§4b). **Every continuation that
+  can END a chain needs an `owner`.** A bare `and` matches a method name half the
+  libraries on a classpath declare; rooting at every one of them would invent a
+  router out of any two-argument call that happens to share the name. The cost is
+  stated rather than hidden: an owner-free continuation extends a walk some real
+  root already reaches, but never roots one by itself. A builder chain roots at its
+  `build()` — the outermost call nothing consumes (§4). **The rooting rule, whole:**
+  a root is an entry call, an owner-declaring continuation, or a receiver-extending
+  verb or prefix whose chain's HEAD is a call in the same method rather than one of
+  the method's own parameters — the statement form, `var b = route(); b.GET("/a",
+  h); b.POST("/b", h); return b.build();`, where the builder is mutable and nothing
+  consumes any verb's own result — and it roots only when its own result is
+  consumed by nothing in that method (§4 as ruled). Two equal verbs folded into one
+  route merge to that verb; two different ones poison it. And a method some LINKING
+  call names as its body — a `body_arg`, a nest-shaped continuation's `subtree_arg`
+  — is never scanned for roots of its own: it is folded exactly once, by whichever
+  root reaches the call that links it. A `Supplier` body is a whole chain, origin
+  to `build()`, and scanning it would publish its route a second time, bare, with
+  the compiler-generated lambda as declarer (A1 final review, I-1).
+- **`origins`** are the calls a chain STARTS at — rules of the verb shape,
+  `{owner, method, arity, arg_types?}`, matched the same way. A receiver produced by
+  one contributes zero routes and poisons nothing; a receiver produced by anything
+  else the walk cannot read is one unresolved row (§4b). `arity` is what tells the
+  argument-less builder factory from the two-argument route of the same name, which
+  heads every `andRoute` chain and must keep its route.
 
 **The walk, one core for both shapes.** From an argument-rooted entry, or from a
 body-linked entry's own named method, every argument is resolved through its
@@ -1536,7 +1592,15 @@ synthetic-facts unit test rather than the live scan, for the day the extractor
 grows the missing case). A router composed from another method's own return value
 — the walk is per-method BY DESIGN — derives ONE unresolved row for the reference
 rather than a silent absence: the facts would support following it, and spec §1c's
-boundary is a stated one, not a gap the evidence left open. `request_shape`/
+boundary is a stated one, not a gap the evidence left open. A `media` call handed a
+`lambda`-kind argument — the route-declaring overload of a media-contributing name, a
+Kotlin DSL's `accept(MediaType, Function1)` — derives ONE unresolved row rather than
+nothing: its name is claimed, so it is consumed into the tree, and a media rule declares
+no route; reading it (the media value as the route's own constraint, plus its handler)
+is a catalog word this grammar does not have yet (`dsl-media-route`, A1 Task 5 review).
+A `composers` call is not read that way: no measured `and`/`or` overload carries a
+handler, so a lambda operand on one is a predicate, and it contributes constraints only.
+`request_shape`/
 `response_shape` stay honestly NULL always: a functional handler's signature is
 `Request → Response`, and its payload contracts live inside its body — `bodyToMono`
 calls and their like — which is call-evidence work for a later phase, not a
@@ -1569,11 +1633,16 @@ grammar, no framework name, no Kotlin-specific branch anywhere in its code** —
 two entry shapes above are catalog declarations interpreted by one core. The ENGINE
 stays unchanged; the catalog VOCABULARY it reads is additively extensible, not
 frozen at these two shapes. That said, some shapes are known to need vocabulary
-additions before their catalogs can be written: a verb row with no path argument
-(axum's `get(handler)`, the path supplied by whatever `.route("/x", get(handler))`
-it is nested under), a literal route path carried at the entry call rather than
-folded through a chain, and a receiver-accumulated router topology (gin's `Group`,
-which mutates a receiver across calls rather than composing a return value). Simple
+additions before their catalogs can be written: a literal route path carried at the
+entry call rather than folded through a chain, and a receiver-accumulated router
+topology (gin's `Group`, which mutates a receiver across calls rather than composing
+a return value; *the builder form above was cited here as composing one, "which is
+why `build()` can root it" — its mutable statement form roots at each verb and
+composes nothing (§4 as ruled), so that is not the difference, and whether `Group`'s
+shape reads as the statement form is unmeasured*). *A verb row with no path argument
+— axum's `get(handler)` under `.route("/x", get(handler))` — stood in this list until
+the catch-all rule and `extends_receiver` landed (A1 Tasks 3–4); it is the arity-1
+verb rule now.* Simple
 per-call registrations — gin's `r.GET("/x", h)`, Express's `app.get(...)` — need none
 of that: they already fit the existing `single_call` style once their languages'
 extractors emit the same fact grammar (D00 §5's `source`/`result`/`receiver` links).

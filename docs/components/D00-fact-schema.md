@@ -347,7 +347,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, structured `arguments` | Call edges, dispatch, traces, endpoints |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | Constructor symbol, the assigned field's symbol, the source parameter's ordinal | The field resolution ladder (2F) |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
@@ -957,6 +957,16 @@ bytecode — `receiver` is null for a static call, `result` is null for a void o
 and a chain that crosses a method boundary stops honestly rather than being stitched by
 proximity.
 
+**`receiver_parameter`** is the other half of a null `receiver`: the index of the
+enclosing method's parameter the receiver arrived as, where it is one — the same D00 §5
+numbering the `parameter` argument kind uses, so `this` is not a parameter and
+`lambda$routes$2(Spec)` has its `Spec` at 0. It is written only where there is an index
+to write and is absent everywhere else, which is exactly where `receiver` is null today
+for a parameter, a field and an unreadable receiver alike (combinator spec §10a). A walk
+into a lambda body can then tell "this call is on the lambda's own parameter" from "this
+receiver could not be read". Strictly additive: an engine that does not read it sees the
+site it always saw.
+
 **`arguments`** carries one entry per argument slot, resolved by walking the frame back to
 each slot's source instruction. Without it, every endpoint path is unresolved — this is why
 annotation arguments and call literals are first-class fields rather than something
@@ -968,7 +978,7 @@ recovered later. Kinds:
 | `int` / `long` / `boolean` | constant instructions | |
 | `enum` | GETSTATIC of a **named constant of its own type** | symbol reference — `HttpMethod.POST`. Structural, not `ACC_ENUM`: an enum-like — a closed set of static final constants typed as their own owner — reads as `enum` here too, deliberately, because libraries move between the two spellings without changing what a constant means. A Kotlin `object`'s `INSTANCE` and constants such as `BigDecimal.ZERO` match the same shape; the referenced type's own `construct_kind` settles true enum-ness (§5b), so the distinction is a join away rather than a guess made where the answer is not available |
 | `class` | LDC of a class constant | symbol reference — the shape root |
-| `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way |
+| `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way. Also carries `captures`, the number of captured values that lead the body's parameters (below) |
 | `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
 | `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
@@ -987,6 +997,18 @@ every extractor normalizes its own mechanism into it: a JVM `invokedynamic`, a G
 or function value, a Python nested function or reference, a JS arrow or function
 expression. `symbol` names the function's own method/function symbol — the bare
 descriptor, exactly as the JVM extractor emits.
+
+A `lambda` entry also carries **`captures`**: how many of the body's LEADING parameters
+are captured values rather than the interface's own (combinator spec §10b). The JVM
+mapping: the `invokedynamic`'s own argument count, **minus one when the implementation
+handle is an instance kind** (`H_INVOKEVIRTUAL`, `H_INVOKESPECIAL`, `H_INVOKEINTERFACE`),
+because that first captured value becomes the body's `this` and not a parameter; the
+metafactory lays the body's parameters out captured values first, so the interface's
+parameter `k` is the body's parameter `captures + k`. `-1` means the interface's first
+parameter IS the body's receiver — an unbound instance reference used as the function.
+Wherever this grammar recurs — an array's `elements`, a `method_return`'s `value` — a
+`lambda` entry carries it the same way; every other kind never does. Strictly additive:
+an engine that does not read `captures` sees the entry it always saw.
 
 **`field` is the canonical cross-language kind for "this argument reads a declared
 field"** — an argument that reads a declared field, carrying that field's symbol. The

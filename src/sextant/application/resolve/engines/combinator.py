@@ -17,20 +17,48 @@ is therefore a fold over that tree rather than a walk along a line.
   recursing again through a prefix rule's own `body_arg`. Body methods are
   never rooted on their own — rooting every method that merely *contains* a
   vocabulary call double-derives every nested route, once prefixed and once
-  bare (2E checkpoint F4). The entry owner and the vocabulary owner are
-  routinely two different types, so the catalog declares both.
-- `vocabulary` — owner+method to role: `verbs` (a verb plus the argument its
-  path sits at, and, in the two-argument form, its handler), `prefixes` (a
-  path contribution, plus optionally the `subtree_arg`/`body_arg` holding the
+  bare (2E checkpoint F4) — and the root scan enforces that by skipping every
+  method some linking call names as its body (`linked_bodies`), not by
+  trusting bodies to hold only vocabulary calls: a Supplier body holds a
+  whole chain, and its `build()` would root (A1 final review, I-1). The entry
+  owner and the vocabulary owner are routinely two different types, so the
+  catalog declares both.
+- `vocabulary` — owner+method to role: `verbs` (a verb plus whichever of a
+  literal-path `path_arg`, a `predicate_arg` whose producing call's constraints
+  fold in, and a `handler_arg` the overload carries), `prefixes` (a path
+  contribution, plus optionally the `subtree_arg`/`body_arg` holding the
   routes it prefixes), `media` (which of `consumes`/`produces` the call fills),
   `media_values` (an enum type's member names to their wire values), and
   `composers` (`and` merges constraints, `or` duplicates the route per branch).
+  `verbs` and `prefixes` are scanned lists, so one name may carry several
+  rules: `arity` and `arg_types` (position to dotted type, compared against the
+  call's own erased descriptor) tell same-name overloads apart, a call the
+  vocabulary names but no rule accepts is one unresolved row, and two rules
+  that could both accept one call are refused at load (spec §3).
 - `continuations` — the calls that merge route sets along `result` →
   `receiver`. A plain method name is owner-free, exactly like `fluent`'s
   steps; a mapping declares the same name with an `owner` that narrows it to
   one type, and — for the nest-shaped continuation — a `path_arg` and a
   `subtree_arg`, which make it fold its argument's whole router under its own
-  prefix rather than reading a handler it does not have.
+  prefix rather than reading a handler it does not have. A mapping declaring
+  `pass_through: true` carries the chain on and reads NO argument: a filter, an
+  attribute, an error handler is never a route (spec §4b).
+- `origins` — the calls a builder chain STARTS at, `{owner, method}` plus the
+  same `arity`/`arg_types` a verb rule takes, because the argument-less
+  builder factory shares its name with the two-argument route it is not: a
+  receiver produced by an origin contributes zero routes and poisons nothing,
+  which is the difference between "the chain starts here" and "I could not
+  read the receiver" — a distinction nothing needed until a builder made every
+  chain start somewhere (spec §4b).
+
+**The builder chain (spec §4).** `route().GET("/a", h).POST("/b", h).build()`
+is a chain whose every verb both declares its own route AND carries the chain
+onward. A verb or prefix rule declaring `extends_receiver: true` folds the
+routes of the call producing its receiver in front of its own, exactly as a
+continuation does; `build()` is a declared continuation and, being consumed by
+nothing, is where the walk roots. A verb rule declaring `handler: none` in
+place of `handler_arg` is a route served with no handler method — a static
+resource (spec §6).
 
 **Rooting.** A candidate — an entry call, or a continuation call whose catalog
 entry declares an `owner` that the call site matches — is a root unless its own
@@ -79,7 +107,12 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import _arg_at, _expanded_arguments
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_parameter_types,
+    member_name,
+    owner_of,
+)
 
 # The two endpoint columns a failed read can poison. Both are wire identity,
 # so poisoning either drops the row's own `resolution` (checkpoint ruling I1,
@@ -88,6 +121,10 @@ from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 _METHOD = "method"
 _PATH = "path"
 _IDENTITY_POISON = (_METHOD, _PATH)
+
+# The address of a route that constrains no path at all — the framework's
+# any-path pattern, which is what a catch-all serves (spec §7 case 3).
+_ANY_PATH = "/**"
 
 # The two roles a `media` rule may fill. Validated at load rather than
 # discovered at derive time: a typo here silently mislabels every media value
@@ -126,12 +163,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     context = _context_of(workspace, catalog)
     rows: list[dict[str, Any]] = []
     for caller, sites in context.by_caller.items():
+        # A linked body is folded by the root that reaches its linking call,
+        # and never scanned for roots of its own (`linked_bodies`).
+        if bare_descriptor(caller) in context.linked_bodies:
+            continue
         scope = _scope_of(sites, context)
         # Sites arrive ordinal-ordered (the `call_sites` query), so the trees
         # of one method are rooted in source order and their rows accumulate
         # in that order too (NFR-1).
         for site in sites:
-            if not _is_root_candidate(site, context):
+            if not _is_root_candidate(site, scope):
                 continue
             result = site["result"]
             if result is not None and result in scope.consumed:
@@ -170,12 +211,15 @@ class _Continuation:
     Rooting note). `path_arg`/`subtree_arg` are both set or both None: together
     they make the continuation nest-shaped — it folds the router at
     `subtree_arg` under the prefix at `path_arg`, instead of reading a
-    predicate and a handler."""
+    predicate and a handler. `pass_through` is the third shape: the chain
+    carried on and no argument read at all (spec §4b), which never combines
+    with the nest-shaped pair."""
 
     name: str
     owner: str | None
     path_arg: int | None
     subtree_arg: int | None
+    pass_through: bool
 
 
 @dataclass(frozen=True)
@@ -187,13 +231,24 @@ class _TreeContext:
 
     entries: tuple[dict[str, Any], ...]
     body_entries: tuple[dict[str, Any], ...]
-    verbs: dict[tuple[str, str], dict[str, Any]]
-    prefixes: dict[tuple[str, str], dict[str, Any]]
+    verbs: tuple[dict[str, Any], ...]
+    prefixes: tuple[dict[str, Any], ...]
+    # Every (owner, name) any verb or prefix rule names — what makes a call CLAIMED
+    # even when no overload rule accepts it (spec §3's G-13 guard).
+    verb_names: frozenset[tuple[str, str]]
+    prefix_names: frozenset[tuple[str, str]]
     media: dict[tuple[str, str], dict[str, Any]]
     media_owners: tuple[str, ...] | None
     media_values: dict[str, str]
     composers: dict[tuple[str, str], str]
     continuations: tuple[_Continuation, ...]
+    # The rules a chain may START at without poisoning (spec §4b) — the argument-
+    # less builder factory, and nothing else either shipped catalog names. Rules,
+    # not names: the factory shares its name with the two-argument route form, and
+    # `arity: 0` is what tells them apart (spec §3). `origin_names` is the claimed
+    # set, as `verb_names` is for verbs.
+    origins: tuple[dict[str, Any], ...]
+    origin_names: frozenset[tuple[str, str]]
     # The handler positions a PLAIN continuation reads. A plain continuation is
     # the same declaration shape as an argument-rooted entry, only reached
     # through a chain rather than written on its own, so it reuses those
@@ -207,6 +262,18 @@ class _TreeContext:
     by_caller: dict[str, list[dict[str, Any]]]
     by_bare_caller: dict[str, list[dict[str, Any]]]
     method_symbols: dict[str, str]
+    # The bare symbol of every method some LINKING call names as its body — a
+    # body-linked entry's or a prefix rule's `body_arg`, a nest-shaped
+    # continuation's `subtree_arg`. The root scan skips these methods whole: a
+    # body is folded exactly once, by whichever root reaches the call that
+    # links it, and is never scanned for roots of its own. The chain-head test
+    # in `_is_root_candidate` protects only receiver-extending verbs and
+    # prefixes; a Supplier body holds a whole chain whose `build()` — an
+    # owner-declaring continuation — nothing in the body consumes, and an
+    # `add(router)` inside a Consumer body is the same shape. Both rooted and
+    # derived their route a second time, bare, with the lambda as `caller`
+    # (A1 final review, I-1).
+    linked_bodies: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -262,11 +329,16 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     method_symbols: dict[str, str] = {}
     for row in workspace.query("method_symbols"):
         method_symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
-    return _TreeContext(
+    verbs = _rules_of(vocabulary.get("verbs", []))
+    prefixes = _rules_of(vocabulary.get("prefixes", []))
+    origins = _rules_of(matches.get("origins", []))
+    context = _TreeContext(
         entries=entries,
         body_entries=body_entries,
-        verbs=_by_owner_method(vocabulary.get("verbs", [])),
-        prefixes=_by_owner_method(vocabulary.get("prefixes", [])),
+        verbs=verbs,
+        prefixes=prefixes,
+        verb_names=frozenset((rule["owner"], rule["method"]) for rule in verbs),
+        prefix_names=frozenset((rule["owner"], rule["method"]) for rule in prefixes),
         media=_by_owner_method(vocabulary.get("media", [])),
         # A LIST or a scalar (§3.1): the enum carrying the wire values may be
         # reachable under more than one name. `media_owners` plural for the same
@@ -279,28 +351,63 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         media_values=dict(media_values.get("values", {})),
         composers=composers,
         continuations=_continuations_of(matches.get("continuations", [])),
+        origins=origins,
+        origin_names=frozenset((rule["owner"], rule["method"]) for rule in origins),
         continuation_handlers=frozenset(
             entry["handler_arg"] for entry in entries if "handler_arg" in entry
         ),
         by_caller=by_caller,
         by_bare_caller=by_bare_caller,
         method_symbols=method_symbols,
+        linked_bodies=frozenset(),
     )
+    # Read off the call sites the catalog claims, so the matchers above decide
+    # which calls link a body — the same matchers the fold jumps through.
+    return replace(context, linked_bodies=_linked_bodies(call_sites, context))
+
+
+def _linked_bodies(call_sites: list[dict[str, Any]], context: _TreeContext) -> frozenset[str]:
+    """The bare symbol of every `lambda`-kind argument at a linking position: a
+    body-linked entry's `body_arg`, a prefix rule's `body_arg`, a nest-shaped
+    continuation's `subtree_arg`. Only a LINKING call names a body; a lambda
+    handed to a method the catalog does not claim is a method like any other,
+    and the root scan reaches it as before."""
+    bodies: set[str] = set()
+    for site in call_sites:
+        positions: list[int] = []
+        entry = _matching_body_entry(site, context)
+        if entry is not None:
+            positions.append(entry["body_arg"])
+        if (str(site["owner"]), str(site["name"])) in context.prefix_names:
+            rule = _matching_rule(site, context.prefixes)
+            if rule is not None and "body_arg" in rule:
+                positions.append(rule["body_arg"])
+        continuation = _matching_continuation(site, context)
+        if continuation is not None and continuation.subtree_arg is not None:
+            positions.append(continuation.subtree_arg)
+        for position in positions:
+            argument = _arg_at(site["arguments"], position)
+            if argument is not None and argument.get("kind") == "lambda":
+                symbol = argument.get("symbol")
+                if symbol is not None:
+                    bodies.add(str(symbol))
+    return frozenset(bodies)
 
 
 def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
     """`continuations`' two forms, normalized to one: a plain method name is
     the owner-free continuation, a mapping carries the same `name` plus
-    whichever of `owner`/`path_arg`/`subtree_arg` the catalog declared. Only
-    ever called on entries `_validate_matches` already passed."""
+    whichever of `owner`/`path_arg`/`subtree_arg`/`pass_through` the catalog
+    declared. Only ever called on entries `_validate_matches` already passed."""
     return tuple(
-        _Continuation(name=entry, owner=None, path_arg=None, subtree_arg=None)
+        _Continuation(name=entry, owner=None, path_arg=None, subtree_arg=None, pass_through=False)
         if isinstance(entry, str)
         else _Continuation(
             name=entry["name"],
             owner=_catalog_symbol(entry["owner"]) if "owner" in entry else None,
             path_arg=entry.get("path_arg"),
             subtree_arg=entry.get("subtree_arg"),
+            pass_through=bool(entry.get("pass_through", False)),
         )
         for entry in declared
     )
@@ -308,6 +415,42 @@ def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
 
 def _by_owner_method(rules: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
     return {(_catalog_symbol(rule["owner"]), rule["method"]): rule for rule in rules}
+
+
+def _rules_of(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """A list, not a dict keyed on (owner, name) — the shape `single_call` moved to
+    for the same reason (its `methods` block, Task 6): a dict lets a second rule for
+    the same name silently overwrite the first, and a builder declares four `GET`s."""
+    return tuple({**rule, "owner": _catalog_symbol(rule["owner"])} for rule in rules)
+
+
+def _matching_rule(
+    site: dict[str, Any], rules: tuple[dict[str, Any], ...]
+) -> dict[str, Any] | None:
+    """The one rule that accepts this call: owner and name equal, `arity` equal where
+    the rule declares one, and every position in `arg_types` carrying that type in
+    the call's own erased descriptor. Positions a rule does not type are unconstrained.
+    At most one rule can accept a call — `_validate_overloads` refused any catalog
+    where two could — so the first found is the only one."""
+    owner, name = str(site["owner"]), str(site["name"])
+    arguments = site["arguments"]
+    types: tuple[str, ...] | None = None
+    for rule in rules:
+        if rule["owner"] != owner or rule["method"] != name:
+            continue
+        if rule.get("arity") not in (None, len(arguments)):
+            continue
+        wanted: dict[int, str] = rule.get("arg_types") or {}
+        if wanted:
+            if types is None:
+                types = descriptor_parameter_types(str(site["descriptor"]))
+            if any(
+                position >= len(types) or types[position] != typed
+                for position, typed in wanted.items()
+            ):
+                continue
+        return rule
+    return None
 
 
 def _scope_of(sites: list[dict[str, Any]], context: _TreeContext) -> _Scope:
@@ -347,13 +490,15 @@ def _claimed(site: dict[str, Any], context: _TreeContext) -> bool:
     """Whether any declared rule claims this call at all — including an
     owner-free continuation, which never roots but is genuinely part of the
     tree it extends, so the routing value it takes as its receiver is really
-    consumed."""
+    consumed; and a declared origin, which declares nothing and is never a
+    root, but is the head of a chain and so part of that chain's tree."""
     key = (str(site["owner"]), str(site["name"]))
     return (
-        key in context.verbs
-        or key in context.prefixes
+        key in context.verb_names
+        or key in context.prefix_names
         or key in context.media
         or key in context.composers
+        or key in context.origin_names
         or _matching_entry(site, context) is not None
         or _matching_body_entry(site, context) is not None
         or _matching_continuation(site, context) is not None
@@ -361,8 +506,22 @@ def _claimed(site: dict[str, Any], context: _TreeContext) -> bool:
 
 
 def _extends_a_receiver(site: dict[str, Any], context: _TreeContext) -> bool:
+    """Whether this call's receiver is the expression it extends — a composer,
+    a continuation, or a verb/prefix rule declaring `extends_receiver` (a
+    builder verb, spec §4). The receiver of such a call is consumed by it, so
+    the call producing that receiver is not a tree of its own: without this,
+    every verb of a builder body would root beside the chain that already
+    folds it, and derive its route a second time."""
     key = (str(site["owner"]), str(site["name"]))
-    return key in context.composers or _matching_continuation(site, context) is not None
+    if key in context.composers or _matching_continuation(site, context) is not None:
+        return True
+    if key in context.verb_names:
+        rule = _matching_rule(site, context.verbs)
+    elif key in context.prefix_names:
+        rule = _matching_rule(site, context.prefixes)
+    else:
+        return False
+    return rule is not None and bool(rule.get("extends_receiver"))
 
 
 def _matching_continuation(site: dict[str, Any], context: _TreeContext) -> _Continuation | None:
@@ -382,16 +541,33 @@ def _matching_continuation(site: dict[str, Any], context: _TreeContext) -> _Cont
     )
 
 
-def _is_root_candidate(site: dict[str, Any], context: _TreeContext) -> bool:
-    """Whether this call could start a tree: an entry of either shape, or an
+def _is_root_candidate(site: dict[str, Any], scope: _Scope) -> bool:
+    """Whether this call could start a tree: an entry of either shape, an
     OWNER-DECLARING continuation (which roots the chain it ends —
     `route(...).and(...)` is rooted at the `and`, since the `route` is consumed
-    as its receiver).
+    as its receiver), or a receiver-extending verb whose receiver a call in
+    THIS method produced — the statement form of a builder (spec §4 as ruled):
+    the builder is mutable and every method returns it, so `b.GET("/a", h);
+    b.POST("/b", h); return b.build();` leaves each verb's own result consumed
+    by nothing, and each roots and derives its route where before only
+    `build()` rooted and derived nothing. In the chained form every
+    intermediate verb's result IS consumed, so the root scan skips it and
+    `build()` alone roots, unchanged. A receiver-extending PREFIX (the
+    builder's `path`/`nest`) is a candidate on the same terms.
 
-    A vocabulary call is deliberately NOT a candidate. That is the whole of
-    checkpoint F4: bodies hold nothing but vocabulary calls, and treating a
-    method as a root because it merely contains one derives every nested route
-    a second time, unprefixed.
+    A vocabulary call inside a BODY is deliberately NOT a candidate. That is
+    the whole of checkpoint F4: bodies hold nothing but vocabulary calls, and
+    treating a method as a root because it merely contains one derives every
+    nested route a second time, unprefixed. A body's chain sits on the body's
+    own parameter: its head carries `receiver_parameter` and no producing
+    call — and a body chains its verbs too (`b.GET(…).DELETE(…)`, the second
+    verb's receiver a call in the same method), so the test is on the chain's
+    HEAD, not on the verb's own receiver. `_body_routes` alone folds them.
+    That head test covers the verbs and prefixes a body's builder parameter
+    carries; a body holding a chain of its OWN (a Supplier body's `route()…
+    build()`, an `add(router)` on the body's parameter) passes it, and `run`
+    is what keeps such a body out of the root scan altogether
+    (`linked_bodies`).
 
     Nor is an owner-free continuation. Matching a bare method name against
     every owner is `fluent`'s steps discipline — right for REACHING a step
@@ -400,12 +576,41 @@ def _is_root_candidate(site: dict[str, Any], context: _TreeContext) -> bool:
     unrelated type would otherwise be rooted and derive a row for a router
     nobody wrote.
     """
+    context = scope.context
     continuation = _matching_continuation(site, context)
     return (
         _matching_entry(site, context) is not None
         or _matching_body_entry(site, context) is not None
         or (continuation is not None and continuation.owner is not None)
+        or _is_statement_verb_or_prefix(site, scope)
     )
+
+
+def _is_statement_verb_or_prefix(site: dict[str, Any], scope: _Scope) -> bool:
+    """A receiver-extending verb OR prefix rule accepting this call — a builder's
+    `path`/`nest` are prefixes and are written as statements exactly as its verbs
+    are — whose receiver a call in this same method produced (never itself), and
+    whose chain does not begin on one of this method's own parameters: that
+    head is a builder body's, and the body walk folds it (checkpoint F4)."""
+    key = (str(site["owner"]), str(site["name"]))
+    if key in scope.context.verb_names:
+        rule = _matching_rule(site, scope.context.verbs)
+    elif key in scope.context.prefix_names:
+        rule = _matching_rule(site, scope.context.prefixes)
+    else:
+        return False
+    if rule is None or not rule.get("extends_receiver"):
+        return False
+    extended = _producing_site(site["receiver"], scope, exclude=site)
+    return extended is not None and _chain_head(extended, scope).get("receiver_parameter") is None
+
+
+def _chain_head(site: dict[str, Any], scope: _Scope) -> dict[str, Any]:
+    """The first call of the receiver chain `site` ends — the one whose receiver
+    no call in this method produced."""
+    while (previous := _producing_site(site["receiver"], scope, exclude=site)) is not None:
+        site = previous
+    return site
 
 
 def _matching_entry(site: dict[str, Any], context: _TreeContext) -> dict[str, Any] | None:
@@ -443,16 +648,42 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     """
     context = scope.context
     key = (str(site["owner"]), str(site["name"]))
-    prefix = context.prefixes.get(key)
-    if prefix is not None:
+    if key in context.prefix_names:
+        prefix = _matching_rule(site, context.prefixes)
+        if prefix is None:
+            return [_Route(poisons=_IDENTITY_POISON)]
         return _nested_routes(site, prefix, scope)
-    verb = context.verbs.get(key)
-    if verb is not None:
-        # The two-argument verb form declares a whole route on its own; the
-        # one-argument form is a predicate, and only becomes a route once some
-        # entry attaches a handler to it.
-        return _verb_routes(site, verb, scope) if "handler_arg" in verb else []
-    if key in context.media or key in context.composers:
+    if key in context.verb_names:
+        verb = _matching_rule(site, context.verbs)
+        if verb is None:
+            # Spec §3, the G-13 guard: the vocabulary names this call and no overload
+            # rule accepts it. One row that says so, never silence — silence is the
+            # one outcome this engine's doctrine forbids, and reading positions off a
+            # sibling overload is the wrong row it forbids next.
+            return [_Route(poisons=_IDENTITY_POISON)]
+        # The declaring forms carry a handler position — or `handler: none`, a
+        # route served with no handler method (spec §6); a bare predicate factory
+        # becomes a route only once some entry attaches a handler to it.
+        return _verb_routes(site, verb, scope) if _declares_a_route(verb) else []
+    if key in context.media:
+        # A media call is a constraint contributor — it declares no route, and reaching
+        # it here (unconsumed) is nothing to report. UNLESS it was handed a handler: a
+        # `lambda`-kind argument on a call whose rule reads media values is the
+        # route-declaring overload of that name (a builder DSL's `accept(MediaType,
+        # Function1)`, measured on both routing stacks), and a declared route absent
+        # with nothing saying so is spec §3's forbidden outcome. One unresolved row, no
+        # handler — the handler position is not one this rule declares. Reading it
+        # properly (the media value as the route's own constraint, plus its handler) is
+        # a catalog word this grammar does not have yet; tracked on the register as
+        # `dsl-media-route`.
+        if _carries_a_handler(site):
+            return [_Route(poisons=_IDENTITY_POISON)]
+        return []
+    if key in context.composers:
+        # A composer is excluded from that check on evidence: no measured `and`/`or`
+        # overload on any owner carries a handler (each takes two predicates, or a
+        # predicate and a path string), so a `lambda`-kind operand on one is a
+        # predicate, not a handler, and poisoning it would invent a route.
         return []
     entry = _matching_entry(site, context)
     if entry is not None:
@@ -466,10 +697,31 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         return _body_routes(_arg_at(site["arguments"], body_entry["body_arg"]), scope)
     continuation = _matching_continuation(site, context)
     if continuation is not None:
+        if continuation.pass_through:
+            # Declared to carry the chain and read nothing: its arguments are
+            # filters, attributes, error handlers — never a route (spec §4b, §5).
+            return _chained_routes(site, scope)
         if continuation.subtree_arg is not None:
             return _nest_continuation_routes(site, continuation, scope)
         return _declared_routes(site, context.continuation_handlers, scope, extends_receiver=True)
     return []
+
+
+def _carries_a_handler(site: dict[str, Any]) -> bool:
+    """Whether any argument of this call is a `lambda`-kind one — a handler, on a call
+    whose rule has no handler position to read it at."""
+    return any(argument.get("kind") == "lambda" for argument in site["arguments"])
+
+
+def _is_pass_through(site: dict[str, Any], context: _TreeContext) -> bool:
+    continuation = _matching_continuation(site, context)
+    return continuation is not None and continuation.pass_through
+
+
+def _declares_a_route(rule: dict[str, Any]) -> bool:
+    """Whether a verb rule declares a whole route on its own — it names where
+    the handler sits, or says there is none — rather than a bare predicate."""
+    return "handler_arg" in rule or rule.get("handler") == "none"
 
 
 def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
@@ -477,14 +729,14 @@ def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     it — one branch normally, several where an `or` fans the route out."""
     context = scope.context
     key = (str(site["owner"]), str(site["name"]))
-    verb = context.verbs.get(key)
-    if verb is not None:
-        return _verb_constraints(site, verb, scope)
-    prefix = context.prefixes.get(key)
-    if prefix is not None:
-        return _argument_constraints(
-            _arg_at(site["arguments"], prefix["path_arg"]), scope, (_PATH,)
-        )
+    if key in context.verb_names:
+        verb = _matching_rule(site, context.verbs)
+        return _verb_constraints(site, verb, scope) if verb else [_Route(poisons=_IDENTITY_POISON)]
+    if key in context.prefix_names:
+        prefix = _matching_rule(site, context.prefixes)
+        if prefix is None:
+            return [_Route(poisons=_IDENTITY_POISON)]
+        return _prefix_constraints(site, prefix, scope)
     media = context.media.get(key)
     if media is not None:
         return [_media_constraints(site, media, context)]
@@ -522,7 +774,7 @@ def _declared_routes(
             continue
         for branch in _argument_routes(argument, scope):
             routes.append(
-                branch if branch.handler is not None else replace(branch, handler=handler)
+                branch if branch.handler is not None else replace(_served(branch), handler=handler)
             )
     return routes
 
@@ -550,14 +802,28 @@ def _nest_continuation_routes(
 
 
 def _chained_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
-    """The routes of the chain a continuation extends. A receiver naming no
-    routing call this method can see — its producing call is in another method,
-    or is not a routing call at all — is one honest unresolved row rather than
-    a silently shorter route set; a continuation with no receiver at all
-    extends nothing and says nothing."""
+    """The routes of the chain a continuation or a receiver-extending verb
+    carries on. A receiver naming no routing call this method can see — its
+    producing call is in another method, or is not a routing call at all — is
+    one honest unresolved row rather than a silently shorter route set; a call
+    with no receiver at all extends nothing and says nothing (a builder body's
+    verbs sit on the body's own parameter, which is exactly this case); and a
+    receiver produced by a DECLARED ORIGIN contributes nothing and poisons
+    nothing — that is the difference between "the chain starts here" and "I
+    could not read the receiver", which nothing could draw until a builder made
+    every chain start somewhere (spec §4b). A pass-through in between is
+    stepped THROUGH before deciding: it contributes nothing by definition, so
+    its own empty route set must never read as an unread receiver —
+    `route().filter(f).GET(…)` starts at the origin, clean."""
     if site["receiver"] is None:
         return []
     extended = _producing_site(site["receiver"], scope, exclude=site)
+    while extended is not None and _is_pass_through(extended, scope.context):
+        if extended["receiver"] is None:
+            return []
+        extended = _producing_site(extended["receiver"], scope, exclude=extended)
+    if extended is not None and _matching_rule(extended, scope.context.origins) is not None:
+        return []
     chained = _routes_of(extended, scope) if extended is not None else []
     return chained or [_Route(poisons=_IDENTITY_POISON)]
 
@@ -573,12 +839,19 @@ def _subtree_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Rou
 
 
 def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
-    """A prefix rule's routes: its own path contribution pushed onto every
-    route of the subtree it holds — an argument (`subtree_arg`) where the
-    subtree is an expression in this same method, a linked body (`body_arg`)
-    where it is a block the compiler moved into a method of its own. A prefix
-    holding neither declares no route at all; it is a constraint, folded where
-    some predicate argument reaches it."""
+    """A prefix rule's routes: its own contribution pushed onto every route of
+    the subtree it holds — an argument (`subtree_arg`) where the subtree is an
+    expression in this same method, a linked body (`body_arg`) where it is a
+    block the compiler moved into a method of its own. A prefix holding neither
+    declares no route at all; it is a constraint, folded where some predicate
+    argument reaches it. A prefix declaring `extends_receiver` (a builder's
+    `path`/`nest`, spec §5) carries the chain on as well, and the chain's routes
+    come first: they were complete before this prefix and were never under it.
+
+    Inside a body the builder is the body's own parameter, so its verbs carry
+    no receiver this method can see; their chain contributes nothing (never a
+    poison), and the body's routes fold cleanly under this prefix.
+    """
     arguments = site["arguments"]
     if "subtree_arg" in rule:
         subtree = _argument_routes(_arg_at(arguments, rule["subtree_arg"]), scope)
@@ -586,8 +859,18 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
         subtree = _body_routes(_arg_at(arguments, rule["body_arg"]), scope)
     else:
         return []
-    prefixes = _argument_constraints(_arg_at(arguments, rule["path_arg"]), scope, (_PATH,))
-    return [_merged(prefix, route) for prefix in prefixes for route in subtree]
+    routes = list(_chained_routes(site, scope)) if rule.get("extends_receiver") else []
+    prefixes = _prefix_constraints(site, rule, scope)
+    routes.extend(_merged(prefix, route) for prefix in prefixes for route in subtree)
+    return routes
+
+
+def _prefix_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
+    """What a prefix rule contributes: a literal path at `path_arg`, or the
+    constraints of the predicate at `predicate_arg` — a path prefix or a media
+    guard alike, whatever the predicate's producing call folds in."""
+    position = rule["path_arg"] if "path_arg" in rule else rule["predicate_arg"]
+    return _argument_constraints(_arg_at(site["arguments"], position), scope, (_PATH,))
 
 
 def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]:
@@ -618,22 +901,62 @@ def _body_routes(argument: dict[str, Any] | None, scope: _Scope) -> list[_Route]
 
 
 def _verb_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
-    handler = _handler_of(
-        site["arguments"], frozenset({rule["handler_arg"]}), scope.context.method_symbols
+    """A route-declaring verb's routes: its own constraints with its handler
+    attached — NULL for `handler: none`, a route served with no handler method
+    (spec §6) — and, when the rule extends its receiver, the routes of the
+    chain to its left in front of them: a builder verb declares its own route
+    AND carries the chain onward, so the routes to its left are as much its
+    tree as its own (spec §4)."""
+    handler = (
+        None
+        if rule.get("handler") == "none"
+        else _handler_of(
+            site["arguments"], frozenset({rule["handler_arg"]}), scope.context.method_symbols
+        )
     )
-    return [
-        replace(constraint, handler=handler) for constraint in _verb_constraints(site, rule, scope)
+    own = [
+        replace(_served(constraint), handler=handler)
+        for constraint in _verb_constraints(site, rule, scope)
     ]
+    if rule.get("extends_receiver"):
+        return [*_chained_routes(site, scope), *own]
+    return own
+
+
+def _served(route: _Route) -> _Route:
+    """A route that is about to become a row and folded NO path part without
+    its path being poisoned is a catch-all — a verb with only a handler, a
+    media-only predicate — and it serves EVERY path: the framework's any-path
+    pattern is its address (spec §7 case 3 as ruled). Contributed HERE, by the
+    route that read no path, so a prefix over it composes as `/api/**` rather
+    than `/api` — `_merged` puts the prefix in front of whatever the route
+    carries, and by the time `_path_of` runs the prefix is already folded in.
+    Anything with a path part, or a poisoned path, is returned as it is."""
+    if route.path_parts or _PATH in route.poisons:
+        return route
+    return replace(route, path_parts=(_ANY_PATH,))
 
 
 def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
-    verb = _Route(verb=str(rule["verb"]))
-    return [
-        _merged(verb, branch)
-        for branch in _argument_constraints(
-            _arg_at(site["arguments"], rule["path_arg"]), scope, (_PATH,)
+    """The verb, merged with whatever its declared positions contribute: a literal path
+    at `path_arg`, a predicate's own constraints at `predicate_arg`, both, or neither —
+    a verb naming no position at all is a catch-all, and it is RESOLVED: nothing was
+    poisoned, the author wrote the route open (spec §7 case 3). A rule whose `verb` is
+    null names no verb of its own — the builder's `route(predicate, handler)` — and
+    the predicate supplies one, or none; `method` then reads NULL without being
+    poisoned."""
+    verb = rule.get("verb")
+    branches = [_Route(verb=None if verb is None else str(verb))]
+    arguments = site["arguments"]
+    if "path_arg" in rule:
+        paths = _argument_constraints(_arg_at(arguments, rule["path_arg"]), scope, (_PATH,))
+        branches = [_merged(branch, path) for branch in branches for path in paths]
+    if "predicate_arg" in rule:
+        predicates = _argument_constraints(
+            _arg_at(arguments, rule["predicate_arg"]), scope, (_PATH,)
         )
-    ]
+        branches = [_merged(branch, predicate) for branch in branches for predicate in predicates]
+    return branches
 
 
 def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _TreeContext) -> _Route:
@@ -803,15 +1126,20 @@ def _merged(left: _Route, right: _Route) -> _Route:
     concatenate in declaration order, media unions, and the first handler
     declared wins.
 
-    A verb declared on BOTH sides poisons the verb rather than picking one. A
-    request carries exactly one verb, so two of them inside a single `and`
-    chain is a constraint no route can satisfy — reporting either would be a
-    guess presented as fact, and reporting the row's identity as fully known
-    would be worse. (`or` never reaches here: its branches stay separate
-    routes, which is precisely how two verbs on one path are expressed.)
+    Two DIFFERENT verbs poison the verb rather than picking one. A request
+    carries exactly one verb, so two of them inside a single `and` chain is a
+    constraint no route can satisfy — reporting either would be a guess
+    presented as fact, and reporting the row's identity as fully known would
+    be worse. Two EQUAL verbs are that one verb (spec §4 as ruled): a
+    handler-less `resource(GET("/favicon.ico"), r)` folds its rule's `GET`
+    against the predicate's, and `GET` and `GET` is `GET`. (`or` never reaches
+    here: its branches stay separate routes, which is precisely how two verbs
+    on one path are expressed.)
     """
     poisons = _union(left.poisons, right.poisons)
-    if _METHOD in poisons or (left.verb is not None and right.verb is not None):
+    if _METHOD in poisons or (
+        left.verb is not None and right.verb is not None and left.verb != right.verb
+    ):
         verb = None
         poisons = _union(poisons, (_METHOD,))
     else:
@@ -868,10 +1196,21 @@ def _path_of(route: _Route, catalog: Catalog) -> str | None:
     point (`protocol_hint` reclassifies later, which is how an SSE row
     inherits this without naming `sse` here, and D02 §3's merge mints `both`
     later still).
+
+    A route that folded NO path part and was not poisoned is a catch-all — a
+    verb with only a handler, or a media-only predicate — and it serves EVERY
+    path, so its address is the framework's own any-path pattern, `/**`
+    (spec §7 case 3 as ruled). Not NULL: on this side a resolved NULL path is
+    what `derive_call_endpoints.sql`'s addresses-nothing gate drops by
+    doctrine — "the address was read, and there is none" — which is the
+    opposite of what a catch-all declares, so this engine never emits a
+    resolved row with a NULL path. A poisoned path stays NULL: that row is
+    unresolved, and the gate lets it through as the "something unreadable is
+    declared here" fact it is.
     """
-    if _PATH in route.poisons or not route.path_parts:
+    if _PATH in route.poisons:
         return None
-    path = "".join(route.path_parts)
+    path = "".join(route.path_parts) if route.path_parts else _ANY_PATH
     return canonical_http_path(path) if serves_urls(catalog.protocol, catalog.direction) else path
 
 
@@ -967,8 +1306,41 @@ def _validate_matches(catalog: Catalog) -> None:
     `continuations` is checked hardest, because it is the one block where two
     declarations can silently claim the same call: the same method name is
     routinely a composer on one type and a chain continuation on another, and
-    only an `owner` tells them apart."""
+    only an `owner` tells them apart.
+
+    A verb rule says where its handler sits OR that there is none — both is
+    two answers, and `extends_receiver` on a rule saying neither is a builder
+    verb that declares no route, which is a continuation misfiled. An origin
+    names an owner and a method, or it names nothing a receiver could match."""
     _validate_continuations(catalog)
+    for rule in catalog.matches.get("vocabulary", {}).get("verbs", []):
+        handler_less = rule.get("handler") == "none"
+        if "handler" in rule and not handler_less:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                f"`handler: {rule.get('handler')!r}` — the only value is `none`, a route "
+                f"served with no handler method (D02 §2's `combinator` style)"
+            )
+        if handler_less and "handler_arg" in rule:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares both "
+                f"`handler_arg` and `handler: none` (D02 §2's `combinator` style)"
+            )
+        if rule.get("extends_receiver") and not _declares_a_route(rule):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                f"`extends_receiver` without `handler_arg` or `handler: none` — a verb "
+                f"that carries a chain declares a route of its own (D02 §2's `combinator` "
+                f"style)"
+            )
+    for origin in catalog.matches.get("origins", []):
+        if not isinstance(origin, dict) or "owner" not in origin or "method" not in origin:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: every `origins` item is "
+                f"`{{owner, method}}`, got {origin!r} (D02 §2's `combinator` style)"
+            )
+    # Last, once every rule is known to have the shape it reads.
+    _validate_overloads(catalog)
     for entry in catalog.matches.get("entries", []):
         argument_rooted = "methods" in entry and "handler_arg" in entry
         body_linked = "method" in entry and "body_arg" in entry
@@ -987,6 +1359,66 @@ def _validate_matches(catalog: Catalog) -> None:
             )
 
 
+def _validate_overloads(catalog: Catalog) -> None:
+    """Spec §3c: never file order. Two rules that could both accept one call are
+    refused here, naming both. Two rules sharing owner, method and arity are
+    distinguishable only if some position BOTH of them type carries a different type
+    in each — a call has one type per position, so then at most one can match. A rule
+    with no `arity` accepts every arity and so collides with every other rule of its
+    name; `arg_types` without `arity`, or a typed position at or beyond the arity, is a
+    rule that cannot mean what it says. `origins` are rules of the same shape and are
+    held to the same two checks."""
+    vocabulary = catalog.matches.get("vocabulary", {})
+    roles = {
+        "verbs": vocabulary.get("verbs", []),
+        "prefixes": vocabulary.get("prefixes", []),
+        # Origins are matched by the same rule, so the same two checks bind them: the
+        # argument-less factory is told from the route of the same name by `arity`.
+        "origins": catalog.matches.get("origins", []),
+    }
+    for role, declared in roles.items():
+        rules = list(declared)
+        for rule in rules:
+            typed = rule.get("arg_types") or {}
+            arity = rule.get("arity")
+            if typed and arity is None:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                    f"`arg_types` without `arity` (D02 §2's `combinator` style)"
+                )
+            for position in typed:
+                if not isinstance(position, int) or arity is not None and position >= arity:
+                    raise CatalogError(
+                        f"loading catalog {catalog.source}: `{rule.get('method')}` types "
+                        f"position {position} but declares arity {arity} "
+                        f"(D02 §2's `combinator` style)"
+                    )
+        for index, left in enumerate(rules):
+            for right in rules[index + 1 :]:
+                # Compared in the symbol form `_matching_rule` compares — two spellings
+                # of one owner are one owner to the matcher, so they are one here.
+                if (_catalog_symbol(left["owner"]), left["method"]) != (
+                    _catalog_symbol(right["owner"]),
+                    right["method"],
+                ):
+                    continue
+                if (
+                    None not in (left.get("arity"), right.get("arity"))
+                    and left["arity"] != right["arity"]
+                ):
+                    continue
+                shared = set(left.get("arg_types") or {}) & set(right.get("arg_types") or {})
+                if any(left["arg_types"][p] != right["arg_types"][p] for p in shared):
+                    continue
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: two `{role}` rules for "
+                    f"`{left['method']}` at arity {left.get('arity')} could both accept one "
+                    f"call — {left.get('arg_types') or {}} and {right.get('arg_types') or {}} "
+                    f"type no shared position differently; a rule must type enough "
+                    f"positions to be unambiguous (spec §3c)"
+                )
+
+
 def _validate_continuations(catalog: Catalog) -> None:
     """Refuses a `continuations` block that cannot be read unambiguously.
 
@@ -995,7 +1427,8 @@ def _validate_continuations(catalog: Catalog) -> None:
     - an entry that is neither a plain name nor a mapping carrying one, or a
       mapping declaring only half of the `path_arg`/`subtree_arg` pair — a
       nest-shaped continuation needs both, and half of it would fold as the
-      plain shape and drop the subtree;
+      plain shape and drop the subtree — or declaring that pair beside
+      `pass_through`, which reads nothing and so cannot fold a subtree;
     - two entries sharing a name with no `owner` telling them apart — silent
       last-wins would hide exactly the bug the check exists for
       (`fluent._validate_steps`, same rule for the same reason);
@@ -1026,14 +1459,20 @@ def _validate_continuations(catalog: Catalog) -> None:
         else:
             raise CatalogError(
                 f"loading catalog {catalog.source}: every `continuations` item is either a "
-                f"method name or `{{name, owner?, path_arg?, subtree_arg?}}`, got {entry!r} "
-                f"(D02 §2's `combinator` style)"
+                f"method name or `{{name, owner?, path_arg?, subtree_arg?, pass_through?}}`, "
+                f"got {entry!r} (D02 §2's `combinator` style)"
             )
         if len(positions) == 1:
             raise CatalogError(
                 f"loading catalog {catalog.source}: continuation `{name}` declares "
                 f"`{positions[0]}` alone — the nest-shaped continuation needs `path_arg` "
                 f"and `subtree_arg` together (D02 §2's `combinator` style)"
+            )
+        if positions and isinstance(entry, dict) and entry.get("pass_through"):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: continuation `{name}` declares "
+                f"`pass_through` beside `path_arg`/`subtree_arg` — a pass-through reads "
+                f"no argument (D02 §2's `combinator` style)"
             )
         if name in composer_owners and (owner is None or owner in composer_owners[name]):
             raise CatalogError(

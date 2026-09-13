@@ -143,6 +143,7 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+_COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
@@ -284,6 +285,84 @@ GUARDS: dict[str, Guard] = {
                 find="        and _has_execute_join(site, context.sites, "
                 "context.via_argument_names[name])",
                 replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    # --- `combinator` -------------------------------------------------------
+    "combinator.unrecognised-overload-is-a-row": Guard(
+        what="a call the vocabulary names but no overload rule accepts derives one unresolved row",
+        why="the alternative is silence — the G-13 failure this engine's doctrine forbids: "
+        "a router whose verb call happens to be an overload the catalog did not declare "
+        "has its whole route absent from the export with nothing saying so",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if verb is None:\n            # Spec §3, the G-13 guard",
+                replace="        if verb is None and False:  # guard disabled by scripts/guard_check.py\n            # Spec §3, the G-13 guard",
+            ),
+        ),
+    ),
+    "combinator.media-with-a-handler-is-a-row": Guard(
+        what="a media call handed a `lambda`-kind argument — the route-declaring overload "
+        "of a media-contributing name; composers are excluded, no measured `and`/`or` "
+        "carries a handler — derives one unresolved row",
+        why="without it the call is claimed into the tree (its name is in the media "
+        "vocabulary) and contributes nothing: a Kotlin DSL's `accept(JSON) { handler }` "
+        "is a declared route absent from the export with nothing saying so — spec §3's "
+        "G-13 failure, on a name the catalog does read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if _carries_a_handler(site):\n            return [_Route(poisons=_IDENTITY_POISON)]",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return [_Route(poisons=_IDENTITY_POISON)]",
+            ),
+        ),
+    ),
+    "combinator.linked-body-never-roots": Guard(
+        what="a method some linking call names as its body — a `body_arg`, a nest-shaped "
+        "continuation's `subtree_arg` — is skipped by the root scan whole",
+        why="without the skip a body holding a chain of its own roots it: a Supplier body's "
+        '`route().GET("/x", h).build()` under `path("/api", …)` publishes `GET /api/x` '
+        "from the prefix's fold AND a bare `GET /x` with the compiler-generated lambda as "
+        "its declarer — the same route twice, the second at an address the framework "
+        "never serves",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if bare_descriptor(caller) in context.linked_bodies:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "combinator.origin-is-declared": Guard(
+        what="a chain head contributes zero routes without poisoning ONLY when its producing "
+        "call is a declared origin",
+        why="without the check a helper's result — `base().POST(…)`, the one receiver the "
+        "walk reaches but cannot read — would read as a clean chain start, and a router "
+        "whose head the walk cannot see would publish every route to its right as resolved "
+        "with nothing saying the head was not read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    if extended is not None and _matching_rule(extended, scope.context.origins) is not None:",
+                replace="    if extended is not None and not _routes_of(extended, scope):  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "combinator.entry-owner-is-the-declared-type": Guard(
+        what="an argument-rooted entry matches a call only on the owner AND method the "
+        "catalog declares",
+        why="the two functional-routing catalogs are one package apart and identical in "
+        "every other cell — same `route(predicate, handler)` call, same verb factory "
+        "names, same argument shapes. Matching on the method name alone roots the "
+        "reactive router under the servlet catalog and vice versa, and each then derives "
+        "an unresolved row for a tree its twin already derived correctly: a duplicate "
+        "boundary with a wrong catalog id, and a gap row for a route that has none",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='            if site["owner"] == entry["owner"] and site["name"] in entry["methods"]',
+                replace='            if site["name"] in entry["methods"]  # guard disabled',
             ),
         ),
     ),
@@ -1288,13 +1367,24 @@ GUARDS: dict[str, Guard] = {
         "moves its SSE routes out of `http`, so `roots` says `http /events/emitter` while "
         "`endpoints` says `sse /events/emitter` — one address spelled two ways in one "
         "workspace, with the document's own trace section quoting the stale half",
+        # Each pass runs inside its own `with _timed(...)` block (b2bdbb9), so the anchor
+        # is the whole block: removing the call alone left an empty block behind and
+        # re-inserting it at the method's own indentation put it outside the other one —
+        # `--guards` then failed to import the copied tree before it reached any guard.
         edits=(
-            Edit(path=_PIPELINE, find="    record_roots(workspace)\n", replace=""),
             Edit(
                 path=_PIPELINE,
-                find="    apply_protocol_hints(workspace, declared)\n",
-                replace="    record_roots(workspace)  # guard disabled\n"
-                "    apply_protocol_hints(workspace, declared)\n",
+                find='    with _timed("record_roots"):\n        record_roots(workspace)\n',
+                replace="",
+            ),
+            Edit(
+                path=_PIPELINE,
+                find='    with _timed("apply_protocol_hints"):\n'
+                "        apply_protocol_hints(workspace, declared)\n",
+                replace='    with _timed("record_roots"):\n'
+                "        record_roots(workspace)  # guard disabled\n"
+                '    with _timed("apply_protocol_hints"):\n'
+                "        apply_protocol_hints(workspace, declared)\n",
             ),
         ),
     ),

@@ -381,6 +381,17 @@ class CallArgument(BaseModel):
     # to read one. An array the extractor could not read end to end stays
     # `unresolved`, so `elements` is never a partial list.
     elements: list["CallArgument"] | None = None
+    # How many of a lambda body's LEADING parameters are captured values (spec §10b):
+    # the indy's argument count, minus one when the implementation handle is an
+    # instance kind, because that first captured value becomes the body's receiver.
+    # The metafactory lays the body's parameters out as captured values first, then
+    # the interface's, so the interface's parameter k is the body's parameter
+    # `captures + k`. `-1` means the interface's first parameter IS the receiver (an
+    # unbound instance reference). Only a `lambda`-kind argument carries it — and
+    # this one field covers every place the argument grammar appears, because a
+    # call site's `arguments`, a `method_return`'s `value` and an `array`'s
+    # `elements` are all entries of the same grammar, modelled by this class.
+    captures: int | None = None
 
 
 class CallTarget(BaseModel):
@@ -421,6 +432,12 @@ class CallSiteFact(BaseModel):
     invoke_kind: str
     ordinal: int
     receiver: int | None = None
+    # Which of the enclosing method's parameters the receiver is, when it is one (D00 §5
+    # numbering: `this` is not a parameter). `receiver` is the producing call's id and is
+    # null for a parameter, a field and an unreadable receiver alike; this is the half of
+    # that answer the argument grammar has carried as `{"kind": "parameter"}` since 9.8,
+    # for the receiver slot. Absent everywhere else.
+    receiver_parameter: int | None = None
     result: int | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM

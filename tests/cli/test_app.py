@@ -109,7 +109,16 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # `@RepositoryRestResource`, derives its six-route table — Spring Data REST exposes
     # a Mongo repository exactly as it does a JPA one, and the roster now names the store
     # contract the fact stream cannot reach through the parent.
-    assert metadata["endpoints"]["inbound"]["http"] == 60
+    # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks —
+    # `BuilderRoutes` under `/bld`, `MvcBuilderRoutes` under `/mvcbld`, one `GET /**` each.
+    # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's nine
+    # routes on both stacks — `KotlinMvcRoutes` under `/ktmvc`, `KotlinWebFluxRoutes`
+    # under `/ktflux`, one `GET /**` each.
+    # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row (`dsl-media-route`),
+    # `unresolved` with no address.
+    # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks —
+    # `GET /bld/sup/inner`, `GET /mvcbld/sup/inner` — each once, under its prefix.
+    assert metadata["endpoints"]["inbound"]["http"] == 90
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -196,7 +205,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # + 1 (W46): `ws/OrderFeedClient`, which opens one — `G-32`'s absent direction.
     # 139 since 2026-09-11: `ProgrammaticWsConfig` + its nested `TicketEndpoint` (`G-34`),
     # `ShipmentRepository` + its nested `Shipment` (`G-45`) — four class files.
-    assert metadata["coverage"]["documents"] == 139
+    # 141 since `G-37` (A1 Task 4): `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes`.
+    # 143 since A1 Task 5: `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` —
+    # one class file each, every lambda in them an `invokedynamic` body of the same class.
+    assert metadata["coverage"]["documents"] == 143
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

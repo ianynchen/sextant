@@ -101,6 +101,48 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # a substring of the fixed one.
     assert "`GET /v1/seam/owners/{ownerId}`" in document
     assert "`POST /chat`" in document
+    # A1 Task 4, `G-37` (spec §8): the builder form on both stacks — `BuilderRoutes`
+    # under `/bld`, `MvcBuilderRoutes` under `/mvcbld` — every verb overload, the
+    # nested body, the route past the mid-chain `filter`, the handler-less `resources`
+    # pattern, and the `GET(h)` catch-all at the framework's any-path pattern.
+    for prefix in ("/bld", "/mvcbld"):
+        for route in (
+            f"`GET {prefix}/orders`",
+            f"`GET {prefix}/orders/{{id}}`",
+            f"`GET {prefix}/health`",
+            f"`POST {prefix}/orders`",
+            f"`PUT {prefix}/orders/{{id}}`",
+            f"`GET {prefix}/nested/inner`",
+            f"`DELETE {prefix}/nested/inner/{{id}}`",
+            f"`GET {prefix}/static/**`",
+            # A1 final review, I-1: the Supplier form of `nest`, its body a whole chain.
+            f"`GET {prefix}/sup/inner`",
+        ):
+            assert route in document, route
+    assert "`GET /**`" in document
+    # The Supplier body's own `build()` rooted before I-1 and published this bare row,
+    # declared by the compiler-generated lambda.
+    assert "`GET /inner`" not in document
+    # A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL on both stacks —
+    # `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc` (every `GET` overload the servlet
+    # DSL declares) and `routes/KotlinWebFluxRoutes.kt` under `/ktflux` (the reactive
+    # `router { }` without coroutines). Each ends in a `GET { }` catch-all, so `GET /**`
+    # is four rows in the inbound table now — two builder, two DSL — one per handler
+    # (counted inside that table only: the traces section lists the two whose handler
+    # bodies make calls a second time).
+    for route in (
+        "`GET /ktmvc/invoices`",
+        "`GET /ktmvc/invoices/{id}`",
+        "`GET /ktmvc/health`",
+        "`POST /ktmvc/invoices`",
+        "`GET /ktflux/orders`",
+        "`GET /ktflux/orders/{id}`",
+        "`POST /ktflux/orders`",
+    ):
+        assert route in document, route
+    inbound, _, _ = document.partition("## Outbound endpoints")
+    inbound_table = inbound.partition("## Inbound endpoints")[2]
+    assert inbound_table.count("| `GET /**` |") == 4
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
@@ -237,11 +279,39 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     #
     # verify: the 39 is reproducible by counting `call_site` facts whose `invoke_kind`
     # is `throw` in the workspace's fact files (8 distinct named types plus the 5 rethrows).
-    assert "Calls whose callee body this workspace read: 468 of 1525 (31%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1523." in document
+    # MOVED by `G-37` (A1 Task 4): `BuilderRoutes` and `MvcBuilderRoutes` add 76 edges
+    # (1601), and the numerator moves for the first time in this list — by 20, to 488 —
+    # because a builder verb's bound method reference (`h::listOrders`) is a call whose
+    # callee body IS in this module: eighteen handler references across the two files,
+    # plus the two `path(…, builder -> …)` bodies the walk reaches. 488 of 1601 rounds to
+    # 30%.
+    # MOVED by A1 Task 5: `KotlinMvcRoutes` and `KotlinWebFluxRoutes` add 69 edges
+    # (1670) and 18 to the numerator (506): thirteen `invokedynamic` lambda bodies — two
+    # `router { }`/`nest { }` bodies and five handlers on the servlet side, two and four
+    # on the reactive — plus the five `h.listInvoices(it)`/`h.createInvoice(it)` calls
+    # inside them, every one a callee declared in this module. Still 30%.
+    # 508 of 1676 since A1 Task 5's review: `KotlinMvcRoutes.kt`'s `accept(JSON) { h }`
+    # line — six edges, two of them (the lambda body and its `h.listInvoices(it)`) into
+    # this module.
+    # 512 of 1692 since the A1 final review (I-1): the Supplier-form `nest` line on each
+    # stack — eight edges each, two of them (the Supplier body and the `h::health` /
+    # `h::archive` reference inside it) into this module. Still 30%.
+    assert "Calls whose callee body this workspace read: 512 of 1692 (30%)" in document
+    # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
+    # the compiler names each builder call, handler reference and lambda body exactly.
+    # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
+    # own builder, predicate and resource types, none of which this module scans.
+    # 1668 resolved and `owner_not_scanned` 388 since A1 Task 5: all 69 new edges are
+    # `resolved`, `declared_here` gains the two Kotlin classes (193), and 16 of the new
+    # lookups land on the DSL, predicate, media and response types of both stacks.
+    # 1674 and 389 since A1 Task 5's review: the `accept(JSON) { h }` line's six edges,
+    # one lookup of them on the DSL's own `accept`.
+    # 1690 and 391 since the A1 final review (I-1): the two Supplier-form lines' sixteen
+    # edges, all `resolved`, one new lookup per stack on the builder's own `nest`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1690." in document
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 345."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
+        "inherited 2, owner_not_scanned 391."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -532,7 +602,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
         # verb, which Spring registers because `params`/`headers` separate them.
         # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
-        "http": 60,
+        # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks.
+        # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's
+        # nine routes on both stacks — `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc`,
+        # `routes/KotlinWebFluxRoutes.kt` under `/ktflux`, a `GET /**` catch-all each.
+        # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row
+        # (`dsl-media-route`), `unresolved` with no address — counted, never hidden.
+        # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
+        # one prefixed row each — and no bare twin from the body's own `build()`.
+        "http": 90,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -747,7 +825,14 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # fetcher) + 1 WebSocket (`/ws/tickets`, programmatic registration); 61 = 60 + 1
             # SQS (the async client's send). Each is a feature delivered 2026-09-11 and each
             # has an intention test in `tests/e2e/test_*_delivered.py` that fails without it.
-            ("inbound", 121),
+            # 139 inbound since `G-37` (A1 Task 4): the eighteen builder-form routes —
+            # eight under `/bld`, eight under `/mvcbld`, and one `GET /**` per stack.
+            # 148 inbound since A1 Task 5: the Kotlin router DSL's nine routes — four
+            # under `/ktmvc` and three under `/ktflux`, plus a `GET /**` catch-all each
+            # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
+            # 149 since A1 Task 5's review: the `accept(JSON) { h }` gap row.
+            # 151 since the A1 final review (I-1): the Supplier-form route on each stack.
+            ("inbound", 151),
             ("outbound", 61),
         ]
     )
@@ -1538,7 +1623,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 136 since 2026-09-11: `ws/ProgrammaticWsConfig` and its nested `TicketEndpoint`,
     # the fixture for the programmatic WebSocket registration (`G-34`).
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
-    assert (None, 138) in origins
+    # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
+    # 142: + `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` (A1 Task 5).
+    assert (None, 142) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

@@ -51,8 +51,15 @@ matches:
     # here is an engine change, not a catalog edit. It stops being theoretical
     # the day `RouterFunctions` declares a `route` or `nest` overload whose
     # position 1 is not the handler; `javap -p -s RouterFunctions` is the check.
+    #
+    # `resources`/`resource` (spec §6) are admitted here for the same reason `nest` is:
+    # the entry is what makes a static call a ROOT, and their `verbs` rules below are
+    # what read them — dispatch lands there, and this `handler_arg` is never read for
+    # either. The argument-less `route()` matches this entry by name too; it is the
+    # builder chain's origin (`origins` below), its result is consumed by the first
+    # builder call, and a bare `route().build()` declares nothing and derives nothing.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
-      methods: [route, nest]
+      methods: [route, nest, resources, resource]
       handler_arg: 1
     # Kotlin: `coRouter(builderLambda)` — the file-facade class (`…Kt`
     # suffix), NOT `CoRouterFunctionDsl` itself (checkpoint (1b) ruling 2).
@@ -63,6 +70,14 @@ matches:
     # below, never rooted on their own (2E checkpoint F4).
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
       method: coRouter
+      body_arg: 0
+    # The reactive `router { }` WITHOUT coroutines (`GAP-1b`): the file-facade class,
+    # exactly as the servlet twin has declared since W44 and `coRouter` above does.
+    # `javap -p -s RouterFunctionDslKt` at spring-webflux 6.1.6 and 7.0.2: one method,
+    # `router(Function1)RouterFunction` — no `plus` here, unlike the servlet facade.
+    # `KotlinWebFluxRoutes.kt` is the live instance; it derived NOTHING until this line.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctionDslKt
+      method: router
       body_arg: 0
 
   vocabulary:
@@ -189,6 +204,590 @@ matches:
         verb: OPTIONS
         path_arg: 0
         handler_arg: 1
+      # The NON-coroutine DSL's seven verbs, FIVE overloads each (`GAP-1b`,
+      # `W44-verb-overloads`, spec §1b). MEASURED with `javap -p -s` on
+      # `RouterFunctionDsl` at spring-webflux 6.1.6 and 7.0.2, identical to the servlet
+      # twin at spring-webmvc 6.1.6 and 7.0.2 (A1 Task 5; `scripts/probes/
+      # cp12_sweep_round1b.md` carries the counts):
+      #   `(Function1)V`                             a catch-all — `/**`, resolved
+      #   `(String)RequestPredicate`                 a predicate FACTORY: no handler,
+      #                                              a route once an entry attaches one
+      #   `(String, Function1)V`                     a literal path and its handler
+      #   `(RequestPredicate, Function1)V`           the predicate's constraints
+      #   `(String, RequestPredicate, Function1)V`   path, predicate, handler at 2
+      # `arity` splits 1/2/3 and `arg_types` splits the two arity-1 forms and the two
+      # arity-2 forms on position 0 (spec §3b). Every handler is a `Function1` (the
+      # reactive one returns `Mono<ServerResponse>`; the erased descriptor is the same),
+      # so the catch-all is typed on it rather than left open. No `extends_receiver`:
+      # the DSL receiver is the body's own parameter and carries no chain (checkpoint
+      # (1b) ruling 3); the body walk folds each call where it stands. This owner had
+      # NO rule at all before A1 Task 5 — a reactive `router { }` derived nothing, with
+      # nothing saying so. `KotlinWebFluxRoutes.kt` is the live instance, under `/ktflux`.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      # The builder's seven verbs (spec §4–§5, `G-37`). MEASURED with `javap -p -s` on
+      # `RouterFunctions$Builder` at spring-webflux 6.1.6 and 7.0.2 — 20 method names, 48
+      # overloads, identical on both stacks at both versions. Each verb declares FOUR:
+      #   `(HandlerFunction)Builder`                          a catch-all — `/**`, resolved
+      #   `(String, HandlerFunction)Builder`                  a literal path
+      #   `(RequestPredicate, HandlerFunction)Builder`        the predicate's constraints
+      #   `(String, RequestPredicate, HandlerFunction)Builder`  path, then the predicate
+      # `arity` splits 1/2/3 and `arg_types` splits the two arity-2 forms on position 0
+      # (spec §3b). Every one both declares its route and carries the chain on
+      # (`extends_receiver`), and the chain roots at `build()` below.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: GET
+        verb: GET
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: GET
+        verb: GET
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: HEAD
+        verb: HEAD
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: POST
+        verb: POST
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: POST
+        verb: POST
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PUT
+        verb: PUT
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PUT
+        verb: PUT
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: PATCH
+        verb: PATCH
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: DELETE
+        verb: DELETE
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        handler_arg: 0
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+        extends_receiver: true
+      # `route(RequestPredicate, HandlerFunction)` on the builder — the predicate form,
+      # one overload (`javap`, same measurement). No verb of its own: the predicate
+      # supplies one (`GET("/x")`), or none (`accept(JSON)` — `method` NULL, `/**`).
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: route
+        verb: null
+        arity: 2
+        predicate_arg: 0
+        handler_arg: 1
+        extends_receiver: true
+      # Static resources on the builder (spec §6): served, handler-less — a client can
+      # GET the pattern and receive bytes, and a row shape with no handler already ships
+      # (`derived_resource`, `schema_operations`). MEASURED, same `javap`: `resources`
+      # has FOUR overloads and `resource` TWO —
+      #   `resources(String, Resource)`                    the pattern is the address
+      #   `resources(String, Resource, BiConsumer)`        the same, with a headers hook
+      #   `resources(Function)`                            the location is computed at
+      #   `resources(Function, BiConsumer)`                  runtime: NO readable address
+      #   `resource(RequestPredicate, Resource)`           one resource under a predicate
+      #   `resource(RequestPredicate, Resource, BiConsumer)`
+      # The two `Function` forms derive `path` NULL, `unresolved`: a verb rule with no
+      # position and no handler would read as a resolved catch-all, which is the lie in
+      # the wrong direction, so each is a rule whose `path_arg` names its unreadable
+      # argument. The arity-2 pair is split on position 0's type.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resources
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler: none
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resources
+        verb: GET
+        arity: 3
+        path_arg: 0
+        handler: none
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resources
+        verb: GET
+        arity: 1
+        path_arg: 0
+        handler: none
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resources
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.util.function.Function }
+        path_arg: 0
+        handler: none
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resource
+        verb: GET
+        arity: 2
+        predicate_arg: 0
+        handler: none
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: resource
+        verb: GET
+        arity: 3
+        predicate_arg: 0
+        handler: none
+        extends_receiver: true
+      # The STATIC `RouterFunctions.resources`/`.resource` — the same six shapes, one
+      # overload each, `javap -p -s RouterFunctions` at spring-webflux 6.1.6 and 7.0.2 —
+      # read the same way, so one spelling of "these bytes are served here" does not
+      # derive while the other stays outside (spec §6, which reverses the ruling that
+      # kept them in the slice). They ROOT through the `entries` item above, exactly as
+      # `nest` does: the entry admits the name, dispatch lands here, and the entry's own
+      # `handler_arg` is never read for them. `resourceLookupFunction` builds a lookup
+      # function and serves nothing itself; it stays in the slice.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resources
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler: none
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resources
+        verb: GET
+        arity: 3
+        path_arg: 0
+        handler: none
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resources
+        verb: GET
+        arity: 1
+        path_arg: 0
+        handler: none
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resources
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.util.function.Function }
+        path_arg: 0
+        handler: none
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resource
+        verb: GET
+        arity: 2
+        predicate_arg: 0
+        handler: none
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions
+        method: resource
+        verb: GET
+        arity: 3
+        predicate_arg: 0
+        handler: none
 
     prefixes:
       # Java: `RequestPredicates.path("/api")` — a predicate contributing
@@ -218,6 +817,75 @@ matches:
         method: nest
         path_arg: 0
         body_arg: 1
+      # The non-coroutine DSL's `nest` (`GAP-1b`), MEASURED with `javap -p -s` at
+      # spring-webflux 6.1.6 and 7.0.2: TWO overloads, both arity 2, both linking to
+      # their body the same way (a `lambda`-kind argument naming the body method) —
+      #   `nest(String, Function1)V`             `"/x".nest { }`, a literal prefix
+      #   `nest(RequestPredicate, Function1)V`   `accept(JSON).nest { }`, a predicate
+      # One rule each, split on position 0's type, so the row says which argument it
+      # reads rather than reading a predicate through a `path_arg`.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: nest
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        body_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: nest
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        body_arg: 1
+      # The DSL's own predicate factory, `path(String)RequestPredicate` — what
+      # `GET(path("/health")) { }` hands its predicate position, so the route reads
+      # `/health` (A1 Task 5). `arity: 1` is load-bearing: the same name's
+      # `path(String, Function1)V` overload DECLARES a verb-less route rather than
+      # producing a predicate, and a prefix rule that accepted it would read a route
+      # declaration as a bare prefix. Unaccepted, it derives one unresolved row instead
+      # (spec §3's G-13 guard), never silence — the slice below is keyed by NAME and
+      # cannot list one overload of a read name.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: path
+        arity: 1
+        path_arg: 0
+      # The builder's nesting forms (spec §5), MEASURED with the same `javap`:
+      #   `path(String, Consumer<Builder>)`      a lambda-bodied builder under a path
+      #   `path(String, Supplier<RouterFunction>)` a lambda-bodied router under a path
+      #   `nest(RequestPredicate, Consumer<Builder>)`
+      #   `nest(RequestPredicate, Supplier<RouterFunction>)`
+      # Both lambdas land in a body method of their own, so both are `body_arg`; the two
+      # overloads at each name share an arity and are split on position 1's type. Each
+      # carries the chain on (`extends_receiver`). Inside a `Consumer<Builder>` body the
+      # builder is the body's own parameter: its verbs carry no receiver the walk can
+      # see, their chain contributes nothing, and the body folds under the prefix.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: path
+        arity: 2
+        arg_types: { 1: java.util.function.Consumer }
+        path_arg: 0
+        body_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: path
+        arity: 2
+        arg_types: { 1: java.util.function.Supplier }
+        path_arg: 0
+        body_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: nest
+        arity: 2
+        arg_types: { 1: java.util.function.Consumer }
+        predicate_arg: 0
+        body_arg: 1
+        extends_receiver: true
+      - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
+        method: nest
+        arity: 2
+        arg_types: { 1: java.util.function.Supplier }
+        predicate_arg: 0
+        body_arg: 1
+        extends_receiver: true
 
     media:
       # `accept` fills `produces`, `contentType` fills `consumes` —
@@ -243,6 +911,21 @@ matches:
         method: accept
         fills: produces
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: contentType
+        fills: consumes
+      # The non-coroutine DSL declares the same pair (`GAP-1b`; `javap -p -s` at
+      # spring-webflux 6.1.6 and 7.0.2): `accept(MediaType...)RequestPredicate` and
+      # `contentType(MediaType...)RequestPredicate`, the vararg factories these rows
+      # read. Each name ALSO has a `(MediaType, Function1)V` overload that declares a
+      # verb-less route under one media guard; a media rule reads its arguments as
+      # constants and never as a route, so that spelling derives one unresolved row
+      # (the engine's media-with-a-handler guard, A1 Task 5 review) — not silence, and
+      # not the route: reading it is `dsl-media-route` on the register, the same gap
+      # the `CoRouterFunctionDsl` pair above and the servlet twin carry.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: accept
+        fills: produces
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
         method: contentType
         fills: consumes
 
@@ -313,6 +996,33 @@ matches:
     # row beside them. Measured by driving the engine with and without the declaration.
     # No live instance here; found by reading the interface rather than the fixture.
     - { name: andOther, owner: org.springframework.web.reactive.function.server.RouterFunction }
+    # The builder chain (spec §4): `build()` ends it and, consumed by nothing, roots
+    # it; `add(RouterFunction)` folds a whole router built beside it through the plain
+    # continuation's argument fold (spec §5) — one built in another method is one
+    # unresolved row (spec §7 case 4).
+    - { name: build, owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder }
+    - { name: add, owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder }
+    # Pass-throughs (spec §4b): declared so a chain through them keeps every route to
+    # its left. Each reads NO argument — a filter, an attribute, an error handler is
+    # never a route. `onError` has two overloads (`Predicate`/`Class` at position 0)
+    # and a pass-through reads neither, so one line covers both.
+    - { name: filter,         owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+    - { name: before,         owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+    - { name: after,          owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+    - { name: onError,        owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+    - { name: withAttribute,  owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+    - { name: withAttributes, owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder, pass_through: true }
+
+  # Spec §4b: where a builder chain STARTS. The argument-less `route()` returns a
+  # `RouterFunctions$Builder` and declares nothing; a receiver it produced contributes
+  # zero routes and poisons nothing, which is what tells "the chain starts here" from
+  # "I could not read the receiver". The only origin either stack names. `arity: 0` is
+  # load-bearing: `route(predicate, handler)` shares the name, heads every `andRoute`
+  # chain, and read as an origin its route is DROPPED — the live fixture's
+  # `GET /fn/orders` disappeared the first time this line lacked it (A1 Task 4).
+  origins:
+    - { owner: org.springframework.web.reactive.function.server.RouterFunctions, method: route, arity: 0 }
+
 
 # Harvest compatibility (Task 9 ruling): copied verbatim from spring-web.yml
 # rather than re-declared, so an outbound-shapes join never has to reconcile
@@ -341,20 +1051,13 @@ wrappers:
 # `shape-models/json.yml` rather than copied into this file.
 shape_model: json
 
-# D02's declared SLICE (F2 §3.8), and it is the one a reader is most likely to be
-# surprised by. Measured (`scripts/probes/w19_catalog_surface.md`): this catalog reads
-# **0 of the 20** methods `RouterFunctions$Builder` declares at spring-webflux 6.1.6.
-#
-# **`RouterFunctions.route()` — the BUILDER DSL — derives nothing at all.** That has
-# been the reference documentation's recommended Java shape since Spring 5.2, so it is
-# plausibly the majority of real functional routers. What this catalog reads is the
-# other two forms: the argument-rooted `RouterFunctions.route(predicate, handler)` and
-# Kotlin's `coRouter { }`.
-#
-# The distinction is structural, not an oversight about names: this grammar roots a
-# route at an ARGUMENT or in a lambda BODY, and a builder verb sits on a RECEIVER
-# returned by an argument-less `route()`. There is no word for that here, which is why
-# closing it is engine work and not a catalog addition.
+# D02's declared SLICE (F2 §3.8). Measured (`scripts/probes/w19_catalog_surface.md`,
+# regenerated for A1 Task 4): this catalog reads **20 of the 20** methods
+# `RouterFunctions$Builder` declares at spring-webflux 6.1.6 — it read 0 of them until
+# the engine could root a walk at `build()` and let a verb extend its receiver (`G-37`,
+# spec §4). The builder DSL, the argument-rooted `route(predicate, handler)` form and
+# Kotlin's `coRouter { }` all derive now; what stays outside is listed below, each with
+# the reason it declares no address.
 slice:
   outside:
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
@@ -378,21 +1081,32 @@ slice:
         under-report it was. Undeclared, a merged router still derives at top level and
         loses any prefix it sits under. Named rather than declared because a rule no
         fixture exercises is a rule nobody checks, and no corpus here supplies a Kotlin one.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions
-      method_names: [route]
+    - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+      method_names: [add, and, invoke, not, or, pathExtension, queryParam, resource, resources, withAttribute]
       why: >
-        The ARGUMENT-LESS `route()` — the builder DSL's entry point, which returns a
-        `RouterFunctions$Builder` for every method in the block below. This catalog reads
-        the two-argument `route(predicate, handler)` at the same name and cannot read
-        this one, because a builder verb sits on a RECEIVER rather than in an argument or
-        a lambda body. `G-37`, and engine work.
+        The non-coroutine DSL's unread members (A1 Task 5, `GAP-1b`), the same ten shapes
+        `CoRouterFunctionDsl` carries above less `path` — read here through its
+        one-argument predicate factory, whose handler-taking overload `path("/x") { … }`
+        derives one unresolved row rather than nothing. `queryParam` and `pathExtension`
+        each declare a HANDLER-taking void overload that DECLARES a route rather than
+        nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
+        reason; `add` and `resource` attach or declare routes too — the receiver-rooted
+        shape `G-37` names, engine work rather than a catalog line, and routes written any
+        of those ways derive NOTHING. `and`/`or`/`not` compose predicates INSIDE the DSL,
+        three overloads each for `and`/`or` (`javap -p -s`, 6.1.6 and 7.0.2), two of which
+        take a `String` operand the `composers` fold has no position for; this file's
+        `composers` block is keyed on the Java `RequestPredicate` owner and reads none of
+        them. `resources` serves static resources and `withAttribute` attaches metadata.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
-      method_names: [resource, resources, resourceLookupFunction]
+      method_names: [resourceLookupFunction]
       why: >
-        Serve static resources under a pattern or a lookup function. Served routes, and
-        arguably boundaries — but each names a resource LOCATION rather than a handler,
-        and this analysis has no row shape for "these bytes are served here". Left
-        outside deliberately, the same ruling the builder's own `resources` takes.
+        Builds the lookup FUNCTION `resources(Function)` takes — a `Function<ServerRequest,
+        Mono<Resource>>` from a pattern and a location — and serves nothing itself: the
+        route is declared by whichever `resources(...)` call the function is handed to,
+        and that call is read. *`resource` and `resources` sat beside it here on the
+        ground that "this analysis has no row shape for 'these bytes are served here'";
+        that ground was false — `derived_resource` and `schema_operations` both mint rows
+        with no handler — and spec §6 moved them into `verbs`, handler-less.*
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
       method_names: [changeParser]
       why: >
@@ -406,41 +1120,3 @@ slice:
         no address and serve nothing new — they are how an assembled tree is MOUNTED —
         and they appear in the enumeration only because their first argument is a router.
         The servlet package declares neither.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
-      method_names: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
-      why: >
-        The builder DSL's seven verbs (four overloads each, `javap` at 6.1.6). Every
-        route declared this way derives NOTHING — not a partial row and not a question.
-        A module using `RouterFunctions.route().GET("/orders", handler).build()` has its
-        whole functional routing surface absent. This is G-37, and it is engine work:
-        the verb call sits on a receiver this grammar cannot root a walk at.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
-      method_names: [path]
-      why: >
-        Nests a builder under a path prefix, so it composes an address the same way an
-        HTTP class-level mapping does. Outside for the same reason as the verbs, and it
-        compounds them: a prefix nobody reads makes every nested route's address wrong
-        as well as absent, were the verbs read without it.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
-      method_names: [route, nest, add, resource]
-      why: >
-        The builder's four remaining route-declaring forms, and they address the wire
-        through a `RequestPredicate` object rather than through a path string — so
-        neither of the enumeration's first two tests could see them, and for one run
-        they sat outside the slice AND outside the enumeration, which is the one place
-        a reader could not have found them. `route(predicate, handler)` and
-        `nest(predicate, …)` declare and group routes; `add` attaches a whole
-        `RouterFunction` built elsewhere; `resource` serves one resource under a
-        predicate. All derive nothing, for the same structural reason as the verbs.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
-      method_names: [resources]
-      why: >
-        Serves static resources under a pattern. A served route, and arguably a
-        boundary — but it names a resource location rather than a handler, and this
-        analysis has no row shape for "these bytes are served here". Left outside
-        deliberately.
-    - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
-      method_names: [withAttribute]
-      why: >
-        Attaches metadata to the route being built. Names no address and serves nothing;
-        it appears in the enumeration only because its first parameter is a `String`.

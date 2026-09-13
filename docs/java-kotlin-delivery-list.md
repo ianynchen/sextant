@@ -34,7 +34,7 @@ too — that is the check aimed at half-delivery: the half you did not do has to
 against the feature it belongs to, or the build goes red.
 
 ```delivery
-REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder
+REST inbound       | REST in    | G-37 G-30 W44-verb-overloads GAP-1b conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder dsl-media-route
 REST outbound      | REST out   | G-30-outbound jdk-httpclient
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
@@ -163,6 +163,7 @@ G-70 | Major
 G-71 | Major
 G-73 | Moderate
 G-74 | Moderate
+dsl-media-route | Major
 ```
 
 **Closed by the waves, verified by reading the code on 2026-09-11 — a WEAKER
@@ -306,7 +307,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 |---|---|---|
 | `G-37` | `RouterFunctions$Builder` unread, **0 of 20 methods, both stacks** | a module routing this way exports **no HTTP at all** |
 | `G-30` | **Spring Cloud Gateway — no catalog exists at all**; Category B, because `RouteLocatorBuilder$Builder.route` has two overloads with the lambda at different positions | the commonest edge component in a Spring estate, inbound and outbound |
-| `W44-verb-overloads` | W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | publishes a lambda or a predicate **as a URL** — a wrong row, not a missing one |
+| `W44-verb-overloads` | W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | MEASURED 2026-09-13 (not the fabrication this row claimed): `GET(handler)` derives `unresolved` for a deliberate catch-all, `GET("/x", predicate, handler)` loses its handler and reads `resolved`, `GET(predicate, handler)` loses the predicate — mis-graded rows, not invented ones |
 | `GAP-1b` | WebFlux non-coroutine `router { }` derives nothing | whole Kotlin router silent |
 | `conditional-controllers` | `@ConditionalOnProperty` / `@Profile` controllers | tier C — no mechanism in the code |
 | `kotlin-null-handler` | Kotlin routes carry a **NULL handler**, all 3 of them; no Kotlin symbol reaches `roots` or `reachability` | Java functional routes name theirs |
@@ -316,9 +317,34 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | `javalin-apibuilder` | the nested `ApiBuilder` form — `get("/{id}", h)` inside `path("/orders", …)`'s lambda; Category B (§4) | a flat read would publish `/{id}` without its prefix, a wrong row |
 | `G-45` | **closed** — a Data REST resource over MongoDB derives its route table since `6f088be`, proven in CI run 34669970510. The R2DBC, Cassandra, Elasticsearch, Neo4j and reactive contracts still outside are `GAP-6` | — |
 | `spring7-version` | **closed** — two versions of one route are not reported as a conflict, proven in CI run 34669970510 | — |
+| `dsl-media-route` | `accept(MediaType, Function1)` / `contentType(MediaType, Function1)` on `RouterFunctionDsl` (both stacks) and `CoRouterFunctionDsl`: a route declared under a media guard alone. Before PR A1 this was silence; now it is one honest `unresolved` row (PR A1, the addresses-nothing seam pinned by a guard) — but the proper read needs a word this grammar does not have: "the media value IS the route's own constraint" on a verb-less rule, so the row can carry its handler and its media instead of naming neither | a media-gated route (e.g. a JSON-only handler with no path) derives an unresolved row instead of `path: /**` with its `produces`/`consumes` set |
 
 > `verify: grep -rl "RouteLocator" src/sextant/catalogs/` → empty
 > `verify: awk '/repositories:/,/routes:/' src/sextant/catalogs/spring-data-rest.yml | grep -c Mongo` → 4
+
+**Stated boundaries in the builder form, measured rather than fixed (PR A1 Task 4; not delivery
+blockers — each is either honest engine output or a shape real code rarely writes).**
+
+- A statement-form builder held in a FIELD or received as a PARAMETER — `this.b.GET("/a",
+  h);`, `void routes(Builder b) { b.GET("/a", h); }` — derives nothing, not even the
+  unresolved row: in the facts that verb's chain has no call in the method for a head, which
+  is exactly what keeps a body from rooting (spec §7 case 4's stated boundary). The
+  `base().POST(…)` spelling, whose receiver IS a call in the method, is the one that yields a
+  row.
+- An UNDECLARED statement-form head — `var b = helper(); b.GET("/a", h); b.POST("/b", h);
+  return b.build();` — yields one unresolved row per statement, not one row for the whole
+  chain: each statement roots on the unread `helper()` and so does `build()`, so N statements
+  give N+1 identity-less rows beside the N real routes (spec §7 case 4, extended). Identity-
+  unknown rows never dedup, by design.
+- A method that is BOTH linked as a lambda body (`nest(path("/api"), this::apiRoutes)`) AND
+  separately served on its own (its own `@Bean`) loses its own row: the A1 final review's fix
+  for a linked body double-deriving (I-1) skips ANY caller a linking call names as its body
+  from the root scan, whole — so the same method reached a second way, as an independent
+  root, is skipped too, and is folded under the prefix only.
+- A mixed-form builder (some statements, some chained) whose shared route is itself
+  unresolved yields that one unresolved row twice: `_merged`'s identity dedup removes a
+  resolved route that both a statement and `build()` reach (spec §4, "identity dedup removes
+  the routes both reach"), but an identity-unknown row carries no identity to dedup on.
 
 ### REST outbound — NOT DELIVERED
 
@@ -540,6 +566,28 @@ and writes `◐ (N open)` for a cell whose feature has blockers, and
 `tests/architecture/test_feature_delivery.py` fails in both directions — a blocked feature
 reading `✅`, or an unblocked one not reading it. A cell reads `✅` only when the feature is
 delivered by the definition at the top of this document.
+
+### The 22 items that need a spec — eight specs, and the order they run in
+
+**Ruled 2026-09-12.** Every item without a spec is delivered and CI-proven; what is left
+is the 22 below, and they are eight designs, not 22. The order is the one that empties
+```delivery rows fastest — a row closed is the unit of progress, not an item shipped —
+with the spec already written first.
+
+| order | group | items | what closes when it lands |
+|---|---|---|---|
+| 1 | **A. Receiver chain / overload discrimination** — spec `ba59750`; **A1 shipped (this PR)**: `G-37`, `W44-verb-overloads`, `GAP-1b`; **A2 is Part II**, the rest | `G-37` `GAP-1b` `W44-verb-overloads` `G-30` `G-30-outbound` `ktor-routing` `javalin-apibuilder` `sqs-template-receive` `jdk-httpclient` (9) | **REST outbound closes**; REST inbound 9 → 3; SQS 2 → 1. Fixes the three `RouterFunctionDsl` overloads the shipped rules mis-grade (`W44-verb-overloads`: a catch-all read as unreadable, a handler lost) |
+| 2 | **B. Sibling-annotation reads** — `annotation_driven` reads an attribute off a sibling annotation of the same method | `quarkus-jaxrs` `jaxrs-sse` (2) | **SSE closes**; REST inbound −1 |
+| 2 | **C. Rules conditional on an annotation attribute** — one plan with B, both grow `annotation_driven` by one word | `kafka-batch-generics` `micronaut-jms-over-sqs` (2) | **Kafka closes**; **SQS closes** (after A) |
+| 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument | `pubsub-channel-adapter` (1) | **Pub/Sub closes** |
+| 4 | **D. New `Protocol` members and two naming words** | `temporal-cadence` `vertx-eventbus` (2) | **Async closes** |
+| 5 | **G. Kotlin routes with a NULL handler** — short spec | `kotlin-null-handler` (1) | REST inbound −1 |
+| 6 | **F. Conditional controllers** — the hardest design question | `conditional-controllers` (1) | **REST inbound closes** |
+| 7 | **H. Meridian** | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty |
+
+Each group is one spec → one plan → one PR, on the per-item loop; a group starts only
+when its spec names the COVERAGE cell every item moves. Categories B and C above are the
+same 22 items sorted by mechanism; this table is the same items sorted by what they close.
 
 ---
 

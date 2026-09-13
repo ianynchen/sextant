@@ -64,6 +64,173 @@ def test_the_jpa_resource_still_derives(http_routes):
     )
 
 
+@pytest.fixture(scope="module")
+def http_rows(analyzed_orders_service: Path) -> list[dict]:
+    """Every inbound HTTP row of the session's one `orders-service` analysis, whole —
+    for the tests that read `resolution` and `handler`, not only the address."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return [
+            dict(row)
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "http" and str(row["direction"]) == "inbound"
+        ]
+    finally:
+        workspace.close()
+
+
+def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
+    """`G-37`, spec §8: the builder DSL, every overload, both stacks, with the mid-chain
+    filter, the nested body, the static resource and the catch-all."""
+    flux, mvc = "spring-webflux-router", "spring-mvc-router"
+    expected = {
+        (flux, "GET", "/bld/orders"),
+        (flux, "GET", "/bld/orders/{id}"),
+        (flux, "GET", "/bld/health"),
+        (flux, "POST", "/bld/orders"),
+        (flux, "PUT", "/bld/orders/{id}"),
+        (flux, "GET", "/bld/nested/inner"),
+        (flux, "DELETE", "/bld/nested/inner/{id}"),
+        (flux, "GET", "/bld/static/**"),
+        (mvc, "GET", "/mvcbld/orders"),
+        (mvc, "GET", "/mvcbld/orders/{id}"),
+        (mvc, "GET", "/mvcbld/health"),
+        (mvc, "POST", "/mvcbld/orders"),
+        (mvc, "PUT", "/mvcbld/orders/{id}"),
+        (mvc, "GET", "/mvcbld/nested/inner"),
+        (mvc, "DELETE", "/mvcbld/nested/inner/{id}"),
+        (mvc, "GET", "/mvcbld/static/**"),
+        (flux, "GET", "/**"),
+        (mvc, "GET", "/**"),
+        # The Supplier form of `nest` (A1 final review, I-1): the body is a whole chain.
+        (flux, "GET", "/bld/sup/inner"),
+        (mvc, "GET", "/mvcbld/sup/inner"),
+    }
+    missing = expected - http_routes
+    assert missing == set(), f"builder routes missing: {sorted(missing)}"
+
+
+def test_a_supplier_body_derives_its_route_once_under_the_prefix_and_never_bare(http_rows):
+    """A1 final review, I-1. `nest(path("/bld/sup"), () -> route().GET("/inner", h).build())`
+    is Spring's own Javadoc example for the Supplier overload, and its body is a chain of
+    its own whose `build()` nothing in the body consumes — so the body rooted beside the
+    prefix's fold and published a bare `GET /inner` with the compiler-generated lambda as
+    its declarer. The prefixed row, declared by the `@Bean` method, is the only one on
+    each stack; no row of either builder catalog carries a lambda as `caller`."""
+    sup = [
+        (row["catalog_id"], row["path"], row["resolution"], str(row["caller"]).split("#")[-1])
+        for row in http_rows
+        if str(row["path"]).endswith("/sup/inner")
+    ]
+    assert sorted((c, p, r, m.split("(")[0]) for c, p, r, m in sup) == [
+        ("spring-mvc-router", "/mvcbld/sup/inner", "resolved", "mvcBuilderRoutes"),
+        ("spring-webflux-router", "/bld/sup/inner", "resolved", "builderRoutes"),
+    ], sup
+    bare = [
+        (row["path"], row["caller"])
+        for row in http_rows
+        if row["catalog_id"] in ("spring-webflux-router", "spring-mvc-router")
+        and (row["path"] == "/inner" or "lambda$" in str(row["caller"]))
+    ]
+    assert bare == [], bare
+
+
+def test_every_builder_route_is_resolved_including_the_one_past_the_filter(http_rows):
+    """Spec §8 test 5, live: `POST /bld/orders` and `PUT /bld/orders/{id}` sit PAST the
+    chain's `filter(...)`, and a pass-through the catalog did not declare would have
+    poisoned every route to its left (spec §4b). Every builder row is `resolved`."""
+    builder_rows = [row for row in http_rows if str(row["path"]).startswith(("/bld/", "/mvcbld/"))]
+    assert builder_rows and {row["resolution"] for row in builder_rows} == {"resolved"}, [
+        (row["path"], row["resolution"]) for row in builder_rows
+    ]
+
+
+def test_the_builder_catch_all_serves_every_path_and_is_resolved(http_rows):
+    """Spec §7 case 3 as ruled: `route().GET(h::health).build()` constrains no path, so it
+    serves every path and publishes the framework's any-path pattern at `resolved` — one
+    row per stack, never a resolved NULL path (which the addresses-nothing gate drops).
+    Four rows since A1 Task 5: the Kotlin DSL's `GET { }` on each stack is the same
+    catch-all (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`), distinct by `caller`."""
+    catch_alls = [
+        row
+        for row in http_rows
+        if row["catalog_id"] in ("spring-webflux-router", "spring-mvc-router")
+        and row["method"] == "GET"
+        and row["path"] == "/**"
+    ]
+    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 4, (
+        catch_alls
+    )
+    assert len({row["caller"] for row in catch_alls}) == 4, catch_alls
+
+
+def test_the_static_resource_route_is_served_with_no_handler(http_rows):
+    """Spec §6: `resources("/bld/static/**", location)` is an inbound boundary a client
+    can GET and receive bytes from. The row carries the pattern and the verb, and its
+    `handler` is NULL — there is no handler method, and none is invented."""
+    static = [row for row in http_rows if str(row["path"]).endswith("/static/**")]
+    assert sorted((row["path"], row["handler"], row["resolution"]) for row in static) == [
+        ("/bld/static/**", None, "resolved"),
+        ("/mvcbld/static/**", None, "resolved"),
+    ]
+
+
+def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(http_rows):
+    """`W44-verb-overloads` and `GAP-1b`, spec §1b's measured table turned into rows: on
+    the servlet stack the four declaring `GET` overloads each derive their route, the
+    catch-all is RESOLVED at `/**` (the framework's any-path pattern, spec §7 case 3),
+    and the three-argument form keeps its handler; on the reactive stack the
+    non-coroutine `router { }` derives at all. The caller is part of every tuple so the
+    two DSL catch-alls are pinned on their own — the builder catch-alls of Task 4 publish
+    the same `GET /**` and would satisfy a caller-less tuple."""
+    rows = {
+        (
+            row["catalog_id"],
+            row["method"],
+            row["path"],
+            row["resolution"],
+            row["handler"] is not None,
+            _short_caller(row),
+        )
+        for row in http_rows
+        if row["path"] == "/**" or str(row["path"]).startswith(("/ktmvc", "/ktflux"))
+    }
+    mvc, flux = "KotlinMvcRoutes#ktMvcRoutes", "KotlinWebFluxRoutes#ktFluxRoutes"
+    assert {
+        ("spring-mvc-router", "GET", "/ktmvc/invoices", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/ktmvc/invoices/{id}", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/ktmvc/health", "resolved", True, mvc),
+        ("spring-mvc-router", "POST", "/ktmvc/invoices", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/**", "resolved", True, mvc),
+        ("spring-webflux-router", "GET", "/ktflux/orders", "resolved", True, flux),
+        ("spring-webflux-router", "GET", "/ktflux/orders/{id}", "resolved", True, flux),
+        ("spring-webflux-router", "POST", "/ktflux/orders", "resolved", True, flux),
+        ("spring-webflux-router", "GET", "/**", "resolved", True, flux),
+    } <= rows, sorted(rows)
+
+
+def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved_row(http_rows):
+    """The tracked gap, NOT the destination (`dsl-media-route` on the register; A1 Task 5
+    review). `KotlinMvcRoutes.kt` writes `accept(MediaType.APPLICATION_JSON) { h }` — the
+    DSL's `accept(MediaType, Function1)V`, a route declared under a media guard alone —
+    and this grammar has no word for a media rule that also carries a handler. It derived
+    SILENCE; it derives one row, `unresolved`, path NULL, no handler, attributed to the
+    declaring method, until the word exists."""
+    gap = [
+        row
+        for row in http_rows
+        if row["catalog_id"] == "spring-mvc-router"
+        and _short_caller(row) == "KotlinMvcRoutes#ktMvcRoutes"
+        and row["resolution"] == "unresolved"
+    ]
+    assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
+
+
+def _short_caller(row: dict) -> str:
+    """`Class#method` out of a module-prefixed caller symbol."""
+    return str(row["caller"]).rsplit("/", 1)[1].partition("(")[0]
+
+
 SPRING7 = FIXTURES / "orders-spring7"
 
 

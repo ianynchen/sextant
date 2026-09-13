@@ -105,7 +105,7 @@ def test_the_probe_table_is_readable_at_all():
     `A-M4`'s whole finding, and a table that had collapsed to one row would let
     every version assertion below pass vacuously."""
     numbers = {number.rstrip("abcdefgh") for number in probe_rows()}
-    assert numbers == {str(n) for n in range(1, 13)}
+    assert numbers == {str(n) for n in range(1, 15)}
     for question in ("1", "2", "3", "4"):
         assert set(measured(question)) == {"6.1.6", "7.0.2"}, (
             f"CP-12 question {question} was measured at one Spring minor, not two — "
@@ -365,7 +365,11 @@ def test_the_webflux_router_catalog_reads_every_verb_both_dsls_declare():
     declared: dict[str, set[str]] = {}
     for entry in catalog("spring-webflux-router")["matches"]["vocabulary"]["verbs"]:
         declared.setdefault(str(entry["owner"]).rpartition(".")[2], set()).add(str(entry["method"]))
-    for question, owner in (("11", "RequestPredicates"), ("12", "CoRouterFunctionDsl")):
+    for question, owner in (
+        ("11", "RequestPredicates"),
+        ("12", "CoRouterFunctionDsl"),
+        ("13", "RouterFunctionDsl"),
+    ):
         for version, verbs in sorted(measured(question).items()):
             missing = sorted(verbs - declared.get(owner, set()))
             assert missing == [], (
@@ -373,3 +377,53 @@ def test_the_webflux_router_catalog_reads_every_verb_both_dsls_declare():
                 f"framework has at {version}: {missing}. A route declared with one derives "
                 "neither a verb nor an address."
             )
+
+
+def test_both_router_catalogs_declare_every_router_dsl_verb_overload():
+    """`W44-verb-overloads`, `GAP-1b` (A1 Task 5). `RouterFunctionDsl` declares
+    FIVE overloads per verb on both stacks at both measured minors (CP-12 Q13, Q14),
+    and each catalog carried one rule per verb — matched on owner and name alone,
+    so four of the five were read through the wrong positions — or, on the reactive
+    side, no rule at all. Every measured overload must now have a rule whose
+    `arity` and `arg_types` accept it and no other: the erased descriptor the probe
+    prints is exactly what the engine's `_matching_rule` compares against."""
+    for question, catalog_id, owner in (
+        (
+            "13",
+            "spring-webflux-router",
+            "org.springframework.web.reactive.function.server.RouterFunctionDsl",
+        ),
+        ("14", "spring-mvc-router", "org.springframework.web.servlet.function.RouterFunctionDsl"),
+    ):
+        rules = [
+            entry
+            for entry in catalog(catalog_id)["matches"]["vocabulary"]["verbs"]
+            if str(entry["owner"]) == owner
+        ]
+        for version, signatures in sorted(measured_signatures(question).items()):
+            unaccepted = sorted(
+                signature for signature in signatures if not _accepts_exactly_one(rules, signature)
+            )
+            assert unaccepted == [], (
+                f"{catalog_id}.yml has no single verb rule accepting these `{owner}` overloads "
+                f"the framework declares at {version}: {unaccepted}"
+            )
+
+
+def _accepts_exactly_one(rules: list[dict], signature: str) -> bool:
+    """Whether exactly one rule's `method`/`arity`/`arg_types` accept a probe-printed
+    signature such as `GET(Ljava/lang/String;Lkotlin/jvm/functions/Function1;)`."""
+    name, _, rest = signature.partition("(")
+    descriptor = rest.rstrip(")")
+    types = [segment.lstrip("L").replace("/", ".") for segment in descriptor.split(";") if segment]
+    accepting = [
+        rule
+        for rule in rules
+        if str(rule["method"]) == name
+        and rule.get("arity") in (None, len(types))
+        and all(
+            position < len(types) and types[position] == typed
+            for position, typed in (rule.get("arg_types") or {}).items()
+        )
+    ]
+    return len(accepting) == 1
