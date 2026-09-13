@@ -100,6 +100,10 @@ _METHOD = "method"
 _PATH = "path"
 _IDENTITY_POISON = (_METHOD, _PATH)
 
+# The address of a route that constrains no path at all — the framework's
+# any-path pattern, which is what a catch-all serves (spec §7 case 3).
+_ANY_PATH = "/**"
+
 # The two roles a `media` rule may fill. Validated at load rather than
 # discovered at derive time: a typo here silently mislabels every media value
 # a catalog reads (`ports/catalogs.py`'s own discipline).
@@ -940,10 +944,21 @@ def _path_of(route: _Route, catalog: Catalog) -> str | None:
     point (`protocol_hint` reclassifies later, which is how an SSE row
     inherits this without naming `sse` here, and D02 §3's merge mints `both`
     later still).
+
+    A route that folded NO path part and was not poisoned is a catch-all — a
+    verb with only a handler, or a media-only predicate — and it serves EVERY
+    path, so its address is the framework's own any-path pattern, `/**`
+    (spec §7 case 3 as ruled). Not NULL: on this side a resolved NULL path is
+    what `derive_call_endpoints.sql`'s addresses-nothing gate drops by
+    doctrine — "the address was read, and there is none" — which is the
+    opposite of what a catch-all declares, so this engine never emits a
+    resolved row with a NULL path. A poisoned path stays NULL: that row is
+    unresolved, and the gate lets it through as the "something unreadable is
+    declared here" fact it is.
     """
-    if _PATH in route.poisons or not route.path_parts:
+    if _PATH in route.poisons:
         return None
-    path = "".join(route.path_parts)
+    path = "".join(route.path_parts) if route.path_parts else _ANY_PATH
     return canonical_http_path(path) if serves_urls(catalog.protocol, catalog.direction) else path
 
 

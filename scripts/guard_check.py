@@ -302,6 +302,23 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.entry-owner-is-the-declared-type": Guard(
+        what="an argument-rooted entry matches a call only on the owner AND method the "
+        "catalog declares",
+        why="the two functional-routing catalogs are one package apart and identical in "
+        "every other cell — same `route(predicate, handler)` call, same verb factory "
+        "names, same argument shapes. Matching on the method name alone roots the "
+        "reactive router under the servlet catalog and vice versa, and each then derives "
+        "an unresolved row for a tree its twin already derived correctly: a duplicate "
+        "boundary with a wrong catalog id, and a gap row for a route that has none",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='            if site["owner"] == entry["owner"] and site["name"] in entry["methods"]',
+                replace='            if site["name"] in entry["methods"]  # guard disabled',
+            ),
+        ),
+    ),
     # --- `supertype_dispatch` ---------------------------------------------
     "supertype_dispatch.declared-supertype": Guard(
         what="a class matches only when it REACHES the descriptor the catalog names "

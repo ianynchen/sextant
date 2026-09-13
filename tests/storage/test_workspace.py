@@ -581,6 +581,56 @@ def test_the_endpoints_ordering_breaks_a_full_tie_on_caller(tmp_path: Path):
     assert [r["caller"] for r in rows] == [alpha, zulu]
 
 
+@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
+def test_a_resolved_row_with_no_path_and_no_peer_is_not_inserted(tmp_path: Path):
+    """`derive_call_endpoints.sql`'s addresses-nothing gate, pinned at its own seam.
+
+    A `resolved` row whose `path` and `peer` are both NULL claims the address was read
+    and there is none — a boundary the running system does not serve, at the evidence
+    tier nothing downstream can tell from an observation — and the statement refuses
+    it. The two neighbours that MUST still land are asserted beside it, because the
+    gate is only right at that exact scope: the same row `unresolved` is a real
+    "this method declares something nobody could read" fact, and a resolved row with
+    a `peer` and no path is a call to that service's base address.
+
+    Pinned here rather than through an engine: `combinator` used to hand this row to
+    the insert for a media-only route (`route(accept(JSON), h)`), and the gate was
+    measured through that. Since spec §7 case 3 was ruled, a catch-all publishes
+    `/**` and no shipped engine emits a resolved NULL path — the gate is the
+    invariant that keeps that true if one ever does."""
+    _topic_annotation_facts(tmp_path / "facts", {"topic": "order-events"})
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+
+    def _row(resolution: str, peer: str | None) -> dict:
+        return {
+            "protocol": "http",
+            "direction": "inbound",
+            "method": None,
+            "path": None,
+            "handler": "com/acme/routes/Handlers#list(sig_1a2b3c4d).",
+            "caller": "com/acme/routes/Routes#routes(sig_1a2b3c4d).",
+            "peer": peer,
+            "handler_signature": None,
+            "resolution": resolution,
+            "evidence": "compiler",
+            "request_shape": None,
+            "response_shape": None,
+            "catalog_id": "cat-in",
+        }
+
+    workspace.derive("call_endpoints", rows=[_row("resolved", None)])
+    workspace.derive("call_endpoints", rows=[_row("unresolved", None)])
+    workspace.derive("call_endpoints", rows=[_row("resolved", "orders.internal")])
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert sorted((str(r["resolution"]), r["peer"]) for r in rows) == [
+        ("resolved", "orders.internal"),
+        ("unresolved", None),
+    ]
+
+
 def test_load_facts_reports_the_row_count_when_a_fact_tree_is_ingested(tmp_path: Path):
     _fixture_facts(tmp_path / "facts")
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")

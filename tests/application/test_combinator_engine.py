@@ -1981,32 +1981,6 @@ def _four_get_overloads_in_one_body() -> list:
     return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, *body]
 
 
-class _RecordingWorkspace(DuckDbWorkspace):
-    """The rows the engine hands to the `call_endpoints` insert, kept beside what the
-    insert let through. The two differ by design: `derive_call_endpoints.sql`'s
-    addresses-nothing gate drops a `resolved` row whose `path` and `peer` are both NULL,
-    so a route the engine derived can be absent from `endpoints` without the engine
-    having dropped it."""
-
-    def __init__(self, path: Path) -> None:
-        super().__init__(path)
-        self.derived: list[dict] = []
-
-    def derive(self, name: str, **params: object) -> None:
-        if name == "call_endpoints":
-            self.derived.extend(dict(row) for row in params["rows"])  # type: ignore[union-attr]
-        super().derive(name, **params)
-
-
-def _resolve_recording(tmp_path: Path, facts: list, catalog: Catalog) -> _RecordingWorkspace:
-    write_fact_file(tmp_path / "facts" / "Routes.jsonl", _document(), facts)
-    workspace = _RecordingWorkspace(tmp_path / "ws.duckdb")
-    workspace.load_facts(tmp_path / "facts")
-    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
-    assert skipped == []
-    return workspace
-
-
 def test_the_four_verb_overloads_each_derive_what_their_positions_carry(tmp_path: Path):
     """Spec §8 test 1. Against the shipped one-rule-per-name grammar it failed the way
     spec §2 says a dict keyed on (owner, name) must: the LAST `GET` rule (arity 3)
@@ -2015,26 +1989,17 @@ def test_the_four_verb_overloads_each_derive_what_their_positions_carry(tmp_path
     predicate (`/four`, not `/four/p`). `arity` + `arg_types` make each overload its
     own rule.
 
-    The catch-all is asserted on the rows the ENGINE derived (spec §7 case 3: `path`
-    NULL and RESOLVED, nothing was poisoned). It does not reach `endpoints`:
-    `derive_call_endpoints.sql`'s addresses-nothing gate drops every `resolved` row
-    with no `path` and no `peer`, and this test states that outcome rather than hiding
-    it — the day the gate learns that a verb alone is an address, the second
-    assertion gains the row and this docstring's second paragraph goes."""
-    workspace = _resolve_recording(
-        tmp_path, _four_get_overloads_in_one_body(), _catalog(_overload_matches())
-    )
+    The catch-all `GET(h)` serves every path, and its row says so with the framework's
+    any-path pattern `/**` at RESOLVED (spec §7 case 3 as ruled: a resolved NULL path
+    is what the addresses-nothing gate drops by doctrine, and a catch-all is the
+    opposite of an absent address)."""
+    workspace = _resolve(tmp_path, _four_get_overloads_in_one_body(), _catalog(_overload_matches()))
     handler = _MODULE + LIST_ORDERS
-    assert _identities(workspace.derived) == [
-        ("GET", None, handler, "resolved"),  # GET(h): a catch-all, deliberately open
-        ("GET", "/two", handler, "resolved"),  # GET("/two", h)
-        ("GET", "/three", handler, "resolved"),  # GET(path("/three"), h)
-        ("GET", "/four/p", handler, "resolved"),  # GET("/four", path("/p"), h)
-    ]
     assert _identities(_rows(workspace)) == [
-        ("GET", "/four/p", handler, "resolved"),
-        ("GET", "/three", handler, "resolved"),
-        ("GET", "/two", handler, "resolved"),
+        ("GET", "/**", handler, "resolved"),  # GET(h): a catch-all, deliberately open
+        ("GET", "/four/p", handler, "resolved"),  # GET("/four", path("/p"), h)
+        ("GET", "/three", handler, "resolved"),  # GET(path("/three"), h)
+        ("GET", "/two", handler, "resolved"),  # GET("/two", h)
     ]
 
 
@@ -2476,50 +2441,31 @@ def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tm
     assert rows == []
 
 
-@pytest.mark.declines("spring-webflux-router")
-@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
-def test_a_request_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(
-    tmp_path: Path,
-):
-    """`A-M9`'s near-miss, and it is what keeps "add the missing verbs" from
-    becoming "treat every `RequestPredicates` factory as a verb". `accept` is a
-    real `RequestPredicates` factory (`javap -p` lists it beside `all`, `path`,
-    `headers`, `contentType`, `method` and `methods`) and it constrains a media
-    type rather than naming a verb — CP-12 Q11 excludes it because it is not
-    spelled in upper case, which is the framework's own way of marking the verb
-    factories, and `"application/json"` is a string argument in exactly the
-    position a path would occupy.
+def test_a_media_only_route_serves_every_path_and_names_no_verb(tmp_path: Path):
+    """`A-M9`'s near-miss for the VERB vocabulary, now asserting the row it derives.
+    `accept` is a real `RequestPredicates` factory (`javap -p` lists it beside `all`,
+    `path`, `headers`, `contentType`, `method` and `methods`) and it constrains a media
+    type rather than naming a verb — CP-12 Q11 excludes it because it is not spelled in
+    upper case, which is the framework's own way of marking the verb factories, and
+    `"application/json"` is a string argument in exactly the position a path would
+    occupy. So `method` is NULL: no `ACCEPT` verb is fabricated, and adding an `accept`
+    row to `verbs` makes this fail with `("ACCEPT", "application/json")`.
 
-    Identical to a route in the positive above in every other cell — same
-    `route` call, same handler, same string argument shape — so it measures the
-    predicate factory and nothing else.
-
-    **NOTHING is derived here, and this test used to assert the opposite**
-    (round-1 review, MAJOR 6). It asserted
-    `(None, None, <handler>, "resolved")` — a `resolved`/`compiler` inbound-HTTP
-    row with a NULL method AND a NULL path — and defended it as "the engine's
-    own answer for a tree whose constraints it cannot read". A row that names
-    no verb and no address names no endpoint, and at the top evidence tier
-    nothing downstream can tell it from an observation. That is precisely what
-    mechanism 3's addresses-nothing gate exists to stop on the annotation path;
-    `derive_call_endpoints.sql` had no such gate, and NULL paths skip its dedup
-    key, so N such routes inserted N undeduped rows.
-
-    The under-report this trades for is real and is stated in
-    `docs/COVERAGE.md`: `route(accept(...), handler)` IS a route, served at
-    every path with that Accept header, and we cannot express it. Silence is
-    the honest answer; a boundary claiming nothing was the dishonest one.
-
-    It still measures the verb vocabulary and nothing else: adding an `accept`
-    row to `verbs` makes this fail with `("ACCEPT", "application/json")`, which
-    is a fabricated verb AND a fabricated address."""
+    The route itself IS served — at every path, for clients accepting JSON — and the
+    row says so: `/**`, the framework's any-path pattern, at `resolved`, carrying the
+    media it read (spec §7 case 3 as ruled). **This test used to assert NOTHING was
+    derived**: the engine emitted a resolved row with a NULL path, which
+    `derive_call_endpoints.sql`'s addresses-nothing gate dropped by doctrine, and the
+    under-report was recorded as a boundary in `docs/COVERAGE.md`. The gate stays;
+    `combinator` now never hands it a resolved NULL path."""
     facts: list = [_method_symbol(LIST_ORDERS)]
     facts += _java_route(0, "accept", "application/json", LIST_ORDERS)
     workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
-    identities = _identities(_rows(workspace))
+    rows = _rows(workspace)
     workspace.close()
 
-    assert identities == []
+    assert _identities(rows) == [(None, "/**", _MODULE + LIST_ORDERS, "resolved")]
+    assert [(row["consumes"], row["produces"]) for row in rows] == [(None, '["application/json"]')]
 
 
 _MVC_ROUTER_FUNCTIONS = "org/springframework/web/servlet/function/RouterFunctions#"
@@ -2585,32 +2531,29 @@ def test_the_mvc_router_catalog_reads_every_verb_the_servlet_package_declares(tm
     assert {row[2].endswith("Handlers#listOrders(sig_a1).") for row in identities} == {True}
 
 
-@pytest.mark.declines("spring-mvc-router")
-@pytest.mark.pins("derive_call_endpoints.addresses-nothing")
-def test_an_mvc_predicate_that_is_not_a_verb_factory_names_no_verb_or_address(tmp_path: Path):
-    """§10 near-miss for the servlet twin, and it pins the guard it names.
-
-    `accept` is a real `RequestPredicates` factory on this owner too and it constrains a
-    media type rather than naming a verb — so the route it guards has no verb and no
-    address, and a row naming neither names no endpoint. `derive_call_endpoints`'s
-    addresses-nothing gate is what stops it being inserted; without that gate, N such
-    routes insert N undeduped rows at `resolved`/`compiler`, because a NULL path skips the
-    dedup key.
+def test_an_mvc_media_only_route_serves_every_path_and_names_no_verb(tmp_path: Path):
+    """The servlet twin of the reactive media-only route above: `accept` is a real
+    `RequestPredicates` factory on this owner too, constrains a media type rather than
+    naming a verb, and the route it guards serves every path — `method` NULL, `/**`,
+    `resolved`, its media carried (spec §7 case 3 as ruled).
 
     *This slot first held an owner-varying input carrying the reactive twin's `pins`
     marker, which `scripts/guard_check.py` reported passing with that guard disabled — a
-    marker naming a guard the test does not pin. The owner case is measured below, without
-    a marker, because the combinator engine's owner conjunct has no guard id.*
+    marker naming a guard the test does not pin. The owner case is the near-miss below,
+    which pins the entry-owner guard.*
     """
     facts: list = [_method_symbol(LIST_ORDERS)]
     facts += _mvc_java_route(0, "accept", "application/json", LIST_ORDERS)
     workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
-    identities = _identities(_rows(workspace))
+    rows = _rows(workspace)
     workspace.close()
 
-    assert identities == []
+    assert _identities(rows) == [(None, "/**", _MODULE + LIST_ORDERS, "resolved")]
+    assert [(row["consumes"], row["produces"]) for row in rows] == [(None, '["application/json"]')]
 
 
+@pytest.mark.declines("spring-mvc-router")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
 def test_the_mvc_router_declines_a_reactive_owner_at_the_same_call_shape(tmp_path: Path):
     """§10 near-miss, and it is the one this catalog could actually get wrong.
 
@@ -2626,6 +2569,24 @@ def test_the_mvc_router_declines_a_reactive_owner_at_the_same_call_shape(tmp_pat
     facts: list = [_method_symbol(LIST_ORDERS)]
     facts += _java_route(0, "GET", "/orders", LIST_ORDERS)
     workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+@pytest.mark.declines("spring-webflux-router")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_reactive_router_declines_a_servlet_owner_at_the_same_call_shape(tmp_path: Path):
+    """The mirror near-miss for the reactive catalog: the servlet package's `route` and
+    `GET`, identical in every other cell, derive nothing here — that tree belongs to
+    `spring-mvc-router`, and a second row for one boundary is a duplicate. Both twins
+    pin the entry's owner conjunct: with it gone, `route` on either package roots a
+    tree, its predicate is read by neither vocabulary, and one unresolved row appears
+    for a router the other catalog already derived correctly."""
+    facts: list = [_method_symbol(LIST_ORDERS)]
+    facts += _mvc_java_route(0, "GET", "/orders", LIST_ORDERS)
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
     identities = _identities(_rows(workspace))
     workspace.close()
 
