@@ -1580,13 +1580,15 @@ synthetic-facts unit test rather than the live scan, for the day the extractor
 grows the missing case). A router composed from another method's own return value
 — the walk is per-method BY DESIGN — derives ONE unresolved row for the reference
 rather than a silent absence: the facts would support following it, and spec §1c's
-boundary is a stated one, not a gap the evidence left open. A `media` or `composers`
-call handed a `lambda`-kind argument — the route-declaring overload of a
-constraint-contributing name, a Kotlin DSL's `accept(MediaType, Function1)` — derives
-ONE unresolved row rather than nothing: its name is claimed, so it is consumed into the
-tree, and a constraint rule declares no route; reading it (the media value as the
-route's own constraint, plus its handler) is a catalog word this grammar does not have
-yet (`dsl-media-route`, A1 Task 5 review). `request_shape`/
+boundary is a stated one, not a gap the evidence left open. A `media` call handed a
+`lambda`-kind argument — the route-declaring overload of a media-contributing name, a
+Kotlin DSL's `accept(MediaType, Function1)` — derives ONE unresolved row rather than
+nothing: its name is claimed, so it is consumed into the tree, and a media rule declares
+no route; reading it (the media value as the route's own constraint, plus its handler)
+is a catalog word this grammar does not have yet (`dsl-media-route`, A1 Task 5 review).
+A `composers` call is not read that way: no measured `and`/`or` overload carries a
+handler, so a lambda operand on one is a predicate, and it contributes constraints only.
+`request_shape`/
 `response_shape` stay honestly NULL always: a functional handler's signature is
 `Request → Response`, and its payload contracts live inside its body — `bodyToMono`
 calls and their like — which is call-evidence work for a later phase, not a

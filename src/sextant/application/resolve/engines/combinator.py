@@ -608,19 +608,25 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         # route served with no handler method (spec §6); a bare predicate factory
         # becomes a route only once some entry attaches a handler to it.
         return _verb_routes(site, verb, scope) if _declares_a_route(verb) else []
-    if key in context.media or key in context.composers:
-        # A media or composer call is a constraint contributor — it declares no route,
-        # and reaching it here (unconsumed) is nothing to report. UNLESS it was handed a
-        # handler: a `lambda`-kind argument on a call whose rule reads media values or
-        # operands is the route-declaring overload of that name (a builder DSL's
-        # `accept(MediaType, Function1)`, measured on both routing stacks), and a
-        # declared route absent with nothing saying so is spec §3's forbidden outcome. One
-        # unresolved row, no handler — the handler position is not one this rule
-        # declares. Reading it properly (the media value as the route's own
-        # constraint, plus its handler) is a catalog word this grammar does not have
-        # yet; tracked on the register as `dsl-media-route`.
+    if key in context.media:
+        # A media call is a constraint contributor — it declares no route, and reaching
+        # it here (unconsumed) is nothing to report. UNLESS it was handed a handler: a
+        # `lambda`-kind argument on a call whose rule reads media values is the
+        # route-declaring overload of that name (a builder DSL's `accept(MediaType,
+        # Function1)`, measured on both routing stacks), and a declared route absent
+        # with nothing saying so is spec §3's forbidden outcome. One unresolved row, no
+        # handler — the handler position is not one this rule declares. Reading it
+        # properly (the media value as the route's own constraint, plus its handler) is
+        # a catalog word this grammar does not have yet; tracked on the register as
+        # `dsl-media-route`.
         if _carries_a_handler(site):
             return [_Route(poisons=_IDENTITY_POISON)]
+        return []
+    if key in context.composers:
+        # A composer is excluded from that check on evidence: no measured `and`/`or`
+        # overload on any owner carries a handler (each takes two predicates, or a
+        # predicate and a path string), so a `lambda`-kind operand on one is a
+        # predicate, not a handler, and poisoning it would invent a route.
         return []
     entry = _matching_entry(site, context)
     if entry is not None:

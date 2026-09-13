@@ -303,8 +303,9 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "combinator.media-with-a-handler-is-a-row": Guard(
-        what="a media or composer call handed a `lambda`-kind argument — the route-declaring "
-        "overload of a constraint-contributing name — derives one unresolved row",
+        what="a media call handed a `lambda`-kind argument — the route-declaring overload "
+        "of a media-contributing name; composers are excluded, no measured `and`/`or` "
+        "carries a handler — derives one unresolved row",
         why="without it the call is claimed into the tree (its name is in the media "
         "vocabulary) and contributes nothing: a Kotlin DSL's `accept(JSON) { handler }` "
         "is a declared route absent from the export with nothing saying so — spec §3's "
