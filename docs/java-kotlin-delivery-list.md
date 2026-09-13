@@ -541,6 +541,28 @@ and writes `◐ (N open)` for a cell whose feature has blockers, and
 reading `✅`, or an unblocked one not reading it. A cell reads `✅` only when the feature is
 delivered by the definition at the top of this document.
 
+### The 22 items that need a spec — eight specs, and the order they run in
+
+**Ruled 2026-09-12.** Every item without a spec is delivered and CI-proven; what is left
+is the 22 below, and they are eight designs, not 22. The order is the one that empties
+```delivery rows fastest — a row closed is the unit of progress, not an item shipped —
+with the spec already written first.
+
+| order | group | items | what closes when it lands |
+|---|---|---|---|
+| 1 | **A. Receiver chain / overload discrimination** — spec `ba59750` written, awaiting review | `G-37` `GAP-1b` `W44-verb-overloads` `G-30` `G-30-outbound` `ktor-routing` `javalin-apibuilder` `sqs-template-receive` `jdk-httpclient` (9) | **REST outbound closes**; REST inbound 9 → 3; SQS 2 → 1. Removes the wrong rows (`W44-verb-overloads` publishes a lambda as a URL today) |
+| 2 | **B. Sibling-annotation reads** — `annotation_driven` reads an attribute off a sibling annotation of the same method | `quarkus-jaxrs` `jaxrs-sse` (2) | **SSE closes**; REST inbound −1 |
+| 2 | **C. Rules conditional on an annotation attribute** — one plan with B, both grow `annotation_driven` by one word | `kafka-batch-generics` `micronaut-jms-over-sqs` (2) | **Kafka closes**; **SQS closes** (after A) |
+| 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument | `pubsub-channel-adapter` (1) | **Pub/Sub closes** |
+| 4 | **D. New `Protocol` members and two naming words** | `temporal-cadence` `vertx-eventbus` (2) | **Async closes** |
+| 5 | **G. Kotlin routes with a NULL handler** — short spec | `kotlin-null-handler` (1) | REST inbound −1 |
+| 6 | **F. Conditional controllers** — the hardest design question | `conditional-controllers` (1) | **REST inbound closes** |
+| 7 | **H. Meridian** | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty |
+
+Each group is one spec → one plan → one PR, on the per-item loop; a group starts only
+when its spec names the COVERAGE cell every item moves. Categories B and C above are the
+same 22 items sorted by mechanism; this table is the same items sorted by what they close.
+
 ---
 
 ## 5. Where that leaves the matrix
