@@ -164,7 +164,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # of one method are rooted in source order and their rows accumulate
         # in that order too (NFR-1).
         for site in sites:
-            if not _is_root_candidate(site, context):
+            if not _is_root_candidate(site, scope):
                 continue
             result = site["result"]
             if result is not None and result in scope.consumed:
@@ -489,16 +489,27 @@ def _matching_continuation(site: dict[str, Any], context: _TreeContext) -> _Cont
     )
 
 
-def _is_root_candidate(site: dict[str, Any], context: _TreeContext) -> bool:
-    """Whether this call could start a tree: an entry of either shape, or an
+def _is_root_candidate(site: dict[str, Any], scope: _Scope) -> bool:
+    """Whether this call could start a tree: an entry of either shape, an
     OWNER-DECLARING continuation (which roots the chain it ends —
     `route(...).and(...)` is rooted at the `and`, since the `route` is consumed
-    as its receiver).
+    as its receiver), or a receiver-extending verb whose receiver a call in
+    THIS method produced — the statement form of a builder (spec §4 as ruled):
+    the builder is mutable and every method returns it, so `b.GET("/a", h);
+    b.POST("/b", h); return b.build();` leaves each verb's own result consumed
+    by nothing, and each roots and derives its route where before only
+    `build()` rooted and derived nothing. In the chained form every
+    intermediate verb's result IS consumed, so the root scan skips it and
+    `build()` alone roots, unchanged.
 
-    A vocabulary call is deliberately NOT a candidate. That is the whole of
-    checkpoint F4: bodies hold nothing but vocabulary calls, and treating a
-    method as a root because it merely contains one derives every nested route
-    a second time, unprefixed.
+    A vocabulary call inside a BODY is deliberately NOT a candidate. That is
+    the whole of checkpoint F4: bodies hold nothing but vocabulary calls, and
+    treating a method as a root because it merely contains one derives every
+    nested route a second time, unprefixed. A body's chain sits on the body's
+    own parameter: its head carries `receiver_parameter` and no producing
+    call — and a body chains its verbs too (`b.GET(…).DELETE(…)`, the second
+    verb's receiver a call in the same method), so the test is on the chain's
+    HEAD, not on the verb's own receiver. `_body_routes` alone folds them.
 
     Nor is an owner-free continuation. Matching a bare method name against
     every owner is `fluent`'s steps discipline — right for REACHING a step
@@ -507,12 +518,37 @@ def _is_root_candidate(site: dict[str, Any], context: _TreeContext) -> bool:
     unrelated type would otherwise be rooted and derive a row for a router
     nobody wrote.
     """
+    context = scope.context
     continuation = _matching_continuation(site, context)
     return (
         _matching_entry(site, context) is not None
         or _matching_body_entry(site, context) is not None
         or (continuation is not None and continuation.owner is not None)
+        or _is_statement_verb(site, scope)
     )
+
+
+def _is_statement_verb(site: dict[str, Any], scope: _Scope) -> bool:
+    """A receiver-extending verb rule accepting this call, whose receiver a call
+    in this same method produced (never itself), and whose chain does not begin
+    on one of this method's own parameters — that head is a builder body's,
+    and the body walk folds it (checkpoint F4)."""
+    key = (str(site["owner"]), str(site["name"]))
+    if key not in scope.context.verb_names:
+        return False
+    rule = _matching_rule(site, scope.context.verbs)
+    if rule is None or not rule.get("extends_receiver"):
+        return False
+    extended = _producing_site(site["receiver"], scope, exclude=site)
+    return extended is not None and _chain_head(extended, scope).get("receiver_parameter") is None
+
+
+def _chain_head(site: dict[str, Any], scope: _Scope) -> dict[str, Any]:
+    """The first call of the receiver chain `site` ends — the one whose receiver
+    no call in this method produced."""
+    while (previous := _producing_site(site["receiver"], scope, exclude=site)) is not None:
+        site = previous
+    return site
 
 
 def _matching_entry(site: dict[str, Any], context: _TreeContext) -> dict[str, Any] | None:
@@ -992,15 +1028,20 @@ def _merged(left: _Route, right: _Route) -> _Route:
     concatenate in declaration order, media unions, and the first handler
     declared wins.
 
-    A verb declared on BOTH sides poisons the verb rather than picking one. A
-    request carries exactly one verb, so two of them inside a single `and`
-    chain is a constraint no route can satisfy — reporting either would be a
-    guess presented as fact, and reporting the row's identity as fully known
-    would be worse. (`or` never reaches here: its branches stay separate
-    routes, which is precisely how two verbs on one path are expressed.)
+    Two DIFFERENT verbs poison the verb rather than picking one. A request
+    carries exactly one verb, so two of them inside a single `and` chain is a
+    constraint no route can satisfy — reporting either would be a guess
+    presented as fact, and reporting the row's identity as fully known would
+    be worse. Two EQUAL verbs are that one verb (spec §4 as ruled): a
+    handler-less `resource(GET("/favicon.ico"), r)` folds its rule's `GET`
+    against the predicate's, and `GET` and `GET` is `GET`. (`or` never reaches
+    here: its branches stay separate routes, which is precisely how two verbs
+    on one path are expressed.)
     """
     poisons = _union(left.poisons, right.poisons)
-    if _METHOD in poisons or (left.verb is not None and right.verb is not None):
+    if _METHOD in poisons or (
+        left.verb is not None and right.verb is not None and left.verb != right.verb
+    ):
         verb = None
         poisons = _union(poisons, (_METHOD,))
     else:

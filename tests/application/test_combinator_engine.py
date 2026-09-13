@@ -110,6 +110,7 @@ def _site(
     *,
     arguments: list[CallArgument] | None = None,
     receiver: int | None = None,
+    receiver_parameter: int | None = None,
     result: int | None = None,
     invoke_kind: str = "static",
     descriptor: str = "(...)V",
@@ -121,6 +122,7 @@ def _site(
         invoke_kind=invoke_kind,
         ordinal=ordinal,
         receiver=receiver,
+        receiver_parameter=receiver_parameter,
         result=result,
         arguments=list(arguments or []),
     )
@@ -2114,6 +2116,16 @@ def _builder_matches() -> dict[str, object]:
             "handler_arg": 1,
             "extends_receiver": True,
         },
+        {
+            "owner": BUILDER_TYPE,
+            "method": "DELETE",
+            "verb": "DELETE",
+            "arity": 2,
+            "arg_types": {0: _STRING},
+            "path_arg": 0,
+            "handler_arg": 1,
+            "extends_receiver": True,
+        },
         # `builder.resources("/static/**", location)`: served, no handler method (§6).
         {
             "owner": BUILDER_TYPE,
@@ -2263,6 +2275,219 @@ def test_an_undeclared_chain_head_is_one_unresolved_row_beside_the_chains_own_ro
         ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
         (None, None, None, "unresolved"),
     ]
+
+
+def _statement_form(*, chained_first: bool) -> list:
+    """`var b = Routers.route(); b.GET("/a", h); b.POST("/b", h); return b.build();` —
+    the builder is mutable and every method returns it, so each statement's receiver is
+    the ORIGIN's result and nothing consumes the statement's own. `chained_first` writes
+    the mixed form, `var b = route().GET("/a", h); b.POST("/b", h); return b.build();`,
+    where `POST` and `build()` sit on `GET`'s result instead. The lambda arguments'
+    `source` ids name the bootstrap sites the real facts carry (no site here produces
+    them), never the verb's own result — that would read as the verb consuming itself."""
+    caller = DECLARER + "routes(sig_r)."
+    head = 1 if chained_first else 0
+    return [
+        *_handler_symbols(),
+        _site(caller, 0, ROUTERS, "route", result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/a"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=101),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "POST",
+            invoke_kind="virtual",
+            receiver=head,
+            result=2,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/b"),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER, source=102),
+            ],
+        ),
+        _site(
+            caller,
+            3,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=head,
+            result=3,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+
+
+def test_the_statement_form_of_the_builder_roots_at_each_verb(tmp_path: Path):
+    """Spec §4 as ruled at review: the builder is mutable, so real code writes one
+    statement per route — conditional registration is written no other way — and
+    that form derived NOTHING: verbs never rooted, `build()` rooted, its receiver was
+    the origin, and the origin contributes `[]`. A receiver-extending verb whose own
+    result nothing consumes, and whose receiver a call in this method produced, is a
+    root of its own."""
+    workspace = _resolve(
+        tmp_path, _statement_form(chained_first=False), _catalog(_builder_matches())
+    )
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_the_mixed_form_derives_each_route_exactly_once(tmp_path: Path):
+    """`var b = route().GET("/a", h); b.POST("/b", h); return b.build();` — `POST` and
+    `build()` both sit on `GET`'s result and both root; both reach `GET /a` through
+    their chain, and identity dedup keeps one row of it."""
+    workspace = _resolve(
+        tmp_path, _statement_form(chained_first=True), _catalog(_builder_matches())
+    )
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_a_body_verb_never_roots_and_derives_once_prefixed(tmp_path: Path):
+    """Checkpoint F4, re-pinned now that a verb CAN root: inside `path("/x", b ->
+    b.GET("/inner", h).DELETE("/inner/{id}", h))` the chain's HEAD sits on the
+    lambda's own parameter (`receiver_parameter`, no producing call in its method) —
+    and the `DELETE` after it sits on `GET`'s result, a call in the same method, which
+    is exactly the receiver a statement-form verb has. The head is what tells them
+    apart: neither verb roots, and the body walk alone folds both, once, under the
+    prefix, never bare. The live fixture's `/bld/nested/inner` pair derived bare the
+    first time this test held one verb."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=1),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+        _site(
+            _BUILDER_BODY,
+            0,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=None,
+            receiver_parameter=1,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/inner"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=101),
+            ],
+        ),
+        _site(
+            _BUILDER_BODY,
+            1,
+            BUILDER,
+            "DELETE",
+            invoke_kind="virtual",
+            receiver=1,
+            result=None,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/inner/{id}"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=102),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(_builder_matches()))
+    assert _identities(_rows(workspace)) == [
+        ("DELETE", "/x/inner/{id}", _MODULE + HEALTH, "resolved"),
+        ("GET", "/x/inner", _MODULE + HEALTH, "resolved"),
+    ]
+
+
+def test_two_equal_verbs_merge_to_that_verb(tmp_path: Path):
+    """Spec §4 as ruled: `resource(RequestPredicates.GET("/favicon.ico"), r)` folds the
+    `resource` rule's own `GET` against the predicate's, and `GET` ∧ `GET` is `GET` —
+    a request carries one verb, and this is it. Only two DIFFERENT verbs poison
+    (`test_a_second_verb_inside_one_and_chain_poisons_only_the_verb`)."""
+    caller = DECLARER + "routes(sig_r)."
+    matches = _builder_matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": BUILDER_TYPE,
+            "method": "resource",
+            "verb": "GET",
+            "arity": 2,
+            "predicate_arg": 0,
+            "handler": "none",
+            "extends_receiver": True,
+        }
+    )
+    facts = [
+        *_handler_symbols(),
+        _site(caller, 0, ROUTERS, "route", result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            PREDICATES,
+            "GET",
+            result=1,
+            arguments=[CallArgument(kind="string", value="/favicon.ico")],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "resource",
+            invoke_kind="virtual",
+            receiver=0,
+            result=2,
+            descriptor=f"(Lcom/example/web/Predicate;Lcom/example/web/Resource;){_BUILDER_DESC}",
+            arguments=[CallArgument(kind="unresolved", source=1), CallArgument(kind="unresolved")],
+        ),
+        _site(
+            caller,
+            3,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=2,
+            result=3,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(matches))
+    assert _identities(_rows(workspace)) == [("GET", "/favicon.ico", None, "resolved")]
 
 
 def test_a_static_resource_rule_derives_a_served_route_with_no_handler(tmp_path: Path):
