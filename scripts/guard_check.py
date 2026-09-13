@@ -143,6 +143,7 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+_COMBINATOR = "sextant/application/resolve/engines/combinator.py"
 _DERIVE_ENDPOINTS = "sextant/storage/duckdb/derive_endpoints.sql"
 _ANNOTATION_DRIVEN = "sextant/application/resolve/engines/annotation_driven.py"
 _ENDPOINTS_DRIVER = "sextant/application/resolve/endpoints.py"
@@ -284,6 +285,20 @@ GUARDS: dict[str, Guard] = {
                 find="        and _has_execute_join(site, context.sites, "
                 "context.via_argument_names[name])",
                 replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    # --- `combinator` -------------------------------------------------------
+    "combinator.unrecognised-overload-is-a-row": Guard(
+        what="a call the vocabulary names but no overload rule accepts derives one unresolved row",
+        why="the alternative is silence — the G-13 failure this engine's doctrine forbids: "
+        "a router whose verb call happens to be an overload the catalog did not declare "
+        "has its whole route absent from the export with nothing saying so",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if verb is None:\n            # Spec §3, the G-13 guard",
+                replace="        if verb is None and False:  # guard disabled by scripts/guard_check.py\n            # Spec §3, the G-13 guard",
             ),
         ),
     ),

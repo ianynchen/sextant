@@ -19,12 +19,18 @@ is therefore a fold over that tree rather than a walk along a line.
   vocabulary call double-derives every nested route, once prefixed and once
   bare (2E checkpoint F4). The entry owner and the vocabulary owner are
   routinely two different types, so the catalog declares both.
-- `vocabulary` — owner+method to role: `verbs` (a verb plus the argument its
-  path sits at, and, in the two-argument form, its handler), `prefixes` (a
-  path contribution, plus optionally the `subtree_arg`/`body_arg` holding the
+- `vocabulary` — owner+method to role: `verbs` (a verb plus whichever of a
+  literal-path `path_arg`, a `predicate_arg` whose producing call's constraints
+  fold in, and a `handler_arg` the overload carries), `prefixes` (a path
+  contribution, plus optionally the `subtree_arg`/`body_arg` holding the
   routes it prefixes), `media` (which of `consumes`/`produces` the call fills),
   `media_values` (an enum type's member names to their wire values), and
   `composers` (`and` merges constraints, `or` duplicates the route per branch).
+  `verbs` and `prefixes` are scanned lists, so one name may carry several
+  rules: `arity` and `arg_types` (position to dotted type, compared against the
+  call's own erased descriptor) tell same-name overloads apart, a call the
+  vocabulary names but no rule accepts is one unresolved row, and two rules
+  that could both accept one call are refused at load (spec §3).
 - `continuations` — the calls that merge route sets along `result` →
   `receiver`. A plain method name is owner-free, exactly like `fluent`'s
   steps; a mapping declares the same name with an `owner` that narrows it to
@@ -79,7 +85,12 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.arguments import _arg_at, _expanded_arguments
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.paths import canonical_http_path, serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_parameter_types,
+    member_name,
+    owner_of,
+)
 
 # The two endpoint columns a failed read can poison. Both are wire identity,
 # so poisoning either drops the row's own `resolution` (checkpoint ruling I1,
@@ -187,8 +198,12 @@ class _TreeContext:
 
     entries: tuple[dict[str, Any], ...]
     body_entries: tuple[dict[str, Any], ...]
-    verbs: dict[tuple[str, str], dict[str, Any]]
-    prefixes: dict[tuple[str, str], dict[str, Any]]
+    verbs: tuple[dict[str, Any], ...]
+    prefixes: tuple[dict[str, Any], ...]
+    # Every (owner, name) any verb or prefix rule names — what makes a call CLAIMED
+    # even when no overload rule accepts it (spec §3's G-13 guard).
+    verb_names: frozenset[tuple[str, str]]
+    prefix_names: frozenset[tuple[str, str]]
     media: dict[tuple[str, str], dict[str, Any]]
     media_owners: tuple[str, ...] | None
     media_values: dict[str, str]
@@ -262,11 +277,15 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     method_symbols: dict[str, str] = {}
     for row in workspace.query("method_symbols"):
         method_symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
+    verbs = _rules_of(vocabulary.get("verbs", []))
+    prefixes = _rules_of(vocabulary.get("prefixes", []))
     return _TreeContext(
         entries=entries,
         body_entries=body_entries,
-        verbs=_by_owner_method(vocabulary.get("verbs", [])),
-        prefixes=_by_owner_method(vocabulary.get("prefixes", [])),
+        verbs=verbs,
+        prefixes=prefixes,
+        verb_names=frozenset((rule["owner"], rule["method"]) for rule in verbs),
+        prefix_names=frozenset((rule["owner"], rule["method"]) for rule in prefixes),
         media=_by_owner_method(vocabulary.get("media", [])),
         # A LIST or a scalar (§3.1): the enum carrying the wire values may be
         # reachable under more than one name. `media_owners` plural for the same
@@ -310,6 +329,42 @@ def _by_owner_method(rules: list[dict[str, Any]]) -> dict[tuple[str, str], dict[
     return {(_catalog_symbol(rule["owner"]), rule["method"]): rule for rule in rules}
 
 
+def _rules_of(rules: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
+    """A list, not a dict keyed on (owner, name) — the shape `single_call` moved to
+    for the same reason (its `methods` block, Task 6): a dict lets a second rule for
+    the same name silently overwrite the first, and a builder declares four `GET`s."""
+    return tuple({**rule, "owner": _catalog_symbol(rule["owner"])} for rule in rules)
+
+
+def _matching_rule(
+    site: dict[str, Any], rules: tuple[dict[str, Any], ...]
+) -> dict[str, Any] | None:
+    """The one rule that accepts this call: owner and name equal, `arity` equal where
+    the rule declares one, and every position in `arg_types` carrying that type in
+    the call's own erased descriptor. Positions a rule does not type are unconstrained.
+    At most one rule can accept a call — `_validate_overloads` refused any catalog
+    where two could — so the first found is the only one."""
+    owner, name = str(site["owner"]), str(site["name"])
+    arguments = site["arguments"]
+    types: tuple[str, ...] | None = None
+    for rule in rules:
+        if rule["owner"] != owner or rule["method"] != name:
+            continue
+        if rule.get("arity") not in (None, len(arguments)):
+            continue
+        wanted: dict[int, str] = rule.get("arg_types") or {}
+        if wanted:
+            if types is None:
+                types = descriptor_parameter_types(str(site["descriptor"]))
+            if any(
+                position >= len(types) or types[position] != typed
+                for position, typed in wanted.items()
+            ):
+                continue
+        return rule
+    return None
+
+
 def _scope_of(sites: list[dict[str, Any]], context: _TreeContext) -> _Scope:
     by_result: dict[int, dict[str, Any]] = {}
     consumed: list[int] = []
@@ -350,8 +405,8 @@ def _claimed(site: dict[str, Any], context: _TreeContext) -> bool:
     consumed."""
     key = (str(site["owner"]), str(site["name"]))
     return (
-        key in context.verbs
-        or key in context.prefixes
+        key in context.verb_names
+        or key in context.prefix_names
         or key in context.media
         or key in context.composers
         or _matching_entry(site, context) is not None
@@ -443,14 +498,21 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     """
     context = scope.context
     key = (str(site["owner"]), str(site["name"]))
-    prefix = context.prefixes.get(key)
-    if prefix is not None:
+    if key in context.prefix_names:
+        prefix = _matching_rule(site, context.prefixes)
+        if prefix is None:
+            return [_Route(poisons=_IDENTITY_POISON)]
         return _nested_routes(site, prefix, scope)
-    verb = context.verbs.get(key)
-    if verb is not None:
-        # The two-argument verb form declares a whole route on its own; the
-        # one-argument form is a predicate, and only becomes a route once some
-        # entry attaches a handler to it.
+    if key in context.verb_names:
+        verb = _matching_rule(site, context.verbs)
+        if verb is None:
+            # Spec §3, the G-13 guard: the vocabulary names this call and no overload
+            # rule accepts it. One row that says so, never silence — silence is the
+            # one outcome this engine's doctrine forbids, and reading positions off a
+            # sibling overload is the wrong row it forbids next.
+            return [_Route(poisons=_IDENTITY_POISON)]
+        # The declaring forms carry a handler position; a bare predicate factory
+        # becomes a route only once some entry attaches a handler to it.
         return _verb_routes(site, verb, scope) if "handler_arg" in verb else []
     if key in context.media or key in context.composers:
         return []
@@ -477,11 +539,13 @@ def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     it — one branch normally, several where an `or` fans the route out."""
     context = scope.context
     key = (str(site["owner"]), str(site["name"]))
-    verb = context.verbs.get(key)
-    if verb is not None:
-        return _verb_constraints(site, verb, scope)
-    prefix = context.prefixes.get(key)
-    if prefix is not None:
+    if key in context.verb_names:
+        verb = _matching_rule(site, context.verbs)
+        return _verb_constraints(site, verb, scope) if verb else [_Route(poisons=_IDENTITY_POISON)]
+    if key in context.prefix_names:
+        prefix = _matching_rule(site, context.prefixes)
+        if prefix is None:
+            return [_Route(poisons=_IDENTITY_POISON)]
         return _argument_constraints(
             _arg_at(site["arguments"], prefix["path_arg"]), scope, (_PATH,)
         )
@@ -627,13 +691,21 @@ def _verb_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> l
 
 
 def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
-    verb = _Route(verb=str(rule["verb"]))
-    return [
-        _merged(verb, branch)
-        for branch in _argument_constraints(
-            _arg_at(site["arguments"], rule["path_arg"]), scope, (_PATH,)
+    """The verb, merged with whatever its declared positions contribute: a literal path
+    at `path_arg`, a predicate's own constraints at `predicate_arg`, both, or neither —
+    a verb naming no position at all is a catch-all, and it is RESOLVED: nothing was
+    poisoned, the author wrote the route open (spec §7 case 3)."""
+    branches = [_Route(verb=str(rule["verb"]))]
+    arguments = site["arguments"]
+    if "path_arg" in rule:
+        paths = _argument_constraints(_arg_at(arguments, rule["path_arg"]), scope, (_PATH,))
+        branches = [_merged(branch, path) for branch in branches for path in paths]
+    if "predicate_arg" in rule:
+        predicates = _argument_constraints(
+            _arg_at(arguments, rule["predicate_arg"]), scope, (_PATH,)
         )
-    ]
+        branches = [_merged(branch, predicate) for branch in branches for predicate in predicates]
+    return branches
 
 
 def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _TreeContext) -> _Route:
@@ -969,6 +1041,7 @@ def _validate_matches(catalog: Catalog) -> None:
     routinely a composer on one type and a chain continuation on another, and
     only an `owner` tells them apart."""
     _validate_continuations(catalog)
+    _validate_overloads(catalog)
     for entry in catalog.matches.get("entries", []):
         argument_rooted = "methods" in entry and "handler_arg" in entry
         body_linked = "method" in entry and "body_arg" in entry
@@ -985,6 +1058,53 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"`fills: {rule.get('fills')!r}` — a media rule fills `consumes` or "
                 f"`produces` (D02 §2's `combinator` style)"
             )
+
+
+def _validate_overloads(catalog: Catalog) -> None:
+    """Spec §3c: never file order. Two rules that could both accept one call are
+    refused here, naming both. Two rules sharing owner, method and arity are
+    distinguishable only if some position BOTH of them type carries a different type
+    in each — a call has one type per position, so then at most one can match. A rule
+    with no `arity` accepts every arity and so collides with every other rule of its
+    name; `arg_types` without `arity`, or a typed position at or beyond the arity, is a
+    rule that cannot mean what it says."""
+    vocabulary = catalog.matches.get("vocabulary", {})
+    for role in ("verbs", "prefixes"):
+        rules = list(vocabulary.get(role, []))
+        for rule in rules:
+            typed = rule.get("arg_types") or {}
+            arity = rule.get("arity")
+            if typed and arity is None:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
+                    f"`arg_types` without `arity` (D02 §2's `combinator` style)"
+                )
+            for position in typed:
+                if not isinstance(position, int) or arity is not None and position >= arity:
+                    raise CatalogError(
+                        f"loading catalog {catalog.source}: `{rule.get('method')}` types "
+                        f"position {position} but declares arity {arity} "
+                        f"(D02 §2's `combinator` style)"
+                    )
+        for index, left in enumerate(rules):
+            for right in rules[index + 1 :]:
+                if (left["owner"], left["method"]) != (right["owner"], right["method"]):
+                    continue
+                if (
+                    None not in (left.get("arity"), right.get("arity"))
+                    and left["arity"] != right["arity"]
+                ):
+                    continue
+                shared = set(left.get("arg_types") or {}) & set(right.get("arg_types") or {})
+                if any(left["arg_types"][p] != right["arg_types"][p] for p in shared):
+                    continue
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: two `{role}` rules for "
+                    f"`{left['method']}` at arity {left.get('arity')} could both accept one "
+                    f"call — {left.get('arg_types') or {}} and {right.get('arg_types') or {}} "
+                    f"type no shared position differently; a rule must type enough "
+                    f"positions to be unambiguous (spec §3c)"
+                )
 
 
 def _validate_continuations(catalog: Catalog) -> None:

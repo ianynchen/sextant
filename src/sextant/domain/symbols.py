@@ -255,6 +255,47 @@ def parameter_types(descriptor: str) -> str:
     return descriptor[: descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1]
 
 
+_PRIMITIVES = {
+    "B": "byte",
+    "C": "char",
+    "D": "double",
+    "F": "float",
+    "I": "int",
+    "J": "long",
+    "S": "short",
+    "Z": "boolean",
+}
+
+
+def descriptor_parameter_types(descriptor: str) -> tuple[str, ...]:
+    """A JVM method descriptor's parameter types, one dotted name each — the form a
+    catalog spells a type in (`com.example.web.Predicate`, `int`, `byte[]`), so a
+    rule's `arg_types` compares to a call's own erased descriptor without either side
+    learning the other's spelling.
+
+    Reads the parameter list `parameter_types` isolates, one type at a time: a
+    primitive letter, `L…;` for a class, and any number of `[` before either for an
+    array. The return type is not read — it is not part of method identity (JLS 8.4.2).
+    """
+    inside = parameter_types(descriptor)[1:-1]
+    types: list[str] = []
+    position = 0
+    while position < len(inside):
+        dimensions = 0
+        while inside[position] == "[":
+            dimensions += 1
+            position += 1
+        if inside[position] == "L":
+            end = inside.index(";", position)
+            name = inside[position + 1 : end].replace("/", ".")
+            position = end + 1
+        else:
+            name = _PRIMITIVES[inside[position]]
+            position += 1
+        types.append(name + "[]" * dimensions)
+    return tuple(types)
+
+
 def returned_type(descriptor: str) -> str | None:
     """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
     returns a primitive, `void` or an array.

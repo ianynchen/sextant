@@ -112,11 +112,12 @@ def _site(
     receiver: int | None = None,
     result: int | None = None,
     invoke_kind: str = "static",
+    descriptor: str = "(...)V",
 ) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
         invoke_kind=invoke_kind,
         ordinal=ordinal,
         receiver=receiver,
@@ -1835,6 +1836,276 @@ def test_a_vocabulary_call_in_a_method_no_entry_links_to_derives_nothing(tmp_pat
 
     assert [row["path"] for row in rows] == ["/kt/orders", "/kt/rich"]
     assert all(row["caller"] == DSL_ROUTES for row in rows)
+
+
+# --- overload discrimination (spec §3) ---------------------------------------
+
+_HANDLER_TYPE = "kotlin.jvm.functions.Function1"
+_PREDICATE_TYPE = "com.example.web.Predicate"
+_STRING = "java.lang.String"
+_DSL_GET_FIVE = [
+    # The five overloads the servlet DSL declares (`javap -p -s RouterFunctionDsl`),
+    # each pinned to what its positions carry. `arity` splits 1/2/3; `arg_types` splits
+    # the two arity-2 forms on position 0.
+    {
+        "owner": "com.example.web.RouterDsl",
+        "method": "GET",
+        "verb": "GET",
+        "arity": 1,
+        "handler_arg": 0,
+    },
+    {
+        "owner": "com.example.web.RouterDsl",
+        "method": "GET",
+        "verb": "GET",
+        "arity": 2,
+        "arg_types": {0: _STRING},
+        "path_arg": 0,
+        "handler_arg": 1,
+    },
+    {
+        "owner": "com.example.web.RouterDsl",
+        "method": "GET",
+        "verb": "GET",
+        "arity": 2,
+        "arg_types": {0: _PREDICATE_TYPE},
+        "predicate_arg": 0,
+        "handler_arg": 1,
+    },
+    {
+        "owner": "com.example.web.RouterDsl",
+        "method": "GET",
+        "verb": "GET",
+        "arity": 3,
+        "path_arg": 0,
+        "predicate_arg": 1,
+        "handler_arg": 2,
+    },
+]
+
+
+def _overload_matches() -> dict[str, object]:
+    matches = _matches()
+    vocabulary = dict(matches["vocabulary"])  # type: ignore[arg-type]
+    vocabulary["verbs"] = [
+        rule
+        for rule in vocabulary["verbs"]
+        if rule["owner"] != "com.example.web.RouterDsl"  # type: ignore[index]
+    ] + _DSL_GET_FIVE
+    vocabulary["prefixes"] = list(vocabulary["prefixes"]) + [  # type: ignore[arg-type]
+        {"owner": "com.example.web.RouterDsl", "method": "path", "path_arg": 0},
+    ]
+    return {**matches, "vocabulary": vocabulary}
+
+
+def _four_get_overloads_in_one_body() -> list:
+    """`router { GET(h); GET("/two", h); GET(path("/three"), h); GET("/four", path("/p"), h) }`
+    as the facts arrive: the entry in the declaring method, four verb calls in the body,
+    each `path(...)` a call of its own whose result the verb consumes through `source`."""
+    entry = _site(
+        DECLARER + "routes(sig_r).",
+        0,
+        DSL_FACADE,
+        "router",
+        arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0)],
+        result=1,
+    )
+    body = [
+        _site(
+            INLINE_BODY,
+            0,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            descriptor=f"(L{_HANDLER_TYPE.replace('.', '/')};)V",
+            arguments=[CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0)],
+        ),
+        _site(
+            INLINE_BODY,
+            1,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            descriptor=f"(Ljava/lang/String;L{_HANDLER_TYPE.replace('.', '/')};)V",
+            arguments=[
+                CallArgument(kind="string", value="/two"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=1),
+            ],
+        ),
+        _site(
+            INLINE_BODY,
+            2,
+            DSL,
+            "path",
+            invoke_kind="virtual",
+            result=2,
+            descriptor="(Ljava/lang/String;)Lcom/example/web/Predicate;",
+            arguments=[CallArgument(kind="string", value="/three")],
+        ),
+        _site(
+            INLINE_BODY,
+            3,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            descriptor=f"(Lcom/example/web/Predicate;L{_HANDLER_TYPE.replace('.', '/')};)V",
+            arguments=[
+                CallArgument(kind="unresolved", source=2),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=3),
+            ],
+        ),
+        _site(
+            INLINE_BODY,
+            4,
+            DSL,
+            "path",
+            invoke_kind="virtual",
+            result=4,
+            descriptor="(Ljava/lang/String;)Lcom/example/web/Predicate;",
+            arguments=[CallArgument(kind="string", value="/p")],
+        ),
+        _site(
+            INLINE_BODY,
+            5,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Predicate;L{_HANDLER_TYPE.replace('.', '/')};)V",
+            arguments=[
+                CallArgument(kind="string", value="/four"),
+                CallArgument(kind="unresolved", source=4),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=5),
+            ],
+        ),
+    ]
+    return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, *body]
+
+
+class _RecordingWorkspace(DuckDbWorkspace):
+    """The rows the engine hands to the `call_endpoints` insert, kept beside what the
+    insert let through. The two differ by design: `derive_call_endpoints.sql`'s
+    addresses-nothing gate drops a `resolved` row whose `path` and `peer` are both NULL,
+    so a route the engine derived can be absent from `endpoints` without the engine
+    having dropped it."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.derived: list[dict] = []
+
+    def derive(self, name: str, **params: object) -> None:
+        if name == "call_endpoints":
+            self.derived.extend(dict(row) for row in params["rows"])  # type: ignore[union-attr]
+        super().derive(name, **params)
+
+
+def _resolve_recording(tmp_path: Path, facts: list, catalog: Catalog) -> _RecordingWorkspace:
+    write_fact_file(tmp_path / "facts" / "Routes.jsonl", _document(), facts)
+    workspace = _RecordingWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(workspace, [catalog], capabilities=CAPABILITIES)
+    assert skipped == []
+    return workspace
+
+
+def test_the_four_verb_overloads_each_derive_what_their_positions_carry(tmp_path: Path):
+    """Spec §8 test 1. Against the shipped one-rule-per-name grammar it failed the way
+    spec §2 says a dict keyed on (owner, name) must: the LAST `GET` rule (arity 3)
+    silently overwrote the other three, so the catch-all read `unresolved`, both
+    two-argument forms lost their handler, and the three-argument form lost its
+    predicate (`/four`, not `/four/p`). `arity` + `arg_types` make each overload its
+    own rule.
+
+    The catch-all is asserted on the rows the ENGINE derived (spec §7 case 3: `path`
+    NULL and RESOLVED, nothing was poisoned). It does not reach `endpoints`:
+    `derive_call_endpoints.sql`'s addresses-nothing gate drops every `resolved` row
+    with no `path` and no `peer`, and this test states that outcome rather than hiding
+    it — the day the gate learns that a verb alone is an address, the second
+    assertion gains the row and this docstring's second paragraph goes."""
+    workspace = _resolve_recording(
+        tmp_path, _four_get_overloads_in_one_body(), _catalog(_overload_matches())
+    )
+    handler = _MODULE + LIST_ORDERS
+    assert _identities(workspace.derived) == [
+        ("GET", None, handler, "resolved"),  # GET(h): a catch-all, deliberately open
+        ("GET", "/two", handler, "resolved"),  # GET("/two", h)
+        ("GET", "/three", handler, "resolved"),  # GET(path("/three"), h)
+        ("GET", "/four/p", handler, "resolved"),  # GET("/four", path("/p"), h)
+    ]
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/four/p", handler, "resolved"),
+        ("GET", "/three", handler, "resolved"),
+        ("GET", "/two", handler, "resolved"),
+    ]
+
+
+@pytest.mark.pins("combinator.unrecognised-overload-is-a-row")
+def test_a_named_call_no_overload_accepts_derives_one_unresolved_row(tmp_path: Path):
+    """Spec §3's G-13 guard: a site whose owner and name the vocabulary knows, at an
+    arity no rule declares, is one honest unresolved row — never silence, never a
+    position read off the wrong overload."""
+    facts = _four_get_overloads_in_one_body()
+    facts.append(
+        _site(
+            INLINE_BODY,
+            6,
+            DSL,
+            "GET",
+            invoke_kind="virtual",
+            descriptor="(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+            arguments=[CallArgument(kind="string", value="/a")] * 4,
+        )
+    )
+    workspace = _resolve(tmp_path, facts, _catalog(_overload_matches()))
+    unresolved = [row for row in _rows(workspace) if row["resolution"] == "unresolved"]
+    assert [(row["method"], row["path"]) for row in unresolved] == [(None, None)]
+
+
+def test_two_rules_that_could_accept_one_call_are_refused_at_load(tmp_path: Path):
+    """Spec §3c: never file order. Two arity-2 rules typing DIFFERENT positions could
+    both accept `GET(String, Predicate)`, so the catalog is refused naming both; two
+    rules typing the SAME position with different types cannot both match, so that
+    pair loads."""
+    matches = _overload_matches()
+    vocabulary = matches["vocabulary"]
+    vocabulary["verbs"] = [r for r in vocabulary["verbs"] if r.get("arity") != 2] + [  # type: ignore[index]
+        {
+            "owner": "com.example.web.RouterDsl",
+            "method": "GET",
+            "verb": "GET",
+            "arity": 2,
+            "arg_types": {0: _STRING},
+            "path_arg": 0,
+            "handler_arg": 1,
+        },
+        {
+            "owner": "com.example.web.RouterDsl",
+            "method": "GET",
+            "verb": "GET",
+            "arity": 2,
+            "arg_types": {1: _HANDLER_TYPE},
+            "predicate_arg": 0,
+            "handler_arg": 1,
+        },
+    ]
+    with pytest.raises(CatalogError, match=r"GET.*arity 2.*both") as refused:
+        _resolve(tmp_path, _four_get_overloads_in_one_body(), _catalog(matches))
+    assert _STRING in str(refused.value) and _HANDLER_TYPE in str(refused.value)
+
+
+def test_a_rule_typing_a_position_beyond_its_arity_is_refused(tmp_path: Path):
+    matches = _overload_matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.RouterDsl",
+            "method": "HEAD",
+            "verb": "HEAD",
+            "arity": 1,
+            "arg_types": {1: _STRING},
+            "handler_arg": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"HEAD.*position 1.*arity 1"):
+        _resolve(tmp_path, _four_get_overloads_in_one_body(), _catalog(matches))
 
 
 # --- (10) dedup: identity-known only, and the handler is part of it -------

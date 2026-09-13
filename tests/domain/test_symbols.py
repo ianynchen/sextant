@@ -5,6 +5,7 @@ import pytest
 from sextant.domain.symbols import (
     Symbol,
     bare_descriptor,
+    descriptor_parameter_types,
     disambiguator_of,
     member_name,
     method_descriptor,
@@ -168,6 +169,27 @@ def test_parameter_types_refuses_a_descriptor_with_no_parameter_list():
     name the catalog and the row. This asserts the boundary the loader is protecting."""
     with pytest.raises(ValueError):
         parameter_types("no parentheses here")
+
+
+def test_descriptor_parameter_types_splits_a_descriptor_into_dotted_names():
+    assert descriptor_parameter_types("()V") == ()
+    assert descriptor_parameter_types("(Ljava/lang/String;)V") == ("java.lang.String",)
+    assert descriptor_parameter_types(
+        "(Ljava/lang/String;ILorg/springframework/web/servlet/function/RequestPredicate;J)V"
+    ) == (
+        "java.lang.String",
+        "int",
+        "org.springframework.web.servlet.function.RequestPredicate",
+        "long",
+    )
+    assert descriptor_parameter_types("([Ljava/lang/String;[[IZ)Ljava/lang/Object;") == (
+        "java.lang.String[]",
+        "int[][]",
+        "boolean",
+    )
+    assert descriptor_parameter_types("(Lkotlin/jvm/functions/Function1;)V") == (
+        "kotlin.jvm.functions.Function1",
+    )
 
 
 @pytest.mark.parametrize(
