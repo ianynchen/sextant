@@ -562,14 +562,14 @@ it derives, no engine work exists for either.
 | `G-30` | `combinator` | `route(String, Function)` and `route(Function)` body-linked with `origin_param: 0`; inside: `PredicateSpec.path(String…)` path, `method(HttpMethod…)` verb via **`verb_arg`**, `and()`/`or()` composers, `not(…)` a **negator**, `filters(…)` a pass-through; `RouteLocatorBuilder.routes()` origin, `build()` root; its own catalog, `spring-cloud-gateway.yml` | `inbound · GET /orders/**`; method NULL `resolved` when no `method()` predicate (a catch-all, §7 case 3); handler NULL, as `resources` rows |
 | `javalin-apibuilder` | `combinator` | `apiBuilder(EndpointGroup)` body-linked; `ApiBuilder.path(String, EndpointGroup)` prefix with `body_arg`; `get/post/…(String, Handler)` verbs; `get(Handler)` inherits the prefix alone. All static — `ApiBuilder` keeps its own prefix stack, so no receiver to verify | `inbound · GET /orders/{id}`; handler = the `Handler` lambda body; caller = the method holding `apiBuilder` (the root's method, per the engine's `caller` rule) |
 | `ktor-routing` | `combinator` | `routing(Application, Function1)` origin, body-linked, `origin_param: 0`; `route(Route, String, Function1)` prefix (`path_arg: 1`, `body_arg: 2`, `receiver_arg: 0`, and `origin_param: 0` for its own body); `get/post/…(Route, String, Function2)` verbs with `receiver_arg: 0`; fixture `fixtures/orders-ktor` | `inbound · GET /api/orders`; **handler NULL** — a Kotlin `suspend` lambda compiles to a class, not an `invokedynamic`, and links to nothing until item G (`kotlin-null-handler`). Stated on the row's test, not hidden |
-| `jdk-httpclient` | `combinator` + `single_call` | JDK: origin `HttpRequest.newBuilder()`, and `newBuilder(URI)` as an origin **with `path_arg: 0`**; `uri(URI)` read through `path_through` over `URI.create(String)` and `new URI(String)`; verbs `GET()`, `POST(…)`, `PUT(…)`, `DELETE()`, and `method(String, …)` via **`verb_arg: 0`**; root `build()` — the result handed to `client.send(…)` is still a root because `send` is not in the vocabulary (§4's consumption rule). Apache: `HttpGet(String)`, `HttpPost(String)`, … and `ClassicRequestBuilder.get(String)` are `single_call` rows | `outbound · POST https://…/orders`, caller = the method holding `build()` |
-
+| `jdk-httpclient` | **`fluent`** (measured 2026-09-13: `okhttp.yml` is this exact shape — a static or `<init>` root, verb-setting steps, a `build` terminal joined to the client's `send`) | JDK: root `HttpRequest.newBuilder` (`captures: {http_method: GET, url: arg0}`; the argument-less overload's `arg0` reads nothing and the `uri` step overwrites it), steps `uri` (`url: arg0`), `GET`/`DELETE`/`POST(body)`/`PUT(body)`/`method(verb, body)` (`http_method`, `body`), `header`/`headers`/`timeout`/`version`/`expectContinue` pass through undeclared, terminal `build` with `terminal_via_argument: {owner: java.net.http.HttpClient, method: [send, sendAsync]}`. `uri(URI.create("…"))` and `uri(new URI("…"))` reach the step as `unresolved`+`source`, so `fluent` gains **`url_via`** — the `channel_via` ladder for the `url` capture, verbatim (`{owner: java.net.URI, method: create, arg: 0}`, `{owner: java.net.URI, method: <init>, arg: 0}`). Apache 5: static roots `ClassicRequestBuilder.get/post/put/delete/patch(String)` (`url: arg0`, verb literal) with `build` terminal via `CloseableHttpClient.execute`; constructor roots `HttpGet/HttpPost/…(String)` as `<init>` roots that are themselves the terminal via `execute` — the walk already checks the root site against `terminal` | `outbound · POST https://…/orders`, peer/path split by `url_of` as every `fluent` row is; caller = the method holding the chain |
 > `verify: grep -n "Every row of one tree carries the containing method" src/sextant/application/resolve/engines/combinator.py`
 
-`single_call` gains nothing. `combinator` gains **five words**, beside Part I's `arity`,
-`arg_types`, `extends_receiver` and `origins` — and one extension to `origins`: an origin
-may declare `path_arg`, in which case it contributes one route carrying that path rather
-than none (`HttpRequest.newBuilder(URI)`).
+`single_call` gains nothing; `fluent` gains `url_via` (above). `combinator` gains the
+words below, beside Part I's `arity`, `arg_types`, `extends_receiver` and `origins`.
+*Withdrawn 2026-09-13: `path_through` and an origin's `path_arg` — both existed only for
+the JDK client, which is a `fluent` catalog; `fluent`'s `url_via` is the same read in the
+engine that already owns builder chains.*
 
 1. **`origin_param: k`** on a body-linked entry or prefix — "inside the body this call
    links, the chain starts at the lambda's parameter *k*". The engine resolves *k* to the
@@ -578,7 +578,13 @@ than none (`HttpRequest.newBuilder(URI)`).
    `receiver_parameter == captures + k` is rooted there; a leftmost receiver that is null,
    another parameter, or a call the vocabulary does not know, poisons — today's rule,
    unchanged. Users: `route(String, Function<PredicateSpec, …>)`, `route(Function<…>)`,
-   `routing(Application, Function1<Route, …>)`.
+   `routing(Application, Function1<Route, …>)` — **and every shipped body-linked rule whose
+   body's parameter is the builder** (`coRouter`, `router`, the DSL `nest`, the builder's
+   `Consumer<Builder>` `path`/`nest`), which declare `origin_param: 0` in this PR: Part I
+   read "no receiver" inside a body as clean, which is exact only while a body never holds
+   a field receiver. A `Supplier` body has no parameter and declares none. Nothing shipped
+   moves — the fixtures' bodies all sit on parameter `captures + 0` (measured in Part I's
+   Task 1 on javac and the fixture's Kotlin).
 2. **`receiver_arg: 0`** on a verb or prefix — the extension-receiver form: "argument 0
    must be the enclosing body's origin parameter". The same `captures + k` check on an
    argument of `kind: parameter` instead of on the receiver. Users: every Ktor rule.
@@ -588,16 +594,27 @@ than none (`HttpRequest.newBuilder(URI)`).
    dropped and the row poisoned. `BooleanSpec.not(…)` / `PredicateSpec.not(…)`. Poisoned,
    not omitted: a route with a negated path predicate still serves *something*; what it
    serves is not readable from the negation, so the row says `unresolved`.
-4. **`path_through`** — `{owner, method, path_arg}`: a call whose *result* appears as a
-   path argument is read through to its own argument. `URI.create(String)` joins through
-   the argument's `source` (the producing call), the same join the engine already makes
-   for predicates; `new URI(String)` arrives as an `instance` argument and joins through
-   the `<init>` call site whose receiver is that instance (the join `single_call` already
-   makes for constructed arguments). Without it `uri(URI.create("https://…"))` is a chain
-   with an unreadable path.
+4. **Chain-form composers and a terminal** — measured on `spring-cloud-gateway-server-webflux`
+   5.0.0 (`javap`): a gateway route is `r.path("/a").and().method(GET).filters(f).uri(x)`
+   — predicates are calls on a RECEIVER chain, composed by the zero-argument `and()`/`or()`
+   (left-associative: `(a or b) and GET`), and the route is emitted by the chain's last
+   call. Part I's composers compose ARGUMENTS (`p1.and(p2)`), and a receiver-extending verb
+   emits one route per verb; neither reads this. So: `chain_composers: {and: [{owner,
+   method}], or: […]}`; `negators: [{owner, method}]` (`not(fn)`, `negate()`, and
+   `predicate(…)` — a served set the walk cannot read — all poison identity); and
+   `terminal: true` on a rule with `handler_arg` or `handler: none`: the call's routes are
+   its receiver chain folded as CONSTRAINTS — start at the origin (or the body's origin
+   parameter), pass-throughs stepped over, every other rule's constraints merged into each
+   branch, `or()` opening a new branch, an unread head poisoning all — merged with the
+   terminal's own. A route whose constraints read no path serves every path: `/**` (§7
+   case 3), so a route with only `method(GET)` or only `host(…)` publishes `GET /**`;
+   `host`, `order`, `metadata`, `alwaysTrue`, `filters(fn)` are pass-throughs. A path
+   argument that is an ARRAY of string literals (`path("/a", "/b")`) is one branch per
+   element, in `_argument_constraints`, for every rule that reads a path.
 5. **`verb_arg: n`** on a verb rule — the verb is the argument at *n*: an enum member's
-   name (`method(HttpMethod.GET)`) or a string literal (`method("PATCH", …)`); anything
-   else there poisons the row. Today the grammar reads a verb only as a literal beside the
+   name (`method(HttpMethod.GET)`), a string literal, or an ARRAY of those (the gateway's
+   `method(HttpMethod...)` is a vararg: `method(GET, POST)` is one branch per verb);
+   anything else there poisons `method`. Today the grammar reads a verb only as a literal beside the
    owner, and says so as a coverage boundary on both Spring routers
    (`verify: grep -n "stay OUT" src/sextant/catalogs/spring-webflux-router.yml`); the word
    lifts that boundary for `RequestPredicates.method/methods` as a side effect, which the
@@ -629,19 +646,21 @@ input (§14).
 
 ## 14. Fixtures and proof for Part II
 
-**Fixture sources** (facts are not committed; each new source is scanned by the tests that analyse its module). Gateway, SQS and the JDK
-client go into `fixtures/orders-service` (the gateway starter joins its POM, gating the
-two gateway catalogs' `detect_coordinates`); Javalin into the existing
-`fixtures/orders-javalin`; Ktor into a **new `fixtures/orders-ktor`** (Maven, Kotlin,
-`ktor-server-core`), added to `tests/fixture_build.py`'s `PRIMED_FIXTURES` so CI primes it
-with the others. Versions recorded by the plan.
+**Fixture sources** (facts are not committed; each new source is scanned by the tests that
+analyse its module). SQS receive and the JDK/Apache client go into `fixtures/orders-service`;
+Javalin into the existing `fixtures/orders-javalin`; Ktor into a **new `fixtures/orders-ktor`**
+and the gateway into a **new `fixtures/orders-gateway`** (`spring-cloud-gateway-server-webflux`
+5.0.0 targets the 7.x framework line, not `orders-service`'s pinned 6.1.6 — measured
+2026-09-13, the only version in the local repository), both Maven, both added to
+`tests/fixture_build.py`'s `PRIMED_FIXTURES` so CI primes them with the others. Versions
+recorded by the plan.
 
 | file | exercises |
 |---|---|
-| `orders-service` · `gateway/GatewayRoutes.java` | `routes().route(id, r -> …)` and `route(r -> …)` (both overloads); one route with `path` only; one with `path().and().method(GET)`; one with `or()` (two paths); one with `not()`; one lambda capturing a local (`prefix + "/**"`) and one capturing `this` — the two capture shapes that break a fixed index; every route ends in `.uri(…)`, `http://` on one, `lb://` on another |
+| `orders-gateway` · `GatewayRoutes.java` | `routes().route(id, r -> …)` and `route(r -> …)` (both overloads); one route with `path` only; one with `path().and().method(GET)`; one with `or()` (two paths); one with `not()`; one lambda capturing a local (`prefix + "/**"`) and one capturing `this` — the two capture shapes that break a fixed index; every route ends in `.uri(…)`, `http://` on one, `lb://` on another |
 | `orders-javalin` · `apibuilder/JavalinApi.java` | `apiBuilder(() -> path("/orders", () -> { get("/{id}", h); post(h); path("/{id}/items", () -> get(h)); }))` — two nesting levels, one verb with no path |
 | `orders-ktor` · `KtorRoutes.kt` | `routing { route("/api") { get("/orders") { … }; route("/v2") { post("/orders") { … } } } }` plus one `get(otherRoute, "/x") { }` inside the body with `otherRoute` a local — the wrong-receiver case |
-| `orders-service` · `httpclient/JdkOrdersClient.java` | `newBuilder().uri(URI.create(…)).POST(…).build()` sent inline; the `newBuilder(URI)` overload; `.method("PATCH", …)`; one request built in a helper and sent elsewhere; Apache `new HttpGet(…)` and `ClassicRequestBuilder.get(…)` |
+| `orders-service` · `httpclient/JdkOrdersClient.java` (JDK) and `httpclient/ApacheOrdersClient.java` | `newBuilder().uri(URI.create(…)).POST(…).build()` sent inline; the `newBuilder(URI)` overload; `.method("PATCH", …)`; one request built in a helper and sent elsewhere; Apache `new HttpGet(…)` and `ClassicRequestBuilder.get(…)` |
 | `orders-service` · `sqs/OrderPoller.java` | `receive(opts -> opts.queue("orders-queue"), Order.class)`, `receiveMany(opts -> …)`, `receiveAsync`, and the direct `receive("direct-queue", Order.class)` overload |
 
 **Tests, continuing §8's numbering:**
@@ -730,7 +749,7 @@ reviewable, and Part I stands on its own:
    handler stated on its row.
 8. Gateway inbound — the first user of `origin_param`, `negators` and `verb_arg`:
    test 10. `G-30` closes.
-9. `path_through`, `path_arg` on an origin, and the JDK/Apache client — test 14;
+9. `fluent`'s `url_via`, and the JDK/Apache client as `fluent` catalogs — test 14;
    `jdk-httpclient` closes; **REST outbound's row empties**.
 10. Register, coverage matrix, closed block — test 18.
 
