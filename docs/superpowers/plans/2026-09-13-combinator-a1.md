@@ -782,7 +782,7 @@ def test_the_four_verb_overloads_each_derive_what_their_positions_carry(tmp_path
     workspace = _resolve(tmp_path, _four_get_overloads_in_one_body(), _catalog(_overload_matches()))
     handler = _MODULE + LIST_ORDERS
     assert _identities(_rows(workspace)) == [
-        ("GET", None, handler, "resolved"),          # GET(h): a catch-all, deliberately open
+        ("GET", "/**", handler, "resolved"),         # GET(h): a catch-all — every path (spec §7 case 3, ruled 2026-09-13)
         ("GET", "/four/p", handler, "resolved"),     # GET("/four", path("/p"), h)
         ("GET", "/three", handler, "resolved"),      # GET(path("/three"), h)
         ("GET", "/two", handler, "resolved"),        # GET("/two", h)
@@ -1445,7 +1445,7 @@ Compile: `cd fixtures/orders-service && mvn -q -o compile` — fix any import ag
         (None, ...)  # see below
 ```
 
-The catch-all `GET(h::health)` is `("GET", None)` — check how the test's set treats a NULL path (other catch-all rows may already exist; if the set comprehension drops `None` paths, add a separate assertion that exactly one `spring-webflux-router` row has `method == "GET"`, `path is None`, `resolution == "resolved"`). Same for the MVC twin under `/mvcbld/…`. `tests/e2e/test_vertical_slice.py::test_the_document_names_every_fixture_endpoint_and_its_gaps` lists the same routes for the rendered document — add them there too. Then in `tests/e2e/test_rest_inbound_delivered.py`: the file's `http_routes` fixture (line 21) yields `(catalog_id, method, path)` for every inbound HTTP row of the session's one `orders-service` analysis. Add a sibling module fixture beside it that yields the whole rows, built the same way (same `analyzed_orders_service` workspace, same `try/finally`):
+The catch-all `GET(h::health)` is `("GET", "/**")` (spec §7 case 3 as ruled 2026-09-13: a route with no path constraint serves every path and publishes the framework's any-path pattern; a resolved NULL path is what `derive_call_endpoints.sql`'s addresses-nothing gate drops, by design). Same for the MVC twin under `/mvcbld/…`. `tests/e2e/test_vertical_slice.py::test_the_document_names_every_fixture_endpoint_and_its_gaps` lists the same routes for the rendered document — add them there too. Then in `tests/e2e/test_rest_inbound_delivered.py`: the file's `http_routes` fixture (line 21) yields `(catalog_id, method, path)` for every inbound HTTP row of the session's one `orders-service` analysis. Add a sibling module fixture beside it that yields the whole rows, built the same way (same `analyzed_orders_service` workspace, same `try/finally`):
 
 ```python
 @pytest.fixture(scope="module")
@@ -1479,6 +1479,7 @@ def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
         (mvc, "GET", "/mvcbld/health"), (mvc, "POST", "/mvcbld/orders"),
         (mvc, "PUT", "/mvcbld/orders/{id}"), (mvc, "GET", "/mvcbld/nested/inner"),
         (mvc, "DELETE", "/mvcbld/nested/inner/{id}"), (mvc, "GET", "/mvcbld/static/**"),
+        (flux, "GET", "/**"), (mvc, "GET", "/**"),
     }
     missing = expected - http_routes
     assert missing == set(), f"builder routes missing: {sorted(missing)}"
@@ -1491,13 +1492,13 @@ def test_every_builder_route_is_resolved_including_the_one_past_the_filter(http_
     ]
 
 
-def test_the_builder_catch_all_is_resolved_with_no_path(http_rows):
+def test_the_builder_catch_all_serves_every_path_and_is_resolved(http_rows):
     catch_alls = [
         row for row in http_rows
         if row["catalog_id"] in ("spring-webflux-router", "spring-mvc-router")
-        and row["method"] == "GET" and row["path"] is None
+        and row["method"] == "GET" and row["path"] == "/**"
     ]
-    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 2
+    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 2, catch_alls
 ```
 
 (The second test is spec §8 test 5 live: the routes past the mid-chain `filter` are resolved.)
@@ -1640,23 +1641,23 @@ def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(
     rows = {
         (row["catalog_id"], row["method"], row["path"], row["resolution"], row["handler"] is not None)
         for row in http_rows
-        if row["path"] is None or str(row["path"]).startswith(("/ktmvc", "/ktflux"))
+        if row["path"] == "/**" or str(row["path"]).startswith(("/ktmvc", "/ktflux"))
     }
     assert {
         ("spring-mvc-router", "GET", "/ktmvc/invoices", "resolved", True),
         ("spring-mvc-router", "GET", "/ktmvc/invoices/{id}", "resolved", True),
         ("spring-mvc-router", "GET", "/ktmvc/health", "resolved", True),
         ("spring-mvc-router", "POST", "/ktmvc/invoices", "resolved", True),
-        ("spring-mvc-router", "GET", None, "resolved", True),
+        ("spring-mvc-router", "GET", "/**", "resolved", True),
         ("spring-webflux-router", "GET", "/ktflux/orders", "resolved", True),
         ("spring-webflux-router", "GET", "/ktflux/orders/{id}", "resolved", True),
         ("spring-webflux-router", "POST", "/ktflux/orders", "resolved", True),
-        ("spring-webflux-router", "GET", None, "resolved", True),
+        ("spring-webflux-router", "GET", "/**", "resolved", True),
     } <= rows, sorted(rows)
 ```
 
 Run it: `.venv/bin/pytest tests/e2e/test_rest_inbound_delivered.py -q -k kotlin_dsl_verb -p no:cacheprovider`
-Expected: FAIL — the `/ktmvc` catch-all reads `unresolved`, `/ktmvc/invoices/{id}` has no handler, `/ktmvc/health` is absent, and nothing under `/ktflux` exists (no `router` entry). Record the actual failure in the task report: it is the measured defect.
+Expected: FAIL — the `/ktmvc` catch-all is absent (unresolved, path NULL), `/ktmvc/invoices/{id}` has no handler, `/ktmvc/health` is absent, and nothing under `/ktflux` exists (no `router` entry). Record the actual failure in the task report: it is the measured defect.
 
 - [ ] **Step 4: the rules**
 
@@ -1716,7 +1717,7 @@ Run the live test → PASS. Run `tests/application/test_combinator_engine.py` �
 
 - [ ] **Step 5: the fixture totals move**
 
-`tests/application/test_pipeline.py` and `tests/e2e/test_vertical_slice.py` gain the `/ktmvc/…` and `/ktflux/…` routes, with a comment naming the two Kotlin files. The two catch-alls join Task 4's separate assertion (now four resolved `GET`/NULL rows across the two router catalogs: two builder, two DSL) — update that count.
+`tests/application/test_pipeline.py` and `tests/e2e/test_vertical_slice.py` gain the `/ktmvc/…` and `/ktflux/…` routes, with a comment naming the two Kotlin files. The two DSL catch-alls join Task 4's `/**` assertion (now four resolved `GET /**` rows across the two router catalogs — two builder, two DSL — distinct by `caller`) — update that count to 4.
 
 - [ ] **Step 6: version-scope discipline**
 
@@ -1778,7 +1779,7 @@ git commit -m "docs(register): G-37, W44-verb-overloads and GAP-1b close on run 
 | §7 cases 1–5 | Task 3 (1, 2, 3), Task 4 (4 by the existing rule, 5) |
 | §8 tests 1–7 | 1: Task 3 (hand-built) + Task 5 (live); 2, 4: Task 3; 3: Task 3's first test (`GET(h)` resolved) + Task 4's live catch-all; 5: Task 4; 6: Task 4 (`declines` + `pins`); 7: Task 4 Step 6 |
 | §16 items 1–4 in order | Tasks 1+2, 3, 4, 5 |
-| spec §7 case 3 wording — a catch-all is `resolved` | Task 3 `_verb_constraints`, pinned by the first overload test and the live catch-all test |
+| spec §7 case 3 — a catch-all is `/**`, `resolved` (ruled 2026-09-13) | Task 3 `_path_of`, pinned by the first overload test and the live catch-all test |
 
 **Type consistency:** `_matching_rule(site, rules)` (Task 3) is what Task 4's `_routes_of` branches call; `predicate_arg` (Task 3) is used by Task 4's builder rules and Task 5's DSL rules; `pass_through` on `_Continuation` (Task 4) is read only in `_routes_of`; `handler: none` (Task 4) is read in `_verb_routes`. `descriptor_parameter_types` returns dotted names, and every `arg_types` value in Tasks 3–5 is spelled dotted.
 

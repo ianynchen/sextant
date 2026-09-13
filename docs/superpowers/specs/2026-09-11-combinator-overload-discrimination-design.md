@@ -292,12 +292,19 @@ The engine's per-column poisoning is unchanged. A row carries
 
 1. **Unrecognised overload** → one row, `resolution: unresolved` (§3's G-13 guard).
 2. **Two equally specific rules** → catalog load error naming both, never file order.
-3. **A catch-all is not an unknown.** `GET(handler)` declares a route with no path
-   constraint; it is `path` NULL with **`resolution: resolved`**, because nothing
-   was poisoned. An unreadable path is `path` NULL with `resolution: unresolved`.
-   No new field is needed, and getting this backwards would publish "we could not
-   read this" for a route the author deliberately wrote open — a lie in the more
-   damaging direction.
+3. **A catch-all is not an unknown — and not an absence.** `GET(handler)` declares a
+   route with no path constraint: it serves EVERY path, and the row says so with the
+   framework's own any-path pattern, **`path: /**`, `resolution: resolved`**. An
+   unreadable path is `path` NULL with `resolution: unresolved`. Getting this backwards
+   would publish "we could not read this" for a route the author deliberately wrote
+   open — a lie in the more damaging direction. *Ruled 2026-09-13 (plan Task 3): this
+   case said `path` NULL, `resolved`. That row is exactly what the call-side
+   addresses-nothing gate (`derive_call_endpoints.sql`) drops by doctrine — a resolved
+   row with no address claims "read, and there is none" — so the catch-all never reached
+   the `endpoints` table. `/**` is the address the framework serves it at; `combinator`
+   now never emits a resolved row with a NULL path, which keeps the gate's invariant
+   whole.* The same rule reaches `route(accept(JSON), h)` — a media-only route serves
+   every path, and reads `/**` with its media, where it used to be dropped silently.
 4. **A builder split across methods** — `private Builder base() {…}` then
    `base().POST(…)` — is one unresolved row, per the existing rule. Stated
    explicitly because a builder invites that factoring far more than
