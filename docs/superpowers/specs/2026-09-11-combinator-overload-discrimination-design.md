@@ -213,8 +213,13 @@ version of this design declared `RouterFunctions.route()` as a plain continuatio
 unresolved row with no verb and no path at the head of **every** builder chain.
 
 So the design adds a third vocabulary role: **`origins`**, declared as
-`{owner, method}`. `_chained_routes` returns `[]` rather than poison when the
-receiver's producing site is a declared origin. This is the difference between
+`{owner, method, arity, arg_types?}` — a rule, discriminated exactly as §3's verbs
+are. *Ruled 2026-09-13 (plan Task 4): this said `{owner, method}`. Matched on owner and
+name alone, `RouterFunctions.route` as an origin swallowed `route(predicate, handler)` —
+the head of every `andRoute` chain — as a chain start, and three live routes vanished
+(`GET /fn/orders`, `GET /mvcfn/invoices`, `GET /extra`). The argument-less `route()` is
+`arity: 0`; the two-argument form stays the entry it always was.* `_chained_routes`
+returns `[]` rather than poison when the receiver's producing site matches a declared origin. This is the difference between
 *"the chain starts here"* and *"I could not read the receiver"* — a distinction
 the code cannot currently draw because until now nothing needed it to.
 
@@ -222,10 +227,11 @@ the code cannot currently draw because until now nothing needed it to.
 catalog declares.
 
 **Consequence worth stating: the same `or` clause makes declaring the
-pass-throughs mandatory.** An undeclared mid-chain call — `filter`, `before`,
-`after`, `onError`, `withAttribute`, `withAttributes` — contributes zero routes
-and therefore poisons the **whole chain's** wire identity, costing every route to
-its left, not just itself.
+pass-throughs mandatory.** An undeclared call in a chain — `filter`, `before`,
+`after`, `onError`, `withAttribute`, `withAttributes`, or an undeclared head —
+contributes zero routes, so every route to its LEFT is replaced by one unresolved row;
+the routes to its right still derive, each on its own turn. (Stated precisely 2026-09-13,
+plan Task 4: "the whole chain" overstated it — the chain right of the gap is intact.)
 
 ---
 
