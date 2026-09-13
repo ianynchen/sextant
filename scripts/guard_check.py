@@ -379,6 +379,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.negator-poisons": Guard(
+        what="a negator anywhere in the receiver chain a terminal folds poisons every "
+        "branch of the route",
+        why="without it the negation reads as a pass-through — nothing contributed, the "
+        'chain folded on — and `path("/a").negate().uri(x)` is published as `/a`, '
+        "resolved: the one path the route does NOT serve, presented as its address",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if key in context.negators:\n"
+                "            return [_Route(poisons=_IDENTITY_POISON)]",
+                replace="        if key in context.negators:\n"
+                "            continue  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "combinator.entry-owner-is-the-declared-type": Guard(
         what="an entry of either shape — argument-rooted or body-linked — matches a call "
         "only on the owner AND method the catalog declares",

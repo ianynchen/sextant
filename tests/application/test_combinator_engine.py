@@ -4658,3 +4658,383 @@ def test_the_ktor_catalog_declines_a_routing_call_on_another_owner(tmp_path: Pat
     workspace.close()
 
     assert identities == []
+
+
+# --- chain-form composers, negators, a terminal, `verb_arg`, array paths (A2 Task 6, spec §12 words 3–5) ---
+
+SPEC = "com/example/gw/PredicateSpec#"
+BOOL = "com/example/gw/BooleanSpec#"
+GW = "com/example/gw/Routes#"
+
+
+def _gateway_matches() -> dict[str, object]:
+    """An invented gateway-shaped vocabulary: a route is a RECEIVER chain of predicate
+    calls on the body's parameter, composed by the zero-argument `and()`/`or()`, and
+    emitted by the chain's last call — the terminal `uri`, which carries no handler."""
+    return {
+        "entries": [
+            {"owner": "com.example.gw.Routes", "method": "route", "body_arg": 1, "origin_param": 0}
+        ],
+        "origins": [{"owner": "com.example.gw.Routes", "method": "routes", "arity": 0}],
+        "vocabulary": {
+            "prefixes": [
+                {
+                    "owner": "com.example.gw.PredicateSpec",
+                    "method": "path",
+                    "arity": 1,
+                    "path_arg": 0,
+                }
+            ],
+            "verbs": [
+                {
+                    "owner": "com.example.gw.PredicateSpec",
+                    "method": "method",
+                    "arity": 1,
+                    "verb_arg": 0,
+                },
+                {
+                    "owner": "com.example.gw.BooleanSpec",
+                    "method": "uri",
+                    "arity": 1,
+                    "terminal": True,
+                    "handler": "none",
+                },
+            ],
+            "chain_composers": {
+                "and": [{"owner": "com.example.gw.BooleanSpec", "method": "and"}],
+                "or": [{"owner": "com.example.gw.BooleanSpec", "method": "or"}],
+            },
+            "negators": [
+                {"owner": "com.example.gw.PredicateSpec", "method": "not"},
+                {"owner": "com.example.gw.BooleanSpec", "method": "negate"},
+            ],
+        },
+        "continuations": [
+            {"name": "build", "owner": "com.example.gw.Routes"},
+            {"name": "filters", "owner": "com.example.gw.BooleanSpec", "pass_through": True},
+        ],
+    }
+
+
+def _gateway_body(chain: list[tuple[str, str, list[CallArgument]]]) -> list:
+    """`routes().route("id", r -> r.<chain>).build()`: `chain` is (owner, name, args) from
+    the head; each call's receiver is the previous call's result, the head's is the body's
+    parameter 0 (the lambda captures nothing)."""
+    caller = DECLARER + "routes(sig_r)."
+    entry_sites = [
+        _site(caller, 0, GW, "routes", result=0, descriptor="()Lcom/example/gw/Builder;"),
+        _site(
+            caller,
+            1,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[
+                CallArgument(kind="string", value="id"),
+                CallArgument(kind="lambda", symbol=INLINE_BODY, source=1, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            GW,
+            "build",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="()Lcom/example/gw/Locator;",
+        ),
+    ]
+    body: list[CallSiteFact] = []
+    previous: int | None = None
+    for ordinal, (owner, name, args) in enumerate(chain):
+        body.append(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=INLINE_BODY,
+                invoke_kind="virtual",
+                ordinal=ordinal,
+                target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+                receiver=previous,
+                receiver_parameter=0 if previous is None else None,
+                result=ordinal,
+                arguments=args,
+            )
+        )
+        previous = ordinal
+    return [_method_symbol(INLINE_BODY), *entry_sites, *body]
+
+
+def _enum(name: str) -> CallArgument:
+    return CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#" + name + ".")
+
+
+def _uri() -> tuple[str, str, list[CallArgument]]:
+    return (BOOL, "uri", [CallArgument(kind="string", value="http://x")])
+
+
+def test_a_predicate_chain_ending_at_a_terminal_is_one_route(tmp_path: Path):
+    """Spec §12 word 4: the terminal's routes are its receiver chain folded as
+    CONSTRAINTS — `path` and `method` merged across the chain-form `and()` — one row,
+    handler NULL as the rule says, `caller` the method holding the tree's root."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/orders/**")]),
+        (BOOL, "and", []),
+        (SPEC, "method", [_enum("GET")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/orders/**", None, "resolved")]
+    assert [row["caller"] for row in rows] == [DECLARER + "routes(sig_r)."]
+
+
+def test_or_opens_a_branch_and_and_binds_to_the_left(tmp_path: Path):
+    """`(a or b) and GET`, left-associative as the framework composes it: `or()` makes
+    the next contribution a branch of its own, and the `method` after the `and()` merges
+    into BOTH branches."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+        (BOOL, "and", []),
+        (SPEC, "method", [_enum("GET")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", "/a", None, "resolved"), ("GET", "/b", None, "resolved")]
+
+
+def test_a_verb_only_route_serves_every_path_and_a_vararg_of_verbs_is_one_branch_each(
+    tmp_path: Path,
+):
+    """Spec §12 word 5: `method(GET, POST)` is a vararg, one branch per verb; a route
+    whose constraints read no path serves every path — `/**` (§7 case 3), contributed
+    ONCE, after the chain and the terminal's own constraints are merged."""
+    chain = [
+        (SPEC, "method", [CallArgument(kind="array", elements=[_enum("GET"), _enum("POST")])]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", "/**", None, "resolved"), ("POST", "/**", None, "resolved")]
+
+
+def test_a_terminal_directly_on_the_origin_parameter_is_a_catch_all(tmp_path: Path):
+    """`r.uri(x)` — a chain of nothing but the terminal: no constraint was read and
+    nothing was poisoned, so the route serves every path and names no verb."""
+    workspace = _resolve(tmp_path, _gateway_body([_uri()]), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/**", None, "resolved")]
+
+
+def test_a_string_verb_reads_as_written_and_an_unreadable_one_poisons_only_the_verb(
+    tmp_path: Path,
+):
+    """The verb argument as a string literal is that verb AS WRITTEN — measured on
+    spring-web 7.0.9, `HttpMethod.valueOf` compares case-sensitively and otherwise wraps
+    the string unchanged, so upper-casing here would publish a verb the framework never
+    matches; an argument of any other kind poisons `method` alone, the path intact."""
+    written = _resolve(
+        tmp_path / "written",
+        _gateway_body([(SPEC, "method", [CallArgument(kind="string", value="GET")]), _uri()]),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(written)) == [("GET", "/**", None, "resolved")]
+    written.close()
+    unread = _resolve(
+        tmp_path / "unread",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "and", []),
+                (SPEC, "method", [CallArgument(kind="unresolved")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(unread)) == [(None, "/a", None, "unresolved")]
+    unread.close()
+
+
+@pytest.mark.pins("combinator.negator-poisons")
+def test_a_negator_anywhere_in_the_chain_poisons_the_route(tmp_path: Path):
+    """Spec §12 word 3: a negated predicate still serves SOMETHING, and what it serves
+    is not readable from the negation — one unresolved row, never the un-negated path
+    published as resolved."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "negate", []),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["resolution"]) for row in rows] == [(None, "unresolved")]
+
+
+def test_a_pass_through_in_the_chain_contributes_nothing(tmp_path: Path):
+    """`filters(fn)` between the predicates and the terminal is a declared pass-through:
+    stepped over, its lambda never read as a handler or a route."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "filters", [CallArgument(kind="lambda", symbol=HEALTH, source=0, captures=0)]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/a", None, "resolved")]
+
+
+def test_a_path_vararg_is_one_branch_per_literal_and_a_non_literal_element_poisons(
+    tmp_path: Path,
+):
+    """Spec §12 word 4's last sentence: `path("/a", "/b")` is one branch per element,
+    read through the same literal-path join every other path is; an array holding
+    anything but string literals is an unreadable path."""
+    literals = _resolve(
+        tmp_path / "literals",
+        _gateway_body(
+            [
+                (
+                    SPEC,
+                    "path",
+                    [
+                        CallArgument(
+                            kind="array",
+                            elements=[
+                                CallArgument(kind="string", value="/a"),
+                                CallArgument(kind="string", value="/b"),
+                            ],
+                        )
+                    ],
+                ),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(literals)) == [
+        (None, "/a", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    literals.close()
+    mixed = _resolve(
+        tmp_path / "mixed",
+        _gateway_body(
+            [
+                (
+                    SPEC,
+                    "path",
+                    [
+                        CallArgument(
+                            kind="array",
+                            elements=[
+                                CallArgument(kind="string", value="/a"),
+                                CallArgument(kind="unresolved"),
+                            ],
+                        )
+                    ],
+                ),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(mixed)) == [(None, None, None, "unresolved")]
+    mixed.close()
+
+
+def test_a_chain_whose_head_is_not_the_origin_parameter_poisons(tmp_path: Path):
+    """Spec §13 case 6 on the chain form: a head on a field receiver is not the body's
+    origin parameter, so the whole route is one unresolved row — and so is a chain with
+    a call the vocabulary does not know in it, since what that call constrains is
+    unreadable."""
+    facts = _gateway_body([(SPEC, "path", [CallArgument(kind="string", value="/a")]), _uri()])
+    head = next(f for f in facts if isinstance(f, CallSiteFact) and f.target.name == "path")
+    facts[facts.index(head)] = head.model_copy(update={"receiver_parameter": None})
+    field = _resolve(tmp_path / "field", facts, _catalog(_gateway_matches()))
+    assert [row["resolution"] for row in _rows(field)] == ["unresolved"]
+    field.close()
+    unknown = _resolve(
+        tmp_path / "unknown",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "and", []),
+                (SPEC, "header", [CallArgument(kind="string", value="X-Id")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(unknown)) == [(None, None, None, "unresolved")]
+    unknown.close()
+
+
+def test_an_outbound_terminal_route_reading_no_path_poisons_the_path(tmp_path: Path):
+    """The any-path address is what a SERVED route with no path constraint is (§7 case
+    3); an outbound catalog serves nothing, so a terminal route that read no path has no
+    address to publish and the path is poisoned instead. No shipped outbound combinator
+    catalog exists — pinned hand-built so the gate is stated, not assumed."""
+    catalog = Catalog(
+        id="test-outbound-chain",
+        style="combinator",
+        protocol="http",
+        direction="outbound",
+        requires=("call_site", "string_constants", "chain_reconstruction"),
+        matches=_gateway_matches(),
+        source=Path("test-outbound-chain.yml"),
+    )
+    workspace = _resolve(
+        tmp_path, _gateway_body([(SPEC, "method", [_enum("GET")]), _uri()]), catalog
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", None, None, "unresolved")]
+
+
+def test_a_chain_word_on_a_name_another_role_claims_and_a_terminal_without_a_handler_answer_are_refused(
+    tmp_path: Path,
+):
+    """A chain composer or negator on an (owner, method) a verb, prefix or media rule
+    already names is two readings of one call decided by dispatch order, never by the
+    catalog; a terminal declares a whole route, so it says where its handler sits or
+    that there is none; `verb_arg` names an argument position and is the rule's ONE
+    answer for its verb — beside `verb`, or at a position the arity cannot carry, it is
+    a rule that cannot mean what it says."""
+    colliding = _gateway_matches()
+    colliding["vocabulary"]["negators"].append(  # type: ignore[index]
+        {"owner": "com.example.gw.PredicateSpec", "method": "path"}
+    )
+    with pytest.raises(CatalogError, match="`path`.*negator"):
+        _resolve(tmp_path / "colliding", _gateway_body([_uri()]), _catalog(colliding))
+    handler_less = _gateway_matches()
+    del handler_less["vocabulary"]["verbs"][1]["handler"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`uri`.*terminal"):
+        _resolve(tmp_path / "handler_less", _gateway_body([_uri()]), _catalog(handler_less))
+    two_verbs = _gateway_matches()
+    two_verbs["vocabulary"]["verbs"][0]["verb"] = "GET"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`method`.*verb_arg"):
+        _resolve(tmp_path / "two_verbs", _gateway_body([_uri()]), _catalog(two_verbs))
+    beyond = _gateway_matches()
+    beyond["vocabulary"]["verbs"][0]["verb_arg"] = 1  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`method`.*verb_arg"):
+        _resolve(tmp_path / "beyond", _gateway_body([_uri()]), _catalog(beyond))

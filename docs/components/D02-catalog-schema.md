@@ -1485,6 +1485,34 @@ matches:
   # path_join: leading_slash   # only where the framework itself joins segments (Javalin)
 ```
 
+The chain form (spec §12 words 3–5), measured on `spring-cloud-gateway-server-webflux`
+5.0.0: a route is a RECEIVER chain of predicate calls on the body's parameter —
+`r.path("/a").and().method(GET).filters(f).uri(x)` — composed by the zero-argument
+`and()`/`or()` and emitted by the chain's last call, the terminal:
+
+```yaml
+matches:
+  entries:
+    - { owner: "…RouteLocatorBuilder$Builder", method: route, body_arg: 1, origin_param: 0 }
+  vocabulary:
+    prefixes:
+      - { owner: "…PredicateSpec", method: path, arity: 1, path_arg: 0 }
+    verbs:
+      - { owner: "…PredicateSpec", method: method, arity: 1, verb_arg: 0 }
+      - { owner: "…UriSpec", method: uri, arity: 1, terminal: true, handler: none }
+    chain_composers:
+      and: [{ owner: "…BooleanSpec", method: and }]
+      or:  [{ owner: "…BooleanSpec", method: or }]
+    negators:
+      - { owner: "…PredicateSpec", method: not }
+      - { owner: "…BooleanSpec", method: negate }
+  continuations:
+    - { name: build,   owner: "…RouteLocatorBuilder$Builder" }
+    - { name: filters, owner: "…BooleanSpec", pass_through: true }
+  origins:
+    - { owner: "…RouteLocatorBuilder", method: routes, arity: 0 }
+```
+
 **Five grammar blocks, and each is catalog data alone — nothing below names a
 framework:**
 
@@ -1537,7 +1565,54 @@ framework:**
   (an enum type's member names to their declared wire values), and `composers`
   (`and` merges constraint sets into one; `or` duplicates the route per branch, over
   ANY predicate kind — verbs, paths, media alike — the `all_methods` precedent
-  generalised).
+  generalised). A verb rule may name its verb OFF THE CALL instead of beside the
+  owner — **`verb_arg: n`** in place of `verb` (spec §12 word 5): the argument at
+  `n` is an enum member, whose name is the verb (`method(HttpMethod.GET)`); a
+  string literal, the verb exactly as written — `HttpMethod.valueOf` keeps the
+  case it is handed (measured on spring-web 7.0.9), so the engine changes no
+  spelling; or an array of those, a vararg, one branch per element
+  (`method(GET, POST)` is two routes). Anything else there — a variable, an array
+  holding one, an empty array — poisons `method` alone; the path stays. `verb_arg`
+  sits on a verb rule declaring no `verb`, is an index from 0 and, where the rule
+  declares an `arity`, lies below it; anything else is refused at load. **A path
+  argument that is an ARRAY of string literals** — `path("/a", "/b")`, a vararg —
+  is one branch per element, for EVERY rule that reads a path (a prefix's
+  `path_arg`, a verb's, a nest-shaped continuation's), each element read through
+  the same `path_join` a single literal is; an array holding anything else, or
+  holding nothing, is an unreadable path.
+- **The chain form** (spec §12 words 3–4). Some frameworks write a route not as a
+  tree of predicate ARGUMENTS but as a RECEIVER chain of predicate calls on the
+  body's parameter, composed by the zero-argument `and()`/`or()` and emitted by the
+  chain's last call — `r.path("/a").and().method(GET).filters(f).uri(x)`. Three
+  words read it. **`chain_composers: {and: [{owner, method}], or: […]}`** are the
+  composers written ON the chain: `and()` is the merge that happens anyway, `or()`
+  makes the next contribution a branch of its own — left-associative, as the
+  framework composes it, so `a.or().b.and().c` is `(a or b) and c`. **`negators:
+  [{owner, method}]`** — `not(fn)`, `negate()` — poison every branch of the route
+  they sit in: a negated predicate still serves something, and what it serves is
+  not readable from the negation, so the row is `unresolved` rather than the
+  un-negated path published as the address (word 3). **`terminal: true`** on a verb
+  rule — with `handler_arg`, or `handler: none` where the framework's route names no
+  handler method, as the gateway's `uri(x)` does not — is the call whose routes are
+  its receiver chain folded as CONSTRAINTS: the head is the declared origin or the
+  body's origin parameter (the same head check every chain in a body gets — a head
+  on a field, on another parameter, or on a receiver nobody produced is one
+  unresolved row, spec §13 case 6), pass-throughs are stepped over, every other
+  rule's constraints merge into each branch, `or()` opens a branch, a negator or a
+  call the vocabulary does not know poisons all — merged with the terminal's own
+  constraints (whichever of `verb`/`verb_arg`, `path_arg`, `predicate_arg` its rule
+  declares; a bare terminal contributes nothing). A route whose constraints read no
+  path serves every path, `/**` (§7 case 3), decided ONCE after the merge — a route
+  with only `method(GET)` publishes `GET /**`, and `r.uri(x)` alone `/**` with no
+  verb — and only where the catalog serves URLs (inbound HTTP): an outbound catalog
+  serves nothing, so a terminal route there that read no path has its path
+  poisoned instead. A terminal extends its receiver as a builder verb does, so the
+  calls before it are never trees of their own; a chain composer or a negator whose
+  chain reaches no terminal declares nothing. A chain composer or a negator on an
+  (owner, method) a verb, prefix or media rule already names — or a continuation on
+  a chain composer's or negator's name, as on a composer's — is refused at load, as
+  is `terminal` without a handler answer, on anything but a verb, or on a name a
+  prefix or media rule claims.
 - **`continuations`** are the calls that merge route SETS along `result` →
   `receiver`, `fluent`'s own steps discipline extended: a plain name matches any
   owner, useful for reaching a step inside a chain already known to be this
