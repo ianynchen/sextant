@@ -932,12 +932,13 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 and isinstance(entry.get("owner"), str)
                 and isinstance(entry.get("method"), str)
                 and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
+                and _valid_arity(entry)
             )
             if not valid:
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{row['name']}` declares a "
                     f"`channel_via` entry that must be `{{owner, method, "
-                    f'arg: int|"all_strings"}}`, got {entry!r}'
+                    f'arg: int|"all_strings", arity?: int}}`, got {entry!r}'
                 )
         if _ADDRESS_ARG_2 in row:
             # The second half of a PAIR, so it means nothing without the
@@ -1405,6 +1406,13 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
         )
 
 
+def _valid_arity(entry: dict[str, Any]) -> bool:
+    """A via form's optional `arity` (A2 Task 8 fix round 1): absent, or an
+    int — the linked call's argument count, which is what tells two
+    overloads apart once owner and method agree (`linked_channels`)."""
+    return "arity" not in entry or isinstance(entry.get("arity"), int)
+
+
 def _channel_via_entries(method: dict[str, Any]) -> list[Any]:
     """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
     normalized to a list without touching the entries themselves — shared by
@@ -1422,7 +1430,12 @@ def _channel_via_forms(method: dict[str, Any]) -> list[dict[str, Any]]:
     the SCIP symbol form once. Only ever called on a row `_validate_methods`
     already passed, from the `methods` normalization at `run` start."""
     return [
-        {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
+        {
+            "owner": _catalog_symbol(entry["owner"]),
+            "method": entry["method"],
+            "arg": entry["arg"],
+            **({"arity": entry["arity"]} if "arity" in entry else {}),
+        }
         for entry in _channel_via_entries(method)
     ]
 

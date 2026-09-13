@@ -154,6 +154,9 @@ def literal_identity_captures() -> list[dict[str, str]]:
                             "catalog": str(path.stem),
                             "where": where,
                             "method": str(entry.get("method")),
+                            # A constructor is named by its class, so the owner is what
+                            # `_names_its_own_value` reads for a `<init>` entry.
+                            "owner": str(entry.get("owner", "")),
                             "field": field,
                             "value": str(captures[field]),
                         }
@@ -171,10 +174,22 @@ def _names_its_own_value(row: dict[str, str]) -> bool:
     `startswith`, not equality: `postForObject` and `getForEntity` are the
     `single_call` spelling of the same entailment, and a `fluent` library that
     named its verb setters `postJson`/`getJson` would be the same fact. What it
-    refuses is a name that shares no prefix with the verb at all — `<init>`,
-    `newBuilder`, `build`.
+    refuses is a name that shares no prefix with the verb at all — a bare
+    `<init>`, `newBuilder`, `build`.
+
+    **A constructor is named by its class** (A2 Task 8 fix round 1): `new
+    HttpGet(…)` is `<init>` on `HttpGet`, and the verb is the class's own
+    suffix — Apache's request classes are `HttpGet`, `HttpPost`, `HttpDelete`,
+    one per verb, and the constructed object is that request and nothing else.
+    So a `<init>` entry is entailed when its owner's simple name ENDS with the
+    verb; a `<init>` on a class named nothing of the kind (`Request$Builder`)
+    stays exactly what it was, a seed the allowlist has to vouch for.
     """
-    return row["method"].lower().startswith(row["value"].lower())
+    value = row["value"].lower()
+    if row["method"] == "<init>":
+        simple = row["owner"].rsplit(".", 1)[-1].rsplit("$", 1)[-1].lower()
+        return simple.endswith(value)
+    return row["method"].lower().startswith(value)
 
 
 def test_no_fluent_entry_seeds_an_identity_value_its_own_call_does_not_name():

@@ -29,7 +29,7 @@ too, but nothing here measured it.
 |---|---|---|
 | 1 | every builder method that sets a verb is encoded | the JDK root's seeded GET is safe, and `test_defaulted_identity_values.py` may allowlist it on that condition |
 | 2 | the builder declares a verb setter the catalog misses | the seed is unsafe and the allowlist entry is false |
-| 3 | `java.net.URI` declares a constructor whose argument 0 is not the address | a `url_via` form on `<init>` — which matches by owner and method, with no arity — would read that argument as the address; the form is not declared, and the boundary is stated |
+| 3 | `java.net.URI` declares a constructor whose argument 0 is not the address | a `url_via` form on `<init>` matched by owner and method alone would read that argument as the address; the form declares `arity: 1` (fix round 1), so only `URI(String)` is followed and the multi-argument constructors are the stated boundary |
 | 4 | `execute` has overloads taking the request at a position other than 0 | the execute-join reads every argument's `source`, so position does not matter to it; recorded so the terminal's claim is bounded |
 
 ## What the run found, in one paragraph
@@ -39,12 +39,13 @@ generic `method(String, BodyPublisher)`); nothing encoded is absent from the JDK
 one root NOT encoded, `newBuilder(HttpRequest, BiPredicate)`, copies another request
 and carries that request's verb — the seeded GET is wrong for it, which the catalog
 states. `java.net.URI` declares FIVE constructors, four of them multi-argument with the
-scheme at argument 0 — expectation 3's case, so only `URI.create(String)` is followed.
-Apache's `ClassicRequestBuilder` declares three overloads of each of eight verb
-factories plus the generic `create(String)`, all encoded; every `HttpGet`-family class
-declares exactly two constructors (`String`, `URI`), the constructor form the catalog
-does not yet read (`apache-httpclient-constructors`); `CloseableHttpClient.execute` has
-eight overloads, the request at argument 0 or 1, all joined by `source`.
+scheme at argument 0 — expectation 3's case, so `URI.create(String)` and `URI(String)`
+are followed and the `<init>` form carries `arity: 1`. Apache's `ClassicRequestBuilder`
+declares three overloads of each of eight verb factories plus the generic
+`create(String)`, all encoded; every `HttpGet`-family class declares exactly two
+constructors (`String`, `URI`), each a `<init>` root that is itself the terminal;
+`CloseableHttpClient.execute` has eight overloads, the request at argument 0 or 1, all
+joined by `source`.
 
 ## Observations
 
@@ -102,11 +103,11 @@ own `META-INF/MANIFEST.MF` — and **not the version the coordinate asked for**;
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `java.net.URI` | stated boundary — NOT followed: a `url_via` form matches by owner and method with no arity, so declaring `<init>` would also follow the multi-argument constructors below and read a scheme as the address |
-| `<init>(java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; not followed |
-| `<init>(java.lang.String, java.lang.String, java.lang.String, int, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; not followed |
-| `<init>(java.lang.String, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; not followed |
-| `<init>(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; not followed |
+| `<init>(java.lang.String)` | `java.net.URI` | **encoded** — the `<init>` form with `arity: 1`, so only this constructor |
+| `<init>(java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; excluded by the form's `arity: 1` |
+| `<init>(java.lang.String, java.lang.String, java.lang.String, int, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; excluded by the form's `arity: 1` |
+| `<init>(java.lang.String, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; excluded by the form's `arity: 1` |
+| `<init>(java.lang.String, java.lang.String, java.lang.String, java.lang.String, java.lang.String)` | `java.net.URI` | stated boundary — argument 0 is a scheme, not an address; excluded by the form's `arity: 1` |
 | `create(java.lang.String)` | `java.net.URI` | **encoded** |
 
 **JDK verb setters declared and not encoded:** none.
@@ -156,57 +157,57 @@ own `META-INF/MANIFEST.MF` — and **not the version the coordinate asked for**;
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpGet` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpGet` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpGet` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpGet` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpHead` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpHead` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpHead` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpHead` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpHead` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpPost` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPost` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPost` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPost` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPost` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpPut` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPut` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPut` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPut` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPut` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpDelete` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpDelete` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpDelete` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpDelete` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpDelete` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpPatch` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPatch` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPatch` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpPatch` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpPatch` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpOptions` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpOptions` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpOptions` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpOptions` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpOptions` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.classic.methods.HttpTrace` — the constructor form
 
 | member | returns | in the catalog |
 |---|---|---|
-| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | constructor form — `apache-httpclient-constructors`, logged, not declared |
-| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | constructor form — `apache-httpclient-constructors`, logged, not declared |
+| `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
+| `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
 ### `org.apache.hc.client5.http.impl.classic.CloseableHttpClient` — the executing call, every overload
 

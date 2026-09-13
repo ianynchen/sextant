@@ -6149,7 +6149,9 @@ def test_a_root_handed_a_constructed_uri_reads_its_address_off_the_constructor(t
     """`newBuilder(new URI("https://h/p")).GET().build()` handed to `send`: the root's
     argument is an `instance` whose `source` is the constructor's own `receiver` (CP-3:
     a constructor's `result` is void), and the `<init>` form of the ladder joins on
-    exactly that — `_linked_constructor`'s own rule, shared with `channel_via`."""
+    exactly that — `_linked_constructor`'s own rule, shared with `channel_via`. Run on
+    the SHIPPED catalog, whose form is `{<init>, arg: 0, arity: 1}` (fix round 1): the
+    one-argument constructor is exactly the arity, so it is followed."""
     caller = "com/acme/http/Client#viaConstructor()."
     facts = [
         _call(
@@ -6176,7 +6178,7 @@ def test_a_root_handed_a_constructed_uri_reads_its_address_off_the_constructor(t
         _call(caller, JDK_BUILDER, "build", 3, receiver=10, result=11),
         _send(caller, 4, built=11),
     ]
-    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_JDK_SHAPED_MATCHES))
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("jdk-httpclient"))
     rows = workspace.query("endpoints")
     workspace.close()
 
@@ -6234,11 +6236,13 @@ def test_a_uri_from_a_call_no_url_via_form_names_derives_an_unresolved_address(t
 
 
 def test_a_multi_argument_uri_constructor_is_not_read_as_an_address(tmp_path: Path):
-    """The boundary `jdk-httpclient.yml` states, pinned: `new URI("https", "h", "/p",
-    null)` puts the SCHEME at argument 0, and a `url_via` form matches by owner and
-    method with no arity — so the shipped catalog declares only `URI.create`, and a
-    constructed URI reads as unread. The row is `path` NULL at `unresolved`, never
-    `https` at `resolved`, which is what declaring `<init>` would publish."""
+    """A via form's `arity` (fix round 1), pinned on the SHIPPED catalog: `new
+    URI("https", "h", "/p", null)` puts the SCHEME at argument 0, and `jdk-httpclient.yml`'s
+    `<init>` form declares `arity: 1`, so the four-argument constructor matches no form
+    and the constructed URI reads as unread — `path` NULL at `unresolved`, never `https`
+    at `resolved`, which is what the form matched on owner and method alone published.
+    `test_a_root_handed_a_constructed_uri_reads_its_address_off_the_constructor` is the
+    one-argument positive on the same shipped form, and the live `fetchSeventh` row."""
     caller = "com/acme/http/Client#viaParts()."
     facts = [
         _call(
@@ -6321,6 +6325,77 @@ def test_a_builder_method_the_jdk_does_not_declare_roots_no_request(tmp_path: Pa
 
 APACHE_BUILDER = "org/apache/hc/core5/http/io/support/ClassicRequestBuilder#"
 APACHE_CLIENT = "org/apache/hc/client5/http/impl/classic/CloseableHttpClient#"
+APACHE_POST = "org/apache/hc/client5/http/classic/methods/HttpPost#"
+
+
+def _execute(caller: str, ordinal: int, request: int) -> CallSiteFact:
+    """`client.execute(request, handler)`: the request at argument 0, joined by `source`."""
+    return _call(
+        caller,
+        APACHE_CLIENT,
+        "execute",
+        ordinal,
+        receiver=9,
+        result=ordinal + 100,
+        arguments=[
+            CallArgument(kind="instance", source=request, symbol=APACHE_POST),
+            CallArgument(kind="lambda", source=11, symbol=f"{caller[:-2]}$0()."),
+        ],
+    )
+
+
+def test_a_constructed_request_handed_to_execute_is_issued(tmp_path: Path):
+    """The constructor form (fix round 1): `new HttpPost("https://h/p")` handed straight
+    to `execute`, no `build()` between — a `<init>` root that is itself the terminal.
+    The join reads the row's CHAIN KEY (CP-3): a constructor's `result` is void and the
+    constructed value's id is its `receiver`, which is what `execute`'s argument `source`
+    names. Reading `result` there made every such chain derive nothing — measured on the
+    fixture before the fix. The paired near-miss is the abandoned-builder one: a
+    constructed request nobody hands to `execute` still derives nothing."""
+    caller = "com/acme/http/Client#viaConstructorForm()."
+    facts = [
+        _call(
+            caller,
+            APACHE_POST,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="special",
+        ),
+        _execute(caller, 1, request=2),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("POST", "h", "/p", "resolved")
+    ]
+
+
+def test_a_constructed_request_never_executed_derives_nothing(tmp_path: Path):
+    """The constructor form's abandoned half: `new HttpPost("https://h/p")` built and
+    dropped is not a call anyone makes, exactly as an abandoned `build()` is."""
+    caller = "com/acme/http/Client#constructedAndDropped()."
+    facts = [
+        _call(
+            caller,
+            APACHE_POST,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="special",
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == []
 
 
 def _apache_builder_chain(caller: str) -> list:
@@ -6409,6 +6484,14 @@ def test_an_apache_request_handed_to_execute_derives_the_factorys_own_verb(tmp_p
             },
             "arg: int",
         ),
+        (
+            {
+                "method": "uri",
+                "captures": {"url": "arg0"},
+                "url_via": [{"owner": "java.net.URI", "method": "<init>", "arg": 0, "arity": "1"}],
+            },
+            "arity?: int",
+        ),
     ],
 )
 def test_a_url_via_ladder_that_reads_no_position_is_refused_at_run_start(
@@ -6418,7 +6501,8 @@ def test_a_url_via_ladder_that_reads_no_position_is_refused_at_run_start(
     position, the same refusal `channel_via` gets without `channel` — and it reads ONE
     position: a URL is one string, where `all_strings` is for a list of topics, so the
     `channel_via`-only spelling is refused here rather than answering several
-    addresses for one request."""
+    addresses for one request. `arity`, when declared, is an int — a string would
+    compare equal to no argument count and silently match nothing."""
     matches = {
         "roots": [{"owner": "java.net.http.HttpRequest", "method": "newBuilder", "captures": {}}],
         "steps": [entry],

@@ -38,6 +38,9 @@ JDK_MODULES = ("java.net.http", "java.base")
 # root/step matches on. Listed so the probe can report a DIFFERENCE, not only print.
 JDK_ENCODED = {
     "java.net.http.HttpRequest": ("newBuilder()", "newBuilder(java.net.URI)"),
+    # `<init>(java.lang.String)` is encoded too, through the form's `arity: 1`; it is
+    # verdict-ed by name in `jdk_verdict` so the multi-argument constructors beside it
+    # read as the boundary they are.
     "java.net.http.HttpRequest$Builder": (
         "uri(java.net.URI)",
         "GET()",
@@ -218,13 +221,12 @@ def main() -> None:
         if bare == "newBuilder":
             return "stated boundary — copies another request; its verb is that request's, the seeded GET is wrong for it"
         if name == "<init>(java.lang.String)":
-            return (
-                "stated boundary — NOT followed: a `url_via` form matches by owner and method "
-                "with no arity, so declaring `<init>` would also follow the multi-argument "
-                "constructors below and read a scheme as the address"
-            )
+            return "**encoded** — the `<init>` form with `arity: 1`, so only this constructor"
         if bare == "<init>":
-            return "stated boundary — argument 0 is a scheme, not an address; not followed"
+            return (
+                "stated boundary — argument 0 is a scheme, not an address; excluded by the "
+                "form's `arity: 1`"
+            )
         return "not a verb setter, address, or executing call"
 
     print(f"## The JDK at {jdk}\n")
@@ -285,7 +287,7 @@ def main() -> None:
         if name.startswith("copy("):
             return "stated boundary — copies another request; not a root"
         if name.startswith("<init>"):
-            return "constructor form — `apache-httpclient-constructors`, logged, not declared"
+            return "**encoded** — a `<init>` root that is itself the terminal via `execute`"
         return "not a verb, address, or executing call"
 
     core, core_version = jars["httpcore5"]

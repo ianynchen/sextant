@@ -55,24 +55,26 @@ matches:
   roots:
     - { owner: java.net.http.HttpRequest, method: newBuilder,
         captures: { http_method: GET, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                  { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
   # `uri(URI)` is the address step, and its argument is never a string: `URI.create("…")`
-  # reaches it as the compiler's `unresolved`+`source`, so `url_via` — `channel_via`'s
-  # ladder applied to the `url` capture (D02 §4) — follows `source` to the `URI.create`
-  # call in this same method and reads ITS argument 0 as the address.
+  # and `new URI("…")` reach it as the compiler's `unresolved`/`instance`+`source`, so
+  # `url_via` — `channel_via`'s ladder applied to the `url` capture (D02 §4) — follows
+  # `source` to the `URI.create` or `URI.<init>` call in this same method and reads ITS
+  # argument 0 as the address.
   #
-  # ONLY `URI.create(String)` is followed, and `new URI(…)` is a stated boundary rather
-  # than a second form: a `url_via` form matches by owner and method with no arity, and
-  # `java.net.URI` declares FIVE constructors — `URI(String)` and four multi-argument
-  # ones whose argument 0 is the SCHEME (`new URI("https", "host", "/path", null)`).
-  # Declaring `<init>` would read `https` as that request's whole address at
-  # `resolved`, a wrong row on real input. So a request whose URI is constructed derives
-  # with `path` NULL at `unresolved` — honest, never silent, and the same answer a
-  # `"…/" + id` concatenation handed to either factory gets, since `url_of` reads a
-  # string literal and nothing else.
+  # `arity: 1` on the constructor form, and it is load-bearing: `java.net.URI` declares
+  # FIVE constructors — `URI(String)` and four multi-argument ones whose argument 0 is
+  # the SCHEME (`new URI("https", "host", "/path", null)`) — and a form matching on
+  # owner and method alone would read `https` as that request's whole address at
+  # `resolved`. With the arity the four-argument form matches no form and derives
+  # `path` NULL at `unresolved` — honest, never silent. A `"…/" + id` concatenation
+  # handed to either factory reads the same way, since `url_of` reads a string literal
+  # and nothing else.
   steps:
     - { method: uri,    captures: { url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                  { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
     - { method: GET,    captures: { http_method: GET } }
     - { method: HEAD,   captures: { http_method: HEAD } }
     - { method: DELETE, captures: { http_method: DELETE } }

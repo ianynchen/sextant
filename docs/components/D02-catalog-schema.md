@@ -1124,9 +1124,11 @@ record a destination nothing could send to plus a peer no messaging fact ever ca
 **`channel_via` reads a destination the consuming call's own argument position never names
 directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
 `createQueue`'s own argument, not `createProducer`'s. A row declaring it is `[{owner,
-method, arg: int | "all_strings"}]`, each form tried in the order written until one's
-`owner`+`method` reach the argument's own linked call site (the same value-id join
-`call_wrappers` uses, §2h, generalised to any named method rather than only `<init>`); `arg`
+method, arg: int | "all_strings", arity?: int}]`, each form tried in the order written until
+one's `owner`+`method` (and `arity`, where the form names one — the linked call's argument
+count, which tells two overloads apart; §4's `url_via` is where it was first needed) reach
+the argument's own linked call site (the same value-id join `call_wrappers` uses, §2h,
+generalised to any named method rather than only `<init>`); `arg`
 an integer reads that one position off the linked call, verbatim, and `arg: "all_strings"`
 reads every one of its string-kind positional arguments as its own resolved tuple — one row
 per element, plus one trailing unresolved tuple if any element failed to resolve, never a
@@ -1413,10 +1415,19 @@ differences from `channel_via`, both from what a URL is: `arg` is an `int` only 
 one string; `all_strings` is for a list of topics), and a ladder that answers nothing — no
 `source`, a linked call no form names, a linked call whose own argument is a `concat` —
 leaves the row exactly as a direct read would, `path` NULL at `unresolved`: the ladder can
-add an answer, never take one away. **A form matches by owner and method with no arity**,
-which is a boundary a catalog author has to weigh: `java.net.URI` declares four
-multi-argument constructors whose argument 0 is the scheme, so a `<init>` form would read
-`https` as an address, and the shipped catalogs follow `URI.create` alone.
+add an answer, never take one away. **A form may name an `arity`** — `{owner, method,
+arg, arity?: int}`, on `channel_via` and `url_via` alike (A2 Task 8 fix round 1) — the
+linked call's argument count, the one thing that tells two overloads apart once owner and
+method agree: `java.net.URI` declares four multi-argument constructors whose argument 0 is
+the SCHEME beside `URI(String)`, so a `<init>` form matched on owner and method alone read
+`https` as an address, and the shipped catalogs write `{owner: java.net.URI, method: <init>,
+arg: 0, arity: 1}`. A form declaring no `arity` matches every overload, as before.
+
+**A `<init>` root may itself be the terminal** — `new HttpPost("…")` handed straight to
+`execute` with no `build()` between (Apache's constructor form): `terminal` names `<init>`
+with the same `terminal_via_argument` mapping, and the execute-join reads the row's chain
+key — a constructor's `receiver`, the constructed value's id (CP-3), never its void
+`result`.
 
 **A step may declare `when`** — `{arg: int, equals: str}`, exactly those two keys — a value
 guard on one of the *matched call's own* arguments, for the builder shape where the

@@ -461,12 +461,21 @@ def _validate_matches(catalog: Catalog) -> None:
             and isinstance(entry.get("owner"), str)
             and isinstance(entry.get("method"), str)
             and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
+            and _valid_arity(entry)
         )
         if not valid:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `registration.channel_via` declares an "
-                f'entry that must be `{{owner, method, arg: int|"all_strings"}}`, got {entry!r}'
+                f'entry that must be `{{owner, method, arg: int|"all_strings", arity?: int}}`, '
+                f"got {entry!r}"
             )
+
+
+def _valid_arity(entry: dict[str, Any]) -> bool:
+    """A via form's optional `arity` (A2 Task 8 fix round 1): absent, or an
+    int — the linked call's argument count, which is what tells two
+    overloads apart once owner and method agree (`linked_channels`)."""
+    return "arity" not in entry or isinstance(entry.get("arity"), int)
 
 
 def _channel_via_entries(registration: dict[str, Any]) -> list[Any]:
@@ -586,6 +595,11 @@ def _channel_via_forms(registration: dict[str, Any]) -> list[dict[str, Any]]:
     symbol form once — only ever called on a `registration` block
     `_validate_matches` already passed, at `run` start."""
     return [
-        {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
+        {
+            "owner": _catalog_symbol(entry["owner"]),
+            "method": entry["method"],
+            "arg": entry["arg"],
+            **({"arity": entry["arity"]} if "arity" in entry else {}),
+        }
         for entry in _channel_via_entries(registration)
     ]

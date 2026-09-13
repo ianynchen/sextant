@@ -1024,11 +1024,16 @@ def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalo
                         isinstance(form.get("arg"), int)
                         or (key == "channel_via" and form.get("arg") == "all_strings")
                     )
+                    # `arity` is optional, and an int when declared: the linked
+                    # call's argument count, which tells a one-string constructor from the
+                    # four-argument constructor once owner and method agree.
+                    and ("arity" not in form or isinstance(form.get("arity"), int))
                 )
                 if not valid:
                     raise CatalogError(
                         f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
-                        f"a `{key}` entry that must be `{{owner, method, arg: {arg_forms}}}`, "
+                        f"a `{key}` entry that must be `{{owner, method, arg: {arg_forms}, "
+                        f"arity?: int}}`, "
                         f"got {form!r}"
                     )
             if key in entry and field not in entry.get("captures", {}):
@@ -1057,7 +1062,12 @@ def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[
     converted to the SCIP symbol form once — only ever called on an entry
     `_validate_channel_via_entries` already passed, at `run` start."""
     return [
-        {"owner": _catalog_symbol(form["owner"]), "method": form["method"], "arg": form["arg"]}
+        {
+            "owner": _catalog_symbol(form["owner"]),
+            "method": form["method"],
+            "arg": form["arg"],
+            **({"arity": form["arity"]} if "arity" in form else {}),
+        }
         for form in _channel_via_entries(entry, key)
     ]
 
@@ -1128,8 +1138,17 @@ def _has_execute_join(
     client, not the request builder. `join_filter`, when the catalog
     declared one, additionally requires the joining row itself to be that
     exact owner+method — otherwise any consumer of the built value (a log
-    statement, an equality check) would count as executing it."""
-    result = site["result"]
+    statement, an equality check) would count as executing it.
+
+    The value joined on is the row's CHAIN KEY (CP-3), not its `result`: a
+    constructor's `result` is void and the constructed value's id is its
+    `receiver`, which is what `execute`'s argument `source` names when the
+    request is `new HttpPost("…")` handed straight over with no `build()`
+    between — the Apache constructor form, a `<init>` root that is itself the
+    terminal (A2 Task 8 fix round 1; reading `result` here made every such
+    chain derive nothing). `_walk` and `_linked_constructor` already key a
+    constructor the same way."""
+    result = _chain_key(site)
     if result is None:
         return False
     for candidate in sites:

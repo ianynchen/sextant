@@ -20,10 +20,14 @@ measured:
 requires: [call_site, string_constants, chain_reconstruction]
 
 matches:
-  # The BUILDER form (spec §12): `ClassicRequestBuilder.get("https://…").build()` handed
-  # to `CloseableHttpClient.execute` — `okhttp.yml`'s exact shape, a static root joined
-  # to the client through the argument `source` id (D00 §5), never through
-  # receiver/result chaining.
+  # TWO forms, one terminal join. The BUILDER form (spec §12):
+  # `ClassicRequestBuilder.get("https://…").build()` handed to
+  # `CloseableHttpClient.execute` — `okhttp.yml`'s exact shape, a static root joined to
+  # the client through the argument `source` id (D00 §5), never through receiver/result
+  # chaining. And the CONSTRUCTOR form: `new HttpPost("…")` or `new HttpGet(URI.create(…))`
+  # handed straight to `execute` with no `build()` between — a `<init>` root that is
+  # itself the value `execute` consumes, so `<init>` is also a `terminal` entry below
+  # and the join reads the constructed value's id (its `receiver`, CP-3).
   #
   # Every verb factory the builder declares — measured, `javap -p -s` on httpcore5 5.2.4
   # (`scripts/probes/a2t8_http_client_builders.md`): `get head post put delete patch
@@ -34,43 +38,67 @@ matches:
   # `URI.create`; `()` reads nothing at argument 0 and the `setUri` step that must follow
   # overwrites it. Each factory names its own verb (`get` → GET), so no default is seeded.
   #
-  # Only `URI.create(String)` is followed, never `new URI(…)`: `java.net.URI` declares
-  # four multi-argument constructors whose argument 0 is the scheme, and a `url_via` form
-  # matches by owner and method with no arity — `jdk-httpclient.yml` states the same
-  # boundary. A constructed URI derives `path` NULL at `unresolved`.
+  # `URI.create(String)` and `new URI(String)` are followed, the constructor with
+  # `arity: 1`: `java.net.URI` declares four multi-argument constructors whose argument 0
+  # is the scheme — `jdk-httpclient.yml` carries the reasoning. Spelled once as an anchor
+  # and reused on every entry.
   #
   # `copy(ClassicHttpRequest)` is a stated boundary: it copies another request and
   # carries that request's verb and address, neither of which this chain names.
   roots:
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: get,
         captures: { http_method: GET, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: &uri_forms [{ owner: java.net.URI, method: create, arg: 0 },
+                             { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: head,
         captures: { http_method: HEAD, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: post,
         captures: { http_method: POST, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: put,
         captures: { http_method: PUT, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: delete,
         captures: { http_method: DELETE, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: patch,
         captures: { http_method: PATCH, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: trace,
         captures: { http_method: TRACE, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: options,
         captures: { http_method: OPTIONS, url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+        url_via: *uri_forms }
     # The fully generic factory (`A-C2`'s shape): the verb is argument 0, read as a
     # string; a verb held in a variable derives `method` NULL at `unresolved`. It
     # takes no address — `setUri` supplies one.
     - { owner: org.apache.hc.core5.http.io.support.ClassicRequestBuilder, method: create,
         captures: { http_method: arg0 } }
+    # The constructor form's roots: every request class `httpclient5` declares, measured
+    # (`scripts/probes/a2t8_http_client_builders.md`): `HttpGet HttpHead HttpPost HttpPut
+    # HttpDelete HttpPatch HttpOptions HttpTrace`, each with exactly `(String)` and
+    # `(URI)`, and each naming its own verb. One `<init>` entry per class covers both
+    # constructors: `(String)` reads the address off `arg0`, `(URI)` reads the same
+    # position through `url_via`. Owner-gated on the concrete class, so a `<init>` on any
+    # other type roots nothing (`fluent.root-is-a-declared-request-starter`).
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpGet,     method: <init>,
+        captures: { http_method: GET,     url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpHead,    method: <init>,
+        captures: { http_method: HEAD,    url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpPost,    method: <init>,
+        captures: { http_method: POST,    url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpPut,     method: <init>,
+        captures: { http_method: PUT,     url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpDelete,  method: <init>,
+        captures: { http_method: DELETE,  url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpPatch,   method: <init>,
+        captures: { http_method: PATCH,   url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpOptions, method: <init>,
+        captures: { http_method: OPTIONS, url: arg0 }, url_via: *uri_forms }
+    - { owner: org.apache.hc.client5.http.classic.methods.HttpTrace,   method: <init>,
+        captures: { http_method: TRACE,   url: arg0 }, url_via: *uri_forms }
   # `setUri(String)` and `setUri(URI)` are one step for the same reason the roots are one
   # entry each. `setEntity`, `addHeader`, `setHeader`, `addParameter`, `setVersion`,
   # `setCharset`, `setAbsoluteRequestUri` pass through undeclared (D02 §4): none sets
@@ -78,8 +106,7 @@ matches:
   # an `HttpEntity` is a transport wrapper, never the wire type of what it carries, so
   # a capture there could only ever demote the row without naming a payload.
   steps:
-    - { method: setUri, captures: { url: arg0 },
-        url_via: [{ owner: java.net.URI, method: create, arg: 0 }] }
+    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms }
   # A mapping, not the bare flag: `execute` has eight overloads at httpclient5 5.2.3, the
   # request at argument 0 or — after an `HttpHost` — argument 1, and the join reads every
   # argument's `source`, so all eight complete the chain. The `HttpHost` an overload
@@ -87,20 +114,16 @@ matches:
   # NULL, exactly as a relative literal anywhere else (CP-2). Both owners a caller's
   # field may be declared as.
   #
-  # STATED BOUNDARY, logged as `apache-httpclient-constructors` (spec §12 named it; A2
-  # Task 8 measured it on the fixture): the CONSTRUCTOR form — `new HttpPost("…")` or
-  # `new HttpGet(URI.create(…))` handed straight to `execute`, no `build()` between — is
-  # a `<init>` root that is itself the value `execute` consumes. `_walk` does check the
-  # root site against `terminal`, but the execute-join reads the root's `result`, and a
-  # constructor's result is void (CP-3): the constructed value's id is its `receiver`,
-  # so the join never sees it and such a chain derives NOTHING today. Not approximated
-  # here; `tests/e2e/test_rest_outbound_delivered.py` pins the absence so the row appears
-  # when the join reads a constructor's chain key.
+  # `<init>` is a terminal too — the constructor form's root IS the value handed to
+  # `execute`, and the join reads the constructed value's id (its `receiver`, CP-3: a
+  # constructor's `result` is void). A constructed request never handed to `execute`
+  # derives nothing, exactly as an abandoned builder does.
   terminal:
     - { method: build,
-        terminal_via_argument: { owner: [org.apache.hc.client5.http.impl.classic.CloseableHttpClient,
-                                         org.apache.hc.client5.http.classic.HttpClient],
-                                 method: execute } }
+        terminal_via_argument: &execute { owner: [org.apache.hc.client5.http.impl.classic.CloseableHttpClient,
+                                                  org.apache.hc.client5.http.classic.HttpClient],
+                                          method: execute } }
+    - { method: <init>, terminal_via_argument: *execute }
   # The field ladder's own vocabulary (2F design §4), as `okhttp.yml` declares it.
   field_sources:
     value_annotation: org.springframework.beans.factory.annotation.Value

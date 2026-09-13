@@ -119,30 +119,35 @@ def outbound_rows(analyzed_orders_service: Path) -> list[dict]:
 
 
 def test_the_jdk_http_client_derives_every_request_it_builds_and_sends(outbound_rows):
-    """`jdk-httpclient`, spec §14 test 14: `JdkOrdersClient`'s three inline chains, each
+    """`jdk-httpclient`, spec §14 test 14: `JdkOrdersClient`'s four inline chains, each
     with the address read exactly. The POST is rooted on the argument-less `newBuilder()`
     and reads its address through `uri(URI.create(…))` — `url_via`, the same linked-call
     ladder `channel_via` follows; the PATCH is rooted on `newBuilder(URI.create(…))`, its
     verb read off `method("PATCH", …)`, its request handed to `sendAsync` — the second
-    name of the terminal's `method` list. The peer is split off the URL as every `fluent`
-    row's is.
+    name of the terminal's `method` list; `fetchSeventh` is rooted on
+    `newBuilder(new URI("…/7"))`, the `<init>` form of the ladder with `arity: 1` (fix
+    round 1), `resolved`. The peer is split off the URL as every `fluent` row's is.
 
-    **Both are `unresolved`, and that is the pin, not a gap left open.** Each captures a
-    `body` — `POST(BodyPublishers.ofString(body))`, `method("PATCH", …ofString(body))` —
-    and a `BodyPublisher` is never a payload type the shape pass can read, so the capture
-    is reached and unread and demotes the row (ruling I1, `_capture_resolved`). It is the
-    exact answer `okhttp.yml` gives `post(RequestBody.create(…))` on this same fixture
-    (`LegacyOkHttp.submitExport`, `unresolved`). A row saying "this method POSTs to
-    `/v1/dispatches` with a body we could not read" is true; one saying `resolved` over a
-    NULL `request_shape` would claim a read that never happened. Reading through
-    `BodyPublishers.ofString(x)` to `x`'s type is its own item.
+    **POST and PATCH are `unresolved`, and that is the pin, not a gap left open.** Each
+    captures a `body` — `POST(BodyPublishers.ofString(body))`, `method("PATCH",
+    …ofString(body))` — and a `BodyPublisher` is never a payload type the shape pass can
+    read, so the capture is reached and unread and demotes the row (ruling I1,
+    `_capture_resolved`). It is the exact answer `okhttp.yml` gives
+    `post(RequestBody.create(…))` on this same fixture (`LegacyOkHttp.submitExport`,
+    `unresolved`). A row saying "this method POSTs to `/v1/orders` with a body we could
+    not read" is true; one saying `resolved` over a NULL `request_shape` would claim a
+    read that never happened. Reading through `BodyPublishers.ofString(x)` to `x`'s type
+    is its own item (`jdk-body-publisher`).
 
-    The GET is `unresolved` with `path` NULL for a different reason: its address is
-    `"…/v1/dispatches/" + id`, a `concat` the extractor records as a template with a hole,
+    `fetch`'s GET is `unresolved` with `path` NULL for a different reason: its address is
+    `"…/v1/orders/" + id`, a `concat` the extractor records as a template with a hole,
     and `url_of` reads a `string` argument and nothing else — the documented rule
-    (`shapes/arguments.py`, `_UNREAD_KINDS`' own note). `new URI(…)` is not a `url_via`
-    form (the catalog states why: the multi-argument constructors), so the argument is
-    read directly, and a direct read of a constructed instance is the same NULL.
+    (`shapes/arguments.py`, `_UNREAD_KINDS`' own note); the ladder reaches the
+    constructor and finds that concat, and answers the same way a direct read would.
+
+    `POST /v1/orders` is ALSO the Feign row `OrdersLoopClient#createOrder` derives, on
+    purpose: an outbound row is per caller and peer (fix round 1, `insert_endpoints.sql`),
+    and `test_an_outbound_path_two_engines_call_keeps_every_caller` pins both.
 
     `deleteRequest()`'s chain reaches `build()` in the helper and `send` is in
     `viaHelper()` — a request built in one method and sent in another. `fluent`'s stated
@@ -155,47 +160,55 @@ def test_the_jdk_http_client_derives_every_request_it_builds_and_sends(outbound_
         if r["catalog_id"] == "jdk-httpclient"
     }
     assert rows == {
-        ("POST", "dispatch.example.com", "/v1/dispatches", "unresolved"),
+        ("POST", "orders.example.com", "/v1/orders", "unresolved"),
+        ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
         ("GET", None, None, "unresolved"),
-        ("PATCH", "dispatch.example.com", "/v1/dispatches/42", "unresolved"),
+        ("PATCH", "orders.example.com", "/v1/orders/42", "unresolved"),
     }, sorted(rows, key=str)
     assert all(
         r["request_shape"] is None for r in outbound_rows if r["catalog_id"] == "jdk-httpclient"
     )
 
 
-def test_the_apache_client_derives_the_builder_form_handed_to_execute(outbound_rows):
-    """`apache-httpclient`, spec §12: `ClassicRequestBuilder.get("…").build()` handed to
-    `CloseableHttpClient.execute` — `okhttp.yml`'s exact shape, the static root joined to
-    the client through the argument `source` id — `resolved`, the verb the factory's own
-    name, the peer split off the URL. No `body` is captured on this form (an `HttpEntity`
-    is a transport wrapper, not a wire type), so nothing demotes it."""
+def test_an_outbound_path_two_engines_call_keeps_every_caller(outbound_rows):
+    """Fix round 1 (Major). `POST https://orders.example.com/v1/orders` is called by
+    `OrdersLoopClient#createOrder` through Feign (`spring-cloud-openfeign`, annotation
+    driven, peer `orders-loop`), by `JdkOrdersClient#create` (`jdk-httpclient`, a
+    call-side `fluent` catalog, peer `orders.example.com`) and by
+    `ApacheOrdersClient#create` (`apache-httpclient`, the constructor form). An outbound
+    row is per caller and peer (F5 §6.1 rule 1), and all three stand. Measured before the fix: the
+    annotation-driven turn compared wire identity alone, and the Feign row VANISHED the
+    moment the JDK client called the same path — no row, no gap."""
+    callers = {
+        (r["catalog_id"], r["peer"], r["caller"].rsplit("/", 1)[1].partition("(")[0])
+        for r in outbound_rows
+        if r["method"] == "POST" and r["path"] == "/v1/orders"
+    }
+    assert callers == {
+        ("spring-cloud-openfeign", "orders-loop", "OrdersLoopClient#createOrder"),
+        ("jdk-httpclient", "orders.example.com", "JdkOrdersClient#create"),
+        ("apache-httpclient", "orders.example.com", "ApacheOrdersClient#create"),
+    }, sorted(callers, key=str)
+
+
+def test_the_apache_client_derives_the_builder_and_the_constructor_forms(outbound_rows):
+    """`apache-httpclient`, spec §12, both spellings of a classic request. The builder
+    form — `ClassicRequestBuilder.get("…").build()` handed to `CloseableHttpClient.execute`
+    — is `okhttp.yml`'s exact shape, the static root joined to the client through the
+    argument `source` id. The constructor form — `new HttpPost("…")` and `new
+    HttpGet(URI.create(…))` handed straight to `execute`, no `build()` between — is a
+    `<init>` root that is itself the terminal: the join reads the constructed value's id
+    (its `receiver`, CP-3; fix round 1 — reading the constructor's void `result` made both
+    derive nothing). Every row `resolved`, the verb the factory's or the class's own name,
+    the peer split off the URL; no `body` is captured on either form (an `HttpEntity` is a
+    transport wrapper, not a wire type), so nothing demotes them."""
     rows = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in outbound_rows
         if r["catalog_id"] == "apache-httpclient"
     }
-    assert ("GET", "dispatch.example.com", "/v1/dispatches", "resolved") in rows, sorted(
-        rows, key=str
-    )
-
-
-def test_the_apache_constructor_form_derives_nothing_until_the_join_reads_a_constructor(
-    outbound_rows,
-):
-    """`apache-httpclient-constructors`, the stated boundary (spec §12 named the form; A2
-    Task 8 measured it). `new HttpPost("…/v1/dispatches")` and `new HttpGet(URI.create(…))`
-    handed straight to `execute`, no `build()` between: a `<init>` root that is itself
-    the value `execute` consumes. `_walk` checks the root site against `terminal`, but
-    the execute-join reads the root's `result`, and a constructor's result is void
-    (CP-3) — the constructed value's id is its `receiver` — so the join never sees it and
-    the chain derives NOTHING. Measured on the compiled fixture: `execute`'s argument is
-    `{kind: instance, source: 2}` and `HttpPost.<init>` has `receiver: 2, result: null`.
-
-    Pinned as ABSENT rather than approximated, so the two rows appear here the day the
-    join reads a constructor's chain key, and the catalog's `terminal` gains the form."""
-    rows = {
-        (r["method"], r["path"]) for r in outbound_rows if r["catalog_id"] == "apache-httpclient"
-    }
-    assert ("POST", "/v1/dispatches") not in rows, sorted(rows, key=str)
-    assert ("GET", "/v1/dispatches/7") not in rows, sorted(rows, key=str)
+    assert rows == {
+        ("GET", "orders.example.com", "/v1/orders", "resolved"),
+        ("POST", "orders.example.com", "/v1/orders", "resolved"),
+        ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
+    }, sorted(rows, key=str)

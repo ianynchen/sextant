@@ -3,7 +3,6 @@
 // is `okhttp.yml`'s exact shape, a static root joined to the client through the argument
 // `source` id. The constructor form — `new HttpPost("…")`, `new HttpGet(URI.create(…))` —
 // is a `<init>` root that is ITSELF the value handed to `execute`, with no `build()` between.
-// The address is `dispatch.example.com/v1/dispatches` for the reason `JdkOrdersClient` states.
 package com.acme.orders.httpclient;
 
 import java.io.IOException;
@@ -19,17 +18,17 @@ public class ApacheOrdersClient {
     private final CloseableHttpClient client = HttpClients.createDefault();
 
     public String list() throws IOException {
-        ClassicHttpRequest request = ClassicRequestBuilder.get("https://dispatch.example.com/v1/dispatches").build();
+        ClassicHttpRequest request = ClassicRequestBuilder.get("https://orders.example.com/v1/orders").build();
         return client.execute(request, response -> String.valueOf(response.getCode()));
     }
 
     public String create() throws IOException {
-        HttpPost post = new HttpPost("https://dispatch.example.com/v1/dispatches");
+        HttpPost post = new HttpPost("https://orders.example.com/v1/orders");
         return client.execute(post, response -> String.valueOf(response.getCode()));
     }
 
     public String fetch() throws IOException {
-        HttpGet get = new HttpGet(URI.create("https://dispatch.example.com/v1/dispatches/7"));
+        HttpGet get = new HttpGet(URI.create("https://orders.example.com/v1/orders/7"));
         return client.execute(get, response -> String.valueOf(response.getCode()));
     }
 }
