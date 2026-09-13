@@ -61,6 +61,7 @@ from sextant.application.resolve.shapes.arguments import (
     split_url,
     supertypes_of,
     url_of,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
@@ -1027,7 +1028,7 @@ def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalo
                     # `arity` is optional, and an int when declared: the linked
                     # call's argument count, which tells a one-string constructor from the
                     # four-argument constructor once owner and method agree.
-                    and ("arity" not in form or isinstance(form.get("arity"), int))
+                    and valid_via_arity(form)
                 )
                 if not valid:
                     raise CatalogError(

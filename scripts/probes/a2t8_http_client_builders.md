@@ -31,6 +31,7 @@ too, but nothing here measured it.
 | 2 | the builder declares a verb setter the catalog misses | the seed is unsafe and the allowlist entry is false |
 | 3 | `java.net.URI` declares a constructor whose argument 0 is not the address | a `url_via` form on `<init>` matched by owner and method alone would read that argument as the address; the form declares `arity: 1` (fix round 1), so only `URI(String)` is followed and the multi-argument constructors are the stated boundary |
 | 4 | `execute` has overloads taking the request at a position other than 0 | the execute-join reads every argument's `source`, so position does not matter to it; recorded so the terminal's claim is bounded |
+| 5 | the interface declares an executing call the concrete class only inherits | enumerating the concrete class alone cannot see it; both owners are read, and every executing name is a terminal method |
 
 ## What the run found, in one paragraph
 
@@ -44,8 +45,10 @@ are followed and the `<init>` form carries `arity: 1`. Apache's `ClassicRequestB
 declares three overloads of each of eight verb factories plus the generic
 `create(String)`, all encoded; every `HttpGet`-family class declares exactly two
 constructors (`String`, `URI`), each a `<init>` root that is itself the terminal;
-`CloseableHttpClient.execute` has eight overloads, the request at argument 0 or 1, all
-joined by `source`.
+`HttpClient.execute` has eight overloads and `executeOpen` one (a `default` method on
+the interface, which `CloseableHttpClient` inherits without redeclaring — enumerated on
+both owners since fix round 2, after an enumeration of the concrete class alone missed
+it), the request at argument 0 or 1, all joined by `source`.
 
 ## Observations
 
@@ -209,7 +212,21 @@ own `META-INF/MANIFEST.MF` — and **not the version the coordinate asked for**;
 | `<init>(java.lang.String)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 | `<init>(java.net.URI)` | `org.apache.hc.client5.http.classic.methods.HttpTrace` | **encoded** — a `<init>` root that is itself the terminal via `execute` |
 
-### `org.apache.hc.client5.http.impl.classic.CloseableHttpClient` — the executing call, every overload
+### `org.apache.hc.client5.http.classic.HttpClient` — the executing calls, every overload
+
+| member | returns | in the catalog |
+|---|---|---|
+| `execute(org.apache.hc.core5.http.ClassicHttpRequest)` | `org.apache.hc.core5.http.HttpResponse` | **encoded** |
+| `execute(org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.io.HttpClientResponseHandler<? extends T>)` | `T` | **encoded** |
+| `execute(org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.protocol.HttpContext)` | `org.apache.hc.core5.http.HttpResponse` | **encoded** |
+| `execute(org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.protocol.HttpContext, org.apache.hc.core5.http.io.HttpClientResponseHandler<? extends T>)` | `T` | **encoded** |
+| `execute(org.apache.hc.core5.http.HttpHost, org.apache.hc.core5.http.ClassicHttpRequest)` | `org.apache.hc.core5.http.ClassicHttpResponse` | **encoded** |
+| `execute(org.apache.hc.core5.http.HttpHost, org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.io.HttpClientResponseHandler<? extends T>)` | `T` | **encoded** |
+| `execute(org.apache.hc.core5.http.HttpHost, org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.protocol.HttpContext)` | `org.apache.hc.core5.http.HttpResponse` | **encoded** |
+| `execute(org.apache.hc.core5.http.HttpHost, org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.protocol.HttpContext, org.apache.hc.core5.http.io.HttpClientResponseHandler<? extends T>)` | `T` | **encoded** |
+| `executeOpen(org.apache.hc.core5.http.HttpHost, org.apache.hc.core5.http.ClassicHttpRequest, org.apache.hc.core5.http.protocol.HttpContext)` | `org.apache.hc.core5.http.ClassicHttpResponse` | **encoded** |
+
+### `org.apache.hc.client5.http.impl.classic.CloseableHttpClient` — the executing calls, every overload
 
 | member | returns | in the catalog |
 |---|---|---|

@@ -2177,11 +2177,14 @@ def test_a_row_declaring_channel_via_together_with_url_arg_is_refused_at_run_sta
         {"owner": "jakarta.jms.Session", "arg": 0},  # missing method
         {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": "first"},  # bad arg
         "jakarta.jms.Session",  # not even a dict
+        # `arity`, when declared, is an int (A2 Task 8 fix round 2): a string would
+        # compare equal to no argument count and the form would silently match nothing.
+        {"owner": "jakarta.jms.Session", "method": "createQueue", "arg": 0, "arity": "1"},
     ],
 )
 def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, entry):
     """Each declared `channel_via` entry must be `{owner, method, arg:
-    int|"all_strings"}` — the same shape discipline `record_wrappers`
+    int|"all_strings", arity?: int}` — the same shape discipline `record_wrappers`
     entries keep, checked once at `run` start rather than a crash the first
     time a call site reaches it."""
     matches = {
@@ -6365,6 +6368,49 @@ def test_a_constructed_request_handed_to_execute_is_issued(tmp_path: Path):
             invoke_kind="special",
         ),
         _execute(caller, 1, request=2),
+    ]
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("POST", "h", "/p", "resolved")
+    ]
+
+
+def test_a_constructed_request_handed_to_execute_open_is_issued(tmp_path: Path):
+    """`executeOpen(HttpHost, ClassicHttpRequest, HttpContext)` — the classic client's
+    streaming call, a `default` method on the `HttpClient` interface since 5.2 that
+    `CloseableHttpClient` inherits — issues the request exactly as `execute` does (fix
+    round 2: the terminal named `execute` alone, so a request handed to `executeOpen`
+    derived nothing while the catalog claimed every executing overload). The request is
+    argument 1 here, behind the `HttpHost`, which the join does not care about — it reads
+    every argument's `source`."""
+    caller = "com/acme/http/Client#viaExecuteOpen()."
+    facts = [
+        _call(
+            caller,
+            APACHE_POST,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/p")],
+            invoke_kind="special",
+        ),
+        _call(
+            caller,
+            "org/apache/hc/client5/http/classic/HttpClient#",
+            "executeOpen",
+            1,
+            receiver=9,
+            result=12,
+            arguments=[
+                CallArgument(kind="unresolved", source=7),
+                CallArgument(kind="instance", source=2, symbol=APACHE_POST),
+                CallArgument(kind="null"),
+            ],
+        ),
     ]
     workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
     rows = workspace.query("endpoints")

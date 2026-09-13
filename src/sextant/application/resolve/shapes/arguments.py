@@ -880,6 +880,16 @@ def linked_channels(
     return [(None, None, "unresolved")]
 
 
+def valid_via_arity(form: object) -> bool:
+    """Whether a via form's optional `arity` is well-formed: absent, or an
+    int — the linked call's argument count `_linked_constructor` compares.
+    One helper for the three engines that validate a `channel_via`/`url_via`
+    form (`single_call`, `interface_implementation`, `fluent`), because the
+    rule is the reader's, not any engine's, and three copies of it would
+    drift the day the reader's changes."""
+    return not isinstance(form, dict) or "arity" not in form or isinstance(form["arity"], int)
+
+
 def _read_channels(site: dict[str, Any], arg: int | str) -> list[tuple[None, str | None, str]]:
     """The channel-shaped tuples a linked call site's own arguments read as
     (`channel_via`): a declared int position, verbatim through `channel_of`,

@@ -32,6 +32,7 @@ from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     channel_of,
     linked_channels,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.symbols import (
@@ -461,7 +462,7 @@ def _validate_matches(catalog: Catalog) -> None:
             and isinstance(entry.get("owner"), str)
             and isinstance(entry.get("method"), str)
             and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
-            and _valid_arity(entry)
+            and valid_via_arity(entry)
         )
         if not valid:
             raise CatalogError(
@@ -469,13 +470,6 @@ def _validate_matches(catalog: Catalog) -> None:
                 f'entry that must be `{{owner, method, arg: int|"all_strings", arity?: int}}`, '
                 f"got {entry!r}"
             )
-
-
-def _valid_arity(entry: dict[str, Any]) -> bool:
-    """A via form's optional `arity` (A2 Task 8 fix round 1): absent, or an
-    int — the linked call's argument count, which is what tells two
-    overloads apart once owner and method agree (`linked_channels`)."""
-    return "arity" not in entry or isinstance(entry.get("arity"), int)
 
 
 def _channel_via_entries(registration: dict[str, Any]) -> list[Any]:

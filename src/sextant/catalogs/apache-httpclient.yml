@@ -107,12 +107,19 @@ matches:
   # a capture there could only ever demote the row without naming a payload.
   steps:
     - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms }
-  # A mapping, not the bare flag: `execute` has eight overloads at httpclient5 5.2.3, the
-  # request at argument 0 or — after an `HttpHost` — argument 1, and the join reads every
-  # argument's `source`, so all eight complete the chain. The `HttpHost` an overload
-  # takes beside a RELATIVE request is not read: such a row is path-only with `peer`
-  # NULL, exactly as a relative literal anywhere else (CP-2). Both owners a caller's
-  # field may be declared as.
+  # A mapping, not the bare flag, and BOTH executing calls the classic client declares
+  # (measured on both owners, `scripts/probes/a2t8_http_client_builders.md`): `execute`
+  # in eight overloads, and `executeOpen(HttpHost, ClassicHttpRequest, HttpContext)` —
+  # the streaming call, a `default` method on the `HttpClient` interface since 5.2 that
+  # `CloseableHttpClient` inherits. The request sits at argument 0 or — after an
+  # `HttpHost` — argument 1, and the join reads every argument's `source`, so every
+  # overload completes the chain. The `HttpHost` an overload takes beside a RELATIVE
+  # request is not read: such a row is path-only with `peer` NULL, exactly as a relative
+  # literal anywhere else (CP-2). Both owners a caller's field may be declared as.
+  #
+  # OUTSIDE this catalog: the async client (`CloseableHttpAsyncClient.execute` on a
+  # `SimpleHttpRequest` built by `SimpleRequestBuilder`) — a different builder, a
+  # different client, a different jar surface, measured by nothing here.
   #
   # `<init>` is a terminal too — the constructor form's root IS the value handed to
   # `execute`, and the join reads the constructed value's id (its `receiver`, CP-3: a
@@ -122,7 +129,7 @@ matches:
     - { method: build,
         terminal_via_argument: &execute { owner: [org.apache.hc.client5.http.impl.classic.CloseableHttpClient,
                                                   org.apache.hc.client5.http.classic.HttpClient],
-                                          method: execute } }
+                                          method: [execute, executeOpen] } }
     - { method: <init>, terminal_via_argument: *execute }
   # The field ladder's own vocabulary (2F design §4), as `okhttp.yml` declares it.
   field_sources:

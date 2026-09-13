@@ -99,8 +99,12 @@ matches:
   # spec §13 case 9).
   terminal:
     - { method: build, terminal_via_argument: { owner: java.net.http.HttpClient, method: [send, sendAsync] } }
-  # The field ladder's own vocabulary (2F design §4), as `okhttp.yml` declares it: a
-  # `URI.create(this.baseUrl)` argument is a `field` read the ladder can name.
+  # The field ladder's own vocabulary (2F design §4), as `okhttp.yml` declares it. It
+  # reaches a `field`-kind argument AT the captured position — a `@Value`-fed `URI`
+  # field handed straight to `uri(…)` or `newBuilder(…)`. It does NOT reach a field read
+  # inside the linked call: `uri(URI.create(this.baseUrl))` follows `url_via` to
+  # `URI.create`, whose own argument is read as a string literal and nothing else
+  # (`channel_of`), so that request derives `path` NULL at `unresolved`.
   field_sources:
     value_annotation: org.springframework.beans.factory.annotation.Value
     properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties

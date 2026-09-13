@@ -536,6 +536,9 @@ def test_a_registration_missing_a_required_key_is_refused_at_run_start(
         {"method": "of", "arg": 1},  # missing `owner`
         {"owner": "x.Y", "method": "of", "arg": "not-an-int"},
         "just-a-string",
+        # `arity`, when declared, is an int (A2 Task 8 fix round 2) — one helper,
+        # `valid_via_arity`, for every engine that reads a via form.
+        {"owner": "x.Y", "method": "of", "arg": 1, "arity": "one"},
     ],
 )
 def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, entry: object):

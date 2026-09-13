@@ -40,6 +40,7 @@ from sextant.application.resolve.shapes.arguments import (
     peer_of,
     supertypes_of,
     url_of,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -932,7 +933,7 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 and isinstance(entry.get("owner"), str)
                 and isinstance(entry.get("method"), str)
                 and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
-                and _valid_arity(entry)
+                and valid_via_arity(entry)
             )
             if not valid:
                 raise CatalogError(
@@ -1404,13 +1405,6 @@ def _validate_identity(row: dict[str, Any], catalog: Catalog) -> None:
             f"`{_IDENTITY}.format: {fmt}`, which is not one of "
             f"{', '.join(sorted(_IDENTITY_FORMATS))} (2I design §4)"
         )
-
-
-def _valid_arity(entry: dict[str, Any]) -> bool:
-    """A via form's optional `arity` (A2 Task 8 fix round 1): absent, or an
-    int — the linked call's argument count, which is what tells two
-    overloads apart once owner and method agree (`linked_channels`)."""
-    return "arity" not in entry or isinstance(entry.get("arity"), int)
 
 
 def _channel_via_entries(method: dict[str, Any]) -> list[Any]:

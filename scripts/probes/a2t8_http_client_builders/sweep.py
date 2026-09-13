@@ -69,7 +69,8 @@ APACHE_ENCODED = {
         for args in ("", "java.lang.String", "java.net.URI")
     )
     + ("create(java.lang.String)", "setUri(java.lang.String)", "setUri(java.net.URI)", "build()"),
-    "org.apache.hc.client5.http.impl.classic.CloseableHttpClient": ("execute",),
+    "org.apache.hc.client5.http.impl.classic.CloseableHttpClient": ("execute", "executeOpen"),
+    "org.apache.hc.client5.http.classic.HttpClient": ("execute", "executeOpen"),
 }
 APACHE_REQUEST_CLASSES = (
     "HttpGet",
@@ -323,18 +324,23 @@ def main() -> None:
         owner = f"org.apache.hc.client5.http.classic.methods.{short}"
         rows = [m for m in members(javap(owner, jar=client_jar)) if m[0].startswith("<init>")]
         table("the constructor form", owner, rows, (), apache_verdict)
-    owner = "org.apache.hc.client5.http.impl.classic.CloseableHttpClient"
-    rows = [
-        m
-        for m in members(
-            javap(
-                owner,
-                jar=client_jar,
-            )
+    # BOTH owners the catalog names: the interface declares `executeOpen` as a `default`
+    # method the concrete class inherits without redeclaring, so an enumeration of
+    # `CloseableHttpClient` alone printed eight `execute` overloads and no `executeOpen`
+    # — and a catalog claiming "every executing call" on that table missed one (fix
+    # round 2, found by review).
+    for owner in (
+        "org.apache.hc.client5.http.classic.HttpClient",
+        "org.apache.hc.client5.http.impl.classic.CloseableHttpClient",
+    ):
+        rows = [m for m in members(javap(owner, jar=client_jar)) if m[0].startswith("execute")]
+        table(
+            "the executing calls, every overload",
+            owner,
+            rows,
+            APACHE_ENCODED[owner],
+            apache_verdict,
         )
-        if m[0].startswith("execute")
-    ]
-    table("the executing call, every overload", owner, rows, APACHE_ENCODED[owner], apache_verdict)
 
 
 if __name__ == "__main__":
