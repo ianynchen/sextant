@@ -22,7 +22,10 @@ is therefore a fold over that tree rather than a walk along a line.
   trusting bodies to hold only vocabulary calls: a Supplier body holds a
   whole chain, and its `build()` would root (A1 final review, I-1). The entry
   owner and the vocabulary owner are routinely two different types, so the
-  catalog declares both.
+  catalog declares both. A body-linked entry takes `arity` and `arg_types`
+  exactly as a verb rule does (spec §3, A2 Task 7): two overloads of one name
+  may link their body at different positions, and the one rule kind matched on
+  owner and name alone claimed both calls for whichever entry came first.
 - `vocabulary` — owner+method to role: `verbs` (a verb plus whichever of a
   literal-path `path_arg`, a `path` the rule states itself — the empty string,
   for an overload that serves exactly the prefix it sits under — a
@@ -703,14 +706,14 @@ def _matching_entry(site: dict[str, Any], context: _TreeContext) -> dict[str, An
 
 
 def _matching_body_entry(site: dict[str, Any], context: _TreeContext) -> dict[str, Any] | None:
-    return next(
-        (
-            entry
-            for entry in context.body_entries
-            if site["owner"] == entry["owner"] and site["name"] == entry["method"]
-        ),
-        None,
-    )
+    """The one body-linked entry accepting this call — owner, name, and `arity`/
+    `arg_types` where the entry declares them, through the same matcher a verb or a
+    prefix rule goes through (spec §3). Two overloads of one name linking their body
+    at different positions were the case owner-and-name alone got wrong: the first
+    entry claimed both, and the other overload's body was read at a position it does
+    not have. `_linked_bodies` asks this same question, so a body linked by either
+    overload stays out of the root scan."""
+    return _matching_rule(site, context.body_entries)
 
 
 def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
@@ -1859,6 +1862,17 @@ def _validate_overloads(catalog: Catalog) -> None:
         # Origins are matched by the same rule, so the same two checks bind them: the
         # argument-less factory is told from the route of the same name by `arity`.
         "origins": catalog.matches.get("origins", []),
+        # Body-linked entries too (A2 Task 7): `route(String, Function)` and
+        # `route(Function)` on one owner link their body at 1 and at 0, and only
+        # `arity` tells them apart. Argument-rooted entries carry a `methods` list and
+        # no per-call positions to get wrong, so they stay outside this check. An entry
+        # missing `owner` or `method` is the shape check's below to refuse, not a
+        # `KeyError` here.
+        "entries": [
+            entry
+            for entry in catalog.matches.get("entries", [])
+            if {"body_arg", "owner", "method"} <= entry.keys()
+        ],
     }
     for role, declared in roles.items():
         rules = list(declared)

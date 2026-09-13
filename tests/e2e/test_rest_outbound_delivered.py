@@ -48,3 +48,58 @@ def test_an_http_interface_registered_by_import_http_services_derives(spring7_ou
         f"an @ImportHttpServices-registered interface stopped deriving. "
         f"Derived: {sorted(spring7_outbound)}"
     )
+
+
+GATEWAY = FIXTURES / "orders-gateway"
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Spring Cloud Gateway fixture derives, whole."""
+    workspace_dir = tmp_path_factory.mktemp("gateway-out")
+    compile_fixture(GATEWAY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_gateway_targets_derive_outbound(gateway_rows):
+    """`spring-cloud-gateway-outbound`, spec §14 test 11: every `uri(…)` a route's lambda
+    ends in, read through `lambda_steps` on both static receiver types (`BooleanSpec.uri`
+    after a predicate, `UriSpec.uri` after `filters(…)`), kept WHOLE — a routing
+    destination, not a request URL: `lb://orders-service` names a load-balanced service,
+    and splitting it into a peer and a path would publish an address the gateway never
+    dials. `peer` NULL on every row, no verb, caller = `routes`.
+
+    `uri(billing)` reads `http://billing-service` at `resolved`: `billing` is a `final
+    String` field with a literal initialiser — a constant variable (JLS §4.12.4) — so
+    javac writes the literal itself at the call (`ldc`, measured on the compiled
+    fixture), and the lambda still captures `this` for it. A field that is not a constant
+    would arrive as a `field` read and the row would be `unresolved`; this pin moves the
+    day the fixture's field stops being one.
+
+    Exactly seven rows: one per `route(…)` call, both overloads."""
+    rows = [
+        r
+        for r in gateway_rows
+        if r["catalog_id"] == "spring-cloud-gateway-outbound" and r["direction"] == "outbound"
+    ]
+    targets = {(r["path"], r["resolution"]) for r in rows}
+    assert targets == {
+        ("http://orders-service", "resolved"),
+        ("lb://orders-service", "resolved"),
+        ("http://ab-service", "resolved"),
+        ("http://public-service", "resolved"),
+        ("http://legacy-service", "resolved"),
+        ("http://billing-service", "resolved"),
+        ("http://host-service", "resolved"),
+    }, sorted(targets, key=str)
+    assert len(rows) == 7, sorted(targets, key=str)
+    assert all(r["peer"] is None and r["method"] is None for r in rows), rows
+    assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})

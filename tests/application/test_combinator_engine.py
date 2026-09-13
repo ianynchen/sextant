@@ -5111,3 +5111,278 @@ def test_a_chain_word_on_a_name_another_role_claims_and_a_terminal_without_a_han
     extending["vocabulary"]["verbs"][1]["extends_receiver"] = True  # type: ignore[index]
     with pytest.raises(CatalogError, match="`uri`.*terminal.*extends_receiver"):
         _resolve(tmp_path / "extending", _gateway_body([_uri()]), _catalog(extending))
+
+
+# --- body-linked entries told apart by arity (A2 Task 7, spec §3 applied to entries) ---
+
+_UNNAMED_BODY = DECLARER + "lambda$routes$1(sig_a2)."
+
+
+def _two_route_overloads_matches() -> dict[str, object]:
+    """The invented gateway vocabulary with BOTH `route` overloads as body-linked entries:
+    `route(String, Function)` with the body at 1, `route(Function)` with it at 0 — one
+    owner, one name, told apart by `arity` (and `arg_types` on the named one)."""
+    matches = _gateway_matches()
+    matches["entries"] = [
+        {
+            "owner": "com.example.gw.Routes",
+            "method": "route",
+            "arity": 2,
+            "arg_types": {0: "java.lang.String"},
+            "body_arg": 1,
+            "origin_param": 0,
+        },
+        {
+            "owner": "com.example.gw.Routes",
+            "method": "route",
+            "arity": 1,
+            "body_arg": 0,
+            "origin_param": 0,
+        },
+    ]
+    return matches
+
+
+def _two_route_overloads_body() -> list:
+    """`routes().route("id", r -> r.path("/a").uri(x)).route(r -> r.path("/b").uri(x)).build()`
+    — the two overloads in one chain, each linking a body of its own."""
+    caller = DECLARER + "routes(sig_r)."
+    sites = [
+        _site(caller, 0, GW, "routes", result=0, descriptor="()Lcom/example/gw/Builder;"),
+        _site(
+            caller,
+            1,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[
+                CallArgument(kind="string", value="id"),
+                CallArgument(kind="lambda", symbol=INLINE_BODY, source=10, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="(Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[CallArgument(kind="lambda", symbol=_UNNAMED_BODY, source=11, captures=0)],
+        ),
+        _site(
+            caller,
+            3,
+            GW,
+            "build",
+            invoke_kind="virtual",
+            receiver=2,
+            result=3,
+            descriptor="()Lcom/example/gw/Locator;",
+        ),
+    ]
+    for body, path in ((INLINE_BODY, "/a"), (_UNNAMED_BODY, "/b")):
+        sites.extend(
+            [
+                _site(
+                    body,
+                    0,
+                    SPEC,
+                    "path",
+                    invoke_kind="virtual",
+                    receiver_parameter=0,
+                    result=0,
+                    arguments=[CallArgument(kind="string", value=path)],
+                ),
+                _site(
+                    body,
+                    1,
+                    BOOL,
+                    "uri",
+                    invoke_kind="virtual",
+                    receiver=0,
+                    result=1,
+                    arguments=[CallArgument(kind="string", value="http://x")],
+                ),
+            ]
+        )
+    return [_method_symbol(INLINE_BODY), _method_symbol(_UNNAMED_BODY), *sites]
+
+
+def test_two_body_linked_overloads_of_one_name_each_fold_their_own_body(tmp_path: Path):
+    """Spec §3's discriminator applies to every rule kind, and a body-linked entry was the
+    one kind it skipped: matched on owner and name alone, the first `route` entry claimed
+    both overloads, so `route(Function)` was read at `body_arg: 1` — no lambda there, one
+    unresolved row — and the route it links was never folded. With `arity` (and
+    `arg_types`) read on entries as on verbs, each overload jumps to its OWN body and
+    both routes derive, under the one method holding the chain."""
+    workspace = _resolve(
+        tmp_path, _two_route_overloads_body(), _catalog(_two_route_overloads_matches())
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        (None, "/a", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {DECLARER + "routes(sig_r)."}
+
+
+def test_two_body_linked_entries_that_could_both_accept_one_call_are_refused(tmp_path: Path):
+    """Spec §3c, on entries as on every other rule kind: two entries sharing owner, method
+    and arity that type no shared position differently could both accept one call, and
+    file order would decide — refused at load, naming both. And `arg_types` without an
+    `arity` is an entry that cannot mean what it says."""
+    same_arity = _two_route_overloads_matches()
+    same_arity["entries"][1]["arity"] = 2  # type: ignore[index]
+    del same_arity["entries"][1]["body_arg"]  # type: ignore[index]
+    same_arity["entries"][1]["body_arg"] = 1  # type: ignore[index]
+    with pytest.raises(CatalogError, match=r"`entries` rules for `route` at arity 2 could both"):
+        _resolve(tmp_path / "same", _two_route_overloads_body(), _catalog(same_arity))
+    untyped = _two_route_overloads_matches()
+    del untyped["entries"][0]["arity"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`route` declares `arg_types` without `arity`"):
+        _resolve(tmp_path / "untyped", _two_route_overloads_body(), _catalog(untyped))
+
+
+# --- `spring-cloud-gateway` (A2 Task 7): the chain form on the shipped catalog ---
+
+_GW_BUILDER = "org/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder#"
+_GW_LOCATOR_BUILDER = "org/springframework/cloud/gateway/route/builder/RouteLocatorBuilder#"
+_GW_PREDICATE_SPEC = "org/springframework/cloud/gateway/route/builder/PredicateSpec#"
+_GW_BOOLEAN_SPEC = "org/springframework/cloud/gateway/route/builder/BooleanSpec#"
+_GW_ROUTE_DESC = (
+    "(Ljava/lang/String;Ljava/util/function/Function;)"
+    "Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;"
+)
+_GW_ROUTES = DECLARER + "routes(sig_g0)."
+_GW_BODY = DECLARER + "lambda$routes$0(sig_g1)."
+
+
+def _shipped_gateway_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-cloud-gateway"
+    )
+
+
+def _gateway_facts(chain_owner: str) -> list:
+    """`builder.routes().route("orders", r -> r.path("/orders/**").uri("http://x")).build()`
+    — the shape `fixtures/orders-gateway/.../GatewayRoutes.java`'s `routes()` compiles to
+    (`javap -c`, 2026-09-13): `routes()` on `RouteLocatorBuilder`, `route`/`build` on its
+    `$Builder`, the lambda an `invokedynamic` body linked with `captures: 0`, and inside
+    it `PredicateSpec.path` on the body's parameter 0 then `BooleanSpec.uri` on that
+    result — the OWNER of each call being the receiver's static type. `chain_owner` is
+    the type the outer chain is written on: the one cell the near-miss below varies."""
+    return [
+        _method_symbol(_GW_BODY),
+        # Value ids as the fixture's own fact file carries them: `routes()` on the method's
+        # `RouteLocatorBuilder` parameter, the lambda's `source` the `LambdaMetafactory`
+        # site's result (a value of its own, never the `route` call's), `build()` on the
+        # `route` call's result.
+        _site(
+            _GW_ROUTES,
+            0,
+            _GW_LOCATOR_BUILDER,
+            "routes",
+            invoke_kind="virtual",
+            receiver_parameter=0,
+            result=7,
+            descriptor=f"()L{_GW_BUILDER[:-1]};",
+        ),
+        _site(
+            _GW_ROUTES,
+            1,
+            chain_owner,
+            "route",
+            invoke_kind="virtual",
+            receiver=7,
+            result=12,
+            descriptor=_GW_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="string", value="orders"),
+                CallArgument(kind="lambda", symbol=_GW_BODY, source=9, captures=0),
+            ],
+        ),
+        _site(
+            _GW_ROUTES,
+            2,
+            chain_owner,
+            "build",
+            invoke_kind="virtual",
+            receiver=12,
+            result=46,
+            descriptor="()Lorg/springframework/cloud/gateway/route/RouteLocator;",
+        ),
+        _site(
+            _GW_BODY,
+            0,
+            _GW_PREDICATE_SPEC,
+            "path",
+            invoke_kind="virtual",
+            receiver_parameter=0,
+            result=0,
+            descriptor=f"([Ljava/lang/String;)L{_GW_BOOLEAN_SPEC[:-1]};",
+            arguments=[
+                CallArgument(
+                    kind="array", elements=[CallArgument(kind="string", value="/orders/**")]
+                )
+            ],
+        ),
+        _site(
+            _GW_BODY,
+            1,
+            _GW_BOOLEAN_SPEC,
+            "uri",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/Buildable;",
+            arguments=[CallArgument(kind="string", value="http://orders-service")],
+        ),
+    ]
+
+
+def test_the_gateway_catalog_derives_a_route_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real owners.
+    `path("/orders/**")` — a vararg, one literal — then `uri(…)`: one route, `/orders/**`,
+    no verb (a catch-all one column over, spec §13 case 7), no handler (a gateway route
+    forwards), caller = the method holding `build()`."""
+    workspace = _resolve(tmp_path, _gateway_facts(_GW_BUILDER), _shipped_gateway_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/orders/**", None, "resolved")]
+    assert [row["caller"] for row in rows] == [_GW_ROUTES]
+
+
+@pytest.mark.declines("spring-cloud-gateway")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_gateway_catalog_declines_a_route_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `route` name and descriptor, the same `Function` lambda with
+    `captures: 0`, the same `PredicateSpec.path` then `BooleanSpec.uri` chain on the
+    body's parameter inside it — and only the OWNER the outer chain is written on
+    differs: `com.example.NotABuilder#route`, which is not `RouteLocatorBuilder$Builder`
+    (and so its `build()` is not this catalog's continuation either: a `route` on another
+    type returns that type).
+
+    Nothing is the required answer. The body-linked entries and the `build()` continuation
+    are the ONLY roots this catalog has — a predicate chain inside a body is never a root
+    of its own — so with the owner check gone any method named `route` handed a lambda
+    would root a tree, and `/orders/**` would be published under this catalog's id for a
+    route the gateway never registered."""
+    workspace = _resolve(
+        tmp_path, _gateway_facts("com/example/NotABuilder#"), _shipped_gateway_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []

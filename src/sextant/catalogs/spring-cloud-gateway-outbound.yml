@@ -1,0 +1,68 @@
+id: spring-cloud-gateway-outbound
+displayName: Spring Cloud Gateway (route targets, outbound)
+style: single_call
+protocol: http
+direction: outbound
+
+detect:
+  coordinates: ["org.springframework.cloud:spring-cloud-gateway-server-webflux", "org.springframework.cloud:spring-cloud-starter-gateway", "org.springframework.cloud:spring-cloud-gateway-server"]
+
+measured:
+  # The two `route` descriptors below, checked against the jar's own bytecode by the
+  # CP-10 harness at 5.0.0 (`tests/architecture/test_catalog_descriptors.py` pins them).
+  - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
+      identity: reported, by: scripts/probes/w19_catalog_surface.md }
+
+requires: [call_site, string_constants]
+
+# The outbound half of `spring-cloud-gateway.yml` (`G-30-outbound`, spec §12): where each
+# route FORWARDS to. A gateway route is one lambda handed to `route(…)`, and its target is
+# the `uri(…)` the lambda's chain ends in — a call INSIDE the lambda, on a builder value
+# the body produced, which is exactly what `lambda_arg`/`lambda_steps` read for
+# `SqsTemplate.send(to -> to.queue(…))` (W57) and `receive(opts -> opts.queue(…))`
+# (`spring-sqs-template-receive.yml`). The same two `route` overloads the inbound catalog
+# links as bodies are the two rows here; a catalog has one direction, so the pair is two
+# files on one module.
+#
+# MEASURED (`javap -p -s`, spring-cloud-gateway-server-webflux 5.0.0, A2 Task 7,
+# 2026-09-13). `RouteLocatorBuilder$Builder` declares exactly two `route` overloads:
+#
+#   route (Ljava/lang/String;Ljava/util/function/Function;)Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;
+#   route (Ljava/util/function/Function;)Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;
+#
+# The lambda is argument 1 of the first and argument 0 of the second. `uri` is declared
+# ONCE, on `UriSpec` — `uri(String)` and `uri(URI)` — and reaches the facts under the
+# receiver's STATIC type (javac, JLS 13.1): `BooleanSpec.uri` straight after a predicate,
+# `UriSpec.uri` after `filters(…)`, which returns the base type, and
+# `BooleanSpec$BooleanOpSpec.uri` after a dangling `and()`/`or()` (a shape that compiles
+# and runs). ONE step naming all three (the §3.1 list form — steps are keyed by method
+# name, so three `uri` steps would be one), `channel_arg: 0`. A `uri(URI)` argument is a
+# call result the step cannot read, so that row is `unresolved` — the target withheld,
+# never guessed.
+#
+# `channel_arg`, not `url_arg`: the target is a ROUTING DESTINATION the gateway resolves
+# — `lb://orders-service` names a load-balanced service, not a host with a path — and
+# D02 keeps a channel whole (`peer` NULL, the literal verbatim as `path`). Splitting
+# `http://orders-service` into a peer and an empty path would publish an address the
+# gateway never dials. The `uri` is read exactly as the compiler wrote it: a `final
+# String` field with a literal initialiser is a constant variable (JLS §4.12.4), so
+# `uri(billing)` in the fixture arrives as the literal itself (`ldc`, measured `javap -c`),
+# resolved; a field that is not a constant would arrive as a `field` read, which no rung
+# of this file's ladder follows (no `field_sources`), and the row would be `unresolved`.
+matches:
+  owner: org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder
+  # TWO ROWS, ONE PER OVERLOAD, each declaring its own erased JVM `descriptor`
+  # (GUIDELINES §8.1's language rule). The arities differ, so `arity` alone would tell
+  # them apart; the descriptor is declared because every `methods` row does
+  # (`tests/architecture/test_catalog_descriptor_coverage.py`).
+  methods:
+    - { name: route, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/util/function/Function;)Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;",
+        lambda_arg: 1,
+        lambda_steps: [{ owner: [org.springframework.cloud.gateway.route.builder.BooleanSpec, org.springframework.cloud.gateway.route.builder.UriSpec, org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec], method: uri, channel_arg: 0 }] }
+    - { name: route, arity: 1,
+        descriptor: "(Ljava/util/function/Function;)Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: [org.springframework.cloud.gateway.route.builder.BooleanSpec, org.springframework.cloud.gateway.route.builder.UriSpec, org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec], method: uri, channel_arg: 0 }] }

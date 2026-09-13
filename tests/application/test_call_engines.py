@@ -2958,6 +2958,126 @@ def test_a_receive_lambda_naming_a_queue_on_another_type_derives_no_queue(tmp_pa
     )
 
 
+_GW_BUILDER = "org/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder#"
+_GW_BOOLEAN_SPEC = "org/springframework/cloud/gateway/route/builder/BooleanSpec#"
+_GW_URI_SPEC = "org/springframework/cloud/gateway/route/builder/UriSpec#"
+_GW_ROUTE_NAMED = (
+    "(Ljava/lang/String;Ljava/util/function/Function;)"
+    "Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;"
+)
+
+
+def _gateway_route_lambda(uri_owner: str, target: str) -> list[CallSiteFact]:
+    """`builder.route("orders", r -> r.path("/orders/**").uri(<target>))` plus the lambda's
+    own body — the shape `fixtures/orders-gateway`'s `routes()` compiles to (`javap -c`,
+    spring-cloud-gateway-server-webflux 5.0.0): the lambda at argument 1 with the measured
+    `(String, Function)` descriptor, and inside it `path` on the body's parameter then
+    `uri` on that result, under the receiver's STATIC type — `uri_owner`, the one cell
+    the near-miss below varies."""
+    caller = "com/acme/gw/GatewayRoutes#routes()."
+    lambda_symbol = "com/acme/gw/GatewayRoutes#lambda$routes$0(sig_x)."
+    return [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=_GW_BUILDER, name="route", descriptor=_GW_ROUTE_NAMED),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=1,
+            result=2,
+            arguments=[
+                CallArgument(kind="string", value="orders"),
+                CallArgument(kind="lambda", symbol=lambda_symbol, captures=0),
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=lambda_symbol,
+            target=CallTarget(
+                owner="org/springframework/cloud/gateway/route/builder/PredicateSpec#",
+                name="path",
+                descriptor=f"([Ljava/lang/String;)L{_GW_BOOLEAN_SPEC[:-1]};",
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=None,
+            receiver_parameter=0,
+            result=10,
+            arguments=[
+                CallArgument(
+                    kind="array", elements=[CallArgument(kind="string", value="/orders/**")]
+                )
+            ],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=lambda_symbol,
+            target=CallTarget(
+                owner=uri_owner,
+                name="uri",
+                descriptor="(Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/Buildable;",
+            ),
+            invoke_kind="virtual",
+            ordinal=1,
+            receiver=10,
+            result=11,
+            arguments=[CallArgument(kind="string", value=target)],
+        ),
+    ]
+
+
+def test_a_gateway_route_target_named_inside_the_lambda_is_read_on_both_static_owners(
+    tmp_path: Path,
+):
+    """`G-30-outbound` (A2 Task 7, spec §12) — the paired positive, on the shipped catalog.
+    The target is the `uri(…)` a route's lambda ends in, read through `lambda_steps` and
+    kept WHOLE (`lb://orders-service` is a routing destination the gateway resolves, not a
+    host with a path — `peer` NULL). `uri` is declared once, on `UriSpec`, and reaches the
+    facts as `BooleanSpec.uri` straight after a predicate or `UriSpec.uri` after
+    `filters(…)` (javac writes the receiver's static type): one step names both."""
+    for owner in (_GW_BOOLEAN_SPEC, _GW_URI_SPEC):
+        workspace = _resolve(
+            tmp_path / owner.split("/")[-1].rstrip("#"),
+            _gateway_route_lambda(owner, "lb://orders-service"),
+            _catalog_by_id("spring-cloud-gateway-outbound"),
+        )
+        rows = workspace.query("endpoints")
+        workspace.close()
+
+        assert [
+            (r["direction"], r["path"], r["peer"], r["method"], r["resolution"]) for r in rows
+        ] == [("outbound", "lb://orders-service", None, None, "resolved")], owner
+
+
+@pytest.mark.declines("spring-cloud-gateway-outbound")
+@pytest.mark.pins("single_call.lambda-step-owner-is-the-declared-type")
+def test_a_gateway_lambda_naming_a_uri_on_another_type_derives_no_target(tmp_path: Path):
+    """§10 near-miss for `G-30-outbound`, and it measures the OWNER of the step.
+
+    Every other conjunct holds: the right `route` on `RouteLocatorBuilder$Builder` with the
+    measured `(String, Function)` descriptor, a real lambda at argument 1, a body the facts
+    carry, a call literally named `uri` carrying a string on a value the body produced.
+    Only the TYPE it is called on differs — `com.example.Target#uri`, neither `BooleanSpec`
+    nor `UriSpec` — and a route body that builds some other object's `uri(…)` beside its
+    predicates is ordinary code. A reader matching the step on its name alone would
+    publish `http://elsewhere` as this gateway's forwarding target at `resolved`.
+
+    The row still derives, path-less and `unresolved` — the same shape as the SQS twins:
+    the call on the builder IS a route, and the one capture the row declares was
+    withheld. What the test refuses is the target being FILLED from the wrong type."""
+    workspace = _resolve(
+        tmp_path,
+        _gateway_route_lambda("com/example/Target#", "http://elsewhere"),
+        _catalog_by_id("spring-cloud-gateway-outbound"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(None, "unresolved")], (
+        "a `uri` call on an unrelated type was read as this route's target"
+    )
+
+
 def _catalog_by_id(catalog_id: str) -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
 

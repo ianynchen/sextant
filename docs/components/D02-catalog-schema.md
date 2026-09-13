@@ -1493,7 +1493,9 @@ The chain form (spec §12 words 3–5), measured on `spring-cloud-gateway-server
 ```yaml
 matches:
   entries:
-    - { owner: "…RouteLocatorBuilder$Builder", method: route, body_arg: 1, origin_param: 0 }
+    - { owner: "…RouteLocatorBuilder$Builder", method: route, arity: 2,
+        arg_types: { 0: java.lang.String }, body_arg: 1, origin_param: 0 }
+    - { owner: "…RouteLocatorBuilder$Builder", method: route, arity: 1, body_arg: 0, origin_param: 0 }
   vocabulary:
     prefixes:
       - { owner: "…PredicateSpec", method: path, arity: 1, path_arg: 0 }
@@ -1530,7 +1532,11 @@ framework:**
   close). The entry owner and the vocabulary owner are routinely two different
   types — `CoRouterFunctionDslKt` (the file facade with the static entry point) is
   not `CoRouterFunctionDsl` (the DSL type every builder call carries) — so a
-  catalog declares both.
+  catalog declares both. A body-linked entry takes `arity` and `arg_types` exactly
+  as a verb rule does (spec §3, below), and two of them sharing owner, method and
+  arity that type no shared position differently are refused at load: the gateway's
+  `route(String, Function)` and `route(Function)` link their body at 1 and at 0, and
+  matched on owner and name alone the first entry claimed both calls.
 - **`vocabulary`** maps owner+method to a role. `verbs` and `prefixes` are LISTS,
   scanned per call, so one name may carry several rules — a builder declares four
   `GET`s — and two keys tell same-name overloads apart (design spec

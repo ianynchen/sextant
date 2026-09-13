@@ -8,13 +8,15 @@ script's own output, pasted verbatim.
 5.1.2**, **spring-webflux 6.1.6**, **sqs 2.25.31**, **kafka-streams 3.6.2** (added
 2026-09-12 for `G-31`, w60), **javalin 6.4.0** (added 2026-09-12 for
 `javalin-routing`, w61), — added 2026-09-12 for `alpakka-pekko`, w62 —
-**pekko-connectors-kafka_2.13 1.1.0**, and — added 2026-09-13 for `ktor-routing`,
-A2 Task 5 — **ktor-server-core-jvm 3.0.3** — each self-reported by the
+**pekko-connectors-kafka_2.13 1.1.0**, — added 2026-09-13 for `ktor-routing`,
+A2 Task 5 — **ktor-server-core-jvm 3.0.3**, and — added 2026-09-13 for `G-30` and
+`G-30-outbound`, A2 Task 7 — **spring-cloud-gateway-server-webflux 5.0.0** — each
+self-reported by the
 archive, from `Implementation-Version:` where the publisher writes one, from
 Maven's `pom.properties` where it does not (the AWS SDK writes no manifest version at
 all), or from Kafka Streams' own `kafka/kafka-streams-version.properties` where it
-writes neither (Javalin, pekko-connectors-kafka and ktor-server-core-jvm all write a
-manifest `Implementation-Version:`). The run ABORTS when a jar's self-report disagrees with the
+writes neither (Javalin, pekko-connectors-kafka, ktor-server-core-jvm and
+spring-cloud-gateway-server-webflux all write a manifest `Implementation-Version:`). The run ABORTS when a jar's self-report disagrees with the
 coordinate that resolved it. Every version here is one the catalog it measures already
 names in its own `measured:` block, except the three that had none — so a surface
 counted here is bounded by the same evidence as the rules it is counted against. A
@@ -97,42 +99,45 @@ Methods every class carries are excluded from both sides of every count: <clinit
 
 ### 1. How much of each owner's surface the catalog reads
 
-| gap | catalog | owner | 1.1.0 | 2.25.31 | 3.0.3 | 3.1.1 | 3.1.4 | 3.6.2 | 5.1.2 | 6.1.6 | 6.4.0 | reads |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | — | — | — | 49 | — | **5 of 49** |
-| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | — | — | — | 10 | — | **5 of 10** |
-| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | — | — | 88 | — | — | — | — | **4 of 88** |
-| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | — | — | 8 | — | — | — | — | **4 of 8** |
-| G-44 | `spring-sqs-template` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | **1 of 12** |
-| G-44 | `spring-sqs-template` | `SqsOperations` | — | — | — | 4 | — | — | — | — | — | **1 of 4** |
-| G-44 | `spring-sqs-template-receive` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | **4 of 12** |
-| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | — | — | 20 | — | — | **11 of 20** |
-| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | — | — | 14 | — | **3 of 14** |
-| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | — | — | 3 | — | **3 of 3** |
-| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | — | — | 6 | — | **4 of 6** |
-| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
-| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | — | — | 8 | — | **4 of 8** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | — | — | 45 | — | **10 of 45** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
-| G-37 | `spring-webflux-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
-| G-37 | `spring-webflux-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | 1 | — | **1 of 1** |
-| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
-| G-43 | `aws-sqs-sdk` | `SqsClient` | — | 29 | — | — | — | — | — | — | — | **1 of 29** |
-| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | — | 28 | — | — | — | — | — | — | — | **1 of 28** |
-| G-31 | `kafka-streams` | `StreamsBuilder` | — | — | — | — | — | 6 | — | — | — | **3 of 6** |
-| G-31 | `kafka-streams-sink` | `KStream` | — | — | — | — | — | 28 | — | — | — | **1 of 28** |
-| G-31 | `kafka-streams-topology` | `Topology` | — | — | — | — | — | 7 | — | — | — | **2 of 7** |
-| javalin-routing | `javalin` | `Javalin` | — | — | — | — | — | — | — | — | 32 | **7 of 32** |
-| javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
-| javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
-| javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | — | 18 | **0 of 18** |
-| javalin-nested | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | — | 18 | **7 of 18** |
-| alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | — | **5 of 14** |
-| alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | — | **0 of 6** |
-| ktor-routing | `ktor-routing` | `RoutingRootKt` | — | — | 4 | — | — | — | — | — | — | **1 of 4** |
-| ktor-routing | `ktor-routing` | `RoutingBuilderKt` | — | — | 21 | — | — | — | — | — | — | **8 of 21** |
+| gap | catalog | owner | 1.1.0 | 2.25.31 | 3.0.3 | 3.1.1 | 3.1.4 | 3.6.2 | 5.0.0 | 5.1.2 | 6.1.6 | 6.4.0 | reads |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | — | — | — | — | 49 | — | **5 of 49** |
+| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | — | — | — | — | 10 | — | **5 of 10** |
+| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | — | — | 88 | — | — | — | — | — | **4 of 88** |
+| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | — | — | 8 | — | — | — | — | — | **4 of 8** |
+| G-44 | `spring-sqs-template` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | — | **1 of 12** |
+| G-44 | `spring-sqs-template` | `SqsOperations` | — | — | — | 4 | — | — | — | — | — | — | **1 of 4** |
+| G-44 | `spring-sqs-template-receive` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | — | **4 of 12** |
+| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | — | — | — | 20 | — | — | **11 of 20** |
+| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | — | — | — | 14 | — | **3 of 14** |
+| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | — | — | — | 3 | — | **3 of 3** |
+| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | — | — | — | 6 | — | **4 of 6** |
+| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
+| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | — | — | — | 8 | — | **4 of 8** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | — | — | — | 45 | — | **10 of 45** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | — | 1 | — | **1 of 1** |
+| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
+| G-43 | `aws-sqs-sdk` | `SqsClient` | — | 29 | — | — | — | — | — | — | — | — | **1 of 29** |
+| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | — | 28 | — | — | — | — | — | — | — | — | **1 of 28** |
+| G-31 | `kafka-streams` | `StreamsBuilder` | — | — | — | — | — | 6 | — | — | — | — | **3 of 6** |
+| G-31 | `kafka-streams-sink` | `KStream` | — | — | — | — | — | 28 | — | — | — | — | **1 of 28** |
+| G-31 | `kafka-streams-topology` | `Topology` | — | — | — | — | — | 7 | — | — | — | — | **2 of 7** |
+| javalin-routing | `javalin` | `Javalin` | — | — | — | — | — | — | — | — | — | 32 | **7 of 32** |
+| javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
+| javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
+| javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | — | — | 18 | **0 of 18** |
+| javalin-nested | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | — | — | 18 | **7 of 18** |
+| alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | — | — | **5 of 14** |
+| alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | — | — | **0 of 6** |
+| ktor-routing | `ktor-routing` | `RoutingRootKt` | — | — | 4 | — | — | — | — | — | — | — | **1 of 4** |
+| ktor-routing | `ktor-routing` | `RoutingBuilderKt` | — | — | 21 | — | — | — | — | — | — | — | **8 of 21** |
+| G-30 | `spring-cloud-gateway` | `RouteLocatorBuilder$Builder` | — | — | — | — | — | — | 2 | — | — | — | **2 of 2** |
+| G-30 | `spring-cloud-gateway` | `PredicateSpec` | — | — | — | — | — | — | 24 | — | — | — | **20 of 24** |
+| G-30-outbound | `spring-cloud-gateway-outbound` | `RouteLocatorBuilder$Builder` | — | — | — | — | — | — | 2 | — | — | — | **1 of 2** |
 
 - A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
 
@@ -185,6 +190,9 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `pekko-connectors-kafka` | `Producer` | 6 | **0** | **0** | **0** | **0** |
 | `ktor-routing` | `RoutingRootKt` | 3 | **0** | **0** | **0** | **0** |
 | `ktor-routing` | `RoutingBuilderKt` | 13 | **0** | **0** | **0** | **0** |
+| `spring-cloud-gateway` | `RouteLocatorBuilder$Builder` | 0 | **0** | **0** | **0** | **0** |
+| `spring-cloud-gateway` | `PredicateSpec` | 4 | **2** | **0** | **0** | **2** |
+| `spring-cloud-gateway-outbound` | `RouteLocatorBuilder$Builder` | 1 | **0** | **0** | **0** | **0** |
 
 **`spring-jms-template` / `JmsTemplate`**
 
@@ -315,6 +323,14 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`ktor-routing` / `RoutingBuilderKt`** — no unread method addresses a wire by either style.
 
 > The zero is the measurement's shape, not the owner's: every method here is a Kotlin extension whose `Route` receiver is argument 0, and its path — where it takes one — is argument 1. The three styles above read argument 0, so none of them can see a candidate on this owner. The unread names that take a path or a selector at argument 1 (`route` with an `HttpMethod`, `param`, `optionalParam`, `header`) and the selector blocks that take none (`method`, `accept`, `contentType`) are stated in `ktor-routing.yml`'s header; a slice entry would be refused, since section 3 lists nothing to name.
+
+**`spring-cloud-gateway` / `RouteLocatorBuilder$Builder`** — no unread method addresses a wire by either style.
+
+**`spring-cloud-gateway` / `PredicateSpec`**
+
+> by name at argument 0 (2): `metadata`, `uri`
+
+**`spring-cloud-gateway-outbound` / `RouteLocatorBuilder$Builder`** — no unread method addresses a wire by either style.
 
 ### 3. Every unread candidate, one per row
 
@@ -521,4 +537,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `ws` | `argument 0` |
 | `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `wsAfter` | `argument 0` |
 | `javalin-apibuilder` | `io.javalin.apibuilder.ApiBuilder` | `wsBefore` | `argument 0` |
+| `spring-cloud-gateway` | `org.springframework.cloud.gateway.route.builder.PredicateSpec` | `metadata` | `argument 0` |
+| `spring-cloud-gateway` | `org.springframework.cloud.gateway.route.builder.PredicateSpec` | `uri` | `argument 0` |
 

@@ -413,10 +413,21 @@ GUARDS: dict[str, Guard] = {
                 find='            if site["owner"] == entry["owner"] and site["name"] in entry["methods"]',
                 replace='            if site["name"] in entry["methods"]  # guard disabled',
             ),
+            # The body-linked shape goes through `_matching_rule` (arity and arg_types
+            # beside owner and name, A2 Task 7); the weakening hands each entry the
+            # site re-owned as that entry's own type, so only the owner conjunct falls.
             Edit(
                 path=_COMBINATOR,
-                find='            if site["owner"] == entry["owner"] and site["name"] == entry["method"]',
-                replace='            if site["name"] == entry["method"]  # guard disabled',
+                find="    return _matching_rule(site, context.body_entries)\n",
+                replace="    return next(  # guard disabled by scripts/guard_check.py\n"
+                "        (\n"
+                "            match\n"
+                "            for entry in context.body_entries\n"
+                '            if (match := _matching_rule({**site, "owner": entry["owner"]}, (entry,)))\n'
+                "            is not None\n"
+                "        ),\n"
+                "        None,\n"
+                "    )\n",
             ),
         ),
     ),

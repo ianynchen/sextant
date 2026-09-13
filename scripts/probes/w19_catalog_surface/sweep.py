@@ -426,6 +426,40 @@ SURFACES = (
         "ktor-routing",
         note=_KTOR_BUILDER_NOTE,
     ),
+    # `spring-cloud-gateway` and its outbound sibling (A2 Task 7). The builder holding
+    # both `route` overloads and `build()` — the inbound catalog's entries and root, the
+    # outbound catalog's `matches.owner` — and the type every predicate chain starts on.
+    # MEASURED: `PredicateSpec` inherits `UriSpec`'s four members, two of which take a
+    # `String` at argument 0 (`uri`, `metadata`) and are the inbound catalog's slice: on
+    # the bare route parameter, before any predicate, neither can lead to a route that
+    # runs. Its own predicates carry a `String[]` (`path`, `host`, `method`) or a
+    # `String` (`header`, `query`, `cookie`, `weight`, `version`) — every one read, as a
+    # rule or a pass-through, on this owner and again on `BooleanSpec$BooleanOpSpec`,
+    # the static type a predicate is invoked on after `and()`/`or()`. That second owner,
+    # `BooleanSpec` and `UriSpec` are read in full (stated in the catalog's header) and
+    # not enumerated here: every unread name they could carry is already the
+    # `PredicateSpec` slice, and a second enumeration would list it twice.
+    Surface(
+        "spring-cloud-gateway",
+        "org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30",
+    ),
+    Surface(
+        "spring-cloud-gateway",
+        "org.springframework.cloud.gateway.route.builder.PredicateSpec",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30",
+    ),
+    Surface(
+        "spring-cloud-gateway-outbound",
+        "org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30-outbound",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and

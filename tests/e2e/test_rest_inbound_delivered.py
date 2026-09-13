@@ -625,3 +625,72 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         "the Route-extension helper's route was derived — a walk now follows `api()`; "
         "move this pin and the catalog's stated boundary together"
     )
+
+
+GATEWAY = FIXTURES / "orders-gateway"
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Spring Cloud Gateway fixture derives, whole — the test reads
+    the handler and the caller beside the identity."""
+    workspace_dir = tmp_path_factory.mktemp("gateway")
+    compile_fixture(GATEWAY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
+    """`spring-cloud-gateway`, spec §14 test 10, on spring-cloud-gateway-server-webflux
+    5.0.0: every route is a lambda handed to `route(…)`, its predicates a receiver chain on
+    the lambda's own parameter, its address the path those predicates read. `path` alone
+    serves its path with no verb (a catch-all one column over, spec §13 case 7);
+    `path().and().method(POST, PUT)` is one row per verb; `path("/a").or().path("/b")` is
+    two rows; the host-only `route(Function)` serves every path, `/**`. No row carries a
+    handler — a gateway route forwards, it dispatches to no method — and every row's
+    caller is `routes`, the method holding `build()`.
+
+    The two capture shapes a fixed parameter index gets wrong, read off `javap -p` of the
+    compiled fixture: `legacy` captures the local `prefix`, so its body is
+    `lambda$routes$6(String, PredicateSpec)` and the route's `PredicateSpec` is parameter
+    1, not 0; `billing` captures `this`, so its body is the instance method
+    `lambda$routes$7(PredicateSpec)` with the spec at parameter 0. Both chains are found
+    on the origin parameter — `origin_param: 0` resolved through each lambda's own
+    `captures` — and neither is attributed to the wrong value. `billing` then reads its
+    literal path, `/billing/**`, resolved. `legacy` reads `prefix + "/**"`, which javac
+    compiles to a concatenation (`{}/**`, a hole for the captured value): the path is not
+    readable from the body, so that row is `unresolved` with its path NULL — the honest
+    answer for an assembled path, and the row is still there, under `routes`, rather
+    than silence. `not(p -> p.path("/admin/**"))` is the other unresolved row: a negated
+    predicate serves something the negation does not say.
+
+    Both `route` overloads derive — the named six and the unnamed host-only one — because a
+    body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched on
+    owner and name alone, the first entry claimed both and the host-only route was one
+    unresolved row. Exactly nine rows from this catalog — the seven resolved and the two
+    unresolved — so an extra row (a negator's lambda body scanned as a tree of its own, a
+    pass-through reached unconsumed, a duplicate) cannot pass silently."""
+    rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway"]
+    identities = {(r["method"], r["path"], r["resolution"]) for r in rows}
+    assert {
+        (None, "/orders/**", "resolved"),
+        ("POST", "/orders/**", "resolved"),
+        ("PUT", "/orders/**", "resolved"),
+        (None, "/a/**", "resolved"),
+        (None, "/b/**", "resolved"),
+        (None, "/billing/**", "resolved"),  # captured `this`: the spec is parameter 0
+        (None, "/**", "resolved"),  # host only, the `route(Function)` overload
+        (None, None, "unresolved"),  # not-admin, and legacy (captured local, concat path)
+    } == identities, sorted(identities, key=str)
+    unresolved = [r for r in rows if r["resolution"] == "unresolved"]
+    assert len(unresolved) == 2 and all(r["method"] is None for r in unresolved), unresolved
+    assert len(rows) == 9, sorted(identities, key=str)
+    assert all(r["handler"] is None for r in rows), [r["handler"] for r in rows]
+    assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})

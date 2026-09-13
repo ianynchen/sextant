@@ -1,0 +1,199 @@
+id: spring-cloud-gateway
+displayName: Spring Cloud Gateway (route DSL, inbound)
+style: combinator
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["org.springframework.cloud:spring-cloud-gateway-server-webflux", "org.springframework.cloud:spring-cloud-starter-gateway", "org.springframework.cloud:spring-cloud-gateway-server"]
+
+measured:
+  - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
+      identity: reported, by: scripts/probes/w19_catalog_surface.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# Spring Cloud Gateway's Java route DSL (`G-30`, spec §12 word 4): every route is a lambda
+# handed to `RouteLocatorBuilder$Builder.route(…)`, its predicates a RECEIVER chain on the
+# lambda's own parameter, its target the `uri(…)` the chain ends in —
+#   builder.routes().route("orders", r -> r.path("/orders/**").and().method(POST).uri("lb://x")).build()
+# The chain form: `and()`/`or()` compose ON the chain, `not(fn)` negates, `uri(…)` emits the
+# route (the terminal), and the route serves the path its predicates read — `/**` when no
+# predicate names one (a host-only or verb-only route serves every path, spec §7 case 3).
+# The sibling `spring-cloud-gateway-outbound.yml` reads the `uri(…)` target; a catalog has
+# one direction.
+#
+# MEASURED, `javap -p -s -cp ~/.m2/repository/org/springframework/cloud/
+# spring-cloud-gateway-server-webflux/5.0.0/spring-cloud-gateway-server-webflux-5.0.0.jar`
+# (A2 Task 7, 2026-09-13; the jar's manifest reports `Implementation-Version: 5.0.0`):
+#   RouteLocatorBuilder.routes() → Builder                        the origin
+#   RouteLocatorBuilder$Builder:
+#     route(String, Function<PredicateSpec, Buildable<Route>>)     the named route
+#     route(Function<PredicateSpec, Buildable<Route>>)             the unnamed route
+#     build() → RouteLocator                                       the root
+#   UriSpec:                     uri(String), uri(URI) → Buildable<Route>; metadata(Map),
+#                                metadata(String, Object), replaceMetadata(Map), customize(Consumer)
+#   PredicateSpec extends UriSpec:
+#     path(String...)  path(boolean, String...)  method(HttpMethod...)  method(String...)
+#     host(String...)  header(String)  header(String, String)  query(String)
+#     query(String, String)  query(String, Predicate)  cookie(String, String)
+#     remoteAddr(String...)  remoteAddr(RemoteAddressResolver, String...)
+#     xForwardedRemoteAddr(String...)  after/before(ZonedDateTime)  between(ZonedDateTime ×2)
+#     readBody(Class, Predicate)  weight(String, int)  version(String)  order(int)
+#     cloudFoundryRouteService()  alwaysTrue()  not(Function)  predicate(Predicate)
+#     asyncPredicate(AsyncPredicate)
+#   BooleanSpec extends UriSpec: and(), or() → BooleanSpec$BooleanOpSpec; negate();
+#                                filters(Function<GatewayFilterSpec, UriSpec>) → UriSpec
+#   BooleanSpec$BooleanOpSpec extends PredicateSpec: not, predicate, asyncPredicate
+#                                (overridden), nested(Function)
+#
+# THE OWNER A CALL CARRIES IS THE RECEIVER'S STATIC TYPE, not the declaring class (javac,
+# JLS 13.1; read off `javap -c` of `fixtures/orders-gateway`). So the same predicate has
+# TWO owners in the facts — `PredicateSpec.path` at the head of a chain and
+# `BooleanSpec$BooleanOpSpec.path` after an `and()`/`or()` — and every predicate rule,
+# pass-through and negator below is declared on both. `uri` has two owners the same way:
+# `BooleanSpec.uri` straight after a predicate, `UriSpec.uri` after `filters(…)`, which
+# returns the base type. `metadata`/`replaceMetadata`/`customize` follow `uri`'s pair.
+#
+# On `PredicateSpec` itself — the bare route parameter, before any predicate — the four
+# `UriSpec` members are unreachable in a route that runs (`build()` refuses a route with
+# no predicate), which is the slice below; on the other three types every member is read.
+#
+# `path(String...)` and `path(boolean, String...)` differ in arity; `method(HttpMethod...)`
+# and `method(String...)` share arity 1 (a vararg is one array slot) and are told apart by
+# `arg_types`. Both `method` forms read through `verb_arg`: an `HttpMethod` constant by
+# its member name, a string exactly as written — `HttpMethod.valueOf` keeps the case it is
+# handed (Task 6, measured on spring-web 7.0.9) — so `method("get")` publishes `get`, the
+# verb the framework would never match, rather than a `GET` it does not declare.
+#
+# An unknown call ANYWHERE in a chain poisons the route (one unresolved row), so every
+# member the jar declares is a rule, a pass-through or a negator here. The pass-throughs
+# narrow WHO is served, not WHAT path — a host, a header, a cookie, a time window, a
+# weight — and the route still serves the path its `path` predicate read (or `/**`). The
+# negators are the predicates whose served set the walk cannot read as a path: `not(fn)`
+# and `negate()` (a negation), `predicate`/`asyncPredicate` (an arbitrary function), and
+# `nested(fn)` (a sub-tree of predicates in a lambda of its own — reading it as
+# constraints is a word this grammar does not have); each poisons the whole route
+# rather than publishing the un-negated or the outer path as the address.
+#
+# Three stated boundaries, none a slice entry (the w19 enumeration counts a candidate by
+# a `String` at argument 0, and these carry a `String[]` or nothing there):
+#   * `path(boolean, String...)` — `matchTrailingSlash` first, the patterns second — has
+#     no rule at arity 2, so a chain carrying it is ONE unresolved row (spec §3's G-13
+#     guard), never a resolved route missing its path. Not in the fixture; add the rule
+#     (`arity: 2, path_arg: 1`) when real input shows it.
+#   * `order(int)` returns `PredicateSpec`, so a predicate AFTER it does not extend its
+#     result; written mid-chain (`path("/a").and().order(1).path("/b").uri(x)`) the
+#     pass-through is reached unconsumed by the body fold and yields a spurious
+#     unresolved row BESIDE the route's own (Task 6's logged shape). At the head
+#     (`r.order(1).path(…)`) it is stepped over cleanly.
+#   * a route whose chain never reaches `uri(…)` declares nothing — the framework's
+#     `build()` fails on it too (`Route$AbstractBuilder.build`: "uri can not be null").
+matches:
+  entries:
+    # `route(String, Function)` and `route(Function)`: the lambda's parameter 0 is the
+    # `PredicateSpec` every chain starts on — `origin_param: 0`, resolved through the
+    # lambda's own `captures` (a lambda capturing a local puts it FIRST: `lambda$routes$6(
+    # String prefix, PredicateSpec r)` in the fixture, so `r` is the body's parameter 1).
+    - { owner: org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder, method: route, arity: 2, arg_types: { 0: java.lang.String }, body_arg: 1, origin_param: 0 }
+    - { owner: org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder, method: route, arity: 1, body_arg: 0, origin_param: 0 }
+  origins:
+    - { owner: org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder, method: routes, arity: 0 }
+  vocabulary:
+    prefixes:
+      # `path(String...)` — a vararg: one branch per literal (`path("/a", "/b")` is two
+      # routes), an element that is not a literal poisons.
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: path, arity: 1, path_arg: 0 }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: path, arity: 1, path_arg: 0 }
+    verbs:
+      # `method(HttpMethod...)` and `method(String...)`, one branch per element.
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: method, arity: 1, arg_types: { 0: "org.springframework.http.HttpMethod[]" }, verb_arg: 0 }
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: method, arity: 1, arg_types: { 0: "java.lang.String[]" }, verb_arg: 0 }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: method, arity: 1, arg_types: { 0: "org.springframework.http.HttpMethod[]" }, verb_arg: 0 }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: method, arity: 1, arg_types: { 0: "java.lang.String[]" }, verb_arg: 0 }
+      # The terminal: `uri(String)` and `uri(URI)` both, at arity 1 — the target is the
+      # sibling outbound catalog's to read, so no position here. No handler method: a
+      # gateway route forwards, it does not dispatch to one (`handler: none`, as a
+      # static-resource route). The third owner is the dangling composer —
+      # `path("/a").and().uri(x)` compiles, runs, and serves `/a` (the operator is applied
+      # only when a predicate follows it) — declared so that shape is a row, not silence.
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, method: uri, arity: 1, terminal: true, handler: none }
+      - { owner: org.springframework.cloud.gateway.route.builder.UriSpec, method: uri, arity: 1, terminal: true, handler: none }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: uri, arity: 1, terminal: true, handler: none }
+    chain_composers:
+      and: [{ owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, method: and }]
+      or:  [{ owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, method: or }]
+    negators:
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: not }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: not }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, method: negate }
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: predicate }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: predicate }
+      - { owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, method: asyncPredicate }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: asyncPredicate }
+      - { owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, method: nested }
+  continuations:
+    # The root: `routes().route(…).route(…).build()` is a plain receiver chain of
+    # body-linked entries, and `build()` is the outermost call nothing consumes.
+    - { name: build, owner: org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder }
+    # Predicates that narrow WHO is served, on both static receiver types.
+    - { name: host,                    owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: host,                    owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: remoteAddr,              owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: remoteAddr,              owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: xForwardedRemoteAddr,    owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: xForwardedRemoteAddr,    owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: after,                   owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: after,                   owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: before,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: before,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: between,                 owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: between,                 owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: readBody,                owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: readBody,                owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: weight,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: weight,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: version,                 owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: version,                 owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: cloudFoundryRouteService, owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: cloudFoundryRouteService, owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: alwaysTrue,              owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: alwaysTrue,              owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: order,                   owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
+    - { name: order,                   owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    # After the predicates: filters and metadata carry the chain to `uri`, reading nothing
+    # (the three `UriSpec` members on every static type they are reached through).
+    - { name: filters,         owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, pass_through: true }
+    - { name: metadata,        owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, pass_through: true }
+    - { name: metadata,        owner: org.springframework.cloud.gateway.route.builder.UriSpec, pass_through: true }
+    - { name: metadata,        owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: replaceMetadata, owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, pass_through: true }
+    - { name: replaceMetadata, owner: org.springframework.cloud.gateway.route.builder.UriSpec, pass_through: true }
+    - { name: replaceMetadata, owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    - { name: customize,       owner: org.springframework.cloud.gateway.route.builder.BooleanSpec, pass_through: true }
+    - { name: customize,       owner: org.springframework.cloud.gateway.route.builder.UriSpec, pass_through: true }
+    - { name: customize,       owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+
+# D02's declared SLICE (F2 §3.8). Measured (`scripts/probes/w19_catalog_surface.md`,
+# spring-cloud-gateway-server-webflux 5.0.0): on `PredicateSpec` the enumeration lists
+# two unread names taking a `String` at argument 0, both inherited from `UriSpec` and both
+# reachable on the bare route parameter only BEFORE any predicate — where no route can
+# come of them.
+slice:
+  outside:
+    - owner: org.springframework.cloud.gateway.route.builder.PredicateSpec
+      method_names: [uri, metadata]
+      why: >
+        `r.uri(…)` straight on the route's `PredicateSpec` is a route with no predicate,
+        and `r.metadata(…)` returns `UriSpec`, after which no predicate can follow;
+        either way the framework's own `Route$AbstractBuilder.build()` fails on it
+        ("predicate can not be null", measured `javap -c`), so no running gateway serves
+        such a route and no row is the right answer. After a predicate the same two
+        names are `BooleanSpec.uri` (the terminal) and `BooleanSpec.metadata` (a
+        pass-through), both read above.
