@@ -306,7 +306,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 |---|---|---|
 | `G-37` | `RouterFunctions$Builder` unread, **0 of 20 methods, both stacks** | a module routing this way exports **no HTTP at all** |
 | `G-30` | **Spring Cloud Gateway — no catalog exists at all**; Category B, because `RouteLocatorBuilder$Builder.route` has two overloads with the lambda at different positions | the commonest edge component in a Spring estate, inbound and outbound |
-| `W44-verb-overloads` | W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | publishes a lambda or a predicate **as a URL** — a wrong row, not a missing one |
+| `W44-verb-overloads` | W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | MEASURED 2026-09-13 (not the fabrication this row claimed): `GET(handler)` derives `unresolved` for a deliberate catch-all, `GET("/x", predicate, handler)` loses its handler and reads `resolved`, `GET(predicate, handler)` loses the predicate — mis-graded rows, not invented ones |
 | `GAP-1b` | WebFlux non-coroutine `router { }` derives nothing | whole Kotlin router silent |
 | `conditional-controllers` | `@ConditionalOnProperty` / `@Profile` controllers | tier C — no mechanism in the code |
 | `kotlin-null-handler` | Kotlin routes carry a **NULL handler**, all 3 of them; no Kotlin symbol reaches `roots` or `reachability` | Java functional routes name theirs |
@@ -550,7 +550,7 @@ with the spec already written first.
 
 | order | group | items | what closes when it lands |
 |---|---|---|---|
-| 1 | **A. Receiver chain / overload discrimination** — spec `ba59750` written, awaiting review | `G-37` `GAP-1b` `W44-verb-overloads` `G-30` `G-30-outbound` `ktor-routing` `javalin-apibuilder` `sqs-template-receive` `jdk-httpclient` (9) | **REST outbound closes**; REST inbound 9 → 3; SQS 2 → 1. Removes the wrong rows (`W44-verb-overloads` publishes a lambda as a URL today) |
+| 1 | **A. Receiver chain / overload discrimination** — spec `ba59750` written, awaiting review | `G-37` `GAP-1b` `W44-verb-overloads` `G-30` `G-30-outbound` `ktor-routing` `javalin-apibuilder` `sqs-template-receive` `jdk-httpclient` (9) | **REST outbound closes**; REST inbound 9 → 3; SQS 2 → 1. Fixes the three `RouterFunctionDsl` overloads the shipped rules mis-grade (`W44-verb-overloads`: a catch-all read as unreadable, a handler lost) |
 | 2 | **B. Sibling-annotation reads** — `annotation_driven` reads an attribute off a sibling annotation of the same method | `quarkus-jaxrs` `jaxrs-sse` (2) | **SSE closes**; REST inbound −1 |
 | 2 | **C. Rules conditional on an annotation attribute** — one plan with B, both grow `annotation_driven` by one word | `kafka-batch-generics` `micronaut-jms-over-sqs` (2) | **Kafka closes**; **SQS closes** (after A) |
 | 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument | `pubsub-channel-adapter` (1) | **Pub/Sub closes** |

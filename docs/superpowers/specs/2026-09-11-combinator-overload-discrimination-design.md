@@ -4,8 +4,8 @@
 conversation 2026-09-12 (revised in place — one spec, one mechanism, ruled by the user).
 Not yet planned.
 **Closes — Group A of the register, nine items:** `G-37` (the builder form derives
-nothing, both stacks), `W44-verb-overloads` (the latent wrong-row defect in the seven
-`RouterFunctionDsl` verb rules), `GAP-1b` (the WebFlux half of the non-coroutine Kotlin
+nothing, both stacks), `W44-verb-overloads` (the seven `RouterFunctionDsl` verb rules
+read one overload of five and mis-grade the rest), `GAP-1b` (the WebFlux half of the non-coroutine Kotlin
 `router { }` gap), `G-30` and `G-30-outbound` (Spring Cloud Gateway, both halves),
 `javalin-apibuilder`, `ktor-routing`, `sqs-template-receive`, `jdk-httpclient`.
 **Rows it empties:** REST outbound. REST inbound 9 → 3, SQS 2 → 1.
@@ -16,7 +16,7 @@ wrong.
 
 **Standing requirement (ruled 2026-09-12): nothing that works today may move.** Part II
 adds two optional fields to one fact; §11 states the proof that every existing row, every
-committed fixture fact and every derived table on both corpora is unchanged by them, and
+extracted fixture fact and every derived table on both corpora is unchanged by them, and
 the plan runs that proof before any engine or catalog work starts.
 
 # Part I — overloads and the builder chain (`G-37`, `W44-verb-overloads`, `GAP-1b`)
@@ -56,21 +56,27 @@ W44 added seven verb rules for the Kotlin `RouterFunctionDsl` with
 `path_arg: 0, handler_arg: 1`. That type declares **five** `GET` overloads, and
 the rule is correct for exactly one of them:
 
-| overload | what `path_arg: 0` reads | correct? |
+| overload | what the shipped rule derives — MEASURED 2026-09-13 on hand-built facts against `spring-mvc-router` | correct? |
 |---|---|---|
-| `GET(Function1)` | a LAMBDA | no |
-| `GET(String, Function1)` | the path | **yes** |
-| `GET(RequestPredicate, Function1)` | a PREDICATE | no |
-| `GET(String, RequestPredicate, Function1)` | the path, but `handler_arg: 1` reads the predicate | no |
+| `GET(Function1)` | `GET`, path NULL, handler read, **`unresolved`** — a deliberate catch-all reported as unreadable (§7 case 3's damaging direction) | no |
+| `GET(String, Function1)` | the route | **yes** |
+| `GET(RequestPredicate, Function1)` | `GET`, path NULL, the predicate's own constraints lost, `unresolved` | no |
+| `GET(String, RequestPredicate, Function1)` | `GET /x`, **handler NULL** (`handler_arg: 1` is the predicate), the predicate lost, marked `resolved` | no |
 | `GET(String)` | a predicate factory | n/a |
+
+*This table said the rules "publish a lambda or a predicate as a URL". They do not:
+`_argument_constraints` turns only a string literal into a path and poisons anything
+else, so the defect is under-reporting and mis-grading — three rows wrong in what they
+claim about themselves — not fabrication. Corrected when the plan's first test was
+written against the engine rather than against this table.*
 
 > `verify: javap -cp $(find ~/.m2 -name 'spring-webmvc-6*.jar' | head -1) org.springframework.web.servlet.function.RouterFunctionDsl | grep -E " GET\("`
 
 The catalog says so itself, and says why it has not bitten: *"No live instance:
 the only Kotlin router in this repository is the reactive `coRouter`."* Untested,
 not safe. **Adding the WebFlux twin gives it a live instance**, which is why the
-two cannot be sequenced apart — shipping the twin alone would activate a defect
-that publishes a handler object in a URL column.
+two cannot be sequenced apart — shipping the twin alone would activate rules that
+grade a catch-all as unreadable and a handler-less row as complete.
 
 ---
 
@@ -310,10 +316,11 @@ which for a builder chain is the method holding `build()`.
 ## 8. Fixtures and proof for Part I
 
 **Precedent:** W44 added `mvcroutes/MvcInvoiceRoutes.java` + `MvcRouteHandlers.java`
-to `fixtures/orders-service`. Extracted facts are **committed** as
-`.sextant/facts/**/*.jsonl`, so new sources mean regenerated fact files and every
-test asserting a fixture total moves with them. That cost is named here rather
-than discovered mid-wave.
+to `fixtures/orders-service`. Extracted facts are **not committed** — `.sextant/` is
+gitignored (`verify: git check-ignore -v fixtures/orders-service/.sextant/facts`) — so a
+new source costs a recompile and a re-analysis in every test that runs one, and every
+test asserting a fixture total moves with it. That cost is named here rather than
+discovered mid-wave.
 
 **Two new fixture sources:**
 - A builder router per stack exercising all four verb shapes, `nest`, `path`, a
@@ -324,10 +331,12 @@ than discovered mid-wave.
 
 **Seven tests. The first is written before any engine change.**
 
-1. **The wrong-row test, first and failing.** All four `GET` overloads in one
-   router; assert no row carries a handler object as its path. Written against the
-   *existing* shipped MVC Kotlin rules, where it must fail — demonstrating the
-   defect rather than asserting it.
+1. **The overload test, first and failing.** All four `GET` overloads in one
+   router; assert `GET(handler)` derives path NULL **`resolved`**, `GET("/x", predicate,
+   handler)` derives its handler and the predicate's constraints, and `GET(predicate,
+   handler)` derives the predicate's path. Written against the *existing* shipped MVC
+   Kotlin rules, where it must fail on all three — demonstrating the defect rather than
+   asserting it.
 2. **The G-13 test.** Call an overload the catalog does not name; assert a row
    appears with `resolution: unresolved`. Fails if the fall-through ever goes
    silent again.
@@ -409,7 +418,7 @@ javac, four shapes of the same gateway lambda:
   r -> r.path(prefix + "/**")…     private static Spec lambda$routes$1(String, Spec)         r at 1
   r -> r.path("/c/**").uri(host)   private        Spec lambda$routes$2(Spec)                 r at 0, `this` is the receiver
   this::helper                                    Spec helper(Spec)                          r at 0
-Kotlin, the fixture's own router (committed class file):
+Kotlin, the fixture's own router (class file under `target/classes`):
   ktRoutes$lambda$2(KotlinOrderRoutes, CoRouterFunctionDsl)                                 DSL receiver at 1 (captures `this`)
   ktRoutes$lambda$2$lambda$1$lambda$0(CoRouterFunctionDsl)                                  DSL receiver at 0
 ```
@@ -465,10 +474,11 @@ them reads NULL, which is today's meaning.
 
 ## 11. The proof that nothing existing moves — run before any engine or catalog work
 
-1. **Additive-only regeneration.** The extractor is rebuilt and every committed fixture
-   fact regenerated. A script strips the two keys from the regenerated tree and asserts
-   the result is **byte-identical** to the tree before the change: no other key, value,
-   ordering or line moves.
+1. **Additive-only extraction.** Every fixture root is scanned twice — with the jar built
+   before the change and with the jar built after — into two trees. A script strips the two
+   keys from the second tree and asserts it is **byte-identical** to the first: no other
+   key, value, ordering or line moves. (Fact trees are not committed; the proof is the
+   double scan, kept as a script so the plan and a reviewer can re-run it.)
 2. **Both corpora.** `.superpowers/perf/table_diff.py` on `orders-service` and
    `mall-admin` (+3 siblings): every derived table identical; the fact tables differ only
    by the two new keys — the script strips `receiver_parameter` and `captures` from every
@@ -571,7 +581,7 @@ input (§14).
 
 ## 14. Fixtures and proof for Part II
 
-**Fixture sources** (committed facts regenerate with them). Gateway, SQS and the JDK
+**Fixture sources** (facts are not committed; each new source is scanned by the tests that analyse its module). Gateway, SQS and the JDK
 client go into `fixtures/orders-service` (the gateway starter joins its POM, gating the
 two gateway catalogs' `detect_coordinates`); Javalin into the existing
 `fixtures/orders-javalin`; Ktor into a **new `fixtures/orders-ktor`** (Maven, Kotlin,
@@ -650,7 +660,7 @@ existing catalog, five fixture sources in three fixture modules (one new), eleve
 reviewable, and Part I stands on its own:
 
 **PR A1 — the mechanism, on the shapes already in the register**
-1. The two fact fields: extractor, `facts.py`, `schema.sql`, regenerated fixture facts,
+1. The two fact fields: extractor, `facts.py`, `schema.sql`, the double-scan proof,
    tests 8 and 9. Nothing downstream reads them yet — the smallest item, and it de-risks
    everything after it.
 2. `verbs`/`prefixes` → lists with `arity` + `arg_types`, the G-13 guard, ambiguity
