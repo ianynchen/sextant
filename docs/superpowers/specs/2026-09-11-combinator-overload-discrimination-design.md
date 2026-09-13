@@ -186,6 +186,24 @@ already returns true for an owner-declaring continuation.
 receivers of calls the catalog's own vocabulary claims, and a return is not a call
 site at all. So `build()`'s result is unconsumed and `build()` roots.
 
+**The statement form roots at each verb (ruled 2026-09-13, plan Task 4 review).** The
+builder is mutable and every method returns `this`, so real code also writes
+`var b = route(); b.GET("/a", h); b.POST("/b", h); return b.build();` — the form
+conditional registration takes. Measured before the ruling: zero rows, silence. So a
+receiver-extending verb **roots when its own result is consumed by nothing AND its
+receiver is produced by a call in the same method**. In the chained form every
+intermediate verb's result is consumed, so only `build()` roots, as before; in the
+statement form each verb's receiver is the origin's result and nothing consumes the
+verb's own, so each roots and derives its route; a mixed form roots at the last verb of
+each statement and `build()`, and identity dedup removes the routes both reach. Checkpoint
+F4 holds: a verb inside a `Consumer<Builder>` body sits on the lambda's parameter, its
+`receiver` is null, and it never roots — it is folded through `_body_routes` alone.
+
+**Two equal verbs merge** (same ruling): `_merged` poisoned `method` whenever both sides
+carried a verb, so `resource(RequestPredicates.GET("/favicon.ico"), r)` — the `resource`
+rule's own `GET` against the predicate's — derived `unresolved`. A request carries one
+verb, and `GET` ∧ `GET` is that verb; only two DIFFERENT verbs poison.
+
 > `verify: grep -n -A12 "def _is_root_candidate" src/sextant/application/resolve/engines/combinator.py`
 
 **A verb must be able to extend its receiver.** Today `_routes_of` dispatches a
