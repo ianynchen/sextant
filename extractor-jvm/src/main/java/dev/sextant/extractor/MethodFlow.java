@@ -113,9 +113,19 @@ public final class MethodFlow {
             Integer receiver = target.hasReceiver()
                 ? sourceId(frame.getStack(base - 1), instructions)
                 : null;
+            // The other half of what `sourceId` cannot say. A receiver that arrives as a
+            // parameter has no producing instruction, so `receiver` is null — the same
+            // null a field receiver and an unreadable one get. The parameter marker the
+            // interpreter mints is right there, and the argument grammar has read it as
+            // `{"kind":"parameter"}` since 9.8; this reads it for the receiver slot and
+            // names the index, so a walk can tell "the lambda's own parameter" from
+            // "something I cannot see". Written only where there is an index to write.
+            Integer receiverParameter = target.hasReceiver()
+                ? parameterIndex(frame.getStack(base - 1), parameterSlots)
+                : null;
             Integer result = Type.getReturnType(target.descriptor()).getSort() == Type.VOID ? null : i;
-            lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver, result,
-                                   implementationOf(insns[i]), arguments));
+            lines.add(callSiteJson(documentId, callerSymbol, target, ordinal++, receiver,
+                                   receiverParameter, result, implementationOf(insns[i]), arguments));
         }
         return lines;
     }
@@ -461,10 +471,12 @@ public final class MethodFlow {
      *  StringConcatFactory} site's bootstrap arguments are a format recipe and
      *  a set of constants — there is no implementation method, so there is no
      *  symbol, and writing the recipe's owner here would claim a call to code
-     *  that does not exist. {@link #lambdaSymbol} is the gate: null for every
+     *  that does not exist. {@link #lambdaHandle} is the gate: null for every
      *  bootstrap but {@code LambdaMetafactory}'s two. */
     private static String implementationOf(AbstractInsnNode insn) {
-        return insn instanceof InvokeDynamicInsnNode indy ? lambdaSymbol(indy) : null;
+        if (!(insn instanceof InvokeDynamicInsnNode indy)) return null;
+        Handle implementation = lambdaHandle(indy);
+        return implementation == null ? null : lambdaSymbol(implementation);
     }
 
     /** The owner's internal name, which is what {@code Analyzer.analyze} wants,
@@ -659,16 +671,31 @@ public final class MethodFlow {
                 return argument("concat", JsonOut.string(template), null,
                                 String.valueOf(instructions.indexOf(producer)));
             }
-            // A lambda's code is not here: javac lifted the body into a
-            // synthetic method and the call site only names it, in the
-            // bootstrap's second argument. A method reference bootstraps
-            // identically and names the referenced method itself.
-            String implementation = lambdaSymbol(indy);
+            // A lambda's code is not here: the compiler lifted the body into a
+            // method of its own and the call site only names it, in the bootstrap's
+            // second argument. A method reference bootstraps identically and names
+            // the referenced method itself.
+            Handle implementation = lambdaHandle(indy);
             // Now that an indy is a call site of its own, the value it produced
             // has a `result` id — so the same join a plain call's result gets
             // applies, whether or not the kind resolved to `lambda`.
-            return argument(implementation == null ? "unresolved" : "lambda", null, implementation,
-                            String.valueOf(instructions.indexOf(producer)));
+            if (implementation == null) {
+                return argument("unresolved", null, null, String.valueOf(instructions.indexOf(producer)));
+            }
+            // How many of the body's LEADING parameters are captured values. The
+            // metafactory lays the body's parameters out as captured values first, then
+            // the interface's, so the interface's parameter k is the body's parameter
+            // `captures + k` — a walk into the body needs this number, and it is written
+            // here, on the indy, where it is known exactly. The indy's own descriptor
+            // lists the captured values; when the handle is an instance kind the first of
+            // them becomes the body's receiver rather than a parameter, so it is not
+            // counted. An unbound instance reference (no captured value, instance handle)
+            // reads -1: the interface's FIRST parameter is the receiver, and parameter k
+            // is the body's parameter k-1.
+            int captured = Type.getArgumentTypes(indy.desc).length;
+            int captures = isInstanceHandle(implementation) ? captured - 1 : captured;
+            return lambdaArgument(lambdaSymbol(implementation),
+                                  String.valueOf(instructions.indexOf(producer)), captures);
         }
         if (producer instanceof MethodInsnNode) {
             // The value itself is out of reach, and the call that produced it is
@@ -862,7 +889,7 @@ public final class MethodFlow {
         return out.toString();
     }
 
-    /** The symbol of the method a {@code LambdaMetafactory} call site will
+    /** The handle of the method a {@code LambdaMetafactory} call site will
      *  invoke, or null when this indy is bootstrapped by something else — a
      *  string concatenation, a record's generated {@code equals}, a framework's
      *  own bootstrap. Those are honest {@code unresolved}s: there is no
@@ -878,9 +905,17 @@ public final class MethodFlow {
      *  site itself. The second exists because the first only fires where the
      *  lambda fills an argument slot — a lambda that is returned, stored in a
      *  field, or invoked through its own interface reaches no slot, and its
-     *  body was then named nowhere.
-     *
-     *  <p>The **bare descriptor path** — {@code java/lang/String#trim(sig_…).} —
+     *  body was then named nowhere. The first also reads the handle's KIND, to
+     *  count captured values, which is why the handle and not its symbol is
+     *  what this returns. */
+    private static Handle lambdaHandle(InvokeDynamicInsnNode indy) {
+        if (!"java/lang/invoke/LambdaMetafactory".equals(indy.bsm.getOwner())) return null;
+        if (indy.bsmArgs.length < 2 || !(indy.bsmArgs[1] instanceof Handle implementation)) return null;
+        return implementation;
+    }
+
+    /** The symbol of the method a {@link #lambdaHandle} names, spelled as the
+     *  **bare descriptor path** — {@code java/lang/String#trim(sig_…).} —
      *  with no coordinates prefix, exactly like the {@code class}, {@code enum}
      *  and {@code instance} kinds beside it. A method reference is very often
      *  into a library, and D00 §1 requires that two modules seeing the same
@@ -890,11 +925,26 @@ public final class MethodFlow {
      *  would join to the other. An in-module reference is joined to its own
      *  method fact by the descriptor suffix, which is what every consumer of
      *  these symbols already keys on. */
-    private static String lambdaSymbol(InvokeDynamicInsnNode indy) {
-        if (!"java/lang/invoke/LambdaMetafactory".equals(indy.bsm.getOwner())) return null;
-        if (indy.bsmArgs.length < 2 || !(indy.bsmArgs[1] instanceof Handle implementation)) return null;
+    private static String lambdaSymbol(Handle implementation) {
         return JsonOut.string(implementation.getOwner() + "#" + implementation.getName()
             + "(" + ClassScanner.disambiguatorOf(implementation.getDesc()) + ").");
+    }
+
+    private static boolean isInstanceHandle(Handle handle) {
+        return handle.getTag() == Opcodes.H_INVOKEVIRTUAL
+            || handle.getTag() == Opcodes.H_INVOKESPECIAL
+            || handle.getTag() == Opcodes.H_INVOKEINTERFACE;
+    }
+
+    /** The `lambda` kind's own writer: three of the four keys every argument may
+     *  carry (a lambda has no `value`), plus `captures`, which only a lambda has. */
+    private static String lambdaArgument(String symbol, String source, int captures) {
+        TreeMap<String, String> entry = new TreeMap<>();
+        entry.put("kind", JsonOut.string("lambda"));
+        entry.put("symbol", symbol);
+        entry.put("source", source);
+        entry.put("captures", String.valueOf(captures));
+        return JsonOut.object(entry);
     }
 
     private static String argument(String kind, String value, String symbol, String source) {
@@ -933,6 +983,18 @@ public final class MethodFlow {
         return instructions.indexOf(producer);
     }
 
+    /** The parameter index a value arrives as, or null: the same test `argumentJson`
+     *  makes for a `parameter`-kind argument — a `VarInsnNode` producer is the
+     *  interpreter's parameter marker and nothing else — applied to the receiver slot.
+     *  `this` and the second half of a wide parameter are no numbered parameter and
+     *  stay null, exactly as they do for an argument. */
+    private static Integer parameterIndex(SourceValue value, int[] parameterSlots) {
+        AbstractInsnNode producer = singleSource(value);
+        if (!(producer instanceof VarInsnNode parameter)) return null;
+        int index = indexOfSlot(parameterSlots, parameter.var);
+        return index < 0 ? null : index;
+    }
+
     private static AbstractInsnNode singleSource(SourceValue value) {
         // Exactly one producer, or nothing. A parameter counts as one of them
         // — it carries the marker CopyTransparentSourceInterpreter gave its
@@ -946,8 +1008,8 @@ public final class MethodFlow {
     }
 
     private static String callSiteJson(String documentId, String callerSymbol, Target invoke,
-                                       int ordinal, Integer receiver, Integer result,
-                                       String implementation, List<String> arguments) {
+                                       int ordinal, Integer receiver, Integer receiverParameter,
+                                       Integer result, String implementation, List<String> arguments) {
         TreeMap<String, String> target = new TreeMap<>();
         // The owner goes through the same symbol grammar every type reference
         // uses, so an array receiver reads as `java/lang/String#[]` here too
@@ -974,6 +1036,9 @@ public final class MethodFlow {
         if (implementation != null) fact.put("implementation", implementation);
         fact.put("ordinal", String.valueOf(ordinal));
         fact.put("receiver", receiver == null ? "null" : String.valueOf(receiver));
+        // Absent rather than null on every site whose receiver is not a parameter — the
+        // rule `implementation` follows two lines up, for the same reason.
+        if (receiverParameter != null) fact.put("receiver_parameter", String.valueOf(receiverParameter));
         fact.put("result", result == null ? "null" : String.valueOf(result));
         fact.put("arguments", JsonOut.array(arguments));
         return JsonOut.object(fact);

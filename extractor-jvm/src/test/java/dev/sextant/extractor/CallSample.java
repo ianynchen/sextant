@@ -203,6 +203,32 @@ public final class CallSample {
         supplied.third();
     }
 
+    /** The receiver is a STATIC method's parameter 0 — local slot 0, where the instance
+     *  rule would read `this`. The fact must say parameter 0. */
+    public static void staticParameterReceiver(Link supplied) {
+        supplied.third();
+    }
+
+    /** {@code long id} takes slots 0-1 after {@code this}, so {@code supplied} is slot 3
+     *  and parameter 1. The fact names the parameter's index, never its slot. */
+    public void wideParameterReceiver(long id, Link supplied) {
+        supplied.third();
+    }
+
+    /** A lambda that captures a LOCAL. javac compiles it to a static synthetic method
+     *  whose first parameter is the captured value and whose second is the interface's:
+     *  {@code lambda$lambdaCapturingLocal$N(String, String)}. The indy carries one
+     *  argument (the capture), the handle is static, so {@code captures} is 1. */
+    public static void lambdaCapturingLocal(java.util.List<String> values, String prefix) {
+        values.forEach(value -> helper(prefix + value));
+    }
+
+    /** A lambda that captures nothing at all: a static synthetic with the interface's
+     *  parameter alone. Zero indy arguments, static handle, {@code captures} 0. */
+    public static void lambdaCapturingNothing(java.util.List<String> values) {
+        values.forEach(value -> helper(value));
+    }
+
     /** A lambda reaches the callee as the result of an {@code invokedynamic}
      *  bootstrapped by {@code LambdaMetafactory}; the body javac lifted out is
      *  the second bootstrap argument, and it is the only place the lambda's
