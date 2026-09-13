@@ -4537,3 +4537,124 @@ def test_an_extending_chain_on_the_origin_derives_every_route_unchanged(tmp_path
             _catalog(_origin_builder_matches()),
         )
         assert _identities(_rows(workspace)) == expected, shape
+
+
+# --- `ktor-routing` (A2 Task 5): the extension-receiver form on the shipped catalog ---
+
+_ROUTING_ROOT = "io/ktor/server/routing/RoutingRootKt#"
+_ROUTING_BUILDER = "io/ktor/server/routing/RoutingBuilderKt#"
+_ROUTE = "Lio/ktor/server/routing/Route;"
+_ROUTING_DESC = "(Lio/ktor/server/application/Application;Lkotlin/jvm/functions/Function1;)Lio/ktor/server/routing/RoutingRoot;"
+_ROUTE_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function1;){_ROUTE}"
+_VERB_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function2;){_ROUTE}"
+_PATHLESS_VERB_DESC = f"({_ROUTE}Lkotlin/jvm/functions/Function2;){_ROUTE}"
+_ROUTING_BODY = DECLARER + "orders$lambda$1(sig_k0)."
+_API_BODY = DECLARER + "orders$lambda$1$lambda$0(sig_k1)."
+_SUSPEND_HANDLER = DECLARER + "Routes$orders$1$1$1#"
+
+
+def _shipped_ktor_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "ktor-routing")
+
+
+def _ktor_facts(entry_owner: str) -> list:
+    """`routing { route("/api") { get("/orders") { }; get { } } }` — the shape
+    `fixtures/orders-ktor/.../KtorRoutes.kt`'s `orders()` compiles to (its fact file, read
+    2026-09-13): every DSL call `invokestatic` with the block's own parameter as argument
+    0, each `Function1` block an `invokedynamic` body linked as a `lambda` argument with
+    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class.
+    `entry_owner` is the one cell the near-miss below varies."""
+    return [
+        _method_symbol(_ROUTING_BODY),
+        _method_symbol(_API_BODY),
+        _site(
+            DECLARER + "orders(sig_o0).",
+            0,
+            entry_owner,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_ROUTING_BODY, source=0, captures=0),
+            ],
+        ),
+        _site(
+            _ROUTING_BODY,
+            0,
+            _ROUTING_BUILDER,
+            "route",
+            result=2,
+            descriptor=_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_API_BODY, source=1, captures=0),
+            ],
+        ),
+        _site(
+            _API_BODY,
+            0,
+            _ROUTING_BUILDER,
+            "get",
+            result=3,
+            descriptor=_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=2),
+            ],
+        ),
+        _site(
+            _API_BODY,
+            1,
+            _ROUTING_BUILDER,
+            "get",
+            result=5,
+            descriptor=_PATHLESS_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=4),
+            ],
+        ),
+    ]
+
+
+def test_the_ktor_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
+    owner. `get("/orders") { }` under `route("/api") { }` is `GET /api/orders`; the
+    path-less `get { }` is `GET /api` — the prefix alone, Ktor's `method(Get)` child of
+    the receiver itself (`path: ""`). Both handlers NULL: a suspend lambda arrives as an
+    `instance`, which is a class and not a method symbol (spec §13 case 8)."""
+    workspace = _resolve(tmp_path, _ktor_facts(_ROUTING_ROOT), _shipped_ktor_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/api", None, "resolved"),
+        ("GET", "/api/orders", None, "resolved"),
+    ]
+
+
+@pytest.mark.declines("ktor-routing")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_ktor_catalog_declines_a_routing_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `routing` name, the same `Function1` lambda with `captures: 0`, the
+    same static `route`/`get` on the block's parameter inside it — and only the entry's
+    OWNER differs: `com.example.NotRouting#routing`, which is not
+    `io.ktor.server.routing.RoutingRootKt`.
+
+    Nothing is the required answer. The body-linked entry is the ONLY place this catalog
+    roots — every `RoutingBuilderKt` call is static and receiver-less, never a root of its
+    own — so with the owner check gone any method named `routing` handed a lambda would
+    root a tree, and a router Ktor never installed would be published under this
+    catalog's id."""
+    workspace = _resolve(tmp_path, _ktor_facts("com/example/NotRouting#"), _shipped_ktor_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []

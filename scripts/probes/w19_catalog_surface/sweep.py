@@ -372,6 +372,31 @@ SURFACES = (
         "1.1.0",
         "alpakka-pekko",
     ),
+    # `ktor-routing` (A2 Task 5). Both owners the catalog names: the file facade holding
+    # the `routing` entry, and the one holding every verb and prefix. MEASURED: every
+    # `RoutingBuilderKt` method is a Kotlin extension whose `Route` receiver is argument
+    # 0 and whose path — where it takes one — is argument 1, so the arg-0 test sees no
+    # candidate on either owner and section 3 lists none for this catalog; the unread
+    # names (`route` with an `HttpMethod`, `method`, the selector blocks, the reified
+    # `*Typed*` spellings) are stated in `ktor-routing.yml`'s header rather than in a
+    # slice the audit would refuse. A fourth addressing style — a name at argument 1
+    # behind an extension receiver — would count them, and would also count methods on
+    # owners already enumerated (`Javalin.addHttpHandler(HandlerType, String, Handler)`),
+    # so it is not added as a side effect of one catalog.
+    Surface(
+        "ktor-routing",
+        "io.ktor.server.routing.RoutingRootKt",
+        "io.ktor:ktor-server-core-jvm",
+        "3.0.3",
+        "ktor-routing",
+    ),
+    Surface(
+        "ktor-routing",
+        "io.ktor.server.routing.RoutingBuilderKt",
+        "io.ktor:ktor-server-core-jvm",
+        "3.0.3",
+        "ktor-routing",
+    ),
 )
 
 # A Kotlin compiler synthetic: `getX$annotations()` holds a property's annotations and

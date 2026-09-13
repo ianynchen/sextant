@@ -552,3 +552,73 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
     assert ("inbound", "GET", "/{id}") not in javalin_routes
     assert ("inbound", "POST", "/jv/nested/**") not in javalin_routes
     assert ("inbound", "GET", "/jv/nestedplainx") not in javalin_routes
+
+
+KTOR = FIXTURES / "orders-ktor"
+
+
+@pytest.fixture(scope="module")
+def ktor_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
+    handler and the caller beside the identity, which the Javalin fixture's triples
+    do not carry."""
+    workspace_dir = tmp_path_factory.mktemp("ktor")
+    compile_fixture(KTOR)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(KTOR), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
+    """`ktor-routing`, spec §14 test 13. `routing { route("/api") { get("/orders") { }
+    … } }` on ktor-server-core 3.0.3: every verb is a static extension whose receiver is
+    argument 0, every block an `invokedynamic` body, and the route is the prefix chain
+    the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
+    on the prefix node itself (`javap -c`), so it serves `/api` — the empty literal
+    path, never `/api/**`. The slashless `route("legacy") { get("orders") { } }` reads
+    `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
+    which is the catalog's `path_join: leading_slash`.
+
+    Handler NULL on every row — a suspend lambda is a class, not a linked body — asserted
+    here so `kotlin-null-handler` moves a pinned value (spec §13 case 8).
+
+    Two outcomes are degraded by design, and both are stated rather than hidden. The
+    wrong-receiver case: `other.get("/stray") { }` inside `route("/api") { }` registers
+    on ANOTHER route, so it is not under `/api`, and `receiver_arg`'s refusal is one
+    unresolved row that never carries the prefix. And the helper: `fun Route.api() {
+    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
+    to split a routing tree — derives NOTHING, not even an unresolved row. Task 4's log
+    predicted one unresolved row (`receiver_arg` with no origin to check against), but
+    the walk never reaches that verb: `api` is an ordinary method no linking call names
+    as its body, and a static, receiver-less verb inside it is no root of its own — the
+    boundary spec §7 case 4 states for a builder received as a PARAMETER. Pinned as
+    silence, so a walk that one day follows `api()` moves a pinned value."""
+    rows = {
+        (r["method"], r["path"], r["resolution"], r["handler"])
+        for r in ktor_rows
+        if r["catalog_id"] == "ktor-routing"
+    }
+    assert {
+        ("GET", "/api/orders", "resolved", None),
+        ("POST", "/api/orders", "resolved", None),
+        ("GET", "/api/v2/orders", "resolved", None),
+        ("DELETE", "/api/v2/orders/{id}", "resolved", None),
+        ("GET", "/api/legacy/orders", "resolved", None),
+        ("GET", "/api", "resolved", None),  # get { } on the prefix: Ktor serves the prefix itself
+        ("GET", "/health", "resolved", None),
+    } <= rows, sorted(rows, key=str)
+    assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
+    stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
+    assert stray and all(r["resolution"] == "unresolved" for r in stray), stray
+    assert not any(str(r["path"]).startswith("/api") for r in stray), stray
+    assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
+    assert not any("#api(" in str(r["caller"]) or r["path"] == "/helper" for r in ktor_rows), (
+        "the Route-extension helper's route was derived — a walk now follows `api()`; "
+        "move this pin and the catalog's stated boundary together"
+    )

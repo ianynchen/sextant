@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**66 of 81 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**67 of 82 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -743,6 +743,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams-topology` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
+| `ktor-routing` | `io.ktor:ktor-server-core-jvm` | 3.0.3 |
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
 | `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |

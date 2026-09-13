@@ -7,13 +7,14 @@ script's own output, pasted verbatim.
 **spring-rabbit 3.1.4**, **spring-cloud-aws-sqs 3.1.1**, **spring-cloud-gcp-pubsub
 5.1.2**, **spring-webflux 6.1.6**, **sqs 2.25.31**, **kafka-streams 3.6.2** (added
 2026-09-12 for `G-31`, w60), **javalin 6.4.0** (added 2026-09-12 for
-`javalin-routing`, w61) and — added 2026-09-12 for `alpakka-pekko`, w62 —
-**pekko-connectors-kafka_2.13 1.1.0** — each self-reported by the
+`javalin-routing`, w61), — added 2026-09-12 for `alpakka-pekko`, w62 —
+**pekko-connectors-kafka_2.13 1.1.0**, and — added 2026-09-13 for `ktor-routing`,
+A2 Task 5 — **ktor-server-core-jvm 3.0.3** — each self-reported by the
 archive, from `Implementation-Version:` where the publisher writes one, from
 Maven's `pom.properties` where it does not (the AWS SDK writes no manifest version at
 all), or from Kafka Streams' own `kafka/kafka-streams-version.properties` where it
-writes neither (Javalin and pekko-connectors-kafka both write a manifest
-`Implementation-Version:`). The run ABORTS when a jar's self-report disagrees with the
+writes neither (Javalin, pekko-connectors-kafka and ktor-server-core-jvm all write a
+manifest `Implementation-Version:`). The run ABORTS when a jar's self-report disagrees with the
 coordinate that resolved it. Every version here is one the catalog it measures already
 names in its own `measured:` block, except the three that had none — so a surface
 counted here is bounded by the same evidence as the rules it is counted against. A
@@ -96,40 +97,42 @@ Methods every class carries are excluded from both sides of every count: <clinit
 
 ### 1. How much of each owner's surface the catalog reads
 
-| gap | catalog | owner | 1.1.0 | 2.25.31 | 3.1.1 | 3.1.4 | 3.6.2 | 5.1.2 | 6.1.6 | 6.4.0 | reads |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | — | — | 49 | — | **5 of 49** |
-| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | — | — | 10 | — | **5 of 10** |
-| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | — | 88 | — | — | — | — | **4 of 88** |
-| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | — | 8 | — | — | — | — | **4 of 8** |
-| G-44 | `spring-sqs-template` | `SqsTemplate` | — | — | 12 | — | — | — | — | — | **1 of 12** |
-| G-44 | `spring-sqs-template` | `SqsOperations` | — | — | 4 | — | — | — | — | — | **1 of 4** |
-| G-44 | `spring-sqs-template-receive` | `SqsTemplate` | — | — | 12 | — | — | — | — | — | **4 of 12** |
-| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | — | 20 | — | — | **11 of 20** |
-| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | — | 14 | — | **3 of 14** |
-| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | — | 3 | — | **3 of 3** |
-| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | — | 6 | — | **4 of 6** |
-| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | 20 | — | **20 of 20** |
-| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | — | 8 | — | **4 of 8** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | 42 | — | **11 of 42** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | 2 | — | **1 of 2** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | — | 45 | — | **10 of 45** |
-| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | — | 2 | — | **1 of 2** |
-| G-37 | `spring-webflux-router` | `RouterFunctionDsl` | — | — | — | — | — | — | 42 | — | **11 of 42** |
-| G-37 | `spring-webflux-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | 1 | — | **1 of 1** |
-| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | 20 | — | **20 of 20** |
-| G-43 | `aws-sqs-sdk` | `SqsClient` | — | 29 | — | — | — | — | — | — | **1 of 29** |
-| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | — | 28 | — | — | — | — | — | — | **1 of 28** |
-| G-31 | `kafka-streams` | `StreamsBuilder` | — | — | — | — | 6 | — | — | — | **3 of 6** |
-| G-31 | `kafka-streams-sink` | `KStream` | — | — | — | — | 28 | — | — | — | **1 of 28** |
-| G-31 | `kafka-streams-topology` | `Topology` | — | — | — | — | 7 | — | — | — | **2 of 7** |
-| javalin-routing | `javalin` | `Javalin` | — | — | — | — | — | — | — | 32 | **7 of 32** |
-| javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | 23 | **7 of 23** |
-| javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | 23 | **7 of 23** |
-| javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **0 of 18** |
-| javalin-nested | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **7 of 18** |
-| alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | **5 of 14** |
-| alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | **0 of 6** |
+| gap | catalog | owner | 1.1.0 | 2.25.31 | 3.0.3 | 3.1.1 | 3.1.4 | 3.6.2 | 5.1.2 | 6.1.6 | 6.4.0 | reads |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| G-44 | `spring-jms-template` | `JmsTemplate` | — | — | — | — | — | — | — | 49 | — | **5 of 49** |
+| G-44 | `spring-jms-template` | `JmsOperations` | — | — | — | — | — | — | — | 10 | — | **5 of 10** |
+| G-44 | `spring-rabbit-template` | `RabbitTemplate` | — | — | — | — | 88 | — | — | — | — | **4 of 88** |
+| G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | — | — | 8 | — | — | — | — | **4 of 8** |
+| G-44 | `spring-sqs-template` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | **1 of 12** |
+| G-44 | `spring-sqs-template` | `SqsOperations` | — | — | — | 4 | — | — | — | — | — | **1 of 4** |
+| G-44 | `spring-sqs-template-receive` | `SqsTemplate` | — | — | — | 12 | — | — | — | — | — | **4 of 12** |
+| G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | — | — | 20 | — | — | **11 of 20** |
+| G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | — | — | 14 | — | **3 of 14** |
+| G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | — | — | 3 | — | **3 of 3** |
+| G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | — | — | 6 | — | **4 of 6** |
+| G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
+| G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | — | — | 8 | — | **4 of 8** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | — | — | 45 | — | **10 of 45** |
+| G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | — | — | 2 | — | **1 of 2** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDsl` | — | — | — | — | — | — | — | 42 | — | **11 of 42** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | — | 1 | — | **1 of 1** |
+| G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | — | 20 | — | **20 of 20** |
+| G-43 | `aws-sqs-sdk` | `SqsClient` | — | 29 | — | — | — | — | — | — | — | **1 of 29** |
+| G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | — | 28 | — | — | — | — | — | — | — | **1 of 28** |
+| G-31 | `kafka-streams` | `StreamsBuilder` | — | — | — | — | — | 6 | — | — | — | **3 of 6** |
+| G-31 | `kafka-streams-sink` | `KStream` | — | — | — | — | — | 28 | — | — | — | **1 of 28** |
+| G-31 | `kafka-streams-topology` | `Topology` | — | — | — | — | — | 7 | — | — | — | **2 of 7** |
+| javalin-routing | `javalin` | `Javalin` | — | — | — | — | — | — | — | — | 32 | **7 of 32** |
+| javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
+| javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | — | 23 | **7 of 23** |
+| javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | — | 18 | **0 of 18** |
+| javalin-nested | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | — | 18 | **7 of 18** |
+| alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | — | **5 of 14** |
+| alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | — | **0 of 6** |
+| ktor-routing | `ktor-routing` | `RoutingRootKt` | — | — | 4 | — | — | — | — | — | — | **1 of 4** |
+| ktor-routing | `ktor-routing` | `RoutingBuilderKt` | — | — | 21 | — | — | — | — | — | — | **8 of 21** |
 
 - A version column holds the count of public methods that owner OFFERS at that version — its own and every one it inherits from a non-platform supertype; `—` means this owner was not measured there.
 
@@ -180,6 +183,8 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `javalin-apibuilder` | `ApiBuilder` | 11 | **8** | **0** | **0** | **8** |
 | `pekko-connectors-kafka` | `Consumer` | 9 | **0** | **0** | **0** | **0** |
 | `pekko-connectors-kafka` | `Producer` | 6 | **0** | **0** | **0** | **0** |
+| `ktor-routing` | `RoutingRootKt` | 3 | **0** | **0** | **0** | **0** |
+| `ktor-routing` | `RoutingBuilderKt` | 13 | **0** | **0** | **0** | **0** |
 
 **`spring-jms-template` / `JmsTemplate`**
 
@@ -302,6 +307,10 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`pekko-connectors-kafka` / `Consumer`** — no unread method addresses a wire by either style.
 
 **`pekko-connectors-kafka` / `Producer`** — no unread method addresses a wire by either style.
+
+**`ktor-routing` / `RoutingRootKt`** — no unread method addresses a wire by either style.
+
+**`ktor-routing` / `RoutingBuilderKt`** — no unread method addresses a wire by either style.
 
 ### 3. Every unread candidate, one per row
 
