@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 2B 4C, 10 open) | ◐ (2A 2B, 2 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 2B 4C, 7 open) | ◐ (2A 2B, 2 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
