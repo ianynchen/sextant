@@ -101,6 +101,23 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # a substring of the fixed one.
     assert "`GET /v1/seam/owners/{ownerId}`" in document
     assert "`POST /chat`" in document
+    # A1 Task 4, `G-37` (spec §8): the builder form on both stacks — `BuilderRoutes`
+    # under `/bld`, `MvcBuilderRoutes` under `/mvcbld` — every verb overload, the
+    # nested body, the route past the mid-chain `filter`, the handler-less `resources`
+    # pattern, and the `GET(h)` catch-all at the framework's any-path pattern.
+    for prefix in ("/bld", "/mvcbld"):
+        for route in (
+            f"`GET {prefix}/orders`",
+            f"`GET {prefix}/orders/{{id}}`",
+            f"`GET {prefix}/health`",
+            f"`POST {prefix}/orders`",
+            f"`PUT {prefix}/orders/{{id}}`",
+            f"`GET {prefix}/nested/inner`",
+            f"`DELETE {prefix}/nested/inner/{{id}}`",
+            f"`GET {prefix}/static/**`",
+        ):
+            assert route in document, route
+    assert "`GET /**`" in document
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
@@ -237,11 +254,21 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     #
     # verify: the 39 is reproducible by counting `call_site` facts whose `invoke_kind`
     # is `throw` in the workspace's fact files (8 distinct named types plus the 5 rethrows).
-    assert "Calls whose callee body this workspace read: 468 of 1525 (31%)" in document
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1523." in document
+    # MOVED by `G-37` (A1 Task 4): `BuilderRoutes` and `MvcBuilderRoutes` add 76 edges
+    # (1601), and the numerator moves for the first time in this list — by 20, to 488 —
+    # because a builder verb's bound method reference (`h::listOrders`) is a call whose
+    # callee body IS in this module: eighteen handler references across the two files,
+    # plus the two `path(…, builder -> …)` bodies the walk reaches. 488 of 1601 rounds to
+    # 30%.
+    assert "Calls whose callee body this workspace read: 488 of 1601 (30%)" in document
+    # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
+    # the compiler names each builder call, handler reference and lambda body exactly.
+    # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
+    # own builder, predicate and resource types, none of which this module scans.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1599." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 345."
+        "inherited 2, owner_not_scanned 372."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -532,7 +559,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 51 since W28: `RoutingConditionsController`'s three handlers on one path and
         # verb, which Spring registers because `params`/`headers` separate them.
         # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
-        "http": 60,
+        # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks.
+        "http": 78,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -747,7 +775,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # fetcher) + 1 WebSocket (`/ws/tickets`, programmatic registration); 61 = 60 + 1
             # SQS (the async client's send). Each is a feature delivered 2026-09-11 and each
             # has an intention test in `tests/e2e/test_*_delivered.py` that fails without it.
-            ("inbound", 121),
+            # 139 inbound since `G-37` (A1 Task 4): the eighteen builder-form routes —
+            # eight under `/bld`, eight under `/mvcbld`, and one `GET /**` per stack.
+            ("inbound", 139),
             ("outbound", 61),
         ]
     )
@@ -1538,7 +1568,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 136 since 2026-09-11: `ws/ProgrammaticWsConfig` and its nested `TicketEndpoint`,
     # the fixture for the programmatic WebSocket registration (`G-34`).
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
-    assert (None, 138) in origins
+    # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
+    assert (None, 140) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

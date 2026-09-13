@@ -2073,6 +2073,335 @@ def test_a_rule_typing_a_position_beyond_its_arity_is_refused(tmp_path: Path):
         _resolve(tmp_path, _four_get_overloads_in_one_body(), _catalog(matches))
 
 
+# --- the builder chain (spec §4) ----------------------------------------------
+
+BUILDER = "com/example/web/RouterBuilder#"
+BUILDER_TYPE = "com.example.web.RouterBuilder"
+_BUILDER_DESC = "Lcom/example/web/RouterBuilder;"
+_BUILDER_BODY = DECLARER + "lambda$routes$1(sig_b1)."
+
+
+def _builder_matches() -> dict[str, object]:
+    matches = _overload_matches()
+    vocabulary = matches["vocabulary"]
+    vocabulary["verbs"] = list(vocabulary["verbs"]) + [  # type: ignore[arg-type]
+        # `builder.GET("/x", h)`: declares a route AND carries the chain on.
+        {
+            "owner": BUILDER_TYPE,
+            "method": "GET",
+            "verb": "GET",
+            "arity": 2,
+            "arg_types": {0: _STRING},
+            "path_arg": 0,
+            "handler_arg": 1,
+            "extends_receiver": True,
+        },
+        {
+            "owner": BUILDER_TYPE,
+            "method": "GET",
+            "verb": "GET",
+            "arity": 1,
+            "handler_arg": 0,
+            "extends_receiver": True,
+        },
+        {
+            "owner": BUILDER_TYPE,
+            "method": "POST",
+            "verb": "POST",
+            "arity": 2,
+            "arg_types": {0: _STRING},
+            "path_arg": 0,
+            "handler_arg": 1,
+            "extends_receiver": True,
+        },
+        # `builder.resources("/static/**", location)`: served, no handler method (§6).
+        {
+            "owner": BUILDER_TYPE,
+            "method": "resources",
+            "verb": "GET",
+            "arity": 2,
+            "arg_types": {0: _STRING},
+            "path_arg": 0,
+            "handler": "none",
+            "extends_receiver": True,
+        },
+    ]
+    vocabulary["prefixes"] = list(vocabulary["prefixes"]) + [  # type: ignore[arg-type]
+        # `builder.path("/x", b -> b.GET(h))`: a prefix over a lambda-bodied subtree that
+        # ALSO carries the chain on (spec §5).
+        {
+            "owner": BUILDER_TYPE,
+            "method": "path",
+            "arity": 2,
+            "path_arg": 0,
+            "body_arg": 1,
+            "extends_receiver": True,
+        },
+    ]
+    return {
+        **matches,
+        "vocabulary": vocabulary,
+        # `arity: 0`: the argument-less factory, NOT the `route(predicate, handler)` entry
+        # of the same name — read as an origin, that one's route would vanish.
+        "origins": [{"owner": "com.example.web.Routers", "method": "route", "arity": 0}],
+        "continuations": list(matches["continuations"])
+        + [  # type: ignore[arg-type]
+            {"name": "build", "owner": BUILDER_TYPE},
+            {"name": "filter", "owner": BUILDER_TYPE, "pass_through": True},
+        ],
+    }
+
+
+def _builder_chain(*, with_filter: bool, declared_origin: bool = True) -> list:
+    """`Routers.route().GET("/a", h).filter(f).POST("/b", h).build()` — each call's
+    receiver is the previous call's result, `route()` produces the first one, `build()`
+    is returned and so consumed by nothing."""
+    caller = DECLARER + "routes(sig_r)."
+    origin = "route" if declared_origin else "routeFrom"
+    sites = [
+        _site(caller, 0, ROUTERS, origin, result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/a"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=1),
+            ],
+        ),
+    ]
+    last = 1
+    if with_filter:
+        sites.append(
+            _site(
+                caller,
+                2,
+                BUILDER,
+                "filter",
+                invoke_kind="virtual",
+                receiver=1,
+                result=2,
+                descriptor=f"(Lcom/example/web/Filter;){_BUILDER_DESC}",
+                arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=2)],
+            )
+        )
+        last = 2
+    sites.append(
+        _site(
+            caller,
+            last + 1,
+            BUILDER,
+            "POST",
+            invoke_kind="virtual",
+            receiver=last,
+            result=last + 1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/b"),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER, source=last + 1),
+            ],
+        )
+    )
+    sites.append(
+        _site(
+            caller,
+            last + 2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=last + 1,
+            result=last + 2,
+            descriptor="()Lcom/example/web/Router;",
+        )
+    )
+    return [*_handler_symbols(), *sites]
+
+
+def test_a_builder_chain_derives_every_verb_it_carries_rooted_at_build(tmp_path: Path):
+    """Spec §4: `build()` is the outermost unconsumed call, so it roots; each verb both
+    declares its route and extends its receiver; `route()` is a declared origin, so the
+    chain's head contributes zero routes WITHOUT poisoning (§4b)."""
+    workspace = _resolve(tmp_path, _builder_chain(with_filter=False), _catalog(_builder_matches()))
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_a_declared_pass_through_carries_the_chain_and_reads_no_argument(tmp_path: Path):
+    """Spec §8 test 5: a `filter(f)` mid-chain neither declares a route nor reads its
+    lambda as a handler; the routes on both sides of it survive."""
+    workspace = _resolve(tmp_path, _builder_chain(with_filter=True), _catalog(_builder_matches()))
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_an_undeclared_chain_head_is_one_unresolved_row_beside_the_chains_own_routes(
+    tmp_path: Path,
+):
+    """Spec §4b's consequence, pinned in the refusing direction: a chain whose head is
+    NOT a declared origin carries one unresolved row for it — the engine cannot tell
+    "the chain starts here" from "I could not read the receiver", and does not guess.
+    The verbs to its right still declare their own routes, exactly as a router composed
+    from another method's return does beside an `and` (spec §7 case 4: "one unresolved
+    row, per the existing rule") — the unread head is never a silent absence, and the
+    routes the author wrote beside it are never lost to it."""
+    workspace = _resolve(
+        tmp_path,
+        _builder_chain(with_filter=False, declared_origin=False),
+        _catalog(_builder_matches()),
+    )
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+
+
+def test_a_static_resource_rule_derives_a_served_route_with_no_handler(tmp_path: Path):
+    """Spec §6: `resources("/static/**", location)` is an inbound boundary a client can
+    GET; the row carries the pattern, the verb, and a NULL handler — the row shape
+    `derived_resource` and `schema_operations` already ship."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _site(caller, 0, ROUTERS, "route", result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "resources",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Resource;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/static/**"),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(_builder_matches()))
+    assert _identities(_rows(workspace)) == [("GET", "/static/**", None, "resolved")]
+
+
+def test_a_prefix_over_a_catch_all_derives_the_prefix_plus_the_any_path_pattern(tmp_path: Path):
+    """Ruled after Task 3's review: a catch-all under a prefix serves `/api/**`, which is
+    the prefix composed OVER the any-path part — so the any-path part must be contributed
+    by the route that read no path, not filled in at the end where the prefix is already
+    gone (`_path_of`'s fallback alone would publish `/api`). Two shapes in one tree, one
+    per grammar: the static `nest(path("/api"), route(accept(JSON), h))` — a media-only
+    predicate route, which must still read `/**` on its own (Task 3's shipped-catalog
+    tests pin that) — and the builder's `path("/x", b -> b.GET(h))`, whose body verb
+    names no path at all."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        # nest(path("/api"), route(accept(JSON), h)) — rooted at the nest.
+        _site(
+            caller,
+            0,
+            PREDICATES,
+            "path",
+            result=10,
+            arguments=[CallArgument(kind="string", value="/api")],
+        ),
+        _site(
+            caller,
+            1,
+            PREDICATES,
+            "accept",
+            result=11,
+            arguments=[CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON.")],
+        ),
+        _site(
+            caller,
+            2,
+            ROUTERS,
+            "route",
+            result=12,
+            arguments=[
+                CallArgument(kind="unresolved", source=11),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=2),
+            ],
+        ),
+        _site(
+            caller,
+            3,
+            ROUTERS,
+            "nest",
+            result=13,
+            arguments=[
+                CallArgument(kind="unresolved", source=10),
+                CallArgument(kind="unresolved", source=12),
+            ],
+        ),
+        # route().path("/x", b -> b.GET(h)).build() — rooted at the build.
+        _site(caller, 4, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            5,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=5),
+            ],
+        ),
+        _site(
+            caller,
+            6,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+        # The body: the builder is the lambda's own parameter, so the verb's receiver is
+        # no call this method can see — and that is a chain that starts here, not one
+        # the walk could not read.
+        _site(
+            _BUILDER_BODY,
+            0,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=None,
+            result=None,
+            descriptor=f"(Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=0)],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(_builder_matches()))
+    assert _identities(_rows(workspace)) == [
+        ("GET", "/x/**", _MODULE + HEALTH, "resolved"),
+        (None, "/api/**", _MODULE + LIST_ORDERS, "resolved"),
+    ]
+
+
 # --- (10) dedup: identity-known only, and the handler is part of it -------
 
 
@@ -2307,6 +2636,75 @@ def test_two_continuations_sharing_a_name_need_distinct_owners(tmp_path: Path):
         _resolve(tmp_path, [], _catalog(matches))
 
 
+def test_a_pass_through_declaring_a_subtree_is_refused(tmp_path: Path):
+    """A pass-through reads no argument (spec §4b), so a nest-shaped pair beside it is
+    two contradictory instructions for one call — refused rather than resolved by
+    dispatch order."""
+    matches = _matches()
+    matches["continuations"] = [
+        {
+            "name": "filter",
+            "owner": "com.example.web.Router",
+            "path_arg": 0,
+            "subtree_arg": 1,
+            "pass_through": True,
+        }
+    ]
+    with pytest.raises(CatalogError, match=r"filter.*pass_through.*reads no argument"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_a_verb_rule_with_two_handler_answers_or_none_while_extending_is_refused(tmp_path: Path):
+    """A verb says where its handler sits OR that there is none; both is two answers, and
+    `extends_receiver` on a rule saying neither is a builder verb that declares no route —
+    a continuation misfiled as a verb. Three refusals, one per conjunct; the `handler`
+    key's only value is `none`, so any other spelling is the fourth."""
+    both = {
+        "owner": BUILDER_TYPE,
+        "method": "GET",
+        "verb": "GET",
+        "arity": 2,
+        "path_arg": 0,
+        "handler_arg": 1,
+        "handler": "none",
+    }
+    neither = {
+        "owner": BUILDER_TYPE,
+        "method": "GET",
+        "verb": "GET",
+        "arity": 2,
+        "path_arg": 0,
+        "extends_receiver": True,
+    }
+    misspelt = {
+        "owner": BUILDER_TYPE,
+        "method": "GET",
+        "verb": "GET",
+        "arity": 2,
+        "path_arg": 0,
+        "handler": "nothing",
+    }
+    for rule, message in (
+        (both, r"GET.*both `handler_arg` and `handler: none`"),
+        (neither, r"GET.*`extends_receiver` without"),
+        (misspelt, r"GET.*the only value is `none`"),
+    ):
+        matches = _matches()
+        matches["vocabulary"]["verbs"] = [rule]  # type: ignore[index]
+        with pytest.raises(CatalogError, match=message):
+            _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_an_origin_naming_no_owner_or_no_method_is_refused(tmp_path: Path):
+    """An origin is compared against a receiver's producing call on owner AND method;
+    half of that matches nothing, and a chain head the catalog meant to declare would
+    poison every chain instead."""
+    for origin in ({"owner": "com.example.web.Routers"}, {"method": "route"}, "route"):
+        matches = {**_matches(), "origins": [origin]}
+        with pytest.raises(CatalogError, match=r"every `origins` item is `\{owner, method\}`"):
+            _resolve(tmp_path, [], _catalog(matches))
+
+
 def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path):
     matches = _matches()
     matches["continuations"] = [{"owner": "com.example.web.Router"}]
@@ -2391,34 +2789,29 @@ def test_the_shipped_router_catalog_reads_every_verb_the_framework_declares(tmp_
 _BUILDER = "org/springframework/web/reactive/function/server/RouterFunctions$Builder#"
 
 
-def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tmp_path: Path):
-    """The round-1 review's MAJOR 3, pinned so that closing it is visible.
+def test_the_router_builder_dsl_derives_its_route_on_the_shipped_catalog(tmp_path: Path):
+    """`G-37` closed (spec §4). `RouterFunctions.route().GET("/orders", handler).build()`
+    is the BUILDER DSL — the reference documentation's recommended shape since 5.2 — and
+    it derived NOTHING through the shipped catalog: the verb sits on a receiver returned
+    by an argument-less `route()`, and this grammar had no word for that. **This test
+    asserted `rows == []`** so that the boundary was pinned rather than quietly a lie in
+    either direction; it went red the moment the surface started deriving, which is now.
 
-    `RouterFunctions.route().GET("/orders", handler).build()` is the BUILDER
-    DSL — a third WebFlux routing surface, seven verbs x four overloads on
-    `RouterFunctions$Builder` (`javap`, spring-webflux 6.1.6). It is undeclared
-    in `spring-webflux-router.yml` and derives NOTHING, while `docs/COVERAGE.md`
-    listed this exact call as "✅ shipped" and the `A-M9` pass added a sentence
-    saying both routing DSLs now read all seven verbs. Two of four surfaces do;
-    the COVERAGE rows now say which.
-
-    The catalog's `entries` are argument-rooted (`route(predicate, handler)`) or
-    body-linked (`coRouter`), and a builder is neither: the verb call sits on a
-    RECEIVER returned by an argument-less `route()`, which this grammar has no
-    word for. So this is an under-report and NOT a fabrication — the argument-
-    less `route()` is not a root candidate, so no poisoned row is minted either,
-    which is what the emptiness here asserts.
-
-    **It goes red the moment the surface starts deriving**, which is the point:
-    a boundary nothing pins is a boundary that quietly becomes a lie in either
-    direction. The `@HTTP` exclusion in `retrofit.yml` is the same pattern.
-
-    Its paired positive is
-    `test_the_shipped_router_catalog_reads_every_verb_the_framework_declares`: the
-    predicate form of the same route, on the same catalog, deriving."""
+    The chain roots at `build()` (consumed by nothing), the verb extends its receiver,
+    and `route()` is a declared origin, so the chain's head contributes zero routes
+    without poisoning. The descriptors are the jar's own (`javap -p -s`, spring-webflux
+    6.1.6), because the arity-2 rules are told apart on position 0's type."""
     facts: list = [
         _method_symbol(LIST_ORDERS),
-        _site(ROUTES, 0, _ROUTER_FUNCTIONS, "route", result=200, arguments=[]),
+        _site(
+            ROUTES,
+            0,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=200,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;",
+        ),
         _site(
             ROUTES,
             1,
@@ -2427,18 +2820,165 @@ def test_the_router_builder_dsl_derives_nothing_and_that_is_a_stated_boundary(tm
             receiver=200,
             result=201,
             invoke_kind="interface",
+            descriptor=(
+                "(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/HandlerFunction;)"
+                "Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;"
+            ),
             arguments=[
                 CallArgument(kind="string", value="/orders"),
                 CallArgument(kind="lambda", symbol=LIST_ORDERS),
             ],
         ),
-        _site(ROUTES, 2, _BUILDER, "build", receiver=201, result=202, arguments=[]),
+        _site(
+            ROUTES,
+            2,
+            _BUILDER,
+            "build",
+            receiver=201,
+            result=202,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunction;",
+        ),
     ]
     workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
     rows = _rows(workspace)
     workspace.close()
 
-    assert rows == []
+    assert _identities(rows) == [("GET", "/orders", _MODULE + LIST_ORDERS, "resolved")]
+
+
+def test_the_origin_is_the_argument_less_factory_not_the_route_of_the_same_name(tmp_path: Path):
+    """The regression the live fixture caught the first time `origins` shipped: the
+    argument-less `route()` and `route(predicate, handler)` share owner and name, and an
+    origin matched on those alone reads the two-argument form — the HEAD of every
+    `andRoute` chain — as a chain start contributing nothing, so its route vanished
+    (`GET /fn/orders`, `GET /mvcfn/invoices`, `GET /extra`, all gone). `arity: 0` on the
+    origin is spec §3's own discriminator, and this pins that the head still declares."""
+    facts: list = [_method_symbol(LIST_ORDERS), _method_symbol(CREATE_ORDER)]
+    facts += _java_route(0, "GET", "/a", LIST_ORDERS)  # route(GET("/a"), h) → result 105
+    facts += [
+        _site(
+            ROUTES,
+            2,
+            _REQUEST_PREDICATES,
+            "POST",
+            result=110,
+            arguments=[CallArgument(kind="string", value="/b")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            "org/springframework/web/reactive/function/server/RouterFunction#",
+            "andRoute",
+            receiver=105,
+            result=111,
+            invoke_kind="interface",
+            arguments=[
+                CallArgument(kind="unresolved", source=110),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/b", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+@pytest.mark.declines("spring-webflux-router")
+@pytest.mark.pins("combinator.origin-is-declared")
+def test_a_builder_chain_headed_by_an_undeclared_call_derives_one_unresolved_row(tmp_path: Path):
+    """§10 near-miss on the `origins` conjunct (spec §8 test 6). Every other cell is the
+    positive above — verbs on the real `RouterFunctions$Builder`, `build()` at the end —
+    and only the chain's HEAD differs: a call named `route`, argument-less, on
+    `com.example.NotRouters`, which the shipped catalog does not declare as an origin.
+
+    What must NOT be produced is a clean chain start: the head is one unresolved row
+    with no verb and no path, the "I could not read the receiver" fact. With the origin
+    check gone every zero-route receiver — a field, a helper's result, a parameter —
+    would read as a clean start, and that row would vanish. The verb's own route still
+    declares beside it (spec §7 case 4: one unresolved row, per the existing rule)."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(
+            ROUTES,
+            0,
+            "com/example/NotRouters#",
+            "route",
+            result=200,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;",
+        ),
+        _site(
+            ROUTES,
+            1,
+            _BUILDER,
+            "GET",
+            receiver=200,
+            result=201,
+            invoke_kind="interface",
+            descriptor=(
+                "(Ljava/lang/String;Lorg/springframework/web/reactive/function/server/HandlerFunction;)"
+                "Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;"
+            ),
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            2,
+            _BUILDER,
+            "build",
+            receiver=201,
+            result=202,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunction;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/x", _MODULE + LIST_ORDERS, "resolved"),
+        (None, None, None, "unresolved"),
+    ]
+
+
+def test_a_static_resources_call_roots_and_serves_its_pattern_handler_less(tmp_path: Path):
+    """Spec §6 on the STATIC spelling: `RouterFunctions.resources("/static/**", location)`
+    returned on its own is a router a client can GET, and the shipped catalog roots it
+    through the `entries` item — the way `nest` roots — while its `verbs` rule reads it.
+    Without the entry a verb never roots (checkpoint F4) and this spelling would derive
+    nothing while the builder's `resources` derived; the row has no handler and says so."""
+    facts: list = [
+        _site(
+            ROUTES,
+            0,
+            _ROUTER_FUNCTIONS,
+            "resources",
+            result=300,
+            descriptor=(
+                "(Ljava/lang/String;Lorg/springframework/core/io/Resource;)"
+                "Lorg/springframework/web/reactive/function/server/RouterFunction;"
+            ),
+            arguments=[
+                CallArgument(kind="string", value="/static/**"),
+                CallArgument(kind="unresolved"),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/static/**", None, "resolved")]
 
 
 def test_a_media_only_route_serves_every_path_and_names_no_verb(tmp_path: Path):

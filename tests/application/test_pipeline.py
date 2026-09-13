@@ -612,6 +612,29 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/mvcfn/invoices"),
         ("POST", "/mvcfn/invoices"),
         ("PUT", "/mvcfn/invoices/{id}"),
+        # A1 Task 4, `G-37` (spec §8): the BUILDER form on both stacks — `BuilderRoutes`
+        # under `/bld` and `MvcBuilderRoutes` under `/mvcbld`. Every verb overload, the
+        # `path(…, builder -> …)` body, the route past a mid-chain `filter`, and the
+        # handler-less `resources` pattern (spec §6). The two `GET(h::…)` catch-alls are
+        # ONE tuple here — `GET /**`, the framework's any-path pattern at `resolved`
+        # (spec §7 case 3 as ruled 2026-09-13) — and two rows, one per catalog.
+        ("GET", "/bld/orders"),
+        ("GET", "/bld/orders/{id}"),
+        ("GET", "/bld/health"),
+        ("POST", "/bld/orders"),
+        ("PUT", "/bld/orders/{id}"),
+        ("GET", "/bld/nested/inner"),
+        ("DELETE", "/bld/nested/inner/{id}"),
+        ("GET", "/bld/static/**"),
+        ("GET", "/mvcbld/orders"),
+        ("GET", "/mvcbld/orders/{id}"),
+        ("GET", "/mvcbld/health"),
+        ("POST", "/mvcbld/orders"),
+        ("PUT", "/mvcbld/orders/{id}"),
+        ("GET", "/mvcbld/nested/inner"),
+        ("DELETE", "/mvcbld/nested/inner/{id}"),
+        ("GET", "/mvcbld/static/**"),
+        ("GET", "/**"),
         # W45, `G-42`: the URLs a STOMP client opens. Verbless, like every other websocket
         # row — a handshake path declares no HTTP method — and three of them from TWO
         # calls, because `addEndpoint("/ws-alt", "/ws-legacy")` registers both.
@@ -969,7 +992,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 158 since `G-36`: `OrderSoapEndpoint#amendOrder` carries two `@PayloadRoot`,
     # which is how Spring-WS routes two message types to one handler, and the
     # container is now declared so both derive. +2 soap inbound.
-    assert len(report.endpoints) == 163
+    # 181 since `G-37` (A1 Task 4): the eighteen builder-form routes — eight under
+    # `/bld`, eight under `/mvcbld`, and the two `GET /**` catch-alls, one per stack.
+    assert len(report.endpoints) == 181
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1115,7 +1140,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         for e in report.endpoints
         if e["catalog_id"] == "spring-webflux-router"
     }
-    assert len(combinator_rows) == 10
+    # 19 since `G-37` (A1 Task 4): `BuilderRoutes`' eight routes under `/bld` and its
+    # `GET /**` catch-all, beside the ten `OrderRoutes`/`KotlinOrderRoutes` rows.
+    assert len(combinator_rows) == 19
     # Java: a bound method reference resolves to the real handler; the inline
     # lambda resolves to its synthetic body — both module-prefixed, joined
     # against the scanned symbol facts, never fabricated (checkpoint (1a)).
@@ -1175,13 +1202,22 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     assert media[("GET", "/fn/orders")] == (None, '["application/json"]')
     assert media[("POST", "/fn/orders")] == ('["application/json"]', None)
     assert media[("GET", "/kt/rich")] == (None, '["application/json"]')
+    # A1 Task 4: the builder's three-argument `GET("/bld/orders/{id}", accept(JSON), h)`
+    # folds the predicate at position 1 exactly as the argument-rooted form does.
+    assert media[("GET", "/bld/orders/{id}")] == (None, '["application/json"]')
     # Every OTHER combinator row declares no media predicate at all, so its
     # columns stay NULL — the read fires where a declaration exists and
     # nowhere else.
     assert {
         columns
         for (m, p), columns in media.items()
-        if (m, p) not in {("GET", "/fn/orders"), ("POST", "/fn/orders"), ("GET", "/kt/rich")}
+        if (m, p)
+        not in {
+            ("GET", "/fn/orders"),
+            ("POST", "/fn/orders"),
+            ("GET", "/kt/rich"),
+            ("GET", "/bld/orders/{id}"),
+        }
     } == {(None, None)}
 
 
@@ -1825,9 +1861,11 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
         # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
         # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
-        "http": 75,
+        "http": 93,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
+        # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
+        # the two `GET /**` catch-alls among them.
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -1859,7 +1897,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 163
+    assert sum(counts.values()) == len(report.endpoints) == 181
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3225,6 +3263,11 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         # uses — one measured member, `APPLICATION_JSON`, and nothing guessed.
         ("http", "/mvcfn/invoices", None, json_media),
         ("http", "/mvcfn/invoices", json_media, None),
+        # A1 Task 4: the builder's three-argument `GET("/…/{id}", accept(JSON), h)` on
+        # each stack — the predicate at position 1 folds its media exactly as the
+        # argument-rooted form's does.
+        ("http", "/bld/orders/{id}", None, json_media),
+        ("http", "/mvcbld/orders/{id}", None, json_media),
         ("sse", "/events/stream", None, '["text/event-stream"]'),
         # 2O Task 13, and NOT a stamp: these three are the functional-routing
         # rows' own `accept`/`contentType` predicates, read off the vararg
@@ -3431,6 +3474,9 @@ def test_the_format_ladder_answers_every_live_row(
         ("http", "inbound", "GET", "/fn/orders"),
         ("http", "inbound", "POST", "/fn/orders"),
         ("http", "inbound", "GET", "/kt/rich"),
+        # A1 Task 4: the two builder routes guarded by `accept(JSON)`, one per stack.
+        ("http", "inbound", "GET", "/bld/orders/{id}"),
+        ("http", "inbound", "GET", "/mvcbld/orders/{id}"),
     }
     # The three predicate-derived rows answer `json`, off `application/json`
     # and nothing else — the same table, the same rung, a different place the
@@ -3591,7 +3637,12 @@ def test_the_format_ladder_answers_every_live_row(
     # declaration, the same honest answer `/live`'s raw frame gets; and the async SQS send
     # (`G-43`) carries a `String` body exactly as the synchronous one beside it does, and
     # the two read identically — measured, so a divergence between the clients would show.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 30
+    # 46 since `G-37` (A1 Task 4): sixteen of the eighteen builder-form routes. The two
+    # `accept(JSON)`-guarded ones answer off their declaration; every other one declares
+    # no media predicate and its handler returns a bare `ServerResponse` (or, for the
+    # `resources` pattern, nothing at all), so the ladder has no declared payload type to
+    # answer off — the same honest answer `PUT /mvcfn/invoices/{id}` already gets.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 46
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

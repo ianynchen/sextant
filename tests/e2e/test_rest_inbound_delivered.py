@@ -64,6 +64,86 @@ def test_the_jpa_resource_still_derives(http_routes):
     )
 
 
+@pytest.fixture(scope="module")
+def http_rows(analyzed_orders_service: Path) -> list[dict]:
+    """Every inbound HTTP row of the session's one `orders-service` analysis, whole —
+    for the tests that read `resolution` and `handler`, not only the address."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return [
+            dict(row)
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "http" and str(row["direction"]) == "inbound"
+        ]
+    finally:
+        workspace.close()
+
+
+def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
+    """`G-37`, spec §8: the builder DSL, every overload, both stacks, with the mid-chain
+    filter, the nested body, the static resource and the catch-all."""
+    flux, mvc = "spring-webflux-router", "spring-mvc-router"
+    expected = {
+        (flux, "GET", "/bld/orders"),
+        (flux, "GET", "/bld/orders/{id}"),
+        (flux, "GET", "/bld/health"),
+        (flux, "POST", "/bld/orders"),
+        (flux, "PUT", "/bld/orders/{id}"),
+        (flux, "GET", "/bld/nested/inner"),
+        (flux, "DELETE", "/bld/nested/inner/{id}"),
+        (flux, "GET", "/bld/static/**"),
+        (mvc, "GET", "/mvcbld/orders"),
+        (mvc, "GET", "/mvcbld/orders/{id}"),
+        (mvc, "GET", "/mvcbld/health"),
+        (mvc, "POST", "/mvcbld/orders"),
+        (mvc, "PUT", "/mvcbld/orders/{id}"),
+        (mvc, "GET", "/mvcbld/nested/inner"),
+        (mvc, "DELETE", "/mvcbld/nested/inner/{id}"),
+        (mvc, "GET", "/mvcbld/static/**"),
+        (flux, "GET", "/**"),
+        (mvc, "GET", "/**"),
+    }
+    missing = expected - http_routes
+    assert missing == set(), f"builder routes missing: {sorted(missing)}"
+
+
+def test_every_builder_route_is_resolved_including_the_one_past_the_filter(http_rows):
+    """Spec §8 test 5, live: `POST /bld/orders` and `PUT /bld/orders/{id}` sit PAST the
+    chain's `filter(...)`, and a pass-through the catalog did not declare would have
+    poisoned every route to its left (spec §4b). Every builder row is `resolved`."""
+    builder_rows = [row for row in http_rows if str(row["path"]).startswith(("/bld/", "/mvcbld/"))]
+    assert builder_rows and {row["resolution"] for row in builder_rows} == {"resolved"}, [
+        (row["path"], row["resolution"]) for row in builder_rows
+    ]
+
+
+def test_the_builder_catch_all_serves_every_path_and_is_resolved(http_rows):
+    """Spec §7 case 3 as ruled: `route().GET(h::health).build()` constrains no path, so it
+    serves every path and publishes the framework's any-path pattern at `resolved` — one
+    row per stack, never a resolved NULL path (which the addresses-nothing gate drops)."""
+    catch_alls = [
+        row
+        for row in http_rows
+        if row["catalog_id"] in ("spring-webflux-router", "spring-mvc-router")
+        and row["method"] == "GET"
+        and row["path"] == "/**"
+    ]
+    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 2, (
+        catch_alls
+    )
+
+
+def test_the_static_resource_route_is_served_with_no_handler(http_rows):
+    """Spec §6: `resources("/bld/static/**", location)` is an inbound boundary a client
+    can GET and receive bytes from. The row carries the pattern and the verb, and its
+    `handler` is NULL — there is no handler method, and none is invented."""
+    static = [row for row in http_rows if str(row["path"]).endswith("/static/**")]
+    assert sorted((row["path"], row["handler"], row["resolution"]) for row in static) == [
+        ("/bld/static/**", None, "resolved"),
+        ("/mvcbld/static/**", None, "resolved"),
+    ]
+
+
 SPRING7 = FIXTURES / "orders-spring7"
 
 

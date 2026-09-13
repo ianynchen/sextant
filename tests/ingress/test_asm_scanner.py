@@ -59,6 +59,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "BuilderRoutes.jsonl",
         "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
@@ -89,6 +90,7 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcBuilderRoutes.jsonl",
         "MvcInvoiceRoutes.jsonl",
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",
@@ -224,7 +226,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # the one this fixture had no instance of at all.
     # + 4 (2026-09-11): `ProgrammaticWsConfig` and its nested `TicketEndpoint` (`G-34`),
     # `ShipmentRepository` and its nested `Shipment` (`G-45`).
-    assert report.documents == 126
+    # 128 since `G-37` (A1 Task 4): `BuilderRoutes` and `MvcBuilderRoutes`, the builder
+    # form of functional routing on both stacks, which this fixture had no instance of.
+    assert report.documents == 128
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -260,6 +264,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "BillingRestTemplate.jsonl",
         "BillingSoapClient.jsonl",
         "BillingWebService.jsonl",
+        "BuilderRoutes.jsonl",
         "CatalogRepository.jsonl",
         "ClassLevelListener.jsonl",
         "CommonProtos$Money$1.jsonl",
@@ -290,6 +295,7 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
         "MpOrderApi.jsonl",
+        "MvcBuilderRoutes.jsonl",
         "MvcInvoiceRoutes.jsonl",
         "MvcRouteHandlers.jsonl",
         "NestedScopedDetail.jsonl",

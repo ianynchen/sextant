@@ -109,7 +109,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # `@RepositoryRestResource`, derives its six-route table — Spring Data REST exposes
     # a Mongo repository exactly as it does a JPA one, and the roster now names the store
     # contract the fact stream cannot reach through the parent.
-    assert metadata["endpoints"]["inbound"]["http"] == 60
+    # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks —
+    # `BuilderRoutes` under `/bld`, `MvcBuilderRoutes` under `/mvcbld`, one `GET /**` each.
+    assert metadata["endpoints"]["inbound"]["http"] == 78
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -196,7 +198,8 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # + 1 (W46): `ws/OrderFeedClient`, which opens one — `G-32`'s absent direction.
     # 139 since 2026-09-11: `ProgrammaticWsConfig` + its nested `TicketEndpoint` (`G-34`),
     # `ShipmentRepository` + its nested `Shipment` (`G-45`) — four class files.
-    assert metadata["coverage"]["documents"] == 139
+    # 141 since `G-37` (A1 Task 4): `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes`.
+    assert metadata["coverage"]["documents"] == 141
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

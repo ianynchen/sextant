@@ -302,6 +302,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.origin-is-declared": Guard(
+        what="a chain head contributes zero routes without poisoning ONLY when its producing "
+        "call is a declared origin",
+        why="without the check every unreadable receiver — a field, a helper's result, a "
+        "parameter — would read as a clean chain start, and a router whose head the walk "
+        "cannot see would publish every route to its right as resolved with nothing saying "
+        "the head was not read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    if extended is not None and _matching_rule(extended, scope.context.origins) is not None:",
+                replace="    if extended is not None and not _routes_of(extended, scope):  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "combinator.entry-owner-is-the-declared-type": Guard(
         what="an argument-rooted entry matches a call only on the owner AND method the "
         "catalog declares",
@@ -1320,13 +1335,24 @@ GUARDS: dict[str, Guard] = {
         "moves its SSE routes out of `http`, so `roots` says `http /events/emitter` while "
         "`endpoints` says `sse /events/emitter` — one address spelled two ways in one "
         "workspace, with the document's own trace section quoting the stale half",
+        # Each pass runs inside its own `with _timed(...)` block (b2bdbb9), so the anchor
+        # is the whole block: removing the call alone left an empty block behind and
+        # re-inserting it at the method's own indentation put it outside the other one —
+        # `--guards` then failed to import the copied tree before it reached any guard.
         edits=(
-            Edit(path=_PIPELINE, find="    record_roots(workspace)\n", replace=""),
             Edit(
                 path=_PIPELINE,
-                find="    apply_protocol_hints(workspace, declared)\n",
-                replace="    record_roots(workspace)  # guard disabled\n"
-                "    apply_protocol_hints(workspace, declared)\n",
+                find='    with _timed("record_roots"):\n        record_roots(workspace)\n',
+                replace="",
+            ),
+            Edit(
+                path=_PIPELINE,
+                find='    with _timed("apply_protocol_hints"):\n'
+                "        apply_protocol_hints(workspace, declared)\n",
+                replace='    with _timed("record_roots"):\n'
+                "        record_roots(workspace)  # guard disabled\n"
+                '    with _timed("apply_protocol_hints"):\n'
+                "        apply_protocol_hints(workspace, declared)\n",
             ),
         ),
     ),
