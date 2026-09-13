@@ -339,6 +339,14 @@ The engine's per-column poisoning is unchanged. A row carries
    now never emits a resolved row with a NULL path, which keeps the gate's invariant
    whole.* The same rule reaches `route(accept(JSON), h)` — a media-only route serves
    every path, and reads `/**` with its media, where it used to be dropped silently.
+   *Ruled 2026-09-13 (A2 Task 3): a framework whose path-less verb serves the PREFIX
+   it sits under rather than every path — Javalin's `get(handler)` is
+   `get(prefixPath(""), handler)`, Ktor's the same shape — is not a catch-all, and its
+   catalog spells that with the empty literal `path: ""` on the rule; and a framework
+   that JOINS segments itself — Javalin's `prefixPath` puts a `/` in front of a
+   segment lacking one, so `path("api", …)` is `path("/api", …)` — declares
+   `path_join: leading_slash`, without which the glued `/users{id}` is a resolved wrong
+   row (Task 3 fix round 1).*
 4. **A builder split across methods** — `private Builder base() {…}` then
    `base().POST(…)` — is one unresolved row, per the existing rule. Stated
    explicitly because a builder invites that factoring far more than

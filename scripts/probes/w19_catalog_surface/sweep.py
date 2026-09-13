@@ -345,7 +345,7 @@ SURFACES = (
         "io.javalin.apibuilder.ApiBuilder",
         "io.javalin:javalin",
         "6.4.0",
-        "javalin-apibuilder",
+        "javalin-nested",
     ),
     # `alpakka-pekko` (w62). `Consumer` is the owner `pekko-connectors-kafka.yml`
     # declares in `matches.owner`; `Producer` is named nowhere in `matches` at all —

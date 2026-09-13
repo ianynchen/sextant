@@ -44,14 +44,20 @@ requires: [call_site, string_constants, chain_reconstruction]
 # engine from reading "no `path_arg`" as a catch-all and publishing `/x/**`, an address
 # Javalin never serves for that call (spec §7 case 3 is the catch-all; this is not one).
 #
-# Two boundaries, stated rather than read: a path-less verb with NO enclosing `path`
+# `prefixPath` and `path` also JOIN: a segment that does not start with `/` gets one
+# put in front — unless it is empty or the bare `*` — so `path("api", …)` and
+# `path("/api", …)` are the same registration (Javalin's own documentation says so, and
+# the bytecode above is the rule). `path_join: leading_slash` below is that rule, applied
+# to every literal this catalog reads; without it `path("users", () -> get(h))` read
+# back as `/users{id}`-style glued addresses, resolved — a wrong row, not a missing one
+# (Task 3 fix round 1).
+#
+# One boundary, stated rather than read: a path-less verb with NO enclosing `path`
 # registers the empty string, and this catalog was not measured for what Javalin serves
-# that at (the fixture does not write it; the engine would publish `/`); and a segment
-# written WITHOUT its leading slash — `path("orders", …)` — is re-punctuated by
-# `prefixPath`/`path` (a `/` is prepended) where the engine concatenates literals
-# verbatim, so such a router reads back joined without the slash Javalin inserts.
-# Both hold as long as `prefixPath` keeps the shape measured above.
+# that at (the fixture does not write it; the engine would publish `/`). Holds as long as
+# `prefixPath` keeps the shape measured above.
 matches:
+  path_join: leading_slash
   entries:
     - owner: io.javalin.config.RouterConfig
       method: apiBuilder

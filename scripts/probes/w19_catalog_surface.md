@@ -127,7 +127,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | javalin-routing | `javalin` | `JavalinDefaultRoutingApi` | — | — | — | — | — | — | — | 23 | **7 of 23** |
 | javalin-routing | `javalin` | `JavalinDefaultRouting` | — | — | — | — | — | — | — | 23 | **7 of 23** |
 | javalin-routing | `javalin` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **0 of 18** |
-| javalin-apibuilder | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **7 of 18** |
+| javalin-nested | `javalin-apibuilder` | `ApiBuilder` | — | — | — | — | — | — | — | 18 | **7 of 18** |
 | alpakka-pekko | `pekko-connectors-kafka` | `Consumer` | 14 | — | — | — | — | — | — | — | **5 of 14** |
 | alpakka-pekko | `pekko-connectors-kafka` | `Producer` | 6 | — | — | — | — | — | — | — | **0 of 6** |
 

@@ -537,13 +537,18 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
     its prefix and nothing more (Javalin's `prefixPath("")`, measured on the 6.4.0 jar —
     `POST /jv/nested`, never `/jv/nested/**`); the role-carrying overload reads the same
     positions; every row's caller is the method holding `apiBuilder`, which is the
-    `config -> …` lambda `Javalin.create` was handed."""
+    `config -> …` lambda `Javalin.create` was handed. The slashless `path("plain", () ->
+    get("x", …))` reads `/jv/nested/plain/x` — the catalog's `path_join: leading_slash`
+    is Javalin's own `prefixPath` rule, and the glued `/jv/nestedplainx` is the resolved
+    wrong row it prevents (Task 3 fix round 1)."""
     expected = {
         ("inbound", "GET", "/jv/nested/{id}"),
         ("inbound", "POST", "/jv/nested"),
         ("inbound", "GET", "/jv/nested/{id}/items"),
         ("inbound", "DELETE", "/jv/nested/{id}/items/{itemId}"),
+        ("inbound", "GET", "/jv/nested/plain/x"),
     }
     assert expected <= javalin_routes, sorted(javalin_routes)
     assert ("inbound", "GET", "/{id}") not in javalin_routes
     assert ("inbound", "POST", "/jv/nested/**") not in javalin_routes
+    assert ("inbound", "GET", "/jv/nestedplainx") not in javalin_routes

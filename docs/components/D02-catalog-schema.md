@@ -1481,9 +1481,10 @@ matches:
     - { name: filter,   owner: "…RouterFunctions$Builder", pass_through: true }
   origins:
     - { owner: "…RouterFunctions", method: route, arity: 0 }
+  # path_join: leading_slash   # only where the framework itself joins segments (Javalin)
 ```
 
-**Four grammar blocks, and each is catalog data alone — nothing below names a
+**Five grammar blocks, and each is catalog data alone — nothing below names a
 framework:**
 
 - **`entries`** declares where trees start, in two shapes. An **argument-rooted**
@@ -1569,6 +1570,16 @@ framework:**
   else the walk cannot read is one unresolved row (§4b). `arity` is what tells the
   argument-less builder factory from the two-argument route of the same name, which
   heads every `andRoute` chain and must keep its route.
+- **`path_join`** (catalog-wide, beside `origins`) says how the framework joins the
+  segments its prefixes and verbs are handed, and applies to every literal path the
+  fold reads. Absent, segments concatenate verbatim, exactly as written — the Spring
+  catalogs. `leading_slash` is the join a framework that normalises each segment
+  itself performs: a `/` goes in front of a segment unless it already starts with one,
+  is empty, or is the bare `*` — Javalin's `prefixPath`, measured on 6.4.0, under which
+  `path("api", …)` and `path("/api", …)` are one registration — so `path("users", () ->
+  path("{id}", () -> get(h)))` reads `/users/{id}`, never `/users{id}` glued and
+  resolved. The empty literal `path: ""` above is one of the three exceptions and is
+  never prefixed. Any other value is refused at load.
 
 **The walk, one core for both shapes.** From an argument-rooted entry, or from a
 body-linked entry's own named method, every argument is resolved through its

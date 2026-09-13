@@ -23,7 +23,10 @@ public class OrderApp {
      *  the 6.4.0 jar: every verb registers `join("", pathDeque) + path`, and `post(handler)`
      *  is `post(prefixPath(""), handler)` — so a path-less verb serves exactly the prefix it
      *  sits under. `post(ctx -> …)` here registers `POST /jv/nested`, not `/jv/nested/**`,
-     *  and the inner `get(ctx -> …)` registers `GET /jv/nested/{id}/items`. */
+     *  and the inner `get(ctx -> …)` registers `GET /jv/nested/{id}/items`. The same
+     *  `prefixPath` puts a `/` in front of a segment written without one, so the slashless
+     *  `path("plain", …)` over `get("x", …)` registers `GET /jv/nested/plain/x` — Javalin's
+     *  documentation calls `path("api", …)` and `path("/api", …)` the same registration. */
     public Javalin nested() {
         return Javalin.create(config -> config.router.apiBuilder(() -> {
             ApiBuilder.path("/jv/nested", () -> {
@@ -32,6 +35,9 @@ public class OrderApp {
                 ApiBuilder.path("/{id}/items", () -> {
                     ApiBuilder.get(ctx -> ctx.result("[]"));                 // get(Handler): both prefixes, nothing more
                     ApiBuilder.delete("/{itemId}", ctx -> ctx.status(204), Role.ADMIN);
+                });
+                ApiBuilder.path("plain", () -> {                             // slashless: Javalin joins it as /plain
+                    ApiBuilder.get("x", ctx -> ctx.result("plain"));
                 });
             });
         }));

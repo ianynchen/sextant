@@ -52,6 +52,15 @@ is therefore a fold over that tree rather than a walk along a line.
   which is the difference between "the chain starts here" and "I could not
   read the receiver" — a distinction nothing needed until a builder made every
   chain start somewhere (spec §4b).
+- `path_join` — how the framework joins the segments its prefixes and verbs
+  are handed, applied to every literal path the fold reads. Absent, segments
+  concatenate verbatim, exactly as written. `leading_slash` is the join a
+  framework that normalises each segment itself performs — a `/` is put in
+  front of a segment unless it already starts with one, is empty, or is the
+  bare `*` — so `path("api", …)` over `get("x", h)` reads `/api/x`, the
+  address that framework serves, never `apix`. A catalog declares it because
+  the join is the framework's rule, measured from its own prefix code, not
+  this engine's guess (A2 Task 3 fix round 1).
 
 **The builder chain (spec §4).** `route().GET("/a", h).POST("/b", h).build()`
 is a chain whose every verb both declares its own route AND carries the chain
@@ -127,6 +136,11 @@ _IDENTITY_POISON = (_METHOD, _PATH)
 # The address of a route that constrains no path at all — the framework's
 # any-path pattern, which is what a catch-all serves (spec §7 case 3).
 _ANY_PATH = "/**"
+
+# The one `path_join` a catalog may declare, beside "absent" (verbatim). Named
+# here so a typo in a catalog is refused at load rather than silently read as
+# verbatim — which would publish the glued address the word exists to prevent.
+_LEADING_SLASH = "leading_slash"
 
 # The two roles a `media` rule may fill. Validated at load rather than
 # discovered at derive time: a typo here silently mislabels every media value
@@ -251,6 +265,9 @@ class _TreeContext:
     # set, as `verb_names` is for verbs.
     origins: tuple[dict[str, Any], ...]
     origin_names: frozenset[tuple[str, str]]
+    # `matches.path_join`: None for verbatim concatenation, `leading_slash` for the
+    # framework-side normalisation `_literal_path` applies to every literal read.
+    path_join: str | None
     # The handler positions a PLAIN continuation reads. A plain continuation is
     # the same declaration shape as an argument-rooted entry, only reached
     # through a chain rather than written on its own, so it reuses those
@@ -355,6 +372,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         continuations=_continuations_of(matches.get("continuations", [])),
         origins=origins,
         origin_names=frozenset((rule["owner"], rule["method"]) for rule in origins),
+        path_join=matches.get("path_join"),
         continuation_handlers=frozenset(
             entry["handler_arg"] for entry in entries if "handler_arg" in entry
         ),
@@ -1078,13 +1096,34 @@ def _argument_constraints(
     if argument is None:
         return [_Route(poisons=poisons)]
     if argument.get("kind") == "string" and isinstance(argument.get("value"), str):
-        return [_Route(path_parts=(str(argument["value"]),))]
+        return [_Route(path_parts=(_literal_path(str(argument["value"]), scope.context),))]
     producing = _producing_site(argument.get("source"), scope)
     if producing is not None:
         branches = _constraints_of(producing, scope)
         if branches:
             return branches
     return [_Route(poisons=poisons)]
+
+
+def _literal_path(literal: str, context: _TreeContext) -> str:
+    """One literal path segment as the framework will join it — the catalog's
+    `path_join` applied, or the literal untouched when none is declared. Every
+    literal the fold reads for a path position passes through here, so a join
+    declared once holds for prefixes, verbs and (when they are read) array
+    elements alike; a rule's own `path: ""` does not, since the empty segment is
+    exactly one the join leaves alone. `leading_slash` is the framework's own
+    three exceptions, verbatim: a segment that already starts with `/`, the
+    empty segment, and the bare `*` stay as written; every other segment gains
+    a leading `/`. Two spellings of one registration must be one row, and the
+    join is what makes `path("api", …)` and `path("/api", …)` the same address
+    here as they are in the framework."""
+    if (
+        context.path_join == _LEADING_SLASH
+        and literal not in ("", "*")
+        and not literal.startswith("/")
+    ):
+        return "/" + literal
+    return literal
 
 
 def _handler_of(
@@ -1319,7 +1358,10 @@ def _validate_matches(catalog: Catalog) -> None:
     A verb rule says where its handler sits OR that there is none — both is
     two answers, and `extends_receiver` on a rule saying neither is a builder
     verb that declares no route, which is a continuation misfiled. An origin
-    names an owner and a method, or it names nothing a receiver could match."""
+    names an owner and a method, or it names nothing a receiver could match. A
+    `path_join` is `leading_slash` or absent — a misspelt one read as absent
+    would glue every slashless segment to its parent, the address the word
+    exists to prevent."""
     _validate_continuations(catalog)
     for rule in catalog.matches.get("vocabulary", {}).get("verbs", []):
         handler_less = rule.get("handler") == "none"
@@ -1341,6 +1383,12 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"that carries a chain declares a route of its own (D02 §2's `combinator` "
                 f"style)"
             )
+    if catalog.matches.get("path_join", _LEADING_SLASH) != _LEADING_SLASH:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `path_join: "
+            f"{catalog.matches.get('path_join')!r}` — the only value is `{_LEADING_SLASH}`; "
+            f"leave it out for verbatim concatenation (D02 §2's `combinator` style)"
+        )
     for origin in catalog.matches.get("origins", []):
         if not isinstance(origin, dict) or "owner" not in origin or "method" not in origin:
             raise CatalogError(

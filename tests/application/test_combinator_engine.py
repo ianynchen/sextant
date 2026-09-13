@@ -3462,6 +3462,15 @@ def test_an_origin_naming_no_owner_or_no_method_is_refused(tmp_path: Path):
             _resolve(tmp_path, [], _catalog(matches))
 
 
+def test_a_path_join_that_is_not_the_one_declared_value_is_refused(tmp_path: Path):
+    """`path_join` is `leading_slash` or absent. A misspelling read as absent would fall
+    back to verbatim concatenation and publish the glued address the word exists to
+    prevent — silently, since every row would still be resolved."""
+    matches = {**_matches(), "path_join": "leading-slash"}
+    with pytest.raises(CatalogError, match=r"`path_join: 'leading-slash'` — the only value"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
 def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path):
     matches = _matches()
     matches["continuations"] = [{"owner": "com.example.web.Router"}]
@@ -4047,3 +4056,135 @@ def test_the_apibuilder_catalog_declines_an_api_builder_call_on_another_owner(tm
     workspace.close()
 
     assert identities == []
+
+
+def _slashless_tree(prefix: str, inner: str, leaf: str) -> list:
+    """`path(prefix, () -> { get(h); path(inner, () -> { get(h); post(leaf, h); }); })` —
+    the reviewer's tree (Task 3 fix round 1), every segment spelled as the caller passes
+    it, so the same shape serves the slashless, the slashed and the `*` spellings."""
+    grandchild = DECLARER + "lambda$nested$3(sig_g0)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_GROUP_BODY),
+        _method_symbol(_GROUP_INNER),
+        _method_symbol(grandchild),
+        _site(
+            _CONFIG_LAMBDA,
+            0,
+            _ROUTER_CONFIG,
+            "apiBuilder",
+            invoke_kind="virtual",
+            receiver=None,
+            result=1,
+            descriptor=f"({_GROUP_DESC})Lio/javalin/config/RouterConfig;",
+            arguments=[CallArgument(kind="lambda", symbol=_GROUP_BODY, source=0)],
+        ),
+        _site(
+            _GROUP_BODY,
+            0,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=prefix),
+                CallArgument(kind="lambda", symbol=_GROUP_INNER, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0)],
+        ),
+        _site(
+            _GROUP_INNER,
+            1,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=inner),
+                CallArgument(kind="lambda", symbol=grandchild, source=1),
+            ],
+        ),
+        _site(
+            grandchild,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=0)],
+        ),
+        _site(
+            grandchild,
+            1,
+            _API_BUILDER,
+            "post",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=leaf),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER, source=1),
+            ],
+        ),
+    ]
+
+
+def test_a_catalog_declaring_leading_slash_joins_slashless_segments_as_its_framework_does(
+    tmp_path: Path,
+):
+    """Task 3 fix round 1 (the reviewer's finding). Javalin documents `path("api", …)` and
+    `path("/api", …)` as the same registration — `prefixPath` prepends `/` to a segment
+    that does not start with one — so `path("users", () -> { get(h); path("{id}", () ->
+    { get(h); post("items", h); }); })` serves `/users`, `/users/{id}` and
+    `/users/{id}/items`. Verbatim concatenation published `GET /users{id}` and
+    `POST /users{id}items`, RESOLVED: a confident wrong address, the row this project
+    forbids. The catalog now says how its framework joins segments (`path_join:
+    leading_slash`), and every literal the engine reads for it is joined that way."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("users", "{id}", "items"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/users", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/users/{id}", _MODULE + HEALTH, "resolved"),
+        ("POST", "/users/{id}/items", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_leading_slash_leaves_a_slashed_tree_exactly_as_written(tmp_path: Path):
+    """The join's first exception: a segment already starting with `/` is untouched, so a
+    router written the documented way reads back identically with and without the word."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("/users", "/{id}", "/items"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/users", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/users/{id}", _MODULE + HEALTH, "resolved"),
+        ("POST", "/users/{id}/items", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_leading_slash_never_prefixes_the_wildcard_segment(tmp_path: Path):
+    """The join's third exception, `prefixPath`'s own `"*"` check: `path("*", …)` is NOT
+    `/*`. Pinned on the segment alone, because the address Javalin serves a `*` prefix
+    under is a matcher question this catalog does not answer — what matters here is
+    that the join does not invent a slash the framework's rule explicitly withholds."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("/users", "*", "/items"), _shipped_apibuilder_catalog()
+    )
+    paths = [row["path"] for row in _rows(workspace)]
+    workspace.close()
+
+    assert paths == ["/users", "/users*", "/users*/items"]
