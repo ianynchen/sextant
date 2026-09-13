@@ -33,6 +33,51 @@ here would restate those documents rather than add anything.
   `spring-petclinic-rest`): every derived table and `metadata.json` equal as they stand,
   the fact tables equal once the two keys are stripped.
 
+- **A module built with the `RouterFunctions.route()` builder now exports its whole HTTP
+  surface, on both the reactive and the servlet stack, and the Kotlin router DSL's five
+  overloads per verb each derive what they declare** (`G-37`, `W44-verb-overloads`,
+  `GAP-1b`). Before this, a builder chain — `route().GET("/a", h).POST("/b", h).build()`,
+  the form Spring's own reference documentation has recommended since 5.2 — derived nothing
+  at all: the engine could read a route named as an argument or folded into a lambda body,
+  and a builder's verb calls sit on a receiver chain instead, which it had no word for. It
+  now reads every verb, the four ways a chain can be written (one long chain, one statement
+  per verb, a mix of the two, or a chain split across an owning method and its caller),
+  `nest`/`path`/`filter`/`add` and the handler-less `resources`/`resource` forms — 20 of the
+  20 methods `RouterFunctions$Builder` declares, on both packages
+  (`scripts/probes/w19_catalog_surface.md`). The Kotlin DSL's shipped catalog carried one
+  rule per verb that was only right for one of its five overloads: `GET(handler)` — a
+  deliberate catch-all — read as an unreadable route, the three-argument form
+  (`GET(path, predicate, handler)`) lost its handler, and `GET(predicate, handler)` lost the
+  predicate's own path; the reactive stack's non-coroutine `router { }` had no catalog entry
+  at all and derived nothing. Both are fixed by telling same-named overloads apart on their
+  argument count and argument types rather than on name alone.
+
+  A route with no path constraint now publishes the framework's own any-path pattern,
+  `path: /**`, instead of being reported as unreadable: `GET(handler)` and
+  `route(accept(APPLICATION_JSON), h)` both serve every path that matches what they do
+  constrain — the first nothing, the second a media type — and used to derive either a
+  silent absence or a resolved row with no address at all, which an existing gate then
+  dropped before it ever reached a reader. Both now read `/**`, with a media-only route's
+  `produces`/`consumes` carried alongside it. The Kotlin DSL's own media-guarded verb-less
+  form (`accept(MediaType) { … }` / `contentType(MediaType) { … }`) has no rule for that
+  shape yet, so it derives one `unresolved` row now rather than the silence it derived
+  before — the proper reading, the media value as the route's own address, needs a catalog
+  word this grammar does not have yet, logged as `dsl-media-route` in the delivery register.
+
+  The routing catalogs gained a grammar for telling same-named overloads apart and for
+  walking a receiver chain ([D02](docs/components/D02-catalog-schema.md)): `arity` and
+  `arg_types` split overloads by argument count and by the type an argument carries;
+  `predicate_arg` names the position whose own constraints (a path, a media type) fold into
+  the rule's route; `extends_receiver` lets a verb both declare a route and carry a builder
+  chain onward; `origins` marks where such a chain is allowed to start, without treating
+  every unread receiver as one; `pass_through` carries a chain across a call whose own
+  arguments are not read (a mid-chain `filter(...)`); and a resource-registering rule can
+  declare `handler: none` for a route the framework serves without a handler of its own.
+  Two catalog rules that could both accept the same call are refused when the catalog loads,
+  naming both — never decided by file order — and a method a linking call names as the body
+  it folds under a prefix is never scanned for a root of its own, so it derives its route
+  exactly once rather than once prefixed and once bare.
+
 - **A WebClient URL built inside a `uri(Function)` lambda went unread** (`OI-73`, W29).
   `uri(b -> b.path("/orders").queryParam("q", term).build())` is the idiomatic way to build
   a URL with query parameters, and the row derived with `path` NULL and
