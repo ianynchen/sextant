@@ -705,9 +705,26 @@ matches:
         method: nest
         path_arg: 0
         subtree_arg: 1
+      # The Kotlin DSL's `nest`, MEASURED with `javap -p -s` at spring-webmvc 6.1.6 and
+      # 7.0.2 — the same two overloads the reactive twin declares, both arity 2, both
+      # linking to their body the same way (a `lambda`-kind argument naming the body
+      # method):
+      #   `nest(String, Function1)V`             `"/x".nest { }`, a literal prefix
+      #   `nest(RequestPredicate, Function1)V`   `accept(JSON).nest { }`, a predicate
+      # One rule each, split on position 0's type, so the row says which argument it
+      # reads rather than reading a predicate through a `path_arg` (one untyped rule
+      # stood here; A1 Task 5's review aligned the stacks).
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: nest
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
+        body_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: nest
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
         body_arg: 1
       # The DSL's own predicate factory, `path(String)RequestPredicate` — what
       # `GET(path("/health")) { }` hands its predicate position, so the route reads
@@ -773,6 +790,11 @@ matches:
       # `accept` on the strength of "no `contentType` call exists anywhere in the
       # checkpoint's Kotlin scan" — a statement about a FIXTURE, written as a statement
       # about the framework. Corrected there in this same commit.
+      # Each name ALSO has a `(MediaType, Function1)V` overload — a route DECLARED
+      # under one media guard, handler and all — and a media rule reads constants, never
+      # a route. That spelling derives one unresolved row (the engine's media-with-a-
+      # handler guard, A1 Task 5 review), not silence and not the route: reading it is
+      # `dsl-media-route` on the register. `KotlinMvcRoutes.kt` carries a live instance.
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: accept
         fills: produces

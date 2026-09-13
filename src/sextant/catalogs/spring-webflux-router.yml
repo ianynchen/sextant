@@ -918,9 +918,10 @@ matches:
       # `contentType(MediaType...)RequestPredicate`, the vararg factories these rows
       # read. Each name ALSO has a `(MediaType, Function1)V` overload that declares a
       # verb-less route under one media guard; a media rule reads its arguments as
-      # constants and never as a route, so that spelling derives nothing here — a
-      # stated gap, the receiver-rooted route-declaring shape `G-37` names, and the
-      # same one the `CoRouterFunctionDsl` pair above and the servlet twin carry.
+      # constants and never as a route, so that spelling derives one unresolved row
+      # (the engine's media-with-a-handler guard, A1 Task 5 review) — not silence, and
+      # not the route: reading it is `dsl-media-route` on the register, the same gap
+      # the `CoRouterFunctionDsl` pair above and the servlet twin carry.
       - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
         method: accept
         fills: produces

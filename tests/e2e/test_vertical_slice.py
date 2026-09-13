@@ -285,7 +285,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `router { }`/`nest { }` bodies and five handlers on the servlet side, two and four
     # on the reactive — plus the five `h.listInvoices(it)`/`h.createInvoice(it)` calls
     # inside them, every one a callee declared in this module. Still 30%.
-    assert "Calls whose callee body this workspace read: 506 of 1670 (30%)" in document
+    # 508 of 1676 since A1 Task 5's review: `KotlinMvcRoutes.kt`'s `accept(JSON) { h }`
+    # line — six edges, two of them (the lambda body and its `h.listInvoices(it)`) into
+    # this module.
+    assert "Calls whose callee body this workspace read: 508 of 1676 (30%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -293,10 +296,12 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 1668 resolved and `owner_not_scanned` 388 since A1 Task 5: all 69 new edges are
     # `resolved`, `declared_here` gains the two Kotlin classes (193), and 16 of the new
     # lookups land on the DSL, predicate, media and response types of both stacks.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1668." in document
+    # 1674 and 389 since A1 Task 5's review: the `accept(JSON) { h }` line's six edges,
+    # one lookup of them on the DSL's own `accept`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1674." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
-        "inherited 2, owner_not_scanned 388."
+        "inherited 2, owner_not_scanned 389."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -591,7 +596,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's
         # nine routes on both stacks — `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc`,
         # `routes/KotlinWebFluxRoutes.kt` under `/ktflux`, a `GET /**` catch-all each.
-        "http": 87,
+        # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row
+        # (`dsl-media-route`), `unresolved` with no address — counted, never hidden.
+        "http": 88,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -811,7 +818,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 148 inbound since A1 Task 5: the Kotlin router DSL's nine routes — four
             # under `/ktmvc` and three under `/ktflux`, plus a `GET /**` catch-all each
             # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
-            ("inbound", 148),
+            # 149 since A1 Task 5's review: the `accept(JSON) { h }` gap row.
+            ("inbound", 149),
             ("outbound", 61),
         ]
     )

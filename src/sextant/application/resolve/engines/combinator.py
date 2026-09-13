@@ -609,6 +609,18 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         # becomes a route only once some entry attaches a handler to it.
         return _verb_routes(site, verb, scope) if _declares_a_route(verb) else []
     if key in context.media or key in context.composers:
+        # A media or composer call is a constraint contributor — it declares no route,
+        # and reaching it here (unconsumed) is nothing to report. UNLESS it was handed a
+        # handler: a `lambda`-kind argument on a call whose rule reads media values or
+        # operands is the route-declaring overload of that name (a builder DSL's
+        # `accept(MediaType, Function1)`, measured on both routing stacks), and a
+        # declared route absent with nothing saying so is spec §3's forbidden outcome. One
+        # unresolved row, no handler — the handler position is not one this rule
+        # declares. Reading it properly (the media value as the route's own
+        # constraint, plus its handler) is a catalog word this grammar does not have
+        # yet; tracked on the register as `dsl-media-route`.
+        if _carries_a_handler(site):
+            return [_Route(poisons=_IDENTITY_POISON)]
         return []
     entry = _matching_entry(site, context)
     if entry is not None:
@@ -630,6 +642,12 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
             return _nest_continuation_routes(site, continuation, scope)
         return _declared_routes(site, context.continuation_handlers, scope, extends_receiver=True)
     return []
+
+
+def _carries_a_handler(site: dict[str, Any]) -> bool:
+    """Whether any argument of this call is a `lambda`-kind one — a handler, on a call
+    whose rule has no handler position to read it at."""
+    return any(argument.get("kind") == "lambda" for argument in site["arguments"])
 
 
 def _is_pass_through(site: dict[str, Any], context: _TreeContext) -> bool:

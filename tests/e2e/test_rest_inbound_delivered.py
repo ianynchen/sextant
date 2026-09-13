@@ -150,8 +150,11 @@ def test_the_static_resource_route_is_served_with_no_handler(http_rows):
 def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(http_rows):
     """`W44-verb-overloads` and `GAP-1b`, spec §1b's measured table turned into rows: on
     the servlet stack the four declaring `GET` overloads each derive their route, the
-    catch-all is RESOLVED with no path, and the three-argument form keeps its handler;
-    on the reactive stack the non-coroutine `router { }` derives at all."""
+    catch-all is RESOLVED at `/**` (the framework's any-path pattern, spec §7 case 3),
+    and the three-argument form keeps its handler; on the reactive stack the
+    non-coroutine `router { }` derives at all. The caller is part of every tuple so the
+    two DSL catch-alls are pinned on their own — the builder catch-alls of Task 4 publish
+    the same `GET /**` and would satisfy a caller-less tuple."""
     rows = {
         (
             row["catalog_id"],
@@ -159,21 +162,45 @@ def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(
             row["path"],
             row["resolution"],
             row["handler"] is not None,
+            _short_caller(row),
         )
         for row in http_rows
         if row["path"] == "/**" or str(row["path"]).startswith(("/ktmvc", "/ktflux"))
     }
+    mvc, flux = "KotlinMvcRoutes#ktMvcRoutes", "KotlinWebFluxRoutes#ktFluxRoutes"
     assert {
-        ("spring-mvc-router", "GET", "/ktmvc/invoices", "resolved", True),
-        ("spring-mvc-router", "GET", "/ktmvc/invoices/{id}", "resolved", True),
-        ("spring-mvc-router", "GET", "/ktmvc/health", "resolved", True),
-        ("spring-mvc-router", "POST", "/ktmvc/invoices", "resolved", True),
-        ("spring-mvc-router", "GET", "/**", "resolved", True),
-        ("spring-webflux-router", "GET", "/ktflux/orders", "resolved", True),
-        ("spring-webflux-router", "GET", "/ktflux/orders/{id}", "resolved", True),
-        ("spring-webflux-router", "POST", "/ktflux/orders", "resolved", True),
-        ("spring-webflux-router", "GET", "/**", "resolved", True),
+        ("spring-mvc-router", "GET", "/ktmvc/invoices", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/ktmvc/invoices/{id}", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/ktmvc/health", "resolved", True, mvc),
+        ("spring-mvc-router", "POST", "/ktmvc/invoices", "resolved", True, mvc),
+        ("spring-mvc-router", "GET", "/**", "resolved", True, mvc),
+        ("spring-webflux-router", "GET", "/ktflux/orders", "resolved", True, flux),
+        ("spring-webflux-router", "GET", "/ktflux/orders/{id}", "resolved", True, flux),
+        ("spring-webflux-router", "POST", "/ktflux/orders", "resolved", True, flux),
+        ("spring-webflux-router", "GET", "/**", "resolved", True, flux),
     } <= rows, sorted(rows)
+
+
+def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved_row(http_rows):
+    """The tracked gap, NOT the destination (`dsl-media-route` on the register; A1 Task 5
+    review). `KotlinMvcRoutes.kt` writes `accept(MediaType.APPLICATION_JSON) { h }` — the
+    DSL's `accept(MediaType, Function1)V`, a route declared under a media guard alone —
+    and this grammar has no word for a media rule that also carries a handler. It derived
+    SILENCE; it derives one row, `unresolved`, path NULL, no handler, attributed to the
+    declaring method, until the word exists."""
+    gap = [
+        row
+        for row in http_rows
+        if row["catalog_id"] == "spring-mvc-router"
+        and _short_caller(row) == "KotlinMvcRoutes#ktMvcRoutes"
+        and row["resolution"] == "unresolved"
+    ]
+    assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
+
+
+def _short_caller(row: dict) -> str:
+    """`Class#method` out of a module-prefixed caller symbol."""
+    return str(row["caller"]).rsplit("/", 1)[1].partition("(")[0]
 
 
 SPRING7 = FIXTURES / "orders-spring7"

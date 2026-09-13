@@ -2027,6 +2027,68 @@ def test_a_named_call_no_overload_accepts_derives_one_unresolved_row(tmp_path: P
     assert [(row["method"], row["path"]) for row in unresolved] == [(None, None)]
 
 
+_MVC_DSL = "org/springframework/web/servlet/function/RouterFunctionDsl#"
+_MVC_DSL_FACADE = "org/springframework/web/servlet/function/RouterFunctionDslKt#"
+
+
+@pytest.mark.pins("combinator.media-with-a-handler-is-a-row")
+def test_a_media_predicate_that_carries_a_handler_derives_one_unresolved_row(tmp_path: Path):
+    """`router { accept(JSON) { h } }` — the Kotlin DSL's `accept(MediaType, Function1)V`
+    (and `contentType`'s twin), measured on every DSL owner at spring-webmvc and
+    spring-webflux 6.1.6 and 7.0.2: a route DECLARED under one media guard, handler and
+    all. The media vocabulary names `accept`, so the call is claimed into the tree — and
+    a media rule contributes constraints, never routes, so the declaration derived
+    NOTHING (A1 Task 5 review). That is spec §3's forbidden outcome: a declared route
+    absent with nothing saying so. One unresolved row, no handler (the handler position
+    is not something a media rule declares), until the grammar has a word for it —
+    `dsl-media-route` on the register.
+
+    The shipped servlet catalog and its real DSL owner, so the row is the one
+    `KotlinMvcRoutes.kt` derives live for the same line. The other half — a media
+    call WITHOUT a handler, consumed by a route, still folds as media and nothing
+    else — is `test_a_vararg_media_arrays_elements_fill_the_media_column` above,
+    unchanged by this."""
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    catalog = next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-mvc-router"
+    )
+    entry = _site(
+        DECLARER + "routes(sig_r).",
+        0,
+        _MVC_DSL_FACADE,
+        "router",
+        arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0)],
+        result=1,
+    )
+    body = [
+        _site(
+            INLINE_BODY,
+            0,
+            _MVC_DSL,
+            "accept",
+            invoke_kind="virtual",
+            descriptor="(Lorg/springframework/http/MediaType;Lkotlin/jvm/functions/Function1;)V",
+            arguments=[
+                CallArgument(
+                    kind="enum", symbol="org/springframework/http/MediaType#APPLICATION_JSON."
+                ),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        ),
+    ]
+    workspace = _resolve(
+        tmp_path, [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, *body], catalog
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["method"], row["path"], row["handler"], row["resolution"]) for row in rows] == [
+        (None, None, None, "unresolved")
+    ]
+
+
 def test_two_rules_that_could_accept_one_call_are_refused_at_load(tmp_path: Path):
     """Spec §3c: never file order. Two arity-2 rules typing DIFFERENT positions could
     both accept `GET(String, Predicate)`, so the catalog is refused naming both; two

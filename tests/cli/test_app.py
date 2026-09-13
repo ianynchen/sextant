@@ -114,7 +114,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's nine
     # routes on both stacks — `KotlinMvcRoutes` under `/ktmvc`, `KotlinWebFluxRoutes`
     # under `/ktflux`, one `GET /**` each.
-    assert metadata["endpoints"]["inbound"]["http"] == 87
+    # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row (`dsl-media-route`),
+    # `unresolved` with no address.
+    assert metadata["endpoints"]["inbound"]["http"] == 88
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 

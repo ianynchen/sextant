@@ -302,6 +302,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.media-with-a-handler-is-a-row": Guard(
+        what="a media or composer call handed a `lambda`-kind argument — the route-declaring "
+        "overload of a constraint-contributing name — derives one unresolved row",
+        why="without it the call is claimed into the tree (its name is in the media "
+        "vocabulary) and contributes nothing: a Kotlin DSL's `accept(JSON) { handler }` "
+        "is a declared route absent from the export with nothing saying so — spec §3's "
+        "G-13 failure, on a name the catalog does read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if _carries_a_handler(site):\n            return [_Route(poisons=_IDENTITY_POISON)]",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return [_Route(poisons=_IDENTITY_POISON)]",
+            ),
+        ),
+    ),
     "combinator.origin-is-declared": Guard(
         what="a chain head contributes zero routes without poisoning ONLY when its producing "
         "call is a declared origin",

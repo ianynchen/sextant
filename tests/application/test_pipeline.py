@@ -1012,7 +1012,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # a catch-all; two of its five were unresolved rows before, so +3 there, not +5)
     # and four under `/ktflux` (`KotlinWebFluxRoutes.kt`, the reactive `router { }`,
     # which derived nothing until its entry existed). +9 http.
-    assert len(report.endpoints) == 190
+    # 191 since A1 Task 5's review: `KotlinMvcRoutes.kt`'s `accept(JSON) { h }` — a route
+    # declared under a media guard alone, which this grammar has no word for
+    # (`dsl-media-route`) — is one unresolved row rather than the silence it was.
+    assert len(report.endpoints) == 191
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1885,13 +1888,15 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
         # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
         # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
-        "http": 102,
+        "http": 103,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
         # the two `GET /**` catch-alls among them.
         # 102 since A1 Task 5: the Kotlin router DSL's nine rows on both stacks
         # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`), two more `GET /**` among them.
+        # 103 since its review: the `accept(JSON) { h }` gap row (`dsl-media-route`),
+        # path NULL and `unresolved` — an http row like the address-less `(None, None)`s.
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -1923,7 +1928,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 190
+    assert sum(counts.values()) == len(report.endpoints) == 191
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3295,7 +3300,7 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         ("http", "/bld/orders/{id}", None, json_media),
         ("http", "/mvcbld/orders/{id}", None, json_media),
         # A1 Task 5: the Kotlin DSL's `accept(JSON)`-guarded route on each stack — the
-        # three-argument form on the servlet side, the predicate form on the reactive.
+        # three-argument `GET("/…/{id}", accept(JSON)) { }` form on both.
         ("http", "/ktmvc/invoices/{id}", None, json_media),
         ("http", "/ktflux/orders/{id}", None, json_media),
         ("sse", "/events/stream", None, '["text/event-stream"]'),
@@ -3678,7 +3683,9 @@ def test_the_format_ladder_answers_every_live_row(
     # 53 since A1 Task 5: seven of the nine Kotlin router DSL routes, for the same reason
     # — the two `accept(JSON)`-guarded ones (`/ktmvc/invoices/{id}`, `/ktflux/orders/{id}`)
     # answer off their declaration; the other seven declare no media predicate.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 53
+    # 54 since A1 Task 5's review: the `accept(JSON) { h }` gap row (`dsl-media-route`)
+    # has no address and no declared payload type, so the ladder has nothing to answer.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 54
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
