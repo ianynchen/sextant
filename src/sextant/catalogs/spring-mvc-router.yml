@@ -30,6 +30,9 @@ detect:
 measured:
   - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6"],
       identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # The Kotlin DSL's verb overloads (Q14), counted on this stack's own jar at both minors.
+  - { artifact: org.springframework:spring-webmvc, versions: ["6.1.6", "7.0.2"],
+      identity: reported, by: scripts/probes/cp12_sweep_round1b.md }
 
 # **NO `array_arguments`**, and the line is measured rather than argued (W47's review).
 # Withhold the capability and re-resolve on facts where every `array` argument arrives as one
@@ -105,60 +108,260 @@ matches:
         method: OPTIONS
         verb: OPTIONS
         path_arg: 0
-      # **THE TWO-ARGUMENT `(String, handler)` FORM ONLY**, and `RouterFunctionDsl.GET`
-      # declares FIVE — `javap -p -s` at spring-webmvc 6.1.6, counted twice because the
-      # first count said four and missed the last one:
-      #   `(Function1)V`                             a bare handler, NO path
-      #   `(String, Function1)V`                     the one this row reads
-      #   `(RequestPredicate, Function1)V`           a predicate, NO path
-      #   `(String, RequestPredicate, Function1)V`   path, predicate, handler
-      #   `(String)RequestPredicate`                 a predicate FACTORY, returns rather
-      #                                              than declares
-      # This grammar matches on owner and name alone — no `descriptor` key — so `path_arg:
-      # 0` is read against whichever overload a caller wrote. On the first and third that
-      # argument is a LAMBDA or a PREDICATE, not a path, and on the fourth the handler sits
-      # at position 2 while `handler_arg: 1` reads the predicate. No live instance: the
-      # only Kotlin router in this repository is the reactive `coRouter`.
+      # The Kotlin DSL's seven verbs, FIVE overloads each (`W44-verb-overloads`, spec
+      # §1b). MEASURED with `javap -p -s` on `RouterFunctionDsl` at spring-webmvc 6.1.6
+      # and 7.0.2, and the same five on the reactive twin at spring-webflux 6.1.6 and
+      # 7.0.2 (A1 Task 5; `scripts/probes/cp12_sweep_round1b.md` carries the counts):
+      #   `(Function1)V`                             a catch-all — `/**`, resolved
+      #   `(String)RequestPredicate`                 a predicate FACTORY: no handler,
+      #                                              a route once an entry attaches one
+      #   `(String, Function1)V`                     a literal path and its handler
+      #   `(RequestPredicate, Function1)V`           the predicate's constraints
+      #   `(String, RequestPredicate, Function1)V`   path, predicate, handler at 2
+      # `arity` splits 1/2/3 and `arg_types` splits the two arity-1 forms and the two
+      # arity-2 forms on position 0 (spec §3b). Every handler is a `Function1`, so the
+      # catch-all is typed on it rather than left open. No `extends_receiver`: the DSL
+      # receiver is the body's own parameter and carries no chain (checkpoint (1b)
+      # ruling 3); the body walk folds each call where it stands.
       #
-      # Not in `slice.outside`, because the slice is for methods a catalog does not read
-      # and these are read. It is an OVERLOAD gap, the same engine work `route`/`nest` need.
-      # The Kotlin builder's own two-argument form: `GET("/x") { handler }` declares a
-      # whole route in one call, so it carries both positions.
+      # *One rule per verb stood here, `path_arg: 0`/`handler_arg: 1`, matched on owner
+      # and name alone — right for the `(String, Function1)` form and wrong for the other
+      # four: the three-argument form lost its handler (position 1 is the predicate),
+      # `GET(path("/x")) { }` read a predicate as its path and derived a path-NULL
+      # unresolved row, and the catch-all read its handler as a path. Measured against
+      # `KotlinMvcRoutes.kt` before these rules existed (A1 Task 5's report).*
+      # `KotlinMvcRoutes.kt` is the live instance: every `GET` overload under `/ktmvc`.
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: GET
         verb: GET
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: HEAD
         verb: HEAD
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: POST
         verb: POST
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: PUT
         verb: PUT
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: PATCH
         verb: PATCH
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: DELETE
         verb: DELETE
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: java.lang.String }
         path_arg: 0
         handler_arg: 1
       - owner: org.springframework.web.servlet.function.RouterFunctionDsl
         method: OPTIONS
         verb: OPTIONS
-        path_arg: 0
+        arity: 2
+        arg_types: { 0: org.springframework.web.servlet.function.RequestPredicate }
+        predicate_arg: 0
         handler_arg: 1
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
       # The builder's seven verbs (spec §4–§5, `G-37`). MEASURED with `javap -p -s` on
       # `RouterFunctions$Builder` at spring-webmvc 6.1.6 and 7.0.2 — 20 method names, 48
       # overloads, identical on both stacks at both versions. Each verb declares FOUR:
@@ -506,6 +709,18 @@ matches:
         method: nest
         path_arg: 0
         body_arg: 1
+      # The DSL's own predicate factory, `path(String)RequestPredicate` — what
+      # `GET(path("/health")) { }` hands its predicate position, so the route reads
+      # `/health` (A1 Task 5, `KotlinMvcRoutes.kt`). `arity: 1` is load-bearing: the
+      # same name's `path(String, Function1)V` overload DECLARES a verb-less route
+      # rather than producing a predicate, and a prefix rule that accepted it would
+      # read a route declaration as a bare prefix. Unaccepted, it derives one
+      # unresolved row instead (spec §3's G-13 guard), never silence — the slice
+      # below is keyed by NAME and cannot list one overload of a read name.
+      - owner: org.springframework.web.servlet.function.RouterFunctionDsl
+        method: path
+        arity: 1
+        path_arg: 0
       # The builder's nesting forms (spec §5), MEASURED with the same `javap`:
       #   `path(String, Consumer<Builder>)`      a lambda-bodied builder under a path
       #   `path(String, Supplier<RouterFunction>)` a lambda-bodied router under a path
@@ -651,19 +866,23 @@ shape_model: json
 slice:
   outside:
     - owner: org.springframework.web.servlet.function.RouterFunctionDsl
-      method_names: [add, and, invoke, not, or, param, path, pathExtension, resource, resources, withAttribute]
+      method_names: [add, and, invoke, not, or, param, pathExtension, resource, resources, withAttribute]
       why: >
         The methods this catalog does not read, and what each actually is — measured with
         `javap -p`, because a first version described them from their names and got three
-        wrong. `path`, `param` and `pathExtension` each declare a HANDLER-taking void overload, so `path("/x") { … }` DECLARES a route rather than
-        nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
-        reason. `add` and `resource` attach or declare routes too. All six are the
-        receiver-rooted shape `G-37` names, which is engine work rather than a catalog
-        line, and routes written any of those ways derive NOTHING. `and`/`or`/`not` compose
-        predicates INSIDE the DSL, where this file's `composers` block is keyed on the Java
-        `RequestPredicate` owner and so reads none of them. `resources` serves static
-        resources and `withAttribute` attaches metadata. The enumeration admits six of
-        these by `route declaration` rather than by a `String` at argument 0.
+        wrong. `param` and `pathExtension` each declare a HANDLER-taking void overload, so
+        `param("x") { … }` DECLARES a route rather than nesting a builder; `invoke` is the
+        `"/x" { handler }` route form for the same reason. `add` and `resource` attach or
+        declare routes too. All five are the receiver-rooted shape `G-37` names, which is
+        engine work rather than a catalog line, and routes written any of those ways derive
+        NOTHING. `path` left this list when its one-argument predicate factory became a
+        `prefixes` rule (A1 Task 5); its handler-taking overload, `path("/x") { … }`, is
+        the same route-declaring shape and derives one unresolved row rather than nothing.
+        `and`/`or`/`not` compose predicates INSIDE the DSL, where this file's `composers`
+        block is keyed on the Java `RequestPredicate` owner and so reads none of them.
+        `resources` serves static resources and `withAttribute` attaches metadata. The
+        enumeration admits six of these by `route declaration` rather than by a `String`
+        at argument 0.
     - owner: org.springframework.web.servlet.function.RouterFunctionDslKt
       method_names: [plus]
       why: >

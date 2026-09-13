@@ -110,10 +110,12 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-37 | `spring-mvc-router` | `RouterFunctions` | — | — | — | — | — | — | 6 | — | **4 of 6** |
 | G-37 | `spring-mvc-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | 20 | — | **20 of 20** |
 | G-37 | `spring-webflux-router` | `RouterFunctions` | — | — | — | — | — | — | 8 | — | **4 of 8** |
-| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | 42 | — | **10 of 42** |
+| G-37 | `spring-mvc-router` | `RouterFunctionDsl` | — | — | — | — | — | — | 42 | — | **11 of 42** |
 | G-37 | `spring-mvc-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | 2 | — | **1 of 2** |
 | G-37 | `spring-webflux-router` | `CoRouterFunctionDsl` | — | — | — | — | — | — | 45 | — | **10 of 45** |
 | G-37 | `spring-webflux-router` | `CoRouterFunctionDslKt` | — | — | — | — | — | — | 2 | — | **1 of 2** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDsl` | — | — | — | — | — | — | 42 | — | **11 of 42** |
+| G-37 | `spring-webflux-router` | `RouterFunctionDslKt` | — | — | — | — | — | — | 1 | — | **1 of 1** |
 | G-37 | `spring-webflux-router` | `RouterFunctions$Builder` | — | — | — | — | — | — | 20 | — | **20 of 20** |
 | G-43 | `aws-sqs-sdk` | `SqsClient` | — | 29 | — | — | — | — | — | — | **1 of 29** |
 | G-43 | `aws-sqs-sdk` | `SqsAsyncClient` | — | 28 | — | — | — | — | — | — | **1 of 28** |
@@ -156,10 +158,12 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-mvc-router` | `RouterFunctions` | 2 | **1** | **0** | **1** | **2** |
 | `spring-mvc-router` | `RouterFunctions$Builder` | 0 | **0** | **0** | **0** | **0** |
 | `spring-webflux-router` | `RouterFunctions` | 4 | **1** | **0** | **3** | **4** |
-| `spring-mvc-router` | `RouterFunctionDsl` | 32 | **8** | **0** | **6** | **11** |
+| `spring-mvc-router` | `RouterFunctionDsl` | 31 | **7** | **0** | **6** | **10** |
 | `spring-mvc-router` | `RouterFunctionDslKt` | 1 | **0** | **0** | **1** | **1** |
 | `spring-webflux-router` | `CoRouterFunctionDsl` | 35 | **8** | **0** | **6** | **11** |
 | `spring-webflux-router` | `CoRouterFunctionDslKt` | 1 | **0** | **0** | **1** | **1** |
+| `spring-webflux-router` | `RouterFunctionDsl` | 31 | **7** | **0** | **6** | **10** |
+| `spring-webflux-router` | `RouterFunctionDslKt` | 0 | **0** | **0** | **0** | **0** |
 | `spring-webflux-router` | `RouterFunctions$Builder` | 0 | **0** | **0** | **0** | **0** |
 | `aws-sqs-sdk` | `SqsClient` | 28 | **0** | **24** | **0** | **24** |
 | `aws-sqs-sdk` | `SqsAsyncClient` | 27 | **0** | **24** | **0** | **24** |
@@ -221,7 +225,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 
 **`spring-mvc-router` / `RouterFunctionDsl`**
 
-> by name at argument 0 (8): `and`, `invoke`, `or`, `param`, `path`, `pathExtension`, `resources`, `withAttribute`
+> by name at argument 0 (7): `and`, `invoke`, `or`, `param`, `pathExtension`, `resources`, `withAttribute`
 
 > by declaring a route (6): `add`, `and`, `invoke`, `not`, `or`, `resource`
 
@@ -238,6 +242,14 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`spring-webflux-router` / `CoRouterFunctionDslKt`**
 
 > by declaring a route (1): `plus`
+
+**`spring-webflux-router` / `RouterFunctionDsl`**
+
+> by name at argument 0 (7): `and`, `invoke`, `or`, `pathExtension`, `queryParam`, `resources`, `withAttribute`
+
+> by declaring a route (6): `add`, `and`, `invoke`, `not`, `or`, `resource`
+
+**`spring-webflux-router` / `RouterFunctionDslKt`** — no unread method addresses a wire by either style.
 
 **`spring-webflux-router` / `RouterFunctions$Builder`** — no unread method addresses a wire by either style.
 
@@ -337,7 +349,6 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `invoke` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `or` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `param` | `argument 0` |
-| `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `path` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `pathExtension` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `resources` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctionDsl` | `withAttribute` | `argument 0` |
@@ -363,6 +374,19 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.CoRouterFunctionDsl` | `or` | `route declaration` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.CoRouterFunctionDsl` | `resource` | `route declaration` |
 | `spring-webflux-router` | `org.springframework.web.reactive.function.server.CoRouterFunctionDslKt` | `plus` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `and` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `invoke` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `or` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `pathExtension` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `queryParam` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `resources` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `withAttribute` | `argument 0` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `add` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `and` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `invoke` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `not` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `or` | `route declaration` |
+| `spring-webflux-router` | `org.springframework.web.reactive.function.server.RouterFunctionDsl` | `resource` | `route declaration` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `addPermission` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `cancelMessageMoveTask` | `request object` |
 | `aws-sqs-sdk` | `software.amazon.awssdk.services.sqs.SqsClient` | `changeMessageVisibility` | `request object` |

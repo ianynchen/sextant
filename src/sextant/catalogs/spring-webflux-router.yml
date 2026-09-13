@@ -71,6 +71,14 @@ matches:
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
       method: coRouter
       body_arg: 0
+    # The reactive `router { }` WITHOUT coroutines (`GAP-1b`): the file-facade class,
+    # exactly as the servlet twin has declared since W44 and `coRouter` above does.
+    # `javap -p -s RouterFunctionDslKt` at spring-webflux 6.1.6 and 7.0.2: one method,
+    # `router(Function1)RouterFunction` — no `plus` here, unlike the servlet facade.
+    # `KotlinWebFluxRoutes.kt` is the live instance; it derived NOTHING until this line.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctionDslKt
+      method: router
+      body_arg: 0
 
   vocabulary:
     # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12,
@@ -196,6 +204,256 @@ matches:
         verb: OPTIONS
         path_arg: 0
         handler_arg: 1
+      # The NON-coroutine DSL's seven verbs, FIVE overloads each (`GAP-1b`,
+      # `W44-verb-overloads`, spec §1b). MEASURED with `javap -p -s` on
+      # `RouterFunctionDsl` at spring-webflux 6.1.6 and 7.0.2, identical to the servlet
+      # twin at spring-webmvc 6.1.6 and 7.0.2 (A1 Task 5; `scripts/probes/
+      # cp12_sweep_round1b.md` carries the counts):
+      #   `(Function1)V`                             a catch-all — `/**`, resolved
+      #   `(String)RequestPredicate`                 a predicate FACTORY: no handler,
+      #                                              a route once an entry attaches one
+      #   `(String, Function1)V`                     a literal path and its handler
+      #   `(RequestPredicate, Function1)V`           the predicate's constraints
+      #   `(String, RequestPredicate, Function1)V`   path, predicate, handler at 2
+      # `arity` splits 1/2/3 and `arg_types` splits the two arity-1 forms and the two
+      # arity-2 forms on position 0 (spec §3b). Every handler is a `Function1` (the
+      # reactive one returns `Mono<ServerResponse>`; the erased descriptor is the same),
+      # so the catch-all is typed on it rather than left open. No `extends_receiver`:
+      # the DSL receiver is the body's own parameter and carries no chain (checkpoint
+      # (1b) ruling 3); the body walk folds each call where it stands. This owner had
+      # NO rule at all before A1 Task 5 — a reactive `router { }` derived nothing, with
+      # nothing saying so. `KotlinWebFluxRoutes.kt` is the live instance, under `/ktflux`.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: GET
+        verb: GET
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: HEAD
+        verb: HEAD
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: POST
+        verb: POST
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PUT
+        verb: PUT
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: PATCH
+        verb: PATCH
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: DELETE
+        verb: DELETE
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: kotlin.jvm.functions.Function1 }
+        handler_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 1
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: OPTIONS
+        verb: OPTIONS
+        arity: 3
+        path_arg: 0
+        predicate_arg: 1
+        handler_arg: 2
       # The builder's seven verbs (spec §4–§5, `G-37`). MEASURED with `javap -p -s` on
       # `RouterFunctions$Builder` at spring-webflux 6.1.6 and 7.0.2 — 20 method names, 48
       # overloads, identical on both stacks at both versions. Each verb declares FOUR:
@@ -559,6 +817,37 @@ matches:
         method: nest
         path_arg: 0
         body_arg: 1
+      # The non-coroutine DSL's `nest` (`GAP-1b`), MEASURED with `javap -p -s` at
+      # spring-webflux 6.1.6 and 7.0.2: TWO overloads, both arity 2, both linking to
+      # their body the same way (a `lambda`-kind argument naming the body method) —
+      #   `nest(String, Function1)V`             `"/x".nest { }`, a literal prefix
+      #   `nest(RequestPredicate, Function1)V`   `accept(JSON).nest { }`, a predicate
+      # One rule each, split on position 0's type, so the row says which argument it
+      # reads rather than reading a predicate through a `path_arg`.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: nest
+        arity: 2
+        arg_types: { 0: java.lang.String }
+        path_arg: 0
+        body_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: nest
+        arity: 2
+        arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
+        predicate_arg: 0
+        body_arg: 1
+      # The DSL's own predicate factory, `path(String)RequestPredicate` — what
+      # `GET(path("/health")) { }` hands its predicate position, so the route reads
+      # `/health` (A1 Task 5). `arity: 1` is load-bearing: the same name's
+      # `path(String, Function1)V` overload DECLARES a verb-less route rather than
+      # producing a predicate, and a prefix rule that accepted it would read a route
+      # declaration as a bare prefix. Unaccepted, it derives one unresolved row instead
+      # (spec §3's G-13 guard), never silence — the slice below is keyed by NAME and
+      # cannot list one overload of a read name.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: path
+        arity: 1
+        path_arg: 0
       # The builder's nesting forms (spec §5), MEASURED with the same `javap`:
       #   `path(String, Consumer<Builder>)`      a lambda-bodied builder under a path
       #   `path(String, Supplier<RouterFunction>)` a lambda-bodied router under a path
@@ -622,6 +911,20 @@ matches:
         method: accept
         fills: produces
       - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: contentType
+        fills: consumes
+      # The non-coroutine DSL declares the same pair (`GAP-1b`; `javap -p -s` at
+      # spring-webflux 6.1.6 and 7.0.2): `accept(MediaType...)RequestPredicate` and
+      # `contentType(MediaType...)RequestPredicate`, the vararg factories these rows
+      # read. Each name ALSO has a `(MediaType, Function1)V` overload that declares a
+      # verb-less route under one media guard; a media rule reads its arguments as
+      # constants and never as a route, so that spelling derives nothing here — a
+      # stated gap, the receiver-rooted route-declaring shape `G-37` names, and the
+      # same one the `CoRouterFunctionDsl` pair above and the servlet twin carry.
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: accept
+        fills: produces
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
         method: contentType
         fills: consumes
 
@@ -777,6 +1080,22 @@ slice:
         under-report it was. Undeclared, a merged router still derives at top level and
         loses any prefix it sits under. Named rather than declared because a rule no
         fixture exercises is a rule nobody checks, and no corpus here supplies a Kotlin one.
+    - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+      method_names: [add, and, invoke, not, or, pathExtension, queryParam, resource, resources, withAttribute]
+      why: >
+        The non-coroutine DSL's unread members (A1 Task 5, `GAP-1b`), the same ten shapes
+        `CoRouterFunctionDsl` carries above less `path` — read here through its
+        one-argument predicate factory, whose handler-taking overload `path("/x") { … }`
+        derives one unresolved row rather than nothing. `queryParam` and `pathExtension`
+        each declare a HANDLER-taking void overload that DECLARES a route rather than
+        nesting a builder; `invoke` is the `"/x" { handler }` route form for the same
+        reason; `add` and `resource` attach or declare routes too — the receiver-rooted
+        shape `G-37` names, engine work rather than a catalog line, and routes written any
+        of those ways derive NOTHING. `and`/`or`/`not` compose predicates INSIDE the DSL,
+        three overloads each for `and`/`or` (`javap -p -s`, 6.1.6 and 7.0.2), two of which
+        take a `String` operand the `composers` fold has no position for; this file's
+        `composers` block is keyed on the Java `RequestPredicate` owner and reads none of
+        them. `resources` serves static resources and `withAttribute` attaches metadata.
     - owner: org.springframework.web.reactive.function.server.RouterFunctions
       method_names: [resourceLookupFunction]
       why: >

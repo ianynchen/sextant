@@ -219,6 +219,24 @@ SURFACES = (
         "6.1.6",
         "G-37",
     ),
+    # The reactive NON-coroutine pair (`GAP-1b`, A1 Task 5): the catalog reads
+    # `RouterFunctionDsl` and its `router` facade since that task, and an owner a catalog
+    # reads and this probe does not enumerate is the one place a reader cannot find its
+    # gaps — the same omission the Kotlin halves above closed.
+    Surface(
+        "spring-webflux-router",
+        "org.springframework.web.reactive.function.server.RouterFunctionDsl",
+        "org.springframework:spring-webflux",
+        "6.1.6",
+        "G-37",
+    ),
+    Surface(
+        "spring-webflux-router",
+        "org.springframework.web.reactive.function.server.RouterFunctionDslKt",
+        "org.springframework:spring-webflux",
+        "6.1.6",
+        "G-37",
+    ),
     Surface(
         "spring-webflux-router",
         "org.springframework.web.reactive.function.server.RouterFunctions$Builder",

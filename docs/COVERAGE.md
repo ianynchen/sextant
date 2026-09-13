@@ -774,7 +774,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-kafka-replying` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka-template` | `org.springframework.kafka:spring-kafka` | 3.1.4 |
 | `spring-kafka` | `org.springframework.kafka:spring-kafka` | 3.1.4, 4.1.1 |
-| `spring-mvc-router` | `org.springframework:spring-webmvc` | 6.1.6 |
+| `spring-mvc-router` | `org.springframework:spring-webmvc` | 6.1.6, 7.0.2 |
 | `spring-mvc` | `org.springframework:spring-webflux` | 6.1.6, 7.0.2 |
 |  | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
 | `spring-pubsub` | `com.google.cloud:spring-cloud-gcp-pubsub` | 5.1.2 |

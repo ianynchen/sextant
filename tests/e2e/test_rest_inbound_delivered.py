@@ -120,7 +120,9 @@ def test_every_builder_route_is_resolved_including_the_one_past_the_filter(http_
 def test_the_builder_catch_all_serves_every_path_and_is_resolved(http_rows):
     """Spec §7 case 3 as ruled: `route().GET(h::health).build()` constrains no path, so it
     serves every path and publishes the framework's any-path pattern at `resolved` — one
-    row per stack, never a resolved NULL path (which the addresses-nothing gate drops)."""
+    row per stack, never a resolved NULL path (which the addresses-nothing gate drops).
+    Four rows since A1 Task 5: the Kotlin DSL's `GET { }` on each stack is the same
+    catch-all (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`), distinct by `caller`."""
     catch_alls = [
         row
         for row in http_rows
@@ -128,9 +130,10 @@ def test_the_builder_catch_all_serves_every_path_and_is_resolved(http_rows):
         and row["method"] == "GET"
         and row["path"] == "/**"
     ]
-    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 2, (
+    assert {row["resolution"] for row in catch_alls} == {"resolved"} and len(catch_alls) == 4, (
         catch_alls
     )
+    assert len({row["caller"] for row in catch_alls}) == 4, catch_alls
 
 
 def test_the_static_resource_route_is_served_with_no_handler(http_rows):
@@ -142,6 +145,35 @@ def test_the_static_resource_route_is_served_with_no_handler(http_rows):
         ("/bld/static/**", None, "resolved"),
         ("/mvcbld/static/**", None, "resolved"),
     ]
+
+
+def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(http_rows):
+    """`W44-verb-overloads` and `GAP-1b`, spec §1b's measured table turned into rows: on
+    the servlet stack the four declaring `GET` overloads each derive their route, the
+    catch-all is RESOLVED with no path, and the three-argument form keeps its handler;
+    on the reactive stack the non-coroutine `router { }` derives at all."""
+    rows = {
+        (
+            row["catalog_id"],
+            row["method"],
+            row["path"],
+            row["resolution"],
+            row["handler"] is not None,
+        )
+        for row in http_rows
+        if row["path"] == "/**" or str(row["path"]).startswith(("/ktmvc", "/ktflux"))
+    }
+    assert {
+        ("spring-mvc-router", "GET", "/ktmvc/invoices", "resolved", True),
+        ("spring-mvc-router", "GET", "/ktmvc/invoices/{id}", "resolved", True),
+        ("spring-mvc-router", "GET", "/ktmvc/health", "resolved", True),
+        ("spring-mvc-router", "POST", "/ktmvc/invoices", "resolved", True),
+        ("spring-mvc-router", "GET", "/**", "resolved", True),
+        ("spring-webflux-router", "GET", "/ktflux/orders", "resolved", True),
+        ("spring-webflux-router", "GET", "/ktflux/orders/{id}", "resolved", True),
+        ("spring-webflux-router", "POST", "/ktflux/orders", "resolved", True),
+        ("spring-webflux-router", "GET", "/**", "resolved", True),
+    } <= rows, sorted(rows)
 
 
 SPRING7 = FIXTURES / "orders-spring7"

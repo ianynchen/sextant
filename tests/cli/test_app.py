@@ -111,7 +111,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # contract the fact stream cannot reach through the parent.
     # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks —
     # `BuilderRoutes` under `/bld`, `MvcBuilderRoutes` under `/mvcbld`, one `GET /**` each.
-    assert metadata["endpoints"]["inbound"]["http"] == 78
+    # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's nine
+    # routes on both stacks — `KotlinMvcRoutes` under `/ktmvc`, `KotlinWebFluxRoutes`
+    # under `/ktflux`, one `GET /**` each.
+    assert metadata["endpoints"]["inbound"]["http"] == 87
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -199,7 +202,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 139 since 2026-09-11: `ProgrammaticWsConfig` + its nested `TicketEndpoint` (`G-34`),
     # `ShipmentRepository` + its nested `Shipment` (`G-45`) — four class files.
     # 141 since `G-37` (A1 Task 4): `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes`.
-    assert metadata["coverage"]["documents"] == 141
+    # 143 since A1 Task 5: `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` —
+    # one class file each, every lambda in them an `invokedynamic` body of the same class.
+    assert metadata["coverage"]["documents"] == 143
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

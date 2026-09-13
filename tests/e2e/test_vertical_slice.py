@@ -118,6 +118,26 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
         ):
             assert route in document, route
     assert "`GET /**`" in document
+    # A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL on both stacks —
+    # `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc` (every `GET` overload the servlet
+    # DSL declares) and `routes/KotlinWebFluxRoutes.kt` under `/ktflux` (the reactive
+    # `router { }` without coroutines). Each ends in a `GET { }` catch-all, so `GET /**`
+    # is four rows in the inbound table now — two builder, two DSL — one per handler
+    # (counted inside that table only: the traces section lists the two whose handler
+    # bodies make calls a second time).
+    for route in (
+        "`GET /ktmvc/invoices`",
+        "`GET /ktmvc/invoices/{id}`",
+        "`GET /ktmvc/health`",
+        "`POST /ktmvc/invoices`",
+        "`GET /ktflux/orders`",
+        "`GET /ktflux/orders/{id}`",
+        "`POST /ktflux/orders`",
+    ):
+        assert route in document, route
+    inbound, _, _ = document.partition("## Outbound endpoints")
+    inbound_table = inbound.partition("## Inbound endpoints")[2]
+    assert inbound_table.count("| `GET /**` |") == 4
     assert "Known gaps" in document
     assert "## Outbound endpoints" in document
     assert "/billing/invoices" in document
@@ -260,15 +280,23 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # callee body IS in this module: eighteen handler references across the two files,
     # plus the two `path(…, builder -> …)` bodies the walk reaches. 488 of 1601 rounds to
     # 30%.
-    assert "Calls whose callee body this workspace read: 488 of 1601 (30%)" in document
+    # MOVED by A1 Task 5: `KotlinMvcRoutes` and `KotlinWebFluxRoutes` add 69 edges
+    # (1670) and 18 to the numerator (506): thirteen `invokedynamic` lambda bodies — two
+    # `router { }`/`nest { }` bodies and five handlers on the servlet side, two and four
+    # on the reactive — plus the five `h.listInvoices(it)`/`h.createInvoice(it)` calls
+    # inside them, every one a callee declared in this module. Still 30%.
+    assert "Calls whose callee body this workspace read: 506 of 1670 (30%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
     # own builder, predicate and resource types, none of which this module scans.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1599." in document
+    # 1668 resolved and `owner_not_scanned` 388 since A1 Task 5: all 69 new edges are
+    # `resolved`, `declared_here` gains the two Kotlin classes (193), and 16 of the new
+    # lookups land on the DSL, predicate, media and response types of both stacks.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1668." in document
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 191, "
-        "inherited 2, owner_not_scanned 372."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
+        "inherited 2, owner_not_scanned 388."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -560,7 +588,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # verb, which Spring registers because `params`/`headers` separate them.
         # 54 since W44: the three `/mvcfn` Spring MVC functional routes (`G-29`).
         # 78 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks.
-        "http": 78,
+        # 87 since A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL's
+        # nine routes on both stacks — `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc`,
+        # `routes/KotlinWebFluxRoutes.kt` under `/ktflux`, a `GET /**` catch-all each.
+        "http": 87,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -777,7 +808,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # has an intention test in `tests/e2e/test_*_delivered.py` that fails without it.
             # 139 inbound since `G-37` (A1 Task 4): the eighteen builder-form routes —
             # eight under `/bld`, eight under `/mvcbld`, and one `GET /**` per stack.
-            ("inbound", 139),
+            # 148 inbound since A1 Task 5: the Kotlin router DSL's nine routes — four
+            # under `/ktmvc` and three under `/ktflux`, plus a `GET /**` catch-all each
+            # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
+            ("inbound", 148),
             ("outbound", 61),
         ]
     )
@@ -1569,7 +1603,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # the fixture for the programmatic WebSocket registration (`G-34`).
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
     # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
-    assert (None, 140) in origins
+    # 142: + `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` (A1 Task 5).
+    assert (None, 142) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

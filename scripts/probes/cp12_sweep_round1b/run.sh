@@ -58,6 +58,10 @@ ARTIFACTS=(
   "org.springframework|spring-web|7.0.2|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-webflux|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework|spring-webflux|7.0.2|META-INF/MANIFEST.MF|Implementation-Version"
+  # Q14 (A1 Task 5): the servlet `RouterFunctionDsl`, at the same two minors as its
+  # reactive twin so the two answers are readable against each other.
+  "org.springframework|spring-webmvc|6.1.6|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.springframework|spring-webmvc|7.0.2|META-INF/MANIFEST.MF|Implementation-Version"
   "com.squareup.retrofit2|retrofit|2.11.0|-|-"
   "org.apache.kafka|kafka-clients|3.6.2|kafka/kafka-version.properties|version"
   "org.springframework.kafka|spring-kafka|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
