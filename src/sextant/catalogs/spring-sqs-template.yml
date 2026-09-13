@@ -127,25 +127,16 @@ shape_model: json
 # what the corrected run found.
 #
 # **The honest summary: this catalog models the synchronous, single-message SEND
-# and nothing else.** A module that receives over SQS through this template, or
-# that sends asynchronously or in batches, derives nothing.
+# and nothing else.** A module that sends asynchronously or in batches derives
+# nothing; one that receives through this template derives its rows from the
+# sibling `spring-sqs-template-receive.yml` (A2 Task 2), not from this file.
 slice:
   outside:
     - owner: io.awspring.cloud.sqs.operations.SqsTemplate
       method_names: [receive, receiveMany, receiveAsync, receiveManyAsync]
       why: >
-        A boundary this catalog does NOT model: the entire inbound direction, and
-        MEASURED rather than assumed (`G-44`, SQS quarter, W59:
-        `scripts/probes/w59_template_receive_halves.md`). Every overload —
-        `receive`, `receiveMany`, `receiveAsync`, `receiveManyAsync` — takes
-        `Consumer<SqsReceiveOptions>` at argument 0 (spring-cloud-aws-sqs 3.1.1);
-        the queue is named INSIDE that lambda, `opts -> opts.queue("orders")`, and
-        no argument carries a string. Reading a call inside a lambda body that the
-        argument names is the receiver-chain form, Category B of the register
-        (`docs/java-kotlin-delivery-list.md` §4) — the same overload-discrimination
-        work `G-37`/`G-30` wait on, not this file's `single_call` style. A module
-        that only consumes derives nothing at all from this catalog, which reads as
-        a module that does not use SQS.
+        The inbound direction, read by `spring-sqs-template-receive.yml` — a catalog
+        has one direction, and that file is the receive half (A2 Task 2, spec §12).
     - owner: io.awspring.cloud.sqs.operations.SqsTemplate
       method_names: [sendAsync, sendManyAsync, sendMany]
       why: >
@@ -160,4 +151,6 @@ slice:
         The interface `SqsTemplate` implements, carried as an owner alternate since
         W10 so an interface-typed field derives the same rows. Its slice is its
         implementation's slice: each method is outside for the reason given above for
-        the same name on `SqsTemplate`.
+        the same name on `SqsTemplate` — except that the receive sibling names
+        `SqsTemplate` alone (its comment says why), so a field typed `SqsOperations`
+        derives no receive row from either file.

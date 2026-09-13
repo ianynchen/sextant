@@ -104,6 +104,7 @@ Methods every class carries are excluded from both sides of every count: <clinit
 | G-44 | `spring-rabbit-template` | `AmqpTemplate` | — | — | — | 8 | — | — | — | — | **4 of 8** |
 | G-44 | `spring-sqs-template` | `SqsTemplate` | — | — | 12 | — | — | — | — | — | **1 of 12** |
 | G-44 | `spring-sqs-template` | `SqsOperations` | — | — | 4 | — | — | — | — | — | **1 of 4** |
+| G-44 | `spring-sqs-template-receive` | `SqsTemplate` | — | — | 12 | — | — | — | — | — | **4 of 12** |
 | G-44 | `spring-pubsub` | `PubSubTemplate` | — | — | — | — | — | 20 | — | — | **11 of 20** |
 | G-33 | `spring-stomp-template` | `SimpMessagingTemplate` | — | — | — | — | — | — | 14 | — | **3 of 14** |
 | G-33 | `spring-stomp-template` | `SimpMessageSendingOperations` | — | — | — | — | — | — | 3 | — | **3 of 3** |
@@ -152,6 +153,7 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-rabbit-template` | `AmqpTemplate` | 4 | **4** | **0** | **0** | **4** |
 | `spring-sqs-template` | `SqsTemplate` | 11 | **7** | **0** | **0** | **7** |
 | `spring-sqs-template` | `SqsOperations` | 3 | **3** | **0** | **0** | **3** |
+| `spring-sqs-template-receive` | `SqsTemplate` | 8 | **4** | **0** | **0** | **4** |
 | `spring-pubsub` | `PubSubTemplate` | 9 | **0** | **0** | **0** | **0** |
 | `spring-stomp-template` | `SimpMessagingTemplate` | 11 | **1** | **0** | **0** | **1** |
 | `spring-stomp-template` | `SimpMessageSendingOperations` | 0 | **0** | **0** | **0** | **0** |
@@ -200,6 +202,10 @@ A raw ratio overstates every gap here: most of what a template class declares is
 **`spring-sqs-template` / `SqsOperations`**
 
 > by name at argument 0 (3): `receive`, `receiveMany`, `sendMany`
+
+**`spring-sqs-template-receive` / `SqsTemplate`**
+
+> by name at argument 0 (4): `send`, `sendAsync`, `sendMany`, `sendManyAsync`
 
 **`spring-pubsub` / `PubSubTemplate`** — no unread method addresses a wire by either style.
 
@@ -338,6 +344,10 @@ A raw ratio overstates every gap here: most of what a template class declares is
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receive` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `receiveMany` | `argument 0` |
 | `spring-sqs-template` | `io.awspring.cloud.sqs.operations.SqsOperations` | `sendMany` | `argument 0` |
+| `spring-sqs-template-receive` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `send` | `argument 0` |
+| `spring-sqs-template-receive` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendAsync` | `argument 0` |
+| `spring-sqs-template-receive` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendMany` | `argument 0` |
+| `spring-sqs-template-receive` | `io.awspring.cloud.sqs.operations.SqsTemplate` | `sendManyAsync` | `argument 0` |
 | `spring-stomp-template` | `org.springframework.messaging.simp.SimpMessagingTemplate` | `setUserDestinationPrefix` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `resourceLookupFunction` | `argument 0` |
 | `spring-mvc-router` | `org.springframework.web.servlet.function.RouterFunctions` | `changeParser` | `route declaration` |

@@ -135,6 +135,16 @@ SURFACES = (
         "3.1.1",
         "G-44",
     ),
+    # The receive half (A2 Task 2, `sqs-template-receive`): its own catalog because a
+    # catalog has one direction, so its own enumeration — the same owner, and the four
+    # unread names are the send half's, which the sibling file reads or names.
+    Surface(
+        "spring-sqs-template-receive",
+        "io.awspring.cloud.sqs.operations.SqsTemplate",
+        "io.awspring.cloud:spring-cloud-aws-sqs",
+        "3.1.1",
+        "G-44",
+    ),
     Surface(
         "spring-pubsub",
         "com.google.cloud.spring.pubsub.core.PubSubTemplate",

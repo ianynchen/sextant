@@ -401,6 +401,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # contributors — its queue name sat unread inside the builder lambda
         # since 2026-08-30 (`dacdf67`) — and it is now its own destination.
         (None, "shipments-lambda"),
+        # A2 Task 2 (`sqs-template-receive`): `SqsTemplate#receive*(opts -> opts.queue(...))`,
+        # the send row above's receive twin — `OrderPoller`'s four forms name ONE
+        # queue, so one identity here and four rows below, one per polling method.
+        (None, "orders-poll"),
         # Both (Phase 2D, Task 11): Pub/Sub's `publish`/`subscribeAndConvert`
         # share this identity — the ONLY messaging path Task 11 introduces on
         # both sides of the merge in the same task (every other Task 11
@@ -1022,7 +1026,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # (`dsl-media-route`) — is one unresolved row rather than the silence it was.
     # 193 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
     # `GET /bld/sup/inner` and `GET /mvcbld/sup/inner` — each once, under its prefix.
-    assert len(report.endpoints) == 193
+    # 197 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+    # `SqsTemplate.receive*` forms, inbound `orders-poll`, one row per polling method.
+    assert len(report.endpoints) == 197
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1915,7 +1921,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         "kafka": 26,
         # `order-notifications`, published and subscribed here, is two rows since W27
         "pubsub": 7,
-        "sqs": 8,
+        # 12 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+        # `SqsTemplate.receive*` forms, inbound, the queue named inside each lambda.
+        "sqs": 12,
         # 2I Task 2: `spring-ws.yml`'s two inbound rows. Untouchable by this
         # pass for the same reason the graphql and messaging buckets are —
         # only an http row carries a `protocol_hint` to be reclassified by.
@@ -1938,7 +1946,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 193
+    assert sum(counts.values()) == len(report.endpoints) == 197
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3697,7 +3705,11 @@ def test_the_format_ladder_answers_every_live_row(
     # has no address and no declared payload type, so the ladder has nothing to answer.
     # 56 since the A1 final review (I-1): the two Supplier-form routes, which declare no
     # media predicate and whose handlers return a bare `ServerResponse`.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 56
+    # 60 since A2 Task 2: `OrderPoller`'s four `SqsTemplate.receive*` rows. A receive
+    # carries no request body — the `Class` at argument 1 is the payload TYPE the
+    # template converts INTO, not a payload — so the rows declare no `body_arg` and the
+    # ladder has nothing to answer off, the same honest answer a handshake path gets.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 60
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

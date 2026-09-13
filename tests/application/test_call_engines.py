@@ -2877,6 +2877,87 @@ def test_a_builder_lambda_naming_no_declared_step_derives_no_destination(tmp_pat
     assert [(r["path"], r["resolution"]) for r in rows] == [(None, "unresolved")]
 
 
+_SQS_RECEIVE_CONSUMER_CLASS = "(Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/Optional;"
+_SQS_RECEIVE_OPTIONS = "io/awspring/cloud/sqs/operations/SqsReceiveOptions#"
+
+
+def _sqs_receive_lambda(body: list[tuple[str, list]], owners: list[str]) -> list[CallSiteFact]:
+    """`template.receive(opts -> …, Order.class)` plus whatever the lambda's own body
+    calls — `_sqs_builder_lambda`'s receive twin, with the measured arity-2 descriptor
+    (spring-cloud-aws-sqs 3.1.1 and 4.1.1, identical) and the `Class` at argument 1."""
+    caller = "com/acme/msg/Poller#poll()."
+    lambda_symbol = "com/acme/msg/Poller#lambda$poll$0(sig_x)."
+    return [
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=_SQS_TEMPLATE_OWNER, name="receive", descriptor=_SQS_RECEIVE_CONSUMER_CLASS
+            ),
+            invoke_kind="virtual",
+            ordinal=0,
+            receiver=1,
+            result=2,
+            arguments=[
+                CallArgument(kind="lambda", symbol=lambda_symbol),
+                CallArgument(kind="class", symbol="com/acme/msg/Order#"),
+            ],
+        ),
+        *[
+            CallSiteFact(
+                document_id="doc_1",
+                caller=lambda_symbol,
+                target=CallTarget(
+                    owner=owners[index],
+                    name=name,
+                    descriptor=f"({'Ljava/lang/Object;' * len(arguments)})L{_SQS_RECEIVE_OPTIONS[:-1]};",
+                ),
+                invoke_kind="interface",
+                ordinal=index,
+                receiver=10 + index,
+                result=11 + index,
+                arguments=arguments,
+            )
+            for index, (name, arguments) in enumerate(body)
+        ],
+    ]
+
+
+@pytest.mark.declines("spring-sqs-template-receive")
+@pytest.mark.pins("single_call.lambda-step-owner-is-the-declared-type")
+def test_a_receive_lambda_naming_a_queue_on_another_type_derives_no_queue(tmp_path: Path):
+    """§10 near-miss for `sqs-template-receive` (A2 Task 2, spec §12), and it measures the
+    OWNER — the receive twin of the send near-miss above, on the shipped receive catalog.
+
+    Every other conjunct holds: the right outer call on `SqsTemplate` with the measured
+    `(Consumer, Class)` descriptor, a real lambda at argument 0, a body the facts carry, a
+    call literally named `queue` carrying a string. Only the TYPE it is called on differs —
+    `com.example.Metrics#queue`, not `SqsReceiveOptions#queue` — and a poll that records a
+    metric inside its options lambda is ordinary code. A reader matching the step on its
+    name alone would publish `internal-metrics` as this module's inbound SQS queue at
+    `resolved`/`compiler`.
+
+    The row still derives, path-less and `unresolved` — the same honest shape as the send
+    twin's, and the shape the A2 plan requires (never a wrong row, never silence): the call
+    on `SqsTemplate` IS a receive, and the one capture the row declares was withheld. What
+    the test refuses is the queue being FILLED from the wrong type. Measured before writing
+    the assertion: exactly one row comes back."""
+    workspace = _resolve(
+        tmp_path,
+        _sqs_receive_lambda(
+            [("queue", [CallArgument(kind="string", value="internal-metrics")])],
+            owners=["com/example/Metrics#"],
+        ),
+        _catalog_by_id("spring-sqs-template-receive"),
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["path"], r["resolution"]) for r in rows] == [(None, "unresolved")], (
+        "a `queue` call on an unrelated type was read as this row's inbound queue"
+    )
+
+
 def _catalog_by_id(catalog_id: str) -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
 

@@ -296,7 +296,11 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 512 of 1692 since the A1 final review (I-1): the Supplier-form `nest` line on each
     # stack — eight edges each, two of them (the Supplier body and the `h::health` /
     # `h::archive` reference inside it) into this module. Still 30%.
-    assert "Calls whose callee body this workspace read: 512 of 1692 (30%)" in document
+    # 516 of 1705 since A2 Task 2: `OrderPoller` — thirteen edges (the constructor's
+    # `Object.<init>`, four `receive*` calls, four options-lambda bodies, four
+    # `SqsReceiveOptions.queue` calls inside them), the four lambda bodies into this
+    # module. Still 30%.
+    assert "Calls whose callee body this workspace read: 516 of 1705 (30%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -308,10 +312,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # one lookup of them on the DSL's own `accept`.
     # 1690 and 391 since the A1 final review (I-1): the two Supplier-form lines' sixteen
     # edges, all `resolved`, one new lookup per stack on the builder's own `nest`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1690." in document
+    # 1703 and 396 since A2 Task 2: `OrderPoller`'s thirteen edges, all `resolved`; five
+    # new lookups land on the framework's own `SqsTemplate.receive*` (four) and
+    # `SqsReceiveOptions.queue` (one), none of which this module scans.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1703." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
-        "inherited 2, owner_not_scanned 391."
+        "inherited 2, owner_not_scanned 396."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -616,7 +623,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "pubsub": 3,
         # 8 since `G-36` — `amendOrder`'s two `@PayloadRoot` both derive now.
         "soap": 8,
-        "sqs": 4,
+        # 8 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+        # `SqsTemplate.receive*` forms, one queue named inside each options lambda.
+        "sqs": 8,
         "sse": 2,
         # 6 since W45: the three connect URLs `addEndpoint` registers.
         "websocket": 7,
@@ -832,7 +841,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
             # 149 since A1 Task 5's review: the `accept(JSON) { h }` gap row.
             # 151 since the A1 final review (I-1): the Supplier-form route on each stack.
-            ("inbound", 151),
+            # 155 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+            # `SqsTemplate.receive*` rows, inbound `orders-poll`.
+            ("inbound", 155),
             ("outbound", 61),
         ]
     )
@@ -1625,7 +1636,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
     # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
     # 142: + `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` (A1 Task 5).
-    assert (None, 142) in origins
+    # 143: + `messaging/OrderPoller` (`sqs-template-receive`, A2 Task 2).
+    assert (None, 143) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

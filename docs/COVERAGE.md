@@ -717,7 +717,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**64 of 79 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**65 of 80 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -790,6 +790,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-scheduling` | `org.springframework:spring-context` | 6.1.6, 6.2.19, 7.0.9 |
 | `spring-sqs-legacy` | `io.awspring.cloud:spring-cloud-aws-messaging` | 2.4.4 |
 |  | `org.springframework.cloud:spring-cloud-aws-messaging` | 2.2.6.RELEASE |
+| `spring-sqs-template-receive` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1 |
 | `spring-sqs-template` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
 | `spring-sqs` | `io.awspring.cloud:spring-cloud-aws-sqs` | 3.1.1, 4.1.1 |
 | `spring-stomp-advice` | `org.springframework:spring-messaging` | 6.1.6 |

@@ -106,6 +106,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
+        # A2 Task 2: `messaging/OrderPoller`, the `SqsTemplate.receive*` fixture.
+        "OrderPoller.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
         "OrderProtos$OrderReply$Builder.jsonl",
         "OrderProtos$OrderReply.jsonl",
@@ -232,7 +234,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # form of functional routing on both stacks, which this fixture had no instance of.
     # 130 since A1 Task 5: `KotlinMvcRoutes` and `KotlinWebFluxRoutes`, the Kotlin
     # router DSL on both stacks — one class file each, their lambdas all `invokedynamic`.
-    assert report.documents == 130
+    # 131 since A2 Task 2: `OrderPoller`, the `SqsTemplate.receive*` fixture — one class
+    # file, its four options lambdas `invokedynamic`.
+    assert report.documents == 131
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -315,6 +319,8 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "OrderGraphqlController.jsonl",
         "OrderIngest.jsonl",
         "OrderPageController.jsonl",
+        # A2 Task 2: `messaging/OrderPoller`, the `SqsTemplate.receive*` fixture.
+        "OrderPoller.jsonl",
         "OrderProtos$OrderReply$1.jsonl",
         "OrderProtos$OrderReply$Builder.jsonl",
         "OrderProtos$OrderReply.jsonl",
