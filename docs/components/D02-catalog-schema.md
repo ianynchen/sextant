@@ -1600,17 +1600,25 @@ the HEAD of its chain — the receiver-extending verb or prefix the chain begins
 or the call itself where it extends nothing (a DSL's `GET("/x") { }` is a chain of
 one): a head on the origin parameter is clean and contributes nothing; a head
 that is a field, another parameter, or a value the extractor could not follow is
-not the origin, and the row is `unresolved` — the poison lands on the head's own
-routes where the head extends nothing, and is one row beside the chain's routes
-where the head carries a chain (the unread-head rule of the builder form,
-unchanged). A STATIC call has no receiver and is never held to the origin. **The permissive rule, stated:** a body linked by a rule
+not the origin, and EVERY route that chain yields is `unresolved` — the head's
+own, each verb's along the chain, a nested body's under the prefix — because all
+of them are registered on whatever the head sits on, and a route on another
+builder is never attributed to this one (spec §13 case 6): one unresolved row per
+route, each with its own handler, never a resolved row beside a poison. (At root
+level, outside any body, the builder-form rule of §4b is untouched: an unread head
+costs the routes to its LEFT as one row and the rest derive.) A STATIC call has no
+receiver and is never held to the origin. An unbound instance reference used as
+the lambda (`captures: -1`, D00 §5) puts the interface's parameter into the body's
+`this`, which no parameter index names: every head in that body poisons — spec
+§10b's stated limit, honest rather than guessed. **The permissive rule, stated:** a body linked by a rule
 WITHOUT `origin_param` — and one whose linking argument carries no `captures`, a
 fact written before the extractor recorded it — reads a null receiver as the
 body's own parameter, as every shipped rule did before this word existed; that is
 exact only while a body never holds a field receiver, which is why the shipped
 `coRouter`, `router`, DSL `nest` and `Consumer`-bodied `path`/`nest` rules all
 declare `origin_param: 0`. A `Supplier` body has no parameter and declares none.
-`origin_param` sits only beside a `body_arg` and is refused at load anywhere else.
+`origin_param` sits only beside a `body_arg` on an entry or a prefix, and is
+refused at load anywhere else — a verb, a continuation, a rule linking no body.
 
 `receiver_arg: n` on a verb or a prefix is the same check for the
 extension-receiver form, where the framework hands the block its receiver as an
@@ -1618,8 +1626,9 @@ ARGUMENT of a static call (Kotlin's `get(route, "/x") { }` under `route("/api") 
 argument `n` must be `{kind: parameter, value: captures + k}` of the enclosing body
 — the origin parameter — or the route is not under this body's prefix at all and
 the row is `unresolved`. `get(someOtherRoute, "/x")` inside that block is not under
-`/api`, and the engine will not say it is. `receiver_arg` is an index from 0 and,
-where the rule declares an `arity`, lies below it; anything else is refused at load.
+`/api`, and the engine will not say it is. `receiver_arg` sits on a verb or a prefix, is an index from 0 and,
+where the rule declares an `arity`, lies below it; anything else — an entry or a
+continuation carrying it included — is refused at load.
 
 **The walk, one core for both shapes.** From an argument-rooted entry, or from a
 body-linked entry's own named method, every argument is resolved through its

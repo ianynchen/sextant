@@ -4376,3 +4376,164 @@ def test_an_origin_param_away_from_a_body_and_a_receiver_arg_beyond_the_arity_ar
     )
     with pytest.raises(CatalogError, match=r"`receiver_arg: 2` — a position from 0 below"):
         _resolve(tmp_path / "receiver", [], _catalog(matches))
+    # The words on rules that cannot read them: `origin_param` on a verb and on a
+    # continuation, `receiver_arg` on an entry and on a continuation — D02 says
+    # "refused anywhere else", so each is.
+    matches = _matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {"owner": "com.example.web.Predicates", "method": "PUT", "verb": "PUT", "origin_param": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`PUT` declares `origin_param: 0`"):
+        _resolve(tmp_path / "verb", [], _catalog(matches))
+    matches = _matches()
+    matches["continuations"].append(  # type: ignore[union-attr]
+        {"name": "also", "owner": "com.example.web.Router", "origin_param": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`also` declares `origin_param: 0`"):
+        _resolve(tmp_path / "continuation", [], _catalog(matches))
+    matches = _matches()
+    matches["entries"].append(  # type: ignore[union-attr]
+        {
+            "owner": "com.example.web.Routers",
+            "methods": ["route"],
+            "handler_arg": 1,
+            "receiver_arg": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`\['route'\]` declares `receiver_arg: 0`"):
+        _resolve(tmp_path / "entry", [], _catalog(matches))
+    matches = _matches()
+    matches["continuations"].append(  # type: ignore[union-attr]
+        {"name": "also", "owner": "com.example.web.Router", "receiver_arg": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`also` declares `receiver_arg: 0`"):
+        _resolve(tmp_path / "continuation-receiver", [], _catalog(matches))
+
+
+def _origin_builder_matches() -> dict[str, object]:
+    """The builder catalog with the `Consumer` `path` declaring `origin_param: 0`."""
+    matches = _builder_matches()
+    vocabulary = dict(matches["vocabulary"])  # type: ignore[arg-type]
+    vocabulary["prefixes"] = [
+        {**rule, "origin_param": 0} if rule.get("body_arg") == 1 else rule
+        for rule in vocabulary["prefixes"]  # type: ignore[index]
+    ]
+    return {**matches, "vocabulary": vocabulary}
+
+
+def _body_chain(*, head: int | None, verbs: int, through_filter: bool) -> list:
+    """`route().path("/api", b -> …).build()` where the body's chain starts on `head`
+    (the body's parameter index, or None for a field) — `head.GET("/a", h)`, then
+    `.GET("/b", h)` when `verbs == 2`; `head.filter(f).GET("/a", h)` when
+    `through_filter`. The linking lambda captures nothing, so the origin is 0."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=101, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+    ordinal, receiver = 0, None
+    if through_filter:
+        facts.append(
+            _site(
+                _BUILDER_BODY,
+                ordinal,
+                BUILDER,
+                "filter",
+                invoke_kind="virtual",
+                receiver=None,
+                receiver_parameter=head,
+                result=1,
+                descriptor=f"(Lcom/example/web/Filter;){_BUILDER_DESC}",
+                arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=99)],
+            )
+        )
+        ordinal, receiver = 1, 1
+    for path in ("/a", "/b")[:verbs]:
+        facts.append(
+            _site(
+                _BUILDER_BODY,
+                ordinal,
+                BUILDER,
+                "GET",
+                invoke_kind="virtual",
+                receiver=receiver,
+                receiver_parameter=head if receiver is None else None,
+                result=ordinal + 10,
+                descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+                arguments=[
+                    CallArgument(kind="string", value=path),
+                    CallArgument(kind="lambda", symbol=HEALTH, source=100 + ordinal),
+                ],
+            )
+        )
+        ordinal, receiver = ordinal + 1, ordinal + 10
+    return facts
+
+
+def test_an_extending_chain_off_the_origin_poisons_every_route_it_yields(tmp_path: Path):
+    """Spec §13 case 6: a chain in a linked body that does not start at the origin
+    parameter — a field, another parameter — is never attributed to the origin. The
+    builder form declares its route AND carries the chain, and the fix-round-1 engine
+    published that route resolved under `/api` beside one unresolved row: a route
+    registered on ANOTHER builder, at an address this router never serves. Every route
+    the chain yields is poisoned instead — one unresolved row per route, each with its
+    own handler, none beside them. Two routes with the same handler are two unresolved
+    rows: only identity-known rows dedup, and these have no identity."""
+    unresolved = (None, None, _MODULE + HEALTH, "unresolved")
+    for shape, expected in (
+        ({"verbs": 1, "through_filter": False}, [unresolved]),
+        ({"verbs": 2, "through_filter": False}, [unresolved, unresolved]),
+        ({"verbs": 1, "through_filter": True}, [unresolved]),
+    ):
+        for head in (None, 1):
+            workspace = _resolve(
+                tmp_path / f"{shape['verbs']}-{shape['through_filter']}-{head}",
+                _body_chain(head=head, **shape),  # type: ignore[arg-type]
+                _catalog(_origin_builder_matches()),
+            )
+            assert _identities(_rows(workspace)) == expected, (shape, head)
+
+
+def test_an_extending_chain_on_the_origin_derives_every_route_unchanged(tmp_path: Path):
+    """The control for the test above: the same three chains on the body's parameter 0
+    — the origin — derive exactly what they did before the word existed."""
+    resolved = _MODULE + HEALTH
+    for shape, expected in (
+        ({"verbs": 1, "through_filter": False}, [("GET", "/api/a", resolved, "resolved")]),
+        (
+            {"verbs": 2, "through_filter": False},
+            [("GET", "/api/a", resolved, "resolved"), ("GET", "/api/b", resolved, "resolved")],
+        ),
+        ({"verbs": 1, "through_filter": True}, [("GET", "/api/a", resolved, "resolved")]),
+    ):
+        workspace = _resolve(
+            tmp_path / f"{shape['verbs']}-{shape['through_filter']}",
+            _body_chain(head=0, **shape),  # type: ignore[arg-type]
+            _catalog(_origin_builder_matches()),
+        )
+        assert _identities(_rows(workspace)) == expected, shape
