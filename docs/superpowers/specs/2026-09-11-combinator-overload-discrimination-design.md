@@ -196,8 +196,16 @@ intermediate verb's result is consumed, so only `build()` roots, as before; in t
 statement form each verb's receiver is the origin's result and nothing consumes the
 verb's own, so each roots and derives its route; a mixed form roots at the last verb of
 each statement and `build()`, and identity dedup removes the routes both reach. Checkpoint
-F4 holds: a verb inside a `Consumer<Builder>` body sits on the lambda's parameter, its
-`receiver` is null, and it never roots — it is folded through `_body_routes` alone.
+F4 holds: inside a `Consumer<Builder>` body the chain's HEAD sits on the lambda's own
+parameter (`receiver_parameter`, no producing call), and the test is on that head rather
+than on the verb's own receiver — a body's second verb (`b.GET(…).DELETE(…)`) has a
+same-method receiver exactly as a statement-form verb does — so no body verb roots, and
+the body is folded through `_body_routes` alone. *Ruled at the A1 final review (I-1): the
+head test protects only receiver-extending verbs and prefixes, and a body holding a whole
+chain of its own — the `Supplier<RouterFunction>` overload's `route().GET(…).build()`, an
+`add(router)` on the body's parameter — rooted beside the prefix's fold and derived its
+route twice. A method some linking call names as its body is now skipped by the root scan
+whole: folded exactly once, by whichever root reaches the linking call.*
 
 **Two equal verbs merge** (same ruling): `_merged` poisoned `method` whenever both sides
 carried a verb, so `resource(RequestPredicates.GET("/favicon.ico"), r)` — the `resource`
@@ -335,9 +343,16 @@ The engine's per-column poisoning is unchanged. A row carries
    `base().POST(…)` — is one unresolved row, per the existing rule. Stated
    explicitly because a builder invites that factoring far more than
    `route(predicate, handler)` ever did, so a theoretical case becomes routine.
-   Same for `add(RouterFunction)` whose argument is built elsewhere.
-5. **An undeclared pass-through** poisons the whole chain (§4b), which is why all
-   seven are declared.
+   Same for `add(RouterFunction)` whose argument is built elsewhere. **A stated
+   boundary beside it:** a statement-form builder held in a FIELD or received as a
+   PARAMETER — `this.b.GET("/a", h);`, `void routes(Builder b) { b.GET("/a", h); }` —
+   derives nothing, not even the unresolved row. In the facts that verb is
+   indistinguishable from a body's: its chain's head is no call in the method, which
+   is exactly what keeps a `Consumer<Builder>` body from rooting. The `base().POST(…)`
+   spelling, whose receiver IS a call in the method, is the one that yields the row.
+5. **An undeclared pass-through** costs the routes to its left (§4b as ruled): the
+   chain to its right still declares its own routes, and the unread receiver is one
+   unresolved row beside them. Which is why all seven are declared.
 
 **Unchanged:** `request_shape`/`response_shape` stay NULL for every functional
 route — *"a functional handler's payloads live inside its body, not in its

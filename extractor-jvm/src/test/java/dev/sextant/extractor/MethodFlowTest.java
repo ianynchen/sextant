@@ -562,6 +562,19 @@ class MethodFlowTest {
         assertTrue(line.contains("\"receiver\":null"), line);
     }
 
+    /** `this` is slot 0 of an instance method and a parameter of neither the descriptor
+     *  nor D00 §5's numbering, and a static call has no receiver at all: neither writes
+     *  the key. A walk reading `receiver_parameter` as "the lambda's own parameter" must
+     *  never see one on a `this`-receiver call. */
+    @Test
+    void writes_no_receiver_parameter_for_this_or_for_a_static_call() throws Exception {
+        String onThis = callSites("stringLiteral").get(0);
+        assertTrue(onThis.contains("\"name\":\"sink\""), onThis);
+        assertFalse(onThis.contains("receiver_parameter"), onThis);
+        String stat = callSites("staticCall").get(0);
+        assertFalse(stat.contains("receiver_parameter"), stat);
+    }
+
     /** Chain reconstruction is a within-method join on these ids: the receiver
      *  of each hop is the previous hop's result, and nothing about it depends
      *  on the two calls sitting next to each other in the source. */
@@ -599,7 +612,7 @@ class MethodFlowTest {
      *  unaryOperation} (which the reviewer confirmed still passes every
      *  other test in this suite). {@code box} is a method parameter — no
      *  producing instruction, so its own id is absent (`"receiver":null`,
-     *  the same rule {@link #leaves_the_receiver_null_when_it_is_a_method_parameter}
+     *  the same rule {@link #names_the_parameter_a_receiver_was_handed_straight_from}
      *  pins) — and a {@code GETFIELD} genuinely computes a new value from
      *  the object it reads, so {@code third()}'s own receiver must be that
      *  {@code GETFIELD}'s own real id, never {@code box}'s absent one. */

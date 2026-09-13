@@ -102,9 +102,37 @@ def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
         (mvc, "GET", "/mvcbld/static/**"),
         (flux, "GET", "/**"),
         (mvc, "GET", "/**"),
+        # The Supplier form of `nest` (A1 final review, I-1): the body is a whole chain.
+        (flux, "GET", "/bld/sup/inner"),
+        (mvc, "GET", "/mvcbld/sup/inner"),
     }
     missing = expected - http_routes
     assert missing == set(), f"builder routes missing: {sorted(missing)}"
+
+
+def test_a_supplier_body_derives_its_route_once_under_the_prefix_and_never_bare(http_rows):
+    """A1 final review, I-1. `nest(path("/bld/sup"), () -> route().GET("/inner", h).build())`
+    is Spring's own Javadoc example for the Supplier overload, and its body is a chain of
+    its own whose `build()` nothing in the body consumes — so the body rooted beside the
+    prefix's fold and published a bare `GET /inner` with the compiler-generated lambda as
+    its declarer. The prefixed row, declared by the `@Bean` method, is the only one on
+    each stack; no row of either builder catalog carries a lambda as `caller`."""
+    sup = [
+        (row["catalog_id"], row["path"], row["resolution"], str(row["caller"]).split("#")[-1])
+        for row in http_rows
+        if str(row["path"]).endswith("/sup/inner")
+    ]
+    assert sorted((c, p, r, m.split("(")[0]) for c, p, r, m in sup) == [
+        ("spring-mvc-router", "/mvcbld/sup/inner", "resolved", "mvcBuilderRoutes"),
+        ("spring-webflux-router", "/bld/sup/inner", "resolved", "builderRoutes"),
+    ], sup
+    bare = [
+        (row["path"], row["caller"])
+        for row in http_rows
+        if row["catalog_id"] in ("spring-webflux-router", "spring-mvc-router")
+        and (row["path"] == "/inner" or "lambda$" in str(row["caller"]))
+    ]
+    assert bare == [], bare
 
 
 def test_every_builder_route_is_resolved_including_the_one_past_the_filter(http_rows):

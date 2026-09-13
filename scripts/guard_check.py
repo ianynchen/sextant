@@ -318,13 +318,29 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.linked-body-never-roots": Guard(
+        what="a method some linking call names as its body — a `body_arg`, a nest-shaped "
+        "continuation's `subtree_arg` — is skipped by the root scan whole",
+        why="without the skip a body holding a chain of its own roots it: a Supplier body's "
+        '`route().GET("/x", h).build()` under `path("/api", …)` publishes `GET /api/x` '
+        "from the prefix's fold AND a bare `GET /x` with the compiler-generated lambda as "
+        "its declarer — the same route twice, the second at an address the framework "
+        "never serves",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if bare_descriptor(caller) in context.linked_bodies:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "combinator.origin-is-declared": Guard(
         what="a chain head contributes zero routes without poisoning ONLY when its producing "
         "call is a declared origin",
-        why="without the check every unreadable receiver — a field, a helper's result, a "
-        "parameter — would read as a clean chain start, and a router whose head the walk "
-        "cannot see would publish every route to its right as resolved with nothing saying "
-        "the head was not read",
+        why="without the check a helper's result — `base().POST(…)`, the one receiver the "
+        "walk reaches but cannot read — would read as a clean chain start, and a router "
+        "whose head the walk cannot see would publish every route to its right as resolved "
+        "with nothing saying the head was not read",
         edits=(
             Edit(
                 path=_COMBINATOR,

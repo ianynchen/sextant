@@ -54,10 +54,14 @@ FROM (SELECT UNNEST(
 -- `resolved`/`compiler` presents a boundary the running system does not serve
 -- as an observation. This file had none, and the asymmetry was live —
 -- `combinator` sets `resolution: resolved` whenever nothing poisoned the read,
--- and `_path_of` returns NULL when a folded route accumulated no path part, so
--- `RouterFunctions.route(RequestPredicates.accept("application/json"), h)`
--- inserted exactly that row. NULL paths also skip the dedup key below (SQL's
--- `NULL = NULL` is unknown), so N such routes inserted N of them.
+-- and `_path_of` RETURNED NULL when a folded route accumulated no path part,
+-- so `RouterFunctions.route(RequestPredicates.accept("application/json"), h)`
+-- INSERTED exactly that row. NULL paths also skip the dedup key below (SQL's
+-- `NULL = NULL` is unknown), so N such routes inserted N of them. Since A1
+-- Task 3 (spec §7 case 3 as ruled) `combinator` publishes a route that read
+-- no path part at the framework's any-path pattern, `/**`, and never emits a
+-- resolved row with a NULL path; the gate stays, as the invariant's keeper
+-- for every call-side engine rather than a fix for that one.
 --
 -- SCOPED TO `resolved`, and the scope is the whole difference between this
 -- gate and a silent under-report. An `unresolved` row with no path is a real,

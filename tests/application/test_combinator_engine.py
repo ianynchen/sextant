@@ -1472,11 +1472,14 @@ def test_a_nest_shaped_continuations_lambda_kind_subtree_folds_its_bodys_routes(
     `_subtree_routes` for every shaped continuation to share.
 
     The body here itself contains a bare `RouterFunctions.route(...)` call —
-    an argument-rooted ENTRY, not a body-linked one — so it is independently
-    rootable on its own terms, exactly checkpoint (1a)'s frozen `other()`
-    case: two distinct facts about one method, `GET /y` from the body's own
-    walk and `GET /x/y` folded under the continuation's prefix, neither
-    suppressing the other."""
+    an argument-rooted ENTRY, not a body-linked one. *Until the A1 final
+    review (I-1) this test pinned that call as independently rootable, "two
+    distinct facts about one method": `GET /y` from the body's own walk beside
+    `GET /x/y` under the prefix. That was the same route twice — the body is a
+    block written inside the continuation's own method, and checkpoint (1a)'s
+    `other()` is a real helper called from the tree, not a linked body.* A
+    method a linking call names is folded exactly once, by the root that
+    reaches that call, so `GET /x/y` is the body's only row."""
     body = DECLARER + "andNestBody(sig_b1)."
     facts = [
         _site(
@@ -1548,9 +1551,9 @@ def test_a_nest_shaped_continuations_lambda_kind_subtree_folds_its_bodys_routes(
         [
             ("GET", "/a", _MODULE + LIST_ORDERS, "resolved"),
             ("GET", "/x/y", _MODULE + CREATE_ORDER, "resolved"),
-            ("GET", "/y", _MODULE + CREATE_ORDER, "resolved"),
         ]
     )
+    assert {row["caller"] for row in rows} == {ROUTES}
 
 
 # --- owner-free continuations extend walks but never root them ------------
@@ -2222,6 +2225,8 @@ def _builder_matches() -> dict[str, object]:
         + [  # type: ignore[arg-type]
             {"name": "build", "owner": BUILDER_TYPE},
             {"name": "filter", "owner": BUILDER_TYPE, "pass_through": True},
+            # `builder.add(router)`: a whole router folded into the chain (spec §7 case 4).
+            {"name": "add", "owner": BUILDER_TYPE},
         ],
     }
 
@@ -2564,6 +2569,221 @@ def test_a_statement_form_prefix_roots_like_a_verb(tmp_path: Path):
         assert _identities(_rows(workspace)) == [("GET", "/api/x", _MODULE + HEALTH, "resolved")], (
             statement
         )
+
+
+_SUPPLIER_BODY = DECLARER + "lambda$routes$2(sig_b2)."
+_FREE_BODY = DECLARER + "lambda$routes$3(sig_b3)."
+
+
+def _supplier_body_facts() -> list:
+    """`route().path("/api", () -> route().GET("/x", h).build()).build()` — the Supplier
+    overload, Spring's own Javadoc example for `Builder.nest(RequestPredicate, Supplier)`:
+    the body is a whole chain of its own, origin to `build()`, whose `build()` nothing in
+    the body consumes."""
+    caller = DECLARER + "routes(sig_r)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_SUPPLIER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Supplier;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_SUPPLIER_BODY, source=101),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+        _site(_SUPPLIER_BODY, 0, ROUTERS, "route", result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            _SUPPLIER_BODY,
+            1,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=102),
+            ],
+        ),
+        _site(
+            _SUPPLIER_BODY,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+
+
+@pytest.mark.pins("combinator.linked-body-never-roots")
+def test_a_linked_body_is_never_scanned_for_roots_of_its_own(tmp_path: Path):
+    """A1 final review, I-1. The module docstring said "body methods are never rooted on
+    their own" and the code relied on bodies holding nothing but vocabulary calls — the
+    chain-head test protects receiver-extending verbs and prefixes only. A Supplier body
+    holds a whole chain, and its `build()` is an owner-declaring continuation that nothing
+    in the body consumes, so it rooted: `GET /api/x` from the prefix's fold AND a bare
+    `GET /x` with the lambda as `caller`, the same route twice. A method some linking
+    call names as its body is folded exactly once, by whichever root reaches that call,
+    and is never scanned for roots of its own."""
+    caller = DECLARER + "routes(sig_r)."
+    workspace = _resolve(tmp_path, _supplier_body_facts(), _catalog(_builder_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/api/x", _MODULE + HEALTH, "resolved")]
+    assert [row["caller"] for row in rows] == [caller]
+
+
+def test_an_add_inside_a_consumer_body_derives_its_router_once_prefixed(tmp_path: Path):
+    """The same finding on the Consumer overload: `path("/api", b ->
+    b.add(RouterFunctions.route(GET("/z"), h)))`. `add` is an owner-declaring
+    continuation, so it was a root candidate wherever it sat, and inside the body its
+    result is consumed by nothing — `GET /api/z` under the prefix and a bare `GET /z`
+    beside it. Exactly one row now."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=101),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+        _site(
+            _BUILDER_BODY,
+            0,
+            PREDICATES,
+            "GET",
+            result=5,
+            arguments=[CallArgument(kind="string", value="/z")],
+        ),
+        _site(
+            _BUILDER_BODY,
+            1,
+            ROUTERS,
+            "route",
+            result=11,
+            arguments=[
+                CallArgument(kind="unresolved", source=5),
+                CallArgument(kind="lambda", symbol=HEALTH, source=102),
+            ],
+        ),
+        _site(
+            _BUILDER_BODY,
+            2,
+            BUILDER,
+            "add",
+            invoke_kind="virtual",
+            receiver=None,
+            receiver_parameter=1,
+            result=12,
+            descriptor=f"(Lcom/example/web/Router;){_BUILDER_DESC}",
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(_builder_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/api/z", _MODULE + HEALTH, "resolved")]
+    assert [row["caller"] for row in rows] == [caller]
+
+
+def test_a_lambda_no_linking_call_names_still_roots_as_any_method_does(tmp_path: Path):
+    """The boundary of the skip: only a method some LINKING call names as its body is
+    left out of the root scan. A lambda handed to a method the catalog does not claim —
+    `Optional.map(x -> route().GET("/y", h).build())` — is a method like any other, and
+    the chain it holds roots at its `build()` exactly as before, with the lambda as
+    `caller`."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_FREE_BODY),
+        _site(
+            caller,
+            0,
+            "java/util/Optional#",
+            "map",
+            invoke_kind="virtual",
+            receiver=None,
+            receiver_parameter=1,
+            result=30,
+            arguments=[CallArgument(kind="lambda", symbol=_FREE_BODY, source=101)],
+        ),
+        _site(_FREE_BODY, 0, ROUTERS, "route", result=0, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            _FREE_BODY,
+            1,
+            BUILDER,
+            "GET",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/y"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=102),
+            ],
+        ),
+        _site(
+            _FREE_BODY,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _catalog(_builder_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/y", _MODULE + HEALTH, "resolved")]
+    assert [row["caller"] for row in rows] == [_FREE_BODY]
 
 
 def _pass_through_on_the_origin(*, head_read: bool) -> list:

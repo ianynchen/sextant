@@ -116,7 +116,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # under `/ktflux`, one `GET /**` each.
     # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row (`dsl-media-route`),
     # `unresolved` with no address.
-    assert metadata["endpoints"]["inbound"]["http"] == 88
+    # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks —
+    # `GET /bld/sup/inner`, `GET /mvcbld/sup/inner` — each once, under its prefix.
+    assert metadata["endpoints"]["inbound"]["http"] == 90
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 

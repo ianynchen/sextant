@@ -1546,7 +1546,19 @@ framework:**
   router out of any two-argument call that happens to share the name. The cost is
   stated rather than hidden: an owner-free continuation extends a walk some real
   root already reaches, but never roots one by itself. A builder chain roots at its
-  `build()` — the outermost call nothing consumes (§4).
+  `build()` — the outermost call nothing consumes (§4). **The rooting rule, whole:**
+  a root is an entry call, an owner-declaring continuation, or a receiver-extending
+  verb or prefix whose chain's HEAD is a call in the same method rather than one of
+  the method's own parameters — the statement form, `var b = route(); b.GET("/a",
+  h); b.POST("/b", h); return b.build();`, where the builder is mutable and nothing
+  consumes any verb's own result — and it roots only when its own result is
+  consumed by nothing in that method (§4 as ruled). Two equal verbs folded into one
+  route merge to that verb; two different ones poison it. And a method some LINKING
+  call names as its body — a `body_arg`, a nest-shaped continuation's `subtree_arg`
+  — is never scanned for roots of its own: it is folded exactly once, by whichever
+  root reaches the call that links it. A `Supplier` body is a whole chain, origin
+  to `build()`, and scanning it would publish its route a second time, bare, with
+  the compiler-generated lambda as declarer (A1 final review, I-1).
 - **`origins`** are the calls a chain STARTS at — rules of the verb shape,
   `{owner, method, arity, arg_types?}`, matched the same way. A receiver produced by
   one contributes zero routes and poisons nothing; a receiver produced by anything
@@ -1624,10 +1636,13 @@ frozen at these two shapes. That said, some shapes are known to need vocabulary
 additions before their catalogs can be written: a literal route path carried at the
 entry call rather than folded through a chain, and a receiver-accumulated router
 topology (gin's `Group`, which mutates a receiver across calls rather than composing
-a return value — the builder form above composes one, which is why `build()` can
-root it). *A verb row with no path argument — axum's `get(handler)` under
-`.route("/x", get(handler))` — stood in this list until the catch-all rule and
-`extends_receiver` landed (A1 Tasks 3–4); it is the arity-1 verb rule now.* Simple
+a return value; *the builder form above was cited here as composing one, "which is
+why `build()` can root it" — its mutable statement form roots at each verb and
+composes nothing (§4 as ruled), so that is not the difference, and whether `Group`'s
+shape reads as the statement form is unmeasured*). *A verb row with no path argument
+— axum's `get(handler)` under `.route("/x", get(handler))` — stood in this list until
+the catch-all rule and `extends_receiver` landed (A1 Tasks 3–4); it is the arity-1
+verb rule now.* Simple
 per-call registrations — gin's `r.GET("/x", h)`, Express's `app.get(...)` — need none
 of that: they already fit the existing `single_call` style once their languages'
 extractors emit the same fact grammar (D00 §5's `source`/`result`/`receiver` links).

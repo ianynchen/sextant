@@ -1,8 +1,9 @@
 // The servlet twin of `routes/BuilderRoutes` (G-37, spec §1): the same builder form one
 // package along, `org.springframework.web.servlet.function`, with the same shapes spec
 // §8 names — all four verb overloads, `path` with a builder body, a filter MID-chain, a
-// static resource, `build()`, and a catch-all in a chain of its own — so the MVC
-// catalog cannot ship a builder surface its reactive twin has and it lacks.
+// static resource, `build()`, a catch-all in a chain of its own, and the Supplier form
+// of `nest` — so the MVC catalog cannot ship a builder surface its reactive twin has and
+// it lacks.
 package com.acme.orders.mvcroutes;
 
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,8 @@ public class MvcBuilderRoutes {
             .path("/mvcbld/nested", builder -> builder
                 .GET("/inner", h::archive)                                                // GET inside a Consumer<Builder> body
                 .DELETE("/inner/{id}", h::archive))
+            .nest(RequestPredicates.path("/mvcbld/sup"),
+                  () -> RouterFunctions.route().GET("/inner", h::archive).build())         // nest(RequestPredicate, Supplier<RouterFunction>): a whole chain as the body
             .resources("/mvcbld/static/**", new ClassPathResource("static/"))             // served, handler-less (spec §6)
             .build();
     }

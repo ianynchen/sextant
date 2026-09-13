@@ -2,7 +2,8 @@
 // reference recommends, and the one that derived NOTHING until the combinator engine
 // could root a walk at `build()` and extend a verb's receiver. Every shape spec §8
 // names: all four verb overloads, `path` with a builder body, a filter MID-chain, a
-// static resource, `build()`, and a catch-all in a chain of its own.
+// static resource, `build()`, and a catch-all in a chain of its own — plus the Supplier
+// form of `nest`, whose body is a whole chain of its own (A1 final review, I-1).
 package com.acme.orders.routes;
 
 import org.springframework.context.annotation.Bean;
@@ -30,6 +31,8 @@ public class BuilderRoutes {
             .path("/bld/nested", builder -> builder
                 .GET("/inner", h::health)                                                 // GET inside a Consumer<Builder> body
                 .DELETE("/inner/{id}", h::health))
+            .nest(RequestPredicates.path("/bld/sup"),
+                  () -> RouterFunctions.route().GET("/inner", h::health).build())         // nest(RequestPredicate, Supplier<RouterFunction>): a whole chain as the body
             .resources("/bld/static/**", new ClassPathResource("static/"))                // served, handler-less (spec §6)
             .build();
     }

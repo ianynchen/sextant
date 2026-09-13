@@ -115,9 +115,14 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
             f"`GET {prefix}/nested/inner`",
             f"`DELETE {prefix}/nested/inner/{{id}}`",
             f"`GET {prefix}/static/**`",
+            # A1 final review, I-1: the Supplier form of `nest`, its body a whole chain.
+            f"`GET {prefix}/sup/inner`",
         ):
             assert route in document, route
     assert "`GET /**`" in document
+    # The Supplier body's own `build()` rooted before I-1 and published this bare row,
+    # declared by the compiler-generated lambda.
+    assert "`GET /inner`" not in document
     # A1 Task 5 (`W44-verb-overloads`, `GAP-1b`): the Kotlin router DSL on both stacks —
     # `mvcroutes/KotlinMvcRoutes.kt` under `/ktmvc` (every `GET` overload the servlet
     # DSL declares) and `routes/KotlinWebFluxRoutes.kt` under `/ktflux` (the reactive
@@ -288,7 +293,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 508 of 1676 since A1 Task 5's review: `KotlinMvcRoutes.kt`'s `accept(JSON) { h }`
     # line — six edges, two of them (the lambda body and its `h.listInvoices(it)`) into
     # this module.
-    assert "Calls whose callee body this workspace read: 508 of 1676 (30%)" in document
+    # 512 of 1692 since the A1 final review (I-1): the Supplier-form `nest` line on each
+    # stack — eight edges each, two of them (the Supplier body and the `h::health` /
+    # `h::archive` reference inside it) into this module. Still 30%.
+    assert "Calls whose callee body this workspace read: 512 of 1692 (30%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -298,10 +306,12 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # lookups land on the DSL, predicate, media and response types of both stacks.
     # 1674 and 389 since A1 Task 5's review: the `accept(JSON) { h }` line's six edges,
     # one lookup of them on the DSL's own `accept`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1674." in document
+    # 1690 and 391 since the A1 final review (I-1): the two Supplier-form lines' sixteen
+    # edges, all `resolved`, one new lookup per stack on the builder's own `nest`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1690." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
-        "inherited 2, owner_not_scanned 389."
+        "inherited 2, owner_not_scanned 391."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -598,7 +608,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # `routes/KotlinWebFluxRoutes.kt` under `/ktflux`, a `GET /**` catch-all each.
         # 88 since A1 Task 5's review: the `accept(JSON) { h }` gap row
         # (`dsl-media-route`), `unresolved` with no address — counted, never hidden.
-        "http": 88,
+        # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
+        # one prefixed row each — and no bare twin from the body's own `build()`.
+        "http": 90,
         "jms": 5,
         "kafka": 15,
         "pubsub": 3,
@@ -819,7 +831,8 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # under `/ktmvc` and three under `/ktflux`, plus a `GET /**` catch-all each
             # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
             # 149 since A1 Task 5's review: the `accept(JSON) { h }` gap row.
-            ("inbound", 149),
+            # 151 since the A1 final review (I-1): the Supplier-form route on each stack.
+            ("inbound", 151),
             ("outbound", 61),
         ]
     )

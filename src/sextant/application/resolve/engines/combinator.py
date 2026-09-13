@@ -17,8 +17,12 @@ is therefore a fold over that tree rather than a walk along a line.
   recursing again through a prefix rule's own `body_arg`. Body methods are
   never rooted on their own — rooting every method that merely *contains* a
   vocabulary call double-derives every nested route, once prefixed and once
-  bare (2E checkpoint F4). The entry owner and the vocabulary owner are
-  routinely two different types, so the catalog declares both.
+  bare (2E checkpoint F4) — and the root scan enforces that by skipping every
+  method some linking call names as its body (`linked_bodies`), not by
+  trusting bodies to hold only vocabulary calls: a Supplier body holds a
+  whole chain, and its `build()` would root (A1 final review, I-1). The entry
+  owner and the vocabulary owner are routinely two different types, so the
+  catalog declares both.
 - `vocabulary` — owner+method to role: `verbs` (a verb plus whichever of a
   literal-path `path_arg`, a `predicate_arg` whose producing call's constraints
   fold in, and a `handler_arg` the overload carries), `prefixes` (a path
@@ -159,6 +163,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     context = _context_of(workspace, catalog)
     rows: list[dict[str, Any]] = []
     for caller, sites in context.by_caller.items():
+        # A linked body is folded by the root that reaches its linking call,
+        # and never scanned for roots of its own (`linked_bodies`).
+        if bare_descriptor(caller) in context.linked_bodies:
+            continue
         scope = _scope_of(sites, context)
         # Sites arrive ordinal-ordered (the `call_sites` query), so the trees
         # of one method are rooted in source order and their rows accumulate
@@ -254,6 +262,18 @@ class _TreeContext:
     by_caller: dict[str, list[dict[str, Any]]]
     by_bare_caller: dict[str, list[dict[str, Any]]]
     method_symbols: dict[str, str]
+    # The bare symbol of every method some LINKING call names as its body — a
+    # body-linked entry's or a prefix rule's `body_arg`, a nest-shaped
+    # continuation's `subtree_arg`. The root scan skips these methods whole: a
+    # body is folded exactly once, by whichever root reaches the call that
+    # links it, and is never scanned for roots of its own. The chain-head test
+    # in `_is_root_candidate` protects only receiver-extending verbs and
+    # prefixes; a Supplier body holds a whole chain whose `build()` — an
+    # owner-declaring continuation — nothing in the body consumes, and an
+    # `add(router)` inside a Consumer body is the same shape. Both rooted and
+    # derived their route a second time, bare, with the lambda as `caller`
+    # (A1 final review, I-1).
+    linked_bodies: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -312,7 +332,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     verbs = _rules_of(vocabulary.get("verbs", []))
     prefixes = _rules_of(vocabulary.get("prefixes", []))
     origins = _rules_of(matches.get("origins", []))
-    return _TreeContext(
+    context = _TreeContext(
         entries=entries,
         body_entries=body_entries,
         verbs=verbs,
@@ -339,7 +359,39 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         by_caller=by_caller,
         by_bare_caller=by_bare_caller,
         method_symbols=method_symbols,
+        linked_bodies=frozenset(),
     )
+    # Read off the call sites the catalog claims, so the matchers above decide
+    # which calls link a body — the same matchers the fold jumps through.
+    return replace(context, linked_bodies=_linked_bodies(call_sites, context))
+
+
+def _linked_bodies(call_sites: list[dict[str, Any]], context: _TreeContext) -> frozenset[str]:
+    """The bare symbol of every `lambda`-kind argument at a linking position: a
+    body-linked entry's `body_arg`, a prefix rule's `body_arg`, a nest-shaped
+    continuation's `subtree_arg`. Only a LINKING call names a body; a lambda
+    handed to a method the catalog does not claim is a method like any other,
+    and the root scan reaches it as before."""
+    bodies: set[str] = set()
+    for site in call_sites:
+        positions: list[int] = []
+        entry = _matching_body_entry(site, context)
+        if entry is not None:
+            positions.append(entry["body_arg"])
+        if (str(site["owner"]), str(site["name"])) in context.prefix_names:
+            rule = _matching_rule(site, context.prefixes)
+            if rule is not None and "body_arg" in rule:
+                positions.append(rule["body_arg"])
+        continuation = _matching_continuation(site, context)
+        if continuation is not None and continuation.subtree_arg is not None:
+            positions.append(continuation.subtree_arg)
+        for position in positions:
+            argument = _arg_at(site["arguments"], position)
+            if argument is not None and argument.get("kind") == "lambda":
+                symbol = argument.get("symbol")
+                if symbol is not None:
+                    bodies.add(str(symbol))
+    return frozenset(bodies)
 
 
 def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
@@ -511,6 +563,11 @@ def _is_root_candidate(site: dict[str, Any], scope: _Scope) -> bool:
     call — and a body chains its verbs too (`b.GET(…).DELETE(…)`, the second
     verb's receiver a call in the same method), so the test is on the chain's
     HEAD, not on the verb's own receiver. `_body_routes` alone folds them.
+    That head test covers the verbs and prefixes a body's builder parameter
+    carries; a body holding a chain of its OWN (a Supplier body's `route()…
+    build()`, an `add(router)` on the body's parameter) passes it, and `run`
+    is what keeps such a body out of the root scan altogether
+    (`linked_bodies`).
 
     Nor is an owner-free continuation. Matching a bare method name against
     every owner is `fluent`'s steps discipline — right for REACHING a step
@@ -1338,7 +1395,12 @@ def _validate_overloads(catalog: Catalog) -> None:
                     )
         for index, left in enumerate(rules):
             for right in rules[index + 1 :]:
-                if (left["owner"], left["method"]) != (right["owner"], right["method"]):
+                # Compared in the symbol form `_matching_rule` compares — two spellings
+                # of one owner are one owner to the matcher, so they are one here.
+                if (_catalog_symbol(left["owner"]), left["method"]) != (
+                    _catalog_symbol(right["owner"]),
+                    right["method"],
+                ):
                     continue
                 if (
                     None not in (left.get("arity"), right.get("arity"))

@@ -635,6 +635,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("DELETE", "/mvcbld/nested/inner/{id}"),
         ("GET", "/mvcbld/static/**"),
         ("GET", "/**"),
+        # A1 final review, I-1: the Supplier form of `nest` on both stacks — a body that
+        # is a whole chain, folded ONCE under its prefix; the bare `GET /inner` the body's
+        # own `build()` used to root is the row that must not be here.
+        ("GET", "/bld/sup/inner"),
+        ("GET", "/mvcbld/sup/inner"),
         # A1 Task 5, `W44-verb-overloads` and `GAP-1b` (spec §1b): the Kotlin router DSL
         # on both stacks — `mvcroutes/KotlinMvcRoutes.kt`'s servlet `router { }` under
         # `/ktmvc`, every `GET` overload it declares, and `routes/KotlinWebFluxRoutes.kt`'s
@@ -1015,7 +1020,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 191 since A1 Task 5's review: `KotlinMvcRoutes.kt`'s `accept(JSON) { h }` — a route
     # declared under a media guard alone, which this grammar has no word for
     # (`dsl-media-route`) — is one unresolved row rather than the silence it was.
-    assert len(report.endpoints) == 191
+    # 193 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
+    # `GET /bld/sup/inner` and `GET /mvcbld/sup/inner` — each once, under its prefix.
+    assert len(report.endpoints) == 193
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1165,7 +1172,8 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `GET /**` catch-all, beside the ten `OrderRoutes`/`KotlinOrderRoutes` rows.
     # 22 since A1 Task 5 (`GAP-1b`): `KotlinWebFluxRoutes`' three routes under `/ktflux`;
     # its own `GET /**` catch-all is a fourth row that shares the builder's key here.
-    assert len(combinator_rows) == 22
+    # 23 since the A1 final review (I-1): `BuilderRoutes`' Supplier-form `GET /bld/sup/inner`.
+    assert len(combinator_rows) == 23
     # Java: a bound method reference resolves to the real handler; the inline
     # lambda resolves to its synthetic body — both module-prefixed, joined
     # against the scanned symbol facts, never fabricated (checkpoint (1a)).
@@ -1888,7 +1896,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 72 since W27's REVIEW: four second callers the outbound dedup had been deleting
         # outright (F5 §6.1 rule 1) — `SharedPathClients`' two, a second caller on
         # `/v2/inventory/levels`, and the `reserve` lambda beside its enclosing method.
-        "http": 103,
+        "http": 105,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -1897,6 +1905,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`), two more `GET /**` among them.
         # 103 since its review: the `accept(JSON) { h }` gap row (`dsl-media-route`),
         # path NULL and `unresolved` — an http row like the address-less `(None, None)`s.
+        # 105 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
+        # one prefixed row each and no bare twin.
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -1928,7 +1938,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 191
+    assert sum(counts.values()) == len(report.endpoints) == 193
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3685,7 +3695,9 @@ def test_the_format_ladder_answers_every_live_row(
     # answer off their declaration; the other seven declare no media predicate.
     # 54 since A1 Task 5's review: the `accept(JSON) { h }` gap row (`dsl-media-route`)
     # has no address and no declared payload type, so the ladder has nothing to answer.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 54
+    # 56 since the A1 final review (I-1): the two Supplier-form routes, which declare no
+    # media predicate and whose handlers return a bare `ServerResponse`.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 56
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
