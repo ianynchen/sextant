@@ -1457,6 +1457,14 @@ could not be read" are different facts:
 
 ### `combinator`
 
+> **A call through a Kotlin `$default` bridge is unmatched.** Every rule in this style (and in
+> `single_call`/`fluent`) matches a call site's own name and erased descriptor. A Kotlin call that
+> omits a defaulted parameter invokes the synthetic `name$default(…, mask, marker)` bridge — a
+> different name and arity — so no rule names it and the route derives nothing. Named and
+> out-of-order arguments do not matter: the compiler emits them in the declaration's order. A
+> catalog for a Kotlin function that declares defaults must declare the bridge form too
+> (register `kotlin-default-bridge-calls`); no shipped catalog covers such a function yet.
+
 Neither one call (`single_call`) nor one chain (`fluent`) carries the declaration here:
 the router is a **tree**, assembled by handing predicate objects, subtrees and whole
 routers to further calls as arguments, rather than fluently through one receiver.
