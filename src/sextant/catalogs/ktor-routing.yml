@@ -1,0 +1,125 @@
+id: ktor-routing
+displayName: Ktor (routing DSL)
+style: combinator
+protocol: http
+direction: inbound
+
+detect:
+  coordinates: ["io.ktor:ktor-server-core-jvm", "io.ktor:ktor-server-core"]
+
+measured:
+  - { artifact: io.ktor:ktor-server-core-jvm, versions: ["3.0.3"],
+      identity: reported, by: scripts/probes/w19_catalog_surface.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# Ktor's routing DSL: `routing { route("/api") { get("/orders") { … } } }`. Every name
+# below is a STATIC extension function on `Route` — the receiver the enclosing block was
+# handed is argument 0 in the bytecode — and every block is a `Function1<Route, Unit>`
+# the Kotlin compiler (2.x, `-Xlambdas=indy` by default) emits as an `invokedynamic`
+# body the extractor links as a `lambda`-kind argument. The entry is on the file facade
+# `RoutingRootKt`, the vocabulary on `RoutingBuilderKt`: two owners for one tree, as
+# every `combinator` catalog declares.
+#
+# MEASURED, `javap -p -s -c -cp ~/.m2/repository/io/ktor/ktor-server-core-jvm/3.0.3/
+# ktor-server-core-jvm-3.0.3.jar` (A2 Task 5, 2026-09-13):
+#   RoutingRootKt.routing(Application, Function1<Routing, Unit>) → RoutingRoot
+#   RoutingBuilderKt:
+#     route(Route, String, Function1)                the nesting primitive
+#     route(Route, String, HttpMethod, Function1)     a prefix carrying a verb — NOT read
+#     method(Route, HttpMethod, Function1)            a verb block with no path — NOT read
+#     get/post/put/patch/delete/head/options, each in TWO overloads:
+#       (Route, String, Function2)   (Route, Function2)
+#     postTyped/putTyped/patchTyped(Route, Function3), postTypedPath/putTypedPath/
+#       patchTypedPath(Route, String, Function3)      the `@JvmName` spellings of the
+#       reified `post<R>`/`put<R>`/`patch<R>` overloads; reified needs `inline`, so a
+#       caller's bytecode holds the inlined body, which calls the plain overload above —
+#       these names never appear at a user's call site
+#     param, optionalParam, header, accept, contentType (Route, …, Function1)
+#                                                     selector blocks, no path — NOT read
+#     createRouteFromPath(Route, String)              the plumbing every prefix calls
+#
+# The path-less overload, read off `javap -c`: `get(Route, Function2)` is
+# `method(this, Get) { handle(body) }` — an `HttpMethodRouteSelector` child of the
+# RECEIVER itself — so `get { }` under `route("/api") { }` serves exactly `/api`, the
+# prefix, and the rule says so with `path: ""` (the same word Javalin's `get(Handler)`
+# carries), never the catch-all `/api/**`.
+#
+# Ktor JOINS segments itself: `route(Route, String, Function1)` is
+# `createRouteFromPath(this, path)`, which is `RoutingPath.parse(path).parts` — a split
+# on `/` that DROPS the empty parts (`parse$lambda$0` keeps `length > 0`) — one child
+# selector per part. So `route("api")` and `route("/api")` are the same registration, and
+# `route("/api") { get("orders") { } }` serves `/api/orders`: `path_join: leading_slash`
+# is that rule, applied to every literal this catalog reads. Without it the slashless
+# spelling read back as `/apiorders`, resolved — a wrong row (the Javalin lesson, Task 3
+# fix round 1). One WRONG-ROW boundary of the join, stated: `leading_slash` leaves the
+# bare `*` unprefixed (Javalin's exception, where `*` is the whole pattern), so
+# `route("/api") { get("*") { } }` publishes `/api*`, resolved — where Ktor's parse
+# makes `*` one wildcard segment and serves `/api/<one segment>`. A resolved wrong
+# row, not a missing one; rare real input (Ktor's documented wildcard forms are `*`
+# and `{...}` INSIDE a longer path, which read correctly). Logged: `path_join` needs a
+# per-catalog exception list before this reads right.
+#
+# Handlers are `suspend RoutingContext.() -> Unit` — a `Function2` the compiler emits as
+# a `SuspendLambda` CLASS, `new`ed at the call site, not an `invokedynamic` — so
+# `handler_arg` reads NULL on every row (spec §13 case 8), stated on the live test so
+# `kotlin-null-handler`'s landing moves a pinned value.
+#
+# Two stated boundaries, neither a slice entry — the w19 enumeration counts a candidate
+# by a `String` at argument 0, and every name here carries its `Route` receiver there,
+# so the audit would refuse a `slice.outside` naming them:
+#   * the four-argument `route(Route, String, HttpMethod, Function1)` — a prefix that
+#     ALSO sets the verb — is one unresolved row today (an arity no `route` rule accepts,
+#     spec §7 case 1), never a resolved prefix that forgot its verb. A `verb_arg` word on
+#     a prefix (A2 Task 6's word, on a verb) would read it.
+#   * the six SELECTOR blocks — `method`, `param`, `optionalParam`, `header`, `accept`,
+#     `contentType`, each `(Route, …, Function1)` — derive NOTHING, not even an
+#     unresolved row, and every route nested under one is LOST: `method(Get) { get { } }`
+#     and `accept(JSON) { get("/x") { } }` both derive `[]` (measured on hand-built facts
+#     through this catalog, Task 5 review). A name the vocabulary does not carry is not
+#     an unrecognised overload — the walk returns nothing for it and never enters its
+#     body — so the G-13 row does not fire. A real-input gap: `accept`/`contentType`
+#     blocks are Ktor's content-negotiation idiom. Logged, not guessed — Task 9 registers
+#     it as `ktor-selector-blocks`, Major.
+#   * a Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from
+#     `routing { api() }`, Ktor's own recommended way to split a large routing tree —
+#     derives nothing, not even an unresolved row: spec §7 case 4's stated boundary (a
+#     builder received as a PARAMETER is, in the facts, indistinguishable from a body's
+#     own), and a call the walk would have to follow into another method (§15). Pinned
+#     on the live test as silence, so a walk that one day reads it moves a pinned value.
+matches:
+  path_join: leading_slash
+  entries:
+    # `routing(Application, Function1<Routing, Unit>)` — the block's parameter is the
+    # root `Routing` (a `Route`), and every verb inside is called on it: `origin_param: 0`.
+    - owner: io.ktor.server.routing.RoutingRootKt
+      method: routing
+      body_arg: 1
+      origin_param: 0
+  vocabulary:
+    prefixes:
+      # `route(Route, String, Function1<Route, Unit>)`: the receiver is argument 0 (must be
+      # the enclosing block's Route), the path argument 1, the block argument 2 — whose own
+      # parameter is the new Route.
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: route, arity: 3,
+          receiver_arg: 0, path_arg: 1, body_arg: 2, origin_param: 0 }
+    verbs:
+      # Per verb: (Route, String, Function2) and (Route, Function2) — the second serves the
+      # receiver route itself (the empty literal path). `receiver_arg: 0` on every rule:
+      # `other.get("/stray") { }` inside `route("/api") { }` is `get(other, "/stray", …)`,
+      # registered on `other`, and the row is `unresolved` without the prefix (spec §14
+      # test 13) rather than `/api/stray` resolved on a route this block never touched.
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: get, verb: GET, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: get, verb: GET, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: post, verb: POST, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: post, verb: POST, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: put, verb: PUT, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: put, verb: PUT, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: patch, verb: PATCH, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: patch, verb: PATCH, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: delete, verb: DELETE, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: delete, verb: DELETE, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: head, verb: HEAD, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: head, verb: HEAD, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: options, verb: OPTIONS, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: options, verb: OPTIONS, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }

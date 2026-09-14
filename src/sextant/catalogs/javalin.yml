@@ -7,9 +7,9 @@ displayName: Javalin
 # identical argument position, with no nesting — only the receiver's DECLARED type
 # differs, which is why `owner:` below names three types rather than one. The
 # NESTED form, `ApiBuilder.get(…)` called inside a lambda passed to `path(…)` inside
-# `config.router.apiBuilder(…)`, is a receiver-chain read this style cannot do —
-# filed separately as `javalin-apibuilder`, Category B, and stated `slice.outside`
-# below rather than matched wrongly.
+# `config.router.apiBuilder(…)`, is a tree this style cannot fold — read by its
+# sibling `javalin-apibuilder.yml` (`combinator`, A2 Task 3), and stated
+# `slice.outside` below rather than matched wrongly here.
 style: single_call
 protocol: http
 direction: inbound
@@ -121,10 +121,11 @@ slice:
         reaches — reading `ApiBuilder.get("/{id}", h)` on its own would publish
         `/{id}` with no `path(…)` prefix, a WRONG row rather than a missing one
         (pinned by `test_javalin_flat_registrations_derive_every_route`'s own
-        assertion that `/{id}` never appears). Filed as `javalin-apibuilder`,
-        Category B (the register, §4) — it needs the same receiver-chain walk
-        `G-37`/`GAP-1b`/`G-30` wait on, not a catalog fix. `before`/`after`/`ws*`/
-        `sse` sit here for the same filter/other-protocol reason as the owners
-        above; `crud` registers FIVE routes off one `CrudHandler` argument, a
-        one-call-to-many-rows shape this style has no word for; `path` and
-        `prefixPath` are the nesting primitive itself, not a route.
+        assertion that `/{id}` never appears). The sibling `javalin-apibuilder.yml`
+        (`combinator`) reads the six verbs and `path` as one tree under
+        `RouterConfig.apiBuilder`; they stay outside THIS file's slice because this
+        file reads none of them. `before`/`after`/`ws*`/`sse` sit outside both for
+        the same filter/other-protocol reason as the owners above; `crud` registers
+        FIVE routes off one `CrudHandler` argument, a one-call-to-many-rows shape
+        neither file has a word for (`javalin-crud` on the register); `prefixPath`
+        is the prefix computation, not a route.

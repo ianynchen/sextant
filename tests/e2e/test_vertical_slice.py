@@ -296,7 +296,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 512 of 1692 since the A1 final review (I-1): the Supplier-form `nest` line on each
     # stack — eight edges each, two of them (the Supplier body and the `h::health` /
     # `h::archive` reference inside it) into this module. Still 30%.
-    assert "Calls whose callee body this workspace read: 512 of 1692 (30%)" in document
+    # 516 of 1705 since A2 Task 2: `OrderPoller` — thirteen edges (the constructor's
+    # `Object.<init>`, four `receive*` calls, four options-lambda bodies, four
+    # `SqsReceiveOptions.queue` calls inside them), the four lambda bodies into this
+    # module. Still 30%.
+    # 520 of 1765 since A2 Task 8: `JdkOrdersClient` and `ApacheOrdersClient` — 60 edges,
+    # four of them into this module (the JDK `deleteRequest()` helper and the three Apache
+    # response-handler lambda bodies). 29%: the seven `fetchSeventh` edges all end at the
+    # platform, which is what tips the rounding.
+    assert "Calls whose callee body this workspace read: 520 of 1765 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -308,10 +316,18 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # one lookup of them on the DSL's own `accept`.
     # 1690 and 391 since the A1 final review (I-1): the two Supplier-form lines' sixteen
     # edges, all `resolved`, one new lookup per stack on the builder's own `nest`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1690." in document
+    # 1703 and 396 since A2 Task 2: `OrderPoller`'s thirteen edges, all `resolved`; five
+    # new lookups land on the framework's own `SqsTemplate.receive*` (four) and
+    # `SqsReceiveOptions.queue` (one), none of which this module scans.
+    # 1763 and 420 since A2 Task 8: the two HTTP clients' 60 edges, all `resolved`;
+    # `declared_here` gains the `deleteRequest()` helper (194); 24 new lookups land on
+    # the JDK's own `HttpRequest`/`HttpRequest$Builder`/`HttpClient`/`URI`/
+    # `BodyPublishers`/`BodyHandlers` and Apache's `ClassicRequestBuilder`/`HttpGet`/
+    # `HttpPost`/`CloseableHttpClient`, none of which this module scans.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1763." in document
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 193, "
-        "inherited 2, owner_not_scanned 391."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 194, "
+        "inherited 2, owner_not_scanned 420."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -616,7 +632,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         "pubsub": 3,
         # 8 since `G-36` — `amendOrder`'s two `@PayloadRoot` both derive now.
         "soap": 8,
-        "sqs": 4,
+        # 8 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+        # `SqsTemplate.receive*` forms, one queue named inside each options lambda.
+        "sqs": 8,
         "sse": 2,
         # 6 since W45: the three connect URLs `addEndpoint` registers.
         "websocket": 7,
@@ -629,7 +647,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # (`OI-73`).
         # 29 since W27's review: four second callers the outbound dedup had been
         # deleting outright (F5 §6.1 rule 1).
-        "http": 29,
+        # 36 since A2 Task 8: the JDK client's four chains and the Apache client's
+        # three (`jdk-httpclient`, `apache-httpclient`).
+        "http": 36,
         "jms": 3,
         "kafka": 11,
         "pubsub": 4,
@@ -832,8 +852,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # (`KotlinMvcRoutes.kt`, `KotlinWebFluxRoutes.kt`).
             # 149 since A1 Task 5's review: the `accept(JSON) { h }` gap row.
             # 151 since the A1 final review (I-1): the Supplier-form route on each stack.
-            ("inbound", 151),
-            ("outbound", 61),
+            # 155 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
+            # `SqsTemplate.receive*` rows, inbound `orders-poll`.
+            ("inbound", 155),
+            # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
+            # client's three (`jdk-httpclient`, `apache-httpclient`).
+            ("outbound", 68),
         ]
     )
 
@@ -1533,12 +1557,13 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(full
     assert "open_questions" in manifest["contents"]["tables"]
     # Two `payload_binding` questions and, since W27 (F5 §6.1), six `self_exchange` ones
     # — the identities this module both serves and calls, which used to be merged into a
-    # single row that asked nothing.
+    # single row that asked nothing. Seven since A2 Task 8: `ApacheOrdersClient#list`
+    # calls `GET /v1/orders`, which `OrderController` serves.
     rows = duckdb.sql(
         "SELECT question, count(*) FROM read_parquet("
         f"'{bundle / 'graph' / 'open_questions.parquet'}') GROUP BY 1 ORDER BY 1"
     ).fetchall()
-    assert rows == [("payload_binding", 2), ("self_exchange", 6)]
+    assert rows == [("payload_binding", 2), ("self_exchange", 7)]
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
@@ -1625,7 +1650,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 138: + `ShipmentRepository` and its nested `Shipment` (`G-45`).
     # 140: + `routes/BuilderRoutes` and `mvcroutes/MvcBuilderRoutes` (`G-37`, A1 Task 4).
     # 142: + `mvcroutes/KotlinMvcRoutes` and `routes/KotlinWebFluxRoutes` (A1 Task 5).
-    assert (None, 142) in origins
+    # 143: + `messaging/OrderPoller` (`sqs-template-receive`, A2 Task 2).
+    # 145: + `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
+    # (`jdk-httpclient`, `apache-httpclient`, A2 Task 8).
+    assert (None, 145) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

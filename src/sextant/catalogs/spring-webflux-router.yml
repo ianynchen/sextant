@@ -71,6 +71,7 @@ matches:
     - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt
       method: coRouter
       body_arg: 0
+      origin_param: 0
     # The reactive `router { }` WITHOUT coroutines (`GAP-1b`): the file-facade class,
     # exactly as the servlet twin has declared since W44 and `coRouter` above does.
     # `javap -p -s RouterFunctionDslKt` at spring-webflux 6.1.6 and 7.0.2: one method,
@@ -79,6 +80,7 @@ matches:
     - owner: org.springframework.web.reactive.function.server.RouterFunctionDslKt
       method: router
       body_arg: 0
+      origin_param: 0
 
   vocabulary:
     # MEASURED, at spring-webflux 6.1.6 and 7.0.2 (CP-12 Q11/Q12,
@@ -817,6 +819,7 @@ matches:
         method: nest
         path_arg: 0
         body_arg: 1
+        origin_param: 0
       # The non-coroutine DSL's `nest` (`GAP-1b`), MEASURED with `javap -p -s` at
       # spring-webflux 6.1.6 and 7.0.2: TWO overloads, both arity 2, both linking to
       # their body the same way (a `lambda`-kind argument naming the body method) —
@@ -830,12 +833,14 @@ matches:
         arg_types: { 0: java.lang.String }
         path_arg: 0
         body_arg: 1
+        origin_param: 0
       - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
         method: nest
         arity: 2
         arg_types: { 0: org.springframework.web.reactive.function.server.RequestPredicate }
         predicate_arg: 0
         body_arg: 1
+        origin_param: 0
       # The DSL's own predicate factory, `path(String)RequestPredicate` — what
       # `GET(path("/health")) { }` hands its predicate position, so the route reads
       # `/health` (A1 Task 5). `arity: 1` is load-bearing: the same name's
@@ -865,6 +870,7 @@ matches:
         path_arg: 0
         body_arg: 1
         extends_receiver: true
+        origin_param: 0
       - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
         method: path
         arity: 2
@@ -879,6 +885,7 @@ matches:
         predicate_arg: 0
         body_arg: 1
         extends_receiver: true
+        origin_param: 0
       - owner: org.springframework.web.reactive.function.server.RouterFunctions$Builder
         method: nest
         arity: 2

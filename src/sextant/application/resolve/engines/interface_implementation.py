@@ -32,6 +32,7 @@ from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     channel_of,
     linked_channels,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.symbols import (
@@ -461,11 +462,13 @@ def _validate_matches(catalog: Catalog) -> None:
             and isinstance(entry.get("owner"), str)
             and isinstance(entry.get("method"), str)
             and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
+            and valid_via_arity(entry)
         )
         if not valid:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `registration.channel_via` declares an "
-                f'entry that must be `{{owner, method, arg: int|"all_strings"}}`, got {entry!r}'
+                f'entry that must be `{{owner, method, arg: int|"all_strings", arity?: int}}`, '
+                f"got {entry!r}"
             )
 
 
@@ -586,6 +589,11 @@ def _channel_via_forms(registration: dict[str, Any]) -> list[dict[str, Any]]:
     symbol form once — only ever called on a `registration` block
     `_validate_matches` already passed, at `run` start."""
     return [
-        {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
+        {
+            "owner": _catalog_symbol(entry["owner"]),
+            "method": entry["method"],
+            "arg": entry["arg"],
+            **({"arity": entry["arity"]} if "arity" in entry else {}),
+        }
         for entry in _channel_via_entries(registration)
     ]

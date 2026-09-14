@@ -3054,6 +3054,111 @@ def test_a_prefix_over_a_catch_all_derives_the_prefix_plus_the_any_path_pattern(
     ]
 
 
+# An all-static nesting DSL (A2 Task 3): the entry links a body, the prefix links a body
+# one level deeper, and every verb inside is a static call with no receiver at all. The
+# framework this mirrors keeps its own prefix stack, and its path-less verb overload
+# registers the prefix ITSELF — `join(prefixes) + ""` — not every path under it.
+STATIC_CONFIG = "com/example/web/StaticConfig#"
+STATIC_ROUTES = "com/example/web/StaticRoutes#"
+_STATIC_BODY = DECLARER + "lambda$staticRoutes$0(sig_b0)."
+_STATIC_INNER = DECLARER + "lambda$staticRoutes$1(sig_b0)."
+
+
+def _static_dsl_matches(*, path_less_serves_the_prefix: bool) -> dict[str, object]:
+    verb: dict[str, object] = {
+        "owner": "com.example.web.StaticRoutes",
+        "method": "get",
+        "verb": "GET",
+        "arity": 1,
+        "handler_arg": 0,
+    }
+    if path_less_serves_the_prefix:
+        verb["path"] = ""
+    return {
+        "entries": [{"owner": "com.example.web.StaticConfig", "method": "routes", "body_arg": 0}],
+        "vocabulary": {
+            "verbs": [verb],
+            "prefixes": [
+                {
+                    "owner": "com.example.web.StaticRoutes",
+                    "method": "path",
+                    "arity": 2,
+                    "path_arg": 0,
+                    "body_arg": 1,
+                }
+            ],
+        },
+    }
+
+
+def _static_dsl_facts() -> list:
+    """`config.routes(() -> { path("/x", () -> { get(h); }); })`."""
+    caller = DECLARER + "staticRoutes(sig_r)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_STATIC_BODY),
+        _method_symbol(_STATIC_INNER),
+        _site(
+            caller,
+            0,
+            STATIC_CONFIG,
+            "routes",
+            invoke_kind="virtual",
+            receiver=None,
+            result=None,
+            descriptor="(Lcom/example/web/Group;)V",
+            arguments=[CallArgument(kind="lambda", symbol=_STATIC_BODY, source=0)],
+        ),
+        _site(
+            _STATIC_BODY,
+            0,
+            STATIC_ROUTES,
+            "path",
+            result=None,
+            descriptor="(Ljava/lang/String;Lcom/example/web/Group;)V",
+            arguments=[
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=_STATIC_INNER, source=0),
+            ],
+        ),
+        _site(
+            _STATIC_INNER,
+            0,
+            STATIC_ROUTES,
+            "get",
+            result=None,
+            descriptor="(Lcom/example/web/Handler;)V",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=0)],
+        ),
+    ]
+
+
+def test_a_verb_rule_declaring_the_empty_literal_path_serves_its_prefix_alone(tmp_path: Path):
+    """The one engine word A2 Task 3 adds: `path: ""` on a verb rule is a literal path
+    contribution — the empty string — so the route DID read a path and `_served` never
+    fills in the any-path pattern. `path("/x", () -> get(h))` is `GET /x`: the prefix
+    alone, which is what a framework whose path-less overload registers
+    `prefix + ""` serves it at. Without the word the same rule is the catch-all of the
+    test above and publishes `/x/**` — every path under the prefix, which that framework
+    never serves; the sibling assertion pins that the word, not the shape, is what
+    tells the two apart."""
+    workspace = _resolve(
+        tmp_path,
+        _static_dsl_facts(),
+        _catalog(_static_dsl_matches(path_less_serves_the_prefix=True)),
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + HEALTH, "resolved")]
+    workspace.close()
+
+    workspace = _resolve(
+        tmp_path / "catch_all",
+        _static_dsl_facts(),
+        _catalog(_static_dsl_matches(path_less_serves_the_prefix=False)),
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x/**", _MODULE + HEALTH, "resolved")]
+    workspace.close()
+
+
 # --- (10) dedup: identity-known only, and the handler is part of it -------
 
 
@@ -3355,6 +3460,15 @@ def test_an_origin_naming_no_owner_or_no_method_is_refused(tmp_path: Path):
         matches = {**_matches(), "origins": [origin]}
         with pytest.raises(CatalogError, match=r"every `origins` item is `\{owner, method\}`"):
             _resolve(tmp_path, [], _catalog(matches))
+
+
+def test_a_path_join_that_is_not_the_one_declared_value_is_refused(tmp_path: Path):
+    """`path_join` is `leading_slash` or absent. A misspelling read as absent would fall
+    back to verbatim concatenation and publish the glued address the word exists to
+    prevent — silently, since every row would still be resolved."""
+    matches = {**_matches(), "path_join": "leading-slash"}
+    with pytest.raises(CatalogError, match=r"`path_join: 'leading-slash'` — the only value"):
+        _resolve(tmp_path, [], _catalog(matches))
 
 
 def test_a_continuation_entry_of_neither_declared_form_is_refused(tmp_path: Path):
@@ -3829,3 +3943,1446 @@ def test_the_kotlin_router_dsl_reads_every_verb_the_framework_declares(tmp_path:
     workspace.close()
 
     assert derived == sorted((verb, f"/kt/{verb.lower()}") for verb in verbs)
+
+
+# --- `javalin-apibuilder` (A2 Task 3): the all-static nesting form on the shipped catalog ---
+
+_ROUTER_CONFIG = "io/javalin/config/RouterConfig#"
+_API_BUILDER = "io/javalin/apibuilder/ApiBuilder#"
+_HANDLER_DESC = "Lio/javalin/http/Handler;"
+_GROUP_DESC = "Lio/javalin/apibuilder/EndpointGroup;"
+_CONFIG_LAMBDA = DECLARER + "lambda$nested$0(sig_c0)."
+_GROUP_BODY = DECLARER + "lambda$nested$1(sig_g0)."
+_GROUP_INNER = DECLARER + "lambda$nested$2(sig_g0)."
+
+
+def _shipped_apibuilder_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "javalin-apibuilder")
+
+
+def _apibuilder_facts(entry_owner: str) -> list:
+    """`config.router.apiBuilder(() -> { path("/orders", () -> { get("/{id}", h);
+    post(h); }); })` — the shape `fixtures/orders-javalin/.../OrderApp.java`'s `nested()`
+    compiles to (`javap -c`, 2026-09-13): the entry call in the `config -> …` lambda, each
+    `EndpointGroup` block a method of its own, every `ApiBuilder` call `invokestatic` with
+    no receiver. `entry_owner` is the one cell the near-miss below varies."""
+    return [
+        *_handler_symbols(),
+        _method_symbol(_GROUP_BODY),
+        _method_symbol(_GROUP_INNER),
+        _site(
+            _CONFIG_LAMBDA,
+            0,
+            entry_owner,
+            "apiBuilder",
+            invoke_kind="virtual",
+            receiver=None,
+            result=1,
+            descriptor=f"({_GROUP_DESC})Lio/javalin/config/RouterConfig;",
+            arguments=[CallArgument(kind="lambda", symbol=_GROUP_BODY, source=0)],
+        ),
+        _site(
+            _GROUP_BODY,
+            0,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="lambda", symbol=_GROUP_INNER, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/{id}"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            1,
+            _API_BUILDER,
+            "post",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=CREATE_ORDER, source=1)],
+        ),
+    ]
+
+
+def test_the_apibuilder_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
+    owner. `get("/{id}", h)` under `path("/orders", …)` is `GET /orders/{id}`; the
+    path-less `post(h)` is `POST /orders` — the prefix alone, Javalin's `prefixPath("")`
+    — and both rows' caller is the method holding `apiBuilder`."""
+    workspace = _resolve(tmp_path, _apibuilder_facts(_ROUTER_CONFIG), _shipped_apibuilder_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {_CONFIG_LAMBDA}
+
+
+@pytest.mark.declines("javalin-apibuilder")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_apibuilder_catalog_declines_an_api_builder_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `apiBuilder` name, the same `EndpointGroup` lambda, the same static
+    `path`/`get`/`post` inside it — and only the entry's OWNER differs:
+    `com.example.NotRouter#apiBuilder`, which is not `io.javalin.config.RouterConfig`.
+
+    Nothing is the required answer. A body-linked entry is the ONLY place this catalog
+    roots — every `ApiBuilder` call is static, receiver-less and never a root of its own —
+    so with the owner check gone any method named `apiBuilder` handed a lambda would
+    root a tree, and a router nobody registered with Javalin would be published under
+    this catalog's id."""
+    workspace = _resolve(
+        tmp_path, _apibuilder_facts("com/example/NotRouter#"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+def _slashless_tree(prefix: str, inner: str, leaf: str) -> list:
+    """`path(prefix, () -> { get(h); path(inner, () -> { get(h); post(leaf, h); }); })` —
+    the reviewer's tree (Task 3 fix round 1), every segment spelled as the caller passes
+    it, so the same shape serves the slashless, the slashed and the `*` spellings."""
+    grandchild = DECLARER + "lambda$nested$3(sig_g0)."
+    return [
+        *_handler_symbols(),
+        _method_symbol(_GROUP_BODY),
+        _method_symbol(_GROUP_INNER),
+        _method_symbol(grandchild),
+        _site(
+            _CONFIG_LAMBDA,
+            0,
+            _ROUTER_CONFIG,
+            "apiBuilder",
+            invoke_kind="virtual",
+            receiver=None,
+            result=1,
+            descriptor=f"({_GROUP_DESC})Lio/javalin/config/RouterConfig;",
+            arguments=[CallArgument(kind="lambda", symbol=_GROUP_BODY, source=0)],
+        ),
+        _site(
+            _GROUP_BODY,
+            0,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=prefix),
+                CallArgument(kind="lambda", symbol=_GROUP_INNER, source=0),
+            ],
+        ),
+        _site(
+            _GROUP_INNER,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0)],
+        ),
+        _site(
+            _GROUP_INNER,
+            1,
+            _API_BUILDER,
+            "path",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_GROUP_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=inner),
+                CallArgument(kind="lambda", symbol=grandchild, source=1),
+            ],
+        ),
+        _site(
+            grandchild,
+            0,
+            _API_BUILDER,
+            "get",
+            result=None,
+            descriptor=f"({_HANDLER_DESC})V",
+            arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=0)],
+        ),
+        _site(
+            grandchild,
+            1,
+            _API_BUILDER,
+            "post",
+            result=None,
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value=leaf),
+                CallArgument(kind="lambda", symbol=CREATE_ORDER, source=1),
+            ],
+        ),
+    ]
+
+
+def test_a_catalog_declaring_leading_slash_joins_slashless_segments_as_its_framework_does(
+    tmp_path: Path,
+):
+    """Task 3 fix round 1 (the reviewer's finding). Javalin documents `path("api", …)` and
+    `path("/api", …)` as the same registration — `prefixPath` prepends `/` to a segment
+    that does not start with one — so `path("users", () -> { get(h); path("{id}", () ->
+    { get(h); post("items", h); }); })` serves `/users`, `/users/{id}` and
+    `/users/{id}/items`. Verbatim concatenation published `GET /users{id}` and
+    `POST /users{id}items`, RESOLVED: a confident wrong address, the row this project
+    forbids. The catalog now says how its framework joins segments (`path_join:
+    leading_slash`), and every literal the engine reads for it is joined that way."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("users", "{id}", "items"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/users", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/users/{id}", _MODULE + HEALTH, "resolved"),
+        ("POST", "/users/{id}/items", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_leading_slash_leaves_a_slashed_tree_exactly_as_written(tmp_path: Path):
+    """The join's first exception: a segment already starting with `/` is untouched, so a
+    router written the documented way reads back identically with and without the word."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("/users", "/{id}", "/items"), _shipped_apibuilder_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/users", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/users/{id}", _MODULE + HEALTH, "resolved"),
+        ("POST", "/users/{id}/items", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+
+
+def test_leading_slash_never_prefixes_the_wildcard_segment(tmp_path: Path):
+    """The join's third exception, `prefixPath`'s own `"*"` check: `path("*", …)` is NOT
+    `/*`. Pinned on the segment alone, because the address Javalin serves a `*` prefix
+    under is a matcher question this catalog does not answer — what matters here is
+    that the join does not invent a slash the framework's rule explicitly withholds."""
+    workspace = _resolve(
+        tmp_path, _slashless_tree("/users", "*", "/items"), _shipped_apibuilder_catalog()
+    )
+    paths = [row["path"] for row in _rows(workspace)]
+    workspace.close()
+
+    assert paths == ["/users", "/users*", "/users*/items"]
+
+
+# --- origin_param / receiver_arg (spec §12 words 1–2) ---------------------------
+
+
+def _origin_matches(origin_param: int | None) -> dict[str, object]:
+    matches = _overload_matches()
+    entry = {"owner": "com.example.web.RouterDslFacade", "method": "router", "body_arg": 0}
+    if origin_param is not None:
+        entry["origin_param"] = origin_param
+    matches["entries"] = [e for e in matches["entries"] if e.get("method") != "router"] + [entry]  # type: ignore[index]
+    return matches
+
+
+def _dsl_body(*, receiver_parameter: int | None, captures: int) -> list:
+    """`router { GET("/x") { h } }` where the DSL call sits on the body's parameter —
+    `receiver_parameter` — and the linking lambda captured `captures` values."""
+    entry = _site(
+        DECLARER + "routes(sig_r).",
+        0,
+        DSL_FACADE,
+        "router",
+        result=1,
+        arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0, captures=captures)],
+    )
+    verb = _site(
+        INLINE_BODY,
+        0,
+        DSL,
+        "GET",
+        invoke_kind="virtual",
+        receiver=None,
+        receiver_parameter=receiver_parameter,
+        descriptor="(Ljava/lang/String;Lkotlin/jvm/functions/Function1;)V",
+        arguments=[
+            CallArgument(kind="string", value="/x"),
+            CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+        ],
+    )
+    return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, verb]
+
+
+def test_a_body_chain_on_the_declared_origin_parameter_derives_clean(tmp_path: Path):
+    """`captures + k`: the lambda captured one value, so the DSL parameter is the body's
+    parameter 1; a rule declaring `origin_param: 0` accepts a head on parameter 1."""
+    workspace = _resolve(
+        tmp_path, _dsl_body(receiver_parameter=1, captures=1), _catalog(_origin_matches(0))
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+
+
+@pytest.mark.pins("combinator.origin-parameter-is-the-chains-head")
+def test_a_body_chain_on_a_field_or_another_parameter_poisons(tmp_path: Path):
+    """A null receiver is a field or an unreadable value; another index is not the origin.
+    Both are one unresolved row — the fixed-index design's wrong row, refused."""
+    for head in (None, 0):
+        workspace = _resolve(
+            tmp_path / str(head),
+            _dsl_body(receiver_parameter=head, captures=1),
+            _catalog(_origin_matches(0)),
+        )
+        assert [row["resolution"] for row in _rows(workspace)] == ["unresolved"], head
+
+
+def test_a_body_linked_without_an_origin_parameter_keeps_the_permissive_rule(tmp_path: Path):
+    """Stated in D02: without `origin_param` a null receiver in a body is read as the body's
+    own parameter, as every shipped rule did before this word existed."""
+    workspace = _resolve(
+        tmp_path, _dsl_body(receiver_parameter=None, captures=0), _catalog(_origin_matches(None))
+    )
+    assert _identities(_rows(workspace)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+
+
+@pytest.mark.pins("combinator.receiver-arg-is-the-origin")
+def test_a_receiver_argument_must_be_the_origin_parameter(tmp_path: Path):
+    """The extension-receiver form: `get(route, "/x", h)` is a STATIC call whose argument 0
+    is the route; inside `route("/api") { … }` that argument must be the body's own
+    parameter, else the row is not under `/api` and poisons (spec §12 word 2)."""
+    matches = _origin_matches(0)
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.RoutingKt",
+            "method": "get",
+            "verb": "GET",
+            "arity": 3,
+            "receiver_arg": 0,
+            "path_arg": 1,
+            "handler_arg": 2,
+        }
+    )
+
+    def body(argument: CallArgument) -> list:
+        entry = _site(
+            DECLARER + "routes(sig_r).",
+            0,
+            DSL_FACADE,
+            "router",
+            result=1,
+            arguments=[CallArgument(kind="lambda", symbol=INLINE_BODY, source=0, captures=0)],
+        )
+        verb = _site(
+            INLINE_BODY,
+            0,
+            "com/example/web/RoutingKt#",
+            "get",
+            descriptor="(Lcom/example/web/Route;Ljava/lang/String;Lkotlin/jvm/functions/Function2;)Lcom/example/web/Route;",
+            arguments=[
+                argument,
+                CallArgument(kind="string", value="/x"),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        )
+        return [*_handler_symbols(), _method_symbol(INLINE_BODY), entry, verb]
+
+    good = _resolve(
+        tmp_path / "good", body(CallArgument(kind="parameter", value=0)), _catalog(matches)
+    )
+    assert _identities(_rows(good)) == [("GET", "/x", _MODULE + LIST_ORDERS, "resolved")]
+    bad = _resolve(
+        tmp_path / "bad", body(CallArgument(kind="parameter", value=1)), _catalog(matches)
+    )
+    assert [row["resolution"] for row in _rows(bad)] == ["unresolved"]
+    unread = _resolve(tmp_path / "unread", body(CallArgument(kind="unresolved")), _catalog(matches))
+    assert [row["resolution"] for row in _rows(unread)] == ["unresolved"]
+
+
+def test_a_body_linked_entry_handed_no_lambda_derives_one_unresolved_row(tmp_path: Path):
+    """Spec §14 test 16 (§13 case 10): the entry's `body_arg` is an `instance`-kind
+    argument — a lambda a Kotlin 1.x compiler wrote as a class, so no `lambda` link
+    names a body — and the walk has nothing to jump into. One unresolved row, never
+    silence: a router the source declares is reported as unread, not absent. Pinned so
+    the register's Kotlin 1.x item has a measurable starting point."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _site(caller, 0, DECLARER + "Routes$routes$1#", "<init>", result=8, invoke_kind="special"),
+        _site(
+            caller,
+            1,
+            DSL_FACADE,
+            "router",
+            result=9,
+            arguments=[
+                CallArgument(kind="instance", source=8, symbol=DECLARER + "Routes$routes$1#")
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, None, None, "unresolved")]
+    assert [row["caller"] for row in rows] == [caller]
+
+
+def test_an_origin_param_away_from_a_body_and_a_receiver_arg_beyond_the_arity_are_refused(
+    tmp_path: Path,
+):
+    """`origin_param` names a parameter of the BODY a `body_arg` links — on a rule that
+    links none it names nothing, and a rule that meant to declare a body's origin would
+    check nothing. `receiver_arg` names an argument position: at or beyond a declared
+    `arity` no call the rule accepts carries it, so every row it reads would poison
+    with nothing saying the rule was miswritten."""
+    matches = _matches()
+    matches["vocabulary"]["prefixes"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.Predicates",
+            "method": "prefix",
+            "path_arg": 0,
+            "origin_param": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`origin_param: 0` — a parameter index of the body"):
+        _resolve(tmp_path / "origin", [], _catalog(matches))
+    matches = _matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {
+            "owner": "com.example.web.RoutingKt",
+            "method": "get",
+            "verb": "GET",
+            "arity": 2,
+            "receiver_arg": 2,
+            "path_arg": 1,
+            "handler_arg": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`receiver_arg: 2` — a position from 0 below"):
+        _resolve(tmp_path / "receiver", [], _catalog(matches))
+    # The words on rules that cannot read them: `origin_param` on a verb and on a
+    # continuation, `receiver_arg` on an entry and on a continuation — D02 says
+    # "refused anywhere else", so each is.
+    matches = _matches()
+    matches["vocabulary"]["verbs"].append(  # type: ignore[index]
+        {"owner": "com.example.web.Predicates", "method": "PUT", "verb": "PUT", "origin_param": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`PUT` declares `origin_param: 0`"):
+        _resolve(tmp_path / "verb", [], _catalog(matches))
+    matches = _matches()
+    matches["continuations"].append(  # type: ignore[union-attr]
+        {"name": "also", "owner": "com.example.web.Router", "origin_param": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`also` declares `origin_param: 0`"):
+        _resolve(tmp_path / "continuation", [], _catalog(matches))
+    matches = _matches()
+    matches["entries"].append(  # type: ignore[union-attr]
+        {
+            "owner": "com.example.web.Routers",
+            "methods": ["route"],
+            "handler_arg": 1,
+            "receiver_arg": 0,
+        }
+    )
+    with pytest.raises(CatalogError, match=r"`\['route'\]` declares `receiver_arg: 0`"):
+        _resolve(tmp_path / "entry", [], _catalog(matches))
+    matches = _matches()
+    matches["continuations"].append(  # type: ignore[union-attr]
+        {"name": "also", "owner": "com.example.web.Router", "receiver_arg": 0}
+    )
+    with pytest.raises(CatalogError, match=r"`also` declares `receiver_arg: 0`"):
+        _resolve(tmp_path / "continuation-receiver", [], _catalog(matches))
+
+
+def _origin_builder_matches() -> dict[str, object]:
+    """The builder catalog with the `Consumer` `path` declaring `origin_param: 0`."""
+    matches = _builder_matches()
+    vocabulary = dict(matches["vocabulary"])  # type: ignore[arg-type]
+    vocabulary["prefixes"] = [
+        {**rule, "origin_param": 0} if rule.get("body_arg") == 1 else rule
+        for rule in vocabulary["prefixes"]  # type: ignore[index]
+    ]
+    return {**matches, "vocabulary": vocabulary}
+
+
+def _body_chain(*, head: int | None, verbs: int, through_filter: bool) -> list:
+    """`route().path("/api", b -> …).build()` where the body's chain starts on `head`
+    (the body's parameter index, or None for a field) — `head.GET("/a", h)`, then
+    `.GET("/b", h)` when `verbs == 2`; `head.filter(f).GET("/a", h)` when
+    `through_filter`. The linking lambda captures nothing, so the origin is 0."""
+    caller = DECLARER + "routes(sig_r)."
+    facts = [
+        *_handler_symbols(),
+        _method_symbol(_BUILDER_BODY),
+        _site(caller, 0, ROUTERS, "route", result=20, descriptor=f"(){_BUILDER_DESC}"),
+        _site(
+            caller,
+            1,
+            BUILDER,
+            "path",
+            invoke_kind="virtual",
+            receiver=20,
+            result=21,
+            descriptor=f"(Ljava/lang/String;Ljava/util/function/Consumer;){_BUILDER_DESC}",
+            arguments=[
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_BUILDER_BODY, source=101, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            BUILDER,
+            "build",
+            invoke_kind="virtual",
+            receiver=21,
+            result=22,
+            descriptor="()Lcom/example/web/Router;",
+        ),
+    ]
+    ordinal, receiver = 0, None
+    if through_filter:
+        facts.append(
+            _site(
+                _BUILDER_BODY,
+                ordinal,
+                BUILDER,
+                "filter",
+                invoke_kind="virtual",
+                receiver=None,
+                receiver_parameter=head,
+                result=1,
+                descriptor=f"(Lcom/example/web/Filter;){_BUILDER_DESC}",
+                arguments=[CallArgument(kind="lambda", symbol=HEALTH, source=99)],
+            )
+        )
+        ordinal, receiver = 1, 1
+    for path in ("/a", "/b")[:verbs]:
+        facts.append(
+            _site(
+                _BUILDER_BODY,
+                ordinal,
+                BUILDER,
+                "GET",
+                invoke_kind="virtual",
+                receiver=receiver,
+                receiver_parameter=head if receiver is None else None,
+                result=ordinal + 10,
+                descriptor=f"(Ljava/lang/String;Lcom/example/web/Handler;){_BUILDER_DESC}",
+                arguments=[
+                    CallArgument(kind="string", value=path),
+                    CallArgument(kind="lambda", symbol=HEALTH, source=100 + ordinal),
+                ],
+            )
+        )
+        ordinal, receiver = ordinal + 1, ordinal + 10
+    return facts
+
+
+def test_an_extending_chain_off_the_origin_poisons_every_route_it_yields(tmp_path: Path):
+    """Spec §13 case 6: a chain in a linked body that does not start at the origin
+    parameter — a field, another parameter — is never attributed to the origin. The
+    builder form declares its route AND carries the chain, and the fix-round-1 engine
+    published that route resolved under `/api` beside one unresolved row: a route
+    registered on ANOTHER builder, at an address this router never serves. Every route
+    the chain yields is poisoned instead — one unresolved row per route, each with its
+    own handler, none beside them. Two routes with the same handler are two unresolved
+    rows: only identity-known rows dedup, and these have no identity."""
+    unresolved = (None, None, _MODULE + HEALTH, "unresolved")
+    for shape, expected in (
+        ({"verbs": 1, "through_filter": False}, [unresolved]),
+        ({"verbs": 2, "through_filter": False}, [unresolved, unresolved]),
+        ({"verbs": 1, "through_filter": True}, [unresolved]),
+    ):
+        for head in (None, 1):
+            workspace = _resolve(
+                tmp_path / f"{shape['verbs']}-{shape['through_filter']}-{head}",
+                _body_chain(head=head, **shape),  # type: ignore[arg-type]
+                _catalog(_origin_builder_matches()),
+            )
+            assert _identities(_rows(workspace)) == expected, (shape, head)
+
+
+def test_an_extending_chain_on_the_origin_derives_every_route_unchanged(tmp_path: Path):
+    """The control for the test above: the same three chains on the body's parameter 0
+    — the origin — derive exactly what they did before the word existed."""
+    resolved = _MODULE + HEALTH
+    for shape, expected in (
+        ({"verbs": 1, "through_filter": False}, [("GET", "/api/a", resolved, "resolved")]),
+        (
+            {"verbs": 2, "through_filter": False},
+            [("GET", "/api/a", resolved, "resolved"), ("GET", "/api/b", resolved, "resolved")],
+        ),
+        ({"verbs": 1, "through_filter": True}, [("GET", "/api/a", resolved, "resolved")]),
+    ):
+        workspace = _resolve(
+            tmp_path / f"{shape['verbs']}-{shape['through_filter']}",
+            _body_chain(head=0, **shape),  # type: ignore[arg-type]
+            _catalog(_origin_builder_matches()),
+        )
+        assert _identities(_rows(workspace)) == expected, shape
+
+
+# --- `ktor-routing` (A2 Task 5): the extension-receiver form on the shipped catalog ---
+
+_ROUTING_ROOT = "io/ktor/server/routing/RoutingRootKt#"
+_ROUTING_BUILDER = "io/ktor/server/routing/RoutingBuilderKt#"
+_ROUTE = "Lio/ktor/server/routing/Route;"
+_ROUTING_DESC = "(Lio/ktor/server/application/Application;Lkotlin/jvm/functions/Function1;)Lio/ktor/server/routing/RoutingRoot;"
+_ROUTE_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function1;){_ROUTE}"
+_VERB_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function2;){_ROUTE}"
+_PATHLESS_VERB_DESC = f"({_ROUTE}Lkotlin/jvm/functions/Function2;){_ROUTE}"
+_ROUTING_BODY = DECLARER + "orders$lambda$1(sig_k0)."
+_API_BODY = DECLARER + "orders$lambda$1$lambda$0(sig_k1)."
+_SUSPEND_HANDLER = DECLARER + "Routes$orders$1$1$1#"
+
+
+def _shipped_ktor_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "ktor-routing")
+
+
+def _ktor_facts(entry_owner: str) -> list:
+    """`routing { route("/api") { get("/orders") { }; get { } } }` — the shape
+    `fixtures/orders-ktor/.../KtorRoutes.kt`'s `orders()` compiles to (its fact file, read
+    2026-09-13): every DSL call `invokestatic` with the block's own parameter as argument
+    0, each `Function1` block an `invokedynamic` body linked as a `lambda` argument with
+    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class.
+    `entry_owner` is the one cell the near-miss below varies."""
+    return [
+        _method_symbol(_ROUTING_BODY),
+        _method_symbol(_API_BODY),
+        _site(
+            DECLARER + "orders(sig_o0).",
+            0,
+            entry_owner,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_ROUTING_BODY, source=0, captures=0),
+            ],
+        ),
+        _site(
+            _ROUTING_BODY,
+            0,
+            _ROUTING_BUILDER,
+            "route",
+            result=2,
+            descriptor=_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/api"),
+                CallArgument(kind="lambda", symbol=_API_BODY, source=1, captures=0),
+            ],
+        ),
+        _site(
+            _API_BODY,
+            0,
+            _ROUTING_BUILDER,
+            "get",
+            result=3,
+            descriptor=_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/orders"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=2),
+            ],
+        ),
+        _site(
+            _API_BODY,
+            1,
+            _ROUTING_BUILDER,
+            "get",
+            result=5,
+            descriptor=_PATHLESS_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=4),
+            ],
+        ),
+    ]
+
+
+def test_the_ktor_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
+    owner. `get("/orders") { }` under `route("/api") { }` is `GET /api/orders`; the
+    path-less `get { }` is `GET /api` — the prefix alone, Ktor's `method(Get)` child of
+    the receiver itself (`path: ""`). Both handlers NULL: a suspend lambda arrives as an
+    `instance`, which is a class and not a method symbol (spec §13 case 8)."""
+    workspace = _resolve(tmp_path, _ktor_facts(_ROUTING_ROOT), _shipped_ktor_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [
+        ("GET", "/api", None, "resolved"),
+        ("GET", "/api/orders", None, "resolved"),
+    ]
+
+
+@pytest.mark.declines("ktor-routing")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_ktor_catalog_declines_a_routing_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `routing` name, the same `Function1` lambda with `captures: 0`, the
+    same static `route`/`get` on the block's parameter inside it — and only the entry's
+    OWNER differs: `com.example.NotRouting#routing`, which is not
+    `io.ktor.server.routing.RoutingRootKt`.
+
+    Nothing is the required answer. The body-linked entry is the ONLY place this catalog
+    roots — every `RoutingBuilderKt` call is static and receiver-less, never a root of its
+    own — so with the owner check gone any method named `routing` handed a lambda would
+    root a tree, and a router Ktor never installed would be published under this
+    catalog's id."""
+    workspace = _resolve(tmp_path, _ktor_facts("com/example/NotRouting#"), _shipped_ktor_catalog())
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []
+
+
+# --- chain-form composers, negators, a terminal, `verb_arg`, array paths (A2 Task 6, spec §12 words 3–5) ---
+
+SPEC = "com/example/gw/PredicateSpec#"
+BOOL = "com/example/gw/BooleanSpec#"
+GW = "com/example/gw/Routes#"
+
+
+def _gateway_matches() -> dict[str, object]:
+    """An invented gateway-shaped vocabulary: a route is a RECEIVER chain of predicate
+    calls on the body's parameter, composed by the zero-argument `and()`/`or()`, and
+    emitted by the chain's last call — the terminal `uri`, which carries no handler."""
+    return {
+        "entries": [
+            {"owner": "com.example.gw.Routes", "method": "route", "body_arg": 1, "origin_param": 0}
+        ],
+        "origins": [{"owner": "com.example.gw.Routes", "method": "routes", "arity": 0}],
+        "vocabulary": {
+            "prefixes": [
+                {
+                    "owner": "com.example.gw.PredicateSpec",
+                    "method": "path",
+                    "arity": 1,
+                    "path_arg": 0,
+                }
+            ],
+            "verbs": [
+                {
+                    "owner": "com.example.gw.PredicateSpec",
+                    "method": "method",
+                    "arity": 1,
+                    "verb_arg": 0,
+                },
+                {
+                    "owner": "com.example.gw.BooleanSpec",
+                    "method": "uri",
+                    "arity": 1,
+                    "terminal": True,
+                    "handler": "none",
+                },
+            ],
+            "chain_composers": {
+                "and": [{"owner": "com.example.gw.BooleanSpec", "method": "and"}],
+                "or": [{"owner": "com.example.gw.BooleanSpec", "method": "or"}],
+            },
+            "negators": [
+                {"owner": "com.example.gw.PredicateSpec", "method": "not"},
+                {"owner": "com.example.gw.BooleanSpec", "method": "negate"},
+            ],
+        },
+        "continuations": [
+            {"name": "build", "owner": "com.example.gw.Routes"},
+            {"name": "filters", "owner": "com.example.gw.BooleanSpec", "pass_through": True},
+            {"name": "host", "owner": "com.example.gw.BooleanSpec", "pass_through": True},
+        ],
+    }
+
+
+def _gateway_body(chain: list[tuple[str, str, list[CallArgument]]]) -> list:
+    """`routes().route("id", r -> r.<chain>).build()`: `chain` is (owner, name, args) from
+    the head; each call's receiver is the previous call's result, the head's is the body's
+    parameter 0 (the lambda captures nothing)."""
+    caller = DECLARER + "routes(sig_r)."
+    entry_sites = [
+        _site(caller, 0, GW, "routes", result=0, descriptor="()Lcom/example/gw/Builder;"),
+        _site(
+            caller,
+            1,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[
+                CallArgument(kind="string", value="id"),
+                CallArgument(kind="lambda", symbol=INLINE_BODY, source=1, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            GW,
+            "build",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="()Lcom/example/gw/Locator;",
+        ),
+    ]
+    body: list[CallSiteFact] = []
+    previous: int | None = None
+    for ordinal, (owner, name, args) in enumerate(chain):
+        body.append(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=INLINE_BODY,
+                invoke_kind="virtual",
+                ordinal=ordinal,
+                target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+                receiver=previous,
+                receiver_parameter=0 if previous is None else None,
+                result=ordinal,
+                arguments=args,
+            )
+        )
+        previous = ordinal
+    return [_method_symbol(INLINE_BODY), *entry_sites, *body]
+
+
+def _enum(name: str) -> CallArgument:
+    return CallArgument(kind="enum", symbol="org/springframework/http/HttpMethod#" + name + ".")
+
+
+def _uri() -> tuple[str, str, list[CallArgument]]:
+    return (BOOL, "uri", [CallArgument(kind="string", value="http://x")])
+
+
+def test_a_predicate_chain_ending_at_a_terminal_is_one_route(tmp_path: Path):
+    """Spec §12 word 4: the terminal's routes are its receiver chain folded as
+    CONSTRAINTS — `path` and `method` merged across the chain-form `and()` — one row,
+    handler NULL as the rule says, `caller` the method holding the tree's root."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/orders/**")]),
+        (BOOL, "and", []),
+        (SPEC, "method", [_enum("GET")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/orders/**", None, "resolved")]
+    assert [row["caller"] for row in rows] == [DECLARER + "routes(sig_r)."]
+
+
+def test_or_opens_a_branch_and_and_binds_to_the_left(tmp_path: Path):
+    """`(a or b) and GET`, left-associative as the framework composes it: `or()` makes
+    the next contribution a branch of its own, and the `method` after the `and()` merges
+    into BOTH branches."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+        (BOOL, "and", []),
+        (SPEC, "method", [_enum("GET")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", "/a", None, "resolved"), ("GET", "/b", None, "resolved")]
+
+
+def test_a_verb_only_route_serves_every_path_and_a_vararg_of_verbs_is_one_branch_each(
+    tmp_path: Path,
+):
+    """Spec §12 word 5: `method(GET, POST)` is a vararg, one branch per verb; a route
+    whose constraints read no path serves every path — `/**` (§7 case 3), contributed
+    ONCE, after the chain and the terminal's own constraints are merged."""
+    chain = [
+        (SPEC, "method", [CallArgument(kind="array", elements=[_enum("GET"), _enum("POST")])]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", "/**", None, "resolved"), ("POST", "/**", None, "resolved")]
+
+
+def test_a_terminal_directly_on_the_origin_parameter_is_a_catch_all(tmp_path: Path):
+    """`r.uri(x)` — a chain of nothing but the terminal: no constraint was read and
+    nothing was poisoned, so the route serves every path and names no verb."""
+    workspace = _resolve(tmp_path, _gateway_body([_uri()]), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/**", None, "resolved")]
+
+
+def test_a_string_verb_reads_as_written_and_an_unreadable_one_poisons_only_the_verb(
+    tmp_path: Path,
+):
+    """The verb argument as a string literal is that verb AS WRITTEN — measured on
+    spring-web 7.0.9, `HttpMethod.valueOf` compares case-sensitively and otherwise wraps
+    the string unchanged, so upper-casing here would publish a verb the framework never
+    matches; an argument of any other kind poisons `method` alone, the path intact."""
+    written = _resolve(
+        tmp_path / "written",
+        _gateway_body([(SPEC, "method", [CallArgument(kind="string", value="GET")]), _uri()]),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(written)) == [("GET", "/**", None, "resolved")]
+    written.close()
+    unread = _resolve(
+        tmp_path / "unread",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "and", []),
+                (SPEC, "method", [CallArgument(kind="unresolved")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(unread)) == [(None, "/a", None, "unresolved")]
+    unread.close()
+
+
+@pytest.mark.pins("combinator.negator-poisons")
+def test_a_negator_anywhere_in_the_chain_poisons_the_route(tmp_path: Path):
+    """Spec §12 word 3: a negated predicate still serves SOMETHING, and what it serves
+    is not readable from the negation — one unresolved row, never the un-negated path
+    published as resolved."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "negate", []),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["resolution"]) for row in rows] == [(None, "unresolved")]
+
+
+def test_an_or_branch_opened_onto_a_pass_through_is_a_branch_of_its_own(tmp_path: Path):
+    """`path("/a").or().host(h)`: the alternative `or()` opened is the host predicate,
+    which the walk reads as nothing — a branch with NO path constraint, which serves
+    every path (spec §12 word 4). The framework serves `/a` AND `/**`; a fold that left
+    the branch pending across the pass-through would publish `/a` alone, and the
+    catch-all half of the route would vanish (Task 6 review, Important). Left-associative
+    still: `((a or host) and b)` merges `/b` into both branches."""
+    opened = _resolve(
+        tmp_path / "opened",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "or", []),
+                (BOOL, "host", [CallArgument(kind="string", value="**.x.com")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(opened)) == [
+        (None, "/**", None, "resolved"),
+        (None, "/a", None, "resolved"),
+    ]
+    opened.close()
+    bound = _resolve(
+        tmp_path / "bound",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "or", []),
+                (BOOL, "host", [CallArgument(kind="string", value="**.x.com")]),
+                (BOOL, "and", []),
+                (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(bound)) == [
+        (None, "/a/b", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    bound.close()
+
+
+def test_an_or_dangling_before_the_terminal_opens_nothing(tmp_path: Path):
+    """`path("/a").or().uri(x)`: the `or()` is followed by no predicate at all, so no
+    alternative was written — one route, `/a`. The terminal is not a predicate and is
+    never the branch an `or()` opens."""
+    workspace = _resolve(
+        tmp_path,
+        _gateway_body(
+            [(SPEC, "path", [CallArgument(kind="string", value="/a")]), (BOOL, "or", []), _uri()]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/a", None, "resolved")]
+
+
+def test_a_pass_through_in_the_chain_contributes_nothing(tmp_path: Path):
+    """`filters(fn)` between the predicates and the terminal is a declared pass-through:
+    stepped over, its lambda never read as a handler or a route."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "filters", [CallArgument(kind="lambda", symbol=HEALTH, source=0, captures=0)]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_matches()))
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [(None, "/a", None, "resolved")]
+
+
+def test_a_path_vararg_is_one_branch_per_literal_and_a_non_literal_element_poisons(
+    tmp_path: Path,
+):
+    """Spec §12 word 4's last sentence: `path("/a", "/b")` is one branch per element,
+    read through the same literal-path join every other path is; an array holding
+    anything but string literals is an unreadable path."""
+    literals = _resolve(
+        tmp_path / "literals",
+        _gateway_body(
+            [
+                (
+                    SPEC,
+                    "path",
+                    [
+                        CallArgument(
+                            kind="array",
+                            elements=[
+                                CallArgument(kind="string", value="/a"),
+                                CallArgument(kind="string", value="/b"),
+                            ],
+                        )
+                    ],
+                ),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(literals)) == [
+        (None, "/a", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    literals.close()
+    mixed = _resolve(
+        tmp_path / "mixed",
+        _gateway_body(
+            [
+                (
+                    SPEC,
+                    "path",
+                    [
+                        CallArgument(
+                            kind="array",
+                            elements=[
+                                CallArgument(kind="string", value="/a"),
+                                CallArgument(kind="unresolved"),
+                            ],
+                        )
+                    ],
+                ),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(mixed)) == [(None, None, None, "unresolved")]
+    mixed.close()
+
+
+def test_a_chain_whose_head_is_not_the_origin_parameter_poisons(tmp_path: Path):
+    """Spec §13 case 6 on the chain form: a head on a field receiver is not the body's
+    origin parameter, so the whole route is one unresolved row — and so is a chain with
+    a call the vocabulary does not know in it, since what that call constrains is
+    unreadable."""
+    facts = _gateway_body([(SPEC, "path", [CallArgument(kind="string", value="/a")]), _uri()])
+    head = next(f for f in facts if isinstance(f, CallSiteFact) and f.target.name == "path")
+    facts[facts.index(head)] = head.model_copy(update={"receiver_parameter": None})
+    field = _resolve(tmp_path / "field", facts, _catalog(_gateway_matches()))
+    assert [row["resolution"] for row in _rows(field)] == ["unresolved"]
+    field.close()
+    unknown = _resolve(
+        tmp_path / "unknown",
+        _gateway_body(
+            [
+                (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+                (BOOL, "and", []),
+                (SPEC, "header", [CallArgument(kind="string", value="X-Id")]),
+                _uri(),
+            ]
+        ),
+        _catalog(_gateway_matches()),
+    )
+    assert _identities(_rows(unknown)) == [(None, None, None, "unresolved")]
+    unknown.close()
+
+
+def test_an_outbound_terminal_route_reading_no_path_poisons_the_path(tmp_path: Path):
+    """The any-path address is what a SERVED route with no path constraint is (§7 case
+    3); an outbound catalog serves nothing, so a terminal route that read no path has no
+    address to publish and the path is poisoned instead. No shipped outbound combinator
+    catalog exists — pinned hand-built so the gate is stated, not assumed."""
+    catalog = Catalog(
+        id="test-outbound-chain",
+        style="combinator",
+        protocol="http",
+        direction="outbound",
+        requires=("call_site", "string_constants", "chain_reconstruction"),
+        matches=_gateway_matches(),
+        source=Path("test-outbound-chain.yml"),
+    )
+    workspace = _resolve(
+        tmp_path, _gateway_body([(SPEC, "method", [_enum("GET")]), _uri()]), catalog
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == [("GET", None, None, "unresolved")]
+
+
+def test_a_chain_word_on_a_name_another_role_claims_and_a_terminal_without_a_handler_answer_are_refused(
+    tmp_path: Path,
+):
+    """A chain composer or negator on an (owner, method) a verb, prefix or media rule
+    already names is two readings of one call decided by dispatch order, never by the
+    catalog; a terminal declares a whole route, so it says where its handler sits or
+    that there is none; `verb_arg` names an argument position and is the rule's ONE
+    answer for its verb — beside `verb`, or at a position the arity cannot carry, it is
+    a rule that cannot mean what it says."""
+    colliding = _gateway_matches()
+    colliding["vocabulary"]["negators"].append(  # type: ignore[index]
+        {"owner": "com.example.gw.PredicateSpec", "method": "path"}
+    )
+    with pytest.raises(CatalogError, match="`path`.*negator"):
+        _resolve(tmp_path / "colliding", _gateway_body([_uri()]), _catalog(colliding))
+    handler_less = _gateway_matches()
+    del handler_less["vocabulary"]["verbs"][1]["handler"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`uri`.*terminal"):
+        _resolve(tmp_path / "handler_less", _gateway_body([_uri()]), _catalog(handler_less))
+    two_verbs = _gateway_matches()
+    two_verbs["vocabulary"]["verbs"][0]["verb"] = "GET"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`method`.*verb_arg"):
+        _resolve(tmp_path / "two_verbs", _gateway_body([_uri()]), _catalog(two_verbs))
+    beyond = _gateway_matches()
+    beyond["vocabulary"]["verbs"][0]["verb_arg"] = 1  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`method`.*verb_arg"):
+        _resolve(tmp_path / "beyond", _gateway_body([_uri()]), _catalog(beyond))
+    both_forms = _gateway_matches()
+    both_forms["vocabulary"]["composers"] = {  # type: ignore[index]
+        "and": [{"owner": "com.example.gw.BooleanSpec", "method": "and"}]
+    }
+    with pytest.raises(CatalogError, match="`and`.*chain_composers.*composers"):
+        _resolve(tmp_path / "both_forms", _gateway_body([_uri()]), _catalog(both_forms))
+    extending = _gateway_matches()
+    extending["vocabulary"]["verbs"][1]["extends_receiver"] = True  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`uri`.*terminal.*extends_receiver"):
+        _resolve(tmp_path / "extending", _gateway_body([_uri()]), _catalog(extending))
+
+
+# --- body-linked entries told apart by arity (A2 Task 7, spec §3 applied to entries) ---
+
+_UNNAMED_BODY = DECLARER + "lambda$routes$1(sig_a2)."
+
+
+def _two_route_overloads_matches() -> dict[str, object]:
+    """The invented gateway vocabulary with BOTH `route` overloads as body-linked entries:
+    `route(String, Function)` with the body at 1, `route(Function)` with it at 0 — one
+    owner, one name, told apart by `arity` (and `arg_types` on the named one)."""
+    matches = _gateway_matches()
+    matches["entries"] = [
+        {
+            "owner": "com.example.gw.Routes",
+            "method": "route",
+            "arity": 2,
+            "arg_types": {0: "java.lang.String"},
+            "body_arg": 1,
+            "origin_param": 0,
+        },
+        {
+            "owner": "com.example.gw.Routes",
+            "method": "route",
+            "arity": 1,
+            "body_arg": 0,
+            "origin_param": 0,
+        },
+    ]
+    return matches
+
+
+def _two_route_overloads_body() -> list:
+    """`routes().route("id", r -> r.path("/a").uri(x)).route(r -> r.path("/b").uri(x)).build()`
+    — the two overloads in one chain, each linking a body of its own."""
+    caller = DECLARER + "routes(sig_r)."
+    sites = [
+        _site(caller, 0, GW, "routes", result=0, descriptor="()Lcom/example/gw/Builder;"),
+        _site(
+            caller,
+            1,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[
+                CallArgument(kind="string", value="id"),
+                CallArgument(kind="lambda", symbol=INLINE_BODY, source=10, captures=0),
+            ],
+        ),
+        _site(
+            caller,
+            2,
+            GW,
+            "route",
+            invoke_kind="virtual",
+            receiver=1,
+            result=2,
+            descriptor="(Ljava/util/function/Function;)Lcom/example/gw/Builder;",
+            arguments=[CallArgument(kind="lambda", symbol=_UNNAMED_BODY, source=11, captures=0)],
+        ),
+        _site(
+            caller,
+            3,
+            GW,
+            "build",
+            invoke_kind="virtual",
+            receiver=2,
+            result=3,
+            descriptor="()Lcom/example/gw/Locator;",
+        ),
+    ]
+    for body, path in ((INLINE_BODY, "/a"), (_UNNAMED_BODY, "/b")):
+        sites.extend(
+            [
+                _site(
+                    body,
+                    0,
+                    SPEC,
+                    "path",
+                    invoke_kind="virtual",
+                    receiver_parameter=0,
+                    result=0,
+                    arguments=[CallArgument(kind="string", value=path)],
+                ),
+                _site(
+                    body,
+                    1,
+                    BOOL,
+                    "uri",
+                    invoke_kind="virtual",
+                    receiver=0,
+                    result=1,
+                    arguments=[CallArgument(kind="string", value="http://x")],
+                ),
+            ]
+        )
+    return [_method_symbol(INLINE_BODY), _method_symbol(_UNNAMED_BODY), *sites]
+
+
+def test_two_body_linked_overloads_of_one_name_each_fold_their_own_body(tmp_path: Path):
+    """Spec §3's discriminator applies to every rule kind, and a body-linked entry was the
+    one kind it skipped: matched on owner and name alone, the first `route` entry claimed
+    both overloads, so `route(Function)` was read at `body_arg: 1` — no lambda there, one
+    unresolved row — and the route it links was never folded. With `arity` (and
+    `arg_types`) read on entries as on verbs, each overload jumps to its OWN body and
+    both routes derive, under the one method holding the chain."""
+    workspace = _resolve(
+        tmp_path, _two_route_overloads_body(), _catalog(_two_route_overloads_matches())
+    )
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        (None, "/a", None, "resolved"),
+        (None, "/b", None, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {DECLARER + "routes(sig_r)."}
+
+
+def test_two_body_linked_entries_that_could_both_accept_one_call_are_refused(tmp_path: Path):
+    """Spec §3c, on entries as on every other rule kind: two entries sharing owner, method
+    and arity that type no shared position differently could both accept one call, and
+    file order would decide — refused at load, naming both. And `arg_types` without an
+    `arity` is an entry that cannot mean what it says."""
+    same_arity = _two_route_overloads_matches()
+    same_arity["entries"][1]["arity"] = 2  # type: ignore[index]
+    del same_arity["entries"][1]["body_arg"]  # type: ignore[index]
+    same_arity["entries"][1]["body_arg"] = 1  # type: ignore[index]
+    with pytest.raises(CatalogError, match=r"`entries` rules for `route` at arity 2 could both"):
+        _resolve(tmp_path / "same", _two_route_overloads_body(), _catalog(same_arity))
+    untyped = _two_route_overloads_matches()
+    del untyped["entries"][0]["arity"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="`route` declares `arg_types` without `arity`"):
+        _resolve(tmp_path / "untyped", _two_route_overloads_body(), _catalog(untyped))
+
+
+# --- `spring-cloud-gateway` (A2 Task 7): the chain form on the shipped catalog ---
+
+_GW_BUILDER = "org/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder#"
+_GW_LOCATOR_BUILDER = "org/springframework/cloud/gateway/route/builder/RouteLocatorBuilder#"
+_GW_PREDICATE_SPEC = "org/springframework/cloud/gateway/route/builder/PredicateSpec#"
+_GW_BOOLEAN_SPEC = "org/springframework/cloud/gateway/route/builder/BooleanSpec#"
+_GW_ROUTE_DESC = (
+    "(Ljava/lang/String;Ljava/util/function/Function;)"
+    "Lorg/springframework/cloud/gateway/route/builder/RouteLocatorBuilder$Builder;"
+)
+_GW_ROUTES = DECLARER + "routes(sig_g0)."
+_GW_BODY = DECLARER + "lambda$routes$0(sig_g1)."
+
+
+def _shipped_gateway_catalog() -> Catalog:
+    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+    from sextant.resources import catalogs_dir
+
+    return next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-cloud-gateway"
+    )
+
+
+def _gateway_facts(chain_owner: str) -> list:
+    """`builder.routes().route("orders", r -> r.path("/orders/**").uri("http://x")).build()`
+    — the shape `fixtures/orders-gateway/.../GatewayRoutes.java`'s `routes()` compiles to
+    (`javap -c`, 2026-09-13): `routes()` on `RouteLocatorBuilder`, `route`/`build` on its
+    `$Builder`, the lambda an `invokedynamic` body linked with `captures: 0`, and inside
+    it `PredicateSpec.path` on the body's parameter 0 then `BooleanSpec.uri` on that
+    result — the OWNER of each call being the receiver's static type. `chain_owner` is
+    the type the outer chain is written on: the one cell the near-miss below varies."""
+    return [
+        _method_symbol(_GW_BODY),
+        # Value ids as the fixture's own fact file carries them: `routes()` on the method's
+        # `RouteLocatorBuilder` parameter, the lambda's `source` the `LambdaMetafactory`
+        # site's result (a value of its own, never the `route` call's), `build()` on the
+        # `route` call's result.
+        _site(
+            _GW_ROUTES,
+            0,
+            _GW_LOCATOR_BUILDER,
+            "routes",
+            invoke_kind="virtual",
+            receiver_parameter=0,
+            result=7,
+            descriptor=f"()L{_GW_BUILDER[:-1]};",
+        ),
+        _site(
+            _GW_ROUTES,
+            1,
+            chain_owner,
+            "route",
+            invoke_kind="virtual",
+            receiver=7,
+            result=12,
+            descriptor=_GW_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="string", value="orders"),
+                CallArgument(kind="lambda", symbol=_GW_BODY, source=9, captures=0),
+            ],
+        ),
+        _site(
+            _GW_ROUTES,
+            2,
+            chain_owner,
+            "build",
+            invoke_kind="virtual",
+            receiver=12,
+            result=46,
+            descriptor="()Lorg/springframework/cloud/gateway/route/RouteLocator;",
+        ),
+        _site(
+            _GW_BODY,
+            0,
+            _GW_PREDICATE_SPEC,
+            "path",
+            invoke_kind="virtual",
+            receiver_parameter=0,
+            result=0,
+            descriptor=f"([Ljava/lang/String;)L{_GW_BOOLEAN_SPEC[:-1]};",
+            arguments=[
+                CallArgument(
+                    kind="array", elements=[CallArgument(kind="string", value="/orders/**")]
+                )
+            ],
+        ),
+        _site(
+            _GW_BODY,
+            1,
+            _GW_BOOLEAN_SPEC,
+            "uri",
+            invoke_kind="virtual",
+            receiver=0,
+            result=1,
+            descriptor="(Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/Buildable;",
+            arguments=[CallArgument(kind="string", value="http://orders-service")],
+        ),
+    ]
+
+
+def test_the_gateway_catalog_derives_a_route_from_the_real_entry(tmp_path: Path):
+    """The paired positive (GUIDELINES §10): the shipped rules fire on the real owners.
+    `path("/orders/**")` — a vararg, one literal — then `uri(…)`: one route, `/orders/**`,
+    no verb (a catch-all one column over, spec §13 case 7), no handler (a gateway route
+    forwards), caller = the method holding `build()`."""
+    workspace = _resolve(tmp_path, _gateway_facts(_GW_BUILDER), _shipped_gateway_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/orders/**", None, "resolved")]
+    assert [row["caller"] for row in rows] == [_GW_ROUTES]
+
+
+@pytest.mark.declines("spring-cloud-gateway")
+@pytest.mark.pins("combinator.entry-owner-is-the-declared-type")
+def test_the_gateway_catalog_declines_a_route_call_on_another_owner(tmp_path: Path):
+    """§10 near-miss on the entry's owner conjunct. Every other cell is the positive
+    above — the same `route` name and descriptor, the same `Function` lambda with
+    `captures: 0`, the same `PredicateSpec.path` then `BooleanSpec.uri` chain on the
+    body's parameter inside it — and only the OWNER the outer chain is written on
+    differs: `com.example.NotABuilder#route`, which is not `RouteLocatorBuilder$Builder`
+    (and so its `build()` is not this catalog's continuation either: a `route` on another
+    type returns that type).
+
+    Nothing is the required answer. The body-linked entries and the `build()` continuation
+    are the ONLY roots this catalog has — a predicate chain inside a body is never a root
+    of its own — so with the owner check gone any method named `route` handed a lambda
+    would root a tree, and `/orders/**` would be published under this catalog's id for a
+    route the gateway never registered."""
+    workspace = _resolve(
+        tmp_path, _gateway_facts("com/example/NotABuilder#"), _shipped_gateway_catalog()
+    )
+    identities = _identities(_rows(workspace))
+    workspace.close()
+
+    assert identities == []

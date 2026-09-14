@@ -288,6 +288,25 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.url-via-follows-only-a-declared-call": Guard(
+        what="a `url_via` (or `channel_via`) form follows the argument's linked call only "
+        "where that call's OWNER is the one the form declares — `URI.create`, never any "
+        "`create` the value happens to come from",
+        why="the ladder is the one place an address is read off a call OTHER than the one "
+        "the catalog matched, and the owner is what vouches for that call; without it a "
+        '`uri(Urls.create("…"))` on a helper the catalog knows nothing about publishes '
+        "that helper's argument as the request's address at `resolved`/`compiler` — a "
+        "resolved address on evidence about a different type. The anchor is the shared "
+        "reader (`shapes/arguments.py`), so the same edit weakens `channel_via`; this id "
+        "is named for the capture whose near-miss pins it",
+        edits=(
+            Edit(
+                path=_ARGUMENTS,
+                find='            and site.get("owner") == owner_symbol\n',
+                replace="            and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     # --- `combinator` -------------------------------------------------------
     "combinator.unrecognised-overload-is-a-row": Guard(
         what="a call the vocabulary names but no overload rule accepts derives one unresolved row",
@@ -349,20 +368,85 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.origin-parameter-is-the-chains-head": Guard(
+        what="inside a body whose linking rule declares `origin_param`, a chain's head is "
+        "clean only when it sits on the body's parameter `captures + k` — the one the "
+        "framework handed the block",
+        why="without the comparison every head with no producing call reads as the origin: "
+        "a route registered on a field's builder, on another parameter, or on a value the "
+        "extractor could not follow is published under this body's prefix as resolved, "
+        "the fixed-index design's wrong row with nothing saying the receiver was not read",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='    if site["receiver"] is None and site.get("receiver_parameter") == origin:',
+                replace='    if site["receiver"] is None and True:  # guard disabled by scripts/guard_check.py',
+            ),
+        ),
+    ),
+    "combinator.receiver-arg-is-the-origin": Guard(
+        what="a rule naming `receiver_arg` reads its route only when that argument is the "
+        "enclosing body's origin parameter",
+        why="without the comparison any parameter at that position passes: "
+        '`get(someOtherRoute, "/x")` inside `route("/api") { }` is published as '
+        "`GET /api/x`, an address the framework never serves, resolved",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find='        and argument.get("value") == scope.origin_parameter',
+                replace="        and True  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "combinator.negator-poisons": Guard(
+        what="a negator anywhere in the receiver chain a terminal folds poisons every "
+        "branch of the route",
+        why="without it the negation reads as a pass-through — nothing contributed, the "
+        'chain folded on — and `path("/a").negate().uri(x)` is published as `/a`, '
+        "resolved: the one path the route does NOT serve, presented as its address",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if key in context.negators:\n"
+                "            return [_Route(poisons=_IDENTITY_POISON)]",
+                replace="        if key in context.negators:\n"
+                "            continue  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "combinator.entry-owner-is-the-declared-type": Guard(
-        what="an argument-rooted entry matches a call only on the owner AND method the "
-        "catalog declares",
+        what="an entry of either shape — argument-rooted or body-linked — matches a call "
+        "only on the owner AND method the catalog declares",
         why="the two functional-routing catalogs are one package apart and identical in "
         "every other cell — same `route(predicate, handler)` call, same verb factory "
         "names, same argument shapes. Matching on the method name alone roots the "
         "reactive router under the servlet catalog and vice versa, and each then derives "
         "an unresolved row for a tree its twin already derived correctly: a duplicate "
-        "boundary with a wrong catalog id, and a gap row for a route that has none",
+        "boundary with a wrong catalog id, and a gap row for a route that has none. A "
+        "body-linked entry is the ONLY root an all-static nesting DSL has (A2 Task 3), so "
+        "there the same slip roots any method of that name handed a lambda and publishes "
+        "a router nobody registered",
         edits=(
             Edit(
                 path=_COMBINATOR,
                 find='            if site["owner"] == entry["owner"] and site["name"] in entry["methods"]',
                 replace='            if site["name"] in entry["methods"]  # guard disabled',
+            ),
+            # The body-linked shape goes through `_matching_rule` (arity and arg_types
+            # beside owner and name, A2 Task 7); the weakening hands each entry the
+            # site re-owned as that entry's own type, so only the owner conjunct falls.
+            Edit(
+                path=_COMBINATOR,
+                find="    return _matching_rule(site, context.body_entries)\n",
+                replace="    return next(  # guard disabled by scripts/guard_check.py\n"
+                "        (\n"
+                "            match\n"
+                "            for entry in context.body_entries\n"
+                '            if (match := _matching_rule({**site, "owner": entry["owner"]}, (entry,)))\n'
+                "            is not None\n"
+                "        ),\n"
+                "        None,\n"
+                "    )\n",
             ),
         ),
     ),

@@ -89,6 +89,11 @@ ARTIFACTS=(
   "org.springframework.amqp|spring-amqp|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.kafka|spring-kafka|3.1.4|META-INF/MANIFEST.MF|Implementation-Version"
   "org.springframework.ws|spring-ws-core|4.1.4|META-INF/MANIFEST.MF|Implementation-Version"
+  # G-30-outbound (A2 Task 7). `RouteLocatorBuilder$Builder.route` in both overloads;
+  # the jar writes BOTH a `pom.properties` and a manifest `Implementation-Version:`
+  # (measured with `unzip -l`), and the manifest is read here. Pinned to the version
+  # `fixtures/orders-gateway/pom.xml` declares.
+  "org.springframework.cloud|spring-cloud-gateway-server-webflux|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

@@ -4,6 +4,8 @@ visible. Each test names the shape.
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
+from pathlib import Path
+
 import pytest
 from click.testing import CliRunner
 
@@ -48,3 +50,165 @@ def test_an_http_interface_registered_by_import_http_services_derives(spring7_ou
         f"an @ImportHttpServices-registered interface stopped deriving. "
         f"Derived: {sorted(spring7_outbound)}"
     )
+
+
+GATEWAY = FIXTURES / "orders-gateway"
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Spring Cloud Gateway fixture derives, whole."""
+    workspace_dir = tmp_path_factory.mktemp("gateway-out")
+    compile_fixture(GATEWAY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_gateway_targets_derive_outbound(gateway_rows):
+    """`spring-cloud-gateway-outbound`, spec §14 test 11: every `uri(…)` a route's lambda
+    ends in, read through `lambda_steps` on both static receiver types (`BooleanSpec.uri`
+    after a predicate, `UriSpec.uri` after `filters(…)`), kept WHOLE — a routing
+    destination, not a request URL: `lb://orders-service` names a load-balanced service,
+    and splitting it into a peer and a path would publish an address the gateway never
+    dials. `peer` NULL on every row, no verb, caller = `routes`.
+
+    `uri(billing)` reads `http://billing-service` at `resolved`: `billing` is a `final
+    String` field with a literal initialiser — a constant variable (JLS §4.12.4) — so
+    javac writes the literal itself at the call (`ldc`, measured on the compiled
+    fixture), and the lambda still captures `this` for it. A field that is not a constant
+    would arrive as a `field` read and the row would be `unresolved`; this pin moves the
+    day the fixture's field stops being one.
+
+    Exactly seven rows: one per `route(…)` call, both overloads."""
+    rows = [
+        r
+        for r in gateway_rows
+        if r["catalog_id"] == "spring-cloud-gateway-outbound" and r["direction"] == "outbound"
+    ]
+    targets = {(r["path"], r["resolution"]) for r in rows}
+    assert targets == {
+        ("http://orders-service", "resolved"),
+        ("lb://orders-service", "resolved"),
+        ("http://ab-service", "resolved"),
+        ("http://public-service", "resolved"),
+        ("http://legacy-service", "resolved"),
+        ("http://billing-service", "resolved"),
+        ("http://host-service", "resolved"),
+    }, sorted(targets, key=str)
+    assert len(rows) == 7, sorted(targets, key=str)
+    assert all(r["peer"] is None and r["method"] is None for r in rows), rows
+    assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
+
+
+@pytest.fixture(scope="module")
+def outbound_rows(analyzed_orders_service: Path) -> list[dict]:
+    """Every outbound row of the session's one `orders-service` analysis, whole (the
+    `tests/conftest.py` fixture — this only reads rows, it runs no analysis of its own)."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints") if row["direction"] == "outbound"]
+    finally:
+        workspace.close()
+
+
+def test_the_jdk_http_client_derives_every_request_it_builds_and_sends(outbound_rows):
+    """`jdk-httpclient`, spec §14 test 14: `JdkOrdersClient`'s four inline chains, each
+    with the address read exactly. The POST is rooted on the argument-less `newBuilder()`
+    and reads its address through `uri(URI.create(…))` — `url_via`, the same linked-call
+    ladder `channel_via` follows; the PATCH is rooted on `newBuilder(URI.create(…))`, its
+    verb read off `method("PATCH", …)`, its request handed to `sendAsync` — the second
+    name of the terminal's `method` list; `fetchSeventh` is rooted on
+    `newBuilder(new URI("…/7"))`, the `<init>` form of the ladder with `arity: 1` (fix
+    round 1), `resolved`. The peer is split off the URL as every `fluent` row's is.
+
+    **POST and PATCH are `unresolved`, and that is the pin, not a gap left open.** Each
+    captures a `body` — `POST(BodyPublishers.ofString(body))`, `method("PATCH",
+    …ofString(body))` — and a `BodyPublisher` is never a payload type the shape pass can
+    read, so the capture is reached and unread and demotes the row (ruling I1,
+    `_capture_resolved`). It is the exact answer `okhttp.yml` gives
+    `post(RequestBody.create(…))` on this same fixture (`LegacyOkHttp.submitExport`,
+    `unresolved`). A row saying "this method POSTs to `/v1/orders` with a body we could
+    not read" is true; one saying `resolved` over a NULL `request_shape` would claim a
+    read that never happened. Reading through `BodyPublishers.ofString(x)` to `x`'s type
+    is its own item (`jdk-body-publisher`).
+
+    `fetch`'s GET is `unresolved` with `path` NULL for a different reason: its address is
+    `"…/v1/orders/" + id`, a `concat` the extractor records as a template with a hole,
+    and `url_of` reads a `string` argument and nothing else — the documented rule
+    (`shapes/arguments.py`, `_UNREAD_KINDS`' own note); the ladder reaches the
+    constructor and finds that concat, and answers the same way a direct read would.
+
+    `POST /v1/orders` is ALSO the Feign row `OrdersLoopClient#createOrder` derives, on
+    purpose: an outbound row is per caller and peer (fix round 1, `insert_endpoints.sql`),
+    and `test_an_outbound_path_two_engines_call_keeps_every_caller` pins both.
+
+    `deleteRequest()`'s chain reaches `build()` in the helper and `send` is in
+    `viaHelper()` — a request built in one method and sent in another. `fluent`'s stated
+    rule (D02 §4, `okhttp.yml`: a built request is not an issued one) is that the chain
+    never reaches a terminal and derives NOTHING; spec §13 case 9 records that the JDK
+    client follows it. Asserted absent so the day the rule changes, this moves."""
+    rows = {
+        (r["method"], r["peer"], r["path"], r["resolution"])
+        for r in outbound_rows
+        if r["catalog_id"] == "jdk-httpclient"
+    }
+    assert rows == {
+        ("POST", "orders.example.com", "/v1/orders", "unresolved"),
+        ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
+        ("GET", None, None, "unresolved"),
+        ("PATCH", "orders.example.com", "/v1/orders/42", "unresolved"),
+    }, sorted(rows, key=str)
+    assert all(
+        r["request_shape"] is None for r in outbound_rows if r["catalog_id"] == "jdk-httpclient"
+    )
+
+
+def test_an_outbound_path_two_engines_call_keeps_every_caller(outbound_rows):
+    """Fix round 1 (Major). `POST https://orders.example.com/v1/orders` is called by
+    `OrdersLoopClient#createOrder` through Feign (`spring-cloud-openfeign`, annotation
+    driven, peer `orders-loop`), by `JdkOrdersClient#create` (`jdk-httpclient`, a
+    call-side `fluent` catalog, peer `orders.example.com`) and by
+    `ApacheOrdersClient#create` (`apache-httpclient`, the constructor form). An outbound
+    row is per caller and peer (F5 §6.1 rule 1), and all three stand. Measured before the fix: the
+    annotation-driven turn compared wire identity alone, and the Feign row VANISHED the
+    moment the JDK client called the same path — no row, no gap."""
+    callers = {
+        (r["catalog_id"], r["peer"], r["caller"].rsplit("/", 1)[1].partition("(")[0])
+        for r in outbound_rows
+        if r["method"] == "POST" and r["path"] == "/v1/orders"
+    }
+    assert callers == {
+        ("spring-cloud-openfeign", "orders-loop", "OrdersLoopClient#createOrder"),
+        ("jdk-httpclient", "orders.example.com", "JdkOrdersClient#create"),
+        ("apache-httpclient", "orders.example.com", "ApacheOrdersClient#create"),
+    }, sorted(callers, key=str)
+
+
+def test_the_apache_client_derives_the_builder_and_the_constructor_forms(outbound_rows):
+    """`apache-httpclient`, spec §12, both spellings of a classic request. The builder
+    form — `ClassicRequestBuilder.get("…").build()` handed to `CloseableHttpClient.execute`
+    — is `okhttp.yml`'s exact shape, the static root joined to the client through the
+    argument `source` id. The constructor form — `new HttpPost("…")` and `new
+    HttpGet(URI.create(…))` handed straight to `execute`, no `build()` between — is a
+    `<init>` root that is itself the terminal: the join reads the constructed value's id
+    (its `receiver`, CP-3; fix round 1 — reading the constructor's void `result` made both
+    derive nothing). Every row `resolved`, the verb the factory's or the class's own name,
+    the peer split off the URL; no `body` is captured on either form (an `HttpEntity` is a
+    transport wrapper, not a wire type), so nothing demotes them."""
+    rows = {
+        (r["method"], r["peer"], r["path"], r["resolution"])
+        for r in outbound_rows
+        if r["catalog_id"] == "apache-httpclient"
+    }
+    assert rows == {
+        ("GET", "orders.example.com", "/v1/orders", "resolved"),
+        ("POST", "orders.example.com", "/v1/orders", "resolved"),
+        ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
+    }, sorted(rows, key=str)

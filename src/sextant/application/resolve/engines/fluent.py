@@ -10,7 +10,11 @@ last wins — an optional `owner` narrows a step to one type, needed only
 where a library reuses a method name for two different roles on two
 different types), and `terminal` (the method names — or, for the OkHttp
 join, a `{method, terminal_via_argument}` entry, `true` or an `{owner,
-method}` mapping that narrows the join — that make a chain executable).
+method}` mapping that narrows the join, each half one name or a list —
+that make a chain executable). A root or step capturing `url` may also
+declare `url_via`, `channel_via`'s linked-call ladder applied to the
+address (`_url_argument`): the JDK client's `uri(URI.create("…"))` hands
+the step no string, and the address lives on `URI.create`'s own argument.
 
 `terminal` marks *executability*, not the walk's end: captures keep folding
 past it, exactly as a real WebClient chain's `bodyToMono` follows `retrieve`.
@@ -57,6 +61,7 @@ from sextant.application.resolve.shapes.arguments import (
     split_url,
     supertypes_of,
     url_of,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
@@ -303,12 +308,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 @dataclass(frozen=True)
 class _JoinFilter:
     """The execute-join a `terminal_via_argument` mapping narrows to: the built value must
-    be consumed by a call to `method` on one of `owners`. Several owners because one
+    be consumed by a call to one of `methods` on one of `owners`. Several owners because one
     library routinely reaches a wire through more than one client — `SendMessageRequest`
-    goes to `SqsClient` or `SqsAsyncClient` — and a scalar stays valid (§3.1)."""
+    goes to `SqsClient` or `SqsAsyncClient` — and a scalar stays valid (§3.1). Several
+    methods for the same reason one step over (A2 Task 8): the JDK client issues a built
+    request through `send` OR `sendAsync`, one builder chain, one address, two executing
+    calls — and two `build` entries in `terminal` would silently overwrite each other in
+    `_terminal_index`'s dict, which is the defect the owners widening already closed."""
 
     owners: tuple[str, ...]
-    method: str
+    methods: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -703,7 +712,7 @@ def _composed_address(
     The composed string is then read by `_address_of`, so a composed absolute
     literal splits by CP-2 exactly as a written one does and a composition
     carrying an expression stays whole."""
-    url_argument = _address_read(captures.get("url"), context) if "url" in captures else None
+    url_argument = _url_argument(captures, context) if "url" in captures else None
     if "base" not in captures:
         return url_of(url_argument)
     base = _string_value(_address_read(captures.get("base"), context))
@@ -715,6 +724,38 @@ def _composed_address(
     if path is None:
         return None, None, "unresolved"
     return _address_of(base + path)
+
+
+def _url_argument(captures: dict[str, Any], context: _ChainContext) -> dict[str, Any] | None:
+    """The `url` capture as the address readers should see it (A2 Task 8, spec §12):
+    the captured argument itself, or — where that argument is not a string literal and
+    the entry declared `url_via` — the string the linked call it names was handed, as a
+    `string` argument, so `url_of` and the `base` composition read it exactly as a
+    literal written at the capture.
+
+    `url_via` is `channel_via`'s ladder applied to the `url` capture, verbatim: the JDK
+    client's `uri(URI.create("https://…"))` reaches the step as `unresolved`+`source`,
+    and the address lives on `URI.create`'s own argument, exactly as a JMS destination
+    lives on `session.createQueue("q")`'s. Same order too — the literal argument first,
+    the ladder only when the literal did not resolve — and the same `linked_channels`
+    call, which follows `source` to a call site whose owner AND method a declared form
+    names, and nothing else. A `field`-fed address is already a string expression by the
+    time it gets here (`_address_read`), so the ladder never runs for it.
+
+    A ladder that answers nothing — no `source`, a linked call no form names, a linked
+    call whose own argument is not a literal (a `concat`) — leaves the captured argument
+    as it was, so the row derives with `path` NULL at `unresolved` exactly as a direct
+    read of that argument would: the ladder can only add an answer, never take one away.
+    `arg` is one position (`_validate_channel_via_entries` refuses `all_strings` here):
+    a URL is one string, where a topic list is several."""
+    argument = _address_read(captures.get("url"), context)
+    forms = captures.get("url_via") or []
+    if _string_value(argument) is not None or not forms:
+        return argument
+    [(_, literal, resolution)] = linked_channels(argument, context.facts, forms)
+    if resolution != "resolved" or literal is None:
+        return argument
+    return {"kind": "string", "value": literal}
 
 
 def _address_of(composed: str) -> tuple[str | None, str | None, str]:
@@ -937,8 +978,14 @@ def _valid_when(when: Any) -> bool:
     )
 
 
+# The two linked-call ladders an entry may declare, each keyed to the capture
+# it reads for: `channel_via` resolves `channel` (Task 12), `url_via` resolves
+# `url` (A2 Task 8) — one grammar, `{owner, method, arg}`, two positions.
+_VIA_KEYS = {"channel_via": "channel", "url_via": "url"}
+
+
 def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
-    """An entry's own `captures` plus its `channel_via` ladder (Task 12),
+    """An entry's own `captures` plus its `channel_via`/`url_via` ladder,
     when declared — folded into the SAME dict `_resolve_captures`/
     `_step_captures` already fold forward chain-wide, so a root's own
     `channel_via` forms travel alongside its `channel` capture through
@@ -948,62 +995,81 @@ def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
     entry `_validate_channel_via_entries` already checked, at `run` start —
     `_channel_via_forms`'s own `_catalog_symbol` conversion is safe here."""
     captures = dict(entry.get("captures", {}))
-    if "channel_via" in entry:
-        captures["channel_via"] = _channel_via_forms(entry)
+    for key in _VIA_KEYS:
+        if key in entry:
+            captures[key] = _channel_via_forms(entry, key)
     return captures
 
 
 def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:
-    """Refuses a broken `channel_via` ladder before any call site is
-    matched, on the RAW (pre-`_catalog_symbol`) `roots`/`steps` entries —
-    the same two-phase discipline `single_call._validate_methods` keeps for
-    its own `channel_via` (shape checked here; `_channel_via_forms`'s
+    """Refuses a broken `channel_via` or `url_via` ladder before any call
+    site is matched, on the RAW (pre-`_catalog_symbol`) `roots`/`steps`
+    entries — the same two-phase discipline `single_call._validate_methods`
+    keeps for its own `channel_via` (shape checked here; `_channel_via_forms`'s
     symbol conversion only ever runs on an entry this already passed).
-    `channel_via` without a `channel` capture is missing the position it
+    A ladder without the capture it reads for (`channel_via` without
+    `channel`, `url_via` without `url`) is missing the position it
     describes — the same `single_call` rule, `_merged_captures` never
     reaches it because this raises first."""
     for entry in entries:
-        for form in _channel_via_entries(entry):
-            valid = (
-                isinstance(form, dict)
-                and isinstance(form.get("owner"), str)
-                and isinstance(form.get("method"), str)
-                and (form.get("arg") == "all_strings" or isinstance(form.get("arg"), int))
-            )
-            if not valid:
-                raise CatalogError(
-                    f"loading catalog {catalog.source}: `{entry.get('method')}` declares a "
-                    f"`channel_via` entry that must be `{{owner, method, "
-                    f'arg: int|"all_strings"}}`, got {form!r}'
+        for key, field in _VIA_KEYS.items():
+            # `url_via` reads ONE position: a URL is one string, where a topic
+            # list is several — so `all_strings` is `channel_via`'s alone.
+            arg_forms = 'int|"all_strings"' if key == "channel_via" else "int"
+            for form in _channel_via_entries(entry, key):
+                valid = (
+                    isinstance(form, dict)
+                    and isinstance(form.get("owner"), str)
+                    and isinstance(form.get("method"), str)
+                    and (
+                        isinstance(form.get("arg"), int)
+                        or (key == "channel_via" and form.get("arg") == "all_strings")
+                    )
+                    # `arity` is optional, and an int when declared: the linked
+                    # call's argument count, which tells a one-string constructor from the
+                    # four-argument constructor once owner and method agree.
+                    and valid_via_arity(form)
                 )
-        if "channel_via" in entry and "channel" not in entry.get("captures", {}):
-            raise CatalogError(
-                f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
-                f"`channel_via` without a `channel` capture — `channel_via` says how to "
-                f"read an instance already named by `channel`, never a destination on its "
-                f"own (D02 §2's `fluent` style, mirroring single_call's own rule)"
-            )
+                if not valid:
+                    raise CatalogError(
+                        f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+                        f"a `{key}` entry that must be `{{owner, method, arg: {arg_forms}, "
+                        f"arity?: int}}`, "
+                        f"got {form!r}"
+                    )
+            if key in entry and field not in entry.get("captures", {}):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+                    f"`{key}` without a `{field}` capture — `{key}` says how to read an "
+                    f"instance already named by `{field}`, never a position on its own "
+                    f"(D02 §2's `fluent` style, mirroring single_call's own rule)"
+                )
 
 
-def _channel_via_entries(entry: dict[str, Any]) -> list[Any]:
-    """`channel_via`'s `{owner, method, arg}` | `[{...}, ...]` grammar,
-    normalized to a list without touching the entries themselves — the
-    `single_call`/`interface_implementation` precedent, shared in spirit
-    rather than in code (this module owns its own root/step shape, never a
-    `methods`/`registration` row)."""
-    via = entry.get("channel_via")
+def _channel_via_entries(entry: dict[str, Any], key: str = "channel_via") -> list[Any]:
+    """`channel_via`'s (or `url_via`'s — `key`) `{owner, method, arg}` |
+    `[{...}, ...]` grammar, normalized to a list without touching the
+    entries themselves — the `single_call`/`interface_implementation`
+    precedent, shared in spirit rather than in code (this module owns its
+    own root/step shape, never a `methods`/`registration` row)."""
+    via = entry.get(key)
     if via is None:
         return []
     return via if isinstance(via, list) else [via]
 
 
-def _channel_via_forms(entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """`channel_via` entries, each declared `owner` converted to the SCIP
-    symbol form once — only ever called on an entry
+def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[dict[str, Any]]:
+    """`channel_via` (or `url_via` — `key`) entries, each declared `owner`
+    converted to the SCIP symbol form once — only ever called on an entry
     `_validate_channel_via_entries` already passed, at `run` start."""
     return [
-        {"owner": _catalog_symbol(form["owner"]), "method": form["method"], "arg": form["arg"]}
-        for form in _channel_via_entries(entry)
+        {
+            "owner": _catalog_symbol(form["owner"]),
+            "method": form["method"],
+            "arg": form["arg"],
+            **({"arity": form["arity"]} if "arity" in form else {}),
+        }
+        for form in _channel_via_entries(entry, key)
     ]
 
 
@@ -1040,12 +1106,27 @@ def _terminal_index(
         via_argument[entry["method"]] = (
             _JoinFilter(
                 owners=catalog_symbols(marker["owner"], "terminal_via_argument.owner"),
-                method=str(marker["method"]),
+                methods=_method_names(marker["method"]),
             )
             if isinstance(marker, dict)
             else None
         )
     return plain, via_argument
+
+
+def _method_names(declared: Any) -> tuple[str, ...]:
+    """`terminal_via_argument.method` as the executing call names it accepts: one name or
+    a list of them (`[send, sendAsync]`), a scalar staying valid exactly as it does for
+    `owner` (§3.1). An EMPTY list is refused rather than read as "joins to nothing" — a
+    catalog that names no executing call has declared a terminal that can never be
+    reached, and every chain on it would derive nothing with no error saying why."""
+    if isinstance(declared, list):
+        if not declared:
+            raise CatalogError(
+                "terminal_via_argument.method names an EMPTY list; name at least one method"
+            )
+        return tuple(str(name) for name in declared)
+    return (str(declared),)
 
 
 def _has_execute_join(
@@ -1058,13 +1139,23 @@ def _has_execute_join(
     client, not the request builder. `join_filter`, when the catalog
     declared one, additionally requires the joining row itself to be that
     exact owner+method — otherwise any consumer of the built value (a log
-    statement, an equality check) would count as executing it."""
-    result = site["result"]
+    statement, an equality check) would count as executing it.
+
+    The value joined on is the row's CHAIN KEY (CP-3), not its `result`: a
+    constructor's `result` is void and the constructed value's id is its
+    `receiver`, which is what `execute`'s argument `source` names when the
+    request is `new HttpPost("…")` handed straight over with no `build()`
+    between — the Apache constructor form, a `<init>` root that is itself the
+    terminal (A2 Task 8 fix round 1; reading `result` here made every such
+    chain derive nothing). `_walk` and `_linked_constructor` already key a
+    constructor the same way."""
+    result = _chain_key(site)
     if result is None:
         return False
     for candidate in sites:
         if join_filter is not None and (
-            candidate["owner"] not in join_filter.owners or candidate["name"] != join_filter.method
+            candidate["owner"] not in join_filter.owners
+            or candidate["name"] not in join_filter.methods
         ):
             continue
         if any(argument.get("source") == result for argument in candidate["arguments"]):

@@ -102,6 +102,38 @@
       <artifactId>okhttp</artifactId>
       <version>4.12.0</version>
     </dependency>
+    <!-- A2 Task 8 (`apache-httpclient`, spec §12): the classic client's request
+         classes (`HttpGet`, `HttpPost`, …) live in `httpclient5`; the
+         `ClassicRequestBuilder` static roots live in its `httpcore5`. API only,
+         the `spring-data-mongodb` precedent: `httpclient5` 5.2.3 pins
+         `httpcore5` 5.2.4 (its parent POM's `httpcore.version`) and pulls
+         `httpcore5-h2` and `slf4j-api` for a runtime this fixture never has, so
+         everything transitive is excluded and the one core jar the sources
+         import is declared on its own at the version the client pins. The JDK
+         client (`jdk-httpclient`) needs nothing here: `java.net.http` is a
+         platform module. -->
+    <dependency>
+      <groupId>org.apache.httpcomponents.client5</groupId>
+      <artifactId>httpclient5</artifactId>
+      <version>5.2.3</version>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.httpcomponents.core5</groupId>
+      <artifactId>httpcore5</artifactId>
+      <version>5.2.4</version>
+      <exclusions>
+        <exclusion>
+          <groupId>*</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
     <dependency>
       <groupId>org.springframework.kafka</groupId>
       <artifactId>spring-kafka</artifactId>

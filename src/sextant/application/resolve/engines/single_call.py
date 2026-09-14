@@ -40,6 +40,7 @@ from sextant.application.resolve.shapes.arguments import (
     peer_of,
     supertypes_of,
     url_of,
+    valid_via_arity,
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -932,12 +933,13 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 and isinstance(entry.get("owner"), str)
                 and isinstance(entry.get("method"), str)
                 and (entry.get("arg") == "all_strings" or isinstance(entry.get("arg"), int))
+                and valid_via_arity(entry)
             )
             if not valid:
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{row['name']}` declares a "
                     f"`channel_via` entry that must be `{{owner, method, "
-                    f'arg: int|"all_strings"}}`, got {entry!r}'
+                    f'arg: int|"all_strings", arity?: int}}`, got {entry!r}'
                 )
         if _ADDRESS_ARG_2 in row:
             # The second half of a PAIR, so it means nothing without the
@@ -1422,7 +1424,12 @@ def _channel_via_forms(method: dict[str, Any]) -> list[dict[str, Any]]:
     the SCIP symbol form once. Only ever called on a row `_validate_methods`
     already passed, from the `methods` normalization at `run` start."""
     return [
-        {"owner": _catalog_symbol(entry["owner"]), "method": entry["method"], "arg": entry["arg"]}
+        {
+            "owner": _catalog_symbol(entry["owner"]),
+            "method": entry["method"],
+            "arg": entry["arg"],
+            **({"arity": entry["arity"]} if "arity" in entry else {}),
+        }
         for entry in _channel_via_entries(method)
     ]
 

@@ -3387,6 +3387,126 @@ def test_a_call_site_catalog_between_two_annotation_driven_ones_still_claims_the
     ]
 
 
+def _jdk_client_facts(root: Path) -> None:
+    """A JDK `HttpClient` chain (`jdk-httpclient`, a call-side `fluent` catalog) issuing
+    `POST https://orders.example.com/v1/orders` from a caller of its own — the same wire
+    identity `_orders_client_facts`' annotation-driven client calls from ANOTHER
+    caller."""
+    document = Document(
+        document_id="doc_4",
+        relative_path="com/acme/http/JdkClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    caller = "com/acme/http/JdkClient#create(sig_2b7e1a90)."
+    builder = "java/net/http/HttpRequest$Builder#"
+
+    def call(owner: str, name: str, ordinal: int, receiver, result, arguments=(), kind="virtual"):
+        return CallSiteFact(
+            document_id="doc_4",
+            caller=caller,
+            target=CallTarget(owner=owner, name=name, descriptor="()V"),
+            invoke_kind=kind,
+            ordinal=ordinal,
+            receiver=receiver,
+            result=result,
+            arguments=list(arguments),
+        )
+
+    facts = [
+        call("java/net/http/HttpRequest#", "newBuilder", 0, None, 2, kind="static"),
+        call(
+            "java/net/URI#",
+            "create",
+            1,
+            None,
+            6,
+            [CallArgument(kind="string", value="https://orders.example.com/v1/orders")],
+            kind="static",
+        ),
+        call(builder, "uri", 2, 2, 7, [CallArgument(kind="unresolved", source=6)]),
+        call(builder, "POST", 3, 7, 8, [CallArgument(kind="string", value="{}")]),
+        call(builder, "build", 4, 8, 20),
+        call(
+            "java/net/http/HttpClient#",
+            "send",
+            5,
+            99,
+            28,
+            [
+                CallArgument(kind="unresolved", source=20),
+                CallArgument(kind="unresolved", source=27),
+            ],
+        ),
+    ]
+    write_fact_file(root / "JdkClient.jsonl", document, facts)
+
+
+def test_an_outbound_row_is_per_caller_across_engines(tmp_path: Path):
+    """A2 Task 8 fix round 1 (Major). An OUTBOUND row is per caller and peer — F5 §6.1
+    rule 1 (W27), which `derive_call_endpoints.sql` applies to every call-side row.
+    `insert_endpoints.sql`, the annotation-driven turn, compared wire identity alone, so
+    a `@FeignClient` method calling `POST /v1/orders` was REFUSED when a call-side
+    catalog earlier in the order had derived the same identity from a different method
+    — measured on `orders-service`: `OrdersLoopClient#createOrder`'s row vanished the
+    moment `JdkOrdersClient` called the same path, with no gap row saying so.
+
+    Here the call-side catalog takes its turn first (`1.yml`), the annotation-driven
+    client second (`2.yml`): both rows stand, told apart by caller. Inbound keeps
+    earlier-catalog-wins exactly as
+    `test_two_catalogs_in_one_batch_claiming_one_wire_identity_derive_the_earlier_ones_rows`
+    pins it — a served route is one route however many catalogs describe it."""
+    _jdk_client_facts(tmp_path / "facts")
+    _orders_client_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    shipped = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    call_side = Catalog(**{**vars(shipped["jdk-httpclient"]), "source": Path("tests/1.yml")})
+    annotated = Catalog(**{**vars(_OUTBOUND_CATALOG), "source": Path("tests/2.yml")})
+
+    skipped = derive_endpoints(
+        workspace,
+        [annotated, call_side],
+        capabilities={"annotation_args", "call_site", "string_constants", "chain_reconstruction"},
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert skipped == []
+    assert sorted(
+        (
+            str(r["direction"]),
+            str(r["method"]),
+            str(r["path"]),
+            str(r["catalog_id"]),
+            str(r["caller"]),
+        )
+        for r in rows
+    ) == [
+        (
+            "outbound",
+            "POST",
+            "/v1/orders",
+            "invented-outbound",
+            "com/acme/billing/OrdersClient#submit(sig_9f1c2b47).",
+        ),
+        (
+            "outbound",
+            "POST",
+            "/v1/orders",
+            "jdk-httpclient",
+            "com/acme/http/JdkClient#create(sig_2b7e1a90).",
+        ),
+    ]
+
+
 def test_derive_endpoints_skips_and_reports_when_a_required_capability_is_missing(
     tmp_path: Path,
 ):

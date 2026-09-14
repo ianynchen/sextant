@@ -1,0 +1,32 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-ktor</artifactId>
+  <version>1.0.0</version>
+  <!-- Ktor (`ktor-routing`), in its own module: a Kotlin server stack with no Spring, so
+       `orders-service`'s pinned row counts do not move. Compiled, never run. The API jar
+       is declared alone, but NOT with `orders-javalin`'s `<exclusions>*`: the Kotlin
+       compiler resolves the supertypes of every type a source names (`Routing` extends
+       `Route`, which lives here, but `Application` sits on `ktor-utils`' `Attributes`
+       and `ktor-http`'s types), so the transitive jars must be on the compile classpath
+       — the first `mvn compile` fetches them ONLINE and every later one runs `-o`. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <kotlin.version>2.2.0</kotlin.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
+    <dependency><groupId>org.jetbrains.kotlinx</groupId><artifactId>kotlinx-coroutines-core-jvm</artifactId><version>1.10.2</version></dependency>
+    <dependency><groupId>io.ktor</groupId><artifactId>ktor-server-core-jvm</artifactId><version>3.0.3</version></dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <executions><execution><id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

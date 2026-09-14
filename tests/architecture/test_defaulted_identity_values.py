@@ -110,6 +110,23 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         "(`scripts/probes/cp11_sweep_round1.md`). It stops being right the day "
         "OkHttp adds a ninth this catalog does not declare."
     ),
+    ("jdk-httpclient", "roots", "newBuilder", "http_method", "GET"): (
+        "a fresh `java.net.http.HttpRequest.Builder` really does issue GET — the platform's "
+        "own documented default (`HttpRequest.Builder`: the request method is GET unless "
+        "a verb method is called), and the reason the seed must NOT simply be deleted "
+        "(deleting it under-reports every `newBuilder(uri).build()` chain). Admissible "
+        "only while every builder method that SETS the verb is a declared step, because "
+        "an unmatched step passes through uncaptured and leaves this literal standing. "
+        "That condition is met at JDK 21.0.12.1: `javap -p -s --module java.net.http` "
+        "gives six verb-setting methods — `GET() HEAD() DELETE() POST(BodyPublisher) "
+        "PUT(BodyPublisher) method(String, BodyPublisher)` — and `jdk-httpclient.yml` "
+        "declares a step for every one (`scripts/probes/a2t8_http_client_builders.md`, "
+        "whose verdict line is 'verb setters declared and not encoded: none'). It stops "
+        "being right the day a JDK adds a seventh this catalog does not declare. One "
+        "stated boundary rides on the same seed: the `newBuilder(HttpRequest, "
+        "BiPredicate)` overload copies another request's verb, and the catalog says its "
+        "GET is wrong there."
+    ),
 }
 
 
@@ -137,6 +154,9 @@ def literal_identity_captures() -> list[dict[str, str]]:
                             "catalog": str(path.stem),
                             "where": where,
                             "method": str(entry.get("method")),
+                            # A constructor is named by its class, so the owner is what
+                            # `_names_its_own_value` reads for a `<init>` entry.
+                            "owner": str(entry.get("owner", "")),
                             "field": field,
                             "value": str(captures[field]),
                         }
@@ -154,10 +174,22 @@ def _names_its_own_value(row: dict[str, str]) -> bool:
     `startswith`, not equality: `postForObject` and `getForEntity` are the
     `single_call` spelling of the same entailment, and a `fluent` library that
     named its verb setters `postJson`/`getJson` would be the same fact. What it
-    refuses is a name that shares no prefix with the verb at all — `<init>`,
-    `newBuilder`, `build`.
+    refuses is a name that shares no prefix with the verb at all — a bare
+    `<init>`, `newBuilder`, `build`.
+
+    **A constructor is named by its class** (A2 Task 8 fix round 1): `new
+    HttpGet(…)` is `<init>` on `HttpGet`, and the verb is the class's own
+    suffix — Apache's request classes are `HttpGet`, `HttpPost`, `HttpDelete`,
+    one per verb, and the constructed object is that request and nothing else.
+    So a `<init>` entry is entailed when its owner's simple name ENDS with the
+    verb; a `<init>` on a class named nothing of the kind (`Request$Builder`)
+    stays exactly what it was, a seed the allowlist has to vouch for.
     """
-    return row["method"].lower().startswith(row["value"].lower())
+    value = row["value"].lower()
+    if row["method"] == "<init>":
+        simple = row["owner"].rsplit(".", 1)[-1].rsplit("$", 1)[-1]
+        return simple.endswith(value.capitalize())
+    return row["method"].lower().startswith(value)
 
 
 def test_no_fluent_entry_seeds_an_identity_value_its_own_call_does_not_name():

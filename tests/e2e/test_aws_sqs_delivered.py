@@ -33,6 +33,64 @@ def sqs_addresses(analyzed_orders_service: Path) -> set[str]:
         workspace.close()
 
 
+@pytest.fixture(scope="module")
+def sqs_rows(analyzed_orders_service: Path) -> list[dict]:
+    """Every SQS row of the session's one `orders-service` analysis, whole — for the
+    tests that read `direction`, `handler` and `resolution`, not only the address."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "sqs"]
+    finally:
+        workspace.close()
+
+
+def _short_handler(row: dict) -> str:
+    """`Class#method` out of a module-prefixed handler symbol. An inbound row's deriving
+    method lands in `handler` and its `caller` is NULL (D02 §2), so this reads `handler`
+    where `test_rest_inbound_delivered._short_caller` reads `caller`."""
+    return str(row["handler"]).rsplit("/", 1)[1].partition("(")[0]
+
+
+def test_a_template_receive_names_its_queue_inside_the_options_lambda(sqs_rows):
+    """`sqs-template-receive`: the four receive forms, the queue named in `opts.queue(…)`,
+    inbound, handler = the polling method — the send rule's receive twin (spec §12)."""
+    rows = {
+        (row["catalog_id"], row["direction"], row["path"], _short_handler(row), row["resolution"])
+        for row in sqs_rows
+        if row["path"] == "orders-poll"
+    }
+    assert rows == {
+        (
+            "spring-sqs-template-receive",
+            "inbound",
+            "orders-poll",
+            "OrderPoller#pollOne",
+            "resolved",
+        ),
+        (
+            "spring-sqs-template-receive",
+            "inbound",
+            "orders-poll",
+            "OrderPoller#pollMany",
+            "resolved",
+        ),
+        (
+            "spring-sqs-template-receive",
+            "inbound",
+            "orders-poll",
+            "OrderPoller#pollOneAsync",
+            "resolved",
+        ),
+        (
+            "spring-sqs-template-receive",
+            "inbound",
+            "orders-poll",
+            "OrderPoller#pollManyAsync",
+            "resolved",
+        ),
+    }, sorted(rows)
+
+
 def test_a_send_through_the_async_client_is_visible(sqs_addresses: set[str]):
     """`G-43`. `SqsAsyncClient` was 0 of 28 methods — and Spring Cloud AWS 3.x
     auto-configures it as the DEFAULT client and backs `SqsTemplate` with it, so the

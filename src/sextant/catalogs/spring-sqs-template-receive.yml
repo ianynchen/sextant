@@ -1,0 +1,134 @@
+id: spring-sqs-template-receive
+displayName: Spring Cloud AWS SQS (SqsTemplate receive)
+style: single_call
+protocol: sqs
+direction: inbound
+
+detect:
+  coordinates: ["io.awspring.cloud:spring-cloud-aws-sqs"]
+
+measured:
+  # The eight receive descriptors below, checked against the jar's own bytecode by the
+  # CP-10 harness at 3.1.1 (`tests/architecture/test_catalog_descriptors.py` pins them).
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
+      identity: reported, by: scripts/probes/cp10_catalog_descriptors.md }
+  # W59 enumerated every `receive*` overload `SqsTemplate` declares at 3.1.1 and found
+  # the queue at argument 0 of NONE of them — it is inside the `Consumer<SqsReceiveOptions>`
+  # every overload takes. That is the measurement this file's `lambda_steps` answer.
+  - { artifact: io.awspring.cloud:spring-cloud-aws-sqs, versions: ["3.1.1"],
+      identity: reported, by: scripts/probes/w59_template_receive_halves.md }
+  # 4.1.1 is NOT a `measured:` row here, deliberately: no committed probe walks the receive
+  # half at that version (W57 walked `SqsSendOptions` at both, W59 walked receive at 3.1.1
+  # only), and `test_catalog_measurement_coverage.py` refuses a version the cited probe did
+  # not run. It was read by hand for this file — the block below records what
+  # `javap -p -s` printed at both versions — and it is byte-identical to 3.1.1.
+
+requires: [call_site, string_constants]
+
+# The receive half of `spring-sqs-template.yml`, in its own file because a catalog has one
+# direction (A2 plan, Global Constraints). The send file's `slice.outside` names these four
+# methods as read HERE.
+#
+# MEASURED (`javap -p -s -cp spring-cloud-aws-sqs-<v>.jar io.awspring.cloud.sqs.operations.SqsTemplate`,
+# v = 3.1.1 and 4.1.1, 2026-09-13, identical output at both). `SqsTemplate` declares
+# EIGHT receive overloads and no other:
+#
+#   receive          (Ljava/util/function/Consumer;)Ljava/util/Optional;
+#   receive          (Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/Optional;
+#   receiveMany      (Ljava/util/function/Consumer;)Ljava/util/Collection;
+#   receiveMany      (Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/Collection;
+#   receiveAsync     (Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;
+#   receiveAsync     (Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;
+#   receiveManyAsync (Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;
+#   receiveManyAsync (Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;
+#
+# No overload takes the queue as a plain argument and none takes no argument at all, so
+# there is no `channel_arg` row and no default-queue row to write: the queue is named INSIDE
+# the `Consumer<SqsReceiveOptions>` every form takes at argument 0 —
+# `opts -> opts.queue("orders")` — which is exactly what `lambda_arg`/`lambda_steps` read
+# for `send(to -> to.queue(…))` (W57). `SqsReceiveOptions` (same `javap`, same two
+# versions, identical) declares seven members: `queue(String)`, `pollTimeout(Duration)`,
+# `visibilityTimeout(Duration)`, `additionalHeader(String, Object)`,
+# `additionalHeaders(Map)`, `maxNumberOfMessages(Integer)`, `receiveRequestAttemptId(UUID)`.
+# `queue(String)` is the one read, at argument 0; `additionalHeader` is the other member
+# taking a `String`, which is why the step names its OWNER and its METHOD: a body touching
+# any other type with a `queue` method must not answer for this one (W57's review).
+#
+# A `Class` argument at position 1 on the arity-2 forms is the payload TYPE, not a
+# payload — a receive carries no request body — so no row declares `body_arg`.
+matches:
+  # `SqsTemplate` alone, unlike the send file's `[SqsTemplate, SqsOperations]` pair. The
+  # eight forms are split across TWO interfaces — `SqsOperations` declares the four
+  # synchronous ones, `SqsAsyncOperations` the four `*Async` ones, and neither extends the
+  # other (measured, same `javap`) — and `test_catalog_descriptors.py` pins every row's
+  # descriptor to every owner named here, so naming either interface would pin four
+  # descriptors to a type that does not declare them. A field typed by one of the
+  # interfaces therefore derives nothing from this file; stated rather than hidden.
+  owner: io.awspring.cloud.sqs.operations.SqsTemplate
+  # EIGHT ROWS, ONE PER OVERLOAD, each declaring its own erased JVM `descriptor`
+  # (GUIDELINES §8.1's language rule; `single_call._matching_method` claims an arity once
+  # any candidate declares one). The arity-1 and arity-2 forms of one name differ only in
+  # the trailing `Class`, and both carry the lambda at argument 0, so the rule is the same
+  # on each: `lambda_arg: 0`, one step, `SqsReceiveOptions#queue`'s argument 0 is the queue.
+  methods:
+    - { name: receive, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Ljava/util/Optional;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receive, arity: 2,
+        descriptor: "(Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/Optional;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveMany, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Ljava/util/Collection;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveMany, arity: 2,
+        descriptor: "(Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/Collection;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveAsync, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveAsync, arity: 2,
+        descriptor: "(Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveManyAsync, arity: 1,
+        descriptor: "(Ljava/util/function/Consumer;)Ljava/util/concurrent/CompletableFuture;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+    - { name: receiveManyAsync, arity: 2,
+        descriptor: "(Ljava/util/function/Consumer;Ljava/lang/Class;)Ljava/util/concurrent/CompletableFuture;",
+        lambda_arg: 0,
+        lambda_steps: [{ owner: io.awspring.cloud.sqs.operations.SqsReceiveOptions, method: queue, channel_arg: 0 }] }
+
+# Copied verbatim from spring-sqs-template.yml (harvest compatibility, same
+# discipline as spring-kafka-template.yml — see its own comment for the full
+# rationale).
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# D02's declared SLICE (F2 §3.8). Measured (`scripts/probes/w19_catalog_surface.md`,
+# spring-cloud-aws-sqs 3.1.1): this catalog reads four of the twelve method names
+# `SqsTemplate` offers, and the four unread names that take a queue at argument 0 are
+# all the OUTBOUND direction — the sibling file's, not this one's.
+slice:
+  outside:
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [send]
+      why: >
+        The outbound direction, read by `spring-sqs-template.yml` — a catalog has one
+        direction, and that file is the send half.
+    - owner: io.awspring.cloud.sqs.operations.SqsTemplate
+      method_names: [sendAsync, sendMany, sendManyAsync]
+      why: >
+        Outbound boundaries NEITHER file models, named outside `spring-sqs-template.yml`'s
+        slice for the reason given there: the async forms are the same wire as `send` with
+        a different return type; the `*Many` forms carry a collection of messages.

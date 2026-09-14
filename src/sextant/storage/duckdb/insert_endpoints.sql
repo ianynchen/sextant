@@ -18,6 +18,20 @@
 -- which is what lets two handlers of one route differing only in media (a
 -- content-negotiation pair) both stand, as they always have.
 --
+-- AN OUTBOUND ROW IS PER CALLER AND PEER (F5 §6.1 rule 1, W27; A2 Task 8 fix
+-- round 1). Wire identity is the whole comparison for an INBOUND row — a served
+-- route is one route however many catalogs describe it — but a call is made
+-- by a method to an address, and `derive_call_endpoints.sql` has compared
+-- `caller` and `peer` too since W27 for exactly that reason. This statement
+-- did not, so an annotation-driven client (`@FeignClient`'s `POST /v1/orders`)
+-- was REFUSED whenever a call-side catalog earlier in the order had derived
+-- the same identity from a DIFFERENT method — measured on `orders-service`:
+-- `OrdersLoopClient#createOrder`'s row vanished the moment `JdkOrdersClient`
+-- called the same path, no row, no gap. So for `direction = 'outbound'` the
+-- match requires the same caller and peer as well (`IS NOT DISTINCT FROM`,
+-- either may be NULL), and earlier-catalog-wins still holds for two catalogs
+-- describing ONE method's call. Inbound is unchanged.
+--
 -- Parameters:
 --   $catalog_id -- the catalog whose turn it is.
 INSERT INTO endpoints (
@@ -34,4 +48,11 @@ WHERE d.catalog_id = $catalog_id
       AND existing.direction = d.direction
       AND existing.method IS NOT DISTINCT FROM d.method
       AND existing.path      = d.path
+      AND (
+          d.direction <> 'outbound'
+          OR (
+              existing.caller IS NOT DISTINCT FROM d.caller
+              AND existing.peer IS NOT DISTINCT FROM d.peer
+          )
+      )
 );

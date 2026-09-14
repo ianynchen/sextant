@@ -1,0 +1,124 @@
+id: jdk-httpclient
+displayName: JDK HttpClient
+style: fluent
+protocol: http
+direction: outbound
+
+# EMPTY on purpose, the `graphql-schema.yml` precedent: `java.net.http` is a
+# platform module and has no dependency coordinate a build could declare.
+# `detect.coordinates` is read only by the two styles `resolve/dependencies.py`
+# gates on and by a catalog setting `detect.required` (`ports/catalogs.py`);
+# `fluent` is neither, so this catalog applies module-wide exactly as
+# `okhttp.yml` does, and an empty list says so rather than inventing a
+# coordinate nothing resolves.
+detect:
+  coordinates: []
+
+measured:
+  # `jmod:java.net.http` is the JDK module the rule was read out of, spelled in
+  # the `group:artifact` shape this block requires; it is NOT a Maven coordinate
+  # and nothing resolves it. The version is the one the JDK stated about itself
+  # (`$JAVA_HOME/release`, `javap -version`), read by the probe.
+  - { artifact: jmod:java.net.http, versions: ["21.0.12.1"],
+      identity: reported, by: scripts/probes/a2t8_http_client_builders.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # `okhttp.yml`'s exact shape (spec §12, measured 2026-09-13): a static root, verb-setting
+  # steps, and a `build()` whose result is handed to a SEPARATE `HttpClient.send` call —
+  # joined only through the argument `source` id (D00 §5), never through receiver/result
+  # chaining, which is what `terminal_via_argument` is for.
+  #
+  # ONE root for both `newBuilder` overloads — a `fluent` root matches on owner and method,
+  # with no descriptor key in this grammar. `newBuilder(URI)` reads its address off `arg0`;
+  # the argument-less `newBuilder()` has no argument 0, so `url` reads as "reached and
+  # empty", and the `uri` step that every such chain calls next overwrites it (D02 §4's
+  # last-wins fold). A chain on `newBuilder()` that never calls `uri` cannot be built —
+  # `build()` throws without a URI — so that empty read never reaches a row.
+  #
+  # `http_method: GET` is the platform's own default (`HttpRequest.Builder` javadoc: a
+  # builder with no verb method called issues GET), allowlisted in
+  # `tests/architecture/test_defaulted_identity_values.py` on the same condition as
+  # OkHttp's: every verb-setting method the builder declares is a step below — measured,
+  # `javap -p -s --module java.net.http` at JDK 21.0.12.1
+  # (`scripts/probes/a2t8_http_client_builders.md`): `GET() HEAD() DELETE()
+  # POST(BodyPublisher) PUT(BodyPublisher) method(String, BodyPublisher)`, six, and
+  # nothing else on the builder sets one. `HEAD()` is a `default` method the interface
+  # gained at JDK 21.
+  #
+  # STATED BOUNDARY — the third overload, `newBuilder(HttpRequest, BiPredicate)`, copies
+  # another request and carries THAT request's verb; the seeded GET is wrong for it, and
+  # its argument 0 is a request, not a URI, so `url` reads nothing `url_via` can follow:
+  # the row derives at `unresolved` with a verb this catalog cannot vouch for. No
+  # fixture writes it; a form to read the copied request is its own item.
+  roots:
+    - { owner: java.net.http.HttpRequest, method: newBuilder,
+        captures: { http_method: GET, url: arg0 },
+        url_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                  { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
+  # `uri(URI)` is the address step, and its argument is never a string: `URI.create("…")`
+  # and `new URI("…")` reach it as the compiler's `unresolved`/`instance`+`source`, so
+  # `url_via` — `channel_via`'s ladder applied to the `url` capture (D02 §4) — follows
+  # `source` to the `URI.create` or `URI.<init>` call in this same method and reads ITS
+  # argument 0 as the address.
+  #
+  # `arity: 1` on the constructor form, and it is load-bearing: `java.net.URI` declares
+  # FIVE constructors — `URI(String)` and four multi-argument ones whose argument 0 is
+  # the SCHEME (`new URI("https", "host", "/path", null)`) — and a form matching on
+  # owner and method alone would read `https` as that request's whole address at
+  # `resolved`. With the arity the four-argument form matches no form and derives
+  # `path` NULL at `unresolved` — honest, never silent. A `"…/" + id` concatenation
+  # handed to either factory reads the same way, since `url_of` reads a string literal
+  # and nothing else.
+  steps:
+    - { method: uri,    captures: { url: arg0 },
+        url_via: [{ owner: java.net.URI, method: create, arg: 0 },
+                  { owner: java.net.URI, method: <init>, arg: 0, arity: 1 }] }
+    - { method: GET,    captures: { http_method: GET } }
+    - { method: HEAD,   captures: { http_method: HEAD } }
+    - { method: DELETE, captures: { http_method: DELETE } }
+    # `body` captures a `BodyPublisher`, which is never a payload TYPE — `ofString(s)`,
+    # `ofByteArray`, `ofFile` — so `request_shape` stays NULL and the row is
+    # `unresolved` (ruling I1: a capture reached and unread). The same answer
+    # `okhttp.yml`'s `post(RequestBody)` gives on the same fixture, and the honest one:
+    # this request carries a body whose wire type nothing here can read. Reading through
+    # `BodyPublishers.ofString(x)` to `x`'s own type is its own item.
+    - { method: POST,   captures: { http_method: POST, body: arg0 } }
+    - { method: PUT,    captures: { http_method: PUT, body: arg0 } }
+    # The fully generic setter (`A-C2`): the verb is argument 0, read as a string, and
+    # a verb held in a variable derives `method` NULL at `unresolved`.
+    - { method: method, captures: { http_method: arg0, body: arg1 } }
+  # `header`/`headers`/`setHeader`/`timeout`/`version`/`expectContinue`/`copy` pass
+  # through undeclared (D02 §4): none sets a verb or an address.
+  #
+  # A mapping, not the bare flag, and BOTH executing calls: `send` and `sendAsync` (two
+  # overloads) each take the built request at argument 0, and a `build()` whose result
+  # reaches neither — a request built in one method and sent in another, or built and
+  # dropped — is not a call anyone makes (`fluent.a-built-request-is-not-an-issued-one`,
+  # spec §13 case 9).
+  terminal:
+    - { method: build, terminal_via_argument: { owner: java.net.http.HttpClient, method: [send, sendAsync] } }
+  # The field ladder's own vocabulary (2F design §4), as `okhttp.yml` declares it. It
+  # reaches a `field`-kind argument AT the captured position — a `@Value`-fed `URI`
+  # field handed straight to `uri(…)` or `newBuilder(…)`. It does NOT reach a field read
+  # inside the linked call: `uri(URI.create(this.baseUrl))` follows `url_via` to
+  # `URI.create`, whose own argument is read as a string literal and nothing else
+  # (`channel_of`), so that request derives `path` NULL at `unresolved`.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+
+# Shared verbatim across every outbound catalog on purpose — `okhttp.yml` carries the
+# reason: shape expansion is a global insert-if-absent pass keyed on the type symbol
+# alone, so every outbound catalog's `wrappers` must agree.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: reactor.core.publisher.Mono,              payload_arg: 0, semantics: async }
+  - { type: java.util.Optional,                       payload_arg: 0, semantics: optional }
+  - { type: retrofit2.Call,                           payload_arg: 0, semantics: async }
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+shape_model: json

@@ -855,18 +855,39 @@ def linked_channels(
     changed; an array the extractor still cannot read end to end never
     reaches the `array` kind, and degrades exactly as that sentence said.*
 
+    A form may also name an `arity` (A2 Task 8 fix round 1): the linked
+    call must then carry exactly that many arguments. Owner and method alone
+    cannot tell overloads apart, and the platform's URI type declares a
+    one-string constructor beside four multi-argument ones whose argument 0
+    is the SCHEME — without the arity a `url_via` form on `<init>` read
+    `https` as an address. A form declaring none matches every overload, as
+    before.
+
     An unlinked argument (no `source` at all), one whose source names no
     real call site, or a linked call none of the declared forms' owner+name
-    reaches, all give the same one-tuple honest answer `channel_of` gives an
-    unreadable destination: peer/path both None, `unresolved`."""
+    (and arity, where declared) reaches, all give the same one-tuple honest
+    answer `channel_of` gives an unreadable destination: peer/path both
+    None, `unresolved`."""
     source = argument.get("source") if argument is not None else None
     if source is None:
         return [(None, None, "unresolved")]
     for form in forms:
-        site = _linked_constructor(form["owner"], source, facts, form["method"])
+        site = _linked_constructor(
+            form["owner"], source, facts, form["method"], arity=form.get("arity")
+        )
         if site is not None:
             return _read_channels(site, form["arg"])
     return [(None, None, "unresolved")]
+
+
+def valid_via_arity(form: object) -> bool:
+    """Whether a via form's optional `arity` is well-formed: absent, or an
+    int — the linked call's argument count `_linked_constructor` compares.
+    One helper for the three engines that validate a `channel_via`/`url_via`
+    form (`single_call`, `interface_implementation`, `fluent`), because the
+    rule is the reader's, not any engine's, and three copies of it would
+    drift the day the reader's changes."""
+    return not isinstance(form, dict) or "arity" not in form or isinstance(form["arity"], int)
 
 
 def _read_channels(site: dict[str, Any], arg: int | str) -> list[tuple[None, str | None, str]]:
@@ -1157,7 +1178,11 @@ def _bare_reference(symbol: str) -> dict[str, Any]:
 
 
 def _linked_constructor(
-    owner_symbol: str, source: int | None, workspace_types: CallFacts, name: str = "<init>"
+    owner_symbol: str,
+    source: int | None,
+    workspace_types: CallFacts,
+    name: str = "<init>",
+    arity: int | None = None,
 ) -> dict[str, Any] | None:
     """D02 §2h's join: the call site — an `<init>` by default, or (Task 7's
     `channel_via`) any other named method — within this same caller, whose
@@ -1166,7 +1191,9 @@ def _linked_constructor(
     `receiver` — the constructed value's id — carries the join instead;
     every other named method's own `result` id is that produced value's id.
     Never a search by proximity: the id is what keeps two calls in one
-    method apart."""
+    method apart. `arity`, when the form names one, is the linked call's
+    argument count — the one thing that tells a one-string constructor from
+    its four-string overload once owner and name agree."""
     if source is None:
         return None
     key = "receiver" if name == "<init>" else "result"
@@ -1177,6 +1204,7 @@ def _linked_constructor(
             if site.get("name") == name
             and site.get("owner") == owner_symbol
             and site.get(key) == source
+            and (arity is None or len(site.get("arguments") or []) == arity)
         ),
         None,
     )

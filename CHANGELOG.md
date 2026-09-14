@@ -14,6 +14,83 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Six more frameworks derive their HTTP/SQS surface — Spring Cloud Gateway (inbound and
+  outbound), Ktor's routing DSL, Javalin's nested `ApiBuilder`, the JDK and Apache HTTP
+  clients, and `SqsTemplate`'s four `receive` forms** (`G-30`, `G-30-outbound`,
+  `ktor-routing`, `javalin-apibuilder`, `jdk-httpclient`, `sqs-template-receive`; combinator
+  spec Part II §9–§16; PR A2). Before this, a Spring Cloud Gateway module — the design's own
+  words, "the largest single hole" — published no routes at all; a Ktor `routing {
+  route("/api") { get("/orders") { … } } }` block, a Javalin `apiBuilder(() ->
+  path("/orders", () -> get("/{id}", h)))` nest, and a JDK or Apache HTTP client call each
+  derived nothing or a wrong row.
+
+  `spring-cloud-gateway.yml` reads a route's receiver chain of predicates —
+  `path`/`method`/`host`/`header`/`query`/`cookie`/`remoteAddr`/`order`/… — composed by
+  `and()`/`or()` and negated by `not()`/`negate()`, folded into the route the chain's
+  terminal `uri(…)` call emits; a route with no `method()` publishes the framework's own
+  catch-all (method NULL, resolved); `not()` anywhere in the predicate tree poisons the
+  row. `spring-cloud-gateway-outbound.yml` reads the same chain's `uri(…)` target,
+  `http://…`/`lb://…` kept whole. `ktor-routing.yml` walks a nested `route("/api") {
+  get("/orders") { … } }` by checking each inner call's receiver against the enclosing
+  block's own `Route`, to arbitrary nesting depth, with a NULL handler stated (a Kotlin
+  `suspend` handler is not yet a readable symbol). `javalin-apibuilder.yml` reads
+  `ApiBuilder`'s nested form the same way, attributing every row to the enclosing
+  `Javalin.create(config -> …)` lambda, with a catalog-declared `path_join:
+  leading_slash` rule so a slashless `path("api", …)` joins to `/api` instead of gluing
+  `api` onto its parent. `jdk-httpclient.yml` and `apache-httpclient.yml` are `fluent`
+  catalogs: a request built with `HttpRequest.newBuilder()…build()`, or with Apache's
+  `ClassicRequestBuilder`/`new HttpGet(…)`, and sent through `send`/`execute` derives — a
+  constructed Apache request handed straight to `execute` included.
+  `spring-sqs-template-receive.yml` reads `SqsTemplate`'s
+  `receive`/`receiveMany`/`receiveAsync`/`receiveManyAsync` — the queue is named inside
+  each call's own `Consumer<SqsReceiveOptions>` lambda; handler = the polling method,
+  caller NULL. `G-44`'s fourth and final quarter.
+
+  Five engine words carry the walk from a linked body's own parameter, through a receiver
+  chain, to the framework's address: `origin_param` names the parameter a body's chain
+  must start from (a chain rooted anywhere else poisons every route it yields, never one
+  attributed to the wrong builder); `receiver_arg` names the call-site argument position
+  a verb's receiver must equal for a receiver-extension form (Ktor's block-scoped
+  `Route.get`); `path: ""` lets a verb rule declare the framework's own empty-string
+  literal path, read through the catalog's own `path_join` rule rather than joined
+  blindly; a fourth composer role, `negators`, sits beside `chain_composers`' `and`/`or`
+  for a call that negates rather than composes, and a `terminal: true` rule closes a
+  chain into the route its accumulated constraints describe; and `verb_arg` names the
+  argument position that carries the verb itself — an enum member, a string literal, or
+  an array of either, one branch per element — rather than the verb sitting beside the
+  owner in the catalog. A body-linked entry — the lambda a `routes().route(id, r -> …)`
+  or `routes().route(r -> …)` call hands off — is now told apart by `arity`/`arg_types`
+  exactly as a verb rule is, so Spring Cloud Gateway's two `route` overloads can both be
+  declared without one shadowing the other. `fluent`'s `url_via` gained an optional
+  `arity`, so a via form naming a constructor (`java.net.URI`'s `<init>`) cannot misread a
+  multi-argument constructor's first argument as the whole URL.
+
+  Two new fixture modules, `fixtures/orders-ktor` and `fixtures/orders-gateway`, exercise
+  the new catalogs; both are Maven and both are primed by CI alongside the others
+  (`tests/fixture_build.py`).
+
+### Fixed
+
+- **An outbound row is per caller, across engines, not per wire identity alone.** A Feign
+  `POST /v1/orders` row vanished whenever a call-side catalog (the JDK client, in the
+  fixture that caught it) derived a row at the same address first: `insert_endpoints.sql`'s
+  outbound dedup matched on wire identity alone — method, path, protocol — and never
+  compared caller or peer, so the second row read as a duplicate of the first and was
+  dropped, caller and all. For `direction = 'outbound'` the dedup now also requires the
+  same caller AND the same peer (`IS NOT DISTINCT FROM`); inbound dedup is unchanged. Two
+  engines calling the same address from two different call sites now both derive their own
+  row.
+
+- **A constructed Apache request handed straight to `execute` is issued, not silent.**
+  `new HttpPost("…/v1/orders")` followed later by `client.execute(request)` derived
+  nothing: the join that recognises "this call sends what that call built" read the
+  constructor's VOID result instead of the identity it actually constructs, so it never
+  matched. The join now reads a constructor root's identity the same way
+  `_linked_constructor` already does, and every `HttpXxx` constructor Apache declares is
+  both a root and a terminal through `execute`.
+
+### Added
+
 - **A call site says which parameter its receiver is, and a lambda argument how many
   captured values lead its body's parameters** (combinator spec §10, PR A1). Two optional
   keys, absent everywhere they do not apply: `receiver_parameter` on a call site whose

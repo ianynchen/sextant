@@ -87,7 +87,33 @@ class Surface:
     version: str
     # The gap this owner's slice answers, for the write-up's own cross-reference.
     gap: str
+    # Printed after this owner's section-2 line, for an owner the three measured styles
+    # do not fit — section 2's prose says the name sits at argument 0 "in these APIs",
+    # and an owner where it does not must say so beside its zero rather than let the
+    # zero read as "nothing missing" (the AWS SDK lesson, a third time). Optional: most
+    # owners need none.
+    note: str | None = None
 
+
+# The zero the three styles print for Ktor is a statement about the styles, not the
+# owner, and section 2 has to say so where the zero is printed — one note per owner,
+# because the facade's three unread names are getters and the extension's are routes.
+_KTOR_ROOT_NOTE = (
+    "The zero is the measurement's shape, not the owner's: `routing` is a Kotlin extension "
+    "whose `Application` receiver is argument 0 and whose block is argument 1 — no name, no "
+    "request object, no predicate — and the three unread names are the `RoutingFailureStatusCode` "
+    "and `LOGGER` getters and `getApplication(Route)`, none of which declares a route."
+)
+_KTOR_BUILDER_NOTE = (
+    "The zero is the measurement's shape, not the owner's: every method here is a Kotlin "
+    "extension whose `Route` receiver is argument 0, and its path — where it takes one — "
+    "is argument 1. The three styles above read argument 0, so none of them can see a "
+    "candidate on this owner. The unread names that take a path or a selector at "
+    "argument 1 (`route` with an `HttpMethod`, `param`, `optionalParam`, `header`) and "
+    "the selector blocks that take none (`method`, `accept`, `contentType`) are stated in "
+    "`ktor-routing.yml`'s header; a slice entry would be refused, since section 3 lists "
+    "nothing to name."
+)
 
 # Every owner whose slice is a question about methods. Owners come from the
 # catalogs themselves; artifacts and versions from each catalog's own `measured:`
@@ -131,6 +157,16 @@ SURFACES = (
     Surface(
         "spring-sqs-template",
         "io.awspring.cloud.sqs.operations.SqsOperations",
+        "io.awspring.cloud:spring-cloud-aws-sqs",
+        "3.1.1",
+        "G-44",
+    ),
+    # The receive half (A2 Task 2, `sqs-template-receive`): its own catalog because a
+    # catalog has one direction, so its own enumeration — the same owner, and the four
+    # unread names are the send half's, which the sibling file reads or names.
+    Surface(
+        "spring-sqs-template-receive",
+        "io.awspring.cloud.sqs.operations.SqsTemplate",
         "io.awspring.cloud:spring-cloud-aws-sqs",
         "3.1.1",
         "G-44",
@@ -326,6 +362,17 @@ SURFACES = (
         "6.4.0",
         "javalin-routing",
     ),
+    # The nested form (A2 Task 3, `javalin-apibuilder`): its own `combinator` catalog
+    # on the same `ApiBuilder` owner, so its own enumeration — it reads the six verbs
+    # and `path`; the unread names with a `String` at argument 0 are the filters, the
+    # other protocols, `crud` and `prefixPath`, each named in that file's slice.
+    Surface(
+        "javalin-apibuilder",
+        "io.javalin.apibuilder.ApiBuilder",
+        "io.javalin:javalin",
+        "6.4.0",
+        "javalin-nested",
+    ),
     # `alpakka-pekko` (w62). `Consumer` is the owner `pekko-connectors-kafka.yml`
     # declares in `matches.owner`; `Producer` is named nowhere in `matches` at all —
     # its inbound-only catalog reads none of it — and is enumerated here anyway so
@@ -350,6 +397,68 @@ SURFACES = (
         "org.apache.pekko:pekko-connectors-kafka_2.13",
         "1.1.0",
         "alpakka-pekko",
+    ),
+    # `ktor-routing` (A2 Task 5). Both owners the catalog names: the file facade holding
+    # the `routing` entry, and the one holding every verb and prefix. MEASURED: every
+    # `RoutingBuilderKt` method is a Kotlin extension whose `Route` receiver is argument
+    # 0 and whose path — where it takes one — is argument 1, so the arg-0 test sees no
+    # candidate on either owner and section 3 lists none for this catalog; the unread
+    # names (`route` with an `HttpMethod`, the selector blocks, the reified `*Typed*`
+    # spellings) are stated in `ktor-routing.yml`'s header rather than in a slice the
+    # audit would refuse, and the `note` below says so beside the zero. A fourth
+    # addressing style — a name at argument 1 behind an extension receiver — would count
+    # them, and would also count methods on owners already enumerated
+    # (`Javalin.addHttpHandler(HandlerType, String, Handler)`), so it is not added as a
+    # side effect of one catalog.
+    Surface(
+        "ktor-routing",
+        "io.ktor.server.routing.RoutingRootKt",
+        "io.ktor:ktor-server-core-jvm",
+        "3.0.3",
+        "ktor-routing",
+        note=_KTOR_ROOT_NOTE,
+    ),
+    Surface(
+        "ktor-routing",
+        "io.ktor.server.routing.RoutingBuilderKt",
+        "io.ktor:ktor-server-core-jvm",
+        "3.0.3",
+        "ktor-routing",
+        note=_KTOR_BUILDER_NOTE,
+    ),
+    # `spring-cloud-gateway` and its outbound sibling (A2 Task 7). The builder holding
+    # both `route` overloads and `build()` — the inbound catalog's entries and root, the
+    # outbound catalog's `matches.owner` — and the type every predicate chain starts on.
+    # MEASURED: `PredicateSpec` inherits `UriSpec`'s four members, two of which take a
+    # `String` at argument 0 (`uri`, `metadata`) and are the inbound catalog's slice: on
+    # the bare route parameter, before any predicate, neither can lead to a route that
+    # runs. Its own predicates carry a `String[]` (`path`, `host`, `method`) or a
+    # `String` (`header`, `query`, `cookie`, `weight`, `version`) — every one read, as a
+    # rule or a pass-through, on this owner and again on `BooleanSpec$BooleanOpSpec`,
+    # the static type a predicate is invoked on after `and()`/`or()`. That second owner,
+    # `BooleanSpec` and `UriSpec` are read in full (stated in the catalog's header) and
+    # not enumerated here: every unread name they could carry is already the
+    # `PredicateSpec` slice, and a second enumeration would list it twice.
+    Surface(
+        "spring-cloud-gateway",
+        "org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30",
+    ),
+    Surface(
+        "spring-cloud-gateway",
+        "org.springframework.cloud.gateway.route.builder.PredicateSpec",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30",
+    ),
+    Surface(
+        "spring-cloud-gateway-outbound",
+        "org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder$Builder",
+        "org.springframework.cloud:spring-cloud-gateway-server-webflux",
+        "5.0.0",
+        "G-30-outbound",
     ),
 )
 
@@ -772,6 +881,8 @@ def main() -> None:
                 f"**`{surface.catalog_id}` / `{simple}`** — no unread method addresses a "
                 f"wire by either style.\n"
             )
+            if surface.note:
+                print(f"> {surface.note}\n")
             continue
         print(f"**`{surface.catalog_id}` / `{simple}`**\n")
         if named:

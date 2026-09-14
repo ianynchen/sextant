@@ -1,0 +1,44 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-gateway</artifactId>
+  <version>1.0.0</version>
+  <!-- Spring Cloud Gateway's Java route DSL (`spring-cloud-gateway`, `spring-cloud-gateway-outbound`),
+       in its own module: gateway 5.0.0 targets the Spring Framework 7.x line, not
+       `orders-service`'s pinned 6.1.6 (spec §14). API jars only; never runs. `reactor-core`
+       is the version `spring-webflux 7.0.2`'s own POM declares. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.cloud</groupId><artifactId>spring-cloud-gateway-server-webflux</artifactId><version>5.0.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-webflux</artifactId><version>7.0.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-web</artifactId><version>7.0.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-context</artifactId><version>7.0.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-core</artifactId><version>7.0.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId><artifactId>spring-beans</artifactId><version>7.0.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId><artifactId>reactor-core</artifactId><version>3.8.1</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

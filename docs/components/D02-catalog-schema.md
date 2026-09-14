@@ -1124,9 +1124,11 @@ record a destination nothing could send to plus a peer no messaging fact ever ca
 **`channel_via` reads a destination the consuming call's own argument position never names
 directly** — `session.createProducer(session.createQueue("raw-audit"))`'s topic lives on
 `createQueue`'s own argument, not `createProducer`'s. A row declaring it is `[{owner,
-method, arg: int | "all_strings"}]`, each form tried in the order written until one's
-`owner`+`method` reach the argument's own linked call site (the same value-id join
-`call_wrappers` uses, §2h, generalised to any named method rather than only `<init>`); `arg`
+method, arg: int | "all_strings", arity?: int}]`, each form tried in the order written until
+one's `owner`+`method` (and `arity`, where the form names one — the linked call's argument
+count, which tells two overloads apart; §4's `url_via` is where it was first needed) reach
+the argument's own linked call site (the same value-id join `call_wrappers` uses, §2h,
+generalised to any named method rather than only `<init>`); `arg`
 an integer reads that one position off the linked call, verbatim, and `arg: "all_strings"`
 reads every one of its string-kind positional arguments as its own resolved tuple — one row
 per element, plus one trailing unresolved tuple if any element failed to resolve, never a
@@ -1338,7 +1340,11 @@ argument link completes the chain. Where a builder's own value could reach more 
 consumer — `Request r = builder.build(); log.debug("…", r);` alongside the real
 `client.newCall(r)` — a catalog instead writes `terminal_via_argument: {owner, method}`, and
 the join narrows to that one declared call; every other consumer of the same value no longer
-counts.
+counts. Both halves take one name or a list (§3.1's scalar-or-list, A2 Task 8): `owner`
+because one library reaches a wire through more than one client, `method` because one
+client issues a built request through more than one call — the JDK's `send` OR
+`sendAsync`, one builder chain, one address — and two `build` entries in `terminal` would
+silently overwrite each other rather than widen the join. An empty list is refused at load.
 
 **A step's own `captures` may also name `base`** — the other half of ONE address, not a
 second address (2F). A builder states its base address once
@@ -1395,6 +1401,34 @@ root's own `channel_via` ladder rides forward the same way, available to resolve
 chain's `channel` wherever the walk finally derives, with no need to repeat it on a later
 step.
 
+**A `url`-declaring entry may also declare `url_via`** (A2 Task 8, spec §12) — `channel_via`'s
+ladder applied to the `url` capture, verbatim: a `[{owner, method, arg}]` list, tried in
+order, followed only once the captured position itself is not a string literal, and joined
+to the linked call in the same method by owner AND method (`_linked_constructor`: a named
+method through its `result`, `<init>` through the constructed value's `receiver`). The JDK
+client's address step is `uri(URI)` and its argument is never a string — `URI.create("…")`
+reaches the step as `unresolved`+`source` — so `jdk-httpclient.yml` writes
+`url_via: [{owner: java.net.URI, method: create, arg: 0}]` and the address is read off
+`URI.create`'s own argument. The answer is then read exactly as a literal written at the
+capture: CP-2 splits an absolute one into peer and path, and a `base` composes with it. Two
+differences from `channel_via`, both from what a URL is: `arg` is an `int` only (a URL is
+one string; `all_strings` is for a list of topics), and a ladder that answers nothing — no
+`source`, a linked call no form names, a linked call whose own argument is a `concat` —
+leaves the row exactly as a direct read would, `path` NULL at `unresolved`: the ladder can
+add an answer, never take one away. **A form may name an `arity`** — `{owner, method,
+arg, arity?: int}`, on `channel_via` and `url_via` alike (A2 Task 8 fix round 1) — the
+linked call's argument count, the one thing that tells two overloads apart once owner and
+method agree: `java.net.URI` declares four multi-argument constructors whose argument 0 is
+the SCHEME beside `URI(String)`, so a `<init>` form matched on owner and method alone read
+`https` as an address, and the shipped catalogs write `{owner: java.net.URI, method: <init>,
+arg: 0, arity: 1}`. A form declaring no `arity` matches every overload, as before.
+
+**A `<init>` root may itself be the terminal** — `new HttpPost("…")` handed straight to
+`execute` with no `build()` between (Apache's constructor form): `terminal` names `<init>`
+with the same `terminal_via_argument` mapping, and the execute-join reads the row's chain
+key — a constructor's `receiver`, the constructed value's id (CP-3), never its void
+`result`.
+
 **A step may declare `when`** — `{arg: int, equals: str}`, exactly those two keys — a value
 guard on one of the *matched call's own* arguments, for the builder shape where the
 capturing method is generic and only the argument says what it set:
@@ -1417,7 +1451,7 @@ could not be read" are different facts:
   must never let a chain keep an earlier confident answer. A later step that writes the same
   key unambiguously supersedes the poison: "can't tell" is an answer this pass records, not
   a state it locks. The step's *literal* declarations (`http_method`, `response_is`, a
-  `channel_via` ladder) are not argument reads and carry no `unresolved` form at all, so
+  `channel_via` or `url_via` ladder) are not argument reads and carry no `unresolved` form at all, so
   they are left out of the fold rather than poisoned into a value their readers cannot
   interpret.
 
@@ -1442,7 +1476,7 @@ matches:
     - { owner: org.springframework.web.reactive.function.server.RouterFunctions,
         methods: [route, nest], handler_arg: 1 }
     - { owner: org.springframework.web.reactive.function.server.CoRouterFunctionDslKt,
-        method: coRouter, body_arg: 0 }
+        method: coRouter, body_arg: 0, origin_param: 0 }
   vocabulary:
     verbs:
       - { owner: "…RequestPredicates", method: GET, verb: GET, path_arg: 0 }
@@ -1462,9 +1496,10 @@ matches:
     prefixes:
       - { owner: "…RequestPredicates", method: path, path_arg: 0 }
       - { owner: "…RouterFunctions", method: nest, path_arg: 0, subtree_arg: 1 }
-      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1 }
+      - { owner: "…CoRouterFunctionDsl", method: nest, path_arg: 0, body_arg: 1, origin_param: 0 }
       - { owner: "…RouterFunctions$Builder", method: path, arity: 2,
-          arg_types: { 1: java.util.function.Consumer }, path_arg: 0, body_arg: 1, extends_receiver: true }
+          arg_types: { 1: java.util.function.Consumer }, path_arg: 0, body_arg: 1,
+          extends_receiver: true, origin_param: 0 }
     media:
       - { owner: "…RequestPredicates", method: accept, fills: produces }
     media_values:
@@ -1481,9 +1516,40 @@ matches:
     - { name: filter,   owner: "…RouterFunctions$Builder", pass_through: true }
   origins:
     - { owner: "…RouterFunctions", method: route, arity: 0 }
+  # path_join: leading_slash   # only where the framework itself joins segments (Javalin)
 ```
 
-**Four grammar blocks, and each is catalog data alone — nothing below names a
+The chain form (spec §12 words 3–5), measured on `spring-cloud-gateway-server-webflux`
+5.0.0: a route is a RECEIVER chain of predicate calls on the body's parameter —
+`r.path("/a").and().method(GET).filters(f).uri(x)` — composed by the zero-argument
+`and()`/`or()` and emitted by the chain's last call, the terminal:
+
+```yaml
+matches:
+  entries:
+    - { owner: "…RouteLocatorBuilder$Builder", method: route, arity: 2,
+        arg_types: { 0: java.lang.String }, body_arg: 1, origin_param: 0 }
+    - { owner: "…RouteLocatorBuilder$Builder", method: route, arity: 1, body_arg: 0, origin_param: 0 }
+  vocabulary:
+    prefixes:
+      - { owner: "…PredicateSpec", method: path, arity: 1, path_arg: 0 }
+    verbs:
+      - { owner: "…PredicateSpec", method: method, arity: 1, verb_arg: 0 }
+      - { owner: "…UriSpec", method: uri, arity: 1, terminal: true, handler: none }
+    chain_composers:
+      and: [{ owner: "…BooleanSpec", method: and }]
+      or:  [{ owner: "…BooleanSpec", method: or }]
+    negators:
+      - { owner: "…PredicateSpec", method: not }
+      - { owner: "…BooleanSpec", method: negate }
+  continuations:
+    - { name: build,   owner: "…RouteLocatorBuilder$Builder" }
+    - { name: filters, owner: "…BooleanSpec", pass_through: true }
+  origins:
+    - { owner: "…RouteLocatorBuilder", method: routes, arity: 0 }
+```
+
+**Five grammar blocks, and each is catalog data alone — nothing below names a
 framework:**
 
 - **`entries`** declares where trees start, in two shapes. An **argument-rooted**
@@ -1500,7 +1566,11 @@ framework:**
   close). The entry owner and the vocabulary owner are routinely two different
   types — `CoRouterFunctionDslKt` (the file facade with the static entry point) is
   not `CoRouterFunctionDsl` (the DSL type every builder call carries) — so a
-  catalog declares both.
+  catalog declares both. A body-linked entry takes `arity` and `arg_types` exactly
+  as a verb rule does (spec §3, below), and two of them sharing owner, method and
+  arity that type no shared position differently are refused at load: the gateway's
+  `route(String, Function)` and `route(Function)` link their body at 1 and at 0, and
+  matched on owner and name alone the first entry claimed both calls.
 - **`vocabulary`** maps owner+method to a role. `verbs` and `prefixes` are LISTS,
   scanned per call, so one name may carry several rules — a builder declares four
   `GET`s — and two keys tell same-name overloads apart (design spec
@@ -1514,9 +1584,13 @@ framework:**
   verb and whichever positions the overload has: `path_arg` (a literal path),
   `predicate_arg` (the position whose producing call's constraints — a path, a
   media guard, a composed predicate — fold into the route), both, or neither, which
-  is a catch-all serving every path and publishing `/**` at `resolved` (§7 case 3);
-  a one-position predicate factory becomes a route only once some entry attaches a
-  handler to it, while a rule naming `handler_arg` — or `handler: none`, a route
+  is a catch-all serving every path and publishing `/**` at `resolved` (§7 case 3).
+  A rule may instead state a literal path itself — `path: ""`, the empty string —
+  for an overload that serves exactly the prefix it sits under (Javalin's
+  `ApiBuilder.get(Handler)` registers `prefix + ""`, measured on 6.4.0): that route
+  READ a path, so it is never a catch-all, and under `path("/x", …)` it is `/x`
+  rather than `/x/**`. A one-position predicate factory becomes a route only once
+  some entry attaches a handler to it, while a rule naming `handler_arg` — or `handler: none`, a route
   SERVED with no handler method, which is what a static-resource pattern is (§6) —
   declares the whole route itself. `extends_receiver: true` on a verb or a prefix
   is the builder form (§4): the call declares its own route AND carries on the
@@ -1531,7 +1605,63 @@ framework:**
   (an enum type's member names to their declared wire values), and `composers`
   (`and` merges constraint sets into one; `or` duplicates the route per branch, over
   ANY predicate kind — verbs, paths, media alike — the `all_methods` precedent
-  generalised).
+  generalised). A verb rule may name its verb OFF THE CALL instead of beside the
+  owner — **`verb_arg: n`** in place of `verb` (spec §12 word 5): the argument at
+  `n` is an enum member, whose name is the verb (`method(HttpMethod.GET)`); a
+  string literal, the verb exactly as written — `HttpMethod.valueOf` keeps the
+  case it is handed (measured on spring-web 7.0.9), so the engine changes no
+  spelling; or an array of those, a vararg, one branch per element
+  (`method(GET, POST)` is two routes). Anything else there — a variable, an array
+  holding one, an empty array — poisons `method` alone; the path stays. `verb_arg`
+  sits on a verb rule declaring no `verb`, is an index from 0 and, where the rule
+  declares an `arity`, lies below it; anything else is refused at load. **A path
+  argument that is an ARRAY of string literals** — `path("/a", "/b")`, a vararg —
+  is one branch per element, for EVERY rule that reads a path (a prefix's
+  `path_arg`, a verb's, a nest-shaped continuation's), each element read through
+  the same `path_join` a single literal is; an array holding anything else, or
+  holding nothing, is an unreadable path.
+- **The chain form** (spec §12 words 3–4). Some frameworks write a route not as a
+  tree of predicate ARGUMENTS but as a RECEIVER chain of predicate calls on the
+  body's parameter, composed by the zero-argument `and()`/`or()` and emitted by the
+  chain's last call — `r.path("/a").and().method(GET).filters(f).uri(x)`. Three
+  words read it. **`chain_composers: {and: [{owner, method}], or: […]}`** are the
+  composers written ON the chain: `and()` is the merge that happens anyway, `or()`
+  makes the next contribution a branch of its own — left-associative, as the
+  framework composes it, so `a.or().b.and().c` is `(a or b) and c`. The alternative
+  an `or()` opens may be a pass-through — `path("/a").or().host(h)` — and a predicate
+  the walk reads as nothing is a branch constraining nothing, which serves every
+  path: that route is `/a` AND `/**`, two rows, never `/a` alone; an `or()` followed
+  by nothing but the terminal opened no alternative, and the route is what stood
+  before it. **`negators:
+  [{owner, method}]`** — `not(fn)`, `negate()` — poison every branch of the route
+  they sit in: a negated predicate still serves something, and what it serves is
+  not readable from the negation, so the row is `unresolved` rather than the
+  un-negated path published as the address (word 3). **`terminal: true`** on a verb
+  rule — with `handler_arg`, or `handler: none` where the framework's route names no
+  handler method, as the gateway's `uri(x)` does not — is the call whose routes are
+  its receiver chain folded as CONSTRAINTS: the head is the declared origin or the
+  body's origin parameter (the same head check every chain in a body gets — a head
+  on a field, on another parameter, or on a receiver nobody produced is one
+  unresolved row, spec §13 case 6), pass-throughs are stepped over, every other
+  rule's constraints merge into each branch, `or()` opens a branch, a negator or a
+  call the vocabulary does not know poisons all — merged with the terminal's own
+  constraints (whichever of `verb`/`verb_arg`, `path_arg`, `predicate_arg` its rule
+  declares; a bare terminal contributes nothing). A route whose constraints read no
+  path serves every path, `/**` (§7 case 3), decided ONCE after the merge — a route
+  with only `method(GET)` publishes `GET /**`, and `r.uri(x)` alone `/**` with no
+  verb — and only where the catalog serves URLs (inbound HTTP): an outbound catalog
+  serves nothing, so a terminal route there that read no path has its path
+  poisoned instead. (A NON-terminal route-declaring form — a verb with `handler_arg`,
+  an entry — is not gated that way and would publish `/**` under an outbound catalog
+  too; the decision is that a terminal is the only route-emitting form an outbound
+  combinator catalog is expected to use, and no shipped one exists.) A terminal
+  extends its receiver as a builder verb does, so the calls before it are never trees
+  of their own; a chain composer or a negator whose chain reaches no terminal declares
+  nothing. A chain composer or a negator on an (owner, method) a verb, prefix, media
+  or argument-`composers` rule already names — or a continuation on a chain
+  composer's or negator's name, as on a composer's — is refused at load, as is
+  `terminal` without a handler answer, beside `extends_receiver`, on anything but a
+  verb, or on a name a prefix or media rule claims.
 - **`continuations`** are the calls that merge route SETS along `result` →
   `receiver`, `fluent`'s own steps discipline extended: a plain name matches any
   owner, useful for reaching a step inside a chain already known to be this
@@ -1565,6 +1695,64 @@ framework:**
   else the walk cannot read is one unresolved row (§4b). `arity` is what tells the
   argument-less builder factory from the two-argument route of the same name, which
   heads every `andRoute` chain and must keep its route.
+- **`path_join`** (catalog-wide, beside `origins`) says how the framework joins the
+  segments its prefixes and verbs are handed, and applies to every literal path the
+  fold reads. Absent, segments concatenate verbatim, exactly as written — the Spring
+  catalogs. `leading_slash` is the join a framework that normalises each segment
+  itself performs: a `/` goes in front of a segment unless it already starts with one,
+  is empty, or is the bare `*` — Javalin's `prefixPath`, measured on 6.4.0, under which
+  `path("api", …)` and `path("/api", …)` are one registration — so `path("users", () ->
+  path("{id}", () -> get(h)))` reads `/users/{id}`, never `/users{id}` glued and
+  resolved. The empty literal `path: ""` above is one of the three exceptions and is
+  never prefixed. Any other value is refused at load.
+
+**Where a body's chain starts — `origin_param` and `receiver_arg` (spec §10, §12
+words 1–2).** Inside a linked body the builder is one of the body method's own
+parameters, and a call on it carries no producing call — its `receiver` is null and
+its `receiver_parameter` (D00 §5) is that parameter's index. A null `receiver` is
+ALSO what a field receiver and a value the extractor could not follow get, so
+"no receiver" alone cannot say the call sits on the builder the framework handed
+the block. `origin_param: k` on a body-linked entry or on a prefix carrying
+`body_arg` says which of the lambda's parameters the routes sit on, and the engine
+resolves it against the body method exactly: the functional interface's parameter
+`k` is the body method's parameter **`captures + k`**, `captures` read off the
+linking site's own `lambda` argument (D00 §5) — both compilers lay captured values
+out before the interface's parameters, so the index is not a catalog constant, and
+a rule that named the body method's index directly would be wrong for every lambda
+that captures something. In such a body every route-declaring call is checked at
+the HEAD of its chain — the receiver-extending verb or prefix the chain begins on,
+or the call itself where it extends nothing (a DSL's `GET("/x") { }` is a chain of
+one): a head on the origin parameter is clean and contributes nothing; a head
+that is a field, another parameter, or a value the extractor could not follow is
+not the origin, and EVERY route that chain yields is `unresolved` — the head's
+own, each verb's along the chain, a nested body's under the prefix — because all
+of them are registered on whatever the head sits on, and a route on another
+builder is never attributed to this one (spec §13 case 6): one unresolved row per
+route, each with its own handler, never a resolved row beside a poison. (At root
+level, outside any body, the builder-form rule of §4b is untouched: an unread head
+costs the routes to its LEFT as one row and the rest derive.) A STATIC call has no
+receiver and is never held to the origin. An unbound instance reference used as
+the lambda (`captures: -1`, D00 §5) puts the interface's parameter into the body's
+`this`, which no parameter index names: every head in that body poisons — spec
+§10b's stated limit, honest rather than guessed. **The permissive rule, stated:** a body linked by a rule
+WITHOUT `origin_param` — and one whose linking argument carries no `captures`, a
+fact written before the extractor recorded it — reads a null receiver as the
+body's own parameter, as every shipped rule did before this word existed; that is
+exact only while a body never holds a field receiver, which is why the shipped
+`coRouter`, `router`, DSL `nest` and `Consumer`-bodied `path`/`nest` rules all
+declare `origin_param: 0`. A `Supplier` body has no parameter and declares none.
+`origin_param` sits only beside a `body_arg` on an entry or a prefix, and is
+refused at load anywhere else — a verb, a continuation, a rule linking no body.
+
+`receiver_arg: n` on a verb or a prefix is the same check for the
+extension-receiver form, where the framework hands the block its receiver as an
+ARGUMENT of a static call (Kotlin's `get(route, "/x") { }` under `route("/api") { }`):
+argument `n` must be `{kind: parameter, value: captures + k}` of the enclosing body
+— the origin parameter — or the route is not under this body's prefix at all and
+the row is `unresolved`. `get(someOtherRoute, "/x")` inside that block is not under
+`/api`, and the engine will not say it is. `receiver_arg` sits on a verb or a prefix, is an index from 0 and,
+where the rule declares an `arity`, lies below it; anything else — an entry or a
+continuation carrying it included — is refused at load.
 
 **The walk, one core for both shapes.** From an argument-rooted entry, or from a
 body-linked entry's own named method, every argument is resolved through its

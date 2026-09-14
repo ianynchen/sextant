@@ -532,9 +532,165 @@ def test_javalin_flat_registrations_derive_every_route(javalin_routes):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="javalin-apibuilder: nested ApiBuilder needs the receiver-chain walk (Category B)",
-)
 def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
-    assert ("inbound", "GET", "/jv/nested/{id}") in javalin_routes
+    """`javalin-apibuilder`, spec §14 test 12: two nesting levels; a path-less verb serves
+    its prefix and nothing more (Javalin's `prefixPath("")`, measured on the 6.4.0 jar —
+    `POST /jv/nested`, never `/jv/nested/**`); the role-carrying overload reads the same
+    positions; every row's caller is the method holding `apiBuilder`, which is the
+    `config -> …` lambda `Javalin.create` was handed. The slashless `path("plain", () ->
+    get("x", …))` reads `/jv/nested/plain/x` — the catalog's `path_join: leading_slash`
+    is Javalin's own `prefixPath` rule, and the glued `/jv/nestedplainx` is the resolved
+    wrong row it prevents (Task 3 fix round 1)."""
+    expected = {
+        ("inbound", "GET", "/jv/nested/{id}"),
+        ("inbound", "POST", "/jv/nested"),
+        ("inbound", "GET", "/jv/nested/{id}/items"),
+        ("inbound", "DELETE", "/jv/nested/{id}/items/{itemId}"),
+        ("inbound", "GET", "/jv/nested/plain/x"),
+    }
+    assert expected <= javalin_routes, sorted(javalin_routes)
+    assert ("inbound", "GET", "/{id}") not in javalin_routes
+    assert ("inbound", "POST", "/jv/nested/**") not in javalin_routes
+    assert ("inbound", "GET", "/jv/nestedplainx") not in javalin_routes
+
+
+KTOR = FIXTURES / "orders-ktor"
+
+
+@pytest.fixture(scope="module")
+def ktor_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
+    handler and the caller beside the identity, which the Javalin fixture's triples
+    do not carry."""
+    workspace_dir = tmp_path_factory.mktemp("ktor")
+    compile_fixture(KTOR)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(KTOR), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
+    """`ktor-routing`, spec §14 test 13. `routing { route("/api") { get("/orders") { }
+    … } }` on ktor-server-core 3.0.3: every verb is a static extension whose receiver is
+    argument 0, every block an `invokedynamic` body, and the route is the prefix chain
+    the blocks nest in. `get { }` under `route("/api")` is `method(Get) { handle(body) }`
+    on the prefix node itself (`javap -c`), so it serves `/api` — the empty literal
+    path, never `/api/**`. The slashless `route("legacy") { get("orders") { } }` reads
+    `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
+    which is the catalog's `path_join: leading_slash`.
+
+    Handler NULL on every row — a suspend lambda is a class, not a linked body — asserted
+    here so `kotlin-null-handler` moves a pinned value (spec §13 case 8).
+
+    Two outcomes are degraded by design, and both are stated rather than hidden. The
+    wrong-receiver case: `other.get("/stray") { }` inside `route("/api") { }` registers
+    on ANOTHER route, so it is not under `/api`, and `receiver_arg`'s refusal is one
+    unresolved row that never carries the prefix. And the helper: `fun Route.api() {
+    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
+    to split a routing tree — derives NOTHING, not even an unresolved row. Task 4's log
+    predicted one unresolved row (`receiver_arg` with no origin to check against), but
+    the walk never reaches that verb: `api` is an ordinary method no linking call names
+    as its body, and a static, receiver-less verb inside it is no root of its own — the
+    boundary spec §7 case 4 states for a builder received as a PARAMETER. Pinned as
+    silence, so a walk that one day follows `api()` moves a pinned value."""
+    rows = {
+        (r["method"], r["path"], r["resolution"], r["handler"])
+        for r in ktor_rows
+        if r["catalog_id"] == "ktor-routing"
+    }
+    assert {
+        ("GET", "/api/orders", "resolved", None),
+        ("POST", "/api/orders", "resolved", None),
+        ("GET", "/api/v2/orders", "resolved", None),
+        ("DELETE", "/api/v2/orders/{id}", "resolved", None),
+        ("GET", "/api/legacy/orders", "resolved", None),
+        ("GET", "/api", "resolved", None),  # get { } on the prefix: Ktor serves the prefix itself
+        ("GET", "/health", "resolved", None),
+    } <= rows, sorted(rows, key=str)
+    assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
+    # Exactly eight rows — the seven above and the stray — so an extra row (a helper route
+    # read one day, a selector block's nested route, a duplicate) cannot pass silently.
+    assert len(ktor_rows) == 8, sorted(rows, key=str)
+    stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
+    assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
+    assert not any(str(r["path"]).startswith("/api") for r in stray), stray
+    assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
+    assert not any("#api(" in str(r["caller"]) or r["path"] == "/helper" for r in ktor_rows), (
+        "the Route-extension helper's route was derived — a walk now follows `api()`; "
+        "move this pin and the catalog's stated boundary together"
+    )
+
+
+GATEWAY = FIXTURES / "orders-gateway"
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the Spring Cloud Gateway fixture derives, whole — the test reads
+    the handler and the caller beside the identity."""
+    workspace_dir = tmp_path_factory.mktemp("gateway")
+    compile_fixture(GATEWAY)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
+    """`spring-cloud-gateway`, spec §14 test 10, on spring-cloud-gateway-server-webflux
+    5.0.0: every route is a lambda handed to `route(…)`, its predicates a receiver chain on
+    the lambda's own parameter, its address the path those predicates read. `path` alone
+    serves its path with no verb (a catch-all one column over, spec §13 case 7);
+    `path().and().method(POST, PUT)` is one row per verb; `path("/a").or().path("/b")` is
+    two rows; the host-only `route(Function)` serves every path, `/**`. No row carries a
+    handler — a gateway route forwards, it dispatches to no method — and every row's
+    caller is `routes`, the method holding `build()`.
+
+    The two capture shapes a fixed parameter index gets wrong, read off `javap -p` of the
+    compiled fixture: `legacy` captures the local `prefix`, so its body is
+    `lambda$routes$6(String, PredicateSpec)` and the route's `PredicateSpec` is parameter
+    1, not 0; `billing` captures `this`, so its body is the instance method
+    `lambda$routes$7(PredicateSpec)` with the spec at parameter 0. Both chains are found
+    on the origin parameter — `origin_param: 0` resolved through each lambda's own
+    `captures` — and neither is attributed to the wrong value. `billing` then reads its
+    literal path, `/billing/**`, resolved. `legacy` reads `prefix + "/**"`, which javac
+    compiles to a concatenation (`{}/**`, a hole for the captured value): the path is not
+    readable from the body, so that row is `unresolved` with its path NULL — the honest
+    answer for an assembled path, and the row is still there, under `routes`, rather
+    than silence. `not(p -> p.path("/admin/**"))` is the other unresolved row: a negated
+    predicate serves something the negation does not say.
+
+    Both `route` overloads derive — the named six and the unnamed host-only one — because a
+    body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched on
+    owner and name alone, the first entry claimed both and the host-only route was one
+    unresolved row. Exactly nine rows from this catalog — the seven resolved and the two
+    unresolved — so an extra row (a negator's lambda body scanned as a tree of its own, a
+    pass-through reached unconsumed, a duplicate) cannot pass silently."""
+    rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway"]
+    identities = {(r["method"], r["path"], r["resolution"]) for r in rows}
+    assert {
+        (None, "/orders/**", "resolved"),
+        ("POST", "/orders/**", "resolved"),
+        ("PUT", "/orders/**", "resolved"),
+        (None, "/a/**", "resolved"),
+        (None, "/b/**", "resolved"),
+        (None, "/billing/**", "resolved"),  # captured `this`: the spec is parameter 0
+        (None, "/**", "resolved"),  # host only, the `route(Function)` overload
+        (None, None, "unresolved"),  # not-admin, and legacy (captured local, concat path)
+    } == identities, sorted(identities, key=str)
+    unresolved = [r for r in rows if r["resolution"] == "unresolved"]
+    assert len(unresolved) == 2 and all(r["method"] is None for r in unresolved), unresolved
+    assert len(rows) == 9, sorted(identities, key=str)
+    assert all(r["handler"] is None for r in rows), [r["handler"] for r in rows]
+    assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
