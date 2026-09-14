@@ -33,9 +33,17 @@ Adding a Critical or Major anywhere without naming the feature it blocks fails t
 too — that is the check aimed at half-delivery: the half you did not do has to appear here,
 against the feature it belongs to, or the build goes red.
 
+**Minor items are logged, not blocking (ruled 2026-09-13, after PR A2).** The definition above
+says a feature is delivered with no open Critical or Major, so the ```delivery block carries
+Critical and Major ids only. Every Minor gap keeps its `severity` line and its §1 row
+(`javalin-crud`, `ktor-wildcard-segment`, `ktor-route-with-verb`, `gateway-and-of-two-paths`,
+`gateway-order-mid-chain`, `url-openconnection`, `jdk-body-publisher`, `jdk-newbuilder-copy`,
+`apache-execute-httphost-peer`, `gateway-detect-4x-coordinate`) and is addressed when its
+feature's next spec touches the seam — never silently dropped, never a blocker.
+
 ```delivery
-REST inbound       | REST in    | G-30 conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder dsl-media-route javalin-crud ktor-route-extensions ktor-selector-blocks ktor-wildcard-segment ktor-route-with-verb gateway-properties-routes gateway-and-of-two-paths gateway-order-mid-chain kotlin-class-lambdas gateway-detect-4x-coordinate
-REST outbound      | REST out   | G-30-outbound jdk-httpclient url-openconnection jdk-body-publisher jdk-newbuilder-copy apache-execute-httphost-peer
+REST inbound       | REST in    | conditional-controllers kotlin-null-handler quarkus-jaxrs dsl-media-route ktor-route-extensions ktor-selector-blocks gateway-properties-routes kotlin-class-lambdas kotlin-default-bridge-calls
+REST outbound      | REST out   | mp-rest-client apache-camel
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
@@ -43,7 +51,7 @@ SSE                | SSE        | jaxrs-sse
 gRPC               | gRPC       |
 Kafka              | Kafka      | kafka-batch-generics
 JMS and AMQP       | JMS / AMQP |
-AWS SQS            | SQS        | sqs-template-receive micronaut-jms-over-sqs
+AWS SQS            | SQS        | micronaut-jms-over-sqs
 Google Pub/Sub     | Pub/Sub    | pubsub-channel-adapter
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
 Async              | Async      | temporal-cadence vertx-eventbus
@@ -174,6 +182,7 @@ gateway-and-of-two-paths | Minor
 gateway-order-mid-chain | Minor
 url-openconnection | Minor
 kotlin-class-lambdas | Major
+kotlin-default-bridge-calls | Major
 jdk-body-publisher | Minor
 jdk-newbuilder-copy | Minor
 apache-execute-httphost-peer | Minor
@@ -281,6 +290,12 @@ be written without a run id, so there is nothing to write until CI has actually 
 Format: `id | test node id | CI run URL`
 
 ```closed
+G-30 | tests/e2e/test_rest_inbound_delivered.py::test_gateway_routes_derive_their_inbound_surface | https://github.com/ianynchen/sextant/actions/runs/34793215476
+G-30-outbound | tests/e2e/test_rest_outbound_delivered.py::test_gateway_targets_derive_outbound | https://github.com/ianynchen/sextant/actions/runs/34793215476
+ktor-routing | tests/e2e/test_rest_inbound_delivered.py::test_ktor_routing_derives_every_route_under_its_nested_prefixes | https://github.com/ianynchen/sextant/actions/runs/34793215476
+javalin-apibuilder | tests/e2e/test_rest_inbound_delivered.py::test_javalin_api_builder_derives_the_composed_path | https://github.com/ianynchen/sextant/actions/runs/34793215476
+sqs-template-receive | tests/e2e/test_aws_sqs_delivered.py::test_a_template_receive_names_its_queue_inside_the_options_lambda | https://github.com/ianynchen/sextant/actions/runs/34793215476
+jdk-httpclient | tests/e2e/test_rest_outbound_delivered.py::test_the_jdk_http_client_derives_every_request_it_builds_and_sends | https://github.com/ianynchen/sextant/actions/runs/34793215476
 G-36 | tests/e2e/test_soap_delivered.py::test_one_handler_serving_two_message_types_derives_both | https://github.com/ianynchen/sextant/actions/runs/34646355110
 G-44 | tests/e2e/test_jms_and_amqp_delivered.py::test_rabbit_template_receives_derive_one_inbound_row_per_queue | https://github.com/ianynchen/sextant/actions/runs/34703991222
 G-31 | tests/e2e/test_kafka_delivered.py::test_a_streams_dsl_topology_derives_every_source_and_sink | https://github.com/ianynchen/sextant/actions/runs/34703991222
@@ -345,6 +360,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | `spring7-version` | **closed** — two versions of one route are not reported as a conflict, proven in CI run 34669970510 | — |
 | `dsl-media-route` | `accept(MediaType, Function1)` / `contentType(MediaType, Function1)` on `RouterFunctionDsl` (both stacks) and `CoRouterFunctionDsl`: a route declared under a media guard alone. Before PR A1 this was silence; now it is one honest `unresolved` row (PR A1, the addresses-nothing seam pinned by a guard) — but the proper read needs a word this grammar does not have: "the media value IS the route's own constraint" on a verb-less rule, so the row can carry its handler and its media instead of naming neither | a media-gated route (e.g. a JSON-only handler with no path) derives an unresolved row instead of `path: /**` with its `produces`/`consumes` set |
 | `kotlin-class-lambdas` | **logged (PR A2 Task 9, spec §15, Major)** — a lambda compiled as a class (`-Xlambdas=class`, the default before Kotlin 2.0) arrives as `kind: instance`, not `kind: lambda`; the body-linked entry roots and derives zero routes — one unresolved row under §4b, not silence, but the address is unreadable | every Kotlin router DSL module built with Kotlin < 2.0 (or `-Xlambdas=class` explicitly) under-reports |
+| `kotlin-default-bridge-calls` | **logged 2026-09-13 (user question after PR A2), Major when reachable** — a Kotlin call that OMITS a defaulted parameter is compiled as a call to the synthetic `name$default(…, mask, marker)` bridge: a different name and arity, which no catalog rule matches, so the route derives NOTHING (not the unrecognised-overload row — that fires only on a name the vocabulary carries). Named and out-of-order arguments are NOT affected (the compiler reorders them into the declaration's order before the bytecode). Not triggered today: `RoutingBuilderKt` declares zero `$default` bridges (measured, 3.0.3) and the Spring DSL rules are on Java-declared members. Fix when a catalog first covers a Kotlin function with defaults: the catalog declares the bridge form (`name$default`, arity = declared + masks + 1, the same positions) — or the engine maps a `$default` call back to its sibling as the extractor's `KotlinDefaultBridge` already does on the declaration side | a Kotlin DSL function with a default parameter, called without it — silence for that route |
 
 > `verify: grep -rl "RouteLocator" src/sextant/catalogs/` → empty
 > `verify: awk '/repositories:/,/routes:/' src/sextant/catalogs/spring-data-rest.yml | grep -c Mongo` → 4
@@ -378,6 +394,8 @@ blockers — each is either honest engine output or a shape real code rarely wri
 | # | issue |
 |---|---|
 | `G-30-outbound` | **shipped** (PR A2 Task 7, commit `3ca2219`) — `spring-cloud-gateway-outbound.yml` reads each route's `uri(…)` target via `lambda_steps`, `channel_arg` keeping `http://…`/`lb://…` whole (peer NULL by design — a load-balanced target names no host). Not yet in ```closed — awaiting this PR's CI |
+| `mp-rest-client` | **named 2026-09-13 (A2 register close)** — MicroProfile REST Client (`@RegisterRestClient` on an interface, `@GET`/`@Path` on its methods; Quarkus's standard outbound client) has no catalog. Tier A: `annotation_driven` with `declared_on: interface`, the shape `spring-http-interface.yml` reads. Surfaced because REST outbound's ```delivery row emptied while its COVERAGE §5.2 checklist still carried this row unsettled — the definition's second clause. Costs a Quarkus/MicroProfile module its whole outbound surface |
+| `apache-camel` | **named 2026-09-13 (A2 register close)** — Apache Camel's route DSL (`from("kafka:orders").to("http://svc/api")`) has no catalog: protocol, direction and destination sit in one URI literal, tier B, `fluent` over URI strings. COVERAGE §5.2 calls it the largest single payoff. Needs a short spec (a URI-scheme→protocol table; `from`/`to`/`toD` as steps). Costs a Camel module its whole integration surface |
 | `jdk-httpclient` | **shipped** (PR A2 Task 8, commit `be46e52`) — `jdk-httpclient.yml` and `apache-httpclient.yml` are `fluent` catalogs: `HttpRequest.newBuilder().uri(URI.create(…)).POST(…).build()` sent inline, the `newBuilder(URI)` overload, `.method("PATCH", …)`, and Apache's `new HttpGet(…)`/`ClassicRequestBuilder.get(…)` all derive through `send`/`execute`, a constructed Apache request handed straight to `execute` included (fix round 2). `url_via` gained an optional `arity` so a via form naming `java.net.URI`'s `<init>` cannot misread a multi-argument constructor's first argument as the URL. `RestTemplate`/`RestClient`/`WebClient`/OkHttp's own `fluent` doctrine — a request built in one method and sent in another derives NOTHING — now literally governs these two catalogs too (spec §13 case 9). Not yet in ```closed — awaiting this PR's CI |
 | `url-openconnection` | **logged (PR A2 Task 9, spec §15, Minor)** — `URL.openConnection()`'s verb is set by a LATER statement on the same connection (`conn.setRequestMethod("POST")`), default GET if never set — a walk forward from a receiver, not backward to a root, and a new default-verb rule this design does not have; every module using the JDK's older client shape derives no outbound rows for it |
 | `jdk-body-publisher` | **logged (PR A2 Task 8, Minor)** — a `body` capture that reads a `BodyPublisher` leaves the row `unresolved` rather than reading through it to the payload type — `fluent`'s own rule, same shape as OkHttp's `RequestBody.create(x)`; every JDK POST/PUT/PATCH row through this fixture reads `unresolved` rather than `resolved`. Open doctrine question: should an unreadable body shape poison the whole ROW, or only the claim about its payload? |

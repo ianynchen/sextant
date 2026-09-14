@@ -35,7 +35,7 @@ always names what is missing.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 1B 4C, 17 open) | ◐ (2A 1B, 6 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 2A 1B 4C, 9 open) | ◐ (1A 1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -47,7 +47,7 @@ always names what is missing.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ◐ (2 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -2351,7 +2351,7 @@ can name a plain-string attribute and `path_from` can be declared per annotation
 | Java | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
 | Java | Micronaut `@Client` + `@Get`/`@Post`… on an interface | `annotation` | ✅ shipped (`micronaut-http-client.yml`, `declared_on: interface`, W58). `@Client` declares `value` and `path` and no media (W58 rows 45-46) |
 | Java | MicroProfile `@RegisterRestClient` | `annotation` | A |
-| Java | Spring 7 `ImportHttpServices` registration | `annotation` | A |
+| Java | Spring 7 `ImportHttpServices` registration | `annotation` | ✅ shipped — measured 2026-09-12 (`spring7-import-http-services`, register §0 "Retired as not-gaps"): the `@HttpExchange` interface derives its rows through `spring-http-interface.yml` (`declared_on: interface`) before any catalog reads the registration; there were no missing rows. Pinned by `tests/e2e/test_rest_outbound_delivered.py` |
 | Java | `RestTemplate` | `registration_call` | ✅ shipped |
 | Java | `RestClient`, `WebClient`, OkHttp | `fluent_chain` | ✅ shipped |
 | Java | JDK `HttpClient`, Apache HttpClient | `fluent_chain` | ✅ **shipped** (`jdk-httpclient`; PR A2 Task 8, `jdk-httpclient.yml`/`apache-httpclient.yml`). `HttpRequest.newBuilder().uri(URI.create(…)).POST(…).build()` sent inline, the `newBuilder(URI)` overload, `.method("PATCH", …)`, and Apache's `new HttpGet(…)`/`ClassicRequestBuilder.get(…)` all derive through `send`/`execute`, a constructed Apache request handed straight to `execute` included. `fluent`'s own doctrine — a request built in one method and sent in another derives NOTHING, as `RestTemplate`/`OkHttp` already read — now literally governs these two catalogs too (spec §13 case 9). `url_via` gained an optional `arity` so a via form naming `java.net.URI`'s `<init>` cannot misread a multi-argument constructor's first argument as the URL. **Stated boundaries**: a `BodyPublisher` body leaves every JDK POST/PUT/PATCH row `unresolved` rather than reading through it to the payload type (`jdk-body-publisher`, Minor — open doctrine question: should an unreadable body shape poison the whole row?); `newBuilder(HttpRequest, BiPredicate)` carries the seeded verb of the COPIED request rather than the copy's own (`jdk-newbuilder-copy`, Minor); Apache's `execute(HttpHost, relativeRequest, …)` reads the request's own path only, the `HttpHost` peer unread (`apache-execute-httphost-peer`, Minor); `URL.openConnection()` is out — its verb is set by a LATER `setRequestMethod` statement on the same connection, a forward walk this design does not do (`url-openconnection`, Minor, spec §15) |
