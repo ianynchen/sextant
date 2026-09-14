@@ -671,7 +671,7 @@ recorded by the plan.
 |---|---|
 | `orders-gateway` · `GatewayRoutes.java` | `routes().route(id, r -> …)` and `route(r -> …)` (both overloads); one route with `path` only; one with `path().and().method(GET)`; one with `or()` (two paths); one with `not()`; one lambda capturing a local (`prefix + "/**"`) and one capturing `this` — the two capture shapes that break a fixed index; every route ends in `.uri(…)`, `http://` on one, `lb://` on another |
 | `orders-javalin` · `apibuilder/JavalinApi.java` | `apiBuilder(() -> path("/orders", () -> { get("/{id}", h); post(h); path("/{id}/items", () -> get(h)); }))` — two nesting levels, one verb with no path |
-| `orders-ktor` · `KtorRoutes.kt` | `routing { route("/api") { get("/orders") { … }; route("/v2") { post("/orders") { … } } } }` plus one `get(otherRoute, "/x") { }` inside the body with `otherRoute` a local — the wrong-receiver case |
+| `orders-ktor` · `KtorRoutes.kt` | `routing { route("/api") { get("/orders") { … }; route("/v2") { post("/orders") { … } } } }` plus one `get(otherRoute, "/x") { }` inside the body with `otherRoute` a local — the wrong-receiver case. *Measured 2026-09-13 (A2 Task 5): the shipped fixture's `otherRoute` is a method PARAMETER, not a local — the wrong-receiver reading is identical either way (one unresolved row, no `/api` prefix)* |
 | `orders-service` · `httpclient/JdkOrdersClient.java` (JDK) and `httpclient/ApacheOrdersClient.java` | `newBuilder().uri(URI.create(…)).POST(…).build()` sent inline; the `newBuilder(URI)` overload; `.method("PATCH", …)`; one request built in a helper and sent elsewhere; Apache `new HttpGet(…)` and `ClassicRequestBuilder.get(…)` |
 | `orders-service` · `sqs/OrderPoller.java` | `receive(opts -> opts.queue("orders-queue"), Order.class)`, `receiveMany(opts -> …)`, `receiveAsync`, and the direct `receive("direct-queue", Order.class)` overload |
 
@@ -685,6 +685,10 @@ recorded by the plan.
     `GET /orders/**` resolved; `NULL /billing/**` resolved (catch-all); both `or`
     branches; the `not` route unresolved; the captured-local and captured-`this` routes
     **resolved with the right path** — the two rows a fixed-index design gets wrong.
+    *Measured 2026-09-13 (A2 Task 7): the captured-local route (`prefix + "/**"`) is
+    attributed to `routes` — proving the parameter index, not silence — but its path is a
+    `concat` argument and stays `unresolved`; only the captured-`this` route (`this.billing`,
+    a field read that javac constant-folds) resolves with its literal path.*
 11. **Gateway outbound** — the `uri` rows via `lambda_steps`: `http://…` and `lb://…`,
     outbound, caller = `routes()`.
 12. **Javalin nesting** — `/orders/{id}`, `/orders` (the path-less `post`),

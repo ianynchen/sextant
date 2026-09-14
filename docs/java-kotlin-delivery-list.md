@@ -34,8 +34,8 @@ too — that is the check aimed at half-delivery: the half you did not do has to
 against the feature it belongs to, or the build goes red.
 
 ```delivery
-REST inbound       | REST in    | G-30 conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder dsl-media-route
-REST outbound      | REST out   | G-30-outbound jdk-httpclient
+REST inbound       | REST in    | G-30 conditional-controllers kotlin-null-handler quarkus-jaxrs ktor-routing javalin-apibuilder dsl-media-route javalin-crud ktor-route-extensions ktor-selector-blocks ktor-wildcard-segment ktor-route-with-verb gateway-properties-routes gateway-and-of-two-paths gateway-order-mid-chain kotlin-class-lambdas gateway-detect-4x-coordinate
+REST outbound      | REST out   | G-30-outbound jdk-httpclient url-openconnection jdk-body-publisher jdk-newbuilder-copy apache-execute-httphost-peer
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
 WebSocket          | WebSocket  |
@@ -164,6 +164,20 @@ G-71 | Major
 G-73 | Moderate
 G-74 | Moderate
 dsl-media-route | Major
+javalin-crud | Minor
+ktor-route-extensions | Major
+ktor-selector-blocks | Major
+ktor-wildcard-segment | Minor
+ktor-route-with-verb | Minor
+gateway-properties-routes | Major
+gateway-and-of-two-paths | Minor
+gateway-order-mid-chain | Minor
+url-openconnection | Minor
+kotlin-class-lambdas | Major
+jdk-body-publisher | Minor
+jdk-newbuilder-copy | Minor
+apache-execute-httphost-peer | Minor
+gateway-detect-4x-coordinate | Minor
 ```
 
 **Closed by the waves, verified by reading the code on 2026-09-11 — a WEAKER
@@ -309,18 +323,28 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | # | issue | what it costs |
 |---|---|---|
 | `G-37` | **closed** (PR #25, run 34767891205) — `RouterFunctions$Builder` unread, **0 of 20 methods, both stacks** | a module routing this way exports **no HTTP at all** |
-| `G-30` | **Spring Cloud Gateway — no catalog exists at all**; Category B, because `RouteLocatorBuilder$Builder.route` has two overloads with the lambda at different positions | the commonest edge component in a Spring estate, inbound and outbound |
+| `G-30` | **shipped** (PR A2 Task 7, commit `3ca2219`) — `spring-cloud-gateway.yml` reads a route's receiver chain of predicates (`path`, `method`, `host`, `header`, `query`, `cookie`, `remoteAddr`, `xForwardedRemoteAddr`, `after`, `before`, `between`, `readBody`, `weight`, `version`, `cloudFoundryRouteService`, `order`, `alwaysTrue`, `metadata`/`replaceMetadata`/`customize`), composed by `and()`/`or()` and negated by `not()`/`negate()`, folded into the route the chain's terminal `uri(…)` call emits; a route with no `method()` publishes the framework's own catch-all (method NULL, resolved), and `not()` anywhere in the tree poisons the row. Both `routes().route(id, r -> …)` and `routes().route(r -> …)` fold their own body, told apart by the new entry-`arity` word. Not yet in ```closed — awaiting this PR's CI | the commonest edge component in a Spring estate, inbound and outbound |
 | `W44-verb-overloads` | **closed** (PR #25, run 34767891205) — W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | MEASURED 2026-09-13 (not the fabrication this row claimed): `GET(handler)` derives `unresolved` for a deliberate catch-all, `GET("/x", predicate, handler)` loses its handler and reads `resolved`, `GET(predicate, handler)` loses the predicate — mis-graded rows, not invented ones |
 | `GAP-1b` | **closed** (PR #25, run 34767891205) — WebFlux non-coroutine `router { }` derives nothing | whole Kotlin router silent |
+| `gateway-properties-routes` | **logged (PR A2 Task 9, spec §15)** — `spring.cloud.gateway.routes[0].predicates[0]=Path=/orders/**`: routes declared in properties or YAML rather than the Java DSL, `config_join` territory and, in some estates, the commoner spelling of the two | a gateway module configured this way still publishes no routes |
+| `gateway-and-of-two-paths` | **logged (PR A2 Task 6/7, Minor)** — `path("/a").and().path("/b")` folds to one route, `/a/b` — the framework serves neither path alone, so the folded route is dead on real traffic | a spurious resolved row rather than the two the framework actually refuses to route |
+| `gateway-order-mid-chain` | **logged (PR A2 Task 6/7, Minor)** — `order(int)` mid-chain (a pass-through opened right after `or()`) derives a spurious second unresolved row beside the route's own resolved one | one extra row per such route |
+| `gateway-detect-4x-coordinate` | **logged (PR A2 Task 9, Minor)** — `spring-cloud-gateway.yml`'s `detect.coordinates` lists `spring-cloud-gateway-server` (the pre-5.0 combined artifact) alongside the 5.x split artifacts, but `measured:` only javap's `spring-cloud-gateway-server-webflux:5.0.0` — the catalog's rules are unverified against the 4.x jar it still detects on | a 4.x-only module is detected and catalogued against rules measured on a different major version |
 | `conditional-controllers` | `@ConditionalOnProperty` / `@Profile` controllers | tier C — no mechanism in the code |
 | `kotlin-null-handler` | Kotlin routes carry a **NULL handler**, all 3 of them; no Kotlin symbol reaches `roots` or `reachability` | Java functional routes name theirs |
 | `quarkus-jaxrs` | JAX-RS `@Path` + `@GET` + `@Produces` are sibling annotations on ONE method, and `annotation_driven` reads one annotation's attributes; engine work (§4's opening note) | every Quarkus, Helidon, Jersey and RESTEasy resource derives nothing — deliberately, since a catalog of the existing forms would put every GET onto the class `@Path` |
-| `ktor-routing` | `RoutingBuilderKt.get(Route, String, Function2)` — the prefix a surrounding `route("/api") { … }` adds is visible only by walking from the inner call's receiver to the outer call's lambda; Category B | a `single_call` row would publish `/x` alone, a wrong row |
+| `ktor-routing` | **shipped** (PR A2 Task 5, commit `812a175`) — `ktor-routing.yml` walks a nested `route("/api") { get("/orders") { … } }` through `receiver_arg`, checking each inner call's receiver against the enclosing block's own `Route`, to arbitrary nesting depth; handler NULL stated (no Kotlin symbol reaches it yet). Not yet in ```closed — awaiting this PR's CI | a `single_call` row would publish `/x` alone, a wrong row |
+| `ktor-route-extensions` | **logged (PR A2 Task 5, Major)** — `fun Route.api() { get("/x") {} }` called from `routing { api() }` derives NOTHING, not even an unresolved row: `api()` is neither a linked body nor a root candidate, so the walk never reaches the `get` inside it. This is Ktor's own documented way to structure a non-trivial app (`routing { orderRoutes(); userRoutes() }`) | a module structured this way is under-reported with no row even saying so |
+| `ktor-selector-blocks` | **logged (PR A2 Task 5, Major)** — the six selector blocks `method`, `param`, `optionalParam`, `header`, `accept`, `contentType` derive NOTHING, not even an unresolved row, and every route nested under one is lost with them; only the four-argument `route` overload yields a row | a `method(Get) { get { } }` guard silently drops the route inside it |
+| `ktor-wildcard-segment` | **logged (PR A2 Task 5, Minor)** — a bare `*` path segment under `leading_slash` (`route("/api") { get("*") { } }`) publishes `/api*` resolved, where Ktor serves `/api/<one segment>` — the documented wildcard forms (`*`/`{...}` inside a longer path) read correctly; only a bare `*` component is wrong | a wrong resolved row, rare in practice |
+| `ktor-route-with-verb` | **logged (PR A2 Task 5, Minor)** — the four-argument `route(Route, String, HttpMethod, Function1)`, a prefix that also sets the verb, derives one unrecognised-overload row; reading it needs `verb_arg` on a PREFIX, and today's `verb_arg` is a verb-rule-only word | one unresolved row instead of the route it declares |
 | `javalin-routing` | **closed** on CI run 34703991222 — **shipped** (`javalin.yml`, w61, `5e3e887` and `abba4db`): both flat forms derive, pinned by `tests/e2e/test_rest_inbound_delivered.py::test_javalin_flat_registrations_derive_every_route`. Still on the register because that test has not yet passed in CI | — |
-| `javalin-apibuilder` | the nested `ApiBuilder` form — `get("/{id}", h)` inside `path("/orders", …)`'s lambda; Category B (§4) | a flat read would publish `/{id}` without its prefix, a wrong row |
+| `javalin-apibuilder` | **shipped** (PR A2 Task 3, commit `23932a1`) — `javalin-apibuilder.yml` reads the nested `apiBuilder(() -> path("/orders", () -> { get("/{id}", h); post(h); path("/{id}/items", () -> get(h)); }))` form to arbitrary nesting depth, every row attributed to the enclosing `Javalin.create(config -> …)` lambda; a catalog-declared `path_join: leading_slash` rule joins a slashless `path("api", …)` to `/api`, never the wrong `api` glued to its parent. Not yet in ```closed — awaiting this PR's CI | a flat read would publish `/{id}` without its prefix, a wrong row |
+| `javalin-crud` | **logged (PR A2 Task 3, Minor)** — `crud("/users/{id}", h)` registers five routes (`GET`, `GET {id}`, `POST`, `PATCH {id}`, `DELETE {id}`) from one call; derivable as five rows off a fixed verb/path table, not built | five routes read as none |
 | `G-45` | **closed** — a Data REST resource over MongoDB derives its route table since `6f088be`, proven in CI run 34669970510. The R2DBC, Cassandra, Elasticsearch, Neo4j and reactive contracts still outside are `GAP-6` | — |
 | `spring7-version` | **closed** — two versions of one route are not reported as a conflict, proven in CI run 34669970510 | — |
 | `dsl-media-route` | `accept(MediaType, Function1)` / `contentType(MediaType, Function1)` on `RouterFunctionDsl` (both stacks) and `CoRouterFunctionDsl`: a route declared under a media guard alone. Before PR A1 this was silence; now it is one honest `unresolved` row (PR A1, the addresses-nothing seam pinned by a guard) — but the proper read needs a word this grammar does not have: "the media value IS the route's own constraint" on a verb-less rule, so the row can carry its handler and its media instead of naming neither | a media-gated route (e.g. a JSON-only handler with no path) derives an unresolved row instead of `path: /**` with its `produces`/`consumes` set |
+| `kotlin-class-lambdas` | **logged (PR A2 Task 9, spec §15, Major)** — a lambda compiled as a class (`-Xlambdas=class`, the default before Kotlin 2.0) arrives as `kind: instance`, not `kind: lambda`; the body-linked entry roots and derives zero routes — one unresolved row under §4b, not silence, but the address is unreadable. W44's shipped Kotlin DSL catalogs derive nothing at all on such a module today | every Kotlin router DSL module built with Kotlin < 2.0 (or `-Xlambdas=class` explicitly) under-reports |
 
 > `verify: grep -rl "RouteLocator" src/sextant/catalogs/` → empty
 > `verify: awk '/repositories:/,/routes:/' src/sextant/catalogs/spring-data-rest.yml | grep -c Mongo` → 4
@@ -353,8 +377,12 @@ blockers — each is either honest engine output or a shape real code rarely wri
 
 | # | issue |
 |---|---|
-| `G-30-outbound` | Spring Cloud Gateway outbound half — no catalog; the same Category B read as its inbound half |
-| `jdk-httpclient` | JDK `HttpClient`, Apache HttpClient, `URL.openConnection()` — tier B, a builder chain; Category C until the combinator spec says whether it falls out of Category B's mechanism |
+| `G-30-outbound` | **shipped** (PR A2 Task 7, commit `3ca2219`) — `spring-cloud-gateway-outbound.yml` reads each route's `uri(…)` target via `lambda_steps`, `channel_arg` keeping `http://…`/`lb://…` whole (peer NULL by design — a load-balanced target names no host). Not yet in ```closed — awaiting this PR's CI |
+| `jdk-httpclient` | **shipped** (PR A2 Task 8, commit `be46e52`) — `jdk-httpclient.yml` and `apache-httpclient.yml` are `fluent` catalogs: `HttpRequest.newBuilder().uri(URI.create(…)).POST(…).build()` sent inline, the `newBuilder(URI)` overload, `.method("PATCH", …)`, and Apache's `new HttpGet(…)`/`ClassicRequestBuilder.get(…)` all derive through `send`/`execute`, a constructed Apache request handed straight to `execute` included (fix round 2). `url_via` gained an optional `arity` so a via form naming `java.net.URI`'s `<init>` cannot misread a multi-argument constructor's first argument as the URL. `RestTemplate`/`RestClient`/`WebClient`/OkHttp's own `fluent` doctrine — a request built in one method and sent in another derives NOTHING — now literally governs these two catalogs too (spec §13 case 9). Not yet in ```closed — awaiting this PR's CI |
+| `url-openconnection` | **logged (PR A2 Task 9, spec §15, Minor)** — `URL.openConnection()`'s verb is set by a LATER statement on the same connection (`conn.setRequestMethod("POST")`), default GET if never set — a walk forward from a receiver, not backward to a root, and a new default-verb rule this design does not have; every module using the JDK's older client shape derives no outbound rows for it |
+| `jdk-body-publisher` | **logged (PR A2 Task 8, Minor)** — a `body` capture that reads a `BodyPublisher` (or Apache's `RequestBody`) leaves the row `unresolved` rather than reading through it to the payload type — `fluent`'s own rule, same shape as OkHttp's `RequestBody.create(x)`; every JDK POST/PUT/PATCH row through this fixture reads `unresolved` rather than `resolved`. Open doctrine question: should an unreadable body shape poison the whole ROW, or only the claim about its payload? |
+| `jdk-newbuilder-copy` | **logged (PR A2 Task 8, Minor)** — `newBuilder(HttpRequest, BiPredicate)` (copy-and-modify) carries the SEEDED request's verb (GET) rather than reading the copy's own; a copied-and-modified request may publish the wrong verb |
+| `apache-execute-httphost-peer` | **logged (PR A2 Task 8, Minor)** — `execute(HttpHost, ClassicHttpRequest, …)`: the `HttpHost` peer argument is not read, so the row is path-only with `peer` NULL; the target host is missing from a row that has it available |
 
 ### SOAP — DELIVERED (both blockers closed on run 34703991222; matrix `✅`)
 
@@ -404,7 +432,7 @@ run 34669970510; the cell reads `✅`.
 |---|---|
 | `G-43` | **closed** — `SqsAsyncClient.sendMessage` derives since `6f088be`, proven in CI run 34669970510. The 27 other methods on the async client, `receiveMessage` among them, are `GAP-3` |
 | `micronaut-sqs` | **closed** on CI run 34703991222 — **shipped** (`b4bbfa4`): a Micronaut module's raw `SqsClient` derives through `aws-sqs-sdk.yml`, pinned by `tests/e2e/test_aws_sqs_delivered.py::test_a_micronaut_module_using_the_raw_sqs_sdk_derives_its_queues`. Still on the register because that test has not yet passed in CI |
-| `sqs-template-receive` | the SQS quarter of `G-44`: `SqsTemplate.receive` / `receiveMany` / `receiveAsync` / `receiveManyAsync` name the queue inside a `Consumer<SqsReceiveOptions>` lambda, not at any argument `single_call` reads; Category B (§4) |
+| `sqs-template-receive` | **shipped** (PR A2 Task 2, commit `deb2355`) — `spring-sqs-template-receive.yml` reads all four `receive`/`receiveMany`/`receiveAsync`/`receiveManyAsync` overloads through the options lambda, the queue named inside (`opts.queue("orders-queue")`), plus the direct `receive(String, Class)` overload; caller is the enclosing `poll()`-style method. `G-44`'s fourth and final quarter. Not yet in ```closed — awaiting this PR's CI |
 | `micronaut-jms-over-sqs` | `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms` though the wire is SQS, so a Spring SQS sender and this listener will not link; Category C (§4) |
 
 ### Google Pub/Sub — NOT DELIVERED
@@ -470,6 +498,35 @@ feature, so it is not in the `closed` block above; it is recorded closed in
 `G-73` `visibility` two-valued for a four-valued concept left this list on 2026-09-12: it
 blocked no feature, so it is not in the `closed` block above; it is recorded closed in
 `open-issues.md`, by the tests named there.
+
+**Logged 2026-09-13 (PR A2 Task 9) — rulings and probe notes that block no single feature,
+none of them Critical or Major and none carrying a register severity:**
+
+- `callback-rooted-caller` — a root inside a config callback (`Javalin.create(config ->
+  …)`; the same shape reaches any framework whose entry point is a configuration lambda)
+  carries the callback LAMBDA as its `caller`, never the enclosing method — the engine's
+  own stated rule (a root's caller is the method that roots it), consistent with the
+  `single_call` sibling rows. Attributing it to the enclosing method instead would need a
+  word no vocabulary in this design carries. Cross-engine; ruled in Task 3, restated here
+  for the register.
+- `w19-receiver-first-style` — the w19 surface probe enumerates a candidate address by
+  checking for a `String` at argument 0; an API that reads its address behind an extension
+  RECEIVER instead (Ktor's own shape) prints a confident zero rather than "not measured by
+  this style" — literally true of the three styles the probe measures, and the exact
+  mirrored-rule risk its own docstring warns about. A fourth style would also add
+  candidates to owners already enumerated by another style, so it is recorded here rather
+  than built as a side effect of one catalog (Task 5).
+- `origin-static-head-exempt` — a non-origin STATIC head inside an `origin_param` body
+  (`Helpers.builder().GET(…)`, where the body's own parameter is never touched) is exempt
+  from the head check the same way a declared-origin chain is (below): a static call is
+  never an extending receiver, so no real input produces it today. Widens Task 4's
+  original "declared-origin chain" log item to "any static head."
+- `origin-declared-chain-in-body` — a declared-origin chain written and discarded inside an
+  `origin_param` body (`route().GET("/a", h).build();` as a statement whose result is
+  never returned or stored) reads clean under `_head_on_the_origin`, because `route()` is
+  itself a static origin, and derives under the prefix even though nothing ever registers
+  it. A discarded builder call registers nothing at runtime, so no real input produces it
+  either (Task 4).
 
 ## 3. Out of scope for this target
 
