@@ -43,8 +43,8 @@ here would restate those documents rather than add anything.
   constructed Apache request handed straight to `execute` included.
   `spring-sqs-template-receive.yml` reads `SqsTemplate`'s
   `receive`/`receiveMany`/`receiveAsync`/`receiveManyAsync` — the queue is named inside
-  each call's own `Consumer<SqsReceiveOptions>` lambda — plus the direct
-  `receive(String, Class)` overload; `G-44`'s fourth and final quarter.
+  each call's own `Consumer<SqsReceiveOptions>` lambda; handler = the polling method,
+  caller NULL. `G-44`'s fourth and final quarter.
 
   Five engine words carry the walk from a linked body's own parameter, through a receiver
   chain, to the framework's address: `origin_param` names the parameter a body's chain

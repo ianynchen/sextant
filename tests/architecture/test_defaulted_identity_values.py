@@ -187,8 +187,8 @@ def _names_its_own_value(row: dict[str, str]) -> bool:
     """
     value = row["value"].lower()
     if row["method"] == "<init>":
-        simple = row["owner"].rsplit(".", 1)[-1].rsplit("$", 1)[-1].lower()
-        return simple.endswith(value)
+        simple = row["owner"].rsplit(".", 1)[-1].rsplit("$", 1)[-1]
+        return simple.endswith(value.capitalize())
     return row["method"].lower().startswith(value)
 
 
