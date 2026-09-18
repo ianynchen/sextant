@@ -10,9 +10,11 @@ planned.
 (`@Produces(SERVER_SENT_EVENTS)` on a JAX-RS method is unread), `kafka-batch-generics`
 (`@KafkaListener(batch = "true")` publishes the `List`, the wire carries the element),
 `micronaut-jms-over-sqs` (a Micronaut JMS listener bound to the SQS connection factory
-publishes `jms`, so it links with no SQS sender), and — added 2026-09-18, user ruling —
-the same switch on `@JMSProducer`, which the register never named.
-**Rows it empties:** SSE, Kafka, SQS. REST inbound 9 → 8.
+publishes `jms`, so it links with no SQS sender), and — added 2026-09-18, user rulings —
+the same switch on `@JMSProducer`, which the register never named, and `mp-rest-client`
+(MicroProfile REST Client: a `@RegisterRestClient` interface carrying JAX-RS annotations —
+the outbound twin of the JAX-RS catalogs, on the same words).
+**Rows it empties:** SSE, Kafka, SQS. REST inbound 9 → 8; REST outbound 2 → 1 (`apache-camel` stays).
 
 Every factual claim below carries the command that produces it, or names the probe (§7)
 that must record it before the key it forces is written. Claims marked **measured
@@ -38,6 +40,7 @@ proof, and the plan runs it before any engine work.
 | R1 | Quarkus REST does **not** relax the class-level `@Path` for servers — `scanResources` collects root resources from `@Path` on classes and `@Path` interfaces only; the "no `@Path` whatsoever" rule (`ResteasyReactiveScanner.java:344`) is for **client** interfaces | corrected: `quarkus-rest.yml` keeps the gate |
 | R2 | `@JMSListener`/`@JMSProducer` carry **only `value()`** at 4.2.0 — no `connectionFactory` attribute; `value` is the `ConnectionFactory` bean name (`getRequiredValue(String.class)` → `Qualifiers.byName`) | corrected: `name: value`; COVERAGE line 3222's `connectionFactory = …` wording is corrected with it |
 | R3 | `request_body.annotation` cannot be absent today (`contracts.py:260`) | corrected: the new fallback word makes `annotation` optional |
+| + | `mp-rest-client` (REST outbound, register row) is the same declaration shape as `jakarta-jaxrs.yml` on an **interface**, outbound — measured 2026-09-18 on `microprofile-rest-client-api` 4.0: `@RegisterRestClient` is `@Target(TYPE)`, `RUNTIME`, `baseUri()`/`configKey()` both default `""` | **joins the group** (user ruling): §3f, one catalog task |
 
 ---
 
@@ -176,6 +179,9 @@ requires: [annotation_args, typed_signatures]
 matches:
   type_annotation: jakarta.ws.rs.Path        # JAX-RS §3.1: a root resource class is one annotated @Path —
                                              # on itself, or on an interface/superclass (§3b word 3)
+  declared_on: class                         # a @Path INTERFACE mints no inbound row of its own — it is a
+                                             # client (§3f) or a contract an implementor inherits (word 3);
+                                             # the jakarta-jws.yml / jakarta-jws-client.yml partition
   request_body:                              # §4 — the new fallback word; no body-marker annotation exists
     fallback: sole_unbound
     bound_by: [jakarta.ws.rs.PathParam, jakarta.ws.rs.QueryParam, jakarta.ws.rs.HeaderParam,
@@ -352,6 +358,66 @@ Each is measured 2026-09-18 on quarkus-rest 3.39.4 sources unless marked P2:
   a class implementing a `@Path` interface is a root resource once registered (explicitly
   or via `Application.getClasses()`), not by package scan. A registration-mode nuance, not a
   model divergence; stated.
+
+### 3f. `mp-rest-client` — the outbound twin, on the same words
+
+MicroProfile REST Client declares an HTTP client as an **interface** carrying the JAX-RS
+annotations — `@Path` on the type, `@GET`/`@Path`/`@Produces`/`@Consumes` on the methods —
+gated by `@RegisterRestClient`. Measured 2026-09-18 on
+`org.eclipse.microprofile.rest.client:microprofile-rest-client-api:4.0` (`javap -v`):
+`@RegisterRestClient` is `@Target(TYPE)`, `@Retention(RUNTIME)`, and declares `baseUri()`
+and `configKey()`, both `String`, both defaulting `""`. It is `jakarta-jaxrs.yml` with the
+direction flipped and the construct kind fixed — the `jakarta-jws.yml`/`jakarta-jws-client.yml`
+partition, and the `spring-http-interface.yml` shape (`declared_on: interface`, outbound):
+
+```yaml
+id: microprofile-rest-client
+style: annotation_driven
+protocol: http
+direction: outbound
+declared_on: interface
+detect: { coordinates: ["org.eclipse.microprofile.rest.client:microprofile-rest-client-api",
+                        "io.quarkus:quarkus-rest-client", "io.quarkus:quarkus-rest-client-jackson"] }
+matches:
+  type_annotation: org.eclipse.microprofile.rest.client.inject.RegisterRestClient
+  request_body: { fallback: sole_unbound, bound_by: [ …the jakarta-jaxrs list… ], excludes: [] }
+  mapping:
+    prefix_annotation: jakarta.ws.rs.Path        # the interface's @Path, as the resource's is
+    prefix_from: [value]
+    peer_from: [baseUri, configKey]              # read off @RegisterRestClient — the type gate, not @Path
+    path_separator: "/"
+    path_from: []
+    path_from_siblings: [{ annotation: jakarta.ws.rs.Path, arg: value }]
+    produces_from_siblings: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+    consumes_from_siblings: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    type_media_from_siblings: { produces: […], consumes: […] }
+    method_from: method
+    all_methods: []
+    annotations: [ …the seven verb entries… ]
+```
+
+- **`peer_from` reads the gate annotation, not the prefix annotation.** Feign's `peer_from:
+  [name, value]` reads `@FeignClient`, which is both gate and prefix carrier; here the
+  prefix is on `@Path` and the peer on `@RegisterRestClient`. The plan verifies which
+  annotation `peer_from` is read off today (`derive_endpoints.sql`'s `prefixes` CTE joins
+  `prefix_gates`); if it is the prefix annotation only, `peer_from` gains a
+  `peer_annotation` twin of `prefix_annotation`, declared here and inert elsewhere. P5
+  records the answer.
+- **Boundary, stated:** the base URI resolved from configuration —
+  `<fqn>/mp-rest/url`, `<configKey>/mp-rest/url`, Quarkus's
+  `quarkus.rest-client.<configKey>.url` — is not read; a client declaring `configKey` and
+  no `baseUri` carries the key as its `peer`, exactly as a Feign client carries its
+  service id. Reading the property is D02 §2d's `config_join` territory and a later item.
+- The client's own inbound-side fence: `jakarta-jaxrs.yml`, `javax-jaxrs.yml` and
+  `quarkus-rest.yml` declare `declared_on: class` (§3a), so a `@RegisterRestClient @Path`
+  interface mints no inbound row.
+- **Fixture and test.** `fixtures/orders-quarkus/.../OrdersClient.java` —
+  `@RegisterRestClient(configKey = "orders") @Path("/remote/orders")` with `@GET List<Order> list()`
+  and `@GET @Path("/{id}") Order byId(@PathParam("id") String id)`, plus one method with
+  `baseUri`; the module gains `microprofile-rest-client-api` (4.0) as a dependency. Strict-xfail
+  test in `tests/e2e/test_rest_outbound_delivered.py`: two `http` outbound rows on
+  `/remote/orders` and `/remote/orders/{id}` with `peer` = `orders`, and no inbound row for
+  the interface.
 
 ### 3e. Fixtures and tests
 
@@ -616,6 +682,7 @@ cites its probe by path.
 | **P1** JAX-RS API and two implementations | `jakarta.ws.rs:jakarta.ws.rs-api` 4.0.0 (measured) and 3.1.0; `javax.ws.rs:javax.ws.rs-api` 2.1.1; `jakarta.ws.rs:jakarta.ws.rs-api` 2.1.6; `org.glassfish.jersey.core:jersey-server` 4.0.0 (measured); `org.jboss.resteasy:resteasy-core` 6.2.12.Final (measured) | (a) the seven verb annotations declare **no** attributes and are `@HttpMethod("…")`-meta-annotated, `@Target(METHOD)`; (b) `@Path`/`@Produces`/`@Consumes` `@Target({TYPE, METHOD})`, `value(): String` / `String[]`; (c) method-over-class media in Jersey `resolveProducedTypes` and Quarkus line 725; (d) the `@Context`-injectable type list for `excludes` and the binding-annotation list for `bound_by`; (e) `SERVER_SENT_EVENTS = "text/event-stream"`; (f) `@HttpMethod` `@Target(ANNOTATION_TYPE)`; (g) both implementations' root-resource walk over interfaces and superclasses; (h) JAX-RS §3.6's any-own-annotation rule as Jersey and RESTEasy apply it |
 | **P2** Quarkus REST | `io.quarkus:quarkus-rest` 3.39.4 sources (measured) and 3.17.5; `quarkus-rest-deployment` 3.39.4; `quarkus-resteasy-reactive` 3.15.7 | (a) `scanResources`: class `@Path` required for servers, interface implementors registered, client-only relaxation; (b) `EndpointIndexer` 713-737: element type from method else class, SSE implied when no `@Produces`, `@RestSseElementType` alias; (c) `DEFAULT_CONTEXT_TYPES` plus `addContextTypes` callers in the deployment module; (d) the body-parameter order at 1380-1413 and the container scan set at `ResteasyReactiveDotNames.java:265`; (e) relocation version and both coordinates; (f) whether `AnnotationStore` applies §3.6 or merges per annotation |
 | **P3** Spring Kafka | `org.springframework.kafka:spring-kafka` 3.1.4, 4.1.1 (both measured) | (a) `batch(): String`; (b) `hasText` → `Boolean.parseBoolean` → `setBatchListener`, no resolution, quoted; (c) `BatchMessagingMessageListenerAdapter`'s accepted parameter shapes; (d) `spring.kafka.listener.type` leaves the attribute empty; (e) whether `Message<T>` needs a wrapper row |
+| **P5** MicroProfile REST Client | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` 4.0 (measured), 3.0.1; `io.quarkus:quarkus-rest-client` 3.39.4 | (a) `@RegisterRestClient` target, retention, attributes and defaults; (b) which annotation `peer_from` is read off in `derive_endpoints.sql` today; (c) how Quarkus resolves the base URI (`RestClientBase`/`RestClientBuilder` — `baseUri`, then config) for the boundary statement |
 | **P4** Micronaut JMS | `io.micronaut.jms:micronaut-jms-core` 4.2.0, `micronaut-jms-sqs` 4.2.0, `micronaut-jms-activemq-classic` 4.2.0, `micronaut-jms-activemq-artemis` 4.2.0 (all measured) | (a) `@JMSListener`/`@JMSProducer` attributes — `value()` only — retention and target; (b) `AbstractJMSListenerMethodProcessor` reading `value` as the factory bean name via `Qualifiers.byName`; (c) the three `CONNECTION_FACTORY_BEAN_NAME` literals and the SQS factory's `@Named`; (d) `javap -v` of a compiled fixture class showing `value` in the class file |
 
 ---
@@ -655,12 +722,13 @@ words in the order they unblock items, then catalogs — each item on the per-it
 | 8 | `wrappers[].when` at rooting (`contracts.py` + D02 §2a) | C-1 |
 | 9 | `protocol_hint`: `hint_when` and `hint_annotations`, owner/type annotation read, docstring contract (+ D02 §2) | C-2, B (M1) |
 | 10 | `jakarta-jaxrs.yml`, `javax-jaxrs.yml`, `quarkus-rest.yml` + conformance fixtures (D02 §4) | `quarkus-jaxrs`, `jaxrs-sse` |
+| 10b | `microprofile-rest-client.yml` + fixture + (if P5 (b) says so) `peer_annotation` | `mp-rest-client` (§3f) |
 | 11 | `spring-kafka.yml` conditional wrapper | `kafka-batch-generics` |
 | 12 | `micronaut-jms.yml`, `micronaut-jms-producer.yml` hint blocks; COVERAGE 3222 wording | `micronaut-jms-over-sqs` + producer |
 | 13 | COVERAGE, delivery list (four closes on the CI run id, producer addition), CHANGELOG, register entries from §6 | close |
 
 Engine tasks: **seven** (3–9), up from five in the draft — tasks 5 and 6 are the review's
-M3 and M2/M4. Catalog tasks: three. Approach 3 would have been ten to twelve engine tasks
+M3 and M2/M4. Catalog tasks: four, `mp-rest-client` joining by ruling (§3f). Approach 3 would have been ten to twelve engine tasks
 for the same four items *before* the review's additions.
 
 **Cost check (§8.7), per resolve:** one `annotations` query per catalog declaring a `when`

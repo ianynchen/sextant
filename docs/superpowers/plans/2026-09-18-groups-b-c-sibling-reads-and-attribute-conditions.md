@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close `quarkus-jaxrs`, `jaxrs-sse`, `kafka-batch-generics` and `micronaut-jms-over-sqs` (plus the `@JMSProducer` half the register never named) so the **SSE, Kafka and SQS delivery rows empty** and REST inbound drops by one.
+**Goal:** Close `quarkus-jaxrs`, `jaxrs-sse`, `kafka-batch-generics`, `micronaut-jms-over-sqs` (plus the `@JMSProducer` half the register never named) and — joined by ruling 2026-09-18 — `mp-rest-client`, so the **SSE, Kafka and SQS delivery rows empty**, REST inbound drops by one and REST outbound to one (`apache-camel`).
 
 **Architecture:** JAX-RS is three `annotation_driven` catalogs (`jakarta`, `javax`, Quarkus REST) over three new engine words — media read off sibling annotations, a class-level media default off a type-level sibling, and sibling inheritance all-or-nothing per JAX-RS §3.6 — and one new body-fallback word, `sole_unbound`, whose "unbound" is measured against the framework's own binding annotations with two Quarkus-only implicit bindings. Kafka batch and Micronaut SQS share one closed condition, `annotation_arg` with `equals` | `parses_true`, consumed by `wrappers[].when` (at rooting, never at expansion) and by `protocol_hint.hint_when`; Quarkus's element-type SSE is a third hint kind, `hint_annotations`. `resolves:` is untouched.
 
 **Tech Stack:** Python 3.14 + pydantic + DuckDB, YAML catalogs, Maven fixtures (Java 21, Kotlin 2.2.0), pytest `-n 4 --dist loadfile`, `javap` on jars in `~/.m2` and downloaded to the scratchpad.
 
-**Spec:** `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, as reviewed and ruled 2026-09-18 (read §0's table first, then §2, §3a–§3e, §4, §5a–§5b, §7–§9). Every rule below argues from it; where the plan and the spec disagree the spec wins and the executor records the conflict.
+**Spec:** `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, as reviewed and ruled 2026-09-18 (read §0's table first, then §2, §3a–§3f, §4, §5a–§5b, §7–§9). Every rule below argues from it; where the plan and the spec disagree the spec wins and the executor records the conflict.
 
 ## Global Constraints
 
@@ -17,6 +17,7 @@
 - **Closed vocabularies are refused by name, never read as "never fires"** (spec §2, §4): an unknown key under `when`, `annotation_arg`, `implicit_bindings`, `request_body` or `protocol_hint` raises `CatalogError` at load, in the engine that reads it.
 - **Never a wrong row, never silence:** a body the rule cannot single out is *no contract*, never a guess; a hint whose condition does not hold leaves the row as derived.
 - **GUIDELINES §5.1:** an engine word moves `docs/components/D02-catalog-schema.md` in the same commit; COVERAGE, the delivery list and the CHANGELOG land in Task 13.
+- **COVERAGE's tables carry a `Framework` column since PR #28, and `scripts/coverage_matrix.py` refuses a Java/Kotlin row whose framework its `FRAMEWORKS` list does not declare and an open register id its `ITEM_FRAMEWORKS` cannot place.** A new COVERAGE row written by Task 10/10b/11/12/13 names its framework in that column (`JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)`, `MicroProfile REST Client`, …); a register id that changes rows is re-mapped there; run `python scripts/coverage_matrix.py` and commit the regenerated §2c grid and per-section rollups with the row.
 - **No version bump** (standing gate). Plain language in `src/**` prose; language confinement (`tests/architecture/test_language_confinement.py`; catalog YAML and fixture sources are exempt).
 - **Per-item loop:** every task ends with the full gate in the foreground — `JAVA_HOME=/Users/yining/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.12.1+1/Contents/Home bash scripts/check.sh` — then one commit. `git add`/`git commit` only: never `stash`, `checkout --`, `reset`, `push`, worktrees, branches.
 - **Fixture facts are not committed** (`.sextant/` gitignored); `target/` never added. A fixture module's first compile after a new dependency may need the network once (`mvn -q compile` without `-o`), after which `-o` works. No new fixture MODULE: every fixture lands in `orders-spring7`, `orders-quarkus`, `orders-micronaut`, `orders-service`, all already in `tests/fixture_build.py::PRIMED_FIXTURES`.
@@ -43,6 +44,8 @@
 | `src/sextant/application/resolve/shapes/expansion.py` | Task 8 (`_Rules.conditional_wrappers`) |
 | `src/sextant/application/resolve/protocol_hint.py` | Task 9 (`hint_when`, `hint_annotations`) |
 | `src/sextant/catalogs/jakarta-jaxrs.yml`, `javax-jaxrs.yml`, `quarkus-rest.yml` (new) | Task 10 |
+| `src/sextant/catalogs/microprofile-rest-client.yml` (new), `fixtures/orders-quarkus/src/main/java/com/acme/quarkus/OrdersClient.java`, `tests/e2e/test_rest_outbound_delivered.py` | Task 10b |
+| `scripts/probes/cp22_microprofile_rest_client.md` | Task 2 (P5) |
 | `src/sextant/catalogs/spring-kafka.yml` | Task 11 |
 | `src/sextant/catalogs/micronaut-jms.yml`, `micronaut-jms-producer.yml` | Task 12 |
 | `tests/application/test_endpoints.py`, `tests/application/test_effective_annotations.py` (or the file that tests `inherited_rows_over` — `grep -ln inherited_rows_over tests/application/*.py`), `tests/application/test_contracts.py` (or the file testing `_body_parameter` — `grep -ln "_body_parameter\|sole_unannotated" tests/application/*.py`), `tests/application/test_protocol_hint.py` (`grep -ln apply_protocol_hints tests/application/*.py`), `tests/application/test_conditions.py` (new) | engine tests and near-misses, Tasks 3–9 |
@@ -254,6 +257,35 @@ public class OrderResource {
 }
 ```
 
+- [ ] **Step 4b: the MicroProfile REST Client fixture**, `fixtures/orders-quarkus/src/main/java/com/acme/quarkus/OrdersClient.java` (the module gains `org.eclipse.microprofile.rest.client:microprofile-rest-client-api:4.0`, and `jakarta.ws.rs-api` is already there from Step 1):
+
+```java
+// `mp-rest-client` (spec §3f): a client is an INTERFACE carrying the JAX-RS annotations,
+// gated by @RegisterRestClient. The same words as the resource catalogs, direction out.
+package com.acme.quarkus;
+
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
+import java.util.List;
+import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+
+@RegisterRestClient(configKey = "orders")
+@Path("/remote/orders")
+@Produces(MediaType.APPLICATION_JSON)
+public interface OrdersClient {
+    @GET
+    List<OrderResource.Order> list();
+
+    @GET
+    @Path("/{id}")
+    OrderResource.Order byId(@PathParam("id") String id);
+}
+```
+and a second interface `@RegisterRestClient(baseUri = "http://billing.internal/api") @Path("/invoices") interface BillingClient { @GET String list(); }`.
+
 - [ ] **Step 5: the Kafka and Micronaut fixtures.**
 
 In `OrderEventsListener.java`, after `onBatch`:
@@ -356,6 +388,16 @@ def test_quarkus_element_type_alone_makes_a_stream_sse(quarkus_endpoints):
     assert protocols["/q/orders/events"] == "sse"
     assert protocols["/q/orders/ticks"] == "sse"
 ```
+In `tests/e2e/test_rest_outbound_delivered.py` (read its fixtures; add a module fixture over `QUARKUS` returning full endpoint rows if none exists — the `spring7` shape):
+```python
+@pytest.mark.xfail(strict=True, reason="mp-rest-client: no catalog reads @RegisterRestClient; spec §3f")
+def test_a_microprofile_rest_client_interface_derives_its_outbound_operations(quarkus_endpoints):
+    out = {(r["method"], r["path"], r["peer"]) for r in quarkus_endpoints if r["direction"] == "outbound" and r["protocol"] == "http"}
+    assert {("GET", "/remote/orders", "orders"), ("GET", "/remote/orders/{id}", "orders"),
+            ("GET", "/invoices", "http://billing.internal/api")} <= out, sorted(out)
+    assert not [r for r in quarkus_endpoints if r["direction"] == "inbound" and r["path"].startswith("/remote/orders")]
+```
+
 In `tests/application/test_pipeline.py`, beside `test_a_batch_listeners_request_shape_is_an_array` (which stays):
 ```python
 @pytest.mark.xfail(strict=True, reason="kafka-batch-generics: wrappers are unconditional; spec §5a")
@@ -444,11 +486,16 @@ git commit -m "test(fixtures): every case Groups B and C close, failing first �
   - 3a–3c: `javap -constants -cp $S io.micronaut.jms.sqs.configuration.SqsConfiguration | grep 'static final'` → `"sqsJmsConnectionFactory"`; same on `ActiveMqClassicConfiguration` → `"activeMqConnectionFactory"`, `ActiveMqArtemisConfiguration` → `"activeMqArtemisConnectionFactory"`; `javap -v -cp $S 'io.micronaut.jms.sqs.configuration.$SqsConfiguration$SqsJmsConnectionFactory0$Definition' | grep -E 'sqsJmsConnectionFactory|Named'` → the bean is `@Named` with that literal.
   - 4: after Task 1's compile: `javap -v -cp fixtures/orders-micronaut/target/classes 'com.acme.mn.OrderMessaging$SqsConsumer' | grep -B2 -A3 JMSListener` → the class file carries `value="sqsJmsConnectionFactory"` → *the constant inlines; `name: value`*.
 
+- [ ] **Step 5b: `cp22_microprofile_rest_client.md`.** `curl -sSf -o mp-rest-client-api-4.0.jar https://repo1.maven.org/maven2/org/eclipse/microprofile/rest/client/microprofile-rest-client-api/4.0/microprofile-rest-client-api-4.0.jar` into the scratchpad (and 3.0.1):
+  - 1: `javap -v -cp <jar> org.eclipse.microprofile.rest.client.inject.RegisterRestClient | grep -E 'public abstract|Retention|Target|default_value'` → `@Target(TYPE)`, `RUNTIME`, `baseUri(): String`, `configKey(): String`, both `AnnotationDefault` `""` (measured 2026-09-18).
+  - 2: `grep -n "peer_from\|peer" src/sextant/storage/duckdb/derive_endpoints.sql | head` and `sed -n '/^prefixes AS/,/^),/p'` → whether `peer` is read off the PREFIX annotation's row (`prefix_gates`) only. Record the answer; it decides whether Task 10b needs a `peer_annotation` key (spec §3f, first bullet).
+  - 3: `unzip -l quarkus-rest-client-3.39.4.jar | grep -i 'RestClientBase\|RestClientBuilder'` and `javap -c -p` on the base-URI resolution → the `baseUri` → `configKey`/fqn `/mp-rest/url` → `quarkus.rest-client.<key>.url` order, quoted, for the boundary statement.
+
 - [ ] **Step 6: commit.**
 
 ```bash
-git add scripts/probes/cp18_jaxrs_api_and_implementations.md scripts/probes/cp19_quarkus_rest.md scripts/probes/cp20_spring_kafka_batch.md scripts/probes/cp21_micronaut_jms_sqs.md
-git commit -m "docs(probes): CP-18..21 — JAX-RS API and two implementations, Quarkus REST's scanner and indexer, Spring Kafka's batch parse, Micronaut JMS's factory-name attribute (B/C Task 2)"
+git add scripts/probes/cp18_jaxrs_api_and_implementations.md scripts/probes/cp19_quarkus_rest.md scripts/probes/cp20_spring_kafka_batch.md scripts/probes/cp21_micronaut_jms_sqs.md scripts/probes/cp22_microprofile_rest_client.md
+git commit -m "docs(probes): CP-18..22 — JAX-RS API and two implementations, Quarkus REST's scanner and indexer, Spring Kafka's batch parse, Micronaut JMS's factory-name attribute, MicroProfile REST Client's gate (B/C Task 2)"
 ```
 
 ---
@@ -1223,7 +1270,7 @@ git commit -m "feat(engine): protocol_hint reads the row's owner — hint_annota
 
 **What the spec says (§3a, §3c, §3d):** the YAML in §3a for `jakarta-jaxrs.yml`; `javax-jaxrs.yml` the same under `javax.ws.rs` fqns and `detect.coordinates: ["javax.ws.rs:javax.ws.rs-api"]` (+ `jakarta.ws.rs:jakarta.ws.rs-api` only if CP-18 shows 2.1.6 is `javax`-packaged AND the 4.0.0 catalog would otherwise claim it — it would not, since fqns differ, so list it); `quarkus-rest.yml` = the `jakarta` file plus: `detect.coordinates: ["io.quarkus:quarkus-rest", "io.quarkus:quarkus-resteasy-reactive"]`, `request_body.bound_by` += `org.jboss.resteasy.reactive.{RestPath,RestQuery,RestHeader,RestForm,RestCookie,RestMatrix,MultipartForm}`, `request_body.implicit_bindings: [path_variable, container]`, `excludes` += CP-19 row 3's Vert.x types, `protocol_hint.hint_annotations: [org.jboss.resteasy.reactive.RestStreamElementType, org.jboss.resteasy.reactive.RestSseElementType]`.
 
-- [ ] **Step 1: write the three files.** Each carries: the header keys; `measured:` — `jakarta-jaxrs`: `{artifact: jakarta.ws.rs:jakarta.ws.rs-api, versions: ["3.1.0", "4.0.0"], identity: reported, by: scripts/probes/cp18_jaxrs_api_and_implementations.md}`; `javax-jaxrs`: `{artifact: javax.ws.rs:javax.ws.rs-api, versions: ["2.1.1"], …cp18}`; `quarkus-rest`: `{artifact: io.quarkus:quarkus-rest, versions: ["3.17.5", "3.39.4"], identity: reported, by: scripts/probes/cp19_quarkus_rest.md}`; the `requires` list; the `matches` block verbatim from spec §3a with the Task 6 `request_body`; `protocol_hint`; `media_formats` copied from `spring-web.yml`'s table (with its comment on why `text/event-stream` is absent); `shape_model: json`. Comments state, in place: verb annotations carry nothing (CP-18 row 1); why `all_methods: []`; the body rule's `bound_by` provenance (CP-18 row 7 / CP-19 row 4); the boundaries of spec §3d; and for `quarkus-rest.yml` why it is a separate file (spec §3a's last table row) and CP-19 row 6's answer on §3.6.
+- [ ] **Step 1: write the three files.** Each carries: the header keys, **`declared_on: class`** (spec §3a as amended — a `@Path` interface is a client or an inherited contract, never an inbound row of its own; pinned by Task 10b's no-inbound assertion); `measured:` — `jakarta-jaxrs`: `{artifact: jakarta.ws.rs:jakarta.ws.rs-api, versions: ["3.1.0", "4.0.0"], identity: reported, by: scripts/probes/cp18_jaxrs_api_and_implementations.md}`; `javax-jaxrs`: `{artifact: javax.ws.rs:javax.ws.rs-api, versions: ["2.1.1"], …cp18}`; `quarkus-rest`: `{artifact: io.quarkus:quarkus-rest, versions: ["3.17.5", "3.39.4"], identity: reported, by: scripts/probes/cp19_quarkus_rest.md}`; the `requires` list; the `matches` block verbatim from spec §3a with the Task 6 `request_body`; `protocol_hint`; `media_formats` copied from `spring-web.yml`'s table (with its comment on why `text/event-stream` is absent); `shape_model: json`. Comments state, in place: verb annotations carry nothing (CP-18 row 1); why `all_methods: []`; the body rule's `bound_by` provenance (CP-18 row 7 / CP-19 row 4); the boundaries of spec §3d; and for `quarkus-rest.yml` why it is a separate file (spec §3a's last table row) and CP-19 row 6's answer on §3.6.
 
 - [ ] **Step 2: run the live tests.** `uv run pytest tests/e2e/test_rest_inbound_delivered.py tests/application/test_pipeline.py -q` — the two original JAX-RS xfails and the eight new ones now **fail as strict-xfail-that-passed**; remove their `@pytest.mark.xfail` decorators; rerun → green. If a case does not pass, the catalog or an earlier task is wrong — fix there, never weaken the assertion.
 
@@ -1233,6 +1280,37 @@ git commit -m "feat(engine): protocol_hint reads the row's owner — hint_annota
 ```bash
 git add src/sextant/catalogs/jakarta-jaxrs.yml src/sextant/catalogs/javax-jaxrs.yml src/sextant/catalogs/quarkus-rest.yml tests/e2e/test_rest_inbound_delivered.py tests/application/test_pipeline.py tests/application/test_endpoints.py
 git commit -m "feat(catalogs): JAX-RS in three catalogs — jakarta and javax spellings, and Quarkus REST with its element-type SSE and implicit body bindings; the SSE row's last Java gap closes (quarkus-jaxrs, jaxrs-sse; B/C Task 10)"
+```
+
+---
+
+### Task 10b: `microprofile-rest-client.yml` — the outbound twin (`mp-rest-client`)
+
+**Files:**
+- Create: `src/sextant/catalogs/microprofile-rest-client.yml`
+- Modify (only if CP-22 row 2 says `peer` is read off the prefix annotation alone): `annotation_driven.py::params_for` (`peer_annotation`, an optional list of fqns defaulting to `prefix_annotation`), `derive_endpoints.sql` (`peer_gates` beside `prefix_gates`; the `peer` read in `prefixes` joins it), D02 (`peer_annotation` bullet beside `peer_from`)
+- Test: `tests/e2e/test_rest_outbound_delivered.py` (Task 1's xfail flips); near-miss in `tests/application/test_endpoints.py`
+
+**Interfaces:**
+- Consumes: Tasks 3–6's words; `declared_on: interface` + `direction: outbound` (the `jakarta-jws-client.yml` / `spring-http-interface.yml` shape) and the implemented-interface fence D02 §2 states for it.
+- Produces: `mp-rest-client` closed; REST outbound 2 → 1.
+
+**What the spec says (§3f):** the YAML there — `type_annotation: …RegisterRestClient`, `prefix_annotation: jakarta.ws.rs.Path`, `peer_from: [baseUri, configKey]` read off the gate, the same sibling and body words as `jakarta-jaxrs.yml`; boundary: the `/mp-rest/url` and `quarkus.rest-client.<key>.url` properties are not read, the key is the peer (the Feign service-id precedent).
+
+- [ ] **Step 1: the catalog**, with `measured: [{artifact: org.eclipse.microprofile.rest.client:microprofile-rest-client-api, versions: ["3.0.1", "4.0"], identity: reported, by: scripts/probes/cp22_microprofile_rest_client.md}]`, `requires: [annotation_args, typed_signatures]`, `media_formats` and `shape_model: json` as the inbound twin, and comments quoting CP-22 rows 1 and 3.
+
+- [ ] **Step 2: `peer_from` off the gate.** Run Task 1's outbound test. If `peer` comes back NULL because the SQL reads `peer_from` off the prefix annotation (`@Path`, which has no `configKey`), add the `peer_annotation` key: `params_for` emits `"peer_annotation": catalog_symbols(mapping.get("peer_annotation") or prefix_annotation)`; `derive_endpoints.sql` gains `peer_gates AS (SELECT cp.catalog_id, UNNEST(list_distinct(cp.peer_annotation)) AS fqn FROM catalog_params cp)` and a `peers` CTE mirroring `prefixes` that reads `peer_from` off rows joined through `peer_gates`, keyed on the type symbol; the final select coalesces `peers.peer` ahead of `prefixes.peer`. Every shipped catalog defaults `peer_annotation` to its `prefix_annotation`, so the golden check holds. D02: one bullet beside `peer_from` — "read off `peer_annotation`, which defaults to the prefix annotation; MicroProfile puts the prefix on `@Path` and the peer on `@RegisterRestClient`."
+
+- [ ] **Step 3: run** the outbound test → PASS; remove its xfail. Run `test_rest_inbound_delivered.py` — no inbound row for `/remote/orders` (the `declared_on: class` fence on the three inbound catalogs).
+
+- [ ] **Step 4: near-miss.** `@pytest.mark.declines("microprofile-rest-client")` `@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")`: an interface gated by `@RegisterRestClient` whose method annotation is `com.acme.own.GET` derives nothing — the parametrised package near-miss, one more entry. And the construct-kind half: the same annotations on a **class** derive nothing under this catalog (`declared_on: interface`), pinned to the existing `declared_on` guard (`grep -n "declared_on" scripts/guard_check.py`).
+
+- [ ] **Step 5: COVERAGE row + regenerate.** In §5.2's table, the `MicroProfile @RegisterRestClient` row's Tier becomes `✅ shipped (…)`, its `Framework` cell is already `MicroProfile REST Client`; `python scripts/coverage_matrix.py`; commit the regenerated rollups (the REST-out line reads `✅ full` only after Task 13 moves the id out of ```delivery — until then `◐ partial` with the id, which is correct).
+
+- [ ] **Step 6: gate, commit.**
+```bash
+git add src/sextant/catalogs/microprofile-rest-client.yml src/sextant/application/resolve/engines/annotation_driven.py src/sextant/storage/duckdb/derive_endpoints.sql docs/components/D02-catalog-schema.md docs/COVERAGE.md tests/e2e/test_rest_outbound_delivered.py tests/application/test_endpoints.py
+git commit -m "feat(catalogs): a MicroProfile @RegisterRestClient interface derives its outbound operations on the JAX-RS words — REST outbound's last non-Camel item (mp-rest-client; B/C Task 10b, spec §3f)"
 ```
 
 ---
@@ -1281,7 +1359,8 @@ git commit -m "feat(catalogs): a Micronaut JMS listener or producer bound to the
 
 **Files:**
 - Modify: `docs/COVERAGE.md` (§5 REST in line 2040 → ✅ with the three catalogs and CP-18/19; §5.6 SSE line 2778 → ✅ and the "one YAML entry" paragraph amended with `hint_annotations`; §4.1 a new Kafka row for `batch = "true"` beside the `List<T>` sentence at ~3061; §5 SQS line 3222 ✅; the boundaries of spec §3d, §5a, §5b each on the row it belongs to), regenerate with `scripts/coverage_matrix.py`, `scripts/coverage_versions.py`
-- Modify: `docs/java-kotlin-delivery-list.md` — ```delivery: `quarkus-jaxrs` leaves REST inbound; `jaxrs-sse`, `kafka-batch-generics`, `micronaut-jms-over-sqs` leave their rows (SSE, Kafka, SQS now empty); §1 rows for the four ids → **closed** "on CI run <id>" (part 2); the Micronaut `@JMSProducer` addition recorded under SQS as delivered with the same run; the "eight specs" table's B and C rows → done, spec path named
+- Modify: `scripts/coverage_matrix.py` — `ITEM_FRAMEWORKS` loses the five closed ids (`quarkus-jaxrs`, `jaxrs-sse`, `kafka-batch-generics`, `micronaut-jms-over-sqs`, `mp-rest-client`) — the generator refuses a mapped id that is no longer open only if a test says so; keep the map honest anyway — and `FRAMEWORKS` is unchanged (every line this group ships was already declared); regenerate
+- Modify: `docs/java-kotlin-delivery-list.md` — ```delivery: `quarkus-jaxrs` leaves REST inbound, `mp-rest-client` leaves REST outbound; `jaxrs-sse`, `kafka-batch-generics`, `micronaut-jms-over-sqs` leave their rows (SSE, Kafka, SQS now empty); §1 rows for the four ids → **closed** "on CI run <id>" (part 2); the Micronaut `@JMSProducer` addition recorded under SQS as delivered with the same run; the "eight specs" table's B and C rows → done, spec path named
 - Modify: `CHANGELOG.md` `Unreleased`: four items + the producer addition, plain language, no bump
 - Modify: `docs/open-issues.md`: three entries from spec §6 — the Feign/Micronaut `sole_unannotated` Kotlin defect (real input: a Kotlin Feign client or Micronaut listener with a non-null body), the SSE per-event format from `@RestStreamElementType` (rung-2 source), Quarkus's return-type default `produces`; plus anything a review of Tasks 3–12 recorded
 
@@ -1294,13 +1373,13 @@ git add docs/COVERAGE.md docs/java-kotlin-delivery-list.md CHANGELOG.md docs/ope
 git commit -m "docs: COVERAGE, CHANGELOG and the register catch up with Groups B and C — three JAX-RS catalogs, batch listeners, JMS over SQS; SSE, Kafka and SQS rows await their CI run (B/C Task 13, part 1)"
 ```
 
-- [ ] **Step 3 (part 2, after CI is green):** move the four ids to ```closed with the run id, empty the three rows, and commit `docs(register): Groups B and C close on run <id>`.
+- [ ] **Step 3 (part 2, after CI is green):** move the five ids to ```closed with the run id, empty the three rows, regenerate COVERAGE, and commit `docs(register): Groups B and C close on run <id>`.
 
 ---
 
 ## Self-review against the spec
 
-**Coverage.** §0's eight rulings: M2/M4 → Task 6; M1 → Task 9 + Task 10's `quarkus-rest.yml`; M3 → Task 5; M5 → Task 7 (`parses_true`) + Task 11; R1 → Task 10 (gate kept) and the Task 1 Quarkus fixture keeps `@Path`; R2 → Task 12 (`name: value`) and COVERAGE 3222; R3 → Task 6 (`annotation` optional). §2 → Task 7. §3a → Task 10. §3b words 1–3 → Tasks 3, 4, 5. §3c → Tasks 9, 10, 6. §3d boundaries → Task 10 comments + Task 13 COVERAGE. §3e fixtures → Task 1 (every named class; the Kotlin resource in `orders-service`, the module that compiles Kotlin). §4 → Task 6. §5a → Tasks 7, 8, 11, and Task 1's two batch methods. §5b → Tasks 9, 12, and Task 1's three Micronaut types. §6 logged items → Task 13. §7 probes → Task 2, cited by Tasks 10–12's `measured:`. §8 proof → the golden check on every engine task. §9's table → the thirteen tasks here in the same order.
+**Coverage.** §0's eight rulings: M2/M4 → Task 6; M1 → Task 9 + Task 10's `quarkus-rest.yml`; M3 → Task 5; M5 → Task 7 (`parses_true`) + Task 11; R1 → Task 10 (gate kept) and the Task 1 Quarkus fixture keeps `@Path`; R2 → Task 12 (`name: value`) and COVERAGE 3222; R3 → Task 6 (`annotation` optional). §2 → Task 7. §3a → Task 10. §3b words 1–3 → Tasks 3, 4, 5. §3c → Tasks 9, 10, 6. §3d boundaries → Task 10 comments + Task 13 COVERAGE. §3e fixtures → Task 1 (every named class; the Kotlin resource in `orders-service`, the module that compiles Kotlin). §3f → Task 1 Step 4b (fixture + xfail), Task 2 Step 5b (P5/CP-22), Task 10b (catalog, `peer_annotation` if needed), Task 13 (register). §4 → Task 6. §5a → Tasks 7, 8, 11, and Task 1's two batch methods. §5b → Tasks 9, 12, and Task 1's three Micronaut types. §6 logged items → Task 13. §7 probes → Task 2, cited by Tasks 10–12's `measured:`. §8 proof → the golden check on every engine task. §9's table → the thirteen tasks here in the same order.
 
 **Placeholders.** None: every step names the file, the code or the exact command. Two places delegate a filename to a `grep` because the repository's test files for `inherited_rows_over`, `_body_parameter` and `apply_protocol_hints` are found, not remembered — the grep is given.
 
