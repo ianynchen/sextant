@@ -221,6 +221,54 @@ a batch on truncation rather than raising the output limit.
   control-flow rows are the grounding such a description needs; keep it a separate design
   question from rules.
 
+## Beyond EARS: detailed business logic as a decision model (added 2026-09-18)
+
+Asked directly: can this extract *detailed* logic — say, which promotions apply at
+checkout and how they stack? Not as EARS. Promotion stacking is not a list of independent
+"when/then" facts; it is a **decision structure** — a set of rules, the inputs each reads,
+an order, and exclusivity between them — and flattening it into sentences loses the one
+thing needed, which is how the rules interact. codetospec's output shape is the wrong
+target for this case; its own §5.1 limit (static extraction cannot see data-driven logic)
+applies in full.
+
+What is deterministically extractable today, on the trace from `POST /checkout`: the exact
+set of methods that participate in pricing (the reading list, and it is small); the set of
+rule implementations reachable through a `PromotionRule.apply` dispatch, `narrowed` with
+its candidates; the fields and constants each rule reads. What is not: the branch
+predicates. `control_flow_kind` is specified in D00 §4 and no extractor emits it, and a
+condition such as `total.gt(po.minimum())` is compare-and-branch bytecode nothing reads.
+
+Three approaches, recorded for when the gate opens:
+
+- **A. Path-condition extraction from bytecode** — a CFG per participating method,
+  predicates recovered as expressions over parameters, fields and constants, emitted as a
+  decision table (one row per path). Exact for code-as-written; explodes on a loop over a
+  data-driven list (`for (Promotion p : applicable)`), silent when the rules are database
+  rows or a rules-engine DSL. A new fact kind and serious extractor work, JVM first — the
+  reason the language gate exists. The frontier, to be stated rather than built.
+- **B. Scoped model reading with a structured, grounded output** — the pragmatic one.
+  Sextant hands the model the exact, absolutely line-numbered bodies on the trace plus facts
+  it may not contradict (the rule types from dispatch, the inputs each reads), and asks for
+  a **decision model**: rules each anchored to a symbol, inputs, ordering, stacking and
+  exclusivity statements, a floor, and a `data_driven` section naming what is *not* in the
+  code. Every symbol, endpoint and input is validated against the graph (the overlay rule —
+  rejected whole otherwise); every prose statement cites a line range that must fall inside
+  a participating method's bytecode extent; a fresh-context refutation pass votes per
+  statement. The model contributes only what a machine cannot — reading
+  `exclusiveApplied |= p.isExclusive()` and saying what it means. Cost is bounded by the
+  trace, not the codebase.
+- **C. Prompt-only** — the same words as B with none of the checks. A demo of the shape,
+  not the capability (see the deferred-enhancement discussion of 2026-09-18).
+
+Recommendation when the gate opens: **B as a `decision` overlay kind on the trace**, with
+A's first cheap piece folded in — emit `control_flow_kind` and the branch *structure* (not
+the predicates) from bytecode, so "there is a loop here, a conditional there" can be
+checked mechanically against the model's ordering and stacking claims. Two limits to state
+in that spec: where the rules are data, the output is the mechanism and the schema and must
+say the rules are not in the repository; and a decision model is only as complete as the
+trace — a promotion applied by another service is an outbound terminal, and the crossing
+is system scope's.
+
 ## Recommended experiment
 
 Take one existing fixture with a trace that ends in a conditional `throw` and a
