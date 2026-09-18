@@ -206,3 +206,83 @@ def test_section_5_carries_every_axis_the_design_names():
     ]
     assert empty == [], f"axis sections in COVERAGE §5 with no table: {empty}"
     del rows
+
+
+# --- the per-framework rollup (2026-09-18) -------------------------------------------------
+#
+# The question "is Spring REST inbound complete?" could not be answered from COVERAGE: §2
+# scores a LANGUAGE per protocol and §5 lists FORMS, and nothing rolled the forms up to the
+# framework a reader actually asks about. The rollup under each `### 5.1`–`### 5.12` heading
+# is generated from the `Framework` column of the rows below it plus the register's open
+# ids, so it cannot drift; these tests pin the pieces `--check` alone would not name.
+
+_PROTOCOL_SECTIONS = [f"5.{n}" for n in range(1, 13)]
+
+
+def test_every_protocol_section_carries_a_generated_framework_rollup():
+    text = DOC.read_text()
+    for number in _PROTOCOL_SECTIONS:
+        assert f"<!-- BEGIN GENERATED: frameworks {number} -->" in text, number
+        assert f"<!-- END GENERATED: frameworks {number} -->" in text, number
+
+
+def test_every_java_row_in_a_protocol_section_names_a_declared_framework():
+    """A row tagged with a framework the target list does not declare is a rollup row nobody
+    can find, and a target framework with no row is the `✗ unsupported` line the rollup
+    exists to show — so the two must agree, and the generator refuses when they do not."""
+    assert _matrix().undeclared_frameworks(DOC.read_text()) == []
+
+
+def test_every_open_register_id_on_a_protocol_row_is_mapped_to_a_framework():
+    """The rollup's `Missing` column reads the ```delivery block. An id it cannot place
+    under a framework would vanish from every rollup while still blocking the row."""
+    assert _matrix().unmapped_items() == []
+
+
+def test_the_rollup_status_rule():
+    """`✅ full` only when every row is shipped AND no open id names the framework;
+    `✗ unsupported` when the target list names a framework with no row at all."""
+    matrix = _matrix()
+    from collections import Counter
+
+    assert matrix.rollup_status(Counter({"shipped": 3}), []) == ("✅ full", "—")
+    assert matrix.rollup_status(Counter({"shipped": 3}), ["quarkus-jaxrs"]) == (
+        "◐ partial",
+        "`quarkus-jaxrs`",
+    )
+    assert matrix.rollup_status(Counter({"shipped": 2, "A": 1, "partial": 1}), []) == (
+        "◐ partial",
+        "not shipped: 1 at A; 1 limited",
+    )
+    assert matrix.rollup_status(Counter(), []) == ("✗ unsupported", "no row yet")
+    assert matrix.rollup_status(Counter({"shipped": 1, "boundary": 3}), []) == (
+        "✅ full",
+        "3 stated boundaries",
+    )
+    assert matrix.rollup_status(Counter({"shipped": 1, "boundary": 1}), ["x"]) == (
+        "◐ partial",
+        "`x`; 1 stated boundary",
+    )
+    assert matrix.classify_rollup("**Boundary — derives nothing.** …") == "boundary"
+    assert matrix.classify("**supported** (3.6.2, w60)") == "shipped"
+
+
+def test_spring_rest_inbound_reads_as_the_rollup_says():
+    """The row that started this: Spring MVC / WebFlux annotations are shipped end to end,
+    and the rollup must say so in one line a reader can find."""
+    text = DOC.read_text()
+    start = text.index("<!-- BEGIN GENERATED: frameworks 5.1 -->")
+    end = text.index("<!-- END GENERATED: frameworks 5.1 -->", start)
+    block = text[start:end]
+    spring = [
+        line
+        for line in block.splitlines()
+        if line.startswith("| Spring MVC / WebFlux (annotations) |")
+    ]
+    assert len(spring) == 1, block
+    # Partial today for exactly two reasons a reader can act on, both named in the line:
+    # the `@ConditionalOnProperty` / `@Profile` row is tier C, and the register holds
+    # `conditional-controllers` open against it. Everything else on that line is shipped.
+    assert "| ◐ partial |" in spring[0], spring[0]
+    assert "`conditional-controllers`" in spring[0], spring[0]
+    assert "not shipped: 1 at C" in spring[0], spring[0]

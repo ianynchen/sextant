@@ -3,6 +3,16 @@
 Section 5 is the source of truth: one row per (language, library). This derives the
 per-cell tier spread so the matrices cannot drift from the checklist they summarise.
 
+**And, since 2026-09-18, the per-framework rollup under each protocol heading.** §2 scores
+a LANGUAGE per protocol and §5 lists FORMS; the question a reader asks — "is Spring REST
+inbound complete? what is missing for Ktor?" — sits between the two and had no answer
+anywhere in the document. Each `### 5.1`–`### 5.12` heading now carries a generated table:
+one row per Java/Kotlin framework on the declared target list (`FRAMEWORKS`), its status
+rolled up from the `Framework` column of the rows below it plus the open ids of
+`java-kotlin-delivery-list.md`'s register (`ITEM_FRAMEWORKS`). `✅ full` means every row
+shipped and no open id; `◐ partial` says what is missing; `✗ unsupported` is a framework on
+the target list with no row at all — the line the document had no way to show before.
+
 Usage: python scripts/coverage_matrix.py [--check]
 """
 
@@ -68,6 +78,159 @@ ALIASES = {
     "Swift": ["Swift"],
 }
 
+# The Java/Kotlin frameworks each protocol section MUST account for — the target list the
+# rollup renders, in this order. Declared rather than inferred from the rows, because a
+# framework with no row is exactly the thing the rollup exists to show (`✗ unsupported`),
+# and an inferred list can never contain one. A row tagged with a framework absent here
+# fails the generator (`undeclared_frameworks`): the two are kept in step by refusal.
+FRAMEWORKS: dict[str, list[str]] = {
+    "REST inbound": [
+        "Spring MVC / WebFlux (annotations)",
+        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
+        "Spring @HttpExchange (server side)",
+        "Spring error handling (@ControllerAdvice)",
+        "Spring Boot Actuator",
+        "Spring Data REST",
+        "Spring Cloud Gateway",
+        "Jakarta / javax Servlet",
+        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
+        "Quarkus Reactive Routes",
+        "Micronaut HTTP",
+        "Ktor",
+        "Javalin",
+        "Vert.x Web",
+        "Akka HTTP",
+        "Helidon SE",
+        "Spark Java",
+        "Play Framework",
+    ],
+    "REST outbound": [
+        "Spring RestTemplate",
+        "RestClient / WebClient / OkHttp (fluent clients)",
+        "Feign / Retrofit / @HttpExchange (annotated client interfaces)",
+        "Spring @HttpExchange (client registration)",
+        "Spring Cloud Gateway (forwarding)",
+        "JDK / Apache HttpClient",
+        "Micronaut HTTP client",
+        "MicroProfile REST Client",
+        "Apache Camel",
+        "Ktor HttpClient",
+        "Vert.x WebClient",
+    ],
+    "SOAP": [
+        "JAX-WS (jakarta.jws / javax.jws)",
+        "JAX-WS (Apache CXF)",
+        "JAX-WS generated client stubs",
+        "Spring Web Services",
+    ],
+    "GraphQL": [
+        "Spring for GraphQL",
+        "Netflix DGS",
+        "MicroProfile GraphQL",
+        "graphql-java (schema-first)",
+        "GraphQL Kotlin (Expedia)",
+    ],
+    "WebSocket": [
+        "Spring WebSocket",
+        "Spring STOMP",
+        "Jakarta / javax WebSocket",
+        "Ktor WebSockets",
+    ],
+    "Server-Sent Events": [
+        "Spring MVC",
+        "Spring WebFlux",
+        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
+        "Ktor SSE",
+    ],
+    "gRPC": [
+        "grpc-java",
+        "Spring gRPC",
+        "net.devh grpc-spring-boot-starter",
+        "Quarkus gRPC",
+    ],
+    "Kafka": [
+        "Spring Kafka",
+        "kafka-clients (raw)",
+        "Kafka Streams",
+        "Spring Cloud Stream",
+        "Micronaut Kafka",
+        "SmallRye Reactive Messaging (Quarkus)",
+        "Pekko / Alpakka Connectors Kafka",
+    ],
+    "JMS and AMQP": [
+        "Spring JMS",
+        "Spring AMQP (RabbitMQ)",
+        "Spring AMQP / Spring JMS templates",
+        "Jakarta / javax JMS API (direct)",
+        "Spring for Apache Pulsar",
+        "Micronaut JMS",
+    ],
+    "AWS SQS": [
+        "Spring Cloud AWS SQS 3.x / 4.x",
+        "Spring Cloud AWS 1.x / 2.x (legacy)",
+        "AWS SDK v2 (raw)",
+        "Micronaut (raw AWS SDK; JMS over SQS)",
+    ],
+    "Google Cloud Pub/Sub": [
+        "Spring Cloud GCP Pub/Sub (PubSubTemplate)",
+        "Spring Cloud GCP Pub/Sub (Spring Integration)",
+        "google-cloud-pubsub (raw client)",
+        "Micronaut GCP Pub/Sub",
+    ],
+    "Async and internal boundaries": [
+        "Spring scheduling (@Scheduled)",
+        "Spring Integration",
+        "Quartz",
+        "Temporal / Cadence",
+        "Vert.x EventBus",
+        "Akka / Pekko actors",
+    ],
+}
+
+# Rows whose `Framework` cell is one of these are engine-level or not-applicable rows and
+# feed no framework line.
+FRAMEWORK_NONE = {"any", "—", ""}
+
+# Open register id -> the framework line(s) it appears under, in the section its
+# ```delivery column names. Every id on a protocol column must be here (`unmapped_items`),
+# or it would block the row while vanishing from every rollup. Kept in the generator
+# rather than in the register because the register is about FEATURES and refuses to know
+# frameworks (`test_feature_delivery.py`); this is presentation data.
+ITEM_FRAMEWORKS: dict[str, list[str]] = {
+    "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
+    "kotlin-null-handler": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
+    "quarkus-jaxrs": ["JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)"],
+    "dsl-media-route": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
+    "ktor-route-extensions": [
+        "Ktor",
+        "Javalin",
+        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
+    ],
+    "ktor-selector-blocks": ["Ktor"],
+    "gateway-properties-routes": ["Spring Cloud Gateway"],
+    "kotlin-class-lambdas": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
+    "kotlin-default-bridge-calls": [
+        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
+        "Ktor",
+    ],
+    "mp-rest-client": ["MicroProfile REST Client"],
+    "apache-camel": ["Apache Camel"],
+    "jaxrs-sse": ["JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)"],
+    "kafka-batch-generics": ["Spring Kafka"],
+    "micronaut-jms-over-sqs": ["Micronaut (raw AWS SDK; JMS over SQS)"],
+    "pubsub-channel-adapter": ["Spring Cloud GCP Pub/Sub (Spring Integration)"],
+    "temporal-cadence": ["Temporal / Cadence"],
+    "vertx-eventbus": ["Vert.x EventBus"],
+}
+
+_ESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+
+
+def cells_of(line: str) -> list[str]:
+    r"""A table row's cells, splitting on unescaped pipes only — `\|` inside a cell is
+    markdown's escape and stays in the cell."""
+    return [c.strip() for c in _ESCAPED_PIPE.split(line.strip().strip("|"))]
+
 
 def anchor(heading: str, number: str) -> str:
     slug = re.sub(r"[^a-z0-9 -]", "", f"{number} {heading}".lower()).replace(" ", "-")
@@ -79,6 +242,12 @@ def classify(cell: str) -> str | None:
     text = cell.replace("*", "").replace("`", "").strip()
     if text.startswith("✅"):
         return "shipped"
+    # W42's level vocabulary, which a few protocol rows use instead of the glyph (the Kafka
+    # Streams row). Before 2026-09-18 these classified as None and were counted nowhere.
+    if text.startswith("partially supported"):
+        return "partial"
+    if text.startswith("supported"):
+        return "shipped"
     if text.startswith("◐"):
         return "partial"
     if text.startswith("⚠️"):
@@ -87,6 +256,18 @@ def classify(cell: str) -> str | None:
         return "na"
     m = re.match(r"([ABC])(?![A-Za-z])", text)
     return m.group(1) if m else None
+
+
+def classify_rollup(cell: str) -> str | None:
+    """`classify`, plus the one class the framework rollup reads and the matrix does not:
+    a **stated boundary** — a row whose status begins `Boundary` or `Limitation`. The
+    matrix ignores those rows (a boundary is what we cannot see and say so; it costs no
+    `✅`). The rollup counts them, because a reader asking "what is Ktor missing?" is owed
+    the number of places the answer is "this, and we say so"."""
+    text = cell.replace("*", "").replace("`", "").strip()
+    if text.startswith(("Boundary", "Limitation")):
+        return "boundary"
+    return classify(cell)
 
 
 def parse(md: str) -> tuple[dict, dict]:
@@ -114,6 +295,170 @@ def parse(md: str) -> tuple[dict, dict]:
         for target in ALIASES[lang]:
             counts.setdefault((target, section), Counter())[tier] += 1
     return counts, numbers
+
+
+def framework_rows(md: str) -> dict[tuple[str, str], Counter]:
+    """{(section heading, framework): Counter of tiers} over the Java/Kotlin rows of every
+    protocol section whose table carries a `Framework` column."""
+    counts: dict[tuple[str, str], Counter] = {}
+    section = None
+    framework_col = False
+    for line in md.splitlines():
+        h = re.match(r"### (5\.\d+) (.+)", line)
+        if h:
+            section = h.group(2)
+            framework_col = False
+            continue
+        if section is None or section in NON_PROTOCOL or not line.startswith("|"):
+            framework_col = framework_col and line.startswith("|")
+            continue
+        cells = cells_of(line)
+        if cells and cells[0] == "Language":
+            framework_col = len(cells) > 1 and cells[1] == "Framework"
+            continue
+        if not framework_col or len(cells) < 4 or set(cells[0]) <= {"-", ":"}:
+            continue
+        lang = cells[0].replace("*", "").strip()
+        if lang not in ("Java", "Kotlin"):
+            continue
+        framework = cells[1].strip()
+        if framework in FRAMEWORK_NONE:
+            continue
+        tier = classify_rollup(cells[-1])
+        if tier is None:
+            continue
+        counts.setdefault((section, framework), Counter())[tier] += 1
+    return counts
+
+
+def undeclared_frameworks(md: str) -> list[str]:
+    """Java/Kotlin rows tagged with a framework the section's target list does not name."""
+    found = []
+    for (section, framework), _c in sorted(framework_rows(md).items()):
+        if framework not in FRAMEWORKS.get(section, []):
+            found.append(f"{section}: `{framework}`")
+    return found
+
+
+def open_items() -> dict[str, list[str]]:
+    """`COVERAGE column -> open ids`, from the register's ```delivery block."""
+    delivery = DOC.parent / "java-kotlin-delivery-list.md"
+    if not delivery.exists():
+        return {}
+    match = re.search(r"```delivery\n(.*?)```", delivery.read_text(), re.DOTALL)
+    if match is None:
+        return {}
+    items: dict[str, list[str]] = {}
+    for line in match.group(1).split("\n"):
+        if not line.strip():
+            continue
+        _, column, blockers = (part.strip() for part in line.split("|"))
+        items[column] = blockers.split()
+    return items
+
+
+def unmapped_items() -> list[str]:
+    """Open ids on a protocol column that `ITEM_FRAMEWORKS` cannot place, or places under a
+    framework the column's section does not declare."""
+    label_to_heading = {label: heading for heading, label in HTTP_COLUMNS + MSG_COLUMNS}
+    found = []
+    for column, ids in open_items().items():
+        heading = label_to_heading.get(column)
+        if heading is None:
+            continue  # the register's non-protocol rows (Meridian) roll up nowhere
+        for item in ids:
+            frameworks = ITEM_FRAMEWORKS.get(item)
+            if not frameworks:
+                found.append(f"{column}: `{item}` is mapped to no framework")
+                continue
+            for framework in frameworks:
+                if framework not in FRAMEWORKS[heading]:
+                    found.append(
+                        f"{column}: `{item}` -> `{framework}` is not declared for {heading}"
+                    )
+    return found
+
+
+def rollup_status(c: Counter, items: list[str]) -> tuple[str, str]:
+    """(status glyph, what is missing) for one framework line.
+
+        ✅ full          every row shipped, no open register id (stated boundaries allowed, and counted)
+        ◐ partial       rows not shipped (by tier), limited rows, open ids — whichever apply
+        ✗ unsupported   the target list names it and no row exists
+
+    A row marked `—` (not applicable) or `⚠️` is neither shipped nor missing here. `Rows
+    shipped` counts rows that claim a tier or a glyph; boundary rows are counted apart.
+    """
+    live = c - Counter({"na": c["na"], "unknown": c["unknown"]})
+    if not live:
+        return "✗ unsupported", "no row yet"
+    missing: list[str] = []
+    gaps = ", ".join(f"{c[t]} at {t}" for t in "ABC" if c[t])
+    if gaps:
+        missing.append(f"not shipped: {gaps}")
+    if c["partial"]:
+        missing.append(f"{c['partial']} limited")
+    if items:
+        missing.append(", ".join(f"`{item}`" for item in items))
+    # A stated boundary costs no `✅` (COVERAGE §1: a boundary is what we cannot see AND
+    # say so), but the count is part of the honest answer, so it is shown either way.
+    boundaries = (
+        f"{c['boundary']} stated boundar{'ies' if c['boundary'] > 1 else 'y'}"
+        if c["boundary"]
+        else ""
+    )
+    if not missing:
+        return "✅ full", boundaries or "—"
+    return "◐ partial", "; ".join([*missing, *([boundaries] if boundaries else [])])
+
+
+def render_rollup(heading: str, number: str, counts: dict[tuple[str, str], Counter]) -> str:
+    label = {h: lbl for h, lbl in HTTP_COLUMNS + MSG_COLUMNS}[heading]
+    open_by_framework: dict[str, list[str]] = {}
+    for item in open_items().get(label, []):
+        for framework in ITEM_FRAMEWORKS.get(item, []):
+            open_by_framework.setdefault(framework, []).append(item)
+    lines = [
+        f"<!-- BEGIN GENERATED: frameworks {number} -->",
+        (
+            "**Java / Kotlin, by framework** — rolled up from the rows below and the register's "
+            "open ids by `scripts/coverage_matrix.py`; do not edit by hand. `✅ full`: every row "
+            "shipped and no open id. `◐ partial`: the last column says what is missing. "
+            "`✗ unsupported`: on the target list, no row yet."
+        ),
+        "",
+        "| Framework | Status | Rows shipped | Missing |",
+        "|---|---|---|---|",
+    ]
+    for framework in FRAMEWORKS[heading]:
+        c = counts.get((heading, framework), Counter())
+        status, missing = rollup_status(c, open_by_framework.get(framework, []))
+        total = sum(v for k, v in c.items() if k not in ("na", "unknown", "boundary"))
+        lines.append(f"| {framework} | {status} | {c['shipped']}/{total} | {missing} |")
+    lines.append(f"<!-- END GENERATED: frameworks {number} -->")
+    return "\n".join(lines)
+
+
+def with_rollups(md: str) -> str:
+    """The document with every protocol section's rollup block regenerated, or inserted
+    directly under the heading where none exists yet."""
+    counts = framework_rows(md)
+    _, numbers = parse(md)
+    new = md
+    for heading, _label in HTTP_COLUMNS + MSG_COLUMNS:
+        number = numbers[heading]
+        block = render_rollup(heading, number, counts)
+        begin = f"<!-- BEGIN GENERATED: frameworks {number} -->"
+        end = f"<!-- END GENERATED: frameworks {number} -->"
+        if begin in new:
+            start = new.index(begin)
+            stop = new.index(end, start) + len(end)
+            new = new[:start] + block + new[stop:]
+        else:
+            heading_line = f"### {number} {heading}\n"
+            at = new.index(heading_line) + len(heading_line)
+            new = new[:at] + "\n" + block + "\n" + new[at:]
+    return new
 
 
 def open_blockers() -> dict[str, int]:
@@ -280,10 +625,26 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    untagged = undeclared_frameworks(md)
+    if untagged:
+        print(
+            "Java/Kotlin rows tagged with a framework the section's FRAMEWORKS list does not "
+            "declare — declare it, or retag the row:\n  " + "\n  ".join(untagged),
+            file=sys.stderr,
+        )
+        return 1
+    homeless = unmapped_items()
+    if homeless:
+        print(
+            "open register ids the rollup cannot place under a framework (ITEM_FRAMEWORKS):\n  "
+            + "\n  ".join(homeless),
+            file=sys.stderr,
+        )
+        return 1
     http = render(counts, numbers, HTTP_COLUMNS, first_col="Scanner")
     msg = render(counts, numbers, MSG_COLUMNS)
 
-    new = md
+    new = with_rollups(md)
     for marker, table in (
         ("2a. Application protocols over HTTP", http),
         ("2b. Messaging and RPC", msg),
