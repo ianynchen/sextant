@@ -11,6 +11,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.shapes import contracts
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -8451,6 +8452,134 @@ def test_a_micronaut_or_quarkus_annotation_from_another_package_derives_nothing(
         )
         == []
     ), f"{catalog_id} matched an annotation from another package"
+
+
+# B/C Task 10: the `_W58_ANNOTATION_CATALOGS`-style package near-miss for the three JAX-RS
+# catalogs. A separate list rather than an extension of `_W58_ANNOTATION_CATALOGS` because
+# the verb annotation itself carries no address attribute (CP-18 row 1) — the class-level
+# `@Path` alone (`type_annotations`) supplies the whole address here, `method_args` stays
+# empty, and the shared test functions below are named for what they cover rather than
+# borrowed from the Micronaut/Quarkus-reactive-routes ones.
+_JAXRS_ANNOTATION_CATALOGS = [
+    pytest.param(
+        "jakarta-jaxrs",
+        ConstructKind.CLASS,
+        {"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="jakarta-jaxrs",
+    ),
+    pytest.param(
+        "javax-jaxrs",
+        ConstructKind.CLASS,
+        {"javax/ws/rs/Path#": {"value": "/orders"}},
+        "javax/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="javax-jaxrs",
+    ),
+    pytest.param(
+        "quarkus-rest",
+        ConstructKind.CLASS,
+        {"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="quarkus-rest",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _JAXRS_ANNOTATION_CATALOGS,
+)
+def test_a_jaxrs_resource_derives_its_row(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """The paired positive for the near-miss below: the class-level `@Path` alone,
+    with a bare verb annotation carrying no attribute of its own, derives exactly
+    one row — so the decline below is on the verb annotation's FQN alone."""
+    assert _gate_rows(
+        tmp_path,
+        catalog_id,
+        owner_kind=owner_kind,
+        type_annotations=type_annotations,
+        method_annotation=method_annotation,
+        method_args=method_args,
+    ) == [row]
+
+
+@pytest.mark.declines("jakarta-jaxrs")
+@pytest.mark.declines("javax-jaxrs")
+@pytest.mark.declines("quarkus-rest")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _JAXRS_ANNOTATION_CATALOGS,
+)
+def test_a_jaxrs_verb_annotation_from_another_package_derives_nothing(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """§10 near-miss for the three JAX-RS catalogs, on the verb annotation's fully-qualified
+    NAME alone: the type gate, the construct kind and the address attribute are exactly as
+    in the positive above; only the verb annotation's package is `com.acme.own`."""
+    simple_name = method_annotation.rsplit("/", 1)[1]
+    assert (
+        _gate_rows(
+            tmp_path,
+            catalog_id,
+            owner_kind=owner_kind,
+            type_annotations=type_annotations,
+            method_annotation=f"com/acme/own/{simple_name}",
+            method_args=method_args,
+        )
+        == []
+    ), f"{catalog_id} matched an annotation from another package"
+
+
+@pytest.mark.declines("quarkus-rest")
+@pytest.mark.pins("contracts.implicit-path-variable-reads-the-composed-path")
+def test_quarkus_rest_declines_the_body_jakarta_jaxrs_derives(tmp_path: Path):
+    """Task 6's unit style, on the two shipped catalogs rather than a synthetic one:
+    `byId(String id)` under `/{id}` — `id`'s NAME matches the path template, so
+    `quarkus-rest.yml`'s own `implicit_bindings: [path_variable]` (spec §4 predicate 2,
+    CP-19 row 4) unbinds it and there is no body. `jakarta-jaxrs.yml` declares no implicit
+    binding at all — under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity
+    body — so the IDENTICAL signature and path still derive a `String` body there."""
+    signature = {
+        "parameters": [
+            {
+                "name": "id",
+                "annotations": [],
+                "type": {"symbol": "java/lang/String#", "arguments": [], "wire_type": "string"},
+                "erased_symbol": "java/lang/String#",
+                "type_annotations": [],
+            }
+        ],
+        "returns": {"symbol": "V", "wire_type": "void"},
+        "return_type_annotations": [],
+    }
+    catalogs = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    quarkus = contracts._body_parameter(
+        signature,
+        catalogs["quarkus-rest"],
+        owner="o",
+        paths=frozenset({"/{id}"}),
+        index={},
+        members={},
+    )
+    jakarta = contracts._body_parameter(
+        signature,
+        catalogs["jakarta-jaxrs"],
+        owner="o",
+        paths=frozenset({"/{id}"}),
+        index={},
+        members={},
+    )
+    assert quarkus is None, "quarkus-rest.yml should decline id as the body (path variable)"
+    assert jakarta is not None and jakarta[1]["type"]["symbol"] == "java/lang/String#"
 
 
 @pytest.mark.declines("jakarta-jws")

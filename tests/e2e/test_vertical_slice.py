@@ -637,7 +637,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # (`dsl-media-route`), `unresolved` with no address — counted, never hidden.
         # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
         # one prefixed row each — and no bare twin from the body's own `build()`.
-        "http": 90,
+        # 91 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+        # `POST /kt/orders` — the bundle answers what the workspace answers, so this
+        # moves with `tests/cli/test_app.py`'s own count.
+        "http": 91,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -870,7 +873,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # `SqsTemplate.receive*` rows, inbound `orders-poll`.
             # 157 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, two more kafka
             # inbound rows off the same unconditional listener catalog `onBatch` uses.
-            ("inbound", 157),
+            # 158 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+            # `POST /kt/orders` — one more http inbound row, at the address
+            # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
+            ("inbound", 158),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),

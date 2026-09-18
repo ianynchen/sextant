@@ -1,0 +1,87 @@
+id: javax-jaxrs
+displayName: JAX-RS (javax.ws.rs) — pre-Jakarta (2.1.x)
+style: annotation_driven
+protocol: http
+direction: inbound
+
+# THE SAME RULE UNDER THE OTHER PACKAGE SPELLING, the `javax-servlet.yml` /
+# `jakarta-servlet.yml` precedent: `jakarta-jaxrs.yml` is where every rule
+# below is explained; this file records only what is different, which is the
+# package name and nothing else. CP-18 measured the `javax.ws.rs` 2.1.1 jar
+# directly (not mirrored): rows 1a-1c/2a-2c confirm the seven verb annotations
+# still declare zero attributes and `@Path`/`@Produces`/`@Consumes` still
+# carry the same `@Target`/`value()` shapes on that side of the rename — "the
+# byte-identical shape, only the package name differing on the javax run".
+#
+# **Not `jakarta.ws.rs:jakarta.ws.rs-api:2.1.6`.** That coordinate is still
+# `javax`-packaged (Jakarta EE 8), which would make this catalog's
+# `detect.coordinates` list it too — but CP-18's environment resolved
+# `javax.ws.rs:javax.ws.rs-api` 2.1.1 for the `javax` rows and never opened
+# `jakarta.ws.rs-api:2.1.6` at all, so that specific coordinate's packaging is
+# unmeasured here and is not added on the strength of a sibling artifact's
+# reading (§5.4).
+detect:
+  coordinates: ["javax.ws.rs:javax.ws.rs-api"]
+
+measured:
+  - { artifact: javax.ws.rs:javax.ws.rs-api, versions: ["2.1.1"],
+      identity: reported, by: scripts/probes/cp18_jaxrs_api_and_implementations.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  type_annotation: javax.ws.rs.Path
+  declared_on: class
+  request_body:
+    fallback: sole_unbound
+    bound_by: [javax.ws.rs.PathParam, javax.ws.rs.QueryParam, javax.ws.rs.HeaderParam,
+               javax.ws.rs.CookieParam, javax.ws.rs.FormParam, javax.ws.rs.MatrixParam,
+               javax.ws.rs.BeanParam, javax.ws.rs.DefaultValue, javax.ws.rs.core.Context,
+               javax.ws.rs.container.Suspended]
+    excludes: [javax.ws.rs.sse.SseEventSink, javax.ws.rs.sse.Sse, javax.ws.rs.core.UriInfo,
+               javax.ws.rs.core.HttpHeaders, javax.ws.rs.core.Request,
+               javax.ws.rs.core.SecurityContext, javax.ws.rs.ext.Providers,
+               javax.ws.rs.container.ResourceContext, javax.ws.rs.core.Configuration,
+               javax.ws.rs.core.Application]
+  mapping:
+    prefix_annotation: javax.ws.rs.Path
+    prefix_from: [value]
+    path_separator: "/"
+    path_from: []
+    path_from_siblings: [{ annotation: javax.ws.rs.Path, arg: value }]
+    produces_from_siblings: [{ annotation: javax.ws.rs.Produces, arg: value }]
+    consumes_from_siblings: [{ annotation: javax.ws.rs.Consumes, arg: value }]
+    type_media_from_siblings:
+      produces: [{ annotation: javax.ws.rs.Produces, arg: value }]
+      consumes: [{ annotation: javax.ws.rs.Consumes, arg: value }]
+    method_from: method
+    all_methods: []
+    annotations:
+      - { fqn: javax.ws.rs.GET,     method: [GET] }
+      - { fqn: javax.ws.rs.POST,    method: [POST] }
+      - { fqn: javax.ws.rs.PUT,     method: [PUT] }
+      - { fqn: javax.ws.rs.DELETE,  method: [DELETE] }
+      - { fqn: javax.ws.rs.PATCH,   method: [PATCH] }
+      - { fqn: javax.ws.rs.HEAD,    method: [HEAD] }
+      - { fqn: javax.ws.rs.OPTIONS, method: [OPTIONS] }
+
+protocol_hint:
+  protocol: sse
+  hint_media: [text/event-stream]
+
+# Identical to `jakarta-jaxrs.yml`'s own copy of `spring-web.yml`'s table —
+# the ladder unions every catalog's `media_formats` rather than picking one.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# Every boundary `jakarta-jaxrs.yml` states (spec §3d) applies here unchanged;
+# `docs/COVERAGE.md` states them once, for both.

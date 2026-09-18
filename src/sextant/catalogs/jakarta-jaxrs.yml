@@ -1,0 +1,160 @@
+id: jakarta-jaxrs
+displayName: JAX-RS (jakarta.ws.rs) — Quarkus REST, Jersey, RESTEasy, Helidon
+style: annotation_driven
+protocol: http
+direction: inbound
+
+# JAX-RS puts the verb, the path and the media on THREE SEPARATE annotations of
+# one method — `@GET` carries nothing at all (CP-18 rows 1a-1c: all seven verb
+# annotations declare zero attributes), `@Path`'s address lives on the sibling
+# `@Path`, and `@Produces`/`@Consumes` live on their own siblings too. Every
+# earlier `annotation_driven` catalog reads ONE matched annotation's own
+# attributes; this shape needed the sibling-read words (spec 2026-09-18 §3b),
+# which is why no catalog read `jakarta.ws.rs` before this one shipped.
+#
+# This file is Jersey's, RESTEasy's and Helidon's rule — every implementation
+# that does not relax the spec's own `@Path`-on-the-class requirement. Quarkus
+# REST reads the same annotations but adds rules of its own (implicit body
+# bindings, an SSE hint by element type, extra context types), so it is a
+# SEPARATE catalog, `quarkus-rest.yml`, rather than a variant of this one — the
+# `spring-web.yml`/`spring-mvc.yml` precedent of two catalogs owning one HTTP
+# row set, stated at spec §3a's last table row.
+detect:
+  coordinates: ["jakarta.ws.rs:jakarta.ws.rs-api"]
+
+measured:
+  - { artifact: jakarta.ws.rs:jakarta.ws.rs-api, versions: ["3.1.0", "4.0.0"],
+      identity: reported, by: scripts/probes/cp18_jaxrs_api_and_implementations.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  type_annotation: jakarta.ws.rs.Path         # JAX-RS §3.1: a root resource class is one
+                                               # annotated @Path — on itself, or on an
+                                               # interface/superclass (word 3 below)
+  # A @Path INTERFACE mints no inbound row of its own — it is either a
+  # MicroProfile REST Client (`microprofile-rest-client.yml`, outbound) or a
+  # generated contract (`OrdersApi`) a server class inherits from (word 3
+  # below serves that case through the type-level gate, which already
+  # inherits). Without this fence a module holding only the client interface —
+  # `fixtures/orders-quarkus/.../OrdersClient.java` — would publish an inbound
+  # row for an operation nothing here serves.
+  declared_on: class
+  # CP-18 row 7: the ten binding annotations (predicate 1) and the ten
+  # @Context-injectable types (predicate 1's type half) JAX-RS §9.2 names,
+  # read off the 4.0.0 jar directly. §4's new fallback word: the entity
+  # parameter is the one parameter carrying NONE of these — JAX-RS §3.3.2.1 —
+  # not "no annotation of any kind" (`sole_unannotated`'s old rule, which
+  # erased every Kotlin body under kotlinc's own `@NotNull` and every
+  # `@Valid`-annotated one; M2, fixed here by measuring against the
+  # framework's OWN list instead of against "any annotation"). No
+  # `implicit_bindings`: under Jersey `byId(String id)` beneath `@Path("/{id}")`
+  # IS an entity body, and this catalog says so by declaring neither implicit
+  # binding — only `quarkus-rest.yml` does, because they are Quarkus's own
+  # indexer rules (CP-19 row 4).
+  request_body:
+    fallback: sole_unbound
+    bound_by: [jakarta.ws.rs.PathParam, jakarta.ws.rs.QueryParam, jakarta.ws.rs.HeaderParam,
+               jakarta.ws.rs.CookieParam, jakarta.ws.rs.FormParam, jakarta.ws.rs.MatrixParam,
+               jakarta.ws.rs.BeanParam, jakarta.ws.rs.DefaultValue, jakarta.ws.rs.core.Context,
+               jakarta.ws.rs.container.Suspended]
+    excludes: [jakarta.ws.rs.sse.SseEventSink, jakarta.ws.rs.sse.Sse, jakarta.ws.rs.core.UriInfo,
+               jakarta.ws.rs.core.HttpHeaders, jakarta.ws.rs.core.Request,
+               jakarta.ws.rs.core.SecurityContext, jakarta.ws.rs.ext.Providers,
+               jakarta.ws.rs.container.ResourceContext, jakarta.ws.rs.core.Configuration,
+               jakarta.ws.rs.core.Application]
+  mapping:
+    prefix_annotation: jakarta.ws.rs.Path
+    prefix_from: [value]
+    path_separator: "/"
+    # CP-18 row 2a: `@Path.value()` is a scalar String, but the verb
+    # annotation itself declares NO attribute at all (row 1) — there is
+    # nothing here for `path_from` to alias. The address comes only from a
+    # sibling `@Path`, below.
+    path_from: []
+    path_from_siblings: [{ annotation: jakarta.ws.rs.Path, arg: value }]
+    # Spec §3b word 1: `@GET`/`@POST`/… carry no `produces`/`consumes`
+    # attribute (CP-18 row 1), so the media types live on the siblings
+    # `@Produces`/`@Consumes` of the same method instead.
+    produces_from_siblings: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+    consumes_from_siblings: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    # Spec §3b word 2: the class-level `@Produces`/`@Consumes` default,
+    # applied only where neither the method's own declaration nor its sibling
+    # said anything — method-over-class, measured in Jersey's
+    # `IntrospectionModeller.resolveProducedTypes` (CP-18 row 5) and in
+    # Quarkus's `EndpointIndexer.java:724-726` (CP-19 row 2) alike.
+    type_media_from_siblings:
+      produces: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+      consumes: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    method_from: method                       # never present; each entry below pre-sets its verb
+    # An entry naming no verb derives nothing — there is none to derive. CP-18
+    # rows 1a-3b: each of the seven verbs is itself meta-annotated
+    # `@HttpMethod("…")` and declares zero attributes of its own, the
+    # JMS/Kafka verbless-declaration shape used for the opposite reason here —
+    # every verb comes from the MATCHED entry, none from an attribute.
+    all_methods: []
+    annotations:
+      - { fqn: jakarta.ws.rs.GET,     method: [GET] }
+      - { fqn: jakarta.ws.rs.POST,    method: [POST] }
+      - { fqn: jakarta.ws.rs.PUT,     method: [PUT] }
+      - { fqn: jakarta.ws.rs.DELETE,  method: [DELETE] }
+      - { fqn: jakarta.ws.rs.PATCH,   method: [PATCH] }
+      - { fqn: jakarta.ws.rs.HEAD,    method: [HEAD] }
+      - { fqn: jakarta.ws.rs.OPTIONS, method: [OPTIONS] }
+
+# Spec §3b word 3 is engine vocabulary (`effective_annotations.py`), not a key
+# this file declares — it fires automatically for any catalog naming a
+# sibling list AND a `type_annotation`, which this file does. JAX-RS §3.6,
+# quoted at CP-18 row 8 and confirmed live by two implementations' bytecode
+# (CP-18 row 6): "if a subclass or implementation method has any JAX-RS
+# annotations then all of the annotations on the superclass or interface
+# method are ignored" — an implementor method carrying none of its own
+# inherits the interface method's WHOLE annotation set (verb, path, media);
+# one carrying its own `@Produces` but no verb is, to JAX-RS, not a resource
+# method at all, and derives nothing. `fixtures/orders-spring7/.../jaxrs/
+# OrdersApi.java` + `OrdersResource.java` is the inherited case this reproduces.
+
+# CP-18 row 4: `MediaType.SERVER_SENT_EVENTS` is the literal
+# `"text/event-stream"`. `@Produces(MediaType.SERVER_SENT_EVENTS)` is JAX-RS's
+# own way of declaring SSE (the last Java gap in COVERAGE §5.6), read by the
+# `hint_media` evidence every `protocol_hint` block already reads — no new key
+# needed on THIS file; `quarkus-rest.yml` adds a second evidence kind for its
+# own `@RestStreamElementType` marker.
+protocol_hint:
+  protocol: sse
+  hint_media: [text/event-stream]
+
+# spring-web.yml's own table, copied verbatim (2G design §7 rung 2): the ladder
+# unions every catalog's `media_formats` rather than picking one, so a module
+# pulling in only JAX-RS still gets the vocabulary. `text/event-stream` stays
+# out for the reason stated there — it names the SSE envelope, never the
+# per-event payload format.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# Stated boundaries (spec §3d), none built here:
+# - Sub-resource locators (a @Path method with no verb, returning a resource
+#   class) derive nothing — the target is a return type this style would have
+#   to recurse into.
+# - A hand-rolled custom verb via `@HttpMethod("LINK")` on a MODULE-LOCAL
+#   annotation resolves through the effective-annotations pre-pass; one on a
+#   framework jar is D02 §7's standing boundary.
+# - `{id: \d+}` regex path templates are kept verbatim in `path`; the body
+#   rule's implicit path-variable match (declared only on `quarkus-rest.yml`)
+#   reads the name before the `:`.
+# - Implicit HEAD/OPTIONS are not minted, as for Spring and Micronaut.
+# - `@ApplicationPath` (a deployment-wide prefix on the `Application`
+#   subclass) is read from neither the class nor configuration — beside
+#   Actuator's base-path boundary.
+# - Jersey's package-scanning registration mode is a nuance of HOW a root
+#   resource is discovered, not of what it derives once discovered; not a
+#   model divergence.

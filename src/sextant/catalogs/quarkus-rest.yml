@@ -1,0 +1,172 @@
+id: quarkus-rest
+displayName: Quarkus REST (JAX-RS on RESTEasy Reactive)
+style: annotation_driven
+protocol: http
+direction: inbound
+
+# `jakarta-jaxrs.yml` plus Quarkus's OWN indexer rules — a separate file
+# because Quarkus REST derives some things differently from Jersey/RESTEasy
+# classic/Helidon over the SAME `jakarta.ws.rs` annotations, and DR-6 says
+# each catalog states only what its own framework does rather than one file
+# quietly averaging two runtimes (spec §3a's last table row). Everything not
+# restated here is `jakarta-jaxrs.yml`'s own rule, read identically.
+#
+# **The class-level `@Path` gate is KEPT, not relaxed (CP-19 row 1).**
+# `ResteasyReactiveScanner.scanResources` builds root resources from `@Path`
+# on a class or on an interface it implements; a class with HTTP-verb
+# annotations and no `@Path` anywhere is only a *possible sub-resource*, never
+# a root. The "no PATH whatsoever" relaxation exists, but it is for CLIENT
+# interfaces (`clientInterfaces`, row 1c) — `microprofile-rest-client.yml`'s
+# side of the line, not this server-side catalog's.
+detect:
+  # `io.quarkus:quarkus-resteasy-reactive` was this artifact's name through
+  # 3.15.x; `io.quarkus:quarkus-rest` is the relocated name from 3.9.0
+  # onward, and every 3.15.x release up to and including the LAST one ever
+  # published under the old name (3.15.7) carries a Maven relocation POM
+  # pointing at the new one (CP-19 row 5). Both coordinates are listed so a
+  # module on either side of the 3.9.0 rename is still detected.
+  coordinates: ["io.quarkus:quarkus-rest", "io.quarkus:quarkus-resteasy-reactive"]
+
+measured:
+  - { artifact: io.quarkus:quarkus-rest, versions: ["3.17.5", "3.39.4"],
+      identity: reported, by: scripts/probes/cp19_quarkus_rest.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  type_annotation: jakarta.ws.rs.Path
+  declared_on: class
+  # CP-19 row 4: once no EXPLICIT binding annotation applies, Quarkus resolves
+  # a parameter in this order — context type -> container (bean-param) type
+  # -> path-variable NAME match -> body (`EndpointIndexer.java:1380-1413`,
+  # the message quoted verbatim there is CP-19 row 4's own citation). The
+  # context-type step is `excludes`, predicate 1's type half; the other two
+  # are the two words on `implicit_bindings` below — declared ONLY here,
+  # because they are Quarkus's own rules and under Jersey
+  # `byId(String id)` beneath `@Path("/{id}")` IS an entity body
+  # (`jakarta-jaxrs.yml` deliberately declares neither).
+  request_body:
+    fallback: sole_unbound
+    # `jakarta-jaxrs.yml`'s own list, plus Quarkus's `@Rest*`/`@MultipartForm`
+    # aliases — `JAX_RS_ANNOTATIONS_FOR_FIELDS`
+    # (`ResteasyReactiveDotNames.java:265-268`, CP-19 row 4c), which is the
+    # SAME set `ParamContainerScanner.scanParameterContainers` reads for the
+    # `container` implicit binding below, so a `@RestForm`-carrying field
+    # both binds a parameter of that type directly AND marks its enclosing
+    # class as a parameter container.
+    bound_by: [jakarta.ws.rs.PathParam, jakarta.ws.rs.QueryParam, jakarta.ws.rs.HeaderParam,
+               jakarta.ws.rs.CookieParam, jakarta.ws.rs.FormParam, jakarta.ws.rs.MatrixParam,
+               jakarta.ws.rs.BeanParam, jakarta.ws.rs.DefaultValue, jakarta.ws.rs.core.Context,
+               jakarta.ws.rs.container.Suspended,
+               org.jboss.resteasy.reactive.RestPath, org.jboss.resteasy.reactive.RestQuery,
+               org.jboss.resteasy.reactive.RestHeader, org.jboss.resteasy.reactive.RestForm,
+               org.jboss.resteasy.reactive.RestCookie, org.jboss.resteasy.reactive.RestMatrix,
+               org.jboss.resteasy.reactive.MultipartForm]
+    # `jakarta-jaxrs.yml`'s own JAX-RS @Context list, plus the three Vert.x
+    # types CP-19 row 3 measures: `EndpointIndexer`'s own `DEFAULT_CONTEXT_TYPES`
+    # is the base JAX-RS set, and `ResteasyReactiveProcessor` — the ONLY
+    # caller of `addContextTypes` in the deployment jar — always adds exactly
+    # these three as its own static `CONTEXT_TYPES` constant
+    # (`EndpointIndexer.java:153-158`; `addContextTypes`, measured by
+    # bytecode). **Boundary, stated rather than built**: Quarkus's
+    # `DEFAULT_CONTEXT_TYPES` also carries `ServerRequestContext`,
+    # `SimpleResourceInfo` and `ResourceInfo` beyond JAX-RS's own list
+    # (CP-19 row 3a, the "extras" beside the nine `@Context` types); a
+    # parameter of one of those three types is not excluded here and would
+    # be read as the body if it were ever the sole unbound parameter. Not in
+    # scope for this catalog — only the Vert.x additions spec §3a names.
+    excludes: [jakarta.ws.rs.sse.SseEventSink, jakarta.ws.rs.sse.Sse, jakarta.ws.rs.core.UriInfo,
+               jakarta.ws.rs.core.HttpHeaders, jakarta.ws.rs.core.Request,
+               jakarta.ws.rs.core.SecurityContext, jakarta.ws.rs.ext.Providers,
+               jakarta.ws.rs.container.ResourceContext, jakarta.ws.rs.core.Configuration,
+               jakarta.ws.rs.core.Application,
+               io.vertx.core.http.HttpServerRequest, io.vertx.core.http.HttpServerResponse,
+               io.vertx.ext.web.RoutingContext]
+    implicit_bindings: [path_variable, container]
+  mapping:
+    prefix_annotation: jakarta.ws.rs.Path
+    prefix_from: [value]
+    path_separator: "/"
+    path_from: []
+    path_from_siblings: [{ annotation: jakarta.ws.rs.Path, arg: value }]
+    produces_from_siblings: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+    consumes_from_siblings: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    type_media_from_siblings:
+      produces: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+      consumes: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    method_from: method
+    all_methods: []
+    annotations:
+      - { fqn: jakarta.ws.rs.GET,     method: [GET] }
+      - { fqn: jakarta.ws.rs.POST,    method: [POST] }
+      - { fqn: jakarta.ws.rs.PUT,     method: [PUT] }
+      - { fqn: jakarta.ws.rs.DELETE,  method: [DELETE] }
+      - { fqn: jakarta.ws.rs.PATCH,   method: [PATCH] }
+      - { fqn: jakarta.ws.rs.HEAD,    method: [HEAD] }
+      - { fqn: jakarta.ws.rs.OPTIONS, method: [OPTIONS] }
+
+# spec §3b word 3 (JAX-RS §3.6, engine vocabulary, fires automatically for any
+# catalog naming siblings + a `type_annotation`) applies to this file exactly
+# as it applies to `jakarta-jaxrs.yml`. **CP-19 row 6's answer on §3.6:
+# Quarkus's OWN mechanism is NOT §3.6, and this is a stated divergence, not
+# built.** `EndpointIndexer.collectEndpoints` recurses self -> superclass ->
+# every interface and, at EACH level, scans that class's OWN declared methods
+# for the sought HTTP-verb annotation; the FIRST class in that order whose OWN
+# method carries it wins, and every OTHER JAX-RS annotation on the endpoint —
+# `@Produces`, `@Consumes`, `@Path` — is then read off that SAME winning
+# method, never off an override at any other level. Concretely: an
+# implementor overriding an interface method with its OWN `@Produces` but no
+# verb annotation of its own never wins the search (the implementor's level
+# carries no `@GET`), so `collectEndpoints` recurses into the interface,
+# finds `@GET` there, and reads the interface's `@Produces` (or the class
+# default) — the implementor's override is silently ignored for every
+# attribute, not just the verb. That is neither JAX-RS §3.6's all-or-nothing
+# rule (which would drop the endpoint entirely once the implementor has ANY
+# own annotation) nor a per-annotation merge (which would combine the
+# interface's `@GET` with the implementor's own `@Produces`) — it is
+# whole-ancestor-member-wins, decided by which level's OWN declaration first
+# satisfies the verb search. Word 3's §3.6 emulation and Quarkus's real rule
+# agree on the common case this catalog's fixture exercises — an implementor
+# method overriding with NO annotations of its own inherits the interface's
+# whole set either way — and diverge only on the sharper case just described,
+# which is `docs/COVERAGE.md`'s boundary to state, not this file's engine
+# word to rebuild.
+protocol_hint:
+  protocol: sse
+  hint_media: [text/event-stream]
+  # CP-19 row 2: `@RestStreamElementType` with no `@Produces` makes the
+  # response SSE — `getStreamAnnotationValue` reads it first and falls back
+  # to the deprecated `@RestSseElementType` alias only when it is absent
+  # (`EndpointIndexer.java:713-723`). Both are PRESENCE evidence (the value
+  # is the per-event format, a named follow-up outside this group, spec §3c);
+  # the annotation targets the handler method or, per the shared
+  # `hint_annotations` contract, its enclosing type.
+  hint_annotations: [org.jboss.resteasy.reactive.RestStreamElementType,
+                     org.jboss.resteasy.reactive.RestSseElementType]
+
+# Identical to `jakarta-jaxrs.yml`'s own copy of `spring-web.yml`'s table —
+# the ladder unions every catalog's `media_formats` rather than picking one.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# Every boundary `jakarta-jaxrs.yml` states (spec §3d) applies here unchanged
+# EXCEPT the parameter-name / path-variable boundary, which is sharper on
+# THIS catalog: `implicit_bindings: [path_variable]` needs the compiled
+# parameter name, so a module built WITHOUT `-parameters`/`-g` falls through
+# to the body rule instead — Quarkus's own behaviour short of its build-time
+# failure, and rare, since Quarkus's Maven and Gradle plugins pass
+# `-parameters` by default (spec §3d).
+#
+# `@ResponseStatus`, `@ResponseHeader`, `@Blocking`/`@NonBlocking`,
+# `@Separator` and the return-type-keyed `applyDefaultProduces` default
+# (CP-19: none change wire identity or contract) are stated in
+# `docs/COVERAGE.md` rather than modelled here.

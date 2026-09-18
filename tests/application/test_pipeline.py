@@ -1052,7 +1052,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
     # `kafka-listener` catalog `onBatch` is, wrongly as a list-of-`OrderEvent` row rather
     # than one `OrderEvent` per record (`kafka-batch-generics`, not landed yet).
-    assert len(report.endpoints) == 206
+    # 207 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`, one row,
+    # `POST /kt/orders` — the same (method, path) `KotlinOrderRoutes#ktRoutes`'s own
+    # functional-routing row already carries (a coincidental address reuse between two
+    # unrelated fixtures), so the SET of routes above is unchanged and only the ROW COUNT
+    # moves.
+    assert len(report.endpoints) == 207
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1929,7 +1934,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 112 since A2 Task 8: the JDK client's four chains and the Apache client's
         # three, outbound, every one a `fluent` row — two of them on `POST /v1/orders`
         # beside the Feign client's, an outbound row being per caller and peer.
-        "http": 112,
+        # 113 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+        # `POST /kt/orders` — a genuinely new row, at the same address
+        # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
+        "http": 113,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -1974,7 +1982,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 206
+    assert sum(counts.values()) == len(report.endpoints) == 207
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2215,13 +2223,19 @@ def test_a_batch_true_listener_publishes_the_element_not_the_list(resolved_fixtu
     assert descriptor["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="quarkus-jaxrs (M2): kotlinc's @NotNull erases the body under sole_unannotated; spec §4",
-)
 def test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract(resolved_fixture):
     _, report = resolved_fixture
-    [row] = [r for r in report.endpoints if r["path"] == "/kt/orders" and r["method"] == "POST"]
+    # `/kt/orders` is ALSO `KotlinOrderRoutes#ktRoutes`'s own address (the pre-existing
+    # functional-routing DSL fixture, `test_pipeline.py:1250-1251`) — a coincidental
+    # address collision between two unrelated fixtures, not a wire-identity conflict:
+    # that row is call-site-shaped (`caller` set, `handler` NULL); this one is an
+    # annotation-driven JAX-RS handler row. Filtering on `handler` picks this one out
+    # uniquely rather than assuming `/kt/orders POST` names exactly one row.
+    [row] = [
+        r
+        for r in report.endpoints
+        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["handler"] is not None
+    ]
     assert json.loads(row["request_shape"])["shape_id"].endswith("KotlinOrderResource$KtOrder#")
 
 
@@ -3708,7 +3722,10 @@ def test_the_format_ladder_answers_every_live_row(
     # + 1 (`OI-74`, W57): the SQS builder-lambda row gained a declared payload — read from
     # `payload(arg0)` inside the lambda — so the ladder now has a type to answer off for a
     # row that carried none. Same mechanism as the nine above, one catalog over.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 76
+    # + 1 (B/C Task 10, `jakarta-jaxrs.yml`): `POST /kt/orders` — `KotlinOrderResource#create`
+    # declares no `@Produces`/`@Consumes` at all, so it is a json-bodied http row reaching the
+    # same rung 5 default every other undeclared json body does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 77
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by

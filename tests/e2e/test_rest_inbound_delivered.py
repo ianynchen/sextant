@@ -294,9 +294,6 @@ def _spring7_row(endpoints: list[dict], method: str, path: str) -> dict:
     return rows[0]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="javax-jaxrs: no catalog reads the javax.ws.rs spelling; spec §3a"
-)
 def test_the_javax_spelling_derives_the_same_operations(spring7_routes):
     expected = {
         ("http", "GET", "/legacy/orders"),
@@ -306,9 +303,6 @@ def test_the_javax_spelling_derives_the_same_operations(spring7_routes):
     assert expected <= spring7_routes, sorted(expected - spring7_routes)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="quarkus-jaxrs (M2): sole_unannotated disqualifies a @Valid body; spec §4"
-)
 def test_a_validated_entity_parameter_is_still_the_body(spring7):
     endpoints, _ = spring7
     row = _spring7_row(endpoints, "POST", "/validated/orders")
@@ -316,10 +310,6 @@ def test_a_validated_entity_parameter_is_still_the_body(spring7):
     assert json.loads(row["request_shape"])["shape_id"].endswith("ValidatedResource$Order#")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="quarkus-jaxrs (M3): an implementor inherits the mapping but not the sibling @Path/@Produces; spec §3b word 3",
-)
 def test_a_class_implementing_a_path_interface_derives_the_interfaces_operations(spring7):
     endpoints, _ = spring7
     assert {(r["method"], r["path"]) for r in endpoints if r["path"].startswith("/api/orders")} == {
@@ -335,9 +325,6 @@ def test_a_class_implementing_a_path_interface_derives_the_interfaces_operations
     assert _spring7_row(endpoints, "GET", "/api/orders/events")["protocol"] == "sse"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="jaxrs-sse (word 1): produces is read off no sibling; spec §3b"
-)
 def test_jaxrs_media_comes_from_the_sibling_and_the_class_default(spring7):
     endpoints, _ = spring7
     assert (
@@ -382,13 +369,6 @@ def spring7_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, s
         workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="JAX-RS puts verb, path and media on THREE separate annotations of one method; "
-    "reading one annotation's attribute off a sibling is a vocabulary form the engine "
-    "lacks. Measured 2026-09-11: a catalog of the existing forms collapses every GET onto "
-    "the class @Path. Engine work — on the delivery list as needing a plan, not a catalog.",
-)
 def test_a_jaxrs_resource_derives_every_operation(spring7_routes):
     """JAX-RS — Quarkus, Helidon, Jersey, RESTEasy. The verb is a MARKER annotation
     (`@GET` carries nothing), the path is a separate `@Path` on the class and/or method,
@@ -408,13 +388,6 @@ def test_a_jaxrs_resource_derives_every_operation(spring7_routes):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="JAX-RS puts verb, path and media on THREE separate annotations of one method; "
-    "reading one annotation's attribute off a sibling is a vocabulary form the engine "
-    "lacks. Measured 2026-09-11: a catalog of the existing forms collapses every GET onto "
-    "the class @Path. Engine work — on the delivery list as needing a plan, not a catalog.",
-)
 def test_a_jaxrs_sse_endpoint_is_classified_as_sse(spring7_routes):
     """`@Produces(MediaType.SERVER_SENT_EVENTS)` is how JAX-RS declares an SSE endpoint —
     the only Java gap left in the SSE cell. It must land in the `sse` bucket, not `http`,
@@ -484,7 +457,13 @@ QUARKUS = FIXTURES / "orders-quarkus"
 
 @pytest.fixture(scope="module")
 def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """Every HTTP row the Quarkus fixture derives, analysed once."""
+    """Every HTTP-surfaced row the Quarkus fixture derives, analysed once —
+    `http` and `sse`, since `protocol_hint` (D02 §2) RECLASSIFIES an HTTP row
+    to `sse` rather than minting a second one. The filter used to read
+    `protocol == "http"` alone, which pre-dated `quarkus-rest.yml`'s own SSE
+    row (B/C Task 10, spec §3c M1): a route `protocol_hint` correctly
+    reclassifies was then invisible to this very fixture's own SSE test,
+    which is a fixture bug rather than a feature gap."""
     workspace_dir = tmp_path_factory.mktemp("quarkus")
     compile_fixture(QUARKUS)
     result = CliRunner().invoke(
@@ -493,7 +472,11 @@ def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
     assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        return [dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "http"]
+        return [
+            dict(row)
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) in ("http", "sse")
+        ]
     finally:
         workspace.close()
 
@@ -554,7 +537,22 @@ def test_quarkus_route_base_media_reaches_every_route(quarkus_media):
 
 
 @pytest.mark.xfail(
-    strict=True, reason="quarkus-jaxrs (M4): implicit path/container/context bindings; spec §4"
+    strict=True,
+    reason=(
+        "quarkus-rest.yml's own implicit-binding/excludes rules are correct in isolation "
+        "(pinned at the unit level by contracts.implicit-path-variable-reads-the-composed-path "
+        "and the quarkus-rest near-miss in test_endpoints.py) but never apply to THIS fixture: "
+        "orders-quarkus's OrderResource carries jakarta.ws.rs annotations that jakarta-jaxrs.yml "
+        "ALSO matches (Quarkus REST implements the same jakarta.ws.rs spec), so both catalogs "
+        "derive the identical (protocol, direction, method, path) row for it, and "
+        "insert_endpoints.sql's earlier-catalog-wins guard is a pure FILENAME tie-break — "
+        "'jakarta-jaxrs.yml' sorts before 'quarkus-rest.yml' — with no way for the more specific "
+        "catalog to win. Unlike the spring-web.yml/spring-mvc.yml precedent spec §3a cites, the "
+        "two catalogs' body rules genuinely DIFFER here, so the wrong one winning is not "
+        "harmless: jakarta-jaxrs.yml's own request_body rule (no implicit_bindings, no Vert.x "
+        "excludes) is what actually runs against every OrderResource row. Engine gap, not a "
+        "catalog defect — B/C Task 10 diagnosis, reported DONE_WITH_CONCERNS."
+    ),
 )
 def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
     def row(method, path):
@@ -568,9 +566,6 @@ def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
     assert row("GET", "/q/orders/whoami")["request_shape"] is None  # RoutingContext
 
 
-@pytest.mark.xfail(
-    strict=True, reason="quarkus-jaxrs (M1): @RestStreamElementType implies SSE; spec §3c"
-)
 def test_quarkus_element_type_alone_makes_a_stream_sse(quarkus_endpoints):
     protocols = {r["path"]: r["protocol"] for r in quarkus_endpoints if r["direction"] == "inbound"}
     assert protocols["/q/orders/events"] == "sse"

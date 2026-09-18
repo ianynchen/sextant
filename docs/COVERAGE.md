@@ -49,7 +49,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1A 1B 4C, 9 open) | ◐ (1A 1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1A, 1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1B 4C, 9 open) | ◐ (1A 1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -82,13 +82,13 @@ register.
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (7 open, 2 not shipped, 2 limited) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1 open) | ✅ | ✅ | ◐ (1 open, 1 not shipped) | ◐ (1 limited) |
-| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ◐ (2 open, 1 not shipped) | ◐ (1 open, 1 not shipped) | — | ✅ | — | ◐ (2 open, 1 not shipped) | ◐ (1 not shipped) | ◐ (1 not shipped) | — | — | — | — |
+| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ◐ (2 open) | ◐ (1 open, 1 not shipped) | — | ✅ | — | ◐ (2 open) | ◐ (1 not shipped) | ◐ (1 not shipped) | — | — | — | — |
 | **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ◐ (1 open) | ✅ | — |
 | **Ktor** | ◐ (3 open) | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ◐ (1 open) | — | — | — | — | — | — | — | — | — | — | — |
 | **Vert.x** | ◐ (1 not shipped) | ✗ | — | — | — | — | — | — | — | — | — | ◐ (1 open, 1 not shipped) |
-| **Helidon (MP via JAX-RS; SE)** | ◐ (2 open, 1 not shipped, 1 line unsupported) | — | — | — | — | ◐ (2 open, 1 not shipped) | — | — | — | — | — | — |
-| **Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)** | ◐ (2 open, 2 not shipped) | — | ✅ | — | ✅ | ◐ (2 open, 1 not shipped) | — | — | ✅ | — | — | — |
+| **Helidon (MP via JAX-RS; SE)** | ◐ (2 open, 1 line unsupported) | — | — | — | — | ◐ (2 open) | — | — | — | — | — | — |
+| **Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)** | ◐ (2 open, 1 not shipped) | — | ✅ | — | ✅ | ◐ (2 open) | — | — | ✅ | — | — | — |
 | **Raw clients and SDKs (JDK/Apache HTTP, kafka-clients, grpc-java, AWS, GCP, graphql-java)** | — | ✅ | — | ✅ | — | — | ✅ | ✅ | — | ✅ | ✅ | — |
 | **Kafka Streams** | — | — | — | — | — | — | — | ✅ | — | — | — | — |
 | **Netflix DGS** | — | — | — | ✅ | — | — | — | — | — | — | — | — |
@@ -762,7 +762,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**71 of 86 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**74 of 89 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -773,6 +773,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `grpc-net-devh` | `net.devh:grpc-client-spring-boot-starter` | 3.1.0.RELEASE |
 | `grpc-spring` | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
 |  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
+| `jakarta-jaxrs` | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0, 4.0.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
 |  | `org.apache.cxf:cxf-rt-frontend-jaxws` | 4.0.5 |
@@ -783,6 +784,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `jakarta.websocket:jakarta.websocket-client-api` | 2.2.0 |
 | `javalin-apibuilder` | `io.javalin:javalin` | 6.4.0 |
 | `javalin` | `io.javalin:javalin` | 6.4.0 |
+| `javax-jaxrs` | `javax.ws.rs:javax.ws.rs-api` | 2.1.1 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
 | `jdk-httpclient` | `jmod:java.net.http` | 21.0.12.1 |
@@ -804,6 +806,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
+| `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
 | `spring-cloud-gateway-outbound` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |
@@ -2085,7 +2088,7 @@ arrive there.
 | Spring Data REST | ◐ partial | 7/8 | not shipped: 1 at C; 7 stated boundaries |
 | Spring Cloud Gateway | ◐ partial | 1/1 | `gateway-properties-routes` |
 | Jakarta / javax Servlet | ◐ partial | 9/10 | not shipped: 1 at C; 9 stated boundaries |
-| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 0/1 | not shipped: 1 at A; `quarkus-jaxrs` |
+| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 5/5 | `quarkus-jaxrs`; 2 stated boundaries |
 | Quarkus Reactive Routes | ✅ full | 1/1 | — |
 | Micronaut HTTP | ✅ full | 1/1 | — |
 | Ktor | ◐ partial | 1/1 | `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-default-bridge-calls` |
@@ -2107,7 +2110,13 @@ arrive there.
 | Java | Spring MVC / WebFlux (annotations) | `produces` / `consumes` declared on the CLASS-level `@RequestMapping` | `ProducesRequestCondition.combine` keeps the method's declaration when non-empty and the class's otherwise, never a union | `annotation` | ✅ shipped (2026-09-12) — **read off the prefix annotation and applied where the method declares none.** Until then the class-level value was dropped: `produces = "application/xml"` on the class derived `produces` NULL, and a Boot module with Jackson present would have called that route `json`. Pinned by `tests/e2e/test_rest_inbound_delivered.py::test_class_level_produces_reaches_every_handler_that_declares_none` |
 | Java | Spring MVC / WebFlux (annotations) | Spring 7 `version = "1.1"` / `"1.2+"` on `@RequestMapping` | API versioning | `annotation` | ✅ shipped — two versions of one route are two rows, not a conflict (`spring7-version`, closed in the register on CI run 34669970510; this cell said `A` for a week after) |
 | Java | Micronaut HTTP | Micronaut `@Controller` + `@Get`/`@Post`… (`value`/`uri` String, **`uris` String[]**) | `@Controller` carries the prefix and class-level media; the eight verb annotations carry the path (`value`/`uri`/`uris`) and, on five of them, media — `@Options` has `consumes` only, `@Head` and `@Trace` neither (W58 rows 33-44) | `annotation` | ✅ shipped (`micronaut-http.yml`, micronaut-http 4.7.6, `scripts/probes/w58_micronaut_quarkus_annotations.md`). Pinned on `fixtures/orders-micronaut` by `tests/e2e/test_rest_inbound_delivered.py`. **Boundary:** Micronaut's normalisation of `@Post(uri = "/")` under a prefix is unmeasured, so the fixture does not exercise it |
-| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | Quarkus / JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`… | `@Path` value is a scalar String | `annotation` | A |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS **`jakarta.ws.rs`** `@Path` + `@GET`/`@POST`/…, `@Produces`/`@Consumes` | the verb is a MARKER annotation carrying no attribute at all (CP-18 row 1); `@Path`'s address and the media types live on SIBLING annotations of the same method, read off first the method's own sibling and then, where neither the method nor a sibling declares one, the class-level default (spec §3b words 1-2, CP-18 rows 2 and 5) | `annotation` (sibling reads) | ✅ **shipped** (`jakarta-jaxrs.yml`, jakarta.ws.rs-api 3.1.0/4.0.0, `scripts/probes/cp18_jaxrs_api_and_implementations.md`, B/C Task 10) — the last Java gap `docs/java-kotlin-delivery-list.md` called `quarkus-jaxrs`. Pinned on `fixtures/orders-spring7` by `tests/e2e/test_rest_inbound_delivered.py::test_a_jaxrs_resource_derives_every_operation` |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — an implementor class inheriting a `@Path` INTERFACE's whole annotation set | JAX-RS §3.6: an implementor method carrying NONE of its own JAX-RS annotations inherits the interface method's verb, path and media whole; one carrying its own `@Produces` but no verb of its own is, to JAX-RS, not a resource method at all and derives nothing (spec §3b word 3, CP-18 rows 6 and 8) | `annotation` + hierarchy | ✅ shipped, on the same sibling-inheritance engine word `microprofile-graphql.yml`'s own catalogs proved generic. Pinned on `fixtures/orders-spring7`'s `OrdersApi`/`OrdersResource` by `test_a_class_implementing_a_path_interface_derives_the_interfaces_operations` — including the implementor's OWN handler symbol on the inherited row, and the inherited-and-SSE case together |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — the request body, `sole_unbound` (JAX-RS §3.3.2.1) | the entity parameter is the one carrying NONE of the specification's own binding annotations — measured against the framework's OWN list (CP-18 row 7) rather than "no annotation at all", which the old `sole_unannotated` word used and which erased the body under kotlinc's synthetic `@NotNull` and under Bean Validation's `@Valid` (M2) | `annotation` (measured fallback) | ✅ shipped. Pinned by `test_a_validated_entity_parameter_is_still_the_body` (`fixtures/orders-spring7`) and `test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract` (`fixtures/orders-service`'s `KotlinOrderResource`) |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — the `javax.ws.rs` spelling (JAX-RS 2.1.x, pre-Jakarta) | the `javax-servlet.yml`/`jakarta-servlet.yml` precedent: same rules, `javax.ws.rs` fqns, a separate file | `annotation` | ✅ shipped (`javax-jaxrs.yml`, javax.ws.rs-api 2.1.1, same probe). Pinned by `test_the_javax_spelling_derives_the_same_operations` |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | **Quarkus REST** — its own additions over the jakarta.ws.rs rule above | M1: `@RestStreamElementType` (or the deprecated `@RestSseElementType`) with no `@Produces` makes the response SSE by PRESENCE alone, the element type being the per-event format (a named follow-up, not carried); M4: two implicit body bindings Quarkus reads off no annotation at all — a parameter NAME matching a `{path}` template variable, and a parameter class declaring a `bound_by`-annotated field/method (a parameter container) — plus the three Vert.x context types (`RoutingContext`, `HttpServerRequest`/`Response`) `ResteasyReactiveProcessor` always adds to the excluded-type list beyond JAX-RS's own `@Context` set (CP-19 rows 2-4) | `annotation` (`protocol_hint.hint_annotations`, `request_body.implicit_bindings`) | ✅ shipped (`quarkus-rest.yml`, quarkus-rest 3.17.5/3.39.4, `scripts/probes/cp19_quarkus_rest.md`) — the last Java gap the SSE cell (§5.6) had. Pinned on `fixtures/orders-quarkus`'s `OrderResource` by `test_quarkus_element_type_alone_makes_a_stream_sse`. **Boundary, engine gap, not a catalog defect:** `test_quarkus_rest_binds_the_body_the_way_quarkus_does` stays `xfail` — a module whose build declares `jakarta.ws.rs:jakarta.ws.rs-api` directly (needed to compile against the API at all) ALSO satisfies `jakarta-jaxrs.yml`'s own gate, and `insert_endpoints.sql`'s earlier-catalog-wins tie-break is a pure filename comparison with no way for the more specific catalog to win when — unlike the `spring-web.yml`/`spring-mvc.yml` precedent this pair otherwise follows — the two catalogs' body rules genuinely differ. `jakarta-jaxrs.yml`'s own (Jersey) rule silently governs every `OrderResource` row's body instead of `quarkus-rest.yml`'s. `quarkus-rest.yml`'s implicit-binding and excludes rules are independently correct and pinned at the unit level (`contracts.implicit-path-variable-reads-the-composed-path`, and the `quarkus-rest` near-miss in `tests/application/test_endpoints.py`) |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — **Quarkus's own `§3.6` divergence** (measured, not modelled) | `EndpointIndexer.collectEndpoints` is neither JAX-RS §3.6's all-or-nothing rule nor a per-annotation merge: it recurses self → superclass → every interface and, at EACH level, scans that class's OWN methods for the sought HTTP-verb annotation; the FIRST level whose OWN method carries it wins, and EVERY other JAX-RS annotation on the endpoint is then read off that SAME winning method — never off an override at any other level (CP-19 row 6) | — | **Boundary — not built.** An implementor overriding an interface method with its own `@Produces` (or any other non-verb JAX-RS annotation) but no verb annotation of its own has that override silently ignored on Quarkus REST specifically; `quarkus-rest.yml` states the divergence in a comment rather than reproducing it, since the fixture's own inheritance case (a bare `@Override` with no annotations at all) agrees with word 3's §3.6 emulation either way |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — stated boundaries (spec §3d) | sub-resource locators (a `@Path` method with no verb, returning a resource class); a hand-rolled custom verb via `@HttpMethod("LINK")` on a framework-jar annotation (D02 §7's standing boundary; a module-local one resolves through the composition pre-pass); implicit `HEAD`/`OPTIONS`, as for Spring and Micronaut; `@ApplicationPath` (a deployment-wide prefix read from neither the class nor configuration); Jersey's package-scanning registration mode (a discovery nuance, not a model divergence) | — | **Boundary — derives nothing for each**, stated rather than built. Quarkus's own build-without-`-parameters` boundary (the `path_variable` implicit binding needs a compiled parameter name) is `quarkus-rest.yml`'s own, beside these |
 | Java | Quarkus Reactive Routes | Quarkus `io.quarkus.vertx.web.Route` | second Quarkus style: no type gate at all — any class with a `@Route` method is a bean; `@RouteBase(path)` is the prefix, `methods` is an `HttpMethod[]` of six (no `PATCH`), `@Route` is `@Repeatable` through `Route$Routes` | `annotation` | ✅ shipped (`quarkus-reactive-routes.yml`, 3.17.5, W58). Pinned on `fixtures/orders-quarkus`. **Two stated boundaries, both measured in `ReactiveRoutesProcessor`:** a `@Route` with no `path` serves `/` + the method name dashed (`helloWorld` → `/hello-world`), which no `path_fallback` word says, so it derives nothing rather than `/helloWorld`; and `@Route(regex = …)` is a pattern, not a path, and derives nothing |
 | Java | Spring Boot Actuator | Actuator `@Endpoint` / `@ReadOperation` / `@WriteOperation` / `@DeleteOperation` | address is the type's `id` under a constant `/actuator` prefix; verb is the operation annotation's own | `annotation` | ✅ **shipped** (2O Task 7) — every row of CP-5 confirmed live on Boot 3.5.10 and 4.1.1 (`scripts/probes/cp5_actuator_paths.md`), each column identified by the run's own Boot banner. **Read with the exposure row below: the addresses are correct, and served only where the module opted in** |
 | Java | Spring Boot Actuator | Actuator — `management.endpoints.web.base-path` moving the whole surface | CP-5 rows 7-8: `/manage/probe` is a 200 and `/actuator/probe` a 404 on both versions probed | `config_join` | **Boundary — OVER-reports the address.** `annotation_driven` never touches `resolved_config` — measured, it names the table nowhere — so a module that overrides the base path is published under `/actuator`. *The parenthesis here read "only `config_join.py:528` and `derived_resource.py:578` read it", which was false twice over: **five** modules read the table — `api.py`, the `config_join` and `derived_resource` engines, and `enrich/brief.py` and `enrich/validate.py`, every one of them by `workspace.query("resolved_config")` — and both line numbers had drifted. *(Corrected again on 2026-09-10: the first correction said SIX and named `resolve/config.py`, which WRITES the table and never reads it, and `resolve/pipeline.py`, which only carries the string as a capability name — while omitting `api.py`, which reads it twice. A replacement count reached by reading a grep for the table's name rather than for a read of it.)* The half that matters — that the ANNOTATION-driven engine does not — is what the boundary rests on, and it is checkable by name rather than by line.* Closes the day an annotation-derived row can read a configuration key |
@@ -2895,7 +2904,7 @@ Boundaries, each verified against the shipped code:
 |---|---|---|---|
 | Spring MVC | ✅ full | 1/1 | — |
 | Spring WebFlux | ✅ full | 1/1 | — |
-| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 0/1 | not shipped: 1 at A; `jaxrs-sse` |
+| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 2/2 | `jaxrs-sse` |
 | Ktor SSE | ✗ unsupported | 0/0 | no row yet |
 <!-- END GENERATED: frameworks 5.6 -->
 
@@ -2908,7 +2917,8 @@ property — see §8.
 |---|---|---|---|---|---|
 | Java | Spring MVC | Spring MVC — returns `org.springframework.web.servlet.mvc.method.annotation.SseEmitter` | **return type**; present since 4.2 and still in 7.x | return-type read | ✅ shipped — `hint_returns`, matched as the flat outer symbol |
 | Java | Spring WebFlux | WebFlux — returns `Flux<ServerSentEvent<T>>`, or `produces = MediaType.TEXT_EVENT_STREAM_VALUE` | return type **or** a `produces` string | return-type read | ✅ shipped — **both** evidence kinds; the marker is matched mid-chain |
-| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — `@Produces(MediaType.SERVER_SENT_EVENTS)` + `SseEventSink` | **an annotation argument** — the one good case | `annotation` | A |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | JAX-RS — `@Produces(MediaType.SERVER_SENT_EVENTS)` + `SseEventSink` | **an annotation argument**, read the same `hint_media` way every other catalog's SSE row is | `annotation` | ✅ **shipped** (`jakarta-jaxrs.yml`/`javax-jaxrs.yml`, B/C Task 10). Pinned by `test_a_jaxrs_sse_endpoint_is_classified_as_sse` (`fixtures/orders-spring7`) and, for the implementor-inherits-SSE case, `test_a_class_implementing_a_path_interface_derives_the_interfaces_operations`'s own `/api/orders/events` assertion |
+| Java | JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | **Quarkus REST** — `@RestStreamElementType`/`@RestSseElementType` with no `@Produces` | the element type's PRESENCE, not its value, is the SSE evidence (CP-19 row 2; `quarkus-rest.yml`'s `protocol_hint.hint_annotations`) | `annotation` (presence) | ✅ **shipped** (`quarkus-rest.yml`, B/C Task 10) — the last Java gap this cell had. Pinned by `test_quarkus_element_type_alone_makes_a_stream_sse` (`fixtures/orders-quarkus`'s `OrderResource#events`) |
 | Go | net/http (manual headers) | manual — `w.Header().Set("Content-Type", "text/event-stream")` then flush in a loop | **a bare string in the handler body.** No library, pure convention | `runtime_dynamic`-adjacent | **C** |
 | TS | Express | Express — `res.setHeader("Content-Type", "text/event-stream")` | string in the body | — | C |
 | TS | Next.js, Hono | Next.js / Hono streaming responses, `ReadableStream` | return type | — | B |
@@ -2947,10 +2957,12 @@ Boundaries, each verified against the shipped code:
 - **Body-string SSE stays unshipped**, as §10 of the design states: the Go and Express form
   writes `Content-Type: text/event-stream` as a bare string inside the handler body, which
   needs `runtime_dynamic`-adjacent reading no engine has. C-tier, deliberately.
-- **JAX-RS's `@Produces(SERVER_SENT_EVENTS)` is still A**, with that catalog. The
-  mechanism is done; a JAX-RS catalog would carry its own `protocol_hint` block, since the
-  block is scoped by the declaring catalog's protocol and a Quarkus module loads no Spring
-  catalog to inherit one from. One YAML entry, no code.
+- **JAX-RS's `@Produces(SERVER_SENT_EVENTS)` shipped (B/C Task 10)** — `jakarta-jaxrs.yml`,
+  `javax-jaxrs.yml` and `quarkus-rest.yml` each carry their own `protocol_hint` block, since
+  the block is scoped by the declaring catalog's protocol and a Quarkus module loads no
+  Spring catalog to inherit one from. `quarkus-rest.yml` adds a second, presence-only
+  evidence kind (`hint_annotations`) for `@RestStreamElementType`/`@RestSseElementType`,
+  which declares no media at all. This was the last Java gap either row above had.
 
 ### 5.7 gRPC
 
