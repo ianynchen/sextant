@@ -151,6 +151,7 @@ _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
+_CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
 _DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
 _PIPELINE = "sextant/application/resolve/pipeline.py"
@@ -819,6 +820,45 @@ GUARDS: dict[str, Guard] = {
                 "                        for sib_annotation, sib_args in siblings\n"
                 "                    ),\n",
                 replace="                    frozenset(),  # guard disabled\n",
+            ),
+        ),
+    ),
+    # --- the body rule (`shapes/contracts.py`) ------------------------------
+    "contracts.sole-unbound-measures-bound-by": Guard(
+        what="under `sole_unbound`, a parameter is bound by an annotation only when that "
+        "annotation is on the catalog's `bound_by` list — any other annotation on it is "
+        "invisible to the rule",
+        why="Spec 2026-09-18 §4 (M2, M4). JAX-RS §3.3.2.1's entity parameter is the one carrying "
+        "none of the SPECIFICATION's parameter annotations; kotlinc writes "
+        "`@org.jetbrains.annotations.NotNull` on every non-null parameter and Bean Validation "
+        "puts `@Valid` on the body. Widened back to 'any annotation binds' — the "
+        "`sole_unannotated` reading — every Kotlin JAX-RS body and every `@Valid Order order` "
+        "publishes NO request contract: a real payload the framework binds, silently missing "
+        "from the endpoint's document",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find='    if any(use["annotation"] in binders for use in parameter.get("annotations", [])):',
+                replace='    if parameter.get("annotations"):  # guard disabled',
+            ),
+        ),
+    ),
+    "contracts.implicit-path-variable-reads-the-composed-path": Guard(
+        what="the `path_variable` implicit binding reads the parameter's name against the "
+        "`{name}` variables of the row's composed path, and only where the catalog declares "
+        "the word",
+        why="Spec 2026-09-18 §4 predicate 2, `EndpointIndexer.java:1393-1399`: Quarkus REST "
+        "treats a parameter named like a path variable as an implicit `@PathParam`, so "
+        '`byId(String id)` beneath `@Path("/{id}")` has no body. With the variables read as '
+        "empty, that `id` is the sole unbound parameter and is published as the request "
+        "contract — a `String` body the framework never reads. The paired half, that Jersey "
+        "does NOT do this and `jakarta-jaxrs.yml` declares no implicit binding, is what the "
+        "pinning test's `plain` arm asserts",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find='        variables = _path_variables(paths) if "path_variable" in implicit else frozenset()',
+                replace="        variables = frozenset()  # guard disabled",
             ),
         ),
     ),

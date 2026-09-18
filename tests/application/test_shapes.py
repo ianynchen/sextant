@@ -2,6 +2,7 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from shape_helpers import (
     KOTLIN_ORDER,
     ORDER_REQUEST,
@@ -18,10 +19,11 @@ from shape_helpers import (
     unknown_box_of,
 )
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.shapes import (
     ExpandedShapes,
+    contracts,
     derive_endpoint_shapes,
     derive_shapes,
     root_type,
@@ -49,6 +51,11 @@ def _body_catalog() -> Catalog:
     )
 
 
+# What the body rule reads beside the signature, empty: a marker-only catalog
+# needs no path, no annotation fold and no member index.
+_NO_CONTEXT: dict = {"owner": "", "paths": frozenset(), "index": {}, "members": {}}
+
+
 def test_a_body_parameter_that_is_a_type_variable_roots_no_shape():
     """W5: reading the `Signature` attribute makes `@RequestBody T body` on a
     generic base controller report the symbol `T`.
@@ -71,7 +78,7 @@ def test_a_body_parameter_that_is_a_type_variable_roots_no_shape():
         ]
     }
 
-    assert _body_type(signature, catalog) is None
+    assert _body_type(signature, catalog, **_NO_CONTEXT) is None
 
 
 def test_a_body_parameter_that_names_a_real_type_still_roots_its_shape():
@@ -93,7 +100,7 @@ def test_a_body_parameter_that_names_a_real_type_still_roots_its_shape():
         ]
     }
 
-    rooted = _body_type(signature, catalog)
+    rooted = _body_type(signature, catalog, **_NO_CONTEXT)
 
     assert rooted is not None
     assert rooted["symbol"] == "java/util/List#"
@@ -1701,14 +1708,14 @@ def test_an_outbound_catalog_cannot_claim_an_inbound_row_even_processed_first(tm
     # The outbound catalog goes first — the original bug's ordering, and the
     # opposite of what `derive_endpoint_shapes` now sorts to.
     outbound_found = _contracts_of(
-        endpoints, _OUTBOUND_CATALOG, settled, _rules_of(_OUTBOUND_CATALOG), set(), []
+        workspace, endpoints, _OUTBOUND_CATALOG, settled, _rules_of(_OUTBOUND_CATALOG), set(), []
     )
     assert outbound_found == {}
     for owner, columns in outbound_found.items():
         settled.setdefault(owner, {}).update(columns)
 
     inbound_found = _contracts_of(
-        endpoints, _ENDPOINT_CATALOG, settled, _rules_of(_ENDPOINT_CATALOG), set(), []
+        workspace, endpoints, _ENDPOINT_CATALOG, settled, _rules_of(_ENDPOINT_CATALOG), set(), []
     )
     for owner, columns in inbound_found.items():
         settled.setdefault(owner, {}).update(columns)
@@ -2120,6 +2127,192 @@ def test_two_non_excluded_bare_parameters_still_yield_no_body(tmp_path):
     workspace.close()
 
     assert endpoint["request_shape"] is None
+
+
+# ---------------------------------------------------------------------------
+# `sole_unbound` (spec 2026-09-18 §4; review M2, M4). `sole_unannotated` reads
+# ANY annotation on a parameter as disqualifying, and kotlinc writes
+# `@org.jetbrains.annotations.NotNull` on every non-null parameter — so under
+# it every Kotlin JAX-RS body, and every `@Valid Order order`, publishes no
+# request contract. The framework's own rule (JAX-RS §3.3.2.1) is "the one
+# parameter carrying none of the framework's OWN binding annotations", and
+# that list is what the new word is measured against. Called directly against
+# `_body_parameter`, which the test file's own `_body_parameter` helper (a
+# parameter builder) shadows — hence the module-qualified name.
+# ---------------------------------------------------------------------------
+
+_JAXRS_BODY = {
+    "fallback": "sole_unbound",
+    "bound_by": [
+        "jakarta.ws.rs.PathParam",
+        "jakarta.ws.rs.QueryParam",
+        "jakarta.ws.rs.core.Context",
+    ],
+    "excludes": ["jakarta.ws.rs.sse.SseEventSink"],
+}
+_QUARKUS_BODY = {**_JAXRS_BODY, "implicit_bindings": ["path_variable", "container"]}
+
+
+def _catalog_with(body: dict) -> Catalog:
+    """A minimal `annotation_driven` catalog whose whole `matches` is the body
+    rule under test — the only key `_body_parameter` reads."""
+    return Catalog(**{**vars(_ENDPOINT_CATALOG), "matches": {"request_body": body}})
+
+
+def _param(name: str, symbol: str, annotations: tuple[str, ...] = ()) -> dict:
+    """One declared parameter, as `SymbolFact.signature` serialises it."""
+    return {
+        "name": name,
+        "annotations": [{"annotation": a, "args": {}} for a in annotations],
+        "type": {"symbol": symbol, "arguments": [], "wire_type": "object"},
+        "erased_symbol": symbol,
+        "type_annotations": [],
+    }
+
+
+def _handler_signature(parameters: list[dict]) -> dict:
+    return _signature(returns={"symbol": "V", "wire_type": "void"}, parameters=tuple(parameters))
+
+
+@pytest.mark.pins("contracts.sole-unbound-measures-bound-by")
+def test_a_validation_annotation_does_not_unbind_the_body():
+    """`@Valid Order order` is the body: Bean Validation's annotation is not one
+    of the framework's, so the framework never sees it and neither may we."""
+    sig = _handler_signature(
+        [_param("order", "com/acme/Order#", annotations=("jakarta/validation/Valid#",))]
+    )
+    found = contracts._body_parameter(
+        sig,
+        _catalog_with(_JAXRS_BODY),
+        owner="com/acme/R#create(sig_1).",
+        paths=frozenset({"/orders"}),
+        index={},
+        members={},
+    )
+    assert found is not None and found[0] == 0
+
+
+def test_a_kotlin_notnull_does_not_unbind_the_body():
+    """The defect that motivated the word: kotlinc's `@NotNull` on every
+    non-null parameter made every Kotlin JAX-RS body vanish under
+    `sole_unannotated`."""
+    sig = _handler_signature(
+        [_param("order", "com/acme/Order#", annotations=("org/jetbrains/annotations/NotNull#",))]
+    )
+    assert (
+        contracts._body_parameter(
+            sig,
+            _catalog_with(_JAXRS_BODY),
+            owner="com/acme/R#create(sig_1).",
+            paths=frozenset({"/orders"}),
+            index={},
+            members={},
+        )
+        is not None
+    )
+
+
+def test_a_bound_by_annotation_unbinds():
+    """Predicate 1: a parameter carrying one of the framework's own binding
+    annotations is bound, and the body is the one that carries none."""
+    sig = _handler_signature(
+        [
+            _param("id", "java/lang/String#", annotations=("jakarta/ws/rs/PathParam#",)),
+            _param("order", "com/acme/Order#"),
+        ]
+    )
+    found = contracts._body_parameter(
+        sig, _catalog_with(_JAXRS_BODY), owner="o", paths=frozenset(), index={}, members={}
+    )
+    assert found is not None and found[0] == 1
+
+
+@pytest.mark.pins("contracts.implicit-path-variable-reads-the-composed-path")
+def test_path_variable_binding_is_quarkus_only():
+    """Predicate 2 is opt-in: under Jersey `byId(String id)` beneath
+    `@Path("/{id}")` IS an entity body, and `jakarta-jaxrs.yml` declares no
+    implicit binding; Quarkus REST reads the name against the path template
+    (`EndpointIndexer.java:1393-1399`), and only a catalog saying so does."""
+    sig = _handler_signature([_param("id", "java/lang/String#")])
+    plain = contracts._body_parameter(
+        sig,
+        _catalog_with(_JAXRS_BODY),
+        owner="o",
+        paths=frozenset({"/orders/{id}"}),
+        index={},
+        members={},
+    )
+    quarkus = contracts._body_parameter(
+        sig,
+        _catalog_with(_QUARKUS_BODY),
+        owner="o",
+        paths=frozenset({"/orders/{id}"}),
+        index={},
+        members={},
+    )
+    assert plain is not None and quarkus is None
+
+
+def test_path_variable_binding_reads_the_name_before_a_regex():
+    """`{id: \\d+}` names `id` — the token before the `:` — and nothing else."""
+    sig = _handler_signature(
+        [_param("id", "java/lang/String#"), _param("order", "com/acme/Order#")]
+    )
+    found = contracts._body_parameter(
+        sig,
+        _catalog_with(_QUARKUS_BODY),
+        owner="o",
+        paths=frozenset({"/orders/{id: \\d+}"}),
+        index={},
+        members={},
+    )
+    assert found is not None and found[0] == 1
+
+
+def test_container_binding_reads_the_parameters_class_members():
+    """Predicate 3: a parameter whose class declares a field or method carrying
+    a `bound_by` annotation is a parameter container (CP-19 row 4), not the
+    body — read off `member_annotations_by_type`'s index, by the class."""
+    sig = _handler_signature([_param("form", "com/acme/Upload#")])
+    members = {"com/acme/Upload#": {"org/jboss/resteasy/reactive/RestForm#"}}
+    body = {
+        **_QUARKUS_BODY,
+        "bound_by": [*_QUARKUS_BODY["bound_by"], "org.jboss.resteasy.reactive.RestForm"],
+    }
+    assert (
+        contracts._body_parameter(
+            sig, _catalog_with(body), owner="o", paths=frozenset(), index={}, members=members
+        )
+        is None
+    )
+
+
+def test_sole_unbound_without_bound_by_is_refused():
+    """The word means 'unbound by THESE'; without the list it would be the old
+    word under a new name, and the catalog is refused rather than read."""
+    with pytest.raises(CatalogError, match="bound_by"):
+        contracts._body_parameter(
+            _handler_signature([]),
+            _catalog_with({"fallback": "sole_unbound"}),
+            owner="o",
+            paths=frozenset(),
+            index={},
+            members={},
+        )
+
+
+def test_an_unknown_implicit_binding_is_refused():
+    """`implicit_bindings` is a closed vocabulary of two words; a third is a
+    catalog error naming the set, not a binding silently ignored."""
+    with pytest.raises(CatalogError, match="implicit_bindings"):
+        contracts._body_parameter(
+            _handler_signature([]),
+            _catalog_with({**_JAXRS_BODY, "implicit_bindings": ["by_type"]}),
+            owner="o",
+            paths=frozenset(),
+            index={},
+            members={},
+        )
 
 
 def test_the_derivation_names_no_language():

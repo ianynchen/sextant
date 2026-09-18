@@ -1,9 +1,11 @@
 import json
+import re
 from typing import Any
 
-from sextant.application.ports.catalogs import Catalog
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
+from sextant.application.resolve.conditions import annotation_index, member_annotations_by_type
 from sextant.application.resolve.shapes.expansion import (
     ExpandedShapes,
     _described,
@@ -64,7 +66,7 @@ def derive_endpoint_shapes(
         # picked out of the two columns by hand: strictly more complete than
         # the 2A roots, which only a bare `object` payload ever reached.
         referenced: list[str] = []
-        found = _contracts_of(endpoints, catalog, settled, rules, enums, referenced)
+        found = _contracts_of(workspace, endpoints, catalog, settled, rules, enums, referenced)
         # Deduped in the order the endpoints reached them, which is the order
         # the shape rows are written and the report names gaps (NFR-1).
         roots = list(dict.fromkeys(referenced))
@@ -100,6 +102,7 @@ _RESPONSE = "response_shape"
 
 
 def _contracts_of(
+    workspace: Workspace,
     endpoints: list[dict[str, object]],
     catalog: Catalog,
     settled: dict[str, dict[str, str]],
@@ -123,6 +126,13 @@ def _contracts_of(
     on a genuinely outbound row, the one case `handler` is SQL NULL. The SQL
     join coalesces the same two columns in the same order to match.
     """
+    # What the body rule reads beside the signature, built once per call and
+    # never per row (GUIDELINES §8.7): the two annotation folds are once per
+    # LOAD (`Workspace.once`), and an owner's composed paths are one pass over
+    # the rows this catalog owns.
+    index = annotation_index(workspace)
+    members = member_annotations_by_type(workspace)
+    paths = _paths_by_owner(endpoints, catalog)
     found: dict[str, dict[str, str]] = {}
     for endpoint in endpoints:
         # `catalog_id` ownership (2E-prep design §1a): a catalog's
@@ -163,8 +173,16 @@ def _contracts_of(
         if not owner or owner in found:
             continue
         already = settled.get(owner, {})
+        body = _body_type(
+            signature,
+            catalog,
+            owner=owner,
+            paths=paths.get(owner, frozenset()),
+            index=index,
+            members=members,
+        )
         columns = {
-            _REQUEST: _payload_descriptor(_body_type(signature, catalog), rules, enums, referenced),
+            _REQUEST: _payload_descriptor(body, rules, enums, referenced),
             _RESPONSE: _payload_descriptor(signature.get("returns"), rules, enums, referenced),
         }
         kept = {
@@ -209,7 +227,25 @@ def _owns(catalog: Catalog, endpoint: dict[str, object]) -> bool:
     return endpoint.get("catalog_id") == catalog.id
 
 
-def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | None:
+def _paths_by_owner(
+    endpoints: list[dict[str, object]], catalog: Catalog
+) -> dict[str, frozenset[str]]:
+    """owner → every composed path the rows this catalog owns give it — what
+    the `path_variable` implicit binding reads a parameter's name against
+    (spec 2026-09-18 §4 predicate 2). One handler mapped to several paths is
+    several rows sharing one signature, so the names are read over all of
+    them; a row with no path contributes none."""
+    found: dict[str, set[str]] = {}
+    for endpoint in endpoints:
+        if _owns(catalog, endpoint) and endpoint.get("path") is not None:
+            owner = str(endpoint["handler"] or endpoint["caller"] or "")
+            found.setdefault(owner, set()).add(str(endpoint["path"]))
+    return {owner: frozenset(paths) for owner, paths in found.items()}
+
+
+def _body_type(
+    signature: dict[str, Any], catalog: Catalog, **context: Any
+) -> dict[str, Any] | None:
     """The type of the parameter the catalog's body rule marks (D02 §2 as
     amended).
 
@@ -232,7 +268,7 @@ def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | 
     (NFR-2). Before W5 a parameter's `type` WAS the erasure, so this rooted at the
     bound — a root that expands to nothing wherever the bound is the universal one.
     """
-    found = _body_parameter(signature, catalog)
+    found = _body_parameter(signature, catalog, **context)
     if found is None:
         return None
     reference = dict(found[1]["type"])
@@ -240,13 +276,29 @@ def _body_type(signature: dict[str, Any], catalog: Catalog) -> dict[str, Any] | 
 
 
 def _body_parameter(
-    signature: dict[str, Any], catalog: Catalog
+    signature: dict[str, Any],
+    catalog: Catalog,
+    *,
+    owner: str,
+    paths: frozenset[str],
+    index: dict[str, list[tuple[str, dict[str, Any]]]],
+    members: dict[str, set[str]],
 ) -> tuple[int, dict[str, Any]] | None:
     """The payload parameter the catalog's body rule marks, as its DECLARED
-    index and the parameter itself (D02 §2 as amended). The marker wins; the
-    sole-unannotated fallback exists because one contract (Feign's) marks the
-    body by being the only bare parameter. A catalog declaring neither
-    contributes no request shapes.
+    index and the parameter itself (D02 §2 as amended). The marker wins, where
+    the catalog declares one; two fallback words follow. `sole_unannotated`
+    exists because one contract (Feign's) marks the body by being the only
+    bare parameter. `sole_unbound` (spec 2026-09-18 §4) is the framework's own
+    rule where it has no marker at all: JAX-RS §3.3.2.1's entity parameter is
+    the one carrying none of the SPECIFICATION's parameter annotations, and an
+    annotation the framework does not know — `@Valid`, kotlinc's `@NotNull` —
+    is invisible to it, so it is invisible here. A catalog declaring none of
+    the three contributes no request shapes.
+
+    `owner`, `paths`, `index` and `members` are what the rule reads beside the
+    signature — the row's composed paths for the `path_variable` implicit
+    binding, the per-type member annotations for `container` — handed in
+    rather than looked up so the caller builds them once (GUIDELINES §8.7).
 
     The index is carried, not only the type, because 2G's parse binding
     (`shapes/parse_binding.py`) joins a call argument that NAMES a parameter
@@ -257,25 +309,94 @@ def _body_parameter(
     declared = catalog.matches.get("request_body")
     if declared is None:
         return None
-    body_annotation = _catalog_symbol(declared["annotation"])
+    marker = declared.get("annotation")
     parameters = signature.get("parameters", [])
-    for index, parameter in enumerate(parameters):
-        if any(use["annotation"] == body_annotation for use in parameter.get("annotations", [])):
-            return index, parameter
-    if declared.get("fallback") == "sole_unannotated":
-        excluded = {_catalog_symbol(t) for t in declared.get("excludes", [])}
+    if marker is not None:
+        body_annotation = _catalog_symbol(marker)
+        for i, parameter in enumerate(parameters):
+            if any(
+                use["annotation"] == body_annotation for use in parameter.get("annotations", [])
+            ):
+                return i, parameter
+    fallback = declared.get("fallback")
+    # Compared against CATALOG-declared type names, so the descriptor's answer:
+    # a type variable's name matches nothing a catalog can write, and an
+    # excluded parameter would slip back in and be picked as the body.
+    excluded = {_catalog_symbol(t) for t in declared.get("excludes", [])}
+    if fallback == "sole_unannotated":
+        if "bound_by" in declared or "implicit_bindings" in declared:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `request_body.bound_by`/"
+                "`implicit_bindings` belong to `fallback: sole_unbound`, not `sole_unannotated`"
+            )
         bare = [
-            (index, parameter)
-            for index, parameter in enumerate(parameters)
-            # Compared against CATALOG-declared type names, so the descriptor's answer:
-            # a type variable's name matches nothing a catalog can write, and an
-            # excluded parameter would slip back in and be picked as the body.
-            if not parameter.get("annotations")
-            and (parameter.get("erased_symbol") or parameter["type"].get("symbol")) not in excluded
+            (i, p)
+            for i, p in enumerate(parameters)
+            if not p.get("annotations")
+            and (p.get("erased_symbol") or p["type"].get("symbol")) not in excluded
         ]
-        if len(bare) == 1:
-            return bare[0]
+        return bare[0] if len(bare) == 1 else None
+    if fallback == "sole_unbound":
+        bound_by = declared.get("bound_by")
+        if not isinstance(bound_by, list) or not bound_by:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `fallback: sole_unbound` requires a "
+                "non-empty `request_body.bound_by` list — the word means 'unbound by THESE'"
+            )
+        implicit = declared.get("implicit_bindings") or []
+        if not isinstance(implicit, list) or not set(implicit) <= _IMPLICIT_BINDINGS:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `request_body.implicit_bindings` must be "
+                f"a subset of {sorted(_IMPLICIT_BINDINGS)}, got {implicit!r}"
+            )
+        binders = {_catalog_symbol(a) for a in bound_by}
+        variables = _path_variables(paths) if "path_variable" in implicit else frozenset()
+        unbound = [
+            (i, p)
+            for i, p in enumerate(parameters)
+            if not _is_bound(p, binders, excluded, variables, "container" in implicit, members)
+        ]
+        return unbound[0] if len(unbound) == 1 else None
     return None
+
+
+# The closed vocabulary of `request_body.implicit_bindings` (spec 2026-09-18 §4):
+# the two bindings Quarkus REST reads off no annotation at all (its
+# `EndpointIndexer`, CP-19 row 4). Declared by `quarkus-rest.yml` alone;
+# `jakarta-jaxrs.yml` declares none, because under Jersey `byId(String id)`
+# beneath `@Path("/{id}")` IS an entity body.
+_IMPLICIT_BINDINGS = frozenset({"path_variable", "container"})
+# A path template's variable: `{name}` or `{name: regex}` — the name is the
+# token before the `:`, and the regex may hold anything but a closing brace.
+_PATH_VARIABLE = re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^}]*)?\}")
+
+
+def _path_variables(paths: frozenset[str]) -> frozenset[str]:
+    return frozenset(name for path in paths for name in _PATH_VARIABLE.findall(path))
+
+
+def _is_bound(
+    parameter: dict[str, Any],
+    binders: set[str],
+    excluded: set[str],
+    variables: frozenset[str],
+    container: bool,
+    members: dict[str, set[str]],
+) -> bool:
+    """Whether the framework claims this parameter for something other than
+    the body — spec §4's three predicates: an excluded (context) type or an
+    explicit binding annotation, a name matching a path variable, a
+    parameter-container class. Any one of them binds, so the order they are
+    asked in changes nothing; the two implicit ones are asked only where the
+    catalog declared the word (`variables` is empty, `container` is False)."""
+    symbol = parameter.get("erased_symbol") or parameter["type"].get("symbol")
+    if symbol in excluded:
+        return True
+    if any(use["annotation"] in binders for use in parameter.get("annotations", [])):
+        return True
+    if parameter.get("name") in variables:
+        return True
+    return container and bool(members.get(symbol, set()) & binders)
 
 
 def _payload_descriptor(

@@ -526,10 +526,37 @@ matches:
   controller join — `type_annotation: …RestController` in the opening example — simply
   disappears for that catalog.
 - **`request_body` is catalog data**, not an engine assumption: which annotation marks the
-  payload parameter, and whether the sole unannotated parameter is the fallback when none is
-  marked. Spring inbound and `@HttpExchange` require `@RequestBody` with no fallback;
-  Retrofit requires `@Body` with no fallback; Feign's Spring-flavoured contract accepts
-  `@RequestBody` but falls back to the sole unannotated parameter when it is absent.
+  payload parameter, and which fallback finds it when none is marked. Spring inbound and
+  `@HttpExchange` require `@RequestBody` with no fallback; Retrofit requires `@Body` with no
+  fallback; Feign's Spring-flavoured contract accepts `@RequestBody` but falls back to the
+  sole unannotated parameter when it is absent. **`annotation` is optional** (spec
+  2026-09-18 §4): JAX-RS has no body marker at all, and a catalog for it declares the
+  fallback alone. Two fallback words exist:
+  - **`sole_unannotated`** — the body is the one parameter carrying NO annotation of any
+    kind. This is an approximation of every framework that uses it, and it has a recorded
+    defect: kotlinc writes `@org.jetbrains.annotations.NotNull` on every non-null parameter
+    and Bean Validation puts `@Valid` on a body, and either one removes the body under this
+    word. It stays because every shipped catalog declaring it derives byte-identically with
+    it, and none is rewritten in this group; the Feign and Micronaut catalogs carry that
+    latent Kotlin defect, `sole_unbound` with each framework's own `bound_by` is its fix, and
+    the group's closing task logs it in the register (spec 2026-09-18 §6).
+  - **`sole_unbound`** — the body is the one parameter the framework's OWN binding
+    annotations do not claim, which is the framework's rule (JAX-RS §3.3.2.1: the entity
+    parameter carries none of the specification's parameter annotations). A parameter is
+    *bound*, and so not the body, when any of three predicates holds: (1) it carries an
+    annotation on **`bound_by`** — the framework's binding annotations, a non-empty list
+    REQUIRED with this word, refused beside `sole_unannotated` — or its declared type is on
+    `excludes`; (2) `path_variable` is declared and the parameter's name equals a `{name}`
+    (or `{name: regex}`, the token before the `:`) in the row's composed path; (3)
+    `container` is declared and the parameter's class declares a field or method carrying a
+    `bound_by` annotation. **`implicit_bindings: [path_variable, container]`** is a closed
+    vocabulary of those two words, refused otherwise; absent means neither. Only
+    `quarkus-rest.yml` declares them, because they are Quarkus REST's own indexer rules
+    (`EndpointIndexer.java:1380-1413`); `jakarta-jaxrs.yml` deliberately declares none, since
+    under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity body. Any other
+    annotation on a parameter — `@Valid`, `@NotNull`, Jackson's, Lombok's — is invisible to
+    this word, because it is invisible to the framework. Zero or several unbound parameters
+    mean no contract, as with `sole_unannotated`.
 - **`prefix_from` and `peer_from` replace the single `path_from` alias list at the type
   level**, because the type-level and method-level annotations play different roles.
   `path_from` still serves method mappings, where it is correct: `@RequestMapping`'s
@@ -654,7 +681,9 @@ ignored by the `sole_unannotated` fallback count. A listener taking `(OrderEvent
 Acknowledgment ack)` has two unannotated parameters, and without `excludes` the fallback
 would honestly find none; naming `Acknowledgment` there lets the fallback see the one real
 payload. This lives under `request_body` rather than as a separate top-level
-`payload_excludes`, because it is the same fallback rule this key already governs.
+`payload_excludes`, because it is the same fallback rule this key already governs. The
+`sole_unbound` word reads the same list the same way — an excluded type is bound (predicate
+1 under `annotation_driven` above) — and adds `bound_by` and `implicit_bindings` beside it.
 
 **`mapping` gains `consumes_from`/`produces_from`, two more alias lists reading declared
 media types (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4's
