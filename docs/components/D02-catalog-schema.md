@@ -2883,6 +2883,8 @@ protocol_hint:
   protocol: sse                # the TARGET
   hint_media: [text/event-stream]
   hint_returns: ["…annotation.SseEmitter"]
+  hint_annotations: ["…annotation.RestStreamElementType"]
+  hint_when: {annotation_arg: {annotation: "…annotation.JMSListener", name: value, equals: sqsJmsConnectionFactory}}
 ```
 
 **Three promises, and they are the whole contract.** (1) It changes `protocol`, never
@@ -2929,11 +2931,46 @@ still get that one's. `hint_media` is an HTTP media declaration and is therefore
 duplicated across the family exactly as `media_formats` is; `hint_returns` names LIBRARY
 types and each is declared once, by the catalog whose artifact declares it.
 
+**Two more evidence kinds read off the row's OWNER rather than the row itself** — the
+`handler` for an inbound row, the `caller` for an outbound one — and, only where the owner
+carries none of the annotation named, its ENCLOSING TYPE (the same nearer-declaration-wins
+precedence §2's `annotation_arg` condition already keeps). This is the one widening of what
+the pass reads: everything above is a column on the row itself, and these two are the first
+and only annotation facts it consults.
+
+- **`hint_annotations` is presence, not comparison** — a list of fqns, and the row
+  reclassifies wherever one of them targets the owner or its enclosing type. Quarkus's
+  `@RestStreamElementType` is the shipped case: a class-level use implies SSE for every
+  method the class exposes, which only the enclosing-type fallback reaches, since the
+  annotation names no member of its own (CP-19 row 2).
+- **`hint_when` is §2's `annotation_arg` condition** (one per catalog block, parsed once at
+  load, never a raw mapping read again downstream) — the row reclassifies where the
+  condition HOLDS for the owner, read the same way §2 and §5a already read it: the owner
+  first, its enclosing type only on a total miss. Micronaut's `@JMSListener` is the shipped
+  case: `@JMSListener("sqsJmsConnectionFactory")` on a class turns a `jms` row into `sqs`,
+  while `@JMSListener("activeMqConnectionFactory")` on another class leaves its `jms` rows
+  alone — the SAME annotation, discriminated by the one attribute that names the broker
+  (CP-21 rows 1a, 3a–3b).
+
+Two catalogs of a family may each declare their own `hint_when` — Micronaut's SQS listener
+and producer catalogs each name a different annotation — and the row reclassifies where
+EITHER holds, exactly as the union rule above already reads for the other three kinds:
+`hint_annotations` unions its fqn lists the same way `hint_returns` does, and each
+catalog's parsed `hint_when` condition is collected rather than merged into the others',
+so nothing has to agree on one shared condition across a family.
+
+**A stated boundary, not a built one.** The inheritance walk (§3b) synthesizes only PREFIX
+fqns at the type level, so a class-level hint annotation declared on an INTERFACE the
+handler's class implements is never carried onto the implementor's class.
+`hint_annotations` therefore sees a class-level annotation on the handler's own class,
+never one declared on an interface it implements.
+
 **A malformed block is refused at run start**, four ways, each a case where reading on
 would make a broken catalog look like an absent one: an unknown key; a target outside
 [D00](D00-fact-schema.md)'s protocol set or equal to the catalog's own; an evidence list
-that is not a list of strings; and a block naming no evidence at all, which is exactly what
-declaring no block already means.
+that is not a list of strings, or a `hint_when` §2's own grammar refuses by name; and a
+block naming NONE of the four evidence kinds at all, which is exactly what declaring no
+block already means.
 
 **One thing outside `endpoints` moves with a row: its `open_questions`.** The ledger
 snapshots a wire identity rather than joining to it ([D01](D01-graph-schema.md) §3), and

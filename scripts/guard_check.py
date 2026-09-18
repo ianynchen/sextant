@@ -152,6 +152,7 @@ _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
 _CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
+_PROTOCOL_HINT = "sextant/application/resolve/protocol_hint.py"
 _DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
 _PIPELINE = "sextant/application/resolve/pipeline.py"
@@ -886,6 +887,25 @@ GUARDS: dict[str, Guard] = {
                 "        *rules.wrappers,\n"
                 "        *(wrapper for condition, wrapper in rules.conditional_wrappers),\n"
                 "    ]  # guard disabled",
+            ),
+        ),
+    ),
+    "protocol_hint.hint-when-reads-the-owner": Guard(
+        what="`hint_when` actually reads the catalog's `annotation_arg` condition against the "
+        "row's owner (and its enclosing type) rather than treating any declared condition as "
+        "satisfied",
+        why="Spec 2026-09-18 §5b, CP-21 rows 1a/3a-3b. Micronaut's `@JMSListener` carries one "
+        "`value()` naming a connection-factory bean, and `sqsJmsConnectionFactory` vs. "
+        "`activeMqConnectionFactory` is the ONLY thing distinguishing an SQS listener from an "
+        "ActiveMQ-classic one — both are plain `jms` rows to every other engine. Treating a "
+        "declared `hint_when` as always-true reclassifies the ActiveMQ row to `sqs` right "
+        "alongside the real SQS one, publishing a queue address for a broker the class was "
+        "never wired to",
+        edits=(
+            Edit(
+                path=_PROTOCOL_HINT,
+                find="    return owner is not None and any(holds(c, owner, index) for c in hint.conditions)",
+                replace="    return owner is not None and bool(hint.conditions)  # guard disabled",
             ),
         ),
     ),

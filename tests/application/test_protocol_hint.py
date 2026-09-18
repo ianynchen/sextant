@@ -25,7 +25,7 @@ import pytest
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import record_open_questions
-from sextant.application.resolve.protocol_hint import apply_protocol_hints
+from sextant.application.resolve.protocol_hint import _checked, apply_protocol_hints
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
@@ -613,3 +613,205 @@ def test_a_catalog_declaring_no_block_reclassifies_nothing(tmp_path: Path):
     workspace.close()
 
     assert answers == {"/stream": SOURCE}
+
+
+# --- the two evidence kinds read off the OWNER (Task 9, spec §3c, §5b) -----
+#
+# `hint_media`/`hint_returns` above read the ROW's own columns. These two read
+# the row's OWNER — `handler` or `caller` — and, only where the owner itself
+# carries nothing, its enclosing type. The annotations below are invented
+# packages and names, same discipline as the rest of this file, EXCEPT the
+# `@Target(TYPE)`-only shape `hint_when`'s test relies on, which is copied
+# from reality rather than invented: CP-21 rows 1a/1b measured Micronaut's own
+# `@JMSListener`/`@JMSProducer` as class-level-only, so a fixture that put
+# either on the method instead would test a shape the framework cannot
+# produce.
+
+_JMS = "jms"
+_SQS = "sqs"
+_SSE = "sse"
+
+_SQS_CONSUMER_TYPE = "com/acme/mn/SqsConsumer#"
+_SQS_CONSUMER_HANDLER = _SQS_CONSUMER_TYPE + "onQueued(sig_1)."
+_SQS_SENDER_TYPE = "com/acme/mn/SqsSender#"
+_SQS_SENDER_CALLER = _SQS_SENDER_TYPE + "send(sig_1)."
+_ACTIVEMQ_TYPE = "com/acme/mn/ActiveMqConsumer#"
+_ACTIVEMQ_HANDLER = _ACTIVEMQ_TYPE + "onMessage(sig_1)."
+
+_JMS_LISTENER = "io/micronaut/jms/annotations/JMSListener#"
+_JMS_PRODUCER = "io/micronaut/jms/annotations/JMSProducer#"
+
+_STREAM_ELEMENT_TYPE = "org/jboss/resteasy/reactive/RestStreamElementType#"
+_EVENTS_HANDLER = "com/acme/qk/EventsResource#events()."
+_TICKS_TYPE = "com/acme/qk/TicksResource#"
+_TICKS_HANDLER = _TICKS_TYPE + "ticks()."
+_PLAIN_HANDLER = "com/acme/qk/PlainResource#plain()."
+
+
+def _hint_catalog(catalog_id: str, protocol: str, hint: dict) -> Catalog:
+    """`_catalog` reordered to catalog id, source protocol, block — the shape
+    Task 9's two owner-reading tests read best in."""
+    return _catalog(protocol=protocol, hint=hint, catalog_id=catalog_id)
+
+
+def _owner_workspace(tmp_path: Path, *facts: AnnotationFact) -> DuckDbWorkspace:
+    """A workspace carrying annotation FACTS beside the endpoint rows `_seed`
+    writes. `hint_annotations`/`hint_when` read the `annotations` table, which
+    only `load_facts` populates — `_seed`'s `call_endpoints` derive never
+    touches it."""
+    write_fact_file(
+        tmp_path / "facts" / "Owners.jsonl",
+        Document(
+            document_id="doc_1",
+            relative_path="com/acme/Owners.java",
+            module_id="com.acme:orders-service",
+            language="java",
+            sextant_version="0.1.0",
+            fact_schema_version=2,
+            scanner_id="asm",
+            content_hash="sha256:a",
+            origin_entry="target/classes",
+            origin_tier=OriginTier.MODULE_OUTPUT,
+            redaction_set_hash="sha256:b",
+        ),
+        list(facts),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    return workspace
+
+
+@pytest.mark.pins("protocol_hint.hint-when-reads-the-owner")
+def test_hint_when_reclassifies_the_owners_type_binding_on_both_directions(tmp_path):
+    # two jms rows: inbound handler `…/SqsConsumer#onQueued(sig_1).`, outbound caller `…/SqsSender#send(sig_1).`;
+    # annotation facts: @JMSListener(value=sqsJmsConnectionFactory) on SqsConsumer#, @JMSProducer(value=…) on SqsSender#,
+    # and a third jms row whose type carries value=activeMqConnectionFactory.
+    workspace = _owner_workspace(
+        tmp_path,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_SQS_CONSUMER_TYPE,
+            retention="runtime",
+            use=AnnotationUse(annotation=_JMS_LISTENER, args={"value": "sqsJmsConnectionFactory"}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_SQS_SENDER_TYPE,
+            retention="runtime",
+            use=AnnotationUse(annotation=_JMS_PRODUCER, args={"value": "sqsJmsConnectionFactory"}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_ACTIVEMQ_TYPE,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation=_JMS_LISTENER, args={"value": "activeMqConnectionFactory"}
+            ),
+        ),
+    )
+    _seed(
+        workspace,
+        {"path": "mn.orders.sqs", "protocol": _JMS, "handler": _SQS_CONSUMER_HANDLER},
+        {
+            "path": "mn.orders.sqs-out",
+            "protocol": _JMS,
+            "direction": "outbound",
+            "caller": _SQS_SENDER_CALLER,
+        },
+        {"path": "mn.orders.classic", "protocol": _JMS, "handler": _ACTIVEMQ_HANDLER},
+    )
+    catalogs = [
+        _hint_catalog(
+            "micronaut-jms",
+            "jms",
+            {
+                "protocol": "sqs",
+                "hint_when": {
+                    "annotation_arg": {
+                        "annotation": "io.micronaut.jms.annotations.JMSListener",
+                        "name": "value",
+                        "equals": "sqsJmsConnectionFactory",
+                    }
+                },
+            },
+        ),
+        _hint_catalog(
+            "micronaut-jms-producer",
+            "jms",
+            {
+                "protocol": "sqs",
+                "hint_when": {
+                    "annotation_arg": {
+                        "annotation": "io.micronaut.jms.annotations.JMSProducer",
+                        "name": "value",
+                        "equals": "sqsJmsConnectionFactory",
+                    }
+                },
+            },
+        ),
+    ]
+    apply_protocol_hints(workspace, catalogs)
+    result = {(r["path"], r["protocol"]) for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert result == {
+        ("mn.orders.sqs", "sqs"),
+        ("mn.orders.sqs-out", "sqs"),
+        ("mn.orders.classic", "jms"),
+    }
+
+
+def test_hint_annotations_fires_on_the_handler_or_its_type(tmp_path):
+    # http rows for /events (handler carries @RestStreamElementType), /ticks (its TYPE carries it), /plain (neither)
+    workspace = _owner_workspace(
+        tmp_path,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EVENTS_HANDLER,
+            retention="runtime",
+            use=AnnotationUse(annotation=_STREAM_ELEMENT_TYPE, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_TICKS_TYPE,
+            retention="runtime",
+            use=AnnotationUse(annotation=_STREAM_ELEMENT_TYPE, args={}),
+        ),
+    )
+    _seed(
+        workspace,
+        {"path": "/events", "handler": _EVENTS_HANDLER},
+        {"path": "/ticks", "handler": _TICKS_HANDLER},
+        {"path": "/plain", "handler": _PLAIN_HANDLER},
+    )
+    catalogs = [
+        _hint_catalog(
+            "quarkus-rest",
+            "http",
+            {
+                "protocol": "sse",
+                "hint_annotations": ["org.jboss.resteasy.reactive.RestStreamElementType"],
+            },
+        )
+    ]
+    apply_protocol_hints(workspace, catalogs)
+    result = {(r["path"], r["protocol"]) for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert result == {("/events", "sse"), ("/ticks", "sse"), ("/plain", "http")}
+
+
+def test_a_block_with_only_the_new_kinds_is_a_valid_block():
+    """The refusal that a block names no evidence widens to all FOUR kinds:
+    a block naming only `hint_annotations` or only `hint_when` is not an
+    empty block."""
+    _checked({"protocol": _SSE, "hint_annotations": ["a.B"]}, _catalog())
+    _checked(
+        {
+            "protocol": _SQS,
+            "hint_when": {"annotation_arg": {"annotation": "a.B", "name": "value", "equals": "x"}},
+        },
+        _catalog(),
+    )
+    with pytest.raises(CatalogError):
+        _checked({"protocol": _SSE, "hint_annotations": "a.B"}, _catalog())  # not a list
