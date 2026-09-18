@@ -815,3 +815,16 @@ def test_a_block_with_only_the_new_kinds_is_a_valid_block():
     )
     with pytest.raises(CatalogError):
         _checked({"protocol": _SSE, "hint_annotations": "a.B"}, _catalog())  # not a list
+
+
+def test_a_malformed_hint_when_is_refused_naming_the_block():
+    """`hint_when` is handed to `conditions.parse_condition` with a `where`
+    that names the block AND the key, so a malformed condition is refused at
+    the same site a malformed `annotation_arg` inside `wrappers[].when` is
+    (Task 8) — never a bare grammar error with no catalog to blame."""
+    catalog = _catalog()
+    with pytest.raises(CatalogError) as excinfo:
+        _checked({"protocol": _SSE, "hint_when": "not-a-mapping"}, catalog)
+
+    assert "protocol_hint.hint_when" in str(excinfo.value)
+    assert str(catalog.source) in str(excinfo.value)

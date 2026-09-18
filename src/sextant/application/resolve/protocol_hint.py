@@ -152,8 +152,10 @@ def apply_protocol_hints(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Reclassifies every row whose evidence names another protocol.
 
     Runs after the engines' merge and before the format ladder
-    (`resolve/pipeline.py`). Reads only catalog vocabulary and the row's own
-    columns; writes exactly one column, on rows that already existed.
+    (`resolve/pipeline.py`). Reads catalog vocabulary, the row's own columns
+    and — for `hint_annotations`/`hint_when` — the owner's and its type's
+    annotation facts; writes exactly one column, on rows that already
+    existed.
     """
     hints = _vocabulary(catalogs)
     if not hints:
