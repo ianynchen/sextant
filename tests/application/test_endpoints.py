@@ -6437,7 +6437,11 @@ def _catalog(catalog_id: str, matches: dict[str, object]) -> Catalog:
 # CP-18 row 1: `@GET` carries no attribute at all, so the JAX-RS media types
 # live on the siblings `@Produces`/`@Consumes` instead — the shape
 # `produces_from_siblings`/`consumes_from_siblings` (spec §3b word 1) reads,
-# mirrored on `path_from_siblings` (`OI-35`) above it.
+# mirrored on `path_from_siblings` (`OI-35`) above it. CP-18 row 5 / CP-19 row
+# 2: the same two annotations, read off the resource CLASS instead, are the
+# class-level DEFAULT `type_media_from_siblings` (spec §3b word 2) reads —
+# consulted only where neither the method's own declaration nor a method-level
+# sibling (the two keys above) said anything.
 _SIBLING_MEDIA_MATCHES = {
     "type_annotation": "com.acme.rs.Path",
     "request_body": {"annotation": "com.acme.rs.Body", "fallback": "none"},
@@ -6449,6 +6453,10 @@ _SIBLING_MEDIA_MATCHES = {
         "path_from_siblings": [{"annotation": "com.acme.rs.Path", "arg": "value"}],
         "produces_from_siblings": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
         "consumes_from_siblings": [{"annotation": "com.acme.rs.Consumes", "arg": "value"}],
+        "type_media_from_siblings": {
+            "produces": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+            "consumes": [{"annotation": "com.acme.rs.Consumes", "arg": "value"}],
+        },
         "method_from": "method",
         "all_methods": [],
         "annotations": [{"fqn": "com.acme.rs.GET", "method": ["GET"]}],
@@ -6547,6 +6555,53 @@ def test_the_matched_annotations_own_produces_still_wins_over_its_sibling(tmp_pa
         },
     )
     assert rows == [("GET", "/orders/{id}", '["text/csv"]', '["application/xml"]')]
+
+
+def test_type_level_produces_applies_when_the_method_declares_none(tmp_path: Path):
+    """Spec §3b word 2: `@Produces` on the resource CLASS is the class-level media
+    default — applied here because the method's `@GET` carries no `produces` of its
+    own, and its only sibling is `@Path` (CP-18 row 5 / CP-19 row 2)."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={"com/acme/rs/Path#": {"value": "/{id}"}},
+    )
+    assert rows == [("GET", "/orders/{id}", '["application/json"]', None)]
+
+
+def test_the_methods_own_produces_sibling_still_wins_over_the_type_level_default(
+    tmp_path: Path,
+):
+    """The near-miss for the positive above: the method here carries its OWN
+    `@Produces` sibling (the word Task 3 reads), so the class-level default is
+    never consulted — coalesce, never a union (Jersey `resolveProducedTypes`,
+    Quarkus `EndpointIndexer` line 725). `consumes` is untouched by either
+    method's `@Produces` and still falls through to nothing (neither the method
+    nor the class declares a `@Consumes`), which is what proves the near-miss
+    is about ORDER on `produces` specifically."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": "text/plain"},
+        },
+    )
+    assert rows == [("GET", "/orders/{id}", '["text/plain"]', None)]
 
 
 _ON_MESSAGE = "jakarta/websocket/OnMessage#"

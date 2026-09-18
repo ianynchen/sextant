@@ -281,6 +281,8 @@ WITH RECURSIVE catalog_params AS (
             path_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             produces_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             consumes_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            type_media_from_siblings
+                STRUCT("column" VARCHAR, ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
             all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
@@ -1014,6 +1016,30 @@ prefixes AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
 ),
+-- Spec 2026-09-18 §3b word 2: the class-level media default read off a TYPE-level sibling
+-- (`@Produces` on a JAX-RS resource class). Keyed on the type so it joins exactly as
+-- `prefixes` does; the combine below is coalesce — the method's declaration, else the
+-- class's, never a union (Jersey `resolveProducedTypes`, Quarkus EndpointIndexer 725,
+-- CP-18 row 5 / CP-19 row 2).
+-- `"column"` is quoted throughout because it is a reserved word in DuckDB's
+-- own grammar (it is not reserved in the STRUCT literal that names the field —
+-- only in an expression position referencing it back out).
+type_media_sources AS (
+    SELECT u.catalog_id AS catalog_id, s."column" AS "column", s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.type_media_from_siblings) AS s FROM catalog_params cp) u
+),
+type_media AS (
+    SELECT ts.catalog_id AS catalog_id, a.target AS type_symbol,
+           min_by(CASE WHEN ts."column" = 'produces' THEN coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]) END, ts.ordinal)
+               FILTER (WHERE ts."column" = 'produces') AS produces_list,
+           min_by(CASE WHEN ts."column" = 'consumes' THEN coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]) END, ts.ordinal)
+               FILTER (WHERE ts."column" = 'consumes') AS consumes_list
+    FROM annotations_effective a
+    JOIN type_media_sources ts ON ts.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = ts.catalog_id)
+    WHERE coalesce(a.args -> ts.arg ->> 0, a.args ->> ts.arg) IS NOT NULL
+    GROUP BY ts.catalog_id, a.target
+),
 -- Cross product of methods and paths (a two-topic, two-method mapping is
 -- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit
 -- in the same SELECT (verified empirically), so methods are unnested in
@@ -1352,8 +1378,11 @@ derived AS (
         -- wire identity plus handler/caller/resolution/evidence/catalog_id.
         -- The method's own declaration first, the class's where the method
         -- made none (`prefixes` above says why that is coalesce, not union).
-        coalesce(m.consumes_list, p.consumes_list) AS consumes_list,
-        coalesce(m.produces_list, p.produces_list) AS produces_list
+        -- `tm` (`type_media` above) is the third and last resort — the TYPE-
+        -- level sibling default (Spec 2026-09-18 §3b word 2) — tried only
+        -- where neither the method nor its own prefix annotation said anything.
+        coalesce(m.consumes_list, p.consumes_list, tm.consumes_list) AS consumes_list,
+        coalesce(m.produces_list, p.produces_list, tm.produces_list) AS produces_list
     FROM mappings m
     JOIN catalog_params cp ON cp.catalog_id = m.catalog_id
     -- A handler or caller is always a method. Without this, a TYPE-level
@@ -1384,6 +1413,11 @@ derived AS (
            AND coalesce(m.gate_type, s.enclosing) = c.type_symbol
     LEFT JOIN prefixes p ON p.catalog_id = m.catalog_id
            AND p.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- `type_media` only ever matches a TYPE symbol because the join key is the
+    -- enclosing type; a method-level `@Produces` row in `annotations_effective`
+    -- has a method target and never joins here.
+    LEFT JOIN type_media tm ON tm.catalog_id = m.catalog_id
+           AND tm.type_symbol = coalesce(m.gate_type, s.enclosing)
     LEFT JOIN qualifier_scopes q ON q.catalog_id = m.catalog_id
            AND q.type_symbol = coalesce(m.gate_type, s.enclosing)
     -- D02 §2c's two flip lookups, both keyed on the BARE descriptor for

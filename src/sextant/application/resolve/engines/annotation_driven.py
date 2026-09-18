@@ -177,6 +177,13 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # read only where every `produces_from`/`consumes_from` alias is absent.
         "produces_from_siblings": _sibling_sources(catalog, mapping, "produces_from_siblings"),
         "consumes_from_siblings": _sibling_sources(catalog, mapping, "consumes_from_siblings"),
+        # Spec 2026-09-18 §3b word 2: the class-level media DEFAULT — `@Produces`/
+        # `@Consumes` on the resource TYPE, applied only where the method itself
+        # (including its own siblings, above) declared none. A different word from
+        # the two above it because the sibling being read sits on the TYPE rather
+        # than the method, and `_type_media_sources` keys it by `produces`/
+        # `consumes` rather than by ordinal position in a single list.
+        "type_media_from_siblings": _type_media_sources(catalog, mapping),
         "prefix_from": list(mapping["prefix_from"]),
         "peer_from": list(mapping.get("peer_from", [])),
         "method_from": mapping["method_from"],
@@ -632,7 +639,10 @@ def _entry_fallback(mapping: dict[str, Any], entry: dict[str, Any]) -> str | Non
 
 
 def _sibling_sources(
-    catalog: Catalog, mapping: dict[str, Any], key: str = "path_from_siblings"
+    catalog: Catalog,
+    mapping: dict[str, Any],
+    key: str = "path_from_siblings",
+    shown: str | None = None,
 ) -> list[dict[str, object]]:
     """`mapping.<key>` as `{ordinal, annotation, arg}` rows, the ordinal counting
     from the order the catalog wrote (`OI-35`). `key` defaults to the name
@@ -640,6 +650,13 @@ def _sibling_sources(
     (Spec 2026-09-18 §3b word 1) read the identical shape through the same
     function, for the same reason — the framework's media types sit on a
     sibling exactly the way its name does.
+
+    `shown`, where given, names the mapping key printed in the refusal instead
+    of `key` — for `_type_media_sources` (Spec 2026-09-18 §3b word 2), which
+    reuses this function's shape check under a synthetic one-key mapping
+    (`{"_": [...]}`) so it does not have to duplicate the check, and needs the
+    refusal to name the real key (`type_media_from_siblings.produces`) rather
+    than the synthetic one (`_`).
 
     The ORDER is the rule and not a presentation detail: CP-15 rows 1a-1b show
     `getOneOfTheseMethodAnnotationsValue` taking the FIRST source with a value
@@ -669,7 +686,7 @@ def _sibling_sources(
         )
     if not valid:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.{key}` must be a non-empty "
+            f"loading catalog {catalog.source}: `mapping.{shown or key}` must be a non-empty "
             f"list of `{{{', '.join(sorted(_SIBLING_KEYS))}}}` entries naming an annotation and "
             f"one of its attributes, in the order the framework consults them — got {declared!r} "
             f"(`OI-35`)"
@@ -682,6 +699,32 @@ def _sibling_sources(
         }
         for ordinal, source in enumerate(declared, start=1)
     ]
+
+
+def _type_media_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str, object]]:
+    """`mapping.type_media_from_siblings` flattened to `{column, ordinal, annotation, arg}`
+    rows — the class-level media default read off a TYPE-level sibling (spec 2026-09-18
+    §3b word 2). Refused unless a mapping of `produces`/`consumes` to sibling lists."""
+    declared = mapping.get("type_media_from_siblings")
+    if declared is None:
+        return []
+    if (
+        not isinstance(declared, dict)
+        or not declared
+        or not set(declared) <= {"produces", "consumes"}
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.type_media_from_siblings` must be a "
+            f"mapping of `produces`/`consumes` to sibling-source lists — got {declared!r}"
+        )
+    rows: list[dict[str, object]] = []
+    for column in ("produces", "consumes"):
+        if column in declared:
+            for source in _sibling_sources(
+                catalog, {"_": declared[column]}, "_", shown=f"type_media_from_siblings.{column}"
+            ):
+                rows.append({"column": column, **source})
+    return rows
 
 
 # The two keys a `path_from_siblings` entry may carry, and no others — a closed

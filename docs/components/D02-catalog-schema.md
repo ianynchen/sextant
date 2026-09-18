@@ -1025,6 +1025,30 @@ mapping:
   for the methods that state nothing themselves — is a separate word (Task 4), not this
   key. Spec 2026-09-18 §3b word 1.
 
+- **`type_media_from_siblings` is the class-level media DEFAULT — `{produces: […],
+  consumes: […]}`, each a `path_from_siblings`-shaped list, read off a TYPE-level
+  sibling** (`@Produces`/`@Consumes` on a JAX-RS resource class) rather than a method-level
+  one. **Combine rule: the method's own declaration wins whenever it is non-empty — its own
+  attribute (`consumes_from`/`produces_from`) OR its own sibling
+  (`produces_from_siblings`/`consumes_from_siblings` above) — and the class's default fills
+  in only where the method said nothing at all, never a union.** Jersey
+  `resolveProducedTypes` and Quarkus `EndpointIndexer` (line 725) both return the method's
+  media types if present and the class's otherwise; **CP-18 row 5 / CP-19 row 2** measured
+  it. Spec 2026-09-18 §3b word 2.
+  - **A separate word from the class-level media `prefix_annotation` itself already reads**
+    (`consumes_from`/`produces_from`, read a second time off the prefix annotation the way
+    `prefixes` reads `prefix_from`/`peer_from` off it, superseding the 2E bullet above that
+    said type-level media went unread), **because the two frameworks put the class-level
+    default on different annotations.** Spring's `@RequestMapping` carries both the path
+    prefix and, when stated, `produces`/`consumes` on the SAME annotation —
+    `prefix_from`/`peer_from`'s own reason for existing (the type-level annotation's
+    attributes play more than one role). JAX-RS's `@Path` is the prefix annotation and
+    carries no media attribute at all; the class-level media default sits on the SIBLING
+    `@Produces`/`@Consumes` instead — which is exactly what forces a second read, keyed by
+    `produces`/`consumes` rather than by the prefix annotation's own aliases.
+  - Sorted and de-duplicated exactly as every other media source lands
+    (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4).
+
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
   `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,
