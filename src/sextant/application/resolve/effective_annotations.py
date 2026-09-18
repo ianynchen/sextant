@@ -381,9 +381,28 @@ def inherited_rows_over(
     annotation_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
     prefix_fqns: list[str] | None,
+    sibling_fqns: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """`inherited_rows` over an already-folded `TypeHierarchy` — the same rows, the
-    same order; the hierarchy is read and never written into."""
+    same order; the hierarchy is read and never written into.
+
+    `sibling_fqns` is the catalog's declared SIBLING annotations — the ones its
+    `path_from_siblings`/`produces_from_siblings`/`consumes_from_siblings` lists
+    and its `protocol_hint.hint_annotations` name — and it is empty for every
+    catalog that declares none, which leaves the walk exactly as it was. Where
+    it is non-empty the walk follows JAX-RS §3.6 rather than Spring's per-
+    annotation merge (spec 2026-09-18 §3b word 3, CP-18 row 8): a method with
+    NO annotation of the catalog's — mapping or sibling — inherits the ancestor
+    method's mapping AND every sibling that ancestor method carries, and a
+    method with ANY of its own inherits nothing at all. JAX-RS puts the path
+    and the media BESIDE the verb (`@GET @Path("/{id}") @Produces(...)`), so a
+    `@GET` inherited alone would be a wrong address; and its own text is *"if a
+    subclass or implementation method has any JAX-RS annotations then all of
+    the annotations on the superclass or interface method are ignored"*, which
+    is why an implementor method carrying only its own `@Produces` gets no
+    mapping row here — to the framework it is not a resource method. The
+    synthesized siblings are ordinary annotation rows downstream, so the SQL
+    that reads siblings never learns an inheritance happened."""
     methods_by_type = hierarchy.methods_by_type
     signature_by_symbol = hierarchy.signature_by_symbol
     modifiers_by_symbol = hierarchy.modifiers_by_symbol
@@ -401,6 +420,11 @@ def inherited_rows_over(
     for entries in annotations_by_target.values():
         entries.sort(key=lambda entry: entry[0])
 
+    # §3.6: any own annotation of the catalog's — mapping or sibling — blocks
+    # inheritance for that method; with no siblings declared this is
+    # `mapping_fqns` itself, today's check.
+    own_fqns = mapping_fqns | set(sibling_fqns)
+
     # Final NFR-1 ordering comes from the explicit sort below; iteration
     # order here only has to be exhaustive, not deterministic.
     rows: list[dict[str, Any]] = []
@@ -410,8 +434,12 @@ def inherited_rows_over(
         # candidate that resolved it — see `_synthesis_target`. Insertion order
         # follows `methods`, which follows the query's `ORDER BY symbol` (NFR-1).
         resolved: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        # The ancestor method's declared siblings, keyed the same way; read
+        # off the SOURCE method the mapping was found on, never off any other
+        # level, because §3.6 inherits one method's set whole.
+        siblings: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for key, candidate in methods.items():
-            if _own_mapping(candidate, mapping_fqns, annotations_by_target) is not None:
+            if _own_mapping(candidate, own_fqns, annotations_by_target) is not None:
                 continue
             found = _resolve_method(
                 key,
@@ -426,6 +454,7 @@ def inherited_rows_over(
             )
             if found is None:
                 continue
+            source, annotation, args = found
             target = _synthesis_target(
                 candidate, methods.values(), signature_by_symbol, modifiers_by_symbol
             )
@@ -435,10 +464,14 @@ def inherited_rows_over(
             # own: the candidate loop skips a method with an own mapping, but
             # the BRIDGE that forwards to it has none of its own to skip on.
             if target != candidate and (
-                _own_mapping(target, mapping_fqns, annotations_by_target) is not None
+                _own_mapping(target, own_fqns, annotations_by_target) is not None
             ):
                 continue
-            resolved.setdefault(target, []).append(found)
+            resolved.setdefault(target, []).append((annotation, args))
+            if sibling_fqns:
+                for sib_annotation, sib_args in annotations_by_target.get(source, []):
+                    if sib_annotation in sibling_fqns:
+                        siblings.setdefault(target, []).append((sib_annotation, sib_args))
         for target, mappings in resolved.items():
             # Two ancestors mapping one method — the shape a class carrying two
             # bridges has (I1). Which one the framework serves depends on its own
@@ -453,6 +486,18 @@ def inherited_rows_over(
                 continue
             annotation, args = mappings[0]
             rows.append({"target": target, "annotation": annotation, "args": args})
+            # The siblings ride with the mapping and only with it: a target
+            # that got no mapping row above gets no sibling row either, so an
+            # ambiguous verb never leaves a lone `@Path` behind. Two candidates
+            # (a bridge and the method it forwards to) that resolved the SAME
+            # ancestor bring its siblings once, not twice.
+            seen: set[tuple[str, str]] = set()
+            for sib_annotation, sib_args in siblings.get(target, []):
+                identity = (sib_annotation, json.dumps(sib_args, sort_keys=True))
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                rows.append({"target": target, "annotation": sib_annotation, "args": sib_args})
         # Computed once per class, independent of the per-method loop above:
         # a class's inherited prefix applies to EVERY one of its methods
         # that ends up mapped, whether that mapping is itself inherited or
@@ -510,20 +555,24 @@ def _resolve_method(
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]],
     mapping_fqns: set[str],
     visited: set[str],
-) -> tuple[str, dict[str, Any]] | None:
+) -> tuple[str, str, dict[str, Any]] | None:
     """Walks directly implemented interfaces (declaration order), then the
     superclass, checking each ancestor's OWN same-key method for a mapping
     annotation before recursing further up that same ancestor's own
-    hierarchy — spec §3's resolution order, applied transitively."""
+    hierarchy — spec §3's resolution order, applied transitively.
+
+    Answers `(source, annotation, args)`: the ancestor method the mapping was
+    found ON comes back with it, because the caller reads that method's
+    declared siblings (spec 2026-09-18 §3b word 3) and no other level's."""
     for interface in interfaces:
         if interface in visited:
             continue
         visited.add(interface)
         method = methods_by_type.get(interface, {}).get(key)
         if method is not None:
-            found = _own_mapping(method, mapping_fqns, annotations_by_target)
-            if found is not None:
-                return found
+            own = _own_mapping(method, mapping_fqns, annotations_by_target)
+            if own is not None:
+                return method, own[0], own[1]
         found = _resolve_method(
             key,
             interfaces_of.get(interface, []),
@@ -542,9 +591,9 @@ def _resolve_method(
     visited.add(supertype)
     method = methods_by_type.get(supertype, {}).get(key)
     if method is not None:
-        found = _own_mapping(method, mapping_fqns, annotations_by_target)
-        if found is not None:
-            return found
+        own = _own_mapping(method, mapping_fqns, annotations_by_target)
+        if own is not None:
+            return method, own[0], own[1]
     return _resolve_method(
         key,
         interfaces_of.get(supertype, []),

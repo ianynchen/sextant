@@ -11,7 +11,14 @@ its place."""
 import json
 from pathlib import Path
 
-from sextant.application.resolve.effective_annotations import composed_mapping_rows, inherited_rows
+import pytest
+
+from sextant.application.resolve.effective_annotations import (
+    composed_mapping_rows,
+    inherited_rows,
+    inherited_rows_over,
+    type_hierarchy,
+)
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
@@ -1104,3 +1111,75 @@ def test_a_composed_interface_side_row_inherits_onto_the_implementation():
             },
         }
     ]
+
+
+# --- siblings inherit with the mapping, all or nothing (spec 2026-09-18 §3b word 3) ---
+#
+# Over `inherited_rows_over` directly, with a `TypeHierarchy` folded once by
+# `type_hierarchy`, because the sibling rule is the walk's own and the rows it
+# reads are hand-built exactly as above. JAX-RS symbols, since the rule is
+# JAX-RS §3.6's: the path and media live BESIDE the verb (`@Path`, `@Produces`
+# next to `@GET`), so an inherited `@GET` alone is a wrong address.
+
+_RS_GET = "com/acme/rs/GET#"
+_RS_PATH = "com/acme/rs/Path#"
+_RS_PRODUCES = "com/acme/rs/Produces#"
+_RS_SIBLINGS = frozenset({_RS_PATH, _RS_PRODUCES})
+_RS_API = "com/acme/OrdersApi#"
+_RS_RESOURCE = "com/acme/OrdersResource#"
+_RS_API_METHOD = _RS_API + "byId(sig_1)."
+_RS_RESOURCE_METHOD = _RS_RESOURCE + "byId(sig_1)."
+_RS_HIERARCHY = type_hierarchy(
+    [_implements(_RS_RESOURCE, [_RS_API])],
+    [],
+    [_method(_RS_API_METHOD, _RS_API), _method(_RS_RESOURCE_METHOD, _RS_RESOURCE)],
+)
+_RS_INTERFACE_ROWS = [
+    {"target": _RS_API_METHOD, "annotation": _RS_GET, "args": {}},
+    {"target": _RS_API_METHOD, "annotation": _RS_PATH, "args": {"value": "/{id}"}},
+    {"target": _RS_API_METHOD, "annotation": _RS_PRODUCES, "args": {"value": ["application/json"]}},
+]
+
+
+def test_siblings_inherit_with_the_mapping_when_the_target_carries_nothing_of_its_own():
+    """The interface's `@GET @Path("/{id}") @Produces("application/json")` reaches
+    the unannotated implementor whole — all three rows, never the verb alone."""
+    rows = inherited_rows_over(
+        _RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+    method = _RS_RESOURCE_METHOD
+    assert {
+        (r["target"], r["annotation"], json.dumps(r["args"], sort_keys=True))
+        for r in rows
+        if r["target"] == method
+    } == {
+        (method, _RS_GET, "{}"),
+        (method, _RS_PATH, '{"value": "/{id}"}'),
+        (method, _RS_PRODUCES, '{"value": ["application/json"]}'),
+    }
+
+
+@pytest.mark.pins("effective_annotations.siblings-inherit-all-or-nothing")
+def test_an_own_sibling_blocks_all_inheritance_for_that_method():
+    """JAX-RS §3.6 (CP-18 row 8): ANY own JAX-RS annotation makes the interface's set
+    ignored — so an implementor method carrying only its own @Produces inherits no
+    mapping and derives nothing, which is the framework's answer."""
+    annotation_rows = [
+        *_RS_INTERFACE_ROWS,
+        {
+            "target": _RS_RESOURCE_METHOD,
+            "annotation": _RS_PRODUCES,
+            "args": {"value": ["text/plain"]},
+        },
+    ]
+    rows = inherited_rows_over(
+        _RS_HIERARCHY, annotation_rows, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+    assert [r for r in rows if r["target"] == _RS_RESOURCE_METHOD] == []
+
+
+def test_without_sibling_fqns_the_walk_is_unchanged():
+    """A catalog declaring no sibling list keeps today's walk: the mapping row alone,
+    and an own sibling would not have blocked it either (Spring's own merge)."""
+    rows = inherited_rows_over(_RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH])
+    assert {r["annotation"] for r in rows if r["target"].endswith("#byId(sig_1).")} == {_RS_GET}

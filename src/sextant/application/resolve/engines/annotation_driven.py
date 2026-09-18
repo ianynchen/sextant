@@ -1497,12 +1497,27 @@ def _synthetic_annotations(
         mapping_fqns | (set(type_annotation_fqns) if type_annotation_fqns is not None else set()),
     )
     run_inheritance = type_annotation_fqns is not None
+    # The catalog's declared SIBLINGS — every annotation its sibling lists and
+    # its `protocol_hint.hint_annotations` name — so the walk can carry them
+    # with an inherited mapping, all or nothing (spec 2026-09-18 §3b word 3).
+    # Empty for a catalog declaring none, which leaves the walk as it was;
+    # `hint_annotations` is a key no catalog writes yet, so that half is inert
+    # until the hint pass reads it.
+    mapping = catalog.matches["mapping"]
+    sibling_fqns = frozenset(
+        _catalog_symbol(str(source["annotation"]))
+        for key in ("path_from_siblings", "produces_from_siblings", "consumes_from_siblings")
+        for source in (mapping.get(key) or [])
+    ) | frozenset(
+        _catalog_symbol(name) for name in (catalog.protocol_hint.get("hint_annotations") or [])
+    )
     inherited = (
         inherited_rows_over(
             workspace.once(_type_hierarchy),
             [*annotation_rows, *composed],
             mapping_fqns,
             prefix_fqns,
+            sibling_fqns=sibling_fqns,
         )
         if run_inheritance
         else []

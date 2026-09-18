@@ -1053,6 +1053,47 @@ mapping:
   - Sorted and de-duplicated exactly as every other media source lands
     (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4).
 
+- **Siblings inherit with the mapping, all or nothing — for a catalog declaring any
+  sibling list, an inherited mapping brings the ancestor method's declared siblings with
+  it, and ANY own annotation of the catalog's blocks inheritance for that method.** Not a
+  key: a rule the inheritance walk (`effective_annotations.py::inherited_rows_over`)
+  applies whenever the catalog names siblings at all — the annotations its
+  `path_from_siblings`, `produces_from_siblings`, `consumes_from_siblings` and
+  `protocol_hint.hint_annotations` lists name. When the walk synthesizes an interface or
+  superclass method's mapping onto an implementor method, it synthesizes that SAME
+  ancestor method's sibling annotations beside it, and it does so only where the
+  implementor method carries none of the catalog's annotations of its own, mapping or
+  sibling. **That is JAX-RS §3.6 exactly** (`scripts/probes/cp18_jaxrs_api_and_implementations.md`
+  row 8): *"if a subclass or implementation method has any JAX-RS annotations then all of
+  the annotations on the superclass or interface method are ignored."* Forced because
+  JAX-RS puts the path and the media BESIDE the verb — an interface's `@GET @Path("/{id}")
+  @Produces("application/json")` inherited as `@GET` alone is a wrong address, not a
+  missing one. A catalog declaring no sibling list keeps the mapping-only own-check and
+  the per-annotation merge it had — Spring's own rule, byte-identical.
+  - **One module knows about inheritance.** The synthesized siblings are ordinary
+    annotation rows downstream, so the sibling reads (`path_from_siblings` and the two
+    media words above), the class-level default and the hint pass never learn that an
+    inheritance happened — the same reason a composed or folded row is an ordinary row by
+    the time the SQL runs.
+  - **The type-level gate already inherits.** The walk synthesizes a class's interface or
+    superclass `prefix_annotation` onto the class when it carries none of its own, and
+    `@Path` is both the prefix and the gate — so `controllers` admits the implementor
+    with no second rule. Word 3 adds the method-level half only.
+  - **The framework's own answer, kept.** Under §3.6 an implementor method carrying only
+    its own `@Produces` — no verb — is not a resource method: its interface's annotations
+    are ignored and it has no verb of its own. The walk reproduces that: an own sibling
+    blocks inheritance, and with no own mapping nothing derives. That is the framework's
+    result, not a gap.
+  - **Boundary, measured: Quarkus REST diverges from §3.6** (`scripts/probes/cp19_quarkus_rest.md`
+    row 6). `EndpointIndexer.collectEndpoints` walks self → superclass → interfaces and
+    the FIRST class in that order whose OWN method declaration carries the verb wins the
+    endpoint whole — every other annotation (`@Path`, `@Produces`, `@Consumes`) is then
+    read off that winning declaration, and an implementor's own sibling without a verb of
+    its own is ignored rather than blocking. Neither §3.6 nor a merge. The walk implements
+    §3.6, the plain JAX-RS rule; `quarkus-rest.yml` states the divergence, and the
+    override-without-a-verb cell is a COVERAGE row, not a rule here. Spec 2026-09-18 §3b
+    word 3.
+
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
   `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,

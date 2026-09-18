@@ -780,6 +780,26 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "effective_annotations.siblings-inherit-all-or-nothing": Guard(
+        what="for a catalog declaring sibling lists, a method carrying ANY annotation of the "
+        "catalog's own — a sibling as much as a mapping — inherits nothing from the ancestor "
+        "method; never only a method carrying an own MAPPING",
+        why="Spec 2026-09-18 §3b word 3, CP-18 row 8. JAX-RS §3.6's rule is all-or-nothing per "
+        'method: "if a subclass or implementation method has any JAX-RS annotations then all '
+        'of the annotations on the superclass or interface method are ignored". An implementor '
+        "method carrying only its own `@Produces` is, to the framework, not a resource method "
+        "at all. With the own-check narrowed to the mapping alone, the walk inherits the "
+        "interface's `@GET` and `@Path` onto it and publishes a route the framework does not "
+        "serve — a fabricated address, and Spring's per-annotation merge applied to a "
+        "framework that measured the opposite",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="    own_fqns = mapping_fqns | set(sibling_fqns)",
+                replace="    own_fqns = set(mapping_fqns)  # guard disabled",
+            ),
+        ),
+    ),
     "derive_endpoints.path-fallback-is-per-annotation": Guard(
         what="an annotated declaration takes the fallback word of the annotation that MATCHED "
         "it, not the catalog's own default",
