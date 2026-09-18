@@ -1021,18 +1021,30 @@ prefixes AS (
 -- `prefixes` does; the combine below is coalesce — the method's declaration, else the
 -- class's, never a union (Jersey `resolveProducedTypes`, Quarkus EndpointIndexer 725,
 -- CP-18 row 5 / CP-19 row 2).
--- `"column"` is quoted throughout because it is a reserved word in DuckDB's
--- own grammar (it is not reserved in the STRUCT literal that names the field —
--- only in an expression position referencing it back out).
+-- `"column"` is quoted throughout because DuckDB reserves the word in its own
+-- grammar, and the STRUCT type declaration just below is exactly where the
+-- unquoted spelling fails to parse — verified directly:
+-- `CAST({'column': 1} AS STRUCT(column INTEGER))` raises `Parser Error: syntax
+-- error at or near "column"`, while the same word unquoted in an expression
+-- position (`s.column`, a JOIN or WHERE reference) mostly parses. Quoted
+-- everywhere here anyway, rather than only where it is strictly required, so
+-- the one field does not carry two different spelling rules depending on
+-- where it is written.
 type_media_sources AS (
     SELECT u.catalog_id AS catalog_id, s."column" AS "column", s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
     FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.type_media_from_siblings) AS s FROM catalog_params cp) u
 ),
 type_media AS (
     SELECT ts.catalog_id AS catalog_id, a.target AS type_symbol,
-           min_by(CASE WHEN ts."column" = 'produces' THEN coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]) END, ts.ordinal)
+           -- No CASE needed inside `min_by` here: the FILTER clause already
+           -- restricts each aggregate's input rows to the one `"column"`
+           -- value it names, so every row `min_by` ever sees for the
+           -- `produces` arm already satisfies `ts."column" = 'produces'` (and
+           -- likewise for `consumes`) — a CASE re-testing the same predicate
+           -- would only ever take its THEN branch.
+           min_by(coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]), ts.ordinal)
                FILTER (WHERE ts."column" = 'produces') AS produces_list,
-           min_by(CASE WHEN ts."column" = 'consumes' THEN coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]) END, ts.ordinal)
+           min_by(coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]), ts.ordinal)
                FILTER (WHERE ts."column" = 'consumes') AS consumes_list
     FROM annotations_effective a
     JOIN type_media_sources ts ON ts.annotation = a.annotation

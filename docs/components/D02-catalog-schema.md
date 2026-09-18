@@ -695,7 +695,11 @@ mapping:
 - **Type-level media attributes are not read in 2E.** A class-level
   `@RequestMapping(produces = ...)` — Spring's own equivalent of `prefix_from` for media —
   is out of scope for this phase; only the method-level mapping annotation's own attributes
-  fill `consumes`/`produces`.
+  fill `consumes`/`produces`. (No longer true past this phase: a class-level
+  `@RequestMapping(produces = ...)` has been read off the prefix annotation itself since
+  `202ea6b`, and a class-level default on a separate TYPE-level sibling annotation —
+  JAX-RS's `@Produces`/`@Consumes` beside `@Path` — since `type_media_from_siblings`,
+  spec 2026-09-18 §3b word 2, below.)
 
 **Phase 2H generalises the vocabulary a fourth time, for a declaration whose name is
 DEFAULTED and whose scope sits on the annotation itself.** Four keys, every one of them
@@ -1037,8 +1041,8 @@ mapping:
   it. Spec 2026-09-18 §3b word 2.
   - **A separate word from the class-level media `prefix_annotation` itself already reads**
     (`consumes_from`/`produces_from`, read a second time off the prefix annotation the way
-    `prefixes` reads `prefix_from`/`peer_from` off it, superseding the 2E bullet above that
-    said type-level media went unread), **because the two frameworks put the class-level
+    `prefixes` reads `prefix_from`/`peer_from` off it, since `202ea6b` — the 2E bullet above
+    is corrected in place), **because the two frameworks put the class-level
     default on different annotations.** Spring's `@RequestMapping` carries both the path
     prefix and, when stated, `produces`/`consumes` on the SAME annotation —
     `prefix_from`/`peer_from`'s own reason for existing (the type-level annotation's

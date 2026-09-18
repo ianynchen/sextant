@@ -6604,6 +6604,30 @@ def test_the_methods_own_produces_sibling_still_wins_over_the_type_level_default
     assert rows == [("GET", "/orders/{id}", '["text/plain"]', None)]
 
 
+def test_type_level_consumes_also_applies_when_the_method_declares_none(tmp_path: Path):
+    """The `consumes` twin of the positive test above. Neither of the two tests above
+    declares a type-level OR method-level `@Consumes` at all, so `type_media`'s
+    `consumes` branch (`min_by(...) FILTER (WHERE ts."column" = 'consumes')`) ran on
+    every prior test but never once produced a non-NULL value — this is the case that
+    actually exercises it. `@GET` here again declares neither `produces` nor `consumes`
+    of its own, so both fall through to the class-level defaults, same as the first
+    positive test above (`produces` unchanged, `application/json`)."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={"com/acme/rs/Path#": {"value": "/{id}"}},
+    )
+    assert rows == [("GET", "/orders/{id}", '["application/json"]', '["application/xml"]')]
+
+
 _ON_MESSAGE = "jakarta/websocket/OnMessage#"
 _SERVER_ENDPOINT = "jakarta/websocket/server/ServerEndpoint#"
 _CLIENT_ENDPOINT = "jakarta/websocket/ClientEndpoint#"
