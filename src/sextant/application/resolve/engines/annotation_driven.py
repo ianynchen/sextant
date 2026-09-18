@@ -171,6 +171,12 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # rather than relied on in the query, because a list's order is not a
         # column and `min_by` needs one to be able to say "first present".
         "path_from_siblings": _sibling_sources(catalog, mapping),
+        # Spec 2026-09-18 §3b word 1: the media siblings — `@Produces`/`@Consumes` on a
+        # JAX-RS method sit beside a verb annotation that declares no attribute at
+        # all (CP-18 row 1). Same closed shape and order rule as the path siblings;
+        # read only where every `produces_from`/`consumes_from` alias is absent.
+        "produces_from_siblings": _sibling_sources(catalog, mapping, "produces_from_siblings"),
+        "consumes_from_siblings": _sibling_sources(catalog, mapping, "consumes_from_siblings"),
         "prefix_from": list(mapping["prefix_from"]),
         "peer_from": list(mapping.get("peer_from", [])),
         "method_from": mapping["method_from"],
@@ -625,9 +631,15 @@ def _entry_fallback(mapping: dict[str, Any], entry: dict[str, Any]) -> str | Non
     return None if declared is None else str(declared)
 
 
-def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str, object]]:
-    """`mapping.path_from_siblings` as `{ordinal, annotation, arg}` rows, the
-    ordinal counting from the order the catalog wrote (`OI-35`).
+def _sibling_sources(
+    catalog: Catalog, mapping: dict[str, Any], key: str = "path_from_siblings"
+) -> list[dict[str, object]]:
+    """`mapping.<key>` as `{ordinal, annotation, arg}` rows, the ordinal counting
+    from the order the catalog wrote (`OI-35`). `key` defaults to the name
+    word, `path_from_siblings`; `produces_from_siblings`/`consumes_from_siblings`
+    (Spec 2026-09-18 §3b word 1) read the identical shape through the same
+    function, for the same reason — the framework's media types sit on a
+    sibling exactly the way its name does.
 
     The ORDER is the rule and not a presentation detail: CP-15 rows 1a-1b show
     `getOneOfTheseMethodAnnotationsValue` taking the FIRST source with a value
@@ -641,7 +653,7 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
     here leaves the operation published under the name the framework does not
     serve it at — a wrong address, which is what this key exists to remove.
     """
-    declared = mapping.get("path_from_siblings")
+    declared = mapping.get(key)
     if declared is None:
         return []
     valid = isinstance(declared, list) and bool(declared)
@@ -657,7 +669,7 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
         )
     if not valid:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.path_from_siblings` must be a non-empty "
+            f"loading catalog {catalog.source}: `mapping.{key}` must be a non-empty "
             f"list of `{{{', '.join(sorted(_SIBLING_KEYS))}}}` entries naming an annotation and "
             f"one of its attributes, in the order the framework consults them — got {declared!r} "
             f"(`OI-35`)"

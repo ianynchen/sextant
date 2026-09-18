@@ -6287,6 +6287,7 @@ def _gate_facts(
     method_args: dict,
     method_modifiers: dict[str, bool] | None = None,
     inherited_from: tuple[str, dict[str, dict]] | None = None,
+    sibling_annotations: dict[str, dict] | None = None,
 ) -> None:
     """One type of the given construct kind carrying the given type-level
     annotations, and one method on it carrying one mapping annotation.
@@ -6306,7 +6307,12 @@ def _gate_facts(
     subject and onto a superclass with that symbol and those type-level
     annotations, which the subject then `extends` — the inherited-member shape
     `A-M15`'s walk reaches, where the subject and the declaring class are two
-    different types and the framework's gate may sit on either."""
+    different types and the framework's gate may sit on either.
+
+    `sibling_annotations` writes extra annotation facts on the SAME handler
+    the mapping annotation sits on — other annotations of the one declaration,
+    the shape `path_from_siblings`/`produces_from_siblings`/
+    `consumes_from_siblings` (`OI-35`, Spec 2026-09-18 §3b word 1) read."""
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/gate/Subject.java",
@@ -6373,6 +6379,16 @@ def _gate_facts(
                 use=AnnotationUse(annotation=method_annotation, args=method_args),
             )
         )
+    if sibling_annotations is not None:
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=handler,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in sibling_annotations.items()
+        ]
     write_fact_file(root / "Subject.jsonl", document, facts)
 
 
@@ -6400,6 +6416,137 @@ def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
     ]
     workspace.close()
     return rows
+
+
+def _catalog(catalog_id: str, matches: dict[str, object]) -> Catalog:
+    """A synthetic `annotation_driven` catalog over a word this file's own
+    fixtures do not yet ship — Task 10 (spec §3b word 1) will ship one —
+    built the way `_INVENTED_LISTENER`/`_vocabulary_catalog` above already
+    build one for a not-yet-shipped word."""
+    return Catalog(
+        id=catalog_id,
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path(f"tests/{catalog_id}.yml"),
+        matches=matches,
+    )
+
+
+# CP-18 row 1: `@GET` carries no attribute at all, so the JAX-RS media types
+# live on the siblings `@Produces`/`@Consumes` instead — the shape
+# `produces_from_siblings`/`consumes_from_siblings` (spec §3b word 1) reads,
+# mirrored on `path_from_siblings` (`OI-35`) above it.
+_SIBLING_MEDIA_MATCHES = {
+    "type_annotation": "com.acme.rs.Path",
+    "request_body": {"annotation": "com.acme.rs.Body", "fallback": "none"},
+    "mapping": {
+        "prefix_annotation": "com.acme.rs.Path",
+        "prefix_from": ["value"],
+        "path_separator": "/",
+        "path_from": [],
+        "path_from_siblings": [{"annotation": "com.acme.rs.Path", "arg": "value"}],
+        "produces_from_siblings": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+        "consumes_from_siblings": [{"annotation": "com.acme.rs.Consumes", "arg": "value"}],
+        "method_from": "method",
+        "all_methods": [],
+        "annotations": [{"fqn": "com.acme.rs.GET", "method": ["GET"]}],
+    },
+}
+
+
+def _gate_media(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
+    _gate_facts(tmp_path / "facts", **facts)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["method"], r["path"], r["produces"], r["consumes"]) for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+def _gate_media_for(tmp_path: Path, catalog: Catalog, **facts) -> list[tuple]:
+    """`_gate_media`'s twin for a SYNTHETIC catalog — the word this file
+    proves has no shipped catalog until Task 10, so there is no id to look
+    `YamlCatalogSource` up by, only the `Catalog` object itself."""
+    _gate_facts(tmp_path / "facts", **facts)
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["method"], r["path"], r["produces"], r["consumes"]) for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+def test_media_is_read_off_a_sibling_when_the_matched_annotation_carries_none(tmp_path: Path):
+    """Spec §3b word 1: `@GET` declares no attribute at all (CP-18 row 1), so produces/consumes
+    come from the sibling `@Produces`/`@Consumes` on the same method, scalar-or-array."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"com/acme/rs/Path#": {"value": "/orders"}},
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": ["text/plain", "application/json"]},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+    )
+    assert rows == [
+        ("GET", "/orders/{id}", '["application/json","text/plain"]', '["application/xml"]')
+    ]
+
+
+@pytest.mark.pins("annotation_driven.sibling-media-only-when-own-absent")
+def test_the_matched_annotations_own_produces_still_wins_over_its_sibling(tmp_path: Path):
+    """The near-miss for the positive above: `@GET` here carries its OWN
+    `produces` attribute, so §3b word 1's "only where every `produces_from`
+    alias is absent" rule means the sibling `@Produces` is never consulted —
+    the same order `path_from_siblings` already holds
+    (`test_the_matched_annotations_own_alias_still_wins_over_every_sibling`,
+    CP-15 row 1). `consumes` is untouched by this catalog's `produces_from`
+    and keeps reading its sibling, which is what proves the near-miss is
+    about ORDER and not about disabling media siblings altogether."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog(
+            "test-siblings",
+            {
+                **_SIBLING_MEDIA_MATCHES,
+                "mapping": {**_SIBLING_MEDIA_MATCHES["mapping"], "produces_from": ["produces"]},
+            },
+        ),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"com/acme/rs/Path#": {"value": "/orders"}},
+        method_annotation="com/acme/rs/GET#",
+        method_args={"produces": ["text/csv"]},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": ["text/plain", "application/json"]},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+    )
+    assert rows == [("GET", "/orders/{id}", '["text/csv"]', '["application/xml"]')]
 
 
 _ON_MESSAGE = "jakarta/websocket/OnMessage#"

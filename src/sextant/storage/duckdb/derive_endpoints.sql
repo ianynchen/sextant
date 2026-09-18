@@ -279,6 +279,8 @@ WITH RECURSIVE catalog_params AS (
             )[],
             path_from VARCHAR[],
             path_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            produces_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            consumes_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
             all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
@@ -414,6 +416,36 @@ sibling_names AS (
     WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
     GROUP BY sp.catalog_id, a.target
 ),
+-- Spec 2026-09-18 §3b word 1: the media twins of the two CTEs above — same shape, same
+-- "first present wins" over the catalog's ordinal, grouped by TARGET because the
+-- annotation carrying the media is not the mapping annotation. Empty for every catalog
+-- declaring no media sibling, so the LEFT JOINs in `declared` reduce to what they were.
+sibling_produces_sources AS (
+    SELECT u.catalog_id AS catalog_id, s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.produces_from_siblings) AS s FROM catalog_params cp) u
+),
+sibling_produces AS (
+    SELECT sp.catalog_id AS catalog_id, a.target AS target,
+           min_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]), [a.args ->> sp.arg]), sp.ordinal) AS found
+    FROM annotations_effective a
+    JOIN sibling_produces_sources sp ON sp.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = sp.catalog_id)
+    WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
+    GROUP BY sp.catalog_id, a.target
+),
+sibling_consumes_sources AS (
+    SELECT u.catalog_id AS catalog_id, s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.consumes_from_siblings) AS s FROM catalog_params cp) u
+),
+sibling_consumes AS (
+    SELECT sc.catalog_id AS catalog_id, a.target AS target,
+           min_by(coalesce(TRY_CAST(a.args -> sc.arg AS VARCHAR[]), [a.args ->> sc.arg]), sc.ordinal) AS found
+    FROM annotations_effective a
+    JOIN sibling_consumes_sources sc ON sc.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = sc.catalog_id)
+    WHERE coalesce(a.args -> sc.arg ->> 0, a.args ->> sc.arg) IS NOT NULL
+    GROUP BY sc.catalog_id, a.target
+),
 -- D02 §2c's direction resolution, as two lookups. Both UNNEST an empty list
 -- for every catalog that declares no rule, so both LEFT JOINs below find
 -- nothing and the flip predicate is false for every row — which is what keeps
@@ -484,18 +516,26 @@ declared AS (
         -- today) means every alias is absent, so `list_extract` on the
         -- resulting empty list already yields NULL — no default needed, and
         -- none is a guessed one (D01 §4).
-        list_extract(list_filter(list_transform(
+        --
+        -- Spec 2026-09-18 §3b word 1: `smc.found`/`smp.found` are the media
+        -- SIBLING reads (`sibling_consumes`/`sibling_produces` above), consulted
+        -- only where the matched annotation's own aliases above found nothing —
+        -- `@GET` (CP-18 row 1) carries no attribute at all, so the coalesce is
+        -- the whole rule. NULL for every catalog declaring no media sibling,
+        -- which is what keeps every catalog written before this word deriving
+        -- byte-identically.
+        coalesce(list_extract(list_filter(list_transform(
             cp.consumes_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS consumes_list,
-        list_extract(list_filter(list_transform(
+        ), v -> v IS NOT NULL), 1), smc.found) AS consumes_list,
+        coalesce(list_extract(list_filter(list_transform(
             cp.produces_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS produces_list,
+        ), v -> v IS NOT NULL), 1), smp.found) AS produces_list,
         -- The SCOPE this declaration's name sits inside, read off the same
         -- annotation that carries the name (2H design §1, form 2). Scalar-or-
         -- array and first-alias-wins like every other attribute read here.
@@ -517,6 +557,8 @@ declared AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = mc.catalog_id
     LEFT JOIN sibling_names sn ON sn.catalog_id = mc.catalog_id AND sn.target = a.target
+    LEFT JOIN sibling_produces smp ON smp.catalog_id = mc.catalog_id AND smp.target = a.target
+    LEFT JOIN sibling_consumes smc ON smc.catalog_id = mc.catalog_id AND smc.target = a.target
     -- THE WITHDRAWAL FILTER (2I design §2, word 4). A declaration whose named
     -- attribute carries the withdrawing value derives NOTHING: the framework
     -- itself does not expose it, so a row here would be an endpoint nobody

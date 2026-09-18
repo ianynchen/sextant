@@ -1014,6 +1014,17 @@ mapping:
     for `unless`'s reason: which annotation renames an operation is the framework's own
     convention.
 
+- **`produces_from_siblings`/`consumes_from_siblings` are `path_from_siblings`'s media
+  twins**: the same closed shape, the same order rule, consulted only where every
+  `produces_from`/`consumes_from` alias on the matched annotation itself is absent.
+  **Forced by CP-18 row 1**: a JAX-RS verb annotation (`@GET`) declares no attribute at
+  all, so the media types it publishes live on the siblings `@Produces`/`@Consumes`
+  instead. The media that lands through this key is sorted and de-duplicated exactly as
+  evidence kind (a) already is (`endpoints.consumes`/`endpoints.produces`,
+  [D01](D01-graph-schema.md) §4). The class-level default — what a resource class states
+  for the methods that state nothing themselves — is a separate word (Task 4), not this
+  key. Spec 2026-09-18 §3b word 1.
+
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
   `read_accessor_property` and `write_accessor_property`. **Forced by CP-15 rows 3a–5b**,

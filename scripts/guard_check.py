@@ -750,6 +750,36 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "annotation_driven.sibling-media-only-when-own-absent": Guard(
+        what="`produces_from_siblings` (and its `consumes_from_siblings` twin) is consulted "
+        "only where every `produces_from` alias on the matched annotation itself is absent — "
+        "never merely because a catalog declares the sibling key",
+        why="Spec 2026-09-18 §3b word 1. CP-18 row 1 puts `@GET`'s own attributes (none) ahead "
+        "of the sibling `@Produces`/`@Consumes`, mirroring CP-15 row 1's order for "
+        "`path_from_siblings` — a declaration that names its OWN media type is served under "
+        "that type, not under whatever a differently-annotated sibling on the same method "
+        "happens to carry. Preferring the sibling publishes the WRONG media type at "
+        "`resolved`/`compiler` for every declaration that states its own",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        coalesce(list_extract(list_filter(list_transform(\n"
+                "            cp.produces_from,\n"
+                "            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n)"
+                " IS NOT NULL\n"
+                "                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),\n"
+                "                                    [a.args ->> n]) END\n"
+                "        ), v -> v IS NOT NULL), 1), smp.found) AS produces_list,",
+                replace="        coalesce(smp.found, list_extract(list_filter(list_transform(\n"
+                "            cp.produces_from,\n"
+                "            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n)"
+                " IS NOT NULL\n"
+                "                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),\n"
+                "                                    [a.args ->> n]) END\n"
+                "        ), v -> v IS NOT NULL), 1)) AS produces_list,  -- guard disabled",
+            ),
+        ),
+    ),
     "derive_endpoints.path-fallback-is-per-annotation": Guard(
         what="an annotated declaration takes the fallback word of the annotation that MATCHED "
         "it, not the catalog's own default",
