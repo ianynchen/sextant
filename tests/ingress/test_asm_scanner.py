@@ -85,6 +85,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "JdkOrdersClient.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
+        # Groups B and C Task 1: the JAX-RS Kotlin fixture, `jaxrs/KotlinOrderResource.kt`
+        # — one class file for the resource, one for its nested `KtOrder` body type.
+        "KotlinOrderResource$KtOrder.jsonl",
+        "KotlinOrderResource.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
@@ -243,7 +247,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 133 since A2 Task 8: `JdkOrdersClient` and `ApacheOrdersClient`, the JDK and Apache
     # HttpClient fixtures — one class file each; the Apache response-handler lambdas are
     # `invokedynamic`.
-    assert report.documents == 133
+    # 135 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
+    # `KotlinOrderResource$KtOrder`, one class file each.
+    assert report.documents == 135
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -305,6 +311,10 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "JdkOrdersClient.jsonl",
         "KotlinMvcRoutes.jsonl",
         "KotlinOrder.jsonl",
+        # Groups B and C Task 1: the JAX-RS Kotlin fixture, `jaxrs/KotlinOrderResource.kt`
+        # — one class file for the resource, one for its nested `KtOrder` body type.
+        "KotlinOrderResource$KtOrder.jsonl",
+        "KotlinOrderResource.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",

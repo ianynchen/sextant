@@ -14,6 +14,7 @@ from sextant.cli.app import cli
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 SPRING7 = FIXTURES / "orders-spring7"
+QUARKUS = FIXTURES / "orders-quarkus"
 
 
 @pytest.fixture(scope="module")
@@ -212,3 +213,42 @@ def test_the_apache_client_derives_the_builder_and_the_constructor_forms(outboun
         ("POST", "orders.example.com", "/v1/orders", "resolved"),
         ("GET", "orders.example.com", "/v1/orders/7", "resolved"),
     }, sorted(rows, key=str)
+
+
+@pytest.fixture(scope="module")
+def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every HTTP row the Quarkus fixture derives, analysed once. Own copy rather than an
+    import from `test_rest_inbound_delivered.py`: that file is not a shared fixture
+    module, so this one compiles and analyses the module itself, the `spring7` shape."""
+    workspace_dir = tmp_path_factory.mktemp("quarkus-out")
+    compile_fixture(QUARKUS)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(QUARKUS), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "http"]
+    finally:
+        workspace.close()
+
+
+@pytest.mark.xfail(
+    strict=True, reason="mp-rest-client: no catalog reads @RegisterRestClient; spec §3f"
+)
+def test_a_microprofile_rest_client_interface_derives_its_outbound_operations(quarkus_endpoints):
+    out = {
+        (r["method"], r["path"], r["peer"])
+        for r in quarkus_endpoints
+        if r["direction"] == "outbound" and r["protocol"] == "http"
+    }
+    assert {
+        ("GET", "/remote/orders", "orders"),
+        ("GET", "/remote/orders/{id}", "orders"),
+        ("GET", "/invoices", "http://billing.internal/api"),
+    } <= out, sorted(out)
+    assert not [
+        r
+        for r in quarkus_endpoints
+        if r["direction"] == "inbound" and r["path"].startswith("/remote/orders")
+    ]

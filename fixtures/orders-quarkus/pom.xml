@@ -10,12 +10,61 @@
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
+  <!-- Groups B and C (spec §3e/§3f): the Quarkus REST (JAX-RS) surface and the
+       MicroProfile REST Client, beside the reactive routes this module already had.
+       The BOM pins every version below; nothing here declares its own. -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>3.17.5</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
   <dependencies>
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-reactive-routes</artifactId>
       <version>3.17.5</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- `OrderResource`'s five Quarkus REST cases (§3e) — the API only, same
+         all-exclusions pattern `quarkus-reactive-routes` above uses. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.ws.rs</groupId>
+      <artifactId>jakarta.ws.rs-api</artifactId>
+    </dependency>
+    <!-- `@RestStreamElementType`, `@RestForm`, `@RestPath`. The BOM publishes this
+         artifact under `io.quarkus.resteasy.reactive`, not the upstream
+         `org.jboss.resteasy.reactive` groupId — same package name (`org.jboss.
+         resteasy.reactive`) on the classes, Quarkus's own fork's coordinate. -->
+    <dependency>
+      <groupId>io.quarkus.resteasy.reactive</groupId>
+      <artifactId>resteasy-reactive-common</artifactId>
+    </dependency>
+    <!-- `Multi`, the return type of `OrderResource`'s SSE handlers. -->
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId>
+      <artifactId>mutiny</artifactId>
+    </dependency>
+    <!-- `RoutingContext`, injected without `@Context` on `whoami`. -->
+    <dependency>
+      <groupId>io.vertx</groupId>
+      <artifactId>vertx-web</artifactId>
+    </dependency>
+    <!-- `OrdersClient`/`BillingClient`'s `@RegisterRestClient` (spec §3f). -->
+    <dependency>
+      <groupId>org.eclipse.microprofile.rest.client</groupId>
+      <artifactId>microprofile-rest-client-api</artifactId>
+      <version>4.0</version>
     </dependency>
   </dependencies>
 </project>

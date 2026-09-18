@@ -213,7 +213,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 146 since A2 Task 8: `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
     # — one class file each; the Apache response-handler lambdas are `invokedynamic`
     # bodies of the same class.
-    assert metadata["coverage"]["documents"] == 146
+    # 148 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
+    # `KotlinOrderResource$KtOrder` — one class file each, one document each.
+    assert metadata["coverage"]["documents"] == 148
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

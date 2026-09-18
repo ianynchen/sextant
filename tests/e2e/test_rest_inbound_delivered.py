@@ -5,6 +5,7 @@ closed.
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -281,6 +282,72 @@ def test_class_level_produces_reaches_every_handler_that_declares_none(spring7):
     )
 
 
+def _spring7_row(endpoints: list[dict], method: str, path: str) -> dict:
+    rows = [
+        r
+        for r in endpoints
+        if r["method"] == method and r["path"] == path and r["direction"] == "inbound"
+    ]
+    assert len(rows) == 1, (
+        f"{method} {path}: {len(rows)} rows; paths: {sorted(r['path'] for r in endpoints)}"
+    )
+    return rows[0]
+
+
+@pytest.mark.xfail(
+    strict=True, reason="javax-jaxrs: no catalog reads the javax.ws.rs spelling; spec §3a"
+)
+def test_the_javax_spelling_derives_the_same_operations(spring7_routes):
+    expected = {
+        ("http", "GET", "/legacy/orders"),
+        ("http", "POST", "/legacy/orders"),
+        ("http", "GET", "/legacy/orders/{id}"),
+    }
+    assert expected <= spring7_routes, sorted(expected - spring7_routes)
+
+
+@pytest.mark.xfail(
+    strict=True, reason="quarkus-jaxrs (M2): sole_unannotated disqualifies a @Valid body; spec §4"
+)
+def test_a_validated_entity_parameter_is_still_the_body(spring7):
+    endpoints, _ = spring7
+    row = _spring7_row(endpoints, "POST", "/validated/orders")
+    assert row["request_shape"] is not None
+    assert json.loads(row["request_shape"])["shape_id"].endswith("ValidatedResource$Order#")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="quarkus-jaxrs (M3): an implementor inherits the mapping but not the sibling @Path/@Produces; spec §3b word 3",
+)
+def test_a_class_implementing_a_path_interface_derives_the_interfaces_operations(spring7):
+    endpoints, _ = spring7
+    assert {(r["method"], r["path"]) for r in endpoints if r["path"].startswith("/api/orders")} == {
+        ("GET", "/api/orders"),
+        ("GET", "/api/orders/{id}"),
+        ("GET", "/api/orders/events"),
+    }
+    by_id = _spring7_row(endpoints, "GET", "/api/orders/{id}")
+    assert by_id["produces"] == '["application/json"]'
+    assert by_id["handler"].endswith(
+        "OrdersResource#byId(sig_" + by_id["handler"].split("sig_")[1]
+    )  # the IMPLEMENTOR handles it
+    assert _spring7_row(endpoints, "GET", "/api/orders/events")["protocol"] == "sse"
+
+
+@pytest.mark.xfail(
+    strict=True, reason="jaxrs-sse (word 1): produces is read off no sibling; spec §3b"
+)
+def test_jaxrs_media_comes_from_the_sibling_and_the_class_default(spring7):
+    endpoints, _ = spring7
+    assert (
+        _spring7_row(endpoints, "GET", "/jaxrs/orders")["produces"] == '["application/json"]'
+    )  # class-level @Produces
+    assert (
+        _spring7_row(endpoints, "POST", "/jaxrs/orders")["consumes"] == '["application/json"]'
+    )  # method-level @Consumes
+
+
 def test_two_versions_of_one_route_are_not_reported_as_a_conflict(spring7_questions):
     """Spring 7 API versioning. `version` is a request condition `RequestMappingInfo.equals`
     compares exactly as it compares `params` and `headers`, so two handlers on `/orders`
@@ -484,6 +551,30 @@ def test_quarkus_route_base_media_reaches_every_route(quarkus_media):
         '["application/json"]',
         '["application/json"]',
     ), f"the route's own consumes was lost or the class produces did not reach it: {quarkus_media}"
+
+
+@pytest.mark.xfail(
+    strict=True, reason="quarkus-jaxrs (M4): implicit path/container/context bindings; spec §4"
+)
+def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
+    def row(method, path):
+        return next(r for r in quarkus_endpoints if r["method"] == method and r["path"] == path)
+
+    assert row("GET", "/q/orders/{id}")["request_shape"] is None  # `id` is the path variable
+    assert json.loads(row("PUT", "/q/orders/{id}")["request_shape"])["shape_id"].endswith(
+        "OrderResource$Order#"
+    )
+    assert row("POST", "/q/orders/upload")["request_shape"] is None  # container
+    assert row("GET", "/q/orders/whoami")["request_shape"] is None  # RoutingContext
+
+
+@pytest.mark.xfail(
+    strict=True, reason="quarkus-jaxrs (M1): @RestStreamElementType implies SSE; spec §3c"
+)
+def test_quarkus_element_type_alone_makes_a_stream_sse(quarkus_endpoints):
+    protocols = {r["path"]: r["protocol"] for r in quarkus_endpoints if r["direction"] == "inbound"}
+    assert protocols["/q/orders/events"] == "sse"
+    assert protocols["/q/orders/ticks"] == "sse"
 
 
 JAVALIN = FIXTURES / "orders-javalin"
