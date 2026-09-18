@@ -85,11 +85,31 @@ sed -n '340,395p' ResteasyReactiveScanner.java
 352                       && Modifier.isInterface(classWithJaxrsMethod.flags())
 353                       && !clientInterfaces.containsKey(classWithJaxrsMethod.name())) {
 354                   clientInterfaces.put(classWithJaxrsMethod.name(), "");
-...
-361   //now index possible sub resources. These are all classes that have method annotations
-362   //that are not annotated @Path
-...
-382   Map<DotName, ClassInfo> possibleSubResources = new HashMap<>();
+355               }
+356           }
+357       }
+358   }
+359
+360   //now index possible sub resources. These are all classes that have method annotations
+361   //that are not annotated @Path
+362   Deque<ClassInfo> toScan = new ArrayDeque<>();
+363   for (DotName methodAnnotation : httpAnnotationToMethod.keySet()) {
+364       for (AnnotationInstance instance : index.getAnnotations(methodAnnotation)) {
+365           MethodInfo method = instance.target().asMethod();
+366           ClassInfo classInfo = method.declaringClass();
+367           toScan.add(classInfo);
+368       }
+369   }
+370   //sub resources can also have just a path annotation
+371   //if they are 'intermediate' sub resources
+372   for (AnnotationInstance instance : index.getAnnotations(ResteasyReactiveDotNames.PATH)) {
+373       if (instance.target().kind() == AnnotationTarget.Kind.METHOD) {
+374           MethodInfo method = instance.target().asMethod();
+375           ClassInfo classInfo = method.declaringClass();
+376           toScan.add(classInfo);
+377       }
+378   }
+379   Map<DotName, ClassInfo> possibleSubResources = new HashMap<>();
 ```
 
 **Claim.** Confirmed at 3.39.4, matching the design review's R1 reading exactly:
@@ -174,15 +194,17 @@ its argument comes from `additionalContextTypes(List<ContextTypeBuildItem>)`,
 which unions the incoming `ContextTypeBuildItem`s with a static
 `CONTEXT_TYPES` field. That field's initializer (`static {}`, disassembled):
 ```
-17: ldc  class io/vertx/core/http/HttpServerRequest
-20: invokevirtual Class.getName:()String
-23: invokestatic  DotName.createSimple:(String)DotName
-26: ldc  class io/vertx/core/http/HttpServerResponse
-...  DotName.createSimple
-35: ldc  class io/vertx/ext/web/RoutingContext
-...  DotName.createSimple
-44: invokestatic  Set.of:(Object,Object,Object)Set;
-47: putstatic     Field CONTEXT_TYPES:Set;
+17: ldc_w  #2199  // class io/vertx/core/http/HttpServerRequest
+20: invokevirtual #67    // Method java/lang/Class.getName:()Ljava/lang/String;
+23: invokestatic  #865   // Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName;
+26: ldc_w  #2201  // class io/vertx/core/http/HttpServerResponse
+29: invokevirtual #67    // Method java/lang/Class.getName:()Ljava/lang/String;
+32: invokestatic  #865   // Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName;
+35: ldc_w  #2203  // class io/vertx/ext/web/RoutingContext
+38: invokevirtual #67    // Method java/lang/Class.getName:()Ljava/lang/String;
+41: invokestatic  #865   // Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName;
+44: invokestatic  #262   // InterfaceMethod java/util/Set.of:(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Set;
+47: putstatic     #1074  // Field CONTEXT_TYPES:Ljava/util/Set;
 ```
 
 **Claim.** `DEFAULT_CONTEXT_TYPES` (JAX-RS `@Context` types plus Quarkus's own
@@ -206,29 +228,38 @@ sed -n '265,268p' ResteasyReactiveDotNames.java
 
 **Output.**
 ```
-1386  } else {
-1387      // auto context parameters
-1388      if (!field
-1389              && paramType.kind() == Kind.CLASS
-1390              && isContextType(paramType.asClassType())) {
-1391          // no name required
-1392          builder.setType(ParameterType.CONTEXT);
-1393      } else if (!field
-1394              && paramType.kind() == Kind.CLASS
-1395              && isParameterContainerType(paramType.asClassType())) {
-1396          // auto @BeanParam/@MultipartForm parameters
-1397          builder.setType(ParameterType.BEAN);
-1398      } else if (!field && pathParameters.contains(sourceName)) {
-1399          builder.setName(sourceName);
-1400          builder.setType(ParameterType.PATH);
-1401          builder.setErrorLocation(builder.getRawErrorLocation()
-1402              + " (this parameter name matches the @Path parameter name, so it has been implicitly assumed to be an @PathParam and not the request body)",
-1403              builder.getErrorLocationParameters());
-1404          convertible = true;
-...
-1408      } else {
-1409          //un-annotated field
-...
+1380  // no name required
+1381  builder.setType(ParameterType.ASYNC_RESPONSE);
+1382  builder.setSuspended(true);
+1383  } else {
+1384      // auto context parameters
+1385      if (!field
+1386              && paramType.kind() == Kind.CLASS
+1387              && isContextType(paramType.asClassType())) {
+1388          // no name required
+1389          builder.setType(ParameterType.CONTEXT);
+1390      } else if (!field
+1391              && paramType.kind() == Kind.CLASS
+1392              && isParameterContainerType(paramType.asClassType())) {
+1393          // auto @BeanParam/@MultipartForm parameters
+1394          builder.setType(ParameterType.BEAN);
+1395      } else if (!field && pathParameters.contains(sourceName)) {
+1396          builder.setName(sourceName);
+1397          builder.setType(ParameterType.PATH);
+1398          builder.setErrorLocation(builder.getRawErrorLocation()
+1399              + " (this parameter name matches the @Path parameter name, so it has been implicitly assumed to be an @PathParam and not the request body)",
+1400              builder.getErrorLocationParameters());
+1401          convertible = true;
+1402      } else if (!field && paramType.name().equals(MULTI_PART_DATA_INPUT)) {
+1403          builder.setType(ParameterType.MULTI_PART_DATA_INPUT);
+1404          builder.setSingle(true);
+1405          return builder;
+1406      } else {
+1407          //un-annotated field
+1408          //just ignore it
+1409          if (field) {
+1410              return builder;
+1411          }
 1412          builder.setName(sourceName);
 1413          builder.setType(ParameterType.BODY);
 1414      }
@@ -257,13 +288,13 @@ name match → body.)
 265  public static final Set<DotName> JAX_RS_ANNOTATIONS_FOR_FIELDS = new HashSet<>(
 266          Arrays.asList(BEAN_PARAM, MULTI_PART_FORM_PARAM, PATH_PARAM, QUERY_PARAM, HEADER_PARAM, FORM_PARAM, MATRIX_PARAM,
 267                  COOKIE_PARAM, REST_PATH_PARAM, REST_QUERY_PARAM, REST_HEADER_PARAM, REST_FORM_PARAM, REST_MATRIX_PARAM,
-268                  COOKIE_PARAM_from_REST_COOKIE_PARAM)); -- see note
+268                  REST_COOKIE_PARAM, CONTEXT, DEFAULT_VALUE, SUSPENDED));
 ```
 
 **Claim.** Once no explicit binding annotation applies, a parameter is
 resolved in this order: **context type → container (bean-param) type →
-path-variable name match → body** (1388–1414), confirming the order the spec
-names, with the message quoted verbatim at 1401–1403. `ParamContainerScanner`
+path-variable name match → body** (1384–1414), confirming the order the spec
+names, with the message quoted verbatim at 1398–1400. `ParamContainerScanner`
 (`scanParameterContainers`) discovers a container type by finding ANY class
 that declares a field or a bean-property setter/getter carrying one of the
 `JAX_RS_ANNOTATIONS_FOR_FIELDS` set (14–31); that set includes the standard
@@ -276,14 +307,14 @@ container rule and the Quarkus-specific additions to `bound_by`.
 **Command.**
 ```
 curl -s https://repo1.maven.org/maven2/io/quarkus/quarkus-rest/maven-metadata.xml | grep -o '<version>3\.[0-9]*\.0</version>' | head -3
-curl -s https://repo1.maven.org/maven2/io/quarkus/quarkus-resteasy-reactive/maven-metadata.xml | grep -o '<version>3\.[0-9]*\.[0-9]*</version>' | tail -5
+curl -s https://repo1.maven.org/maven2/io/quarkus/quarkus-resteasy-reactive/maven-metadata.xml | grep -o '<version>3\.[0-9]*\.[0-9]*</version>' | tail -10
 cat <scratchpad>/quarkus-resteasy-reactive-3.15.7.pom
 ```
 
 **Output.**
 ```
 quarkus-rest earliest versions: 3.9.0.CR1, 3.9.0.CR2, 3.9.0
-quarkus-resteasy-reactive last versions: ...3.14.4, 3.15.0, 3.15.1 .. 3.15.7
+quarkus-resteasy-reactive last versions: 3.14.3, 3.14.4, 3.15.0, 3.15.1, 3.15.2, 3.15.3, 3.15.4, 3.15.5, 3.15.6, 3.15.7
 ```
 `quarkus-resteasy-reactive-3.15.7.pom` (the LAST version ever published under
 that coordinate):
@@ -320,42 +351,95 @@ sed -n '1067,1076p' EndpointIndexer.java   # getInheritableAnnotation
 
 **Output — `AnnotationStore` itself is a thin Jandex delegate.**
 ```
-public org.jboss.jandex.AnnotationInstance getAnnotation(AnnotationTarget, DotName);
+public org.jboss.jandex.AnnotationInstance getAnnotation(org.jboss.jandex.AnnotationTarget, org.jboss.jandex.DotName);
     Code:
          0: aload_0
-         1: getfield      #23      // Field delegate:Lorg/jboss/jandex/AnnotationOverlay;
+         1: getfield      #23                 // Field delegate:Lorg/jboss/jandex/AnnotationOverlay;
          4: aload_1
-         5: invokeinterface       // AnnotationTarget.asDeclaration:()Declaration;
+         5: invokeinterface #29,  1           // InterfaceMethod org/jboss/jandex/AnnotationTarget.asDeclaration:()Lorg/jboss/jandex/Declaration;
         10: aload_2
-        11: invokeinterface       // AnnotationOverlay.annotation:(Declaration,DotName)AnnotationInstance;
+        11: invokeinterface #39,  3           // InterfaceMethod org/jboss/jandex/AnnotationOverlay.annotation:(Lorg/jboss/jandex/Declaration;Lorg/jboss/jandex/DotName;)Lorg/jboss/jandex/AnnotationInstance;
         16: areturn
 ```
 `getAnnotation(target, name)` looks up the annotation declared on THAT
 declaration alone via the Jandex `AnnotationOverlay` — no class-hierarchy walk
 happens inside `AnnotationStore` itself.
 
-**Output — `EndpointIndexer.collectEndpoints`, the actual hierarchy walk (line
-numbers from the file).**
+**Output — `EndpointIndexer.collectEndpoints`, the actual hierarchy walk, full
+method body, line numbers from the file (`private static List<FoundEndpoint>
+collectEndpoints(…)`, signature at 456–459 omitted from the excerpt below for
+space; every line of the body from the first statement to the closing brace
+is included).**
 ```
-476   for (DotName httpMethod : httpAnnotationToMethod.keySet().stream().sorted().toList()) {
-477       List<MethodInfo> methods = currentClassInfo.methods();
-478       for (MethodInfo info : methods) {
-479           AnnotationInstance annotation = annotationStore.getAnnotation(info, httpMethod);
-480           if (annotation != null) {
-...
-486                   seenMethods.add(descriptor);
-487                   ret.add(new FoundEndpoint(currentClassInfo, classNameBindings, info, httpMethod));
-...
-512   DotName superClassName = currentClassInfo.superName();
-513   if (superClassName != null && !superClassName.equals(OBJECT)) {
-514       ClassInfo superClass = index.getClassByName(superClassName);
-515       if (superClass != null) {
-516           ret.addAll(collectEndpoints(superClass, actualEndpointInfo, seenMethods, ...));
-520   List<DotName> interfaces = currentClassInfo.interfaceNames();
-521   for (DotName i : interfaces) {
-522       ClassInfo superClass = index.getClassByName(i);
-523       if (superClass != null) {
-524           ret.addAll(collectEndpoints(superClass, actualEndpointInfo, seenMethods, ...));
+461         if (considerApplication && applicationScanningResult != null
+462                 && !applicationScanningResult.keepClass(actualEndpointInfo.name().toString())) {
+463             return Collections.emptyList();
+464         }
+465
+466         // $$CDIWrapper suffix is used to generate CDI beans from interfaces, we don't want to create endpoints for them:
+467         if (currentClassInfo.name().toString().endsWith(CDI_WRAPPER_SUFFIX)) {
+468             return Collections.emptyList();
+469         }
+470
+471         List<FoundEndpoint> ret = new ArrayList<>();
+472         Set<String> classNameBindings = NameBindingUtil.nameBindingNames(index, currentClassInfo);
+473         if (classNameBindings.isEmpty()) {
+474             classNameBindings = existingClassNameBindings;
+475         }
+476
+477         for (DotName httpMethod : httpAnnotationToMethod.keySet().stream().sorted().toList()) {
+478             List<MethodInfo> methods = currentClassInfo.methods();
+479             for (MethodInfo info : methods) {
+480                 AnnotationInstance annotation = annotationStore.getAnnotation(info, httpMethod);
+481                 if (annotation != null) {
+482                     if (!hasProperModifiers(info)) {
+483                         continue;
+484                     }
+485                     String descriptor = methodDescriptor(info);
+486                     if (seenMethods.contains(descriptor)) {
+487                         continue;
+488                     }
+489                     seenMethods.add(descriptor);
+490                     ret.add(new FoundEndpoint(currentClassInfo, classNameBindings, info, httpMethod));
+491                 }
+492             }
+493         }
+494
+495         //now resource locator methods
+496         List<MethodInfo> methods = currentClassInfo.methods();
+497         for (MethodInfo info : methods) {
+498             AnnotationInstance annotation = annotationStore.getAnnotation(info, PATH);
+499             if (annotation != null) {
+500                 if (!hasProperModifiers(info)) {
+501                     continue;
+502                 }
+503                 String descriptor = methodDescriptor(info);
+504                 if (seenMethods.contains(descriptor)) {
+505                     continue;
+506                 }
+507                 seenMethods.add(descriptor);
+508                 ret.add(new FoundEndpoint(currentClassInfo, classNameBindings, info, null));
+509             }
+510         }
+511
+512         DotName superClassName = currentClassInfo.superName();
+513         if (superClassName != null && !superClassName.equals(OBJECT)) {
+514             ClassInfo superClass = index.getClassByName(superClassName);
+515             if (superClass != null) {
+516                 ret.addAll(collectEndpoints(superClass, actualEndpointInfo, seenMethods, classNameBindings, considerApplication,
+517                         httpAnnotationToMethod, index, applicationScanningResult, annotationStore));
+518             }
+519         }
+520         List<DotName> interfaces = currentClassInfo.interfaceNames();
+521         for (DotName i : interfaces) {
+522             ClassInfo superClass = index.getClassByName(i);
+523             if (superClass != null) {
+524                 ret.addAll(collectEndpoints(superClass, actualEndpointInfo, seenMethods, classNameBindings, considerApplication,
+525                         httpAnnotationToMethod, index, applicationScanningResult, annotationStore));
+526             }
+527         }
+528         return ret;
+529     }
 ```
 `getInheritableAnnotation` (1068–1075) — method-then-declaring-CLASS fallback
 — exists but is used ONLY for `@Blocking`/`@NonBlocking`/`@RunOnVirtualThread`

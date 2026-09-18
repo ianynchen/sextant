@@ -1,14 +1,16 @@
-# CP-22 — MicroProfile REST Client: `@RegisterRestClient`'s gate, whether `peer` is read off the prefix annotation's own row, and Quarkus's base-URI resolution order
+# CP-22 — MicroProfile REST Client: `@RegisterRestClient`'s attributes, whether `peer` and `prefix` share an annotation row, and Quarkus's base-URI resolution order
 
 **Question.** Group B/C's outbound (client) catalogs mirror the inbound JAX-RS
-catalogs on the same words, with `@RegisterRestClient` as the prefix-gate
-annotation. Three facts anchor that: `@RegisterRestClient`'s own attribute set
-and defaults (row 1); whether `derive_endpoints.sql`'s `peer` column is read
-off the SAME annotation row as `prefix` — i.e. whether a `peer_annotation` key
-is even needed, or whether `peer_from` naming an attribute on the prefix gate
-annotation is always sufficient (row 2, spec §3f); and, for the Quarkus
-implementation specifically, what order `baseUri` (from the annotation),
-`configKey` (mapped to `/mp-rest/url`-style properties) and Quarkus's own
+catalogs on the same words. Three facts anchor that: `@RegisterRestClient`'s
+own attribute set and defaults (row 1); whether `derive_endpoints.sql`'s
+`prefixes` CTE reads `peer` off the SAME annotation row as `prefix` — and,
+given row 1's finding that `@RegisterRestClient` carries no prefix attribute
+at all, whether MP REST Client's `prefix` (`@Path`) and `peer`
+(`@RegisterRestClient`) land on two different annotations, meaning
+`peer_from` alone is not sufficient and a `peer_annotation`-shaped key is
+needed (row 2, spec §3f); and, for the Quarkus implementation specifically,
+what order `baseUri` (from the annotation), `configKey` (mapped to
+`/mp-rest/url`-style properties) and Quarkus's own
 `quarkus.rest-client.<key>.url` config resolve in — the boundary statement a
 catalog's `measured:` block needs (row 3).
 
@@ -93,7 +95,8 @@ sed -n '935,972p' src/sextant/storage/duckdb/derive_endpoints.sql
 944              cp.peer_from,
 945              n -> coalesce(a.args -> n ->> 0, a.args ->> n)
 946          ), v -> v IS NOT NULL), 1) AS peer,
-...
+... (lines 947–967 omitted: the `consumes_list`/`produces_list` extraction
+    and its comment, irrelevant to the prefix/peer question this row asks)
 968      FROM annotations_effective a
 969      JOIN prefix_gates pg ON pg.fqn = a.annotation
 970           AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
@@ -101,20 +104,38 @@ sed -n '935,972p' src/sextant/storage/duckdb/derive_endpoints.sql
 972  ),
 ```
 
-**Claim (settling row 2 — TRUE as the brief implies).** The `prefixes` CTE
-selects from a SINGLE row of `annotations_effective a`, filtered to rows whose
-`a.annotation` matches `prefix_gates.fqn` (line 969 — the prefix-gate
-annotation, e.g. `@RegisterRestClient`). Both `prefix` (939–942, from
-`cp.prefix_from`) and `peer` (943–946, from `cp.peer_from`) are extracted from
-`a.args` on that SAME joined row — there is no second join to any other
-annotation, no `peer_gates` table, nothing that could read `peer` off a
-DIFFERENT annotation than the one that supplied `prefix`. **`peer` is read
-exclusively off the prefix gate annotation's own row.** This means Group B/C's
-Word 3f does NOT need a separate `peer_annotation` key: as long as a
-framework spells its peer/service-id attribute on the SAME annotation as its
-prefix (as `@RegisterRestClient` does — `configKey`), `peer_from` naming that
-attribute is sufficient, and the design spec's §3f first bullet is answered:
-no new key needed for this shape.
+**Claim (settling row 2).** The `prefixes` CTE selects from a SINGLE row of
+`annotations_effective a`, filtered to rows whose `a.annotation` matches
+`prefix_gates.fqn` (line 969 — the prefix-gate annotation, e.g.
+`@RegisterRestClient`). Both `prefix` (939–942, from `cp.prefix_from`) and
+`peer` (943–946, from `cp.peer_from`) are extracted from `a.args` on that SAME
+joined row — there is no second join to any other annotation, no
+`peer_gates` table, nothing that could read `peer` off a DIFFERENT annotation
+than the one that supplied `prefix`. **The measurement confirms: `peer` is
+read exclusively off the prefix gate annotation's own row.**
+
+That measurement, applied to MicroProfile REST Client, is where the shape
+breaks rather than holds. Row 1 already showed `@RegisterRestClient` declares
+exactly two attributes, `baseUri()` and `configKey()` — **no prefix attribute
+of any kind.** The prefix on an MP REST Client interface is not
+`@RegisterRestClient` at all; it is the plain JAX-RS `@Path` (CP-18 row 2),
+a DIFFERENT annotation entirely. So for this framework, `prefix` and `peer`
+do NOT live on the same annotation row: `@Path` supplies the prefix,
+`@RegisterRestClient` supplies the peer (`configKey`, or `baseUri` as a
+fallback identifier). Under the current SQL, `prefixes` joins on a single
+`prefix_gates.fqn` — if a catalog names `@Path` as `prefix_gates` (which it
+must, since that is where the actual path string lives), `cp.peer_from`
+naming `[configKey, baseUri]` would be evaluated against `@Path`'s own
+`a.args`, which carries neither attribute, and `peer` would derive NULL for
+every MP REST Client interface. **Group B/C's Word 3f therefore DOES need a
+`peer_annotation` key (or an equivalent second-annotation lookup) for this
+framework** — `peer_from` alone, naming an attribute on the SAME row as
+`prefix_from`, is insufficient whenever prefix and peer are declared on two
+different annotations, which is exactly MP REST Client's shape. The design
+spec's §3f first bullet is answered the other way from what this probe
+originally concluded: the plan's Task 10b Step 2 already anticipates a
+`peer_annotation`-shaped key, and this measurement is the evidence that Task
+10b needs it, not evidence that it can be skipped.
 
 ### 3 — Quarkus's base-URI resolution: annotation `baseUri` vs. `configKey`-mapped config vs. `quarkus.rest-client.<key>.url`
 
@@ -182,11 +203,17 @@ observed.
 1. Row 1: `@RegisterRestClient` is confirmed `@Target(TYPE)`, two `String`
    attributes (`baseUri`, `configKey`), both defaulting to `""`, unchanged
    3.0.1 → 4.0.
-2. Row 2: **TRUE** — `peer` is read off the prefix gate annotation's own row
-   only (`derive_endpoints.sql`'s `prefixes` CTE joins `prefix_gates` once and
-   reads both `prefix` and `peer` from the same `a.args`). No `peer_annotation`
-   key is needed for this shape; Task 10b does not need to add one on this
-   evidence.
+2. Row 2: the SQL measurement holds — `derive_endpoints.sql`'s `prefixes` CTE
+   joins `prefix_gates` once and reads both `prefix` and `peer` from that
+   SAME row's `a.args`; there is no mechanism to read `peer` off a second
+   annotation. Applied to MP REST Client, this is why a `peer_annotation` key
+   IS needed: row 1 shows `@RegisterRestClient` has no prefix attribute, so
+   the prefix comes from `@Path` instead — prefix and peer sit on two
+   different annotations for this framework, and `peer_from` alone (naming
+   an attribute on whichever single annotation `prefix_gates` names) cannot
+   reach `@RegisterRestClient`'s `configKey`/`baseUri` when `prefix_gates`
+   names `@Path`. Task 10b Step 2, which already anticipates this key, is
+   confirmed necessary by this measurement rather than made optional by it.
 3. Row 3: Quarkus's own base-URI resolution (`RestClientCDIDelegateBuilder.
    configureBaseUrl`) prefers `quarkus.rest-client.<key>.url`/`.uri` config
    over the annotation's `baseUri` when both are present, falling back to the

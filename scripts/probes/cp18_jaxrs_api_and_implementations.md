@@ -200,7 +200,9 @@ javap -c -p -cp $RESTEASY org.jboss.resteasy.util.AnnotationResolver | sed -n '/
 public static java.lang.Class<?> getAnnotatedResourceClass(java.lang.Class<?>);
     Code:
          0: aconst_null
-         ...
+         1: astore_1
+         2: aload_0
+         3: astore_2
          4: aload_2
          5: ldc           #1                  // class jakarta/ws/rs/Path
          7: invokevirtual #3                  // Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z
@@ -211,16 +213,39 @@ public static java.lang.Class<?> getAnnotatedResourceClass(java.lang.Class<?>);
         16: ifnonnull     66
         19: aload_2
         20: invokevirtual #9                  // Method java/lang/Class.getInterfaces:()[Ljava/lang/Class;
-        ...
+        23: astore_3
+        24: aload_3
+        25: arraylength
+        26: istore        4
+        28: iconst_0
+        29: istore        5
+        31: iload         5
+        33: iload         4
+        35: if_icmpge     66
+        38: aload_3
+        39: iload         5
+        41: aaload
+        42: astore        6
         44: aload         6
         46: ldc           #1                  // class jakarta/ws/rs/Path
         48: invokevirtual #3                  // Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z
-        ...
+        51: ifeq          60
+        54: aload         6
+        56: astore_1
+        57: goto          66
+        60: iinc          5, 1
+        63: goto          31
         66: aload_2
         67: invokevirtual #13                 // Method java/lang/Class.getSuperclass:()Ljava/lang/Class;
         70: dup
         71: astore_2
         72: ifnonnull     4
+        75: aload_1
+        76: ifnull        81
+        79: aload_1
+        80: areturn
+        81: aload_0
+        82: areturn
 ```
 
 **Output — RESTEasy classic `AnnotationResolver.getClassWithAnnotation`.**
@@ -235,13 +260,42 @@ public static java.lang.Class<?> getClassWithAnnotation(java.lang.Class<?>, java
          9: areturn
         10: aload_0
         11: invokevirtual #13                 // Method java/lang/Class.getInterfaces:()[Ljava/lang/Class;
-        ...
+        14: astore_2
+        15: aload_2
+        16: arraylength
+        17: istore_3
+        18: iconst_0
+        19: istore        4
+        21: iload         4
+        23: iload_3
+        24: if_icmpge     51
+        27: aload_2
+        28: iload         4
+        30: aaload
+        31: astore        5
         33: aload         5
         35: aload_1
         36: invokevirtual #7                  // Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z
-        ...
+        39: ifeq          45
+        42: aload         5
+        44: areturn
+        45: iinc          4, 1
+        48: goto          21
         51: aload_0
         52: invokevirtual #17                 // Method java/lang/Class.getSuperclass:()Ljava/lang/Class;
+        55: astore_2
+        56: aload_2
+        57: ldc           #2                  // class java/lang/Object
+        59: if_acmpeq     72
+        62: aload_2
+        63: ifnull        72
+        66: aload_2
+        67: aload_1
+        68: invokestatic  #21                 // Method getClassWithAnnotation:(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/Class;
+        71: areturn
+        72: aconst_null
+        73: areturn
+}
 ```
 
 **Claim.** Both implementations check the class itself, then `getInterfaces()`,
