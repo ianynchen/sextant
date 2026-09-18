@@ -862,6 +862,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "contracts.conditional-wrapper-needs-its-condition": Guard(
+        what="a conditional `wrappers` entry (`when`) is handed to `root_type` for an owner "
+        "only where its condition actually holds for that owner",
+        why='Spec 2026-09-18 §5a. A Spring Kafka `@KafkaListener(batch = "true")` handler '
+        "takes `List<OrderEvent>` where the wire carries one `OrderEvent` per record; a "
+        "non-batched listener on the same type takes the wire's own single `OrderEvent`. "
+        "Dropping the filter unwraps `List` for BOTH — the non-batched handler's real "
+        "`List<OrderEvent>` payload is reported as a bare `OrderEvent`, a wrong contract for "
+        "a call the catalog never declared batched",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find="    return [\n"
+                "        *rules.wrappers,\n"
+                "        *(\n"
+                "            wrapper\n"
+                "            for condition, wrapper in rules.conditional_wrappers\n"
+                "            if holds(condition, owner, index)\n"
+                "        ),\n"
+                "    ]",
+                replace="    return [\n"
+                "        *rules.wrappers,\n"
+                "        *(wrapper for condition, wrapper in rules.conditional_wrappers),\n"
+                "    ]  # guard disabled",
+            ),
+        ),
+    ),
     "derive_endpoints.path-fallback-is-per-annotation": Guard(
         what="an annotated declaration takes the fallback word of the annotation that MATCHED "
         "it, not the catalog's own default",

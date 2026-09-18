@@ -628,7 +628,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # whose payload this pass DID read.
         if request_shape is None and identity_type is not None:
             request_shape = _payload_descriptor(
-                _bare_reference(identity_type), carrier_rules.rules, carrier_rules.enums, referenced
+                _bare_reference(identity_type),
+                carrier_rules.rules,
+                carrier_rules.enums,
+                referenced,
+                carrier_rules.rules.wrappers,
             )
         response_shape = argument_descriptor(response_argument, facts, carrier_rules)
         # One row per destination tuple (the same multi-topic precedent

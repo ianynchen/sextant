@@ -405,7 +405,9 @@ def _descriptor_of(
     captured call argument goes through, because that is exactly what this
     is: a type named by a call site rather than by a signature.
     """
-    return _payload_descriptor(_bare_reference(payload_type), rules, enums, referenced)
+    return _payload_descriptor(
+        _bare_reference(payload_type), rules, enums, referenced, rules.wrappers
+    )
 
 
 def _binding(endpoint: dict[str, Any], descriptor: str) -> dict[str, Any]:

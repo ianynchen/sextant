@@ -1018,7 +1018,11 @@ def argument_descriptor(
     """
     reference = _reference_of(argument, workspace_types, catalog_rules)
     return _payload_descriptor(
-        reference, catalog_rules.rules, catalog_rules.enums, workspace_types.referenced
+        reference,
+        catalog_rules.rules,
+        catalog_rules.enums,
+        workspace_types.referenced,
+        catalog_rules.rules.wrappers,
     )
 
 

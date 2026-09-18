@@ -28,9 +28,16 @@ from sextant.application.resolve.shapes import (
     derive_shapes,
     root_type,
 )
-from sextant.application.resolve.shapes.contracts import _body_type, _contracts_of, _owns
+from sextant.application.resolve.shapes.contracts import (
+    _body_type,
+    _check_conditional_wrappers,
+    _contracts_of,
+    _owns,
+    _wrappers_for,
+)
 from sextant.application.resolve.shapes.expansion import _rules_of
 from sextant.application.resolve.shapes.nullability import _scope_nullable
+from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.facts import DeclaredFieldFact, DeclaredShapeFact, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -1957,6 +1964,78 @@ def test_the_messaging_catalogs_wrappers_include_the_harvested_baseline_plus_bro
     }
     assert [w for w in catalogs["spring-jms"].wrappers if w not in baseline] == []
     assert [w for w in catalogs["spring-sqs"].wrappers if w not in baseline] == []
+
+
+# ---------------------------------------------------------------------------
+# `wrappers[].when` (Task 8, spec 2026-09-18 §5a): a conditional envelope,
+# evaluated per OWNER at ROOTING — never at expansion, which is global and
+# insert-if-absent and must never see the conditional half at all. A Spring
+# Kafka `@KafkaListener(batch = "true")` handler takes `List<OrderEvent>`
+# where the wire carries one `OrderEvent` per record; the same `List` on a
+# non-batched listener is a real payload, not an envelope — so `List` is an
+# envelope only where the owner's own `@KafkaListener` says `batch: true`.
+# ---------------------------------------------------------------------------
+
+_KL = "org/springframework/kafka/annotation/KafkaListener#"
+
+_BATCH_LIST_WRAPPER = {
+    "type": "java.util.List",
+    "payload_arg": 0,
+    "semantics": "envelope",
+    "when": {
+        "annotation_arg": {
+            "annotation": "org.springframework.kafka.annotation.KafkaListener",
+            "name": "batch",
+            "parses_true": True,
+        }
+    },
+}
+
+
+def _catalog_with_wrappers(wrappers: list[dict]) -> Catalog:
+    """The invented serialiser (`_CATALOG`) with its `wrappers` list replaced
+    by the one under test — every other block `_rules_of` reads (`known_types`,
+    `serialization`, `nullability`) stays, unused by this rule."""
+    return Catalog(**{**vars(_CATALOG), "wrappers": wrappers})
+
+
+@pytest.mark.pins("contracts.conditional-wrapper-needs-its-condition")
+def test_a_conditional_wrapper_unwraps_only_where_its_condition_holds():
+    catalog = _catalog_with_wrappers([_BATCH_LIST_WRAPPER])
+    rules = _rules_of(catalog)
+    owner = "m com/acme/L#onRecords(sig_1)."
+    batch = _wrappers_for(rules, owner, {owner: [(_KL, {"batch": "true"})]})
+    record = _wrappers_for(rules, owner, {owner: [(_KL, {"batch": "false"})]})
+    assert [w["type"] for w in batch] == ["java.util.List"] and record == []
+    assert rules.wrappers == []  # nothing conditional reaches the unconditional list
+
+
+def test_a_conditional_wrapper_never_reaches_expansion():
+    """Expansion is keyed on the type symbol and insert-if-absent (spring-kafka.yml's stated
+    hazard); a conditional envelope must not make `java.util.List` an envelope module-wide."""
+    catalog = _catalog_with_wrappers([_BATCH_LIST_WRAPPER])
+    assert "java/util/List#" not in {
+        _catalog_symbol(w["type"]) for w in _rules_of(catalog).wrappers
+    }
+
+
+def test_when_on_a_type_another_catalog_names_unconditionally_is_refused():
+    """The sort-order hazard `spring-kafka.yml`'s own `wrappers` comment
+    describes for an unconditional copy, from the conditional side: shape
+    expansion is global, so whichever catalog reaches a shared type first
+    decides it for everyone — a `when` beside another catalog's unconditional
+    claim on the same type would make that catalog's own answer depend on
+    load order, silently."""
+    conditional = _catalog_with_wrappers([_BATCH_LIST_WRAPPER])
+    unconditional = Catalog(
+        **{
+            **vars(_CATALOG),
+            "id": "invented-unconditional-list",
+            "wrappers": [{"type": "java.util.List", "payload_arg": 0, "semantics": "envelope"}],
+        }
+    )
+    with pytest.raises(CatalogError, match="when"):
+        _check_conditional_wrappers([conditional, unconditional])
 
 
 def test_a_scalar_response_is_recorded_rather_than_dropped(tmp_path):

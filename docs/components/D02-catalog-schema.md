@@ -3089,6 +3089,44 @@ rather than guessing.
 `payload_type_arg` carrier extension (§7 permission) is dropped as redundant; recorded
 here so it is not reintroduced.
 
+**A wrapper entry may carry `when`** — the same closed condition above ("Conditions on an
+annotation attribute") — for a type that is an envelope only where an annotation attribute
+says so:
+
+```yaml
+wrappers:
+  - { type: java.util.List, payload_arg: 0, semantics: envelope,
+      when: { annotation_arg: { annotation: org.springframework.kafka.annotation.KafkaListener,
+                                 name: batch, parses_true: true } } }
+```
+
+A Spring Kafka `@KafkaListener(batch = "true")` handler takes `List<OrderEvent>` where the
+wire carries one `OrderEvent` per record — `List` is the envelope, and `spring-kafka.yml`
+adds exactly this entry (forward-referenced here; the file itself carries the row). The
+same `List` on a non-batched listener is a real `List<OrderEvent>` payload, not an
+envelope, so the entry must not unwrap it there: `when` is evaluated once per OWNER — the
+condition read on the handler and, failing that, its enclosing type, the same precedence
+the condition itself defines — and only the wrappers whose `when` holds for that owner are
+handed to rooting alongside every unconditional entry.
+
+**Rooting-only.** Shape EXPANSION (the pass that turns a rooted type into its wire fields)
+is global and insert-if-absent, keyed on the type symbol alone: the first catalog to reach
+a shared type is the one whose rules describe it for everyone, forever, regardless of which
+endpoint asked. A conditional wrapper cannot join that pool — making `List` an envelope
+because one handler's annotation said so would make it an envelope for every OTHER
+handler's `List`, batched or not, module-wide. So a conditional entry is never part of the
+list expansion reads; it exists only at the point an endpoint's payload is rooted, decided
+fresh for each owner.
+
+**Refused: a `when` on a type another catalog names unconditionally.** The sort-order
+hazard `spring-kafka.yml`'s own `wrappers` comment describes for an unconditional COPY
+(§1b's same lesson, applied to a block that stayed per-catalog) runs the other direction
+too: if one catalog's `wrappers` names a type with no condition at all, a second catalog
+cannot make that same type conditional — the first catalog's own endpoints would still see
+it as an envelope everywhere, while whether anyone ELSE'S endpoints did would depend on
+which catalog happened to load first. Caught once, before any endpoint is processed, and
+named by both files rather than left to be discovered downstream.
+
 ---
 
 ## 2b. Classification declarations

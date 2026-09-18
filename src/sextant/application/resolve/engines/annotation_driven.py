@@ -1674,7 +1674,9 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
         if declared is None:
             continue
         signature = json.loads(str(declared))
-        descriptor = _payload_descriptor(signature.get("returns"), rules, enums, referenced)
+        descriptor = _payload_descriptor(
+            signature.get("returns"), rules, enums, referenced, rules.wrappers
+        )
         if descriptor is None:
             continue
         uses = workspace.query("annotations_of", target=handler)

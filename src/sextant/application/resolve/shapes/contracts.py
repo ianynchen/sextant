@@ -5,7 +5,11 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
-from sextant.application.resolve.conditions import annotation_index, member_annotations_by_type
+from sextant.application.resolve.conditions import (
+    annotation_index,
+    holds,
+    member_annotations_by_type,
+)
 from sextant.application.resolve.shapes.expansion import (
     ExpandedShapes,
     _described,
@@ -37,6 +41,7 @@ def derive_endpoint_shapes(
     # in which every catalog is skipped leaves empty tables rather than the
     # previous run's answers.
     workspace.derive("shapes_reset")
+    _check_conditional_wrappers(catalogs)
     endpoints = workspace.query("endpoints")
     settled: dict[str, dict[str, str]] = {}
     unexpanded: list[str] = []
@@ -92,6 +97,54 @@ def derive_endpoint_shapes(
     # Two catalogs reaching one type report it once: the gap is in the type,
     # not in how many catalogs walked into it.
     return ExpandedShapes(unexpanded_types=tuple(dict.fromkeys(unexpanded)))
+
+
+def _check_conditional_wrappers(catalogs: list[Catalog]) -> None:
+    """Refuses a `wrappers[].when` entry whose `type` some OTHER catalog's
+    UNCONDITIONAL `wrappers` also names (spec 2026-09-18 §5a) — the sort-order
+    hazard `spring-kafka.yml`'s own `wrappers` comment already describes for
+    an unconditional copy: shape expansion is global and insert-if-absent, so
+    whichever catalog's rules reach a shared type first is the one everyone
+    else's payload gets described by. A conditional entry sits beside that
+    same hazard from the other direction — it would make the FIRST catalog's
+    unconditional answer depend on which one happened to load first, silently,
+    since neither file's own text says the type is shared. Checked once,
+    ahead of the loop, so a catalog whose `when` can never even be reached
+    (no handler owns a row) is still refused rather than let through by luck.
+    """
+    unconditional_types: dict[str, Catalog] = {}
+    for catalog in catalogs:
+        for wrapper in catalog.wrappers:
+            if "when" not in wrapper:
+                unconditional_types.setdefault(_catalog_symbol(wrapper["type"]), catalog)
+    for catalog in catalogs:
+        for wrapper in catalog.wrappers:
+            if "when" not in wrapper:
+                continue
+            other = unconditional_types.get(_catalog_symbol(wrapper["type"]))
+            if other is not None and other is not catalog:
+                raise CatalogError(
+                    f"{catalog.source}: wrappers[type={wrapper['type']}] declares `when`, but "
+                    f"{other.source} names the same type unconditionally — the type would be "
+                    "an envelope everywhere that catalog's rules apply and an envelope only "
+                    "conditionally here, so which answer wins would depend on catalog sort "
+                    "order rather than on either file's own text"
+                )
+
+
+def _wrappers_for(
+    rules: "_Rules", owner: str, index: dict[str, list[tuple[str, dict[str, Any]]]]
+) -> list[dict[str, Any]]:
+    """The envelopes that apply to THIS owner: every unconditional wrapper, plus each
+    conditional one whose `when` holds on the owner or its type (spec 2026-09-18 §5a)."""
+    return [
+        *rules.wrappers,
+        *(
+            wrapper
+            for condition, wrapper in rules.conditional_wrappers
+            if holds(condition, owner, index)
+        ),
+    ]
 
 
 # The two endpoint columns this pass fills. Named rather than spelled out at
@@ -181,9 +234,15 @@ def _contracts_of(
             index=index,
             members=members,
         )
+        # Once per owner, for both columns (spec §5a): the request and the
+        # response of one handler share the same conditional evaluation, so
+        # `holds` is asked once here rather than once per column.
+        wrappers = _wrappers_for(rules, owner, index)
         columns = {
-            _REQUEST: _payload_descriptor(body, rules, enums, referenced),
-            _RESPONSE: _payload_descriptor(signature.get("returns"), rules, enums, referenced),
+            _REQUEST: _payload_descriptor(body, rules, enums, referenced, wrappers),
+            _RESPONSE: _payload_descriptor(
+                signature.get("returns"), rules, enums, referenced, wrappers
+            ),
         }
         kept = {
             column: descriptor
@@ -404,6 +463,7 @@ def _payload_descriptor(
     rules: "_Rules",
     enums: set[str],
     referenced: list[str],
+    wrappers: list[dict[str, Any]],
 ) -> str | None:
     """The wire descriptor a signature-level reference roots at, or None for
     *no payload* — a `void` return, an absent body. Scalars are recorded: a
@@ -416,11 +476,16 @@ def _payload_descriptor(
     report a type the catalog already declares as one nobody could expand — a
     gap pointing at an entry that is already there. An envelope *nobody*
     declared still becomes a shape and is still reported.
+
+    `wrappers` is the caller's own list, not `rules.wrappers` — every caller
+    but `_contracts_of` has no owner to test a conditional entry against and
+    passes `rules.wrappers` straight through; `_contracts_of` passes
+    `_wrappers_for`'s per-owner answer instead (spec 2026-09-18 §5a).
     """
     if reference is None:
         return None
-    rooted = root_type(reference, rules.wrappers)
-    if _matching_wrapper(rooted.symbol, rules.wrappers) is not None:
+    rooted = root_type(reference, wrappers)
+    if _matching_wrapper(rooted.symbol, wrappers) is not None:
         return None
     if rooted.reference.get("wire_type") in (None, ""):
         return None

@@ -603,7 +603,7 @@ def _request_shape(
     arguments = returns.get("arguments") or []
     if payload_arg >= len(arguments):
         return None
-    return _payload_descriptor(arguments[payload_arg], rules, enums, referenced)
+    return _payload_descriptor(arguments[payload_arg], rules, enums, referenced, rules.wrappers)
 
 
 def _protocol_of(
