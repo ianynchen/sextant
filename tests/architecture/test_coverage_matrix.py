@@ -286,3 +286,42 @@ def test_spring_rest_inbound_reads_as_the_rollup_says():
     assert "| ◐ partial |" in spring[0], spring[0]
     assert "`conditional-controllers`" in spring[0], spring[0]
     assert "not shipped: 1 at C" in spring[0], spring[0]
+
+
+# --- §2c, the family × protocol grid ---------------------------------------------------------
+
+
+def test_the_family_grid_exists_and_the_language_row_points_at_it():
+    text = DOC.read_text()
+    assert "### 2c. Java / Kotlin — framework family × protocol" in text
+    assert "[§2c](#2c-java--kotlin-framework-family--protocol)" in text
+    start = text.index("| Framework family |")
+    end = text.index("\n\n", start)
+    rows = [line for line in text[start:end].splitlines() if line.startswith("| **")]
+    assert rows and rows[0].startswith("| **Spring Boot"), rows[:1]
+
+
+def test_every_framework_line_belongs_to_a_family():
+    """A line in `FRAMEWORKS` no family owns is one §2c would silently sum away."""
+    assert _matrix().orphan_lines() == []
+
+
+def test_the_grid_cell_rule():
+    """`—` is "this family has no line for that protocol" — Ktor and SOAP — and is not a gap;
+    `✗` is "on the target list, nothing shipped"; `✅` needs every line full."""
+    from collections import Counter
+
+    matrix = _matrix()
+    counts = {("SOAP", "Spring Web Services"): Counter({"shipped": 3})}
+    assert matrix.grid_cell("SOAP", ["Ktor"], counts, {}) == "—"
+    assert matrix.grid_cell("SOAP", ["Spring Web Services"], counts, {}) == "✅"
+    assert matrix.grid_cell("REST inbound", ["Play Framework"], {}, {}) == "✗"
+    assert (
+        matrix.grid_cell(
+            "Kafka",
+            ["Spring Kafka"],
+            {("Kafka", "Spring Kafka"): Counter({"shipped": 4})},
+            {"Spring Kafka": ["kafka-batch-generics"]},
+        )
+        == "◐ (1 open)"
+    )

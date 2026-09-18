@@ -223,6 +223,103 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "vertx-eventbus": ["Vert.x EventBus"],
 }
 
+# Framework FAMILIES — the stack a reader picks — and the framework lines each one owns
+# across every protocol. §2c's grid is one row per family, one column per protocol, each
+# cell rolled up from the family's lines declared for that protocol; a family with no line
+# declared for a protocol reads `—` (nothing to do with it), which is a different fact from
+# `✗` (on the target list, nothing shipped). A line may belong to several families — the
+# JAX-RS line is Quarkus's, Helidon's and the Jakarta standards' at once — and every line in
+# `FRAMEWORKS` must belong to at least one (`orphan_lines`), or the grid would sum it away.
+FAMILIES: dict[str, list[str]] = {
+    "Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)": [
+        "Spring MVC / WebFlux (annotations)",
+        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
+        "Spring @HttpExchange (server side)",
+        "Spring error handling (@ControllerAdvice)",
+        "Spring Boot Actuator",
+        "Spring Data REST",
+        "Spring Cloud Gateway",
+        "Spring RestTemplate",
+        "RestClient / WebClient / OkHttp (fluent clients)",
+        "Feign / Retrofit / @HttpExchange (annotated client interfaces)",
+        "Spring @HttpExchange (client registration)",
+        "Spring Cloud Gateway (forwarding)",
+        "Spring Web Services",
+        "Spring for GraphQL",
+        "Spring WebSocket",
+        "Spring STOMP",
+        "Spring MVC",
+        "Spring WebFlux",
+        "Spring gRPC",
+        "net.devh grpc-spring-boot-starter",
+        "Spring Kafka",
+        "Spring Cloud Stream",
+        "Spring JMS",
+        "Spring AMQP (RabbitMQ)",
+        "Spring AMQP / Spring JMS templates",
+        "Spring for Apache Pulsar",
+        "Spring Cloud AWS SQS 3.x / 4.x",
+        "Spring Cloud AWS 1.x / 2.x (legacy)",
+        "Spring Cloud GCP Pub/Sub (PubSubTemplate)",
+        "Spring Cloud GCP Pub/Sub (Spring Integration)",
+        "Spring scheduling (@Scheduled)",
+        "Spring Integration",
+    ],
+    "Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)": [
+        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
+        "Quarkus Reactive Routes",
+        "MicroProfile REST Client",
+        "MicroProfile GraphQL",
+        "Quarkus gRPC",
+        "SmallRye Reactive Messaging (Quarkus)",
+    ],
+    "Micronaut": [
+        "Micronaut HTTP",
+        "Micronaut HTTP client",
+        "Micronaut Kafka",
+        "Micronaut JMS",
+        "Micronaut (raw AWS SDK; JMS over SQS)",
+        "Micronaut GCP Pub/Sub",
+    ],
+    "Ktor": ["Ktor", "Ktor HttpClient", "Ktor WebSockets", "Ktor SSE"],
+    "Javalin": ["Javalin"],
+    "Vert.x": ["Vert.x Web", "Vert.x WebClient", "Vert.x EventBus"],
+    "Helidon (MP via JAX-RS; SE)": [
+        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
+        "Helidon SE",
+    ],
+    "Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)": [
+        "Jakarta / javax Servlet",
+        "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
+        "JAX-WS (jakarta.jws / javax.jws)",
+        "JAX-WS (Apache CXF)",
+        "JAX-WS generated client stubs",
+        "Jakarta / javax JMS API (direct)",
+        "Jakarta / javax WebSocket",
+    ],
+    "Raw clients and SDKs (JDK/Apache HTTP, kafka-clients, grpc-java, AWS, GCP, graphql-java)": [
+        "JDK / Apache HttpClient",
+        "kafka-clients (raw)",
+        "grpc-java",
+        "AWS SDK v2 (raw)",
+        "google-cloud-pubsub (raw client)",
+        "graphql-java (schema-first)",
+    ],
+    "Kafka Streams": ["Kafka Streams"],
+    "Netflix DGS": ["Netflix DGS"],
+    "GraphQL Kotlin (Expedia)": ["GraphQL Kotlin (Expedia)"],
+    "Akka / Pekko (HTTP, Connectors, actors)": [
+        "Akka HTTP",
+        "Pekko / Alpakka Connectors Kafka",
+        "Akka / Pekko actors",
+    ],
+    "Apache Camel": ["Apache Camel"],
+    "Temporal / Cadence": ["Temporal / Cadence"],
+    "Quartz": ["Quartz"],
+    "Play Framework": ["Play Framework"],
+    "Spark Java": ["Spark Java"],
+}
+
 _ESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 
 
@@ -461,6 +558,70 @@ def with_rollups(md: str) -> str:
     return new
 
 
+def orphan_lines() -> list[str]:
+    """Framework lines declared in `FRAMEWORKS` that no family owns — §2c would sum them away."""
+    owned = {line for lines in FAMILIES.values() for line in lines}
+    return sorted({line for lines in FRAMEWORKS.values() for line in lines} - owned)
+
+
+def grid_cell(
+    heading: str, family_lines: list[str], counts, open_by_line: dict[str, list[str]]
+) -> str:
+    """One §2c cell: the family's lines declared for this protocol, rolled up.
+
+    ✅            every line full
+    ◐ (…)        the bracket: N open ids · N rows not shipped · N limited · N lines unsupported
+    ✗            every declared line unsupported (on the list, nothing shipped)
+    —            the family declares no line for this protocol
+    """
+    lines = [line for line in FRAMEWORKS[heading] if line in family_lines]
+    if not lines:
+        return "—"
+    statuses = []
+    open_ids: list[str] = []
+    not_shipped = limited = unsupported = 0
+    for line in lines:
+        c = counts.get((heading, line), Counter())
+        status, _missing = rollup_status(c, open_by_line.get(line, []))
+        statuses.append(status)
+        open_ids.extend(i for i in open_by_line.get(line, []) if i not in open_ids)
+        not_shipped += sum(c[t] for t in "ABC")
+        limited += c["partial"]
+        unsupported += status == "✗ unsupported"
+    if all(st == "✅ full" for st in statuses):
+        return "✅"
+    if all(st == "✗ unsupported" for st in statuses):
+        return "✗"
+    parts = []
+    if open_ids:
+        parts.append(f"{len(open_ids)} open")
+    if not_shipped:
+        parts.append(f"{not_shipped} not shipped")
+    if limited:
+        parts.append(f"{limited} limited")
+    if unsupported:
+        parts.append(f"{unsupported} line{'s' if unsupported > 1 else ''} unsupported")
+    return f"◐ ({', '.join(parts)})" if parts else "◐"
+
+
+def render_grid(counts, numbers) -> str:
+    """§2c — Java / Kotlin, framework family × protocol."""
+    columns = HTTP_COLUMNS + MSG_COLUMNS
+    open_by_line: dict[str, list[str]] = {}
+    for ids in open_items().values():
+        for item in ids:
+            for line in ITEM_FRAMEWORKS.get(item, []):
+                open_by_line.setdefault(line, []).append(item)
+    head = ["Framework family"] + [f"[{label}]({anchor(h, numbers[h])})" for h, label in columns]
+    out = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for family, lines in FAMILIES.items():
+        row = [f"**{family}**"] + [
+            grid_cell(h, lines, counts, open_by_line) for h, _label in columns
+        ]
+        out.append("| " + " | ".join(row) + " |")
+    return "\n".join(out)
+
+
 def open_blockers() -> dict[str, int]:
     """`COVERAGE column -> open blocker count`, from `java-kotlin-delivery-list.md`.
 
@@ -641,8 +802,17 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    orphans_2c = orphan_lines()
+    if orphans_2c:
+        print(
+            "framework lines no FAMILIES entry owns — §2c would sum them away:\n  "
+            + "\n  ".join(orphans_2c),
+            file=sys.stderr,
+        )
+        return 1
     http = render(counts, numbers, HTTP_COLUMNS, first_col="Scanner")
     msg = render(counts, numbers, MSG_COLUMNS)
+    grid = render_grid(framework_rows(md), numbers)
 
     new = with_rollups(md)
     for marker, table in (
@@ -653,6 +823,11 @@ def main() -> int:
         tbl_start = new.index("| Language", start)
         tbl_end = new.index("\n\n", tbl_start)
         new = new[:tbl_start] + table + new[tbl_end:]
+    grid_marker = "### 2c. Java / Kotlin — framework family × protocol"
+    start = new.index(grid_marker)
+    tbl_start = new.index("| Framework family", start)
+    tbl_end = new.index("\n\n", tbl_start)
+    new = new[:tbl_start] + grid + new[tbl_end:]
 
     if "--check" in sys.argv:
         print("matrices are current" if new == md else "STALE — rerun without --check")
