@@ -1075,6 +1075,14 @@ mapping:
     media words above), the class-level default and the hint pass never learn that an
     inheritance happened — the same reason a composed or folded row is an ordinary row by
     the time the SQL runs.
+  - **Agreement is measured on the whole set.** Two ancestors mapping one method — the
+    shape a class overriding covariantly against both an interface and a superclass has —
+    already yielded nothing where their verbs differed (ambiguous evidence, §8). Under §3.6
+    the inherited unit is the ancestor method's whole annotation set, so the comparison is
+    the whole set: an interface `@GET @Path("/a")` against a superclass `@GET @Path("/b")`
+    agree on the verb and not on the set, and the target gets no row at all — never the
+    verb with both paths beside it, which downstream would pick between on a tied ordinal.
+    With no siblings declared every set is the mapping alone, which is today's comparison.
   - **The type-level gate already inherits.** The walk synthesizes a class's interface or
     superclass `prefix_annotation` onto the class when it carries none of its own, and
     `@Path` is both the prefix and the gate — so `controllers` admits the implementor

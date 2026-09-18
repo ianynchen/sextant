@@ -1183,3 +1183,56 @@ def test_without_sibling_fqns_the_walk_is_unchanged():
     and an own sibling would not have blocked it either (Spring's own merge)."""
     rows = inherited_rows_over(_RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH])
     assert {r["annotation"] for r in rows if r["target"].endswith("#byId(sig_1).")} == {_RS_GET}
+
+
+@pytest.mark.pins("effective_annotations.inherited-set-agreed-as-a-whole")
+def test_two_ancestors_agreeing_on_the_verb_but_not_on_a_sibling_resolve_nothing():
+    """I1's shape over siblings (Task 5 fix round 1): `_C extends _B implements _I`,
+    covariant overrides against BOTH, so two bridges redirect to the one real
+    `find(sig_b).`. Interface and superclass both carry `@GET` — the mapping
+    agrees — but `@Path("/from-interface")` against `@Path("/from-superclass")`.
+
+    §3.6 inherits an ancestor method's annotation set WHOLE, so agreement is
+    measured on the whole set: two different sets are the same ambiguous
+    evidence two different verbs are, and the target gets nothing — never the
+    verb with two paths beside it, which downstream would pick between on a
+    tied ordinal."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    hierarchy = type_hierarchy(
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            *_covariant_pair(),
+            _scanned_method(
+                _B + "find(sig_x).",
+                _B,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+            ),
+            _scanned_method(
+                _C + "find(sig_x).",
+                _C,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+                generated=True,
+            ),
+        ],
+    )
+    annotation_rows = [
+        {"target": _I + "find(sig_a).", "annotation": _RS_GET, "args": {}},
+        {
+            "target": _I + "find(sig_a).",
+            "annotation": _RS_PATH,
+            "args": {"value": "/from-interface"},
+        },
+        {"target": _B + "find(sig_x).", "annotation": _RS_GET, "args": {}},
+        {
+            "target": _B + "find(sig_x).",
+            "annotation": _RS_PATH,
+            "args": {"value": "/from-superclass"},
+        },
+    ]
+
+    rows = inherited_rows_over(
+        hierarchy, annotation_rows, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+
+    assert [r for r in rows if r["target"] == _C + "find(sig_b)."] == []

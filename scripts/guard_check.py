@@ -800,6 +800,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "effective_annotations.inherited-set-agreed-as-a-whole": Guard(
+        what="two ancestors mapping one method agree only when their WHOLE inherited sets "
+        "agree — the mapping and every declared sibling — never on the mapping alone",
+        why="Spec 2026-09-18 §3b word 3 (Task 5 fix round 1). JAX-RS §3.6 inherits an ancestor "
+        'method\'s annotation set whole, so an interface `@GET @Path("/a")` against a '
+        'superclass `@GET @Path("/b")` on one covariantly-overridden method is the same '
+        "ambiguous evidence two different verbs are (I1), one annotation over. Compared on the "
+        "verb alone they agree, and the target is handed the verb with BOTH paths beside it; "
+        "downstream `sibling_names` then picks between two same-annotation rows on a tied "
+        "ordinal, and the published address is whichever DuckDB happened to keep — a wrong "
+        "address half the time and an unpredictable one every time (NFR-1)",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="                    frozenset(\n"
+                "                        (sib_annotation, json.dumps(sib_args, sort_keys=True))\n"
+                "                        for sib_annotation, sib_args in siblings\n"
+                "                    ),\n",
+                replace="                    frozenset(),  # guard disabled\n",
+            ),
+        ),
+    ),
     "derive_endpoints.path-fallback-is-per-annotation": Guard(
         what="an annotated declaration takes the fallback word of the annotation that MATCHED "
         "it, not the catalog's own default",

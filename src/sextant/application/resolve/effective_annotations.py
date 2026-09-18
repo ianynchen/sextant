@@ -433,11 +433,13 @@ def inherited_rows_over(
         # Keyed by the method the mapping BELONGS to, which is not always the
         # candidate that resolved it — see `_synthesis_target`. Insertion order
         # follows `methods`, which follows the query's `ORDER BY symbol` (NFR-1).
-        resolved: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-        # The ancestor method's declared siblings, keyed the same way; read
-        # off the SOURCE method the mapping was found on, never off any other
-        # level, because §3.6 inherits one method's set whole.
-        siblings: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        #
+        # Each resolution is the ancestor method's WHOLE inherited set: the
+        # mapping, plus that SOURCE method's declared siblings (empty when the
+        # catalog declares none), because §3.6 inherits one method's set whole
+        # and never one annotation of it — so agreement below is measured on
+        # the set, not on the mapping alone.
+        resolved: dict[str, list[tuple[str, dict[str, Any], list[tuple[str, dict[str, Any]]]]]] = {}
         for key, candidate in methods.items():
             if _own_mapping(candidate, own_fqns, annotations_by_target) is not None:
                 continue
@@ -467,36 +469,48 @@ def inherited_rows_over(
                 _own_mapping(target, own_fqns, annotations_by_target) is not None
             ):
                 continue
-            resolved.setdefault(target, []).append((annotation, args))
-            if sibling_fqns:
-                for sib_annotation, sib_args in annotations_by_target.get(source, []):
-                    if sib_annotation in sibling_fqns:
-                        siblings.setdefault(target, []).append((sib_annotation, sib_args))
-        for target, mappings in resolved.items():
+            # `annotations_by_target` is sorted per target above, so the
+            # sibling list reads the same way twice (NFR-1).
+            siblings = [
+                (sib_annotation, sib_args)
+                for sib_annotation, sib_args in annotations_by_target.get(source, [])
+                if sib_annotation in sibling_fqns
+            ]
+            resolved.setdefault(target, []).append((annotation, args, siblings))
+        for target, resolutions in resolved.items():
             # Two ancestors mapping one method — the shape a class carrying two
             # bridges has (I1). Which one the framework serves depends on its own
             # annotation search order, which is not read here, so a target with
             # two DIFFERENT answers gets none: §8's ambiguous evidence, and the
             # same nothing this shape produced before, now stated rather than a
             # side effect of excluding every bridge.
+            #
+            # The answer compared is the whole set. Two ancestors agreeing on the
+            # verb but not on a sibling (`@GET @Path("/a")` against `@GET
+            # @Path("/b")`) are the same ambiguity one annotation over, and
+            # emitting the verb with both paths beside it would hand downstream
+            # two same-annotation rows to pick between on a tied ordinal — an
+            # address nobody can predict. With no siblings declared every set is
+            # empty and this is the mapping-only comparison it always was.
             distinct = {
-                (annotation, json.dumps(args, sort_keys=True)) for annotation, args in mappings
+                (
+                    annotation,
+                    json.dumps(args, sort_keys=True),
+                    frozenset(
+                        (sib_annotation, json.dumps(sib_args, sort_keys=True))
+                        for sib_annotation, sib_args in siblings
+                    ),
+                )
+                for annotation, args, siblings in resolutions
             }
             if len(distinct) != 1:
                 continue
-            annotation, args = mappings[0]
+            annotation, args, siblings = resolutions[0]
             rows.append({"target": target, "annotation": annotation, "args": args})
             # The siblings ride with the mapping and only with it: a target
             # that got no mapping row above gets no sibling row either, so an
-            # ambiguous verb never leaves a lone `@Path` behind. Two candidates
-            # (a bridge and the method it forwards to) that resolved the SAME
-            # ancestor bring its siblings once, not twice.
-            seen: set[tuple[str, str]] = set()
-            for sib_annotation, sib_args in siblings.get(target, []):
-                identity = (sib_annotation, json.dumps(sib_args, sort_keys=True))
-                if identity in seen:
-                    continue
-                seen.add(identity)
+            # ambiguous set never leaves a lone `@Path` behind.
+            for sib_annotation, sib_args in siblings:
                 rows.append({"target": target, "annotation": sib_annotation, "args": sib_args})
         # Computed once per class, independent of the per-method loop above:
         # a class's inherited prefix applies to EVERY one of its methods
@@ -536,9 +550,12 @@ def _own_mapping(
 ) -> tuple[str, dict[str, Any]] | None:
     """The first (deterministically, by annotation fqn) mapping-shaped
     annotation a target carries directly — never one this pass itself
-    walked up to find. `fqns` is `mapping_fqns` for a method-level check,
+    walked up to find. `fqns` is `own_fqns` — `mapping_fqns` plus the catalog's
+    declared siblings, which is `mapping_fqns` itself where none are declared —
+    for a method-level check (spec 2026-09-18 §3b word 3), `mapping_fqns` alone
+    where `_resolve_method` reads an ANCESTOR method's own mapping, and
     `set(prefix_fqns)` for a class's own type-level one; the same helper serves
-    both "own wins outright" gates spec §3 states."""
+    every "own wins outright" gate spec §3 states."""
     for annotation, args in annotations_by_target.get(target, []):
         if annotation in fqns:
             return annotation, args
