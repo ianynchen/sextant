@@ -25,24 +25,66 @@ measured here. The claim below is scoped to what `configureBaseUrl` itself
 does once it has that config object in hand.
 
 **Version scope (§5.4).** `org.eclipse.microprofile.rest.client:
-microprofile-rest-client-api` **4.0 and 3.0.1** (row 1, spanning the MP 6→7
-platform boundary); `derive_endpoints.sql` as it exists on this branch (row
-2, not version-scoped — it is this repository's own SQL); `io.quarkus:
-quarkus-rest-client` **3.39.4** (row 3, the same generation as CP-19's
-sources). Every verdict below is bounded by those three.
+microprofile-rest-client-api`, resolved at the Maven coordinates **4.0 and
+3.0.1** (row 1, spanning the MP 6→7 platform boundary) — the archive itself
+reports these via OSGi's `Bundle-Version` as **4.0.0** and **3.0.1**
+respectively (the 4.0 coordinate pads to a three-segment `4.0.0` in the jar's
+own manifest, a normal OSGi convention rather than a mismatch, and the harness
+treats `4.0.0` as that jar's identity because that is what the archive itself
+wrote); `derive_endpoints.sql` as it exists on this branch (row 2, not
+version-scoped — it is this repository's own SQL, identified by the git
+commit the harness resolves HEAD to); `io.quarkus:quarkus-rest-client`
+**3.39.4** (row 3, the same generation as CP-19's sources). Every verdict
+below is bounded by those three.
 
 ## Environment
 
 `MP40=~/.m2/repository/org/eclipse/microprofile/rest/client/microprofile-rest-client-api/4.0/microprofile-rest-client-api-4.0.jar`
-(already resolved in `~/.m2`); `MP301=<scratchpad>/mp-rest-client-api-3.0.1.jar`
-(fetched from `https://repo1.maven.org/maven2/…/3.0.1/…` — not previously
-staged); `<scratchpad>/quarkus-rest-client-3.39.4.jar` (fetched from
-`https://repo1.maven.org/maven2/io/quarkus/quarkus-rest-client/3.39.4/…` — not
-previously staged; this jar's classes do NOT include a
-`RestClientBase`/`RestClientBuilder` class under those exact names at 3.39.4 —
-the resolution logic actually lives in
+(already resolved in `~/.m2`); `MP301=~/.m2/repository/org/eclipse/microprofile/rest/client/microprofile-rest-client-api/3.0.1/…`
+(the committed harness resolves this itself via `mvn dependency:get` rather
+than depending on the design-review scratchpad's copy);
+`~/.m2/repository/io/quarkus/quarkus-rest-client/3.39.4/…` (same — resolved by
+the harness). This jar's classes do NOT include a `RestClientBase`/
+`RestClientBuilder` class under those exact names at 3.39.4 — the resolution
+logic actually lives in
 `io.quarkus.rest.client.reactive.runtime.RestClientCDIDelegateBuilder`, found
-by reading the jar's own class listing, see row 3).
+by reading the jar's own class listing, see row 3.
+
+**How to run.** `bash scripts/probes/cp22_microprofile_rest_client/run.sh`. It
+resolves all three jars through Maven (network on the first run only, cached
+in `~/.m2` afterwards), asks `javap` rows 1 and 3's questions, and reads this
+repository's own `derive_endpoints.sql` for row 2. Needs a JDK, Maven and
+`git`. Not a test: nothing in the suite runs it, and NFR-1's no-network rule
+governs the suite rather than evidence gathering.
+
+## Observations
+
+Verbatim from `run.sh`'s generated table (`probe.py` prints it; nothing here
+is typed by hand). **Every column header of the first table is a version the
+JAR itself REPORTED, and not the version the Maven coordinate asked for** — out of
+each manifest's `Bundle-Version` (rows 1a/1b) or `Implementation-Version` (row
+3). `probe.py` reads the value out of the archive it opened and ABORTS the
+whole run when it disagrees with what the jar was expected to report, rather
+than filling a mislabelled column; that is CP-5's failure, which printed a
+version it believed beside output from a version it had not run. (The
+`microprofile-rest-client-api` 4.0 COORDINATE and its `4.0.0` self-reported
+`Bundle-Version` are two different spellings of the same OSGi convention, not
+a disagreement — see the harness comment.) Row 2 is not a jar read at all —
+its identity is the git commit `run.sh` resolves HEAD to.
+
+```
+| what the run read | 3.0.1 | 3.39.4 | 4.0.0 |
+|---|---|---|---|
+| artifacts reporting this version | org.eclipse.microprofile.rest.client:microprofile-rest-client-api | io.quarkus:quarkus-rest-client | org.eclipse.microprofile.rest.client:microprofile-rest-client-api |
+| identity read from the archive itself | yes | yes | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1a | @RegisterRestClient: @Target, @Retention, baseUri()/configKey() defaults | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME) ; baseUri(): String default "" ; configKey(): String default ""` |
+| 1b | @RegisterRestClient: @Target, @Retention, baseUri()/configKey() defaults | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1 | `@Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME) ; baseUri(): String default "" ; configKey(): String default ""` |
+| 2 | derive_endpoints.sql's prefixes CTE: peer off the prefix-gate row only? | `src/sextant/storage/duckdb/derive_endpoints.sql` | repo@7fc977b | `joins: JOIN prefix_gates ON pg.fqn = a.annotation ; JOIN catalog_params ON cp.catalog_id = pg.catalog_id ; reads cp.prefix_from: True ; reads cp.peer_from: True ; distinct annotation joins: 1` |
+| 3 | Quarkus's configureBaseUrl: config vs. annotation baseUri precedence | `io.quarkus:quarkus-rest-client` | 3.39.4 | `invokeinterface InterfaceMethod io/quarkus/restclient/config/RestClientsConfig$RestClientConfig.uriReload:()Ljava/util/Optional; ; invokeinterface InterfaceMethod io/quarkus/restclient/config/RestClientsConfig$RestClientConfig.urlReload:()Ljava/util/Optional; ; invokestatic Method oneOf:([Ljava/util/Optional;)Ljava/util/Optional; ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; getfield Field configKey:Ljava/lang/String; ; getfield Field configKey:Ljava/lang/String; ; getfield Field jaxrsInterface:Ljava/lang/Class; ; new class java/lang/IllegalArgumentException ; ldc_w String Unable to determine the proper baseUrl/baseUri. Consider registering using @RegisterRestClient(baseUri=\"someuri\"), @RegisterRestClient(configKey=\"orkey\"), or by adding \'%s\' or \'%s\' to your Quarkus configuration ; ldc_w String quarkus.rest-client.%s.url ; ldc_w String quarkus.rest-client.%s.uri ; invokespecial Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;)V ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; invokeinterface InterfaceMethod io/quarkus/rest/client/reactive/QuarkusRestClientBuilder.baseUri:(Ljava/net/URI;)Lio/quarkus/rest/client/reactive/QuarkusRestClientBuilder; ; new class java/lang/IllegalArgumentException ; invokespecial Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;Ljava/lang/Throwable;)V` |
+```
 
 ## Rows
 

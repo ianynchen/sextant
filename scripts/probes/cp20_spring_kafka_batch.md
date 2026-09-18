@@ -27,6 +27,45 @@ those two.
 `K=~/.m2/repository/org/springframework/kafka/spring-kafka/$v/spring-kafka-$v.jar`
 for `$v` in `3.1.4`, `4.1.1`.
 
+**How to run.** `bash scripts/probes/cp20_spring_kafka_batch/run.sh`. It
+resolves both jars through Maven (network on the first run only, cached in
+`~/.m2` afterwards), asks `javap` this probe's questions, and greps this
+repository's own catalog files for row 5. Needs a JDK, Maven and `git`. Not a
+test: nothing in the suite runs it, and NFR-1's no-network rule governs the
+suite rather than evidence gathering.
+
+## Observations
+
+Verbatim from `run.sh`'s generated table (`probe.py` prints it; nothing here
+is typed by hand). **Every column header of the first table is a version the
+JAR itself REPORTED, and not the version the coordinate list asked for** — out
+of each manifest's `Implementation-Version`. `probe.py` reads the value out of
+the archive it opened and ABORTS the whole run when it disagrees with the
+coordinate that resolved the jar, rather than filling a mislabelled column;
+that is CP-5's failure, which printed a version it believed beside output from
+a version it had not run. Row 5 is not a jar read at all — its identity is the
+git commit `run.sh` resolves HEAD to, printed by the harness itself rather
+than assumed.
+
+```
+| what the run read | 3.1.4 | 4.1.1 |
+|---|---|---|
+| artifacts reporting this version | org.springframework.kafka:spring-kafka | org.springframework.kafka:spring-kafka |
+| identity read from the archive itself | yes | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1 | batch()'s declared type and default | `org.springframework.kafka:spring-kafka` | 3.1.4 | `batch(): java.lang.String ; AnnotationDefault: ""` |
+| 2 | the post-processor's batch()->hasText->parseBoolean->setBatchListener parse | `org.springframework.kafka:spring-kafka` | 3.1.4 | `invokeinterface InterfaceMethod org/springframework/kafka/annotation/KafkaListener.batch:()Ljava/lang/String; ; invokestatic Method org/springframework/util/StringUtils.hasText:(Ljava/lang/String;)Z ; ifeq ; aload_1 ; aload_2 ; invokeinterface InterfaceMethod org/springframework/kafka/annotation/KafkaListener.batch:()Ljava/lang/String; ; invokestatic Method java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z ; invokevirtual Method org/springframework/kafka/config/MethodKafkaListenerEndpoint.setBatchListener:(Z)V` |
+| 3 | BatchMessagingMessageListenerAdapter.onMessage's accepted shapes | `org.springframework.kafka:spring-kafka` | 3.1.4 | `public void onMessage(org.apache.kafka.clients.consumer.ConsumerRecords<K, V>, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer<K, V>) ; public void onMessage(java.util.List<org.apache.kafka.clients.consumer.ConsumerRecord<K, V>>, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer<?, ?>) ; public void onMessage(java.lang.Object, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer)` |
+| 4 | the factory's own, config-driven setBatchListener | `org.springframework.kafka:spring-kafka` | 3.1.4 | `ConcurrentKafkaListenerContainerFactory declares batch member: False ; AbstractKafkaListenerContainerFactory: private org.springframework.kafka.support.converter.BatchMessageConverter batchMessageConverter ; private java.lang.Boolean batchListener ; private org.springframework.kafka.listener.adapter.BatchToRecordAdapter<K, V> batchToRecordAdapter ; public void setBatchMessageConverter(org.springframework.kafka.support.converter.BatchMessageConverter) ; public java.lang.Boolean isBatchListener() ; public void setBatchListener(java.lang.Boolean) ; public void setBatchToRecordAdapter(org.springframework.kafka.listener.adapter.BatchToRecordAdapter<K, V>)` |
+| 1 | batch()'s declared type and default | `org.springframework.kafka:spring-kafka` | 4.1.1 | `batch(): java.lang.String ; AnnotationDefault: ""` |
+| 2 | the post-processor's batch()->hasText->parseBoolean->setBatchListener parse | `org.springframework.kafka:spring-kafka` | 4.1.1 | `invokeinterface InterfaceMethod org/springframework/kafka/annotation/KafkaListener.batch:()Ljava/lang/String; ; invokestatic Method org/springframework/util/StringUtils.hasText:(Ljava/lang/String;)Z ; ifeq ; aload_1 ; aload_2 ; invokeinterface InterfaceMethod org/springframework/kafka/annotation/KafkaListener.batch:()Ljava/lang/String; ; invokestatic Method java/lang/Boolean.parseBoolean:(Ljava/lang/String;)Z ; invokevirtual Method org/springframework/kafka/config/MethodKafkaListenerEndpoint.setBatchListener:(Z)V` |
+| 3 | BatchMessagingMessageListenerAdapter.onMessage's accepted shapes | `org.springframework.kafka:spring-kafka` | 4.1.1 | `public void onMessage(org.apache.kafka.clients.consumer.ConsumerRecords<K, V>, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer<K, V>) ; public void onMessage(java.util.List<org.apache.kafka.clients.consumer.ConsumerRecord<K, V>>, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer<?, ?>) ; public void onMessage(java.lang.Object, org.springframework.kafka.support.Acknowledgment, org.apache.kafka.clients.consumer.Consumer)` |
+| 4 | the factory's own, config-driven setBatchListener | `org.springframework.kafka:spring-kafka` | 4.1.1 | `ConcurrentKafkaListenerContainerFactory declares batch member: False ; AbstractKafkaListenerContainerFactory: private org.springframework.kafka.support.converter.BatchMessageConverter batchMessageConverter ; private java.lang.Boolean batchListener ; private org.springframework.kafka.listener.adapter.BatchToRecordAdapter<K, V> batchToRecordAdapter ; public void setBatchMessageConverter(org.springframework.kafka.support.converter.BatchMessageConverter) ; public java.lang.Boolean isBatchListener() ; public void setBatchListener(java.lang.Boolean) ; public void setBatchToRecordAdapter(org.springframework.kafka.listener.adapter.BatchToRecordAdapter<K, V>)` |
+| 5 | List<Message<T>> as a wrapper type in the shipped catalogs | `spring-kafka.yml, spring-kafka-message.yml` | repo@7fc977b | `spring-kafka.yml: no match ; spring-kafka-message.yml: no match` |
+```
+
 ## Rows
 
 ### 1 — `batch()`: type and default, both versions

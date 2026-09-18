@@ -28,9 +28,46 @@ below is bounded to 4.2.0.
 `C=~/.m2/repository/io/micronaut/jms/micronaut-jms-core/4.2.0/micronaut-jms-core-4.2.0.jar`
 `S=~/.m2/repository/io/micronaut/jms/micronaut-jms-sqs/4.2.0/micronaut-jms-sqs-4.2.0.jar`
 `AMQ=~/.m2/repository/io/micronaut/jms/micronaut-jms-activemq-classic/4.2.0/micronaut-jms-activemq-classic-4.2.0.jar`
-(already resolved in `~/.m2`); the Artemis jar
-(`io.micronaut.jms:micronaut-jms-artemis:4.2.0`) came from the design-review
-scratchpad as `mn-jms-artemis-4.2.0.jar`, not yet in `~/.m2`.
+(already resolved in `~/.m2`); the Artemis jar's real Maven coordinate is
+`io.micronaut.jms:micronaut-jms-activemq-artemis:4.2.0` — the design-review
+scratchpad's local nickname (`mn-jms-artemis-4.2.0.jar`) is not the
+artifactId, which the committed harness resolves correctly.
+
+**How to run.** `bash scripts/probes/cp21_micronaut_jms_sqs/run.sh`. It
+resolves all four jars through Maven (network on the first run only, cached in
+`~/.m2` afterwards), recompiles `fixtures/orders-micronaut` if its gitignored
+`target/classes` is missing, and asks `javap` this probe's questions. Needs a
+JDK and Maven. Not a test: nothing in the suite runs it, and NFR-1's
+no-network rule governs the suite rather than evidence gathering.
+
+## Observations
+
+Verbatim from `run.sh`'s generated table (`probe.py` prints it; nothing here
+is typed by hand). **Every column header of the first table is a version the
+JAR itself REPORTED, and not the version the coordinate list asked for** — out
+of each manifest's `Implementation-Version`. `probe.py` reads the value out of
+the archive it opened and ABORTS the whole run when it disagrees with the
+coordinate that resolved the jar, rather than filling a mislabelled column;
+that is CP-5's failure, which printed a version it believed beside output from
+a version it had not run.
+
+```
+| what the run read | 4.2.0 |
+|---|---|
+| artifacts reporting this version | io.micronaut.jms:micronaut-jms-activemq-artemis, io.micronaut.jms:micronaut-jms-activemq-classic, io.micronaut.jms:micronaut-jms-core, io.micronaut.jms:micronaut-jms-sqs |
+| identity read from the archive itself | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1a | JMSListener: attributes, @Target, @Retention | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 | `value(): java.lang.String ; @Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME)` |
+| 1b | JMSProducer: attributes, @Target, @Retention | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 | `value(): java.lang.String ; @Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME)` |
+| 2 | the post-processor's value()->Qualifiers.byName resolution | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 | `ldc class io/micronaut/jms/annotations/JMSListener ; invokevirtual Method io/micronaut/core/annotation/AnnotationValue.getRequiredValue:(Ljava/lang/Class;)Ljava/lang/Object; ; invokedynamic InvokeDynamic #0:get:(Lio/micronaut/jms/configuration/AbstractJMSListenerMethodProcessor;Lio/micronaut/inject/ExecutableMethod;)Ljava/util/function/Supplier; ; invokedynamic InvokeDynamic #2:get:(Lio/micronaut/jms/configuration/AbstractJMSListenerMethodProcessor;)Ljava/util/function/Supplier; ; invokedynamic InvokeDynamic #3:onMessage:(Lio/micronaut/jms/configuration/AbstractJMSListenerMethodProcessor;Lio/micronaut/core/type/Executable;Ljava/lang/Object;)Ljakarta/jms/MessageListener; ; invokevirtual Method io/micronaut/core/annotation/AnnotationValue.getRequiredValue:(Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/Object; ; ldc class io/micronaut/jms/listener/JMSListenerRegistry ; checkcast class io/micronaut/jms/listener/JMSListenerRegistry ; invokestatic Method io/micronaut/inject/qualifiers/Qualifiers.byName:(Ljava/lang/String;)Lio/micronaut/context/Qualifier; ; ldc class io/micronaut/jms/listener/JMSListenerErrorHandler ; ldc class io/micronaut/jms/listener/JMSListenerSuccessHandler ; invokevirtual Method io/micronaut/jms/listener/JMSListenerRegistry.register:(Ljakarta/jms/Connection;Lio/micronaut/jms/model/JMSDestinationType;Ljava/lang/String;ZILjakarta/jms/MessageListener;Ljava/util/concurrent/ExecutorService;ZLjava/util/Optional;)Lio/micronaut/jms/listener/JMSListener; ; invokevirtual Method io/micronaut/jms/listener/JMSListener.addSuccessHandlers:(Ljava/util/Collection;)V ; invokevirtual Method io/micronaut/jms/listener/JMSListener.addErrorHandlers:(Ljava/util/Collection;)V ; ldc_w String No JMSListenerRegistry configured` |
+| 3a | SqsConfiguration.CONNECTION_FACTORY_BEAN_NAME | `io.micronaut.jms:micronaut-jms-sqs` | 4.2.0 | `CONNECTION_FACTORY_BEAN_NAME = "sqsJmsConnectionFactory"` |
+| 3b | ActiveMqClassicConfiguration.CONNECTION_FACTORY_BEAN_NAME | `io.micronaut.jms:micronaut-jms-activemq-classic` | 4.2.0 | `CONNECTION_FACTORY_BEAN_NAME = "activeMqConnectionFactory"` |
+| 3c | ActiveMqArtemisConfiguration.CONNECTION_FACTORY_BEAN_NAME | `io.micronaut.jms:micronaut-jms-activemq-artemis` | 4.2.0 | `CONNECTION_FACTORY_BEAN_NAME = "activeMqArtemisConnectionFactory"` |
+| 3d | the generated SQS connection-factory bean's own @Named literal | `io.micronaut.jms:micronaut-jms-sqs` | 4.2.0 | `carries literal "sqsJmsConnectionFactory": True ; carries @Named: True` |
+| 4 | Task 1's compiled fixture: the value inlines | `com.acme.mn.OrderMessaging$SqsConsumer` | fixture (recompiled by run.sh) | `@JMSListener(value="sqsJmsConnectionFactory")` |
+```
 
 ## Rows
 

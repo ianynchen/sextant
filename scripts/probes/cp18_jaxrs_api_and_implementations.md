@@ -43,6 +43,54 @@ $ /opt/homebrew/opt/openjdk/bin/javap -version
 `JERSEY=~/.m2/repository/org/glassfish/jersey/core/jersey-server/4.0.0/jersey-server-4.0.0.jar`
 `RESTEASY=<scratchpad>/resteasy-core-6.2.12.jar`
 
+**How to run.** `bash scripts/probes/cp18_jaxrs_api_and_implementations/run.sh`.
+It resolves each jar through Maven (network on the first run only, cached in
+`~/.m2` afterwards) and asks `javap`/`unzip` this probe's questions. Needs a
+JDK and Maven. Not a test: nothing in the suite runs it, and NFR-1's no-network
+rule governs the suite rather than evidence gathering.
+
+## Observations
+
+Verbatim from `run.sh`'s generated table (`probe.py` prints it; nothing here
+is typed by hand). **Every column header of the first table is a version the
+JAR itself REPORTED, and not the version the coordinate list asked for** — out
+of each manifest's `Implementation-Version` (or, where a jar carries none,
+`Bundle-Version` — jersey-server's manifest has no `Implementation-Version` of
+its own). `probe.py` reads the value out of the archive it opened and ABORTS
+the whole run when it disagrees with the coordinate that resolved the jar,
+rather than filling a mislabelled column; that is CP-5's failure, which
+printed a version it believed beside output from a version it had not run.
+
+```
+| what the run read | 2.1.1 | 3.1.0 | 4.0.0 | 6.2.12.Final |
+|---|---|---|---|---|
+| artifacts reporting this version | javax.ws.rs:javax.ws.rs-api | jakarta.ws.rs:jakarta.ws.rs-api | jakarta.ws.rs:jakarta.ws.rs-api, org.glassfish.jersey.core:jersey-server | org.jboss.resteasy:resteasy-core |
+| identity read from the archive itself | yes | yes | yes | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1a | verb annotations' declared attributes | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `GET: 0 attributes ; POST: 0 attributes ; PUT: 0 attributes ; DELETE: 0 attributes ; PATCH: 0 attributes ; HEAD: 0 attributes ; OPTIONS: 0 attributes` |
+| 1b | verb annotations' declared attributes | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0 | `GET: 0 attributes ; POST: 0 attributes ; PUT: 0 attributes ; DELETE: 0 attributes ; PATCH: 0 attributes ; HEAD: 0 attributes ; OPTIONS: 0 attributes` |
+| 1c | verb annotations' declared attributes | `javax.ws.rs:javax.ws.rs-api` | 2.1.1 | `GET: 0 attributes ; POST: 0 attributes ; PUT: 0 attributes ; DELETE: 0 attributes ; PATCH: 0 attributes ; HEAD: 0 attributes ; OPTIONS: 0 attributes` |
+| 2a | @Target and value()'s type | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.TYPE,Ljava/lang/annotation/ElementType;.METHOD]) ; value(): java.lang.String` |
+| 2b | @Target and value()'s type | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.TYPE,Ljava/lang/annotation/ElementType;.METHOD]) ; value(): java.lang.String[]` |
+| 2c | @Target and value()'s type | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.TYPE,Ljava/lang/annotation/ElementType;.METHOD]) ; value(): java.lang.String[]` |
+| 3a | @GET's own meta-annotation | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `@HttpMethod("GET")` |
+| 3b | @HttpMethod itself: @Target and value() | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.ANNOTATION_TYPE]) ; value(): java.lang.String` |
+| 4 | MediaType's constants | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `APPLICATION_JSON = "application/json" ; SERVER_SENT_EVENTS = "text/event-stream"` |
+| 5 | Jersey's resolveProducedTypes: method-over-class | `org.glassfish.jersey.core:jersey-server` | 4.0.0 | `aload_0 ; ldc class jakarta/ws/rs/Produces ; invokevirtual Method org/glassfish/jersey/server/model/AnnotatedMethod.isAnnotationPresent:(Ljava/lang/Class;)Z ; ifeq ; aload_0 ; ldc class jakarta/ws/rs/Produces ; invokevirtual Method org/glassfish/jersey/server/model/AnnotatedMethod.getAnnotation:(Ljava/lang/Class;)Ljava/lang/annotation/Annotation; ; checkcast class jakarta/ws/rs/Produces` |
+| 6a | class -> interfaces -> superclass walk | `org.glassfish.jersey.core:jersey-server` | 4.0.0 | `invokevirtual Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z ; invokevirtual Method java/lang/Class.getInterfaces:()[Ljava/lang/Class; ; invokevirtual Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z ; invokevirtual Method java/lang/Class.getSuperclass:()Ljava/lang/Class;` |
+| 6b | class -> interfaces -> superclass walk | `org.jboss.resteasy:resteasy-core` | 6.2.12.Final | `invokevirtual Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z ; invokevirtual Method java/lang/Class.getInterfaces:()[Ljava/lang/Class; ; invokevirtual Method java/lang/Class.isAnnotationPresent:(Ljava/lang/Class;)Z ; invokevirtual Method java/lang/Class.getSuperclass:()Ljava/lang/Class;` |
+| 7a | binding-param/@Context/@Suspended vocabulary | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `jakarta/ws/rs/BeanParam.class ; jakarta/ws/rs/CookieParam.class ; jakarta/ws/rs/DefaultValue.class ; jakarta/ws/rs/FormParam.class ; jakarta/ws/rs/HeaderParam.class ; jakarta/ws/rs/MatrixParam.class ; jakarta/ws/rs/PathParam.class ; jakarta/ws/rs/QueryParam.class ; jakarta/ws/rs/container/Suspended.class ; jakarta/ws/rs/core/Context.class` |
+| 7b | @Context-injectable type vocabulary | `jakarta.ws.rs:jakarta.ws.rs-api` | 4.0.0 | `jakarta/ws/rs/container/ResourceContext.class ; jakarta/ws/rs/core/Application.class ; jakarta/ws/rs/core/Configuration.class ; jakarta/ws/rs/core/HttpHeaders.class ; jakarta/ws/rs/core/Request.class ; jakarta/ws/rs/core/SecurityContext.class ; jakarta/ws/rs/core/UriInfo.class ; jakarta/ws/rs/ext/Providers.class ; jakarta/ws/rs/sse/Sse.class ; jakarta/ws/rs/sse/SseEventSink.class` |
+```
+
+Row 8 (JAX-RS §3.6's text) is not in this table: it is a citation of the
+specification's own words, already quoted and approved in
+`docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md:263-264`,
+not a fact any jar's bytecode can carry — no `javap`/`unzip` command produces
+it, so the harness does not print it.
+
 ## Rows
 
 ### 1a–1g — the seven verb annotations declare no attributes
