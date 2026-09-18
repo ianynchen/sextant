@@ -863,3 +863,35 @@ class had already recurred. Neither reaches a percentage, a timing, or a count o
 
 **Raised rather than settled here**, which is what §13.8 step 3 requires: a rule already
 written, already agreed and broken this many times is not fixed by writing it again.
+
+## A summary at the wrong altitude cannot answer the question a reader asks (COVERAGE framework rollup, 2026-09-18)
+
+**What happened.** Asked "is Spring Boot REST complete?", the answer given from COVERAGE was
+wrong in the direction that alarmed the reader: the register's `REST inbound — NOT DELIVERED`
+row was read as Spring being unfinished, when every open item on it was Ktor, Quarkus or a
+Kotlin-DSL edge and Spring's own inbound and outbound surfaces were shipped. The document
+had no level at which that could be seen. §2 scores a **language** per protocol; §5 lists
+**forms**, eighty-one of them for REST inbound with Spring, Servlet, Data REST and JAX-RS rows
+interleaved. The framework — the unit a person's stack is made of — existed nowhere.
+
+**The fix is a generated level, not a hand-written one.** Each protocol section now opens
+with a per-framework rollup derived from a `Framework` column on the form rows plus the
+register's open ids (`scripts/coverage_matrix.py`, `FRAMEWORKS` and `ITEM_FRAMEWORKS`). Two
+refusals keep it honest: a row tagged with an undeclared framework fails the generator, and
+an open id that maps to no framework fails it. The target lists are declared rather than
+inferred, because a framework with no row at all — `✗ unsupported` — is exactly what an
+inferred list can never show, and it is the line the question "what would full support
+mean?" needs.
+
+**What the new altitude surfaced on its first run.** The `Spring 7 version` row still read
+`A` a week after the register closed `spring7-version` on a CI run; the Kafka Streams row
+used W42's `**supported**` word, which the matrix classifier did not read, so the matrix had
+never counted it. Neither was reachable from the existing tests: `test_feature_delivery.py`
+compares the matrix glyph to the blocker count and cannot see a stale tier on a row. A
+second aggregation over the same rows is a second chance to notice a row that the first
+aggregation summed away.
+
+**The lesson.** When a reader's question has no row and no cell that answers it, the
+answer given will be assembled from the nearest ones and will be wrong in whichever
+direction the nearest ones lean. Add the level the question is asked at, generate it from
+the data that exists, and let the generator refuse when the data and the level disagree.
