@@ -3002,6 +3002,52 @@ An LLM may verify a walked path against the manifest or the source; a human cura
 what neither can. As in §2d, an LLM is never the sole source of an address that creates a
 link.
 
+## Conditions on an annotation attribute
+
+A return or parameter type is not the only thing a rule needs to look past the mapping
+annotation for. Whether a listener declares itself batched, or which JMS connection factory
+it names, is also visible only in an annotation's own attribute — and more than one rule
+needs to ask it. One closed condition shape serves every such rule:
+
+```yaml
+when:
+  annotation_arg:
+    annotation: <fqn>        # required — which annotation, never "the matched one"
+    name: <attribute>        # one attribute name, or a list of aliases, first present wins
+    equals: <string>         # exact comparison of the attribute's string form …
+    # — or —
+    parses_true: true        # … or Java's Boolean.parseBoolean after StringUtils.hasText
+```
+
+- **`annotation` is required.** Naming the fqn makes the condition self-contained, so a
+  `wrappers` entry — attached to no mapping annotation of its own — can still carry one.
+- **`name` is a scalar or an alias list**, read like `path_from`: first present wins. The
+  list form exists for an attribute that is aliased in the annotation's own definition —
+  only the alias the author actually typed is in the bytecode.
+- **Read on the declaration, else on its enclosing type.** The engine looks for
+  `annotation` among the annotation rows targeting the owner symbol; only if none is found
+  there does it look among those targeting the owner's enclosing type. The nearer
+  declaration wins outright — once the owner is found to carry the annotation, its
+  comparison is the answer, whether it matches or not, and the enclosing type is never
+  consulted. One shape serves `@KafkaListener(batch)` on a method and `@JMSListener(value)`
+  on a class.
+- **Exactly one comparator is required, `equals` or `parses_true`.**
+- **`equals` compares the attribute's string form, case-sensitively**, and matches an
+  array attribute if any one element equals. **`parses_true` is Java's
+  `Boolean.parseBoolean` after `StringUtils.hasText`** — true for `"true"`, `"TRUE"`,
+  `"True"`, false for an absent, empty, blank, or unresolved (`"${listener.batch}"`)
+  attribute — measured on Spring's own `KafkaListenerAnnotationBeanPostProcessor`
+  (`scripts/probes/cp20_spring_kafka_batch.md` row 2). It is a separate word rather than a
+  case-insensitive `equals` because a sibling use of this same condition compares a
+  **bean name**, and Micronaut's `Qualifiers.byName` is case-sensitive:
+  `SqsJmsConnectionFactory` is a different bean from `sqsJmsConnectionFactory`.
+- **The vocabulary is CLOSED.** `when` naming anything but `annotation_arg`, an
+  `annotation_arg` carrying a key outside these four, both comparators, or neither, is
+  refused by name at catalog load — never silently read as "never fires".
+
+Two consumers: §2a's `wrappers[].when` below, and §2's `protocol_hint`'s own `hint_when`
+above.
+
 ## 2a. Wrapper declarations
 
 A return or parameter type is often an envelope around the wire payload:

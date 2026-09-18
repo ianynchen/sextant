@@ -11,10 +11,15 @@ identity assertion is what catches that shape.
 
 from pathlib import Path
 
+import pytest
+
+from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.conditions import (
     annotation_index,
     enclosing_type_of,
+    holds,
     member_annotations_by_type,
+    parse_condition,
 )
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -135,3 +140,101 @@ def test_both_folds_are_built_once_per_load(tmp_path):
     assert annotation_index(workspace) is annotation_index(workspace)
     assert member_annotations_by_type(workspace) is member_annotations_by_type(workspace)
     workspace.close()
+
+
+KL = "org/springframework/kafka/annotation/KafkaListener#"
+JL = "io/micronaut/jms/annotations/JMSListener#"
+
+
+def test_equals_reads_the_owner_first():
+    c = parse_condition(
+        {
+            "annotation_arg": {
+                "annotation": "io.micronaut.jms.annotations.JMSListener",
+                "name": "value",
+                "equals": "sqsJmsConnectionFactory",
+            }
+        },
+        "t",
+    )
+    index = {"m com/acme/A#on(sig_1).": [(JL, {"value": "sqsJmsConnectionFactory"})]}
+    assert holds(c, "m com/acme/A#on(sig_1).", index)
+
+
+def test_equals_falls_back_to_the_enclosing_type():
+    c = parse_condition(
+        {
+            "annotation_arg": {
+                "annotation": "io.micronaut.jms.annotations.JMSListener",
+                "name": "value",
+                "equals": "sqsJmsConnectionFactory",
+            }
+        },
+        "t",
+    )
+    index = {"m com/acme/A#": [(JL, {"value": "sqsJmsConnectionFactory"})]}
+    assert holds(c, "m com/acme/A#on(sig_1).", index)
+    assert not holds(
+        c,
+        "m com/acme/A#on(sig_1).",
+        {"m com/acme/A#": [(JL, {"value": "activeMqConnectionFactory"})]},
+    )
+
+
+def test_equals_is_case_sensitive_and_matches_any_array_element():
+    c = parse_condition({"annotation_arg": {"annotation": "x.Y", "name": "v", "equals": "a"}}, "t")
+    assert holds(c, "o", {"o": [("x/Y#", {"v": ["b", "a"]})]})
+    assert not holds(c, "o", {"o": [("x/Y#", {"v": "A"})]})
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("True", True),
+        ("false", False),
+        ("", False),
+        ("${x}", False),
+        (None, False),
+    ],
+)
+def test_parses_true_is_boolean_parseboolean_after_hastext(value, expected):
+    c = parse_condition(
+        {
+            "annotation_arg": {
+                "annotation": "org.springframework.kafka.annotation.KafkaListener",
+                "name": "batch",
+                "parses_true": True,
+            }
+        },
+        "t",
+    )
+    args = {} if value is None else {"batch": value}
+    assert holds(c, "o", {"o": [(KL, args)]}) is expected
+
+
+def test_name_aliases_first_present_wins():
+    c = parse_condition(
+        {"annotation_arg": {"annotation": "x.Y", "name": ["a", "b"], "equals": "1"}}, "t"
+    )
+    assert holds(c, "o", {"o": [("x/Y#", {"b": "1"})]})
+    assert not holds(c, "o", {"o": [("x/Y#", {"a": "2", "b": "1"})]})
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"annotation_arg": {"annotation": "x.Y", "name": "v"}},  # no comparator
+        {
+            "annotation_arg": {"annotation": "x.Y", "name": "v", "equals": "1", "parses_true": True}
+        },  # both
+        {"annotation_arg": {"name": "v", "equals": "1"}},  # no annotation
+        {"annotation_arg": {"annotation": "x.Y", "name": "v", "contains": "1"}},  # unknown key
+        {"annotation_present": "x.Y"},  # unknown condition
+        "annotation_arg",
+    ],
+)
+def test_anything_else_is_refused_by_name(bad):
+    with pytest.raises(CatalogError):
+        parse_condition(bad, "t")
