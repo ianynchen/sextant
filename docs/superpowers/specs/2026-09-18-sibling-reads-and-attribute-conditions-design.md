@@ -261,8 +261,10 @@ annotation at class level if exists"). A separate word from the prefix read beca
 carries no media and `@Produces` no prefix — the `prefix_from`/`peer_from` reason.
 
 **Word 3 — siblings inherit with the mapping, all or nothing (M3).**
-`effective_annotations.py::inherited_rows_over` gains one rule for catalogs that declare any
-sibling list: when it synthesizes an inherited mapping onto a target method, it also
+`effective_annotations.py::inherited_rows_over` gains one rule for catalogs that declare
+`inherit_siblings: all_or_nothing` *(amended after the final review: opt-in through that
+one-word key rather than implied by any sibling list — `microprofile-graphql.yml` names
+siblings under a framework with no §3.6)*: when it synthesizes an inherited mapping onto a target method, it also
 synthesizes that ancestor method's annotations whose fqn appears in the catalog's
 `path_from_siblings`, `produces_from_siblings`, `consumes_from_siblings` or
 `protocol_hint.hint_annotations` — and it does so **only when the target method carries none
@@ -698,7 +700,9 @@ cites its probe by path.
 1. Every key here is optional and defaults to shipped behaviour: no sibling media source →
    media read as today; no `when` → wrapper unconditional; no `hint_when`/`hint_annotations`
    → the hint block reads media and return types as today; `sole_unannotated` unchanged; no
-   sibling lists → the inheritance walk synthesizes exactly what it synthesizes today.
+   `inherit_siblings` → the inheritance walk synthesizes exactly what it synthesizes today
+   *(amended after the final review: opt-in through `inherit_siblings`, since a sibling list
+   alone — `microprofile-graphql.yml` has one — must not switch the walk)*.
 2. **Golden run:** `uv run sextant module analyze` + `render` + `export` on
    `fixtures/orders-service`, `orders-spring7`, `orders-micronaut`, `orders-quarkus` at `main`
    and after the engine words land with **no catalog yet declaring them**; every

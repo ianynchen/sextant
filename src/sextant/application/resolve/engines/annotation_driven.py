@@ -810,6 +810,26 @@ _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 # it is not mints endpoints out of ordinary methods.
 _MEMBER_RULES = frozenset({"public_methods"})
 
+# Whether the inheritance walk carries a catalog's declared SIBLINGS along
+# with an inherited mapping (spec 2026-09-18 §3b word 3, amended after the
+# final review: OPT-IN). Today's one word is 'all_or_nothing': JAX-RS §3.6's
+# rule, quoted at CP-18 row 8 — a method carrying none of the catalog's
+# annotations inherits the ancestor method's mapping and every declared
+# sibling beside it, and one carrying ANY of its own inherits nothing.
+#
+# Opt-in rather than implied by the sibling lists, because naming a sibling
+# says where a NAME lives and nothing about how the framework inherits:
+# `microprofile-graphql.yml` declares `path_from_siblings` (`OI-35`) and a
+# type gate, and SmallRye GraphQL has no §3.6 — an implementor method carrying
+# only its own `@Name` must still inherit the interface's `@Query`. A catalog
+# declaring no word keeps the mapping-only own-check and Spring's
+# per-annotation merge, exactly as before the word existed.
+#
+# A closed vocabulary for `_PATH_FALLBACKS`'s reason: a typo read as "no
+# rule" silently restores the wrong address (an inherited `@GET` with no
+# `@Path` beside it) the word exists to remove.
+_INHERIT_SIBLINGS = frozenset({"all_or_nothing"})
+
 # The two keys a `unless` filter may carry, and no others (2I design §2,
 # word 4). A closed SHAPE rather than a closed vocabulary, because the values
 # are catalog data: which attribute withdraws a declaration, and at which
@@ -1240,6 +1260,15 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         _validate_entry_fallback(catalog, entry)
         _validate_container(catalog, entry)
     _sibling_sources(catalog, mapping)
+    inherit_siblings = mapping.get("inherit_siblings")
+    if inherit_siblings is not None and inherit_siblings not in _INHERIT_SIBLINGS:
+        # An unrecognised word read as "no rule" keeps the mapping-only walk,
+        # and an inherited verb then lands on the implementor WITHOUT the
+        # `@Path` beside it — the wrong address the word exists to remove.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.inherit_siblings: {inherit_siblings}` "
+            f"is not one of {', '.join(sorted(_INHERIT_SIBLINGS))} (spec 2026-09-18 §3b word 3)"
+        )
     qualifier_format = mapping.get("qualifier_format")
     if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
         # An unrecognised word would fall through to the separator
@@ -1514,27 +1543,13 @@ def _synthetic_annotations(
         mapping_fqns | (set(type_annotation_fqns) if type_annotation_fqns is not None else set()),
     )
     run_inheritance = type_annotation_fqns is not None
-    # The catalog's declared SIBLINGS — every annotation its sibling lists and
-    # its `protocol_hint.hint_annotations` name — so the walk can carry them
-    # with an inherited mapping, all or nothing (spec 2026-09-18 §3b word 3).
-    # Empty for a catalog declaring none, which leaves the walk as it was;
-    # `hint_annotations` is a key no catalog writes yet, so that half is inert
-    # until the hint pass reads it.
-    mapping = catalog.matches["mapping"]
-    sibling_fqns = frozenset(
-        _catalog_symbol(str(source["annotation"]))
-        for key in ("path_from_siblings", "produces_from_siblings", "consumes_from_siblings")
-        for source in (mapping.get(key) or [])
-    ) | frozenset(
-        _catalog_symbol(name) for name in (catalog.protocol_hint.get("hint_annotations") or [])
-    )
     inherited = (
         inherited_rows_over(
             workspace.once(_type_hierarchy),
             [*annotation_rows, *composed],
             mapping_fqns,
             prefix_fqns,
-            sibling_fqns=sibling_fqns,
+            sibling_fqns=_inherited_sibling_fqns(catalog),
         )
         if run_inheritance
         else []
@@ -1543,6 +1558,28 @@ def _synthetic_annotations(
         {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
         for row in (*folded, *composed, *inherited)
     ]
+
+
+def _inherited_sibling_fqns(catalog: Catalog) -> frozenset[str]:
+    """The catalog's declared SIBLINGS — every annotation its sibling lists and
+    its `protocol_hint.hint_annotations` name — for the walk to carry with an
+    inherited mapping, all or nothing (spec 2026-09-18 §3b word 3); and EMPTY
+    unless the catalog opts in with `mapping.inherit_siblings: all_or_nothing`
+    (`_INHERIT_SIBLINGS`), which leaves the walk mapping-only for every other
+    catalog — a sibling list alone says where a name lives, not how the
+    framework inherits. `hint_annotations` counts as a sibling here because
+    §3.6's own-check is "any JAX-RS annotation", and `quarkus-rest.yml` writes
+    the key; the hint pass itself reads raw facts only (`OI-92`)."""
+    mapping = catalog.matches["mapping"]
+    if mapping.get("inherit_siblings") is None:
+        return frozenset()
+    return frozenset(
+        _catalog_symbol(str(source["annotation"]))
+        for key in ("path_from_siblings", "produces_from_siblings", "consumes_from_siblings")
+        for source in (mapping.get(key) or [])
+    ) | frozenset(
+        _catalog_symbol(name) for name in (catalog.protocol_hint.get("hint_annotations") or [])
+    )
 
 
 def _containers(catalog: Catalog) -> dict[str, str]:

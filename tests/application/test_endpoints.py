@@ -1473,6 +1473,27 @@ def test_a_malformed_sibling_name_source_is_refused_by_file(tmp_path: Path, decl
     assert "invented-vocabulary.yml" in str(raised.value)
 
 
+def test_a_catalog_naming_an_unknown_inherit_siblings_word_is_refused_by_file(tmp_path: Path):
+    """`inherit_siblings` is a closed vocabulary of one word (spec §3b word 3, opt-in
+    after the final review). An unrecognised word read as "no rule" keeps the
+    mapping-only walk, and an inherited verb then lands on the implementor WITHOUT
+    the sibling `@Path` beside it — the wrong address the word exists to remove,
+    restored silently by a typo."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(
+            tmp_path,
+            _vocabulary_catalog(
+                path_from_siblings=[
+                    {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"}
+                ],
+                inherit_siblings="all-or-nothing",
+            ),
+        )
+
+    assert "inherit_siblings: all-or-nothing" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
 # --- 2I design §2: the two QName forms, on an invented framework ----------
 #
 # Deliberately NOT Spring-WS and NOT JAX-WS, for the reason the 2H forms above

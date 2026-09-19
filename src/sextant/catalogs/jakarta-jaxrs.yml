@@ -114,6 +114,10 @@ matches:
     type_media_from_siblings:
       produces: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
       consumes: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    # Spec §3b word 3, opt-in (amended after the final review): the
+    # inheritance walk carries the sibling lists above along with an inherited
+    # verb, all or nothing — JAX-RS §3.6, CP-18 row 8.
+    inherit_siblings: all_or_nothing
     method_from: method                       # never present; each entry below pre-sets its verb
     # An entry naming no verb derives nothing — there is none to derive. CP-18
     # rows 1a-3b: each of the seven verbs is itself meta-annotated
@@ -130,9 +134,10 @@ matches:
       - { fqn: jakarta.ws.rs.HEAD,    method: [HEAD] }
       - { fqn: jakarta.ws.rs.OPTIONS, method: [OPTIONS] }
 
-# Spec §3b word 3 is engine vocabulary (`effective_annotations.py`), not a key
-# this file declares — it fires automatically for any catalog naming a
-# sibling list AND a `type_annotation`, which this file does. JAX-RS §3.6,
+# Spec §3b word 3 is engine vocabulary (`effective_annotations.py`) this file
+# OPTS INTO with `mapping.inherit_siblings: all_or_nothing` above (amended
+# after the final review: a sibling list alone no longer switches it on, since
+# `microprofile-graphql.yml` names siblings and has no §3.6). JAX-RS §3.6,
 # quoted at CP-18 row 8 and confirmed live by two implementations' bytecode
 # (CP-18 row 6): "if a subclass or implementation method has any JAX-RS
 # annotations then all of the annotations on the superclass or interface

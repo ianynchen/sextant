@@ -89,10 +89,12 @@ here would restate those documents rather than add anything.
   annotation, as the framework's own class-level default, the method's declaration always
   winning when it has one.
 
-- **Sibling inheritance** carries a catalog's own declared sibling lists along with an
-  inherited mapping, all-or-nothing, reproducing JAX-RS's "any own annotation on the
-  implementor method means none of the interface's are read" rule rather than merging the
-  two.
+- **Sibling inheritance** (`inherit_siblings: all_or_nothing`, opt-in) carries a catalog's
+  own declared sibling lists along with an inherited mapping, all-or-nothing, reproducing
+  JAX-RS's "any own annotation on the implementor method means none of the interface's are
+  read" rule rather than merging the two. Only the four JAX-RS-shaped catalogs declare it;
+  a catalog naming siblings for another reason (MicroProfile GraphQL's name sources) keeps
+  the walk it had.
 
 - **`sole_unbound` and `implicit_bindings`** are a new request-body fallback and its
   companion: the body is the one parameter that carries NONE of the framework's own binding

@@ -76,6 +76,10 @@ matches:
     type_media_from_siblings:
       produces: [{ annotation: javax.ws.rs.Produces, arg: value }]
       consumes: [{ annotation: javax.ws.rs.Consumes, arg: value }]
+    # Spec §3b word 3, opt-in (amended after the final review): the
+    # inheritance walk carries the sibling lists above along with an inherited
+    # verb, all or nothing — JAX-RS §3.6, CP-18 row 8.
+    inherit_siblings: all_or_nothing
     method_from: method
     all_methods: []
     annotations:

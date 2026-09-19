@@ -13,15 +13,19 @@ from pathlib import Path
 
 import pytest
 
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.effective_annotations import (
     composed_mapping_rows,
     inherited_rows,
     inherited_rows_over,
     type_hierarchy,
 )
+from sextant.application.resolve.engines.annotation_driven import _inherited_sibling_fqns
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -1183,6 +1187,60 @@ def test_without_sibling_fqns_the_walk_is_unchanged():
     and an own sibling would not have blocked it either (Spring's own merge)."""
     rows = inherited_rows_over(_RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH])
     assert {r["annotation"] for r in rows if r["target"].endswith("#byId(sig_1).")} == {_RS_GET}
+
+
+def _sibling_catalog(**mapping: object) -> Catalog:
+    """A catalog naming the two JAX-RS-shaped sibling lists above — and only what a
+    test layers on beyond them."""
+    return Catalog(
+        id="invented-siblings",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        source=Path("tests/invented-siblings.yml"),
+        matches={
+            "mapping": {
+                "path_from_siblings": [{"annotation": "com.acme.rs.Path", "arg": "value"}],
+                "produces_from_siblings": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+                "annotations": [{"fqn": "com.acme.rs.GET"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def test_a_catalog_naming_siblings_without_inherit_siblings_keeps_the_mapping_only_walk():
+    """Word 3 is OPT-IN (amended after the final review): a sibling list says where a
+    name lives, not how the framework inherits. A catalog naming siblings and no
+    `inherit_siblings` hands the walk an EMPTY sibling set, and the walk is then
+    today's — the mapping row alone, Spring's own merge — while the same catalog with
+    `inherit_siblings: all_or_nothing` hands it both declared siblings."""
+    assert _inherited_sibling_fqns(_sibling_catalog()) == frozenset()
+    assert _inherited_sibling_fqns(_sibling_catalog(inherit_siblings="all_or_nothing")) == (
+        _RS_SIBLINGS
+    )
+    rows = inherited_rows_over(
+        _RS_HIERARCHY,
+        _RS_INTERFACE_ROWS,
+        {_RS_GET},
+        [_RS_PATH],
+        sibling_fqns=_inherited_sibling_fqns(_sibling_catalog()),
+    )
+    assert {r["annotation"] for r in rows if r["target"] == _RS_RESOURCE_METHOD} == {_RS_GET}
+
+
+def test_the_shipped_microprofile_graphql_catalog_hands_the_walk_no_siblings():
+    """The catalog that forced the amendment: `microprofile-graphql.yml` declares
+    `path_from_siblings` (`OI-35`) and a type gate, and SmallRye GraphQL has no
+    JAX-RS §3.6 — an implementor method carrying only its own `@Name` must still
+    inherit the interface's `@Query`. Read off the REAL loaded catalog, so a later
+    edit opting it in is a deliberate change here rather than a silent one."""
+    catalog = next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "microprofile-graphql"
+    )
+    assert catalog.matches["mapping"].get("path_from_siblings")
+    assert _inherited_sibling_fqns(catalog) == frozenset()
 
 
 @pytest.mark.pins("effective_annotations.inherited-set-agreed-as-a-whole")

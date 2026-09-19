@@ -1134,13 +1134,19 @@ mapping:
   - Sorted and de-duplicated exactly as every other media source lands
     (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4).
 
-- **Siblings inherit with the mapping, all or nothing — for a catalog declaring any
-  sibling list, an inherited mapping brings the ancestor method's declared siblings with
-  it, and ANY own annotation of the catalog's blocks inheritance for that method.** Not a
-  key: a rule the inheritance walk (`effective_annotations.py::inherited_rows_over`)
-  applies whenever the catalog names siblings at all — the annotations its
-  `path_from_siblings`, `produces_from_siblings`, `consumes_from_siblings` and
-  `protocol_hint.hint_annotations` lists name. When the walk synthesizes an interface or
+- **Siblings inherit with the mapping, all or nothing — for a catalog declaring
+  `inherit_siblings: all_or_nothing`, an inherited mapping brings the ancestor method's
+  declared siblings with it, and ANY own annotation of the catalog's blocks inheritance
+  for that method.** A closed key of one word, and OPT-IN (amended after the final
+  review; it used to fire for any catalog naming a sibling list, and
+  `microprofile-graphql.yml` names one — `OI-35` — under a framework with no such rule, so
+  an implementor method carrying only its own `@Name` lost the inherited `@Query`). Any
+  other word is refused by name (`annotation_driven.py::_validate_naming`). Where declared,
+  the inheritance walk (`effective_annotations.py::inherited_rows_over`) carries the
+  annotations the catalog's `path_from_siblings`, `produces_from_siblings`,
+  `consumes_from_siblings` and `protocol_hint.hint_annotations` lists name
+  (`annotation_driven.py::_inherited_sibling_fqns`); where absent it hands the walk an
+  empty set and nothing below applies. When the walk synthesizes an interface or
   superclass method's mapping onto an implementor method, it synthesizes that SAME
   ancestor method's sibling annotations beside it, and it does so only where the
   implementor method carries none of the catalog's annotations of its own, mapping or
@@ -1149,8 +1155,9 @@ mapping:
   the annotations on the superclass or interface method are ignored."* Forced because
   JAX-RS puts the path and the media BESIDE the verb — an interface's `@GET @Path("/{id}")
   @Produces("application/json")` inherited as `@GET` alone is a wrong address, not a
-  missing one. A catalog declaring no sibling list keeps the mapping-only own-check and
-  the per-annotation merge it had — Spring's own rule, byte-identical.
+  missing one. A catalog declaring no `inherit_siblings` keeps the mapping-only own-check
+  and the per-annotation merge it had — Spring's own rule, byte-identical — whether or not
+  it names siblings.
   - **One module knows about inheritance.** The synthesized siblings are ordinary
     annotation rows downstream, so the sibling reads (`path_from_siblings` and the two
     media words above), the class-level default and the hint pass never learn that an
