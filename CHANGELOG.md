@@ -14,6 +14,103 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **No version bump with this entry — the standing gate still holds** (Spring Boot
+  end-to-end before any bump, `docs/java-kotlin-delivery-list.md`'s own "Target" section):
+  the five items below are catalog and engine work only, and stay in the register's
+  ```delivery block until a CI run closes them.
+
+- **A JAX-RS resource — Jersey, RESTEasy, Helidon or Quarkus REST, either `jakarta.ws.rs` or
+  the older `javax.ws.rs` package — now derives every route it declares** (`quarkus-jaxrs`;
+  Groups B and C spec, `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`
+  §3). Before this, JAX-RS was entirely unread: `@GET`/`@POST`/… carry no address or media
+  type of their own — those live on the SAME method's `@Path`/`@Produces`/`@Consumes` — so
+  no catalog could read them without a way to read one annotation's siblings, and every
+  resource derived nothing. Three catalogs now cover it: `jakarta-jaxrs.yml` and
+  `javax-jaxrs.yml` read the specification as written, and `quarkus-rest.yml` reads
+  Quarkus's own additions (two extra ways to recognise a method's request body with no
+  binding annotation at all, and the three Vert.x types Quarkus always excludes from it) —
+  because a plain-JAX-RS reading of a Quarkus module got the body rule wrong, the two plain
+  catalogs now stand aside on a module that declares Quarkus REST rather than risk winning
+  that race. A class implementing a `@Path` INTERFACE now derives the interface's own
+  routes too, following the specification's own inheritance rule: an implementing method
+  with none of its own JAX-RS annotations inherits the interface method's address, verb and
+  media whole, and one that only overrides part of it (say, just `@Produces`) is — to
+  JAX-RS — not a resource method at all. A Kotlin JAX-RS body, and any body Bean Validation
+  annotates with `@Valid`, used to look unbound to the engine's old "no annotation at all"
+  rule; the fallback now checks the framework's own binding annotations instead, so both
+  keep their contract.
+
+- **MicroProfile REST Client — the standard way a Quarkus module calls another service —
+  now derives its outbound calls** (`mp-rest-client`, spec §3f). A `@RegisterRestClient`
+  interface carrying JAX-RS annotations (`@Path`, `@GET`, …) reads on the same words as the
+  inbound catalogs above, direction flipped: its peer name comes off
+  `@RegisterRestClient(baseUri = …, configKey = …)` itself rather than off `@Path`, which
+  only supplies the address prefix.
+
+- **JAX-RS's `@Produces(MediaType.SERVER_SENT_EVENTS)`, and Quarkus REST's
+  `@RestStreamElementType`, are now read as Server-Sent Events** (`jaxrs-sse`, spec §3c).
+  The plain JAX-RS catalogs read the media type the same way every other framework's SSE
+  row already does. Quarkus REST adds a second way: `@RestStreamElementType` (or the older
+  `@RestSseElementType`) with no `@Produces` at all still makes the response SSE, because
+  Quarkus itself treats the element-type annotation's mere PRESENCE as the signal — its
+  VALUE is the per-event format, which is not carried yet and stays a known follow-up.
+
+- **A Spring `@KafkaListener(batch = "true")` listener's payload is now the record, not the
+  list it arrives in** (`kafka-batch-generics`, spec §5a). Spring hands a batch listener's
+  handler one element PER RECORD, so `List<OrderEvent>` on such a listener means the wire
+  payload is `OrderEvent` and `List` is only the container carrying it — the same way
+  `ConsumerRecord<K, V>` already reads as an envelope around `V`. Before this, the listener
+  published the array itself, because nothing told a batch listener's `List` apart from an
+  ordinary one. The match is read off the listener's own `batch` attribute, case-
+  insensitively (`"true"`/`"TRUE"` both count, matching Spring's own
+  `Boolean.parseBoolean`); a `List<T>` request body with no `batch` attribute at all still
+  publishes the array, unchanged.
+
+- **A Micronaut JMS listener or producer bound to the SQS connection factory now reads —
+  and links — as SQS, not JMS** (`micronaut-jms-over-sqs`, both directions; spec §5b).
+  Micronaut ships no first-party SQS annotation; the way a Micronaut module reaches SQS
+  through JMS is `@JMSListener`/`@JMSProducer` pointed at `micronaut-jms-sqs`'s own
+  connection factory bean, `"sqsJmsConnectionFactory"` — a plain string attribute, unlike
+  what an earlier draft of this register entry assumed, since `@JMSListener` and
+  `@JMSProducer` carry no `connectionFactory` attribute at all. Before this, such a listener
+  or producer derived as ordinary JMS and would never link with a Spring SQS sender or
+  listener on the same queue name; now both directions reclassify to SQS and link under the
+  queue name they share. A user-named factory bean wired to SQS by hand, or a factory name
+  written as a property placeholder, is not knowable from bytecode and still reads as JMS —
+  only the framework's own constant is matched, stated as a boundary.
+
+- **Five engine words, one condition shape, make the five catalog changes above possible —
+  every one optional and inert unless a catalog declares it, so nothing already shipped
+  moves.** `produces_from_siblings`/`consumes_from_siblings` read a method's media type off
+  a sibling annotation of the same method (`@Produces`/`@Consumes` beside `@GET`) where no
+  ordinary `produces_from`/`consumes_from` alias is present; `type_media_from_siblings`
+  reads the same off the enclosing CLASS's own sibling annotation, as the framework's own
+  class-level default, the method's declaration always winning when it has one. Sibling
+  inheritance carries a catalog's own declared sibling lists along with an inherited
+  mapping, all-or-nothing, reproducing JAX-RS's "any own annotation on the implementor
+  method means none of the interface's are read" rule rather than merging the two.
+  `sole_unbound` is a new request-body fallback: the body is the one parameter that carries
+  NONE of the framework's own binding annotations — measured against that list, unlike the
+  old `sole_unannotated` fallback, which lost a body under Kotlin's compiler-generated
+  `@NotNull` or Bean Validation's `@Valid`; `implicit_bindings` names further ways a
+  framework binds a parameter with no annotation at all (Quarkus's path-variable-by-name and
+  parameter-container rules). One condition shape, `annotation_arg`, reads an attribute on
+  an annotation and compares it — `equals` for an exact string match, or `parses_true` for
+  Java's own `Boolean.parseBoolean` after a blank-string guard, case-insensitive, with no
+  placeholder resolution (Spring's own predicate, not ours). `wrappers[].when` attaches that
+  condition to an envelope-unwrapping rule, so `List` only unwraps to its element where the
+  condition holds (a batch listener), never for every `List` everywhere.
+  `protocol_hint.hint_when` and `protocol_hint.hint_annotations` are two new ways a row gets
+  reclassified to a different protocol after the fact — an annotation attribute's value (the
+  SQS connection-factory name) or an annotation's mere presence (Quarkus's SSE element-type
+  marker) — beside the existing media-type and return-type evidence.
+  `detect.superseded_by` lets a catalog declare that another catalog IS the framework's own
+  implementation on a module that declares it, and stand aside rather than run and risk
+  winning a naming tie-break with the wrong rule (`jakarta-jaxrs.yml`/`javax-jaxrs.yml`
+  yielding to `quarkus-rest.yml`). `peer_annotation` lets a catalog read the identity that
+  names a client's peer off a DIFFERENT annotation than the one that supplies its address
+  prefix (MicroProfile's `@RegisterRestClient` versus `@Path`).
+
 - **Six more frameworks derive their HTTP/SQS surface — Spring Cloud Gateway (inbound and
   outbound), Ktor's routing DSL, Javalin's nested `ApiBuilder`, the JDK and Apache HTTP
   clients, and `SqsTemplate`'s four `receive` forms** (`G-30`, `G-30-outbound`,

@@ -1173,6 +1173,197 @@ it is not seen in practice.
 lands for (a), when the `t` side takes the `selected_documents` filter for (b), and when (c)
 is measured.
 
+### OI-86 — `sole_unannotated` still governs Feign and Micronaut messaging, and loses a Kotlin body the same way JAX-RS used to
+**Minor — reachable input unmeasured; Major if it turns out common · logged 2026-09-18 at
+B/C Task 13's review (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`
+§6) · `spring-cloud-openfeign.yml`, `micronaut-jms.yml`, `micronaut-jms-producer.yml`,
+`micronaut-kafka.yml`, `micronaut-kafka-client.yml`, `micronaut-pubsub.yml`,
+`micronaut-pubsub-client.yml`**
+
+M2 (this branch's own §0) found that `sole_unannotated` disqualifies a parameter for ANY
+annotation at all, so kotlinc's synthetic `@NotNull` — which reaches the facts at
+`retention: class` on every non-null Kotlin declaration — erases a Kotlin request body from
+under it; the fix, `sole_unbound`, measures against the framework's own binding annotations
+instead and shipped on the three JAX-RS catalogs (`jakarta-jaxrs.yml`, `javax-jaxrs.yml`,
+`quarkus-rest.yml`) and MicroProfile REST Client. **The other seven catalogs above still
+declare `sole_unannotated`** (measured by `grep -n fallback` on each), so the identical loss
+applies to a Kotlin `@FeignClient` interface's request body and a Kotlin
+`@KafkaListener`/`@JMSListener`/`@PubSubListener`-style Micronaut handler's body — `@Valid`
+on a Java body has the same effect, framework-independent.
+
+**Real triggering input:** a Kotlin Feign client interface, or a Kotlin Micronaut Kafka/JMS/
+Pub-Sub listener or client, declaring a non-null body parameter with no `@RequestBody`/
+`@MessageBody` annotation of its own — exactly the shape `fixtures/orders-service`'s
+`KotlinOrderResource` had under JAX-RS before this branch's fix, and no fixture here has the
+Feign or Micronaut equivalent: `find fixtures -iname "*.kt"` returns six files, none under
+`fixtures/orders-micronaut` and none naming `FeignClient`, so the input is real and
+plausible (Micronaut's Kotlin-first documentation, Feign's common use from Kotlin services)
+but its frequency in real estates is not measured here — no probe or corpus scan has counted
+Kotlin Feign/Micronaut modules the way CP-18's own measurement did for JAX-RS. Per the
+register's own severity rule (measure before assigning), that absence of a measurement is
+why this logs as **Minor rather than Major**: the fix is Major-when-reachable specifically
+for a Kotlin Feign outbound body (blocking REST outbound) or a Kotlin Micronaut listener
+body (blocking Kafka/JMS/SQS/Pub-Sub inbound or outbound, whichever catalog is in play), and
+should be re-graded Major the moment a corpus or fixture shows the shape is common.
+
+**Verify:** `grep -n fallback src/sextant/catalogs/{spring-cloud-openfeign,micronaut-jms,micronaut-jms-producer,micronaut-kafka,micronaut-kafka-client,micronaut-pubsub,micronaut-pubsub-client}.yml`
+— all seven still read `sole_unannotated`. **Closes** when each catalog's `request_body`
+switches to `fallback: sole_unbound` with that framework's own `bound_by` list, measured the
+way CP-18 measured JAX-RS's.
+
+### OI-87 — `@RestStreamElementType`'s value is not carried as the per-event SSE format
+**Minor · logged 2026-09-18 at B/C Task 13's review (spec §3c, §6) ·
+`src/sextant/catalogs/quarkus-rest.yml`**
+
+Quarkus REST's `@RestStreamElementType` (or the deprecated `@RestSseElementType`) is now
+read for its PRESENCE — `protocol_hint.hint_annotations`, shipped B/C Task 10 — which
+correctly classifies the response as SSE even with no `@Produces` at all. Its VALUE, the
+per-event element type, is not carried anywhere: an SSE row's per-event payload still falls
+to the format ladder's rung 5 (`json`, `narrowed`, rendered `json (assumed)`), the same as
+every other undeclared payload, rather than reading the annotation's own value as a rung-2
+source the way `@Produces`/`@Consumes` already are for the envelope. No wrong output either
+way — rung 5's `json (assumed)` is honest about its own uncertainty — so this is a trust-
+marker upgrade left undone, not a defect in what ships.
+
+**Real triggering input:** any `@RestStreamElementType(OrderEvent.class)` (or
+`@RestSseElementType`) method with no declared `@Produces` — `fixtures/orders-quarkus`'s
+`OrderResource#events` is exactly this shape today, and its per-event contract reads at
+rung 5 rather than rung 2.
+
+**Verify:** `json.loads(row["response_shape"])` on the SSE row in
+`fixtures/orders-quarkus` shows the rung-5 trust marker, not rung 2. **Closes** when a new
+rung-2 source reads `@RestStreamElementType`'s (and `@RestSseElementType`'s) declared value
+the next time the format ladder is touched (spec §3c names this a named follow-up, not in
+this group).
+
+### OI-88 — Quarkus REST's return-type-keyed default `produces` is not read
+**Minor · logged 2026-09-18 at B/C Task 13's review (spec §3c, §6) ·
+`src/sextant/catalogs/quarkus-rest.yml`**
+
+`EndpointIndexer.applyDefaultProduces` (`EndpointIndexer.java:853`, measured 2026-09-18)
+fills an undeclared route's `produces` from its RETURN TYPE — `String` becomes
+`text/plain`, anything else becomes JSON where a JSON provider is present — a framework
+default keyed on the return type rather than on any declared value, which no
+`default_produces`-shaped key in this engine states. An undeclared Quarkus route's
+`produces` stays NULL here and the row falls to the format ladder's rung 5 exactly as an
+undeclared Spring route does, rather than the return-type-keyed default a real Quarkus
+deployment computes. Stated as a boundary in `docs/COVERAGE.md` §5.1 (the Quarkus
+"stated-not-built surface" row) and in `quarkus-rest.yml`'s own comments; this entry is the
+register's own record of the same gap.
+
+**Real triggering input:** any Quarkus REST method with no `@Produces` at all — the request
+body rule's own excludes and implicit bindings are unaffected, only the response media type.
+
+**Verify:** `grep -n applyDefaultProduces` against a `quarkus-rest` sources jar shows the
+rule; no key in `quarkus-rest.yml` reads a return type. **Closes** when a return-type-keyed
+default-media word is designed — a further measurement and a schema addition, not a catalog
+edit alone.
+
+### OI-89 — `annotation_arg.equals` compares Python's `str()` of a non-string fact value, which is not Java's string form
+**Minor — unreachable by any shipped catalog today · logged 2026-09-18, ruled at B/C Task 7's
+review (spec §2) · `src/sextant/application/resolve/conditions.py:204`**
+
+`_compare`'s `equals` arm reads `any(v is not None and str(v) == condition.equals for v in
+values)`, where `v` is the extracted fact's own Python-typed value. For a `String`
+attribute this is correct — the fact and the catalog's YAML string agree. For a `boolean`
+attribute, `v` extracts as a Python `bool`, and `str(True)` is `"True"`, capitalised,
+where Java's own `Boolean.toString()` — and thus the bytecode's own constant-value form — is
+lower-case `"true"`. A catalog declaring `equals: "true"` against a boolean attribute would
+therefore compare `"True" == "true"`, false, and the condition would never hold, silently:
+the row it gates would read as though the attribute were always absent or always the other
+value.
+
+**Why logged rather than fixed:** measured against every catalog on this branch — `equals`
+is declared exactly three places (`grep -n 'equals:' src/sextant/catalogs/*.yml`,
+`jakarta-jws.yml` ×2 and `jakarta-jws-client.yml` ×2, all a DIFFERENT word, `unless.attribute`,
+not `annotation_arg`; `micronaut-jms.yml` and `micronaut-jms-producer.yml`'s
+`hint_when.equals: sqsJmsConnectionFactory`, a `String` attribute both ways) — no shipped
+consumer of `annotation_arg`'s `equals` compares a non-string attribute, so the register's
+own rule (an issue real input cannot trigger is logged, not fixed) applies: the input a
+future boolean-`equals` catalog would supply does not exist yet.
+
+**Verify:** `grep -n "equals:" src/sextant/catalogs/*.yml` — the two `annotation_arg`
+consumers are both `String` attributes. **Closes** with two changes together: `_compare`
+reads Java's own string form for a non-string value (`"true"`/`"false"` for `bool`, decimal
+for numeric types) rather than Python's `str()`, and `parse_condition` refuses a non-string
+`equals` value at catalog load until that mapping is declared — a parse-time refusal rather
+than a silent runtime mismatch, `parse_condition`'s own closed-vocabulary discipline (spec
+§2) extended to the comparator's operand.
+
+### OI-90 — `POST /kt/orders` derives TWO inbound rows in `orders-service`, one per engine
+**Minor · logged 2026-09-18, found at B/C Task 10's review · `fixtures/orders-service`,
+`src/sextant/storage/duckdb/insert_endpoints.sql`**
+
+`fixtures/orders-service`'s Kotlin JAX-RS resource, `KotlinOrderResource`, and its
+pre-existing Kotlin functional-routing fixture, `KotlinOrderRoutes#ktRoutes`, both register
+`POST /kt/orders` — a coincidental address collision between two unrelated fixture files
+sharing one Maven module, not a wire-identity conflict either framework would actually
+suffer in a real deployment. Both rows survive because `insert_endpoints.sql`'s inbound
+identity guard is the SECOND HALF of the `annotation_driven` engine specifically (its own
+header comment: "the second half of the annotation_driven engine") and runs once per
+annotation-driven catalog's own turn, comparing only against rows already in the table at
+that turn — it never runs for, and never sees, a row the functional-routing DSL engine
+inserted through its own path. So two DIFFERENT engines minting the identical `(http,
+inbound, POST, /kt/orders)` identity do not merge and do not conflict-flag; both stand,
+distinguished only by `handler` (JAX-RS's `KotlinOrderResource#createOrder` symbol) versus
+`caller` (the DSL route, `handler` NULL).
+
+**Real triggering input:** live today, in `fixtures/orders-service`. `test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract`
+(`tests/application/test_pipeline.py`) filters on `handler is not None` specifically to pick
+the JAX-RS row out of the pair rather than assuming the address names exactly one row — the
+test's own comment names the collision. Graded Minor rather than Major because both rows are
+individually honest about a real registration and the collision is a property of this
+fixture's own address choice (two independent framework samples sharing one path string
+inside one Maven module for coverage convenience) rather than a shape a single real Spring
+Boot module would present — the pre-existing engine property (identity dedup is scoped to
+`annotation_driven`'s own inserts) is broader than this one collision and would repeat for
+any two catalogs from different engines sharing an inbound address, which is unmeasured
+beyond this one instance.
+
+**Verify:** `[r for r in report.endpoints if r["path"] == "/kt/orders" and r["method"] ==
+"POST"]` returns two rows in `fixtures/orders-service`. **Closes** when the inbound identity
+guard (or a merge pass after it) compares across every engine's inserts, not only
+`annotation_driven`'s own turn-by-turn ones — an engine change, not a fixture edit, since the
+fixture's own collision is incidental rather than the shape worth chasing on its own.
+
+### OI-91 — Quarkus REST's own inheritance rule diverges from JAX-RS §3.6, and the engine emulates the specification, not Quarkus
+**Minor · logged 2026-09-18 (CP-19 row 6, spec §3b word 3's boundary note) ·
+`src/sextant/catalogs/quarkus-rest.yml`, `docs/COVERAGE.md` §5.1**
+
+JAX-RS §3.6 is all-or-nothing PER METHOD: an implementor method carrying any of its own
+JAX-RS annotations gets none of the interface method's, whichever level they are declared
+at. Quarkus's own `EndpointIndexer.collectEndpoints` (measured, CP-19 row 6) is a different
+walk: self → superclass → every interface, and AT EACH LEVEL it scans that class's OWN
+methods for the sought HTTP-verb annotation; the FIRST level whose own method carries the
+verb wins, and EVERY OTHER JAX-RS annotation on the endpoint — `@Path`, `@Produces`,
+`@Consumes` sibling included — is read off that SAME winning method, never off an override
+at any other level. Word 3 (this branch's sibling-inheritance engine change) reproduces
+JAX-RS §3.6 exactly, which is the specification's own answer and the right one for the two
+plain catalogs; on Quarkus REST specifically it is a stated, measured divergence rather than
+a built one: an implementor overriding an interface method with its own `@Produces` (or any
+other non-verb annotation) but no verb annotation of its own has that override silently
+ignored by Quarkus — word 3 would look for the implementor's own annotations, find one
+(`@Produces`), and — following §3.6 — derive NOTHING for that method (no own verb), where
+Quarkus's real walk would still find the verb at the interface level and apply it there,
+producing a row this engine does not.
+
+`quarkus-rest.yml` states the divergence in a comment (`src/sextant/catalogs/quarkus-rest.yml`,
+the `collectEndpoints` block) rather than reproducing Quarkus's own per-level walk, and
+`docs/COVERAGE.md` §5.1's "Quarkus's own §3.6 divergence" row states it beside the JAX-RS
+rows. This entry is the register's own record of the same measured gap, since spec §6 named
+it as one of the items the closing task logs.
+
+**Real triggering input:** an implementor overriding an interface method with its own
+`@Produces` (or similar) and no verb annotation of its own — not present in
+`fixtures/orders-quarkus`, whose own inheritance case is a bare `@Override` with no
+annotations at all, so word 3's §3.6 emulation and Quarkus's real rule agree on the fixture
+either way (COVERAGE §5.1 states this explicitly).
+
+**Verify:** `grep -n "collectEndpoints" src/sextant/catalogs/quarkus-rest.yml` shows the
+comment; CP-19 row 6 (`scripts/probes/cp19_quarkus_rest.md`) has the measurement. **Closes**
+when `quarkus-rest.yml` gains its own per-level annotation walk distinct from word 3's
+shared §3.6 emulation — a catalog-scoped variant of sibling inheritance, not a change to the
+word every other catalog relies on.
 
 ## CLOSED
 
