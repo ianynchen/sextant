@@ -127,6 +127,20 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
             catalog_symbols(prefix_annotation, f"{catalog.source}: mapping.prefix_annotation")
         )
     )
+    # CP-22 row 2 (spec §3f): `peer_from` used to be read off the SAME
+    # annotation row `prefix_from` is — true for `@FeignClient`, where prefix
+    # and peer share one annotation, but not for MicroProfile REST Client,
+    # whose prefix sits on `@Path` and whose peer sits on `@RegisterRestClient`
+    # — two different annotations. `peer_annotation` names the second one and
+    # defaults to `prefix_annotation` where a catalog declares none, so every
+    # catalog shipped before this word reads `peer_from` exactly where it
+    # always did and derives byte-identically.
+    peer_annotation = mapping.get("peer_annotation") or prefix_annotation
+    peer_fqns = (
+        None
+        if peer_annotation is None
+        else list(catalog_symbols(peer_annotation, f"{catalog.source}: mapping.peer_annotation"))
+    )
     mapping_annotations = [_mapping_annotation(mapping, m) for m in mapping["annotations"]]
     return {
         "protocol": catalog.protocol,
@@ -152,6 +166,9 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
             else []
         ),
         "prefix_annotation": prefix_fqns,
+        # `peer_from` reads off THIS annotation, not `prefix_annotation` —
+        # the two differ only for MicroProfile REST Client today (spec §3f).
+        "peer_annotation": peer_fqns,
         # F2 §3.5's relationship conjunct. How a class-level annotation relates
         # to the methods inside it — `prefix` (compose, the HTTP shape) or
         # `sibling` (a method naming its own destination is its OWN
@@ -171,6 +188,19 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # rather than relied on in the query, because a list's order is not a
         # column and `min_by` needs one to be able to say "first present".
         "path_from_siblings": _sibling_sources(catalog, mapping),
+        # Spec 2026-09-18 §3b word 1: the media siblings — `@Produces`/`@Consumes` on a
+        # JAX-RS method sit beside a verb annotation that declares no attribute at
+        # all (CP-18 row 1). Same closed shape and order rule as the path siblings;
+        # read only where every `produces_from`/`consumes_from` alias is absent.
+        "produces_from_siblings": _sibling_sources(catalog, mapping, "produces_from_siblings"),
+        "consumes_from_siblings": _sibling_sources(catalog, mapping, "consumes_from_siblings"),
+        # Spec 2026-09-18 §3b word 2: the class-level media DEFAULT — `@Produces`/
+        # `@Consumes` on the resource TYPE, applied only where the method itself
+        # (including its own siblings, above) declared none. A different word from
+        # the two above it because the sibling being read sits on the TYPE rather
+        # than the method, and `_type_media_sources` keys it by `produces`/
+        # `consumes` rather than by ordinal position in a single list.
+        "type_media_from_siblings": _type_media_sources(catalog, mapping),
         "prefix_from": list(mapping["prefix_from"]),
         "peer_from": list(mapping.get("peer_from", [])),
         "method_from": mapping["method_from"],
@@ -625,9 +655,25 @@ def _entry_fallback(mapping: dict[str, Any], entry: dict[str, Any]) -> str | Non
     return None if declared is None else str(declared)
 
 
-def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str, object]]:
-    """`mapping.path_from_siblings` as `{ordinal, annotation, arg}` rows, the
-    ordinal counting from the order the catalog wrote (`OI-35`).
+def _sibling_sources(
+    catalog: Catalog,
+    mapping: dict[str, Any],
+    key: str = "path_from_siblings",
+    shown: str | None = None,
+) -> list[dict[str, object]]:
+    """`mapping.<key>` as `{ordinal, annotation, arg}` rows, the ordinal counting
+    from the order the catalog wrote (`OI-35`). `key` defaults to the name
+    word, `path_from_siblings`; `produces_from_siblings`/`consumes_from_siblings`
+    (Spec 2026-09-18 §3b word 1) read the identical shape through the same
+    function, for the same reason — the framework's media types sit on a
+    sibling exactly the way its name does.
+
+    `shown`, where given, names the mapping key printed in the refusal instead
+    of `key` — for `_type_media_sources` (Spec 2026-09-18 §3b word 2), which
+    reuses this function's shape check under a synthetic one-key mapping
+    (`{"_": [...]}`) so it does not have to duplicate the check, and needs the
+    refusal to name the real key (`type_media_from_siblings.produces`) rather
+    than the synthetic one (`_`).
 
     The ORDER is the rule and not a presentation detail: CP-15 rows 1a-1b show
     `getOneOfTheseMethodAnnotationsValue` taking the FIRST source with a value
@@ -641,7 +687,7 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
     here leaves the operation published under the name the framework does not
     serve it at — a wrong address, which is what this key exists to remove.
     """
-    declared = mapping.get("path_from_siblings")
+    declared = mapping.get(key)
     if declared is None:
         return []
     valid = isinstance(declared, list) and bool(declared)
@@ -657,7 +703,7 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
         )
     if not valid:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.path_from_siblings` must be a non-empty "
+            f"loading catalog {catalog.source}: `mapping.{shown or key}` must be a non-empty "
             f"list of `{{{', '.join(sorted(_SIBLING_KEYS))}}}` entries naming an annotation and "
             f"one of its attributes, in the order the framework consults them — got {declared!r} "
             f"(`OI-35`)"
@@ -670,6 +716,32 @@ def _sibling_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str
         }
         for ordinal, source in enumerate(declared, start=1)
     ]
+
+
+def _type_media_sources(catalog: Catalog, mapping: dict[str, Any]) -> list[dict[str, object]]:
+    """`mapping.type_media_from_siblings` flattened to `{column, ordinal, annotation, arg}`
+    rows — the class-level media default read off a TYPE-level sibling (spec 2026-09-18
+    §3b word 2). Refused unless a mapping of `produces`/`consumes` to sibling lists."""
+    declared = mapping.get("type_media_from_siblings")
+    if declared is None:
+        return []
+    if (
+        not isinstance(declared, dict)
+        or not declared
+        or not set(declared) <= {"produces", "consumes"}
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.type_media_from_siblings` must be a "
+            f"mapping of `produces`/`consumes` to sibling-source lists — got {declared!r}"
+        )
+    rows: list[dict[str, object]] = []
+    for column in ("produces", "consumes"):
+        if column in declared:
+            for source in _sibling_sources(
+                catalog, {"_": declared[column]}, "_", shown=f"type_media_from_siblings.{column}"
+            ):
+                rows.append({"column": column, **source})
+    return rows
 
 
 # The two keys a `path_from_siblings` entry may carry, and no others — a closed
@@ -737,6 +809,26 @@ _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 # for declarations carrying NO annotation at all, so a word read as something
 # it is not mints endpoints out of ordinary methods.
 _MEMBER_RULES = frozenset({"public_methods"})
+
+# Whether the inheritance walk carries a catalog's declared SIBLINGS along
+# with an inherited mapping (spec 2026-09-18 §3b word 3, amended after the
+# final review: OPT-IN). Today's one word is 'all_or_nothing': JAX-RS §3.6's
+# rule, quoted at CP-18 row 8 — a method carrying none of the catalog's
+# annotations inherits the ancestor method's mapping and every declared
+# sibling beside it, and one carrying ANY of its own inherits nothing.
+#
+# Opt-in rather than implied by the sibling lists, because naming a sibling
+# says where a NAME lives and nothing about how the framework inherits:
+# `microprofile-graphql.yml` declares `path_from_siblings` (`OI-35`) and a
+# type gate, and SmallRye GraphQL has no §3.6 — an implementor method carrying
+# only its own `@Name` must still inherit the interface's `@Query`. A catalog
+# declaring no word keeps the mapping-only own-check and Spring's
+# per-annotation merge, exactly as before the word existed.
+#
+# A closed vocabulary for `_PATH_FALLBACKS`'s reason: a typo read as "no
+# rule" silently restores the wrong address (an inherited `@GET` with no
+# `@Path` beside it) the word exists to remove.
+_INHERIT_SIBLINGS = frozenset({"all_or_nothing"})
 
 # The two keys a `unless` filter may carry, and no others (2I design §2,
 # word 4). A closed SHAPE rather than a closed vocabulary, because the values
@@ -1168,6 +1260,15 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         _validate_entry_fallback(catalog, entry)
         _validate_container(catalog, entry)
     _sibling_sources(catalog, mapping)
+    inherit_siblings = mapping.get("inherit_siblings")
+    if inherit_siblings is not None and inherit_siblings not in _INHERIT_SIBLINGS:
+        # An unrecognised word read as "no rule" keeps the mapping-only walk,
+        # and an inherited verb then lands on the implementor WITHOUT the
+        # `@Path` beside it — the wrong address the word exists to remove.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.inherit_siblings: {inherit_siblings}` "
+            f"is not one of {', '.join(sorted(_INHERIT_SIBLINGS))} (spec 2026-09-18 §3b word 3)"
+        )
     qualifier_format = mapping.get("qualifier_format")
     if qualifier_format is not None and qualifier_format not in _QUALIFIER_FORMATS:
         # An unrecognised word would fall through to the separator
@@ -1448,6 +1549,7 @@ def _synthetic_annotations(
             [*annotation_rows, *composed],
             mapping_fqns,
             prefix_fqns,
+            sibling_fqns=_inherited_sibling_fqns(catalog),
         )
         if run_inheritance
         else []
@@ -1456,6 +1558,28 @@ def _synthetic_annotations(
         {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
         for row in (*folded, *composed, *inherited)
     ]
+
+
+def _inherited_sibling_fqns(catalog: Catalog) -> frozenset[str]:
+    """The catalog's declared SIBLINGS — every annotation its sibling lists and
+    its `protocol_hint.hint_annotations` name — for the walk to carry with an
+    inherited mapping, all or nothing (spec 2026-09-18 §3b word 3); and EMPTY
+    unless the catalog opts in with `mapping.inherit_siblings: all_or_nothing`
+    (`_INHERIT_SIBLINGS`), which leaves the walk mapping-only for every other
+    catalog — a sibling list alone says where a name lives, not how the
+    framework inherits. `hint_annotations` counts as a sibling here because
+    §3.6's own-check is "any JAX-RS annotation", and `quarkus-rest.yml` writes
+    the key; the hint pass itself reads raw facts only (`OI-92`)."""
+    mapping = catalog.matches["mapping"]
+    if mapping.get("inherit_siblings") is None:
+        return frozenset()
+    return frozenset(
+        _catalog_symbol(str(source["annotation"]))
+        for key in ("path_from_siblings", "produces_from_siblings", "consumes_from_siblings")
+        for source in (mapping.get(key) or [])
+    ) | frozenset(
+        _catalog_symbol(name) for name in (catalog.protocol_hint.get("hint_annotations") or [])
+    )
 
 
 def _containers(catalog: Catalog) -> dict[str, str]:
@@ -1604,7 +1728,9 @@ def _derive_replies(workspace: Workspace, catalog: Catalog) -> None:
         if declared is None:
             continue
         signature = json.loads(str(declared))
-        descriptor = _payload_descriptor(signature.get("returns"), rules, enums, referenced)
+        descriptor = _payload_descriptor(
+            signature.get("returns"), rules, enums, referenced, rules.wrappers
+        )
         if descriptor is None:
             continue
         uses = workspace.query("annotations_of", target=handler)

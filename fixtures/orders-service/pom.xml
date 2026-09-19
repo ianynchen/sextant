@@ -319,6 +319,14 @@
       <artifactId>orders-soap-client</artifactId>
       <version>1.0.0</version>
     </dependency>
+    <!-- `KotlinOrderResource.kt`'s JAX-RS annotations (spec Groups B/C Task 1, M2's
+         Kotlin case) — the API only, `provided` since this module never runs. -->
+    <dependency>
+      <groupId>jakarta.ws.rs</groupId>
+      <artifactId>jakarta.ws.rs-api</artifactId>
+      <version>4.0.0</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
   <build>
     <plugins>

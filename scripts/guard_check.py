@@ -151,6 +151,8 @@ _EFFECTIVE_ANNOTATIONS = "sextant/application/resolve/effective_annotations.py"
 _SCHEDULED_WORK = "sextant/application/resolve/engines/scheduled_work.py"
 _ERROR_ADVICE = "sextant/application/resolve/engines/error_advice.py"
 _ARGUMENTS = "sextant/application/resolve/shapes/arguments.py"
+_CONTRACTS = "sextant/application/resolve/shapes/contracts.py"
+_PROTOCOL_HINT = "sextant/application/resolve/protocol_hint.py"
 _DISPATCH = "sextant/application/resolve/dispatch.py"
 _ROOTS = "sextant/application/resolve/roots.py"
 _PIPELINE = "sextant/application/resolve/pipeline.py"
@@ -597,6 +599,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.declared-on-construct-kind": Guard(
+        what="a catalog declaring `$declared_on` derives only from a declaration whose "
+        "enclosing type is that CONSTRUCT KIND",
+        why="2I design §4. The same annotation family means opposite things on a CLASS (a "
+        "server resource JAX-RS or JAX-WS publishes) and an INTERFACE (a generated "
+        "client stub or an MP REST Client) — `@RegisterRestClient`/`@Path` on a CLASS is "
+        "not `microprofile-rest-client.yml`'s shape at all. Without this fence an "
+        "outbound catalog gated on `declared_on: interface` would also derive from "
+        "every annotated CLASS an inbound catalog already reports, publishing a served "
+        "operation as one the module calls too",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="      AND (cp.declared_on IS NULL OR e.construct_kind = cp.declared_on)",
+                replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "derive_endpoints.handler-is-a-method": Guard(
         what="a handler or caller is always a method (or a free function) — a TYPE-level use "
         "of a mapping annotation joins no declaration at all",
@@ -670,6 +690,51 @@ GUARDS: dict[str, Guard] = {
                 path=_DERIVE_ENDPOINTS,
                 find="        (fl.owner IS NOT NULL) AS flipped,",
                 replace="        (cp.flip_direction IS NOT NULL) AS flipped,  -- guard disabled",
+            ),
+        ),
+    ),
+    "endpoints.superseded-catalog-does-not-run": Guard(
+        what="a catalog declaring `detect.superseded_by` is SKIPPED, not merely deprioritised, "
+        "on a module whose recorded build declares one of those coordinates",
+        why="B/C Task 10 fix round 1. `jakarta-jaxrs.yml` and `quarkus-rest.yml` read the SAME "
+        "`jakarta.ws.rs` annotations — Quarkus REST implements the specification with the "
+        "specification's own classes — and derive the byte-identical wire identity for every "
+        "resource method a Quarkus module declares, with genuinely different body rules "
+        "(`request_body.implicit_bindings`, `excludes`). Without this gate the merge's "
+        "insert-if-absent guard picks a winner by FILENAME alone, and `jakarta-jaxrs.yml` sorts "
+        "first — so a Quarkus module's own `OrderResource#upload(Upload form)` publishes the "
+        "parameter CONTAINER as the request body instead of excluding it, silently, on every "
+        "row Jersey's rule and Quarkus's disagree about",
+        edits=(
+            Edit(
+                path=_ENDPOINTS_DRIVER,
+                find="        superseded = _superseded_by(workspace, catalog)\n"
+                "        if superseded is not None:",
+                replace="        superseded = _superseded_by(workspace, catalog)\n"
+                "        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    # B/C Task 10b (CP-22 row 2, spec §3f). `peer_annotation`'s DEFAULT is
+    # Python rather than SQL — `derive_endpoints.sql`'s `peer_gates` reads
+    # whatever `$peer_annotation` already resolved to, so the fallback that
+    # makes every catalog written before this word byte-identical is written
+    # where the resolution happens.
+    "derive_endpoints.peer-read-off-the-peer-annotation": Guard(
+        what="`peer_from` is read off `mapping.peer_annotation` where a catalog declares one, "
+        "not unconditionally off `mapping.prefix_annotation`",
+        why="CP-22 row 2: MicroProfile REST Client's prefix (`@Path`) and peer "
+        "(`@RegisterRestClient`'s `baseUri`/`configKey`) sit on two different annotations. "
+        "Forcing the fallback unconditionally reads `peer_from` off `@Path`, which carries "
+        "neither attribute, so every MP REST Client row's `peer` derives NULL instead of "
+        "the config key or base URI Feign's own `peer_from` precedent says a client's "
+        "peer should be",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    peer_annotation = mapping.get("peer_annotation") or prefix_annotation',
+                replace="    peer_annotation = prefix_annotation  # guard disabled by "
+                "scripts/guard_check.py",
             ),
         ),
     ),
@@ -747,6 +812,183 @@ GUARDS: dict[str, Guard] = {
                 " [a.args ->> sp.arg]),\n                  sp.ordinal) AS found",
                 replace="           max_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]),"
                 " [a.args ->> sp.arg]),\n                  sp.ordinal) AS found",
+            ),
+        ),
+    ),
+    "annotation_driven.sibling-media-only-when-own-absent": Guard(
+        what="`produces_from_siblings` (and its `consumes_from_siblings` twin) is consulted "
+        "only where every `produces_from` alias on the matched annotation itself is absent — "
+        "never merely because a catalog declares the sibling key",
+        why="Spec 2026-09-18 §3b word 1. CP-18 row 1 puts `@GET`'s own attributes (none) ahead "
+        "of the sibling `@Produces`/`@Consumes`, mirroring CP-15 row 1's order for "
+        "`path_from_siblings` — a declaration that names its OWN media type is served under "
+        "that type, not under whatever a differently-annotated sibling on the same method "
+        "happens to carry. Preferring the sibling publishes the WRONG media type at "
+        "`resolved`/`compiler` for every declaration that states its own",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="        coalesce(list_extract(list_filter(list_transform(\n"
+                "            cp.produces_from,\n"
+                "            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n)"
+                " IS NOT NULL\n"
+                "                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),\n"
+                "                                    [a.args ->> n]) END\n"
+                "        ), v -> v IS NOT NULL), 1), smp.found) AS produces_list,",
+                replace="        coalesce(smp.found, list_extract(list_filter(list_transform(\n"
+                "            cp.produces_from,\n"
+                "            n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n)"
+                " IS NOT NULL\n"
+                "                      THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),\n"
+                "                                    [a.args ->> n]) END\n"
+                "        ), v -> v IS NOT NULL), 1)) AS produces_list,  -- guard disabled",
+            ),
+        ),
+    ),
+    "effective_annotations.siblings-inherit-all-or-nothing": Guard(
+        what="for a catalog declaring sibling lists, a method carrying ANY annotation of the "
+        "catalog's own — a sibling as much as a mapping — inherits nothing from the ancestor "
+        "method; never only a method carrying an own MAPPING",
+        why="Spec 2026-09-18 §3b word 3, CP-18 row 8. JAX-RS §3.6's rule is all-or-nothing per "
+        'method: "if a subclass or implementation method has any JAX-RS annotations then all '
+        'of the annotations on the superclass or interface method are ignored". An implementor '
+        "method carrying only its own `@Produces` is, to the framework, not a resource method "
+        "at all. With the own-check narrowed to the mapping alone, the walk inherits the "
+        "interface's `@GET` and `@Path` onto it and publishes a route the framework does not "
+        "serve — a fabricated address, and Spring's per-annotation merge applied to a "
+        "framework that measured the opposite",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="    own_fqns = mapping_fqns | set(sibling_fqns)",
+                replace="    own_fqns = set(mapping_fqns)  # guard disabled",
+            ),
+        ),
+    ),
+    "effective_annotations.inherited-set-agreed-as-a-whole": Guard(
+        what="two ancestors mapping one method agree only when their WHOLE inherited sets "
+        "agree — the mapping and every declared sibling — never on the mapping alone",
+        why="Spec 2026-09-18 §3b word 3 (Task 5 fix round 1). JAX-RS §3.6 inherits an ancestor "
+        'method\'s annotation set whole, so an interface `@GET @Path("/a")` against a '
+        'superclass `@GET @Path("/b")` on one covariantly-overridden method is the same '
+        "ambiguous evidence two different verbs are (I1), one annotation over. Compared on the "
+        "verb alone they agree, and the target is handed the verb with BOTH paths beside it; "
+        "downstream `sibling_names` then picks between two same-annotation rows on a tied "
+        "ordinal, and the published address is whichever DuckDB happened to keep — a wrong "
+        "address half the time and an unpredictable one every time (NFR-1)",
+        edits=(
+            Edit(
+                path=_EFFECTIVE_ANNOTATIONS,
+                find="                    frozenset(\n"
+                "                        (sib_annotation, json.dumps(sib_args, sort_keys=True))\n"
+                "                        for sib_annotation, sib_args in siblings\n"
+                "                    ),\n",
+                replace="                    frozenset(),  # guard disabled\n",
+            ),
+        ),
+    ),
+    # --- the body rule (`shapes/contracts.py`) ------------------------------
+    "contracts.sole-unbound-measures-bound-by": Guard(
+        what="under `sole_unbound`, a parameter is bound by an annotation only when that "
+        "annotation is on the catalog's `bound_by` list — any other annotation on it is "
+        "invisible to the rule",
+        why="Spec 2026-09-18 §4 (M2, M4). JAX-RS §3.3.2.1's entity parameter is the one carrying "
+        "none of the SPECIFICATION's parameter annotations; kotlinc writes "
+        "`@org.jetbrains.annotations.NotNull` on every non-null parameter and Bean Validation "
+        "puts `@Valid` on the body. Widened back to 'any annotation binds' — the "
+        "`sole_unannotated` reading — every Kotlin JAX-RS body and every `@Valid Order order` "
+        "publishes NO request contract: a real payload the framework binds, silently missing "
+        "from the endpoint's document",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find='    if any(use["annotation"] in binders for use in parameter.get("annotations", [])):',
+                replace='    if parameter.get("annotations"):  # guard disabled',
+            ),
+        ),
+    ),
+    "contracts.implicit-path-variable-reads-the-composed-path": Guard(
+        what="the `path_variable` implicit binding reads the parameter's name against the "
+        "`{name}` variables of the row's composed path, and only where the catalog declares "
+        "the word",
+        why="Spec 2026-09-18 §4 predicate 2, `EndpointIndexer.java:1393-1399`: Quarkus REST "
+        "treats a parameter named like a path variable as an implicit `@PathParam`, so "
+        '`byId(String id)` beneath `@Path("/{id}")` has no body. With the variables read as '
+        "empty, that `id` is the sole unbound parameter and is published as the request "
+        "contract — a `String` body the framework never reads. The paired half, that Jersey "
+        "does NOT do this and `jakarta-jaxrs.yml` declares no implicit binding, is what the "
+        "pinning test's `plain` arm asserts",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find='        variables = _path_variables(paths) if "path_variable" in implicit else frozenset()',
+                replace="        variables = frozenset()  # guard disabled",
+            ),
+        ),
+    ),
+    "contracts.conditional-wrapper-needs-its-condition": Guard(
+        what="a conditional `wrappers` entry (`when`) is handed to `root_type` for an owner "
+        "only where its condition actually holds for that owner",
+        why='Spec 2026-09-18 §5a. A Spring Kafka `@KafkaListener(batch = "true")` handler '
+        "takes `List<OrderEvent>` where the wire carries one `OrderEvent` per record; a "
+        "non-batched listener on the same type takes the wire's own single `OrderEvent`. "
+        "Dropping the filter unwraps `List` for BOTH — the non-batched handler's real "
+        "`List<OrderEvent>` payload is reported as a bare `OrderEvent`, a wrong contract for "
+        "a call the catalog never declared batched",
+        edits=(
+            Edit(
+                path=_CONTRACTS,
+                find="    return [\n"
+                "        *rules.wrappers,\n"
+                "        *(\n"
+                "            wrapper\n"
+                "            for condition, wrapper in rules.conditional_wrappers\n"
+                "            if holds(condition, owner, index)\n"
+                "        ),\n"
+                "    ]",
+                replace="    return [\n"
+                "        *rules.wrappers,\n"
+                "        *(wrapper for condition, wrapper in rules.conditional_wrappers),\n"
+                "    ]  # guard disabled",
+            ),
+        ),
+    ),
+    "protocol_hint.hint-when-reads-the-owner": Guard(
+        what="`hint_when` actually reads the catalog's `annotation_arg` condition against the "
+        "row's owner (and its enclosing type) rather than treating any declared condition as "
+        "satisfied",
+        why="Spec 2026-09-18 §5b, CP-21 rows 1a/3a-3b. Micronaut's `@JMSListener` carries one "
+        "`value()` naming a connection-factory bean, and `sqsJmsConnectionFactory` vs. "
+        "`activeMqConnectionFactory` is the ONLY thing distinguishing an SQS listener from an "
+        "ActiveMQ-classic one — both are plain `jms` rows to every other engine. Treating a "
+        "declared `hint_when` as always-true reclassifies the ActiveMQ row to `sqs` right "
+        "alongside the real SQS one, publishing a queue address for a broker the class was "
+        "never wired to",
+        edits=(
+            Edit(
+                path=_PROTOCOL_HINT,
+                find="    return owner is not None and any(holds(c, owner, index) for c in hint.conditions)",
+                replace="    return owner is not None and bool(hint.conditions)  # guard disabled",
+            ),
+        ),
+    ),
+    "protocol_hint.hint-annotations-yield-to-a-declared-produces": Guard(
+        what="`hint_annotations` fires only when the row's OWNER carries none of the declaring "
+        "catalog's `produces_from_siblings` annotations — never on the marker's presence alone "
+        "beside a method-level media declaration",
+        why="CP-19 row 2a (`EndpointIndexer.java:720-723`, the final review's Important 2). "
+        "Quarkus reads the method-level `@Produces` FIRST and falls to `@RestStreamElementType` "
+        "only when that read is empty, so `@GET @Produces(APPLICATION_STREAM_JSON) "
+        "@RestStreamElementType(APPLICATION_JSON) Multi<Book>` serves an NDJSON stream, not "
+        "SSE. On presence alone the pass would publish that row as `sse` — a protocol the "
+        "framework never serves there, at `resolved`/`compiler` where nothing downstream can "
+        "tell it from an observation",
+        edits=(
+            Edit(
+                path=_PROTOCOL_HINT,
+                find="    if any(annotation in hint.media_annotations for annotation, _ in index.get(owner, [])):\n"
+                "        return False\n",
+                replace="",
             ),
         ),
     ),

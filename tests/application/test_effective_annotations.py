@@ -11,10 +11,21 @@ its place."""
 import json
 from pathlib import Path
 
-from sextant.application.resolve.effective_annotations import composed_mapping_rows, inherited_rows
+import pytest
+
+from sextant.application.ports.catalogs import Catalog
+from sextant.application.resolve.effective_annotations import (
+    composed_mapping_rows,
+    inherited_rows,
+    inherited_rows_over,
+    type_hierarchy,
+)
+from sextant.application.resolve.engines.annotation_driven import _inherited_sibling_fqns
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -1104,3 +1115,182 @@ def test_a_composed_interface_side_row_inherits_onto_the_implementation():
             },
         }
     ]
+
+
+# --- siblings inherit with the mapping, all or nothing (spec 2026-09-18 §3b word 3) ---
+#
+# Over `inherited_rows_over` directly, with a `TypeHierarchy` folded once by
+# `type_hierarchy`, because the sibling rule is the walk's own and the rows it
+# reads are hand-built exactly as above. JAX-RS symbols, since the rule is
+# JAX-RS §3.6's: the path and media live BESIDE the verb (`@Path`, `@Produces`
+# next to `@GET`), so an inherited `@GET` alone is a wrong address.
+
+_RS_GET = "com/acme/rs/GET#"
+_RS_PATH = "com/acme/rs/Path#"
+_RS_PRODUCES = "com/acme/rs/Produces#"
+_RS_SIBLINGS = frozenset({_RS_PATH, _RS_PRODUCES})
+_RS_API = "com/acme/OrdersApi#"
+_RS_RESOURCE = "com/acme/OrdersResource#"
+_RS_API_METHOD = _RS_API + "byId(sig_1)."
+_RS_RESOURCE_METHOD = _RS_RESOURCE + "byId(sig_1)."
+_RS_HIERARCHY = type_hierarchy(
+    [_implements(_RS_RESOURCE, [_RS_API])],
+    [],
+    [_method(_RS_API_METHOD, _RS_API), _method(_RS_RESOURCE_METHOD, _RS_RESOURCE)],
+)
+_RS_INTERFACE_ROWS = [
+    {"target": _RS_API_METHOD, "annotation": _RS_GET, "args": {}},
+    {"target": _RS_API_METHOD, "annotation": _RS_PATH, "args": {"value": "/{id}"}},
+    {"target": _RS_API_METHOD, "annotation": _RS_PRODUCES, "args": {"value": ["application/json"]}},
+]
+
+
+def test_siblings_inherit_with_the_mapping_when_the_target_carries_nothing_of_its_own():
+    """The interface's `@GET @Path("/{id}") @Produces("application/json")` reaches
+    the unannotated implementor whole — all three rows, never the verb alone."""
+    rows = inherited_rows_over(
+        _RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+    method = _RS_RESOURCE_METHOD
+    assert {
+        (r["target"], r["annotation"], json.dumps(r["args"], sort_keys=True))
+        for r in rows
+        if r["target"] == method
+    } == {
+        (method, _RS_GET, "{}"),
+        (method, _RS_PATH, '{"value": "/{id}"}'),
+        (method, _RS_PRODUCES, '{"value": ["application/json"]}'),
+    }
+
+
+@pytest.mark.pins("effective_annotations.siblings-inherit-all-or-nothing")
+def test_an_own_sibling_blocks_all_inheritance_for_that_method():
+    """JAX-RS §3.6 (CP-18 row 8): ANY own JAX-RS annotation makes the interface's set
+    ignored — so an implementor method carrying only its own @Produces inherits no
+    mapping and derives nothing, which is the framework's answer."""
+    annotation_rows = [
+        *_RS_INTERFACE_ROWS,
+        {
+            "target": _RS_RESOURCE_METHOD,
+            "annotation": _RS_PRODUCES,
+            "args": {"value": ["text/plain"]},
+        },
+    ]
+    rows = inherited_rows_over(
+        _RS_HIERARCHY, annotation_rows, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+    assert [r for r in rows if r["target"] == _RS_RESOURCE_METHOD] == []
+
+
+def test_without_sibling_fqns_the_walk_is_unchanged():
+    """A catalog declaring no sibling list keeps today's walk: the mapping row alone,
+    and an own sibling would not have blocked it either (Spring's own merge)."""
+    rows = inherited_rows_over(_RS_HIERARCHY, _RS_INTERFACE_ROWS, {_RS_GET}, [_RS_PATH])
+    assert {r["annotation"] for r in rows if r["target"].endswith("#byId(sig_1).")} == {_RS_GET}
+
+
+def _sibling_catalog(**mapping: object) -> Catalog:
+    """A catalog naming the two JAX-RS-shaped sibling lists above — and only what a
+    test layers on beyond them."""
+    return Catalog(
+        id="invented-siblings",
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        source=Path("tests/invented-siblings.yml"),
+        matches={
+            "mapping": {
+                "path_from_siblings": [{"annotation": "com.acme.rs.Path", "arg": "value"}],
+                "produces_from_siblings": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+                "annotations": [{"fqn": "com.acme.rs.GET"}],
+                **mapping,
+            }
+        },
+    )
+
+
+def test_a_catalog_naming_siblings_without_inherit_siblings_keeps_the_mapping_only_walk():
+    """Word 3 is OPT-IN (amended after the final review): a sibling list says where a
+    name lives, not how the framework inherits. A catalog naming siblings and no
+    `inherit_siblings` hands the walk an EMPTY sibling set, and the walk is then
+    today's — the mapping row alone, Spring's own merge — while the same catalog with
+    `inherit_siblings: all_or_nothing` hands it both declared siblings."""
+    assert _inherited_sibling_fqns(_sibling_catalog()) == frozenset()
+    assert _inherited_sibling_fqns(_sibling_catalog(inherit_siblings="all_or_nothing")) == (
+        _RS_SIBLINGS
+    )
+    rows = inherited_rows_over(
+        _RS_HIERARCHY,
+        _RS_INTERFACE_ROWS,
+        {_RS_GET},
+        [_RS_PATH],
+        sibling_fqns=_inherited_sibling_fqns(_sibling_catalog()),
+    )
+    assert {r["annotation"] for r in rows if r["target"] == _RS_RESOURCE_METHOD} == {_RS_GET}
+
+
+def test_the_shipped_microprofile_graphql_catalog_hands_the_walk_no_siblings():
+    """The catalog that forced the amendment: `microprofile-graphql.yml` declares
+    `path_from_siblings` (`OI-35`) and a type gate, and SmallRye GraphQL has no
+    JAX-RS §3.6 — an implementor method carrying only its own `@Name` must still
+    inherit the interface's `@Query`. Read off the REAL loaded catalog, so a later
+    edit opting it in is a deliberate change here rather than a silent one."""
+    catalog = next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "microprofile-graphql"
+    )
+    assert catalog.matches["mapping"].get("path_from_siblings")
+    assert _inherited_sibling_fqns(catalog) == frozenset()
+
+
+@pytest.mark.pins("effective_annotations.inherited-set-agreed-as-a-whole")
+def test_two_ancestors_agreeing_on_the_verb_but_not_on_a_sibling_resolve_nothing():
+    """I1's shape over siblings (Task 5 fix round 1): `_C extends _B implements _I`,
+    covariant overrides against BOTH, so two bridges redirect to the one real
+    `find(sig_b).`. Interface and superclass both carry `@GET` — the mapping
+    agrees — but `@Path("/from-interface")` against `@Path("/from-superclass")`.
+
+    §3.6 inherits an ancestor method's annotation set WHOLE, so agreement is
+    measured on the whole set: two different sets are the same ambiguous
+    evidence two different verbs are, and the target gets nothing — never the
+    verb with two paths beside it, which downstream would pick between on a
+    tied ordinal."""
+    long_param = [{"type": {"symbol": "long#"}, "erased_symbol": "long#"}]
+    hierarchy = type_hierarchy(
+        [_implements(_C, [_I])],
+        [_extends(_C, _B)],
+        [
+            *_covariant_pair(),
+            _scanned_method(
+                _B + "find(sig_x).",
+                _B,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+            ),
+            _scanned_method(
+                _C + "find(sig_x).",
+                _C,
+                {"parameters": long_param, "returns": {"symbol": "com/acme/orders/Base#"}},
+                generated=True,
+            ),
+        ],
+    )
+    annotation_rows = [
+        {"target": _I + "find(sig_a).", "annotation": _RS_GET, "args": {}},
+        {
+            "target": _I + "find(sig_a).",
+            "annotation": _RS_PATH,
+            "args": {"value": "/from-interface"},
+        },
+        {"target": _B + "find(sig_x).", "annotation": _RS_GET, "args": {}},
+        {
+            "target": _B + "find(sig_x).",
+            "annotation": _RS_PATH,
+            "args": {"value": "/from-superclass"},
+        },
+    ]
+
+    rows = inherited_rows_over(
+        hierarchy, annotation_rows, {_RS_GET}, [_RS_PATH], sibling_fqns=_RS_SIBLINGS
+    )
+
+    assert [r for r in rows if r["target"] == _C + "find(sig_b)."] == []

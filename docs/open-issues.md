@@ -1173,6 +1173,351 @@ it is not seen in practice.
 lands for (a), when the `t` side takes the `selected_documents` filter for (b), and when (c)
 is measured.
 
+### OI-86 — `sole_unannotated` still governs Feign and Micronaut messaging, and loses a Kotlin body the same way JAX-RS used to
+**Minor — reachable input unmeasured; Major if it turns out common · logged 2026-09-18 at
+B/C Task 13's review (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`
+§6) · `spring-cloud-openfeign.yml`, `micronaut-jms.yml`, `micronaut-jms-producer.yml`,
+`micronaut-kafka.yml`, `micronaut-kafka-client.yml`, `micronaut-pubsub.yml`,
+`micronaut-pubsub-client.yml`**
+
+M2 (this branch's own §0) found that `sole_unannotated` disqualifies a parameter for ANY
+annotation at all, so kotlinc's synthetic `@NotNull` — which reaches the facts at
+`retention: class` on every non-null Kotlin declaration — erases a Kotlin request body from
+under it; the fix, `sole_unbound`, measures against the framework's own binding annotations
+instead and shipped on the three JAX-RS catalogs (`jakarta-jaxrs.yml`, `javax-jaxrs.yml`,
+`quarkus-rest.yml`) and MicroProfile REST Client. **The other seven catalogs above still
+declare `sole_unannotated`** (measured by `grep -n fallback` on each), so the identical loss
+applies to a Kotlin `@FeignClient` interface's request body and a Kotlin
+`@KafkaListener`/`@JMSListener`/`@PubSubListener`-style Micronaut handler's body — `@Valid`
+on a Java body has the same effect, framework-independent.
+
+**Real triggering input:** a Kotlin Feign client interface, or a Kotlin Micronaut Kafka/JMS/
+Pub-Sub listener or client, declaring a non-null body parameter with no `@RequestBody`/
+`@MessageBody` annotation of its own — exactly the shape `fixtures/orders-service`'s
+`KotlinOrderResource` had under JAX-RS before this branch's fix, and no fixture here has the
+Feign or Micronaut equivalent: `find fixtures -iname "*.kt"` returns six files, none under
+`fixtures/orders-micronaut` and none naming `FeignClient`, so the input is real and
+plausible (Micronaut's Kotlin-first documentation, Feign's common use from Kotlin services)
+but its frequency in real estates is not measured here — no probe or corpus scan has counted
+Kotlin Feign/Micronaut modules the way CP-18's own measurement did for JAX-RS. Per the
+register's own severity rule (measure before assigning), that absence of a measurement is
+why this logs as **Minor rather than Major**: the fix is Major-when-reachable specifically
+for a Kotlin Feign outbound body (blocking REST outbound) or a Kotlin Micronaut listener
+body (blocking Kafka/JMS/SQS/Pub-Sub inbound or outbound, whichever catalog is in play), and
+should be re-graded Major the moment a corpus or fixture shows the shape is common.
+
+**Verify:** `grep -n fallback src/sextant/catalogs/{spring-cloud-openfeign,micronaut-jms,micronaut-jms-producer,micronaut-kafka,micronaut-kafka-client,micronaut-pubsub,micronaut-pubsub-client}.yml`
+— all seven still read `sole_unannotated`. **Closes** when each catalog's `request_body`
+switches to `fallback: sole_unbound` with that framework's own `bound_by` list, measured the
+way CP-18 measured JAX-RS's.
+
+### OI-87 — `@RestStreamElementType`'s value is not carried as the per-event SSE format
+**Minor · logged 2026-09-18 at B/C Task 13's review (spec §3c, §6) ·
+`src/sextant/catalogs/quarkus-rest.yml`**
+
+Quarkus REST's `@RestStreamElementType` (or the deprecated `@RestSseElementType`) is now
+read for its PRESENCE — `protocol_hint.hint_annotations`, shipped B/C Task 10 — which
+correctly classifies the response as SSE even with no `@Produces` at all. Its VALUE, the
+per-event element type, is not carried anywhere: an SSE row's per-event payload still falls
+to the format ladder's rung 5 (`json`, `narrowed`, rendered `json (assumed)`), the same as
+every other undeclared payload, rather than reading the annotation's own value as a rung-2
+source the way `@Produces`/`@Consumes` already are for the envelope. No wrong output either
+way — rung 5's `json (assumed)` is honest about its own uncertainty — so this is a trust-
+marker upgrade left undone, not a defect in what ships.
+
+**Real triggering input:** any `@RestStreamElementType(OrderEvent.class)` (or
+`@RestSseElementType`) method with no declared `@Produces` — `fixtures/orders-quarkus`'s
+`OrderResource#events` is exactly this shape today, and its per-event contract reads at
+rung 5 rather than rung 2.
+
+**Verify:** `json.loads(row["response_shape"])` on the SSE row in
+`fixtures/orders-quarkus` shows the rung-5 trust marker, not rung 2. **Closes** when a new
+rung-2 source reads `@RestStreamElementType`'s (and `@RestSseElementType`'s) declared value
+the next time the format ladder is touched (spec §3c names this a named follow-up, not in
+this group).
+
+### OI-88 — Quarkus REST's return-type-keyed default `produces` is not read
+**Minor · logged 2026-09-18 at B/C Task 13's review (spec §3c, §6) ·
+`src/sextant/catalogs/quarkus-rest.yml`**
+
+`EndpointIndexer.applyDefaultProduces` (`EndpointIndexer.java:853`, measured 2026-09-18)
+fills an undeclared route's `produces` from its RETURN TYPE — `String` becomes
+`text/plain`, anything else becomes JSON where a JSON provider is present — a framework
+default keyed on the return type rather than on any declared value, which no
+`default_produces`-shaped key in this engine states. An undeclared Quarkus route's
+`produces` stays NULL here and the row falls to the format ladder's rung 5 exactly as an
+undeclared Spring route does, rather than the return-type-keyed default a real Quarkus
+deployment computes. Stated as a boundary in `docs/COVERAGE.md` §5.1 (the Quarkus
+"stated-not-built surface" row) and in `quarkus-rest.yml`'s own comments; this entry is the
+register's own record of the same gap.
+
+**Real triggering input:** any Quarkus REST method with no `@Produces` at all — the request
+body rule's own excludes and implicit bindings are unaffected, only the response media type.
+
+**Verify:** `grep -n applyDefaultProduces` against a `quarkus-rest` sources jar shows the
+rule; no key in `quarkus-rest.yml` reads a return type. **Closes** when a return-type-keyed
+default-media word is designed — a further measurement and a schema addition, not a catalog
+edit alone.
+
+### OI-89 — `annotation_arg.equals` compares Python's `str()` of a non-string fact value, which is not Java's string form
+**Minor — unreachable by any shipped catalog today · logged 2026-09-18, ruled by the
+controller during B/C Task 7's review (SDD ledger; spec §2) ·
+`src/sextant/application/resolve/conditions.py:204`**
+
+`_compare`'s `equals` arm reads `any(v is not None and str(v) == condition.equals for v in
+values)`, where `v` is the extracted fact's own Python-typed value. For a `String`
+attribute this is correct — the fact and the catalog's YAML string agree. For a `boolean`
+attribute, `v` extracts as a Python `bool`, and `str(True)` is `"True"`, capitalised,
+where Java's own `Boolean.toString()` — and thus the bytecode's own constant-value form — is
+lower-case `"true"`. A catalog declaring `equals: "true"` against a boolean attribute would
+therefore compare `"True" == "true"`, false, and the condition would never hold, silently:
+the row it gates would read as though the attribute were always absent or always the other
+value.
+
+**Why logged rather than fixed:** measured against every catalog on this branch —
+`grep -n 'equals:' src/sextant/catalogs/*.yml` returns SEVEN hits, not the six an earlier
+draft of this entry undercounted:
+
+```
+src/sextant/catalogs/jakarta-jws.yml:223:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws.yml:225:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws-client.yml:111:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws-client.yml:113:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/micronaut-jms.yml:59:      equals: sqsJmsConnectionFactory
+src/sextant/catalogs/micronaut-jms-producer.yml:54:      equals: sqsJmsConnectionFactory
+src/sextant/catalogs/spring-kafka-message.yml:54:    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { channel: arg1 } }
+```
+
+Four of the seven (`jakarta-jws.yml` ×2, `jakarta-jws-client.yml` ×2) are a DIFFERENT word,
+`unless.attribute`, not `annotation_arg` — a pre-existing mechanism this branch did not
+touch. Two (`micronaut-jms.yml`, `micronaut-jms-producer.yml`) are the `annotation_arg`
+consumers this branch added, both `hint_when.equals: sqsJmsConnectionFactory` against a
+`String` attribute. **The seventh, `spring-kafka-message.yml:54`, is a THIRD word again** —
+`single_call`'s own `when: { arg: 0, equals: … }`, an argument-equality guard on a call-site
+step (`setHeader`'s first argument matching the literal `"kafka_topic"`), not
+`annotation_arg`'s attribute-on-an-annotation read at all; `_compare` above is never called
+for it. So of the seven hits, exactly two exercise `annotation_arg`'s `equals`, and both are
+`String` attributes — no shipped consumer of `annotation_arg`'s `equals` compares a
+non-string attribute, so the register's own rule (an issue real input cannot trigger is
+logged, not fixed) applies: the input a future boolean-`equals` catalog would supply does
+not exist yet.
+
+**Verify:** `grep -n "equals:" src/sextant/catalogs/*.yml` — seven hits, sorted above by
+which word each belongs to; the two `annotation_arg` consumers are both `String` attributes.
+**Closes** with two changes together: `_compare`
+reads Java's own string form for a non-string value (`"true"`/`"false"` for `bool`, decimal
+for numeric types) rather than Python's `str()`, and `parse_condition` refuses a non-string
+`equals` value at catalog load until that mapping is declared — a parse-time refusal rather
+than a silent runtime mismatch, `parse_condition`'s own closed-vocabulary discipline (spec
+§2) extended to the comparator's operand.
+
+### OI-90 — `POST /kt/orders` derives TWO inbound rows in `orders-service`, one per engine
+**Minor · logged 2026-09-18, found at B/C Task 10's review · `fixtures/orders-service`,
+`src/sextant/storage/duckdb/insert_endpoints.sql`**
+
+`fixtures/orders-service`'s Kotlin JAX-RS resource, `KotlinOrderResource`, and its
+pre-existing Kotlin functional-routing fixture, `KotlinOrderRoutes#ktRoutes`, both register
+`POST /kt/orders` — a coincidental address collision between two unrelated fixture files
+sharing one Maven module, not a wire-identity conflict either framework would actually
+suffer in a real deployment. Both rows survive because `insert_endpoints.sql`'s inbound
+identity guard is the SECOND HALF of the `annotation_driven` engine specifically (its own
+header comment: "the second half of the annotation_driven engine") and runs once per
+annotation-driven catalog's own turn, comparing only against rows already in the table at
+that turn — it never runs for, and never sees, a row the functional-routing DSL engine
+inserted through its own path. So two DIFFERENT engines minting the identical `(http,
+inbound, POST, /kt/orders)` identity do not merge and do not conflict-flag; both stand,
+distinguished only by `handler` (JAX-RS's `KotlinOrderResource#createOrder` symbol) versus
+`caller` (the DSL route, `handler` NULL).
+
+**Real triggering input:** live today, in `fixtures/orders-service`. `test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract`
+(`tests/application/test_pipeline.py`) filters on `handler is not None` specifically to pick
+the JAX-RS row out of the pair rather than assuming the address names exactly one row — the
+test's own comment names the collision. Graded Minor rather than Major because both rows are
+individually honest about a real registration and the collision is a property of this
+fixture's own address choice (two independent framework samples sharing one path string
+inside one Maven module for coverage convenience) rather than a shape a single real Spring
+Boot module would present — the pre-existing engine property (identity dedup is scoped to
+`annotation_driven`'s own inserts) is broader than this one collision and would repeat for
+any two catalogs from different engines sharing an inbound address, which is unmeasured
+beyond this one instance.
+
+**Verify:** `[r for r in report.endpoints if r["path"] == "/kt/orders" and r["method"] ==
+"POST"]` returns two rows in `fixtures/orders-service`. **Closes** when the inbound identity
+guard (or a merge pass after it) compares across every engine's inserts, not only
+`annotation_driven`'s own turn-by-turn ones — an engine change, not a fixture edit, since the
+fixture's own collision is incidental rather than the shape worth chasing on its own.
+
+### OI-91 — Quarkus REST's own inheritance rule diverges from JAX-RS §3.6, and the engine emulates the specification, not Quarkus
+**Minor · logged 2026-09-18 (CP-19 row 6, spec §3b word 3's boundary note) ·
+`src/sextant/catalogs/quarkus-rest.yml`, `docs/COVERAGE.md` §5.1**
+
+JAX-RS §3.6 is all-or-nothing PER METHOD: an implementor method carrying any of its own
+JAX-RS annotations gets none of the interface method's, whichever level they are declared
+at. Quarkus's own `EndpointIndexer.collectEndpoints` (measured, CP-19 row 6) is a different
+walk: self → superclass → every interface, and AT EACH LEVEL it scans that class's OWN
+methods for the sought HTTP-verb annotation; the FIRST level whose own method carries the
+verb wins, and EVERY OTHER JAX-RS annotation on the endpoint — `@Path`, `@Produces`,
+`@Consumes` sibling included — is read off that SAME winning method, never off an override
+at any other level. Word 3 (this branch's sibling-inheritance engine change) reproduces
+JAX-RS §3.6 exactly, which is the specification's own answer and the right one for the two
+plain catalogs; on Quarkus REST specifically it is a stated, measured divergence rather than
+a built one: an implementor overriding an interface method with its own `@Produces` (or any
+other non-verb annotation) but no verb annotation of its own has that override silently
+ignored by Quarkus — word 3 would look for the implementor's own annotations, find one
+(`@Produces`), and — following §3.6 — derive NOTHING for that method (no own verb), where
+Quarkus's real walk would still find the verb at the interface level and apply it there,
+producing a row this engine does not.
+
+`quarkus-rest.yml` states the divergence in a comment (`src/sextant/catalogs/quarkus-rest.yml`,
+the `collectEndpoints` block) rather than reproducing Quarkus's own per-level walk, and
+`docs/COVERAGE.md` §5.1's "Quarkus's own §3.6 divergence" row states it beside the JAX-RS
+rows. This entry is the register's own record of the same measured gap, since spec §6 named
+it as one of the items the closing task logs.
+
+**Real triggering input:** an implementor overriding an interface method with its own
+`@Produces` (or similar) and no verb annotation of its own — not present in
+`fixtures/orders-quarkus`, whose own inheritance case is a bare `@Override` with no
+annotations at all, so word 3's §3.6 emulation and Quarkus's real rule agree on the fixture
+either way (COVERAGE §5.1 states this explicitly).
+
+**Verify:** `grep -n "collectEndpoints" src/sextant/catalogs/quarkus-rest.yml` shows the
+comment; CP-19 row 6 (`scripts/probes/cp19_quarkus_rest.md`) has the measurement. **Closes**
+when `quarkus-rest.yml` gains its own per-level annotation walk distinct from word 3's
+shared §3.6 emulation — a catalog-scoped variant of sibling inheritance, not a change to the
+word every other catalog relies on.
+
+### OI-92 — the `protocol_hint` pass reads raw annotation facts, so an inherited `hint_annotations` marker never reaches it
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/protocol_hint.py::apply_protocol_hints`,
+`src/sextant/application/resolve/conditions.py::annotation_index`**
+
+`apply_protocol_hints` reads `annotation_index`, a fold over the raw `annotations` table.
+The inheritance walk (`effective_annotations.py::inherited_rows_over`) synthesizes an
+interface method's mapping — and, for a catalog declaring `inherit_siblings:
+all_or_nothing`, its declared siblings, `protocol_hint.hint_annotations` among them — onto
+an annotation-free implementor method, but those rows exist only as the `$synthetic`
+parameter `derive_endpoints.sql` binds; nothing persists them, and the hint pass never sees
+them. So the walk carries `@RestStreamElementType` onto the implementor for the SQL's
+purposes and the pass, asked about the same handler a moment later, finds nothing there.
+The three documents that said the pass "needs no inheritance awareness" (D02 §3b word 3,
+spec §3b, the module docstring) are corrected with this entry.
+
+**Real triggering input:** a Quarkus REST interface declaring `@GET @Path("/events")
+@RestStreamElementType(APPLICATION_JSON) Multi<T> events()` and a class implementing it
+with a bare `@Override` — the `OrdersApi`/`OrdersResource` shape `fixtures/orders-spring7`
+carries, with the element-type marker on the interface method. The implementor's row
+derives with the right verb and address (the walk carried both) and `protocol: http`, where
+Quarkus serves SSE (CP-19 row 2a). Not present in any fixture: `fixtures/orders-quarkus`'s
+`OrderResource#events` writes the marker on the class's own method.
+
+**Cost:** an `http` row where the framework serves an event stream — under-classified,
+never fabricated; the address and verb are right, the protocol column is the pre-`jaxrs-sse`
+answer for that one row.
+
+**Verify:** `grep -n "annotation_index(workspace)" src/sextant/application/resolve/protocol_hint.py`
+— the pass's one annotation read; `grep -n "synthetic" src/sextant/storage/duckdb/derive_endpoints.sql`
+— the only consumer of the walk's rows. **Closes** when the pass reads the composed
+annotation universe (`_synthetic_annotations`'s output folded into the index it consults)
+or the walk persists its synthesized rows into a table every downstream reader folds — one
+change, made once, rather than a second inheritance walk inside the pass.
+
+### OI-93 — a REPEATED `@KafkaListener(batch = "true")` never satisfies `wrappers[].when`, because `conditions.holds` reads raw rows while the SQL side unfolds the container
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/conditions.py::holds`,
+`src/sextant/application/resolve/engines/annotation_driven.py::_synthetic_annotations`**
+
+`@KafkaListener` is `@Repeatable(KafkaListeners.class)` (CP-16 rows 2a/2b), so two uses on
+one method reach the class file as ONE `@KafkaListeners` row whose `value` holds both
+(JLS 9.7.5). `spring-kafka.yml` names the container (`OI-36`), and the engine unfolds it
+into two ordinary `@KafkaListener` rows — but only into `derive_endpoints.sql`'s
+`$synthetic` parameter (`folded_rows`, `_synthetic_annotations`). `conditions.holds`, which
+`wrappers[].when` (spec §5a) and `hint_when` read through, folds the raw `annotations`
+table (`annotation_index`): on the repeated method it finds `@KafkaListeners`, never
+`@KafkaListener`, and the `batch` attribute is inside the container's `value` array where
+the condition's `names` lookup does not reach. The condition is therefore false, the
+`List` wrapper stays unconditional-off, and the row publishes the array.
+
+**Real triggering input:** `@KafkaListener(topics = "a", batch = "true") @KafkaListener(topics
+= "b", batch = "true") void onBatch(List<OrderEvent> events)` — two batch listeners on one
+handler. Not present in any fixture: `fixtures/orders-service`'s `OrderEventsListener`
+carries one `@KafkaListener` per batch method, and its repeated-listener fixture
+(`OI-36`'s) is a record listener with no `batch` attribute.
+
+**Cost:** the array is published as the request shape — the pre-branch answer for that
+handler, never a fabricated one; the two rows' addresses and the listener itself are right.
+
+**Verify:** `grep -n "annotation_index(workspace)" src/sextant/application/resolve/shapes/contracts.py src/sextant/application/resolve/protocol_hint.py`
+— both readers fold the raw table; `grep -n "folded" src/sextant/application/resolve/engines/annotation_driven.py`
+— the unfold reaches the SQL parameter only. **Closes** with `OI-92`'s fix and by the same
+change: one composed annotation universe (folded, composed, inherited) that every
+annotation reader folds, rather than a second unfold inside `conditions.py`.
+
+### OI-94 — a batch listener's reply row roots its payload with the unconditional wrappers, so `@SendTo` on a `List<X>`-returning batch listener publishes `X` as the response and `array<X>` on the reply
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/engines/annotation_driven.py::_derive_replies`,
+`src/sextant/application/resolve/shapes/contracts.py::_contracts_of`**
+
+`_contracts_of` roots one handler's request AND response with `_wrappers_for(rules, owner,
+index)` — the unconditional wrappers plus each conditional one whose `when` holds on the
+owner (spec §5a, once per owner for both columns). `_derive_replies` roots the same
+handler's return type for the reply row with `rules.wrappers` alone — the unconditional
+list, `conditional_wrappers` never consulted. For a listener declaring `batch = "true"` and
+returning `List<X>` under `@SendTo`, the conditional `List` wrapper holds on the handler:
+the response column unwraps to `X`, and the reply row, rooted a moment later without it,
+publishes `array<X>`. One handler, one return type, two answers.
+
+**Real triggering input:** `@KafkaListener(topics = "t", batch = "true") @SendTo("replies")
+List<Reply> onBatch(List<OrderEvent> events)` — a batch listener that replies. Not present
+in any fixture: `fixtures/orders-service`'s batch methods return `void`, and its `@SendTo`
+listener is a record listener. Whether Spring's batch reply is one message per element or
+one message carrying the list is itself unmeasured — the two rows disagree with EACH OTHER,
+which is the defect here, before either is checked against the framework.
+
+**Cost:** two columns describing one return type differently; both are real types the
+handler names, neither fabricated.
+
+**Verify:** `grep -n "rules.wrappers" src/sextant/application/resolve/engines/annotation_driven.py`
+— the reply rooting's wrapper argument; `grep -n "_wrappers_for" src/sextant/application/resolve/shapes/contracts.py`
+— the per-owner list the response uses. **Closes** when `_derive_replies` roots with the
+same per-owner `_wrappers_for` list `_contracts_of` uses, after CP-20 says which of the two
+answers Spring's batch reply actually is.
+
+### OI-95 — a `jakarta.*` API coordinate at a Jakarta EE 8 version is `javax`-packaged, and the family's coordinate lists cannot say so
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C, logged
+once for the whole `javax`/`jakarta` family · `src/sextant/catalogs/jakarta-jaxrs.yml`,
+`javax-jaxrs.yml`, `jakarta-jms.yml`, `javax-jms.yml`; `src/sextant/application/resolve/dependencies.py`**
+
+`jakarta.ws.rs:jakarta.ws.rs-api` 2.1.x (Jakarta EE 8) ships `javax.ws.rs.*` classes under
+the `jakarta` coordinate; the `jakarta.ws.rs.*` packages arrive at 3.0. The same is true of
+`jakarta.jms:jakarta.jms-api` 2.0.x. `detect.coordinates` is `group:artifact` with no
+version, so a module on the EE 8 artifact matches `jakarta-jaxrs.yml`'s coordinate and
+declares nothing that matches `javax-jaxrs.yml`'s (`javax.ws.rs:javax.ws.rs-api`), while its
+bytecode carries `javax/ws/rs/GET` — the spelling only `javax-jaxrs.yml` reads.
+`javax-jaxrs.yml`'s own header comment records that CP-18 never opened the 2.1.6 artifact,
+which is why the coordinate is not simply added to that file (§5.4).
+
+**What happens today:** nothing wrong. An `annotation_driven` catalog gates on the
+annotation fqn, not the coordinate (`dependencies.py::gate_reason` reads coordinates only
+for `DEPENDENCY_GATED` styles and `detect.required` catalogs, and neither JAX-RS catalog
+declares the latter), so `javax-jaxrs.yml` runs, matches every `javax.ws.rs` use and
+derives every row; `jakarta-jaxrs.yml` runs, matches nothing and derives nothing. The
+`jms` pair is the same shape on `single_call`, which gates on descriptors. **The shape is
+unhandled, not wrong**: the day `detect.coordinates` becomes the module-wide activation
+gate D02 §12 describes (`OI-83`), or any coordinate read of the `superseded_by` kind is
+applied to this family, the EE 8 module activates the `jakarta` catalog and not the `javax`
+one, and derives nothing — an under-derivation the coordinate lists as written cannot
+prevent, because neither can say "this coordinate below 3.0 is the other spelling".
+
+**Real triggering input:** a Jakarta EE 8 module — `jakarta.ws.rs:jakarta.ws.rs-api:2.1.6`
+or `jakarta.jms:jakarta.jms-api:2.0.3` in its POM, `javax.*` imports in its sources. Not
+present in any fixture.
+
+**Verify:** `grep -n "coordinates" src/sextant/catalogs/jakarta-jaxrs.yml src/sextant/catalogs/javax-jaxrs.yml`
+— one unversioned coordinate each; `grep -n "DEPENDENCY_GATED = " src/sextant/application/resolve/dependencies.py`
+— the two styles coordinates gate today. **Closes** when the coordinate grammar can carry a
+version bound (`jakarta.ws.rs:jakarta.ws.rs-api:>=3.0` on the `jakarta` file, `<3.0` on the
+`javax` one) and the EE 8 artifact's packaging is measured on the artifact itself, or when
+the activation gate is designed to fall back to the annotation fqn for this family.
 
 ## CLOSED
 

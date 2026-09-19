@@ -70,3 +70,20 @@ def test_micronaut_pubsub_both_directions(messaging_rows):
     assert missing == set(), (
         f"Micronaut Pub/Sub: missing {sorted(missing)}. Derived: {sorted(messaging_rows)}"
     )
+
+
+def test_micronaut_jms_over_sqs_is_sqs_on_both_sides(messaging_rows):
+    assert {
+        ("sqs", "inbound", "mn.orders.sqs"),
+        ("sqs", "outbound", "mn.orders.sqs-out"),
+    } <= messaging_rows
+    assert ("jms", "inbound", "mn.orders.sqs") not in messaging_rows
+
+
+def test_micronaut_jms_on_another_broker_stays_jms(messaging_rows):
+    """Not xfail: ActiveMQ Classic's constant is not SQS's, and the existing pair is untouched."""
+    assert {
+        ("jms", "inbound", "mn.orders.classic"),
+        ("jms", "inbound", "mn.orders.queue"),
+        ("jms", "outbound", "mn.orders.audit"),
+    } <= messaging_rows

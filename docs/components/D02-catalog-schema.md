@@ -38,7 +38,7 @@ matches:
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
-| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required` and `satisfied_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`** — see below |
+| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required`, `satisfied_by` and `superseded_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`; `superseded_by` is read for every catalog that declares it** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
 | `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1c. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
@@ -206,6 +206,52 @@ starter's own transitives are not recorded — derived nothing from a `@ConnectM
 and asked nothing either. Declared per catalog rather than computed as "an annotation only
 one catalog claims", because a rule that changes when an unrelated catalog is added is a
 rule nobody can read off the file that states it.
+
+**`detect.superseded_by` is `detect.coordinates`' negative twin** (B/C Task 10 fix round 1):
+the coordinates whose presence in the module's recorded build means ANOTHER catalog is the
+real implementation of THIS catalog's rule, so this one must not run there at all.
+
+```yaml
+detect:
+  coordinates: ["jakarta.ws.rs:jakarta.ws.rs-api"]
+  superseded_by: ["io.quarkus:quarkus-rest", "io.quarkus:quarkus-rest-jackson", …]
+```
+
+It exists because two catalogs can read the SAME evidence while their rules genuinely
+differ, and D02 §5's own precedent for "two catalogs match one module" — "identical
+identities meet the insert-if-absent guard and one row survives" — only holds where the two
+catalogs' rules AGREE wherever they overlap (`spring-web.yml`/`spring-mvc.yml`, whose
+`request_body` blocks are the same annotation and fallback). `jakarta-jaxrs.yml` and
+`quarkus-rest.yml` are the case that breaks it: Quarkus REST implements the JAX-RS
+specification with the specification's own `jakarta.ws.rs` annotation classes, so a Quarkus
+module's resource methods satisfy BOTH catalogs' matches identically, and the two catalogs'
+`request_body` rules (implicit bindings, excludes) genuinely disagree. The merge's
+insert-if-absent guard has no notion of which catalog is more specific — only a filename
+comparison — so letting both run would leave the WRONG catalog's rule governing a row on the
+strength of alphabetical order rather than of which framework the module actually runs.
+
+The framework's own fact settles it: on a module declaring one of Quarkus REST's own
+server-side facet coordinates, Quarkus REST IS the JAX-RS implementation there, and Jersey's,
+RESTEasy classic's and Helidon's own rules do not apply — so `jakarta-jaxrs.yml` (and
+`javax-jaxrs.yml`, defensively) declare `detect.superseded_by` naming every one of
+`quarkus-rest.yml`'s own coordinates, and refuse to run wherever the build records one of
+them. **Refused unless the catalog also declares `detect.coordinates`** — the
+`detect.satisfied_by`/`detect.required` precedent: a catalog that yields to something must
+say what it is FOR, or the key describes a bypass of a gate that is not there.
+
+**A superseded catalog is SKIPPED, visibly, through the exact same channel a missing
+capability or an unmet dependency already uses** (`resolve/endpoints.py`, the third gate,
+after `unmet_dependency`) — `SkippedCatalog(catalog.id, ("superseded by <coordinate>",))` —
+never a silent zero. The coordinate read is the SAME one `unmet_dependency` uses
+(`_declared_coordinates`, `resolve/dependencies.py`) rather than a second query, but **the
+"could not tell" case resolves to the OPPOSITE consequence from the positive gate** — this is
+a negative condition, not `detect.coordinates` restated with the sense flipped. A module
+recording no module fact at all makes `unmet_dependency` SKIP the catalog it gates (a
+dependency it cannot confirm is present is treated as absent); the same "could not tell" makes
+`_superseded_by` return `None` and the catalog RUNS — a coordinate it cannot confirm is
+present is never treated as present either, and a catalog is never refused by a question
+nothing answered in either direction, which is what keeps every catalog's behaviour
+unchanged on a workspace whose facts predate the module fact.
 
 **A gated catalog that does not derive files a question rather than going quiet**, on
 either failing branch of the gate: no module fact recorded, and coordinates recorded that
@@ -526,10 +572,44 @@ matches:
   controller join — `type_annotation: …RestController` in the opening example — simply
   disappears for that catalog.
 - **`request_body` is catalog data**, not an engine assumption: which annotation marks the
-  payload parameter, and whether the sole unannotated parameter is the fallback when none is
-  marked. Spring inbound and `@HttpExchange` require `@RequestBody` with no fallback;
-  Retrofit requires `@Body` with no fallback; Feign's Spring-flavoured contract accepts
-  `@RequestBody` but falls back to the sole unannotated parameter when it is absent.
+  payload parameter, and which fallback finds it when none is marked. Spring inbound and
+  `@HttpExchange` require `@RequestBody` with no fallback; Retrofit requires `@Body` with no
+  fallback; Feign's Spring-flavoured contract accepts `@RequestBody` but falls back to the
+  sole unannotated parameter when it is absent. **`annotation` is optional** (spec
+  2026-09-18 §4): JAX-RS has no body marker at all, and a catalog for it declares the
+  fallback alone. Two fallback words exist:
+  - **`sole_unannotated`** — the body is the one parameter carrying NO annotation of any
+    kind. This is an approximation of every framework that uses it, and it has a recorded
+    defect: kotlinc writes `@org.jetbrains.annotations.NotNull` on every non-null parameter
+    and Bean Validation puts `@Valid` on a body, and either one removes the body under this
+    word. It stays because every shipped catalog declaring it derives byte-identically with
+    it, and none is rewritten in this group; the Feign and Micronaut catalogs carry that
+    latent Kotlin defect, `sole_unbound` with each framework's own `bound_by` is its fix, and
+    the group's closing task logs it in the register (spec 2026-09-18 §6).
+  - **`sole_unbound`** — the body is the one parameter the framework's OWN binding
+    annotations do not claim, which is the framework's rule (JAX-RS §3.3.2.1: the entity
+    parameter carries none of the specification's parameter annotations). A parameter is
+    *bound*, and so not the body, when any of three predicates holds: (1) it carries an
+    annotation on **`bound_by`** — the framework's binding annotations, a non-empty list
+    REQUIRED with this word, refused beside `sole_unannotated` — or its declared type is on
+    `excludes`; (2) `path_variable` is declared and the parameter's name equals a `{name}`
+    (or `{name: regex}`, the token before the `:`) in the row's composed path; (3)
+    `container` is declared and the parameter's class declares a field or method carrying a
+    `bound_by` annotation. **`implicit_bindings: [path_variable, container]`** is a closed
+    vocabulary of those two words, refused otherwise; absent means neither. Only
+    `quarkus-rest.yml` declares them, because they are Quarkus REST's own indexer rules
+    (`EndpointIndexer.java:1380-1413`); `jakarta-jaxrs.yml` deliberately declares none, since
+    under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity body. Any other
+    annotation on a parameter — `@Valid`, `@NotNull`, Jackson's, Lombok's — is invisible to
+    this word, because it is invisible to the framework. Zero or several unbound parameters
+    mean no contract, as with `sole_unannotated`.
+  - **The block's key set is closed** — `annotation`, `fallback`, `bound_by`, `excludes`,
+    `implicit_bindings`, and nothing else (`contracts.py::_REQUEST_BODY_KEYS`, added after
+    the final review). An unknown key is refused by name rather than ignored, because a
+    misspelt `excludes` read as absent would make a context type the body, silently. The
+    per-type member fold `container` reads (`conditions.member_annotations_by_type`) is
+    built only for a run in which some catalog declares `container`; every other run is
+    handed an empty map.
 - **`prefix_from` and `peer_from` replace the single `path_from` alias list at the type
   level**, because the type-level and method-level annotations play different roles.
   `path_from` still serves method mappings, where it is correct: `@RequestMapping`'s
@@ -540,6 +620,12 @@ matches:
   separately, so `@RequestMapping` declares `prefix_from: [value, path]`, `@FeignClient`
   declares `prefix_from: [path]` and `peer_from: [name, value]`, and `@HttpExchange`
   declares `prefix_from: [value, url]`.
+- **`peer_from` is read off `peer_annotation`, which defaults to the prefix annotation**;
+  MicroProfile puts the prefix on `@Path` and the peer on `@RegisterRestClient` (CP-22
+  row 2, spec §3f). Every catalog above shares one annotation for both roles — Feign's
+  `@FeignClient` carries `path` and `name` on the same row — so `peer_annotation` is
+  optional and inert everywhere `peer_from`'s own attribute already sits on the prefix
+  annotation; `microprofile-rest-client.yml` is the one catalog that declares it.
 - **`path_separator` says what joins the prefix to the address it prefixes**, and it is
   the character deduped at that seam. Optional; a catalog declaring none concatenates the
   two halves bare, which is what every catalog did before the key existed.
@@ -654,7 +740,9 @@ ignored by the `sole_unannotated` fallback count. A listener taking `(OrderEvent
 Acknowledgment ack)` has two unannotated parameters, and without `excludes` the fallback
 would honestly find none; naming `Acknowledgment` there lets the fallback see the one real
 payload. This lives under `request_body` rather than as a separate top-level
-`payload_excludes`, because it is the same fallback rule this key already governs.
+`payload_excludes`, because it is the same fallback rule this key already governs. The
+`sole_unbound` word reads the same list the same way — an excluded type is bound (predicate
+1 under `annotation_driven` above) — and adds `bound_by` and `implicit_bindings` beside it.
 
 **`mapping` gains `consumes_from`/`produces_from`, two more alias lists reading declared
 media types (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4's
@@ -695,7 +783,11 @@ mapping:
 - **Type-level media attributes are not read in 2E.** A class-level
   `@RequestMapping(produces = ...)` — Spring's own equivalent of `prefix_from` for media —
   is out of scope for this phase; only the method-level mapping annotation's own attributes
-  fill `consumes`/`produces`.
+  fill `consumes`/`produces`. (No longer true past this phase: a class-level
+  `@RequestMapping(produces = ...)` has been read off the prefix annotation itself since
+  `202ea6b`, and a class-level default on a separate TYPE-level sibling annotation —
+  JAX-RS's `@Produces`/`@Consumes` beside `@Path` — since `type_media_from_siblings`,
+  spec 2026-09-18 §3b word 2, below.)
 
 **Phase 2H generalises the vocabulary a fourth time, for a declaration whose name is
 DEFAULTED and whose scope sits on the annotation itself.** Four keys, every one of them
@@ -1013,6 +1105,100 @@ mapping:
     A closed SHAPE (`annotation` and `arg`, nothing else) rather than a closed vocabulary,
     for `unless`'s reason: which annotation renames an operation is the framework's own
     convention.
+
+- **`produces_from_siblings`/`consumes_from_siblings` are `path_from_siblings`'s media
+  twins**: the same closed shape, the same order rule, consulted only where every
+  `produces_from`/`consumes_from` alias on the matched annotation itself is absent.
+  **Forced by CP-18 row 1**: a JAX-RS verb annotation (`@GET`) declares no attribute at
+  all, so the media types it publishes live on the siblings `@Produces`/`@Consumes`
+  instead. The media that lands through this key is sorted and de-duplicated exactly as
+  evidence kind (a) already is (`endpoints.consumes`/`endpoints.produces`,
+  [D01](D01-graph-schema.md) §4). The class-level default — what a resource class states
+  for the methods that state nothing themselves — is a separate word (Task 4), not this
+  key. Spec 2026-09-18 §3b word 1.
+
+- **`type_media_from_siblings` is the class-level media DEFAULT — `{produces: […],
+  consumes: […]}`, each a `path_from_siblings`-shaped list, read off a TYPE-level
+  sibling** (`@Produces`/`@Consumes` on a JAX-RS resource class) rather than a method-level
+  one. **Combine rule: the method's own declaration wins whenever it is non-empty — its own
+  attribute (`consumes_from`/`produces_from`) OR its own sibling
+  (`produces_from_siblings`/`consumes_from_siblings` above) — and the class's default fills
+  in only where the method said nothing at all, never a union.** Jersey
+  `resolveProducedTypes` and Quarkus `EndpointIndexer` (line 725) both return the method's
+  media types if present and the class's otherwise; **CP-18 row 5 / CP-19 row 2** measured
+  it. Spec 2026-09-18 §3b word 2.
+  - **A separate word from the class-level media `prefix_annotation` itself already reads**
+    (`consumes_from`/`produces_from`, read a second time off the prefix annotation the way
+    `prefixes` reads `prefix_from`/`peer_from` off it, since `202ea6b` — the 2E bullet above
+    is corrected in place), **because the two frameworks put the class-level
+    default on different annotations.** Spring's `@RequestMapping` carries both the path
+    prefix and, when stated, `produces`/`consumes` on the SAME annotation —
+    `prefix_from`/`peer_from`'s own reason for existing (the type-level annotation's
+    attributes play more than one role). JAX-RS's `@Path` is the prefix annotation and
+    carries no media attribute at all; the class-level media default sits on the SIBLING
+    `@Produces`/`@Consumes` instead — which is exactly what forces a second read, keyed by
+    `produces`/`consumes` rather than by the prefix annotation's own aliases.
+  - Sorted and de-duplicated exactly as every other media source lands
+    (`endpoints.consumes`/`endpoints.produces`, [D01](D01-graph-schema.md) §4).
+
+- **Siblings inherit with the mapping, all or nothing — for a catalog declaring
+  `inherit_siblings: all_or_nothing`, an inherited mapping brings the ancestor method's
+  declared siblings with it, and ANY own annotation of the catalog's blocks inheritance
+  for that method.** A closed key of one word, and OPT-IN (amended after the final
+  review; it used to fire for any catalog naming a sibling list, and
+  `microprofile-graphql.yml` names one — `OI-35` — under a framework with no such rule, so
+  an implementor method carrying only its own `@Name` lost the inherited `@Query`). Any
+  other word is refused by name (`annotation_driven.py::_validate_naming`). Where declared,
+  the inheritance walk (`effective_annotations.py::inherited_rows_over`) carries the
+  annotations the catalog's `path_from_siblings`, `produces_from_siblings`,
+  `consumes_from_siblings` and `protocol_hint.hint_annotations` lists name
+  (`annotation_driven.py::_inherited_sibling_fqns`); where absent it hands the walk an
+  empty set and nothing below applies. When the walk synthesizes an interface or
+  superclass method's mapping onto an implementor method, it synthesizes that SAME
+  ancestor method's sibling annotations beside it, and it does so only where the
+  implementor method carries none of the catalog's annotations of its own, mapping or
+  sibling. **That is JAX-RS §3.6 exactly** (`scripts/probes/cp18_jaxrs_api_and_implementations.md`
+  row 8): *"if a subclass or implementation method has any JAX-RS annotations then all of
+  the annotations on the superclass or interface method are ignored."* Forced because
+  JAX-RS puts the path and the media BESIDE the verb — an interface's `@GET @Path("/{id}")
+  @Produces("application/json")` inherited as `@GET` alone is a wrong address, not a
+  missing one. A catalog declaring no `inherit_siblings` keeps the mapping-only own-check
+  and the per-annotation merge it had — Spring's own rule, byte-identical — whether or not
+  it names siblings.
+  - **One module knows about inheritance — and only the SQL sees its output.** The
+    synthesized siblings are ordinary annotation rows to `derive_endpoints.sql`, so the
+    sibling reads (`path_from_siblings` and the two media words above) and the class-level
+    default never learn that an inheritance happened — the same reason a composed or
+    folded row is an ordinary row by the time the SQL runs. The hint pass is NOT among
+    those readers (amended after the final review, `OI-92`): it folds the raw `annotations`
+    table, and the synthesized rows never reach it — see the `protocol_hint` section's
+    boundary.
+  - **Agreement is measured on the whole set.** Two ancestors mapping one method — the
+    shape a class overriding covariantly against both an interface and a superclass has —
+    already yielded nothing where their verbs differed (ambiguous evidence, §8). Under §3.6
+    the inherited unit is the ancestor method's whole annotation set, so the comparison is
+    the whole set: an interface `@GET @Path("/a")` against a superclass `@GET @Path("/b")`
+    agree on the verb and not on the set, and the target gets no row at all — never the
+    verb with both paths beside it, which downstream would pick between on a tied ordinal.
+    With no siblings declared every set is the mapping alone, which is today's comparison.
+  - **The type-level gate already inherits.** The walk synthesizes a class's interface or
+    superclass `prefix_annotation` onto the class when it carries none of its own, and
+    `@Path` is both the prefix and the gate — so `controllers` admits the implementor
+    with no second rule. Word 3 adds the method-level half only.
+  - **The framework's own answer, kept.** Under §3.6 an implementor method carrying only
+    its own `@Produces` — no verb — is not a resource method: its interface's annotations
+    are ignored and it has no verb of its own. The walk reproduces that: an own sibling
+    blocks inheritance, and with no own mapping nothing derives. That is the framework's
+    result, not a gap.
+  - **Boundary, measured: Quarkus REST diverges from §3.6** (`scripts/probes/cp19_quarkus_rest.md`
+    row 6). `EndpointIndexer.collectEndpoints` walks self → superclass → interfaces and
+    the FIRST class in that order whose OWN method declaration carries the verb wins the
+    endpoint whole — every other annotation (`@Path`, `@Produces`, `@Consumes`) is then
+    read off that winning declaration, and an implementor's own sibling without a verb of
+    its own is ignored rather than blocking. Neither §3.6 nor a merge. The walk implements
+    §3.6, the plain JAX-RS rule; `quarkus-rest.yml` states the divergence, and the
+    override-without-a-verb cell is a COVERAGE row, not a rule here. Spec 2026-09-18 §3b
+    word 3.
 
 - **`path_fallback` on an ANNOTATION ENTRY overrides `mapping.path_fallback` for the
   declarations that annotation matches**, and **two new words join the closed vocabulary**:
@@ -2766,6 +2952,8 @@ protocol_hint:
   protocol: sse                # the TARGET
   hint_media: [text/event-stream]
   hint_returns: ["…annotation.SseEmitter"]
+  hint_annotations: ["…annotation.RestStreamElementType"]
+  hint_when: {annotation_arg: {annotation: "…annotation.JMSListener", name: value, equals: sqsJmsConnectionFactory}}
 ```
 
 **Three promises, and they are the whole contract.** (1) It changes `protocol`, never
@@ -2812,11 +3000,59 @@ still get that one's. `hint_media` is an HTTP media declaration and is therefore
 duplicated across the family exactly as `media_formats` is; `hint_returns` names LIBRARY
 types and each is declared once, by the catalog whose artifact declares it.
 
+**Two more evidence kinds read off the row's OWNER rather than the row itself** — the
+`handler` for an inbound row, the `caller` for an outbound one — and, only where the owner
+carries none of the annotation named, its ENCLOSING TYPE (the same nearer-declaration-wins
+precedence §2's `annotation_arg` condition already keeps). This is the one widening of what
+the pass reads: everything above is a column on the row itself, and these two are the first
+and only annotation facts it consults.
+
+- **`hint_annotations` is presence, not comparison** — a list of fqns, and the row
+  reclassifies wherever one of them targets the owner or its enclosing type **and the
+  owner itself carries none of the declaring catalog's `produces_from_siblings`
+  annotations** (amended after the final review). Quarkus's `@RestStreamElementType` is
+  the shipped case: a class-level use implies SSE for every method the class exposes,
+  which only the enclosing-type fallback reaches, since the annotation names no member of
+  its own (CP-19 row 2) — and CP-19 row 2a reads the METHOD-level `@Produces` first, so a
+  handler declaring `@Produces("application/x-ndjson")` beside the marker serves what it
+  declares and stays `http`. The owner alone is checked, never its type: a class-level
+  `@Produces` is the default Quarkus consults after this decision, not before it
+  (`protocol_hint.py::_owner_annotated`, `_Hint.media_annotations`).
+- **`hint_when` is §2's `annotation_arg` condition** (one per catalog block, parsed once at
+  load, never a raw mapping read again downstream) — the row reclassifies where the
+  condition HOLDS for the owner, read the same way §2 and §5a already read it: the owner
+  first, its enclosing type only on a total miss. Micronaut's `@JMSListener` is the shipped
+  case: `@JMSListener("sqsJmsConnectionFactory")` on a class turns a `jms` row into `sqs`,
+  while `@JMSListener("activeMqConnectionFactory")` on another class leaves its `jms` rows
+  alone — the SAME annotation, discriminated by the one attribute that names the broker
+  (CP-21 rows 1a, 3a–3b).
+
+Two catalogs of a family may each declare their own `hint_when` — Micronaut's SQS listener
+and producer catalogs each name a different annotation — and the row reclassifies where
+EITHER holds, exactly as the union rule above already reads for the other three kinds:
+`hint_annotations` unions its fqn lists the same way `hint_returns` does, and each
+catalog's parsed `hint_when` condition is collected rather than merged into the others',
+so nothing has to agree on one shared condition across a family.
+
+**A stated boundary, not a built one — the pass reads raw facts only** (`OI-92`). The
+pass folds the `annotations` table (`conditions.annotation_index`); the inheritance walk's
+synthesized rows — the type-level prefix, an inherited mapping and, under
+`inherit_siblings`, its siblings — reach only `derive_endpoints.sql`'s `$synthetic`
+parameter, never that fold. So a class-level hint annotation declared on an INTERFACE the
+handler's class implements is never carried onto the implementor's class, AND a
+method-level one declared on an interface method (`@GET @RestStreamElementType(...)` on
+the interface, an annotation-free implementor) is never carried onto the implementing
+method, even though the walk carried the verb and `@Path` beside it. `hint_annotations`
+therefore sees only annotations written on the handler's own declaration or its own class;
+the inherited form derives `http` where the framework serves an event stream —
+under-classified, never fabricated.
+
 **A malformed block is refused at run start**, four ways, each a case where reading on
 would make a broken catalog look like an absent one: an unknown key; a target outside
 [D00](D00-fact-schema.md)'s protocol set or equal to the catalog's own; an evidence list
-that is not a list of strings; and a block naming no evidence at all, which is exactly what
-declaring no block already means.
+that is not a list of strings, or a `hint_when` §2's own grammar refuses by name; and a
+block naming NONE of the four evidence kinds at all, which is exactly what declaring no
+block already means.
 
 **One thing outside `endpoints` moves with a row: its `open_questions`.** The ledger
 snapshots a wire identity rather than joining to it ([D01](D01-graph-schema.md) §3), and
@@ -2885,6 +3121,52 @@ An LLM may verify a walked path against the manifest or the source; a human cura
 what neither can. As in §2d, an LLM is never the sole source of an address that creates a
 link.
 
+## Conditions on an annotation attribute
+
+A return or parameter type is not the only thing a rule needs to look past the mapping
+annotation for. Whether a listener declares itself batched, or which JMS connection factory
+it names, is also visible only in an annotation's own attribute — and more than one rule
+needs to ask it. One closed condition shape serves every such rule:
+
+```yaml
+when:
+  annotation_arg:
+    annotation: <fqn>        # required — which annotation, never "the matched one"
+    name: <attribute>        # one attribute name, or a list of aliases, first present wins
+    equals: <string>         # exact comparison of the attribute's string form …
+    # — or —
+    parses_true: true        # … or Java's Boolean.parseBoolean after StringUtils.hasText
+```
+
+- **`annotation` is required.** Naming the fqn makes the condition self-contained, so a
+  `wrappers` entry — attached to no mapping annotation of its own — can still carry one.
+- **`name` is a scalar or an alias list**, read like `path_from`: first present wins. The
+  list form exists for an attribute that is aliased in the annotation's own definition —
+  only the alias the author actually typed is in the bytecode.
+- **Read on the declaration, else on its enclosing type.** The engine looks for
+  `annotation` among the annotation rows targeting the owner symbol; only if none is found
+  there does it look among those targeting the owner's enclosing type. The nearer
+  declaration wins outright — once the owner is found to carry the annotation, its
+  comparison is the answer, whether it matches or not, and the enclosing type is never
+  consulted. One shape serves `@KafkaListener(batch)` on a method and `@JMSListener(value)`
+  on a class.
+- **Exactly one comparator is required, `equals` or `parses_true`.**
+- **`equals` compares the attribute's string form, case-sensitively**, and matches an
+  array attribute if any one element equals. **`parses_true` is Java's
+  `Boolean.parseBoolean` after `StringUtils.hasText`** — true for `"true"`, `"TRUE"`,
+  `"True"`, false for an absent, empty, blank, or unresolved (`"${listener.batch}"`)
+  attribute — measured on Spring's own `KafkaListenerAnnotationBeanPostProcessor`
+  (`scripts/probes/cp20_spring_kafka_batch.md` row 2). It is a separate word rather than a
+  case-insensitive `equals` because a sibling use of this same condition compares a
+  **bean name**, and Micronaut's `Qualifiers.byName` is case-sensitive:
+  `SqsJmsConnectionFactory` is a different bean from `sqsJmsConnectionFactory`.
+- **The vocabulary is CLOSED.** `when` naming anything but `annotation_arg`, an
+  `annotation_arg` carrying a key outside these four, both comparators, or neither, is
+  refused by name at catalog load — never silently read as "never fires".
+
+Two consumers: §2a's `wrappers[].when` below, and §2's `protocol_hint`'s own `hint_when`
+above.
+
 ## 2a. Wrapper declarations
 
 A return or parameter type is often an envelope around the wire payload:
@@ -2925,6 +3207,44 @@ rather than guessing.
 `payload_arg: 1`, declared the same way as every other wrapper above. The spec's
 `payload_type_arg` carrier extension (§7 permission) is dropped as redundant; recorded
 here so it is not reintroduced.
+
+**A wrapper entry may carry `when`** — the same closed condition above ("Conditions on an
+annotation attribute") — for a type that is an envelope only where an annotation attribute
+says so:
+
+```yaml
+wrappers:
+  - { type: java.util.List, payload_arg: 0, semantics: envelope,
+      when: { annotation_arg: { annotation: org.springframework.kafka.annotation.KafkaListener,
+                                 name: batch, parses_true: true } } }
+```
+
+A Spring Kafka `@KafkaListener(batch = "true")` handler takes `List<OrderEvent>` where the
+wire carries one `OrderEvent` per record — `List` is the envelope, and `spring-kafka.yml`
+adds exactly this entry (forward-referenced here; the file itself carries the row). The
+same `List` on a non-batched listener is a real `List<OrderEvent>` payload, not an
+envelope, so the entry must not unwrap it there: `when` is evaluated once per OWNER — the
+condition read on the handler and, failing that, its enclosing type, the same precedence
+the condition itself defines — and only the wrappers whose `when` holds for that owner are
+handed to rooting alongside every unconditional entry.
+
+**Rooting-only.** Shape EXPANSION (the pass that turns a rooted type into its wire fields)
+is global and insert-if-absent, keyed on the type symbol alone: the first catalog to reach
+a shared type is the one whose rules describe it for everyone, forever, regardless of which
+endpoint asked. A conditional wrapper cannot join that pool — making `List` an envelope
+because one handler's annotation said so would make it an envelope for every OTHER
+handler's `List`, batched or not, module-wide. So a conditional entry is never part of the
+list expansion reads; it exists only at the point an endpoint's payload is rooted, decided
+fresh for each owner.
+
+**Refused: a `when` on a type another catalog names unconditionally.** The sort-order
+hazard `spring-kafka.yml`'s own `wrappers` comment describes for an unconditional COPY
+(§1b's same lesson, applied to a block that stayed per-catalog) runs the other direction
+too: if one catalog's `wrappers` names a type with no condition at all, a second catalog
+cannot make that same type conditional — the first catalog's own endpoints would still see
+it as an envelope everywhere, while whether anyone ELSE'S endpoints did would depend on
+which catalog happened to load first. Caught once, before any endpoint is processed, and
+named by both files rather than left to be discovered downstream.
 
 ---
 

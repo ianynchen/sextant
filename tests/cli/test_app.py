@@ -118,7 +118,11 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # `unresolved` with no address.
     # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks —
     # `GET /bld/sup/inner`, `GET /mvcbld/sup/inner` — each once, under its prefix.
-    assert metadata["endpoints"]["inbound"]["http"] == 90
+    # 91 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+    # `POST /kt/orders` — the same address `KotlinOrderRoutes#ktRoutes`'s own
+    # functional-routing row already serves, so the route SET is unchanged and only
+    # the row count moves.
+    assert metadata["endpoints"]["inbound"]["http"] == 91
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -213,7 +217,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 146 since A2 Task 8: `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
     # — one class file each; the Apache response-handler lambdas are `invokedynamic`
     # bodies of the same class.
-    assert metadata["coverage"]["documents"] == 146
+    # 148 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
+    # `KotlinOrderResource$KtOrder` — one class file each, one document each.
+    assert metadata["coverage"]["documents"] == 148
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

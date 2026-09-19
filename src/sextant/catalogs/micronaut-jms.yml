@@ -9,6 +9,8 @@ detect:
 measured:
   - { artifact: io.micronaut.jms:micronaut-jms-core, versions: ["4.2.0"],
       identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+  - { artifact: io.micronaut.jms:micronaut-jms-sqs, versions: ["4.2.0"],
+      identity: reported, by: scripts/probes/cp21_micronaut_jms_sqs.md }
 requires: [annotation_args]
 # One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
 # and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
@@ -29,3 +31,29 @@ matches:
     annotations:
       - { fqn: io.micronaut.jms.annotations.Queue }
       - { fqn: io.micronaut.jms.annotations.Topic }
+
+# `micronaut-jms-over-sqs` (spec 2026-09-18 §5b). CP-21 rows 1a/2: `@JMSListener` declares
+# exactly `value(): String` — no `connectionFactory` attribute of any name — and the
+# post-processor reads it with `getRequiredValue` and resolves the JMS `Connection` bean
+# through `Qualifiers.byName(value)`; `value` IS the connection-factory bean's name, read
+# the same way `path_from: [value]` above already reads it as the destination address —
+# two different questions asked of the one attribute the annotation has. CP-21 rows 3a/3d:
+# `micronaut-jms-sqs` registers its factory `@Named` under the literal
+# `SqsConfiguration.CONNECTION_FACTORY_BEAN_NAME = "sqsJmsConnectionFactory"`, confirmed
+# against Task 1's own compiled fixture (CP-21 row 4), which is the literal `equals`
+# compares — case-sensitive, `Qualifiers.byName` is not `equals`-insensitive the way
+# Spring's `parseBoolean` is (spec §2).
+#
+# Stated boundaries, not built. A user-named factory bean wired to an SQS `ConnectionFactory`
+# in a hand-written `@Factory` is unknowable from bytecode alone and stays `jms` — only the
+# framework's own constant is matched, never a bean name an application chose. A `value`
+# written as a property placeholder (`"${jms.factory}"`) compares unequal to the literal and
+# stays `jms` too — there is no resolution here, the same as Spring's own unresolved case
+# (spring-kafka.yml's `wrappers` comment).
+protocol_hint:
+  protocol: sqs
+  hint_when:
+    annotation_arg:
+      annotation: io.micronaut.jms.annotations.JMSListener
+      name: value
+      equals: sqsJmsConnectionFactory

@@ -63,6 +63,15 @@
 --                           file never asks which level declared it.
 --   $prefix_annotation   -- LIST of fqns for the type-level annotation carrying the
 --                           path prefix (§3.1: one annotation, several spellings)
+--   $peer_annotation     -- LIST of fqns for the type-level annotation $peer_from is
+--                           read off (CP-22 row 2, spec §3f). Defaults to
+--                           $prefix_annotation where the catalog declares no
+--                           `peer_annotation` key of its own — true for every
+--                           catalog shipped before this word, which is why
+--                           they derive byte-identically. MicroProfile REST
+--                           Client is the one framework where prefix and peer
+--                           sit on two different annotations: the prefix is
+--                           `@Path`, the peer is `@RegisterRestClient`.
 --   $path_from           -- attribute names that alias one another, first present wins
 --   $path_from_siblings  -- `OI-35`: {ordinal, annotation, arg} rows naming a
 --                           name source that lives on ANOTHER annotation of the
@@ -271,7 +280,7 @@ WITH RECURSIVE catalog_params AS (
         $catalogs::STRUCT(
             catalog_id VARCHAR, protocol VARCHAR, direction VARCHAR,
             type_annotation VARCHAR[], declared_on VARCHAR, locally_implemented VARCHAR[],
-            prefix_annotation VARCHAR[], class_level VARCHAR,
+            prefix_annotation VARCHAR[], peer_annotation VARCHAR[], class_level VARCHAR,
             mapping_annotations STRUCT(
                 fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
                 unless_attribute VARCHAR, unless_equals VARCHAR,
@@ -279,6 +288,10 @@ WITH RECURSIVE catalog_params AS (
             )[],
             path_from VARCHAR[],
             path_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            produces_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            consumes_from_siblings STRUCT(ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
+            type_media_from_siblings
+                STRUCT("column" VARCHAR, ordinal INTEGER, annotation VARCHAR, arg VARCHAR)[],
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
             all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
@@ -303,6 +316,15 @@ type_gates AS (
 ),
 prefix_gates AS (
     SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.prefix_annotation)) AS fqn
+    FROM catalog_params cp
+),
+-- CP-22 row 2 (spec §3f): `peers` below reads `peer_from` off THIS annotation
+-- rather than `prefix_gates` — identical shape, mirrors `prefix_gates`
+-- exactly, because `$peer_annotation` already defaults to `$prefix_annotation`
+-- for every catalog that declares none, so this list is `prefix_gates`'s own
+-- fqns for every shipped catalog but the one that names a different one.
+peer_gates AS (
+    SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.peer_annotation)) AS fqn
     FROM catalog_params cp
 ),
 mapping_catalog AS (
@@ -414,6 +436,36 @@ sibling_names AS (
     WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
     GROUP BY sp.catalog_id, a.target
 ),
+-- Spec 2026-09-18 §3b word 1: the media twins of the two CTEs above — same shape, same
+-- "first present wins" over the catalog's ordinal, grouped by TARGET because the
+-- annotation carrying the media is not the mapping annotation. Empty for every catalog
+-- declaring no media sibling, so the LEFT JOINs in `declared` reduce to what they were.
+sibling_produces_sources AS (
+    SELECT u.catalog_id AS catalog_id, s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.produces_from_siblings) AS s FROM catalog_params cp) u
+),
+sibling_produces AS (
+    SELECT sp.catalog_id AS catalog_id, a.target AS target,
+           min_by(coalesce(TRY_CAST(a.args -> sp.arg AS VARCHAR[]), [a.args ->> sp.arg]), sp.ordinal) AS found
+    FROM annotations_effective a
+    JOIN sibling_produces_sources sp ON sp.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = sp.catalog_id)
+    WHERE coalesce(a.args -> sp.arg ->> 0, a.args ->> sp.arg) IS NOT NULL
+    GROUP BY sp.catalog_id, a.target
+),
+sibling_consumes_sources AS (
+    SELECT u.catalog_id AS catalog_id, s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.consumes_from_siblings) AS s FROM catalog_params cp) u
+),
+sibling_consumes AS (
+    SELECT sc.catalog_id AS catalog_id, a.target AS target,
+           min_by(coalesce(TRY_CAST(a.args -> sc.arg AS VARCHAR[]), [a.args ->> sc.arg]), sc.ordinal) AS found
+    FROM annotations_effective a
+    JOIN sibling_consumes_sources sc ON sc.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = sc.catalog_id)
+    WHERE coalesce(a.args -> sc.arg ->> 0, a.args ->> sc.arg) IS NOT NULL
+    GROUP BY sc.catalog_id, a.target
+),
 -- D02 §2c's direction resolution, as two lookups. Both UNNEST an empty list
 -- for every catalog that declares no rule, so both LEFT JOINs below find
 -- nothing and the flip predicate is false for every row — which is what keeps
@@ -484,18 +536,26 @@ declared AS (
         -- today) means every alias is absent, so `list_extract` on the
         -- resulting empty list already yields NULL — no default needed, and
         -- none is a guessed one (D01 §4).
-        list_extract(list_filter(list_transform(
+        --
+        -- Spec 2026-09-18 §3b word 1: `smc.found`/`smp.found` are the media
+        -- SIBLING reads (`sibling_consumes`/`sibling_produces` above), consulted
+        -- only where the matched annotation's own aliases above found nothing —
+        -- `@GET` (CP-18 row 1) carries no attribute at all, so the coalesce is
+        -- the whole rule. NULL for every catalog declaring no media sibling,
+        -- which is what keeps every catalog written before this word deriving
+        -- byte-identically.
+        coalesce(list_extract(list_filter(list_transform(
             cp.consumes_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS consumes_list,
-        list_extract(list_filter(list_transform(
+        ), v -> v IS NOT NULL), 1), smc.found) AS consumes_list,
+        coalesce(list_extract(list_filter(list_transform(
             cp.produces_from,
             n -> CASE WHEN coalesce(a.args -> n ->> 0, a.args ->> n) IS NOT NULL
                       THEN coalesce(TRY_CAST(a.args -> n AS VARCHAR[]),
                                     [a.args ->> n]) END
-        ), v -> v IS NOT NULL), 1) AS produces_list,
+        ), v -> v IS NOT NULL), 1), smp.found) AS produces_list,
         -- The SCOPE this declaration's name sits inside, read off the same
         -- annotation that carries the name (2H design §1, form 2). Scalar-or-
         -- array and first-alias-wins like every other attribute read here.
@@ -517,6 +577,8 @@ declared AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = mc.catalog_id
     LEFT JOIN sibling_names sn ON sn.catalog_id = mc.catalog_id AND sn.target = a.target
+    LEFT JOIN sibling_produces smp ON smp.catalog_id = mc.catalog_id AND smp.target = a.target
+    LEFT JOIN sibling_consumes smc ON smc.catalog_id = mc.catalog_id AND smc.target = a.target
     -- THE WITHDRAWAL FILTER (2I design §2, word 4). A declaration whose named
     -- attribute carries the withdrawing value derives NOTHING: the framework
     -- itself does not expose it, so a row here would be an endpoint nobody
@@ -972,6 +1034,69 @@ prefixes AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
 ),
+-- CP-22 row 2 (spec §3f): `prefixes.peer` above is read off the PREFIX gate's
+-- own row, which is correct for every catalog whose peer and prefix share one
+-- annotation (`@FeignClient`) but wrong for MicroProfile REST Client, whose
+-- peer (`baseUri`/`configKey`) sits on `@RegisterRestClient` while the prefix
+-- sits on `@Path` — two different annotation rows on the same type. `peers`
+-- mirrors `prefixes` exactly (same keying, same scalar-or-array read) but
+-- joins through `peer_gates` instead, so it reads `$peer_from` off the row
+-- `$peer_annotation` actually names. Below, the final select coalesces
+-- `peers.peer` ahead of `prefixes.peer` — `peers` wins wherever it has a row,
+-- which is every catalog that declares its own `peer_annotation`; every other
+-- catalog's `peer_gates` is byte-identical to its `prefix_gates` (the default
+-- in `annotation_driven.py::params_for`), so `peers` joins the SAME
+-- annotation row `prefixes` did and the two columns agree — the coalesce is
+-- inert for them.
+peers AS (
+    SELECT
+        pg.catalog_id AS catalog_id,
+        a.target AS type_symbol,
+        list_extract(list_filter(list_transform(
+            cp.peer_from,
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS peer
+    FROM annotations_effective a
+    JOIN peer_gates pg ON pg.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
+),
+-- Spec 2026-09-18 §3b word 2: the class-level media default read off a TYPE-level sibling
+-- (`@Produces` on a JAX-RS resource class). Keyed on the type so it joins exactly as
+-- `prefixes` does; the combine below is coalesce — the method's declaration, else the
+-- class's, never a union (Jersey `resolveProducedTypes`, Quarkus EndpointIndexer 725,
+-- CP-18 row 5 / CP-19 row 2).
+-- `"column"` is quoted throughout because DuckDB reserves the word in its own
+-- grammar, and the STRUCT type declaration just below is exactly where the
+-- unquoted spelling fails to parse — verified directly:
+-- `CAST({'column': 1} AS STRUCT(column INTEGER))` raises `Parser Error: syntax
+-- error at or near "column"`, while the same word unquoted in an expression
+-- position (`s.column`, a JOIN or WHERE reference) mostly parses. Quoted
+-- everywhere here anyway, rather than only where it is strictly required, so
+-- the one field does not carry two different spelling rules depending on
+-- where it is written.
+type_media_sources AS (
+    SELECT u.catalog_id AS catalog_id, s."column" AS "column", s.ordinal AS ordinal, s.annotation AS annotation, s.arg AS arg
+    FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.type_media_from_siblings) AS s FROM catalog_params cp) u
+),
+type_media AS (
+    SELECT ts.catalog_id AS catalog_id, a.target AS type_symbol,
+           -- No CASE needed inside `min_by` here: the FILTER clause already
+           -- restricts each aggregate's input rows to the one `"column"`
+           -- value it names, so every row `min_by` ever sees for the
+           -- `produces` arm already satisfies `ts."column" = 'produces'` (and
+           -- likewise for `consumes`) — a CASE re-testing the same predicate
+           -- would only ever take its THEN branch.
+           min_by(coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]), ts.ordinal)
+               FILTER (WHERE ts."column" = 'produces') AS produces_list,
+           min_by(coalesce(TRY_CAST(a.args -> ts.arg AS VARCHAR[]), [a.args ->> ts.arg]), ts.ordinal)
+               FILTER (WHERE ts."column" = 'consumes') AS consumes_list
+    FROM annotations_effective a
+    JOIN type_media_sources ts ON ts.annotation = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = ts.catalog_id)
+    WHERE coalesce(a.args -> ts.arg ->> 0, a.args ->> ts.arg) IS NOT NULL
+    GROUP BY ts.catalog_id, a.target
+),
 -- Cross product of methods and paths (a two-topic, two-method mapping is
 -- four identities): DuckDB zips rather than cross-joins when two UNNESTs sit
 -- in the same SELECT (verified empirically), so methods are unnested in
@@ -1275,7 +1400,11 @@ derived AS (
         CASE WHEN resolved_direction = 'outbound' THEN NULL
              ELSE coalesce(fh.handler, s.symbol) END AS handler,
         CASE WHEN resolved_direction = 'outbound' THEN s.symbol END AS caller,
-        p.peer      AS peer,
+        -- `peers.peer` ahead of `prefixes.peer` (CP-22 row 2, spec §3f): the
+        -- two agree for every catalog whose `peer_annotation` defaults to its
+        -- `prefix_annotation`, and `peers` is the one that reads MicroProfile
+        -- REST Client's `@RegisterRestClient` row correctly.
+        coalesce(pr.peer, p.peer) AS peer,
         s.signature AS handler_signature,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
         -- derives used to be stamped `resolved` unconditionally, which is a
@@ -1310,8 +1439,11 @@ derived AS (
         -- wire identity plus handler/caller/resolution/evidence/catalog_id.
         -- The method's own declaration first, the class's where the method
         -- made none (`prefixes` above says why that is coalesce, not union).
-        coalesce(m.consumes_list, p.consumes_list) AS consumes_list,
-        coalesce(m.produces_list, p.produces_list) AS produces_list
+        -- `tm` (`type_media` above) is the third and last resort — the TYPE-
+        -- level sibling default (Spec 2026-09-18 §3b word 2) — tried only
+        -- where neither the method nor its own prefix annotation said anything.
+        coalesce(m.consumes_list, p.consumes_list, tm.consumes_list) AS consumes_list,
+        coalesce(m.produces_list, p.produces_list, tm.produces_list) AS produces_list
     FROM mappings m
     JOIN catalog_params cp ON cp.catalog_id = m.catalog_id
     -- A handler or caller is always a method. Without this, a TYPE-level
@@ -1342,6 +1474,16 @@ derived AS (
            AND coalesce(m.gate_type, s.enclosing) = c.type_symbol
     LEFT JOIN prefixes p ON p.catalog_id = m.catalog_id
            AND p.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- CP-22 row 2 (spec §3f): `peers`'s own row for this type, read off
+    -- `$peer_annotation` rather than `$prefix_annotation` — see `peers`'s own
+    -- comment for why the two agree for every catalog but this group's new one.
+    LEFT JOIN peers pr ON pr.catalog_id = m.catalog_id
+           AND pr.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- `type_media` only ever matches a TYPE symbol because the join key is the
+    -- enclosing type; a method-level `@Produces` row in `annotations_effective`
+    -- has a method target and never joins here.
+    LEFT JOIN type_media tm ON tm.catalog_id = m.catalog_id
+           AND tm.type_symbol = coalesce(m.gate_type, s.enclosing)
     LEFT JOIN qualifier_scopes q ON q.catalog_id = m.catalog_id
            AND q.type_symbol = coalesce(m.gate_type, s.enclosing)
     -- D02 §2c's two flip lookups, both keyed on the BARE descriptor for

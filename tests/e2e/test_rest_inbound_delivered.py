@@ -5,6 +5,7 @@ closed.
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -281,6 +282,59 @@ def test_class_level_produces_reaches_every_handler_that_declares_none(spring7):
     )
 
 
+def _spring7_row(endpoints: list[dict], method: str, path: str) -> dict:
+    rows = [
+        r
+        for r in endpoints
+        if r["method"] == method and r["path"] == path and r["direction"] == "inbound"
+    ]
+    assert len(rows) == 1, (
+        f"{method} {path}: {len(rows)} rows; paths: {sorted(r['path'] for r in endpoints)}"
+    )
+    return rows[0]
+
+
+def test_the_javax_spelling_derives_the_same_operations(spring7_routes):
+    expected = {
+        ("http", "GET", "/legacy/orders"),
+        ("http", "POST", "/legacy/orders"),
+        ("http", "GET", "/legacy/orders/{id}"),
+    }
+    assert expected <= spring7_routes, sorted(expected - spring7_routes)
+
+
+def test_a_validated_entity_parameter_is_still_the_body(spring7):
+    endpoints, _ = spring7
+    row = _spring7_row(endpoints, "POST", "/validated/orders")
+    assert row["request_shape"] is not None
+    assert json.loads(row["request_shape"])["shape_id"].endswith("ValidatedResource$Order#")
+
+
+def test_a_class_implementing_a_path_interface_derives_the_interfaces_operations(spring7):
+    endpoints, _ = spring7
+    assert {(r["method"], r["path"]) for r in endpoints if r["path"].startswith("/api/orders")} == {
+        ("GET", "/api/orders"),
+        ("GET", "/api/orders/{id}"),
+        ("GET", "/api/orders/events"),
+    }
+    by_id = _spring7_row(endpoints, "GET", "/api/orders/{id}")
+    assert by_id["produces"] == '["application/json"]'
+    assert by_id["handler"].endswith(
+        "OrdersResource#byId(sig_" + by_id["handler"].split("sig_")[1]
+    )  # the IMPLEMENTOR handles it
+    assert _spring7_row(endpoints, "GET", "/api/orders/events")["protocol"] == "sse"
+
+
+def test_jaxrs_media_comes_from_the_sibling_and_the_class_default(spring7):
+    endpoints, _ = spring7
+    assert (
+        _spring7_row(endpoints, "GET", "/jaxrs/orders")["produces"] == '["application/json"]'
+    )  # class-level @Produces
+    assert (
+        _spring7_row(endpoints, "POST", "/jaxrs/orders")["consumes"] == '["application/json"]'
+    )  # method-level @Consumes
+
+
 def test_two_versions_of_one_route_are_not_reported_as_a_conflict(spring7_questions):
     """Spring 7 API versioning. `version` is a request condition `RequestMappingInfo.equals`
     compares exactly as it compares `params` and `headers`, so two handlers on `/orders`
@@ -315,13 +369,6 @@ def spring7_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, s
         workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="JAX-RS puts verb, path and media on THREE separate annotations of one method; "
-    "reading one annotation's attribute off a sibling is a vocabulary form the engine "
-    "lacks. Measured 2026-09-11: a catalog of the existing forms collapses every GET onto "
-    "the class @Path. Engine work — on the delivery list as needing a plan, not a catalog.",
-)
 def test_a_jaxrs_resource_derives_every_operation(spring7_routes):
     """JAX-RS — Quarkus, Helidon, Jersey, RESTEasy. The verb is a MARKER annotation
     (`@GET` carries nothing), the path is a separate `@Path` on the class and/or method,
@@ -341,13 +388,6 @@ def test_a_jaxrs_resource_derives_every_operation(spring7_routes):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="JAX-RS puts verb, path and media on THREE separate annotations of one method; "
-    "reading one annotation's attribute off a sibling is a vocabulary form the engine "
-    "lacks. Measured 2026-09-11: a catalog of the existing forms collapses every GET onto "
-    "the class @Path. Engine work — on the delivery list as needing a plan, not a catalog.",
-)
 def test_a_jaxrs_sse_endpoint_is_classified_as_sse(spring7_routes):
     """`@Produces(MediaType.SERVER_SENT_EVENTS)` is how JAX-RS declares an SSE endpoint —
     the only Java gap left in the SSE cell. It must land in the `sse` bucket, not `http`,
@@ -417,7 +457,13 @@ QUARKUS = FIXTURES / "orders-quarkus"
 
 @pytest.fixture(scope="module")
 def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """Every HTTP row the Quarkus fixture derives, analysed once."""
+    """Every HTTP-surfaced row the Quarkus fixture derives, analysed once —
+    `http` and `sse`, since `protocol_hint` (D02 §2) RECLASSIFIES an HTTP row
+    to `sse` rather than minting a second one. The filter used to read
+    `protocol == "http"` alone, which pre-dated `quarkus-rest.yml`'s own SSE
+    row (B/C Task 10, spec §3c M1): a route `protocol_hint` correctly
+    reclassifies was then invisible to this very fixture's own SSE test,
+    which is a fixture bug rather than a feature gap."""
     workspace_dir = tmp_path_factory.mktemp("quarkus")
     compile_fixture(QUARKUS)
     result = CliRunner().invoke(
@@ -426,7 +472,11 @@ def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
     assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        return [dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "http"]
+        return [
+            dict(row)
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) in ("http", "sse")
+        ]
     finally:
         workspace.close()
 
@@ -484,6 +534,31 @@ def test_quarkus_route_base_media_reaches_every_route(quarkus_media):
         '["application/json"]',
         '["application/json"]',
     ), f"the route's own consumes was lost or the class produces did not reach it: {quarkus_media}"
+
+
+def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
+    def row(method, path):
+        return next(r for r in quarkus_endpoints if r["method"] == method and r["path"] == path)
+
+    assert row("GET", "/q/orders/{id}")["request_shape"] is None  # `id` is the path variable
+    assert json.loads(row("PUT", "/q/orders/{id}")["request_shape"])["shape_id"].endswith(
+        "OrderResource$Order#"
+    )
+    assert row("POST", "/q/orders/upload")["request_shape"] is None  # container
+    assert row("GET", "/q/orders/whoami")["request_shape"] is None  # RoutingContext
+
+
+def test_quarkus_element_type_alone_makes_a_stream_sse(quarkus_endpoints):
+    """CP-19 row 2a, both branches: the element type ALONE implies SSE (`/events`),
+    `@Produces(SERVER_SENT_EVENTS)` alone is SSE by media (`/ticks`), and the element
+    type beside a method-level `@Produces("application/x-ndjson")` is NOT — Quarkus reads
+    the method's `@Produces` first and falls to the marker only when that read is empty
+    (`/ndjson`, the final review's Important 2; `OrderResource#ndjson` took the fixture's
+    `endpoints` rows from 16 to 17, all of them HTTP-surfaced)."""
+    protocols = {r["path"]: r["protocol"] for r in quarkus_endpoints if r["direction"] == "inbound"}
+    assert protocols["/q/orders/events"] == "sse"
+    assert protocols["/q/orders/ticks"] == "sse"
+    assert protocols["/q/orders/ndjson"] == "http"
 
 
 JAVALIN = FIXTURES / "orders-javalin"

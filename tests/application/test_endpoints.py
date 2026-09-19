@@ -11,6 +11,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.shapes import contracts
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -1469,6 +1470,27 @@ def test_a_malformed_sibling_name_source_is_refused_by_file(tmp_path: Path, decl
         _vocabulary_paths(tmp_path, _vocabulary_catalog(path_from_siblings=declared))
 
     assert "path_from_siblings" in str(raised.value)
+    assert "invented-vocabulary.yml" in str(raised.value)
+
+
+def test_a_catalog_naming_an_unknown_inherit_siblings_word_is_refused_by_file(tmp_path: Path):
+    """`inherit_siblings` is a closed vocabulary of one word (spec §3b word 3, opt-in
+    after the final review). An unrecognised word read as "no rule" keeps the
+    mapping-only walk, and an inherited verb then lands on the implementor WITHOUT
+    the sibling `@Path` beside it — the wrong address the word exists to remove,
+    restored silently by a typo."""
+    with pytest.raises(CatalogError) as raised:
+        _vocabulary_paths(
+            tmp_path,
+            _vocabulary_catalog(
+                path_from_siblings=[
+                    {"annotation": "com.acme.messaging.annotation.Alias", "arg": "value"}
+                ],
+                inherit_siblings="all-or-nothing",
+            ),
+        )
+
+    assert "inherit_siblings: all-or-nothing" in str(raised.value)
     assert "invented-vocabulary.yml" in str(raised.value)
 
 
@@ -4090,6 +4112,115 @@ def test_an_outbound_catalog_produces_caller_rows_with_peer_and_prefixed_path(tm
     workspace.close()
 
 
+def _peer_annotation_facts(root: Path) -> None:
+    """The MicroProfile REST Client shape in miniature (CP-22 row 2, B/C Task 10b):
+    ONE type carries TWO type-level annotations — `@ServiceClient(path = …)` supplies
+    the prefix, a SEPARATE `@Registration(service = …)` supplies the peer. Neither
+    annotation carries the other's attribute, so a derivation that read `peer_from`
+    off the PREFIX annotation's own row (the pre-Task-10b behaviour, correct for
+    `@FeignClient`) would find no `service` attribute there and derive `peer` NULL."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/peer/PeerClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/peer/PeerClient#"
+    submit = "com/acme/peer/PeerClient#submit(sig_2a3b4c5d)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=submit,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/ServiceClient#", args={"path": "/billing"}
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/Registration#",
+                args={"service": "billing-service"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=submit,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/PostExchange#", args={"value": ["/invoices"]}
+            ),
+        ),
+    ]
+    write_fact_file(root / "PeerClient.jsonl", document, facts)
+
+
+_PEER_ANNOTATION_CATALOG = Catalog(
+    id="invented-peer-annotation",
+    style="annotation_driven",
+    protocol="http",
+    direction="outbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "type_annotation": "com.acme.peer.annotation.ServiceClient",
+        "request_body": {"annotation": "com.acme.peer.annotation.Body", "fallback": "none"},
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["path"],
+            "prefix_annotation": "com.acme.peer.annotation.ServiceClient",
+            # The one key this catalog adds beyond `_OUTBOUND_CATALOG` above: a SECOND
+            # annotation `peer_from` reads off, distinct from `prefix_annotation`.
+            "peer_annotation": "com.acme.peer.annotation.Registration",
+            "peer_from": ["service"],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "annotations": [
+                {"fqn": "com.acme.peer.annotation.PostExchange", "method": ["POST"]},
+            ],
+        },
+    },
+)
+
+
+@pytest.mark.pins("derive_endpoints.peer-read-off-the-peer-annotation")
+def test_peer_annotation_reads_peer_off_its_own_row_not_the_prefix_annotations(tmp_path: Path):
+    """CP-22 row 2 (spec §3f): `peer_annotation` names the annotation `peer_from` is read
+    off, and it need not be `prefix_annotation` — `@ServiceClient` supplies the prefix
+    `/billing`, `@Registration` supplies the peer `billing-service`, and neither carries
+    the other's attribute. Forcing `peer_annotation` back to `prefix_annotation`
+    unconditionally (the guard this pins) reads `peer_from: [service]` off `@ServiceClient`,
+    which has no `service` attribute, and `peer` derives NULL instead."""
+    _peer_annotation_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace, [_PEER_ANNOTATION_CATALOG], capabilities={"annotation_args"}
+    )
+    assert skipped == []
+    [endpoint] = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert endpoint["path"] == "/billing/invoices"
+    assert endpoint["peer"] == "billing-service"
+    workspace.close()
+
+
 def _orders_controller_facts(root: Path) -> None:
     """A controller exposing exactly one route, POST /v1/orders — deliberately
     narrower than `_controller_facts` (which also exposes two GET routes
@@ -6287,6 +6418,7 @@ def _gate_facts(
     method_args: dict,
     method_modifiers: dict[str, bool] | None = None,
     inherited_from: tuple[str, dict[str, dict]] | None = None,
+    sibling_annotations: dict[str, dict] | None = None,
 ) -> None:
     """One type of the given construct kind carrying the given type-level
     annotations, and one method on it carrying one mapping annotation.
@@ -6306,7 +6438,12 @@ def _gate_facts(
     subject and onto a superclass with that symbol and those type-level
     annotations, which the subject then `extends` — the inherited-member shape
     `A-M15`'s walk reaches, where the subject and the declaring class are two
-    different types and the framework's gate may sit on either."""
+    different types and the framework's gate may sit on either.
+
+    `sibling_annotations` writes extra annotation facts on the SAME handler
+    the mapping annotation sits on — other annotations of the one declaration,
+    the shape `path_from_siblings`/`produces_from_siblings`/
+    `consumes_from_siblings` (`OI-35`, Spec 2026-09-18 §3b word 1) read."""
     document = Document(
         document_id="doc_1",
         relative_path="com/acme/gate/Subject.java",
@@ -6373,6 +6510,16 @@ def _gate_facts(
                 use=AnnotationUse(annotation=method_annotation, args=method_args),
             )
         )
+    if sibling_annotations is not None:
+        facts += [
+            AnnotationFact(
+                document_id="doc_1",
+                target=handler,
+                retention="runtime",
+                use=AnnotationUse(annotation=fqn, args=args),
+            )
+            for fqn, args in sibling_annotations.items()
+        ]
     write_fact_file(root / "Subject.jsonl", document, facts)
 
 
@@ -6400,6 +6547,216 @@ def _gate_rows(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
     ]
     workspace.close()
     return rows
+
+
+def _catalog(catalog_id: str, matches: dict[str, object]) -> Catalog:
+    """A synthetic `annotation_driven` catalog over a word this file's own
+    fixtures do not yet ship — Task 10 (spec §3b word 1) will ship one —
+    built the way `_INVENTED_LISTENER`/`_vocabulary_catalog` above already
+    build one for a not-yet-shipped word."""
+    return Catalog(
+        id=catalog_id,
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path(f"tests/{catalog_id}.yml"),
+        matches=matches,
+    )
+
+
+# CP-18 row 1: `@GET` carries no attribute at all, so the JAX-RS media types
+# live on the siblings `@Produces`/`@Consumes` instead — the shape
+# `produces_from_siblings`/`consumes_from_siblings` (spec §3b word 1) reads,
+# mirrored on `path_from_siblings` (`OI-35`) above it. CP-18 row 5 / CP-19 row
+# 2: the same two annotations, read off the resource CLASS instead, are the
+# class-level DEFAULT `type_media_from_siblings` (spec §3b word 2) reads —
+# consulted only where neither the method's own declaration nor a method-level
+# sibling (the two keys above) said anything.
+_SIBLING_MEDIA_MATCHES = {
+    "type_annotation": "com.acme.rs.Path",
+    "request_body": {"annotation": "com.acme.rs.Body", "fallback": "none"},
+    "mapping": {
+        "prefix_annotation": "com.acme.rs.Path",
+        "prefix_from": ["value"],
+        "path_separator": "/",
+        "path_from": [],
+        "path_from_siblings": [{"annotation": "com.acme.rs.Path", "arg": "value"}],
+        "produces_from_siblings": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+        "consumes_from_siblings": [{"annotation": "com.acme.rs.Consumes", "arg": "value"}],
+        "type_media_from_siblings": {
+            "produces": [{"annotation": "com.acme.rs.Produces", "arg": "value"}],
+            "consumes": [{"annotation": "com.acme.rs.Consumes", "arg": "value"}],
+        },
+        "method_from": "method",
+        "all_methods": [],
+        "annotations": [{"fqn": "com.acme.rs.GET", "method": ["GET"]}],
+    },
+}
+
+
+def _gate_media(tmp_path: Path, catalog_id: str, **facts) -> list[tuple]:
+    _gate_facts(tmp_path / "facts", **facts)
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == catalog_id)
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["method"], r["path"], r["produces"], r["consumes"]) for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+def _gate_media_for(tmp_path: Path, catalog: Catalog, **facts) -> list[tuple]:
+    """`_gate_media`'s twin for a SYNTHETIC catalog — the word this file
+    proves has no shipped catalog until Task 10, so there is no id to look
+    `YamlCatalogSource` up by, only the `Catalog` object itself."""
+    _gate_facts(tmp_path / "facts", **facts)
+    if catalog.detect_required:
+        write_fixture_module_fact_with(tmp_path / "facts", catalog.detect_coordinates[:1])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["method"], r["path"], r["produces"], r["consumes"]) for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    return rows
+
+
+def test_media_is_read_off_a_sibling_when_the_matched_annotation_carries_none(tmp_path: Path):
+    """Spec §3b word 1: `@GET` declares no attribute at all (CP-18 row 1), so produces/consumes
+    come from the sibling `@Produces`/`@Consumes` on the same method, scalar-or-array."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"com/acme/rs/Path#": {"value": "/orders"}},
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": ["text/plain", "application/json"]},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+    )
+    assert rows == [
+        ("GET", "/orders/{id}", '["application/json","text/plain"]', '["application/xml"]')
+    ]
+
+
+@pytest.mark.pins("annotation_driven.sibling-media-only-when-own-absent")
+def test_the_matched_annotations_own_produces_still_wins_over_its_sibling(tmp_path: Path):
+    """The near-miss for the positive above: `@GET` here carries its OWN
+    `produces` attribute, so §3b word 1's "only where every `produces_from`
+    alias is absent" rule means the sibling `@Produces` is never consulted —
+    the same order `path_from_siblings` already holds
+    (`test_the_matched_annotations_own_alias_still_wins_over_every_sibling`,
+    CP-15 row 1). `consumes` is untouched by this catalog's `produces_from`
+    and keeps reading its sibling, which is what proves the near-miss is
+    about ORDER and not about disabling media siblings altogether."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog(
+            "test-siblings",
+            {
+                **_SIBLING_MEDIA_MATCHES,
+                "mapping": {**_SIBLING_MEDIA_MATCHES["mapping"], "produces_from": ["produces"]},
+            },
+        ),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"com/acme/rs/Path#": {"value": "/orders"}},
+        method_annotation="com/acme/rs/GET#",
+        method_args={"produces": ["text/csv"]},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": ["text/plain", "application/json"]},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+    )
+    assert rows == [("GET", "/orders/{id}", '["text/csv"]', '["application/xml"]')]
+
+
+def test_type_level_produces_applies_when_the_method_declares_none(tmp_path: Path):
+    """Spec §3b word 2: `@Produces` on the resource CLASS is the class-level media
+    default — applied here because the method's `@GET` carries no `produces` of its
+    own, and its only sibling is `@Path` (CP-18 row 5 / CP-19 row 2)."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={"com/acme/rs/Path#": {"value": "/{id}"}},
+    )
+    assert rows == [("GET", "/orders/{id}", '["application/json"]', None)]
+
+
+def test_the_methods_own_produces_sibling_still_wins_over_the_type_level_default(
+    tmp_path: Path,
+):
+    """The near-miss for the positive above: the method here carries its OWN
+    `@Produces` sibling (the word Task 3 reads), so the class-level default is
+    never consulted — coalesce, never a union (Jersey `resolveProducedTypes`,
+    Quarkus `EndpointIndexer` line 725). `consumes` is untouched by either
+    method's `@Produces` and still falls through to nothing (neither the method
+    nor the class declares a `@Consumes`), which is what proves the near-miss
+    is about ORDER on `produces` specifically."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={
+            "com/acme/rs/Path#": {"value": "/{id}"},
+            "com/acme/rs/Produces#": {"value": "text/plain"},
+        },
+    )
+    assert rows == [("GET", "/orders/{id}", '["text/plain"]', None)]
+
+
+def test_type_level_consumes_also_applies_when_the_method_declares_none(tmp_path: Path):
+    """The `consumes` twin of the positive test above. Neither of the two tests above
+    declares a type-level OR method-level `@Consumes` at all, so `type_media`'s
+    `consumes` branch (`min_by(...) FILTER (WHERE ts."column" = 'consumes')`) ran on
+    every prior test but never once produced a non-NULL value — this is the case that
+    actually exercises it. `@GET` here again declares neither `produces` nor `consumes`
+    of its own, so both fall through to the class-level defaults, same as the first
+    positive test above (`produces` unchanged, `application/json`)."""
+    rows = _gate_media_for(
+        tmp_path,
+        _catalog("test-siblings", _SIBLING_MEDIA_MATCHES),
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={
+            "com/acme/rs/Path#": {"value": "/orders"},
+            "com/acme/rs/Produces#": {"value": "application/json"},
+            "com/acme/rs/Consumes#": {"value": "application/xml"},
+        },
+        method_annotation="com/acme/rs/GET#",
+        method_args={},
+        sibling_annotations={"com/acme/rs/Path#": {"value": "/{id}"}},
+    )
+    assert rows == [("GET", "/orders/{id}", '["application/json"]', '["application/xml"]')]
 
 
 _ON_MESSAGE = "jakarta/websocket/OnMessage#"
@@ -8225,6 +8582,219 @@ def test_a_micronaut_or_quarkus_annotation_from_another_package_derives_nothing(
         )
         == []
     ), f"{catalog_id} matched an annotation from another package"
+
+
+# B/C Task 10 (extended by Task 10b): the `_W58_ANNOTATION_CATALOGS`-style package
+# near-miss for the four JAX-RS-worded catalogs — three inbound plus `mp-rest-client`'s
+# outbound twin. A separate list rather than an extension of `_W58_ANNOTATION_CATALOGS`
+# because the verb annotation itself carries no address attribute (CP-18 row 1) — the
+# class-level `@Path` alone (`type_annotations`) supplies the whole address here,
+# `method_args` stays empty, and the shared test functions below are named for what they
+# cover rather than borrowed from the Micronaut/Quarkus-reactive-routes ones.
+_JAXRS_ANNOTATION_CATALOGS = [
+    pytest.param(
+        "jakarta-jaxrs",
+        ConstructKind.CLASS,
+        {"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="jakarta-jaxrs",
+    ),
+    pytest.param(
+        "javax-jaxrs",
+        ConstructKind.CLASS,
+        {"javax/ws/rs/Path#": {"value": "/orders"}},
+        "javax/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="javax-jaxrs",
+    ),
+    pytest.param(
+        "quarkus-rest",
+        ConstructKind.CLASS,
+        {"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "inbound", "GET", "/orders"),
+        id="quarkus-rest",
+    ),
+    # B/C Task 10b: `mp-rest-client`'s OWN type-level gate is
+    # `@RegisterRestClient` rather than `@Path` alone — both annotations sit on
+    # the same INTERFACE, `@Path` supplying the prefix `matches.type_annotation`
+    # does not read, `@RegisterRestClient` supplying the gate `peer_from` reads
+    # (CP-22 row 2, spec §3f). The row is `outbound`, the one difference from the
+    # three inbound entries above.
+    pytest.param(
+        "microprofile-rest-client",
+        ConstructKind.INTERFACE,
+        {
+            "org/eclipse/microprofile/rest/client/inject/RegisterRestClient#": {},
+            "jakarta/ws/rs/Path#": {"value": "/orders"},
+        },
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "outbound", "GET", "/orders"),
+        id="microprofile-rest-client",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _JAXRS_ANNOTATION_CATALOGS,
+)
+def test_a_jaxrs_resource_derives_its_row(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """The paired positive for the near-miss below: the class-level `@Path` alone,
+    with a bare verb annotation carrying no attribute of its own, derives exactly
+    one row — so the decline below is on the verb annotation's FQN alone."""
+    assert _gate_rows(
+        tmp_path,
+        catalog_id,
+        owner_kind=owner_kind,
+        type_annotations=type_annotations,
+        method_annotation=method_annotation,
+        method_args=method_args,
+    ) == [row]
+
+
+@pytest.mark.declines("jakarta-jaxrs")
+@pytest.mark.declines("javax-jaxrs")
+@pytest.mark.declines("quarkus-rest")
+@pytest.mark.declines("microprofile-rest-client")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+@pytest.mark.parametrize(
+    ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
+    _JAXRS_ANNOTATION_CATALOGS,
+)
+def test_a_jaxrs_verb_annotation_from_another_package_derives_nothing(
+    tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
+):
+    """§10 near-miss for the four JAX-RS-worded catalogs, on the verb annotation's
+    fully-qualified NAME alone: the type gate, the construct kind and the address
+    attribute are exactly as in the positive above; only the verb annotation's package
+    is `com.acme.own`."""
+    simple_name = method_annotation.rsplit("/", 1)[1]
+    assert (
+        _gate_rows(
+            tmp_path,
+            catalog_id,
+            owner_kind=owner_kind,
+            type_annotations=type_annotations,
+            method_annotation=f"com/acme/own/{simple_name}",
+            method_args=method_args,
+        )
+        == []
+    ), f"{catalog_id} matched an annotation from another package"
+
+
+@pytest.mark.declines("microprofile-rest-client")
+@pytest.mark.pins("derive_endpoints.declared-on-construct-kind")
+def test_a_register_rest_client_annotated_class_derives_no_outbound_row(tmp_path: Path):
+    """B/C Task 10b's construct-kind half of the near-miss the `mp-rest-client`/JAX-RS
+    partition needs (`jakarta-jws-client.yml`'s own precedent): `microprofile-rest-client.yml`
+    declares `declared_on: interface`, so the SAME `@RegisterRestClient @Path` facts —
+    the paired positive above derives from — mint nothing when the enclosing type is a
+    CLASS rather than an interface. Without the fence a `@Path`-annotated CLASS every
+    inbound JAX-RS catalog already reports (`jakarta-jaxrs.yml`, `quarkus-rest.yml`)
+    would ALSO derive an outbound row here, publishing a served operation as one the
+    module calls too."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "microprofile-rest-client",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={
+                "org/eclipse/microprofile/rest/client/inject/RegisterRestClient#": {},
+                "jakarta/ws/rs/Path#": {"value": "/orders"},
+            },
+            method_annotation="jakarta/ws/rs/GET#",
+            method_args={},
+        )
+        == []
+    )
+
+
+@pytest.mark.declines("quarkus-rest")
+@pytest.mark.pins("contracts.implicit-path-variable-reads-the-composed-path")
+def test_quarkus_rest_declines_the_body_jakarta_jaxrs_derives(tmp_path: Path):
+    """Task 6's unit style, on the two shipped catalogs rather than a synthetic one:
+    `byId(String id)` under `/{id}` — `id`'s NAME matches the path template, so
+    `quarkus-rest.yml`'s own `implicit_bindings: [path_variable]` (spec §4 predicate 2,
+    CP-19 row 4) unbinds it and there is no body. `jakarta-jaxrs.yml` declares no implicit
+    binding at all — under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity
+    body — so the IDENTICAL signature and path still derive a `String` body there."""
+    signature = {
+        "parameters": [
+            {
+                "name": "id",
+                "annotations": [],
+                "type": {"symbol": "java/lang/String#", "arguments": [], "wire_type": "string"},
+                "erased_symbol": "java/lang/String#",
+                "type_annotations": [],
+            }
+        ],
+        "returns": {"symbol": "V", "wire_type": "void"},
+        "return_type_annotations": [],
+    }
+    catalogs = {c.id: c for c in YamlCatalogSource(CATALOGS).load()}
+    quarkus = contracts._body_parameter(
+        signature,
+        catalogs["quarkus-rest"],
+        owner="o",
+        paths=frozenset({"/{id}"}),
+        index={},
+        members={},
+    )
+    jakarta = contracts._body_parameter(
+        signature,
+        catalogs["jakarta-jaxrs"],
+        owner="o",
+        paths=frozenset({"/{id}"}),
+        index={},
+        members={},
+    )
+    assert quarkus is None, "quarkus-rest.yml should decline id as the body (path variable)"
+    assert jakarta is not None and jakarta[1]["type"]["symbol"] == "java/lang/String#"
+
+
+@pytest.mark.declines("jakarta-jaxrs")
+@pytest.mark.pins("endpoints.superseded-catalog-does-not-run")
+def test_jakarta_jaxrs_derives_nothing_where_quarkus_rest_is_declared(tmp_path: Path):
+    """B/C Task 10 fix round 1 (`detect.superseded_by`): `jakarta-jaxrs.yml` and
+    `quarkus-rest.yml` read the SAME `jakarta.ws.rs` annotations — Quarkus REST implements
+    the specification with the specification's own classes — so a module whose build
+    records `io.quarkus:quarkus-rest` directly is running Quarkus REST, the framework's own
+    implementation there, and `jakarta-jaxrs.yml` must not run at all rather than merely
+    risk losing the merge's filename tie-break. The paired positive — the SAME facts with
+    no Quarkus coordinate recorded — is `test_a_jaxrs_resource_derives_its_row` above."""
+    _gate_facts(
+        tmp_path / "facts",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        method_annotation="jakarta/ws/rs/GET#",
+        method_args={},
+    )
+    write_fixture_module_fact_with(
+        tmp_path / "facts", ["io.quarkus:quarkus-rest", "jakarta.ws.rs:jakarta.ws.rs-api"]
+    )
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "jakarta-jaxrs")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["protocol"], r["direction"], r["method"], r["path"])
+        for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    assert rows == [], f"jakarta-jaxrs derived rows on a Quarkus REST module: {rows}"
+    assert [s.catalog_id for s in skipped] == ["jakarta-jaxrs"]
 
 
 @pytest.mark.declines("jakarta-jws")

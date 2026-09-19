@@ -304,7 +304,12 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # four of them into this module (the JDK `deleteRequest()` helper and the three Apache
     # response-handler lambda bodies). 29%: the seven `fetchSeventh` edges all end at the
     # platform, which is what tips the rounding.
-    assert "Calls whose callee body this workspace read: 520 of 1765 (29%)" in document
+    # 520 of 1769 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
+    # `KtOrder` add four edges, all to the platform — kotlinc's `Object.<init>` call in
+    # each constructor, plus a `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` null
+    # check in each (KtOrder's own `sku` parameter, `create`'s `order` parameter). The
+    # numerator is unmoved: no new edge's callee body is in this module. Still 29%.
+    assert "Calls whose callee body this workspace read: 520 of 1769 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -324,7 +329,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # the JDK's own `HttpRequest`/`HttpRequest$Builder`/`HttpClient`/`URI`/
     # `BodyPublishers`/`BodyHandlers` and Apache's `ClassicRequestBuilder`/`HttpGet`/
     # `HttpPost`/`CloseableHttpClient`, none of which this module scans.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1763." in document
+    # 1767 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
+    # `KtOrder` add four `resolved` edges (comment above, `Calls whose callee body`).
+    # `declared_here`/`owner_not_scanned` are UNCHANGED: `Object.<init>` and
+    # `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` are methods every other
+    # class and every other Kotlin file here already looks up, so no new DISTINCT
+    # method identity enters either bucket — only the per-call-site edge count moves.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1767." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 194, "
         "inherited 2, owner_not_scanned 420."
@@ -626,9 +637,15 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # (`dsl-media-route`), `unresolved` with no address — counted, never hidden.
         # 90 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
         # one prefixed row each — and no bare twin from the body's own `build()`.
-        "http": 90,
+        # 91 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+        # `POST /kt/orders` — the bundle answers what the workspace answers, so this
+        # moves with `tests/cli/test_app.py`'s own count.
+        "http": 91,
         "jms": 5,
-        "kafka": 15,
+        # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
+        # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
+        # catalog `onBatch` already is (`kafka-batch-generics` has not landed).
+        "kafka": 17,
         "pubsub": 3,
         # 8 since `G-36` — `amendOrder`'s two `@PayloadRoot` both derive now.
         "soap": 8,
@@ -854,7 +871,12 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 151 since the A1 final review (I-1): the Supplier-form route on each stack.
             # 155 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
             # `SqsTemplate.receive*` rows, inbound `orders-poll`.
-            ("inbound", 155),
+            # 157 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, two more kafka
+            # inbound rows off the same unconditional listener catalog `onBatch` uses.
+            # 158 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+            # `POST /kt/orders` — one more http inbound row, at the address
+            # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
+            ("inbound", 158),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),
@@ -1653,7 +1675,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 143: + `messaging/OrderPoller` (`sqs-template-receive`, A2 Task 2).
     # 145: + `httpclient/JdkOrdersClient` and `httpclient/ApacheOrdersClient`
     # (`jdk-httpclient`, `apache-httpclient`, A2 Task 8).
-    assert (None, 145) in origins
+    # 147: + `jaxrs/KotlinOrderResource` and its nested `KotlinOrderResource$KtOrder`
+    # (Groups B and C Task 1).
+    assert (None, 147) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

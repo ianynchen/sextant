@@ -85,6 +85,7 @@ class YamlCatalogSource:
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
                     detect_satisfied_by=_detect_satisfied_by(raw, path),
+                    detect_superseded_by=_detect_superseded_by(raw, path),
                     slice_outside=_slice_outside(raw, path),
                     detect_required=_detect_required(raw, path),
                     # D02 §2a — optional, and framework-specific: an envelope
@@ -338,6 +339,40 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
         raise CatalogError(
             f"loading catalog {path}: `detect.coordinates` must be a list of "
             f"`groupId:artifactId` coordinates — got {declared!r} (D02 §1)"
+        )
+    return tuple(declared)
+
+
+def _detect_superseded_by(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
+    """`detect.superseded_by` — `detect.coordinates`' negative twin
+    (`Catalog.detect_superseded_by`, B/C Task 10 fix round 1): the coordinates
+    whose presence in the module's build means another catalog is the real
+    implementation of this catalog's rule.
+
+    Refused unless the catalog also declares `detect.coordinates` — a catalog
+    that YIELDS to something must say what it is FOR, the same reason
+    `detect.satisfied_by` is refused without `detect.required`. Shape-checked
+    the same way `_coordinates` is: a `groupId:artifactId` written wrong
+    matches nothing while looking exactly like a real coordinate.
+    """
+    detect = raw.get("detect") or {}
+    if not isinstance(detect, dict):
+        return ()
+    declared = detect.get("superseded_by")
+    if declared is None:
+        return ()
+    valid = isinstance(declared, list) and all(
+        isinstance(entry, str) and entry.count(":") == 1 for entry in declared
+    )
+    if not valid:
+        raise CatalogError(
+            f"loading catalog {path}: `detect.superseded_by` must be a list of "
+            f"`groupId:artifactId` coordinates — got {declared!r}"
+        )
+    if not detect.get("coordinates"):
+        raise CatalogError(
+            f"loading catalog {path}: `detect.superseded_by` without `detect.coordinates` "
+            f"names what this catalog yields to without saying what it is FOR"
         )
     return tuple(declared)
 

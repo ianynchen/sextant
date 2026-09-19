@@ -33,6 +33,20 @@ public class OrderEventsListener {
     public void onBatch(List<OrderEvent> events) {
     }
 
+    // `kafka-batch-generics`: `batch = "true"` makes this a BATCH listener — one element
+    // per record, so the topic's wire payload is OrderEvent and `List` is the
+    // container's envelope. `onBatch` above, with no attribute, is a RECORD listener
+    // taking a list: its wire payload IS the list. Same parameter type, two contracts
+    // (spec §5a).
+    @KafkaListener(topics = "order-batch-records", batch = "true")
+    public void onRecords(List<OrderEvent> events) {
+    }
+
+    // Spring parses the attribute with Boolean.parseBoolean — case-insensitive (M5).
+    @KafkaListener(topics = "order-batch-records-upper", batch = "TRUE")
+    public void onRecordsUpper(List<OrderEvent> events) {
+    }
+
     // Value-returning, no `@SendTo`: the dynamic-reply row — the reply topic
     // comes from the record's KAFKA_REPLY_TOPIC header at runtime, not from
     // any annotation attribute.

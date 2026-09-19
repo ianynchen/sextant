@@ -381,9 +381,28 @@ def inherited_rows_over(
     annotation_rows: list[dict[str, Any]],
     mapping_fqns: set[str],
     prefix_fqns: list[str] | None,
+    sibling_fqns: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """`inherited_rows` over an already-folded `TypeHierarchy` — the same rows, the
-    same order; the hierarchy is read and never written into."""
+    same order; the hierarchy is read and never written into.
+
+    `sibling_fqns` is the catalog's declared SIBLING annotations — the ones its
+    `path_from_siblings`/`produces_from_siblings`/`consumes_from_siblings` lists
+    and its `protocol_hint.hint_annotations` name — and it is empty for every
+    catalog that declares none, which leaves the walk exactly as it was. Where
+    it is non-empty the walk follows JAX-RS §3.6 rather than Spring's per-
+    annotation merge (spec 2026-09-18 §3b word 3, CP-18 row 8): a method with
+    NO annotation of the catalog's — mapping or sibling — inherits the ancestor
+    method's mapping AND every sibling that ancestor method carries, and a
+    method with ANY of its own inherits nothing at all. JAX-RS puts the path
+    and the media BESIDE the verb (`@GET @Path("/{id}") @Produces(...)`), so a
+    `@GET` inherited alone would be a wrong address; and its own text is *"if a
+    subclass or implementation method has any JAX-RS annotations then all of
+    the annotations on the superclass or interface method are ignored"*, which
+    is why an implementor method carrying only its own `@Produces` gets no
+    mapping row here — to the framework it is not a resource method. The
+    synthesized siblings are ordinary annotation rows downstream, so the SQL
+    that reads siblings never learns an inheritance happened."""
     methods_by_type = hierarchy.methods_by_type
     signature_by_symbol = hierarchy.signature_by_symbol
     modifiers_by_symbol = hierarchy.modifiers_by_symbol
@@ -401,6 +420,11 @@ def inherited_rows_over(
     for entries in annotations_by_target.values():
         entries.sort(key=lambda entry: entry[0])
 
+    # §3.6: any own annotation of the catalog's — mapping or sibling — blocks
+    # inheritance for that method; with no siblings declared this is
+    # `mapping_fqns` itself, today's check.
+    own_fqns = mapping_fqns | set(sibling_fqns)
+
     # Final NFR-1 ordering comes from the explicit sort below; iteration
     # order here only has to be exhaustive, not deterministic.
     rows: list[dict[str, Any]] = []
@@ -409,9 +433,15 @@ def inherited_rows_over(
         # Keyed by the method the mapping BELONGS to, which is not always the
         # candidate that resolved it — see `_synthesis_target`. Insertion order
         # follows `methods`, which follows the query's `ORDER BY symbol` (NFR-1).
-        resolved: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        #
+        # Each resolution is the ancestor method's WHOLE inherited set: the
+        # mapping, plus that SOURCE method's declared siblings (empty when the
+        # catalog declares none), because §3.6 inherits one method's set whole
+        # and never one annotation of it — so agreement below is measured on
+        # the set, not on the mapping alone.
+        resolved: dict[str, list[tuple[str, dict[str, Any], list[tuple[str, dict[str, Any]]]]]] = {}
         for key, candidate in methods.items():
-            if _own_mapping(candidate, mapping_fqns, annotations_by_target) is not None:
+            if _own_mapping(candidate, own_fqns, annotations_by_target) is not None:
                 continue
             found = _resolve_method(
                 key,
@@ -426,6 +456,7 @@ def inherited_rows_over(
             )
             if found is None:
                 continue
+            source, annotation, args = found
             target = _synthesis_target(
                 candidate, methods.values(), signature_by_symbol, modifiers_by_symbol
             )
@@ -435,24 +466,52 @@ def inherited_rows_over(
             # own: the candidate loop skips a method with an own mapping, but
             # the BRIDGE that forwards to it has none of its own to skip on.
             if target != candidate and (
-                _own_mapping(target, mapping_fqns, annotations_by_target) is not None
+                _own_mapping(target, own_fqns, annotations_by_target) is not None
             ):
                 continue
-            resolved.setdefault(target, []).append(found)
-        for target, mappings in resolved.items():
+            # `annotations_by_target` is sorted per target above, so the
+            # sibling list reads the same way twice (NFR-1).
+            siblings = [
+                (sib_annotation, sib_args)
+                for sib_annotation, sib_args in annotations_by_target.get(source, [])
+                if sib_annotation in sibling_fqns
+            ]
+            resolved.setdefault(target, []).append((annotation, args, siblings))
+        for target, resolutions in resolved.items():
             # Two ancestors mapping one method — the shape a class carrying two
             # bridges has (I1). Which one the framework serves depends on its own
             # annotation search order, which is not read here, so a target with
             # two DIFFERENT answers gets none: §8's ambiguous evidence, and the
             # same nothing this shape produced before, now stated rather than a
             # side effect of excluding every bridge.
+            #
+            # The answer compared is the whole set. Two ancestors agreeing on the
+            # verb but not on a sibling (`@GET @Path("/a")` against `@GET
+            # @Path("/b")`) are the same ambiguity one annotation over, and
+            # emitting the verb with both paths beside it would hand downstream
+            # two same-annotation rows to pick between on a tied ordinal — an
+            # address nobody can predict. With no siblings declared every set is
+            # empty and this is the mapping-only comparison it always was.
             distinct = {
-                (annotation, json.dumps(args, sort_keys=True)) for annotation, args in mappings
+                (
+                    annotation,
+                    json.dumps(args, sort_keys=True),
+                    frozenset(
+                        (sib_annotation, json.dumps(sib_args, sort_keys=True))
+                        for sib_annotation, sib_args in siblings
+                    ),
+                )
+                for annotation, args, siblings in resolutions
             }
             if len(distinct) != 1:
                 continue
-            annotation, args = mappings[0]
+            annotation, args, siblings = resolutions[0]
             rows.append({"target": target, "annotation": annotation, "args": args})
+            # The siblings ride with the mapping and only with it: a target
+            # that got no mapping row above gets no sibling row either, so an
+            # ambiguous set never leaves a lone `@Path` behind.
+            for sib_annotation, sib_args in siblings:
+                rows.append({"target": target, "annotation": sib_annotation, "args": sib_args})
         # Computed once per class, independent of the per-method loop above:
         # a class's inherited prefix applies to EVERY one of its methods
         # that ends up mapped, whether that mapping is itself inherited or
@@ -491,9 +550,12 @@ def _own_mapping(
 ) -> tuple[str, dict[str, Any]] | None:
     """The first (deterministically, by annotation fqn) mapping-shaped
     annotation a target carries directly — never one this pass itself
-    walked up to find. `fqns` is `mapping_fqns` for a method-level check,
+    walked up to find. `fqns` is `own_fqns` — `mapping_fqns` plus the catalog's
+    declared siblings, which is `mapping_fqns` itself where none are declared —
+    for a method-level check (spec 2026-09-18 §3b word 3), `mapping_fqns` alone
+    where `_resolve_method` reads an ANCESTOR method's own mapping, and
     `set(prefix_fqns)` for a class's own type-level one; the same helper serves
-    both "own wins outright" gates spec §3 states."""
+    every "own wins outright" gate spec §3 states."""
     for annotation, args in annotations_by_target.get(target, []):
         if annotation in fqns:
             return annotation, args
@@ -510,20 +572,24 @@ def _resolve_method(
     annotations_by_target: dict[str, list[tuple[str, dict[str, Any]]]],
     mapping_fqns: set[str],
     visited: set[str],
-) -> tuple[str, dict[str, Any]] | None:
+) -> tuple[str, str, dict[str, Any]] | None:
     """Walks directly implemented interfaces (declaration order), then the
     superclass, checking each ancestor's OWN same-key method for a mapping
     annotation before recursing further up that same ancestor's own
-    hierarchy — spec §3's resolution order, applied transitively."""
+    hierarchy — spec §3's resolution order, applied transitively.
+
+    Answers `(source, annotation, args)`: the ancestor method the mapping was
+    found ON comes back with it, because the caller reads that method's
+    declared siblings (spec 2026-09-18 §3b word 3) and no other level's."""
     for interface in interfaces:
         if interface in visited:
             continue
         visited.add(interface)
         method = methods_by_type.get(interface, {}).get(key)
         if method is not None:
-            found = _own_mapping(method, mapping_fqns, annotations_by_target)
-            if found is not None:
-                return found
+            own = _own_mapping(method, mapping_fqns, annotations_by_target)
+            if own is not None:
+                return method, own[0], own[1]
         found = _resolve_method(
             key,
             interfaces_of.get(interface, []),
@@ -542,9 +608,9 @@ def _resolve_method(
     visited.add(supertype)
     method = methods_by_type.get(supertype, {}).get(key)
     if method is not None:
-        found = _own_mapping(method, mapping_fqns, annotations_by_target)
-        if found is not None:
-            return found
+        own = _own_mapping(method, mapping_fqns, annotations_by_target)
+        if own is not None:
+            return method, own[0], own[1]
     return _resolve_method(
         key,
         interfaces_of.get(supertype, []),

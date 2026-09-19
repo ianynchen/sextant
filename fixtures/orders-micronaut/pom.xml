@@ -38,6 +38,17 @@
       <groupId>io.micronaut.jms</groupId><artifactId>micronaut-jms-core</artifactId><version>4.2.0</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
     </dependency>
+    <!-- The two connection-factory modules `OrderMessaging`'s `SqsConsumer`/`SqsSender`/
+         `ClassicConsumer` bind to by the framework's own bean-name constants (spec
+         Groups B/C Task 1, §5b) — annotation artifacts only, same exclusion pattern. -->
+    <dependency>
+      <groupId>io.micronaut.jms</groupId><artifactId>micronaut-jms-sqs</artifactId><version>4.2.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.micronaut.jms</groupId><artifactId>micronaut-jms-activemq-classic</artifactId><version>4.2.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
     <dependency>
       <groupId>io.micronaut.gcp</groupId><artifactId>micronaut-gcp-pubsub</artifactId><version>5.8.0</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>

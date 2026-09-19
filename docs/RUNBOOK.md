@@ -895,3 +895,66 @@ aggregation summed away.
 answer given will be assembled from the nearest ones and will be wrong in whichever
 direction the nearest ones lean. Add the level the question is asked at, generate it from
 the data that exists, and let the generator refuse when the data and the level disagree.
+
+## The lint gate is not the gate (Groups B and C, Task 2, 2026-09-18)
+
+**What happened.** Task 2 rewrote five probe write-ups, ran `scripts/check.sh --lint`, saw
+it pass, and committed. The full gate was red for all five: `tests/architecture/
+test_probe_provenance.py::test_every_probe_records_where_its_evidence_came_from` refuses a
+probe with no committed harness and no `## Observations` section, and none of the five had
+either. Ruff, mypy and the import contracts have nothing to say about a Markdown file, so
+"lint passed" was true and meant nothing about the change being made. The task report even
+recorded the lint pass as its evidence; the fix round that followed built five harnesses.
+
+**The rule: every task runs `scripts/check.sh` in full before it commits — docs-only
+changes included.** The lint flag exists for the pre-commit hook, where seconds matter. It
+is not a gate on a change; the gate is the whole suite, and this repository's suite reads
+the documents (`test_probe_provenance.py`, `test_shipped_counts.py`, `test_source_citations.py`,
+`test_feature_delivery.py`, `test_markdown_tables.py`). A change to a `.md` file is a change
+the tests see. Run all of them.
+
+## Two catalogs reading the same annotations dedupe only where their rules agree (Groups B and C, Task 10, 2026-09-18)
+
+**What happened.** `jakarta-jaxrs.yml` and `quarkus-rest.yml` read the same
+`jakarta.ws.rs` annotations — Quarkus REST *implements* the specification with the
+specification's own classes, and no annotation fact says which runtime is underneath. Both
+catalogs derived the byte-identical wire identity for every `OrderResource` row, and
+`insert_endpoints.sql`'s insert-if-absent guard kept whichever ran first: a `str(catalog.source)`
+comparison, so `jakarta-jaxrs.yml` beat `quarkus-rest.yml` alphabetically. The spec had
+cited `spring-web.yml`/`spring-mvc.yml` as the precedent that this is safe. It is safe
+there because those two catalogs' `request_body` blocks are the same pair; it was not safe
+here, because the two JAX-RS body rules genuinely differ (`implicit_bindings`, the Vert.x
+`excludes`), and the plain catalog's rule silently governed a Quarkus module's bodies.
+
+**What settled it.** The filename tie-break is not a specificity rule and cannot be made
+one by naming. `detect.superseded_by` is the answer: the plain catalog declares the
+coordinates under which another catalog IS the framework, and stands aside on such a
+module rather than run and risk winning. A catalog-only fix was looked for first and does
+not exist — `annotation_driven` catalogs gate on the annotation fqn, not the coordinate, and
+`detect.required` changes nothing about which of two colliding rows survives.
+
+**The rule: a spec pairing two catalogs over one annotation vocabulary compares their
+`request_body` and `excludes` blocks before it cites the dedup as the reason they can
+coexist.** Where the blocks differ, the pairing needs `superseded_by` or a different split;
+"identical identities meet the insert-if-absent guard" describes the mechanism, not a
+guarantee that the row it keeps carries the right rule.
+
+## An index keyed on a fact symbol needs a coordinate-prefixed unit fixture (Groups B and C, Task 10 fix round 1, 2026-09-18)
+
+**What happened.** `conditions.py::member_annotations_by_type` keyed its map on
+`located_symbols.enclosing` — the fact's FULL symbol, module coordinates included — while
+its one reader, `shapes/contracts.py::_is_bound`, looked it up by a parameter's
+`erased_symbol`, which a signature carries BARE (D00 §5a). The two never matched on a real
+module, so Quarkus's `container` implicit binding bound `upload(Upload form)`'s parameter
+as the body instead of excluding it. `test_conditions.py`'s unit test wrote bare symbols on
+both sides — the fixture had no full form in it — and passed under the full-symbol keying
+and under the corrected `bare_descriptor` keying alike. The defect surfaced only when
+`quarkus-rest.yml` first ran alone against a compiled fixture.
+
+**The rule: a unit fixture for any index keyed on a fact symbol writes the symbols in the
+coordinate space the facts use.** `test_conditions.py` now carries the `_MODULE` prefix
+`test_effective_annotations.py` already had, and asserts the returned keys are bare while
+the written targets are not — which is the assertion that fails under the old keying. This
+is the second entry in this file on the same shape ("A fixture spelled in a simpler
+coordinate space cannot see a coordinate-space bug", 2O Task 10); the earlier one was about
+a join, this one about a map lookup, and the fix is the same one constant.

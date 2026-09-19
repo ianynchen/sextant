@@ -407,7 +407,9 @@ def excluded_body(family: str) -> str:
             {"name": "message", "type": {"symbol": f"{family}/jms/Message#"}, "annotations": []}
         ]
     }
-    picked = _body_parameter(signature, catalog("spring-jms"))
+    picked = _body_parameter(
+        signature, catalog("spring-jms"), owner="", paths=frozenset(), index={}, members={}
+    )
     return "nothing (excluded)" if picked is None else picked[1]["type"]["symbol"]
 
 

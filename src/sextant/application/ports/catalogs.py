@@ -95,6 +95,32 @@ class Catalog:
     # rule that changes when an unrelated catalog is added is a rule nobody can
     # read off the file that states it.
     detect_satisfied_by: tuple[str, ...] = ()
+    # `detect.coordinates`' negative twin (B/C Task 10 fix round 1): the
+    # coordinates whose presence in the module's recorded build means ANOTHER
+    # catalog is the implementation of THIS catalog's rule, so this one does
+    # not run there.
+    #
+    # It exists because `jakarta-jaxrs.yml` and `quarkus-rest.yml` read the
+    # SAME `jakarta.ws.rs` annotations — Quarkus REST implements the JAX-RS
+    # specification with the specification's own annotation classes — and
+    # derive the byte-identical wire identity for every resource method a
+    # Quarkus module declares. Unlike `spring-web.yml`/`spring-mvc.yml` (D02
+    # §5's precedent, whose two catalogs' rules agree wherever they overlap),
+    # the two JAX-RS catalogs' BODY rules genuinely differ, so which one wins
+    # the insert-if-absent tie-break is not cosmetic — and that tie-break is a
+    # filename comparison with no notion of which catalog is more specific. On
+    # a module that records one of `detect_superseded_by`'s coordinates, the
+    # framework's own fact is that the superseding catalog IS the
+    # implementation and this catalog's rule does not apply at all — so the
+    # gate refuses to run it rather than let it win a race it should not be
+    # in.
+    #
+    # Read the same way `detect_coordinates` is (`_declared_coordinates`,
+    # `resolve/dependencies.py`) — module-fact coordinates only, no
+    # transitives on Maven — and gated the same visible way a missing
+    # capability or an unmet dependency already is: a superseded catalog is
+    # SKIPPED and reported, never silently absent.
+    detect_superseded_by: tuple[str, ...] = ()
     # D02's declared SLICE (F2 §3.8): the part of its framework's surface this
     # catalog does not read, named method by method with the reason.
     #

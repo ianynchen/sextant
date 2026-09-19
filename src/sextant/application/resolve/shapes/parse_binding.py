@@ -44,9 +44,15 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.conditions import annotation_index, member_annotations_by_type
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import _bare_reference, parameter_index
-from sextant.application.resolve.shapes.contracts import _body_parameter, _payload_descriptor
+from sextant.application.resolve.shapes.contracts import (
+    _body_parameter,
+    _paths_by_owner,
+    _payload_descriptor,
+    declares_container,
+)
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of, derive_shapes
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
 
@@ -112,11 +118,27 @@ def bind_parse_calls(workspace: Workspace, catalogs: list[Catalog]) -> ParseBind
     # records as a known gap.
     roots: dict[str, list[str]] = {}
     unexpanded: list[str] = []
-    for endpoint in workspace.query("endpoints"):
+    # The body rule's context, the same one `_contracts_of` hands it — the two
+    # annotation folds once per load, an owner's composed paths once per
+    # catalog that owns a row (GUIDELINES §8.7) — so the parameter this pass
+    # rebinds is the one the shape pass picked, never a second reading.
+    endpoints = workspace.query("endpoints")
+    index = annotation_index(workspace)
+    members = (
+        member_annotations_by_type(workspace)
+        if any(declares_container(catalog) for catalog in catalogs)
+        else {}
+    )
+    paths_of: dict[str, dict[str, frozenset[str]]] = {}
+    for endpoint in endpoints:
         catalog = by_id.get(str(endpoint.get("catalog_id")))
         if catalog is None:
             continue
-        parameter = _bytes_parameter(endpoint, catalog, vocabulary)
+        if catalog.id not in paths_of:
+            paths_of[catalog.id] = _paths_by_owner(endpoints, catalog)
+        parameter = _bytes_parameter(
+            endpoint, catalog, vocabulary, paths=paths_of[catalog.id], index=index, members=members
+        )
         if parameter is None:
             continue
         handler = str(endpoint["handler"])
@@ -334,7 +356,13 @@ def _argument_at(site: dict[str, Any], index: int | None) -> dict[str, Any] | No
 
 
 def _bytes_parameter(
-    endpoint: dict[str, Any], catalog: Catalog, vocabulary: "_Vocabulary"
+    endpoint: dict[str, Any],
+    catalog: Catalog,
+    vocabulary: "_Vocabulary",
+    *,
+    paths: dict[str, frozenset[str]],
+    index: dict[str, list[tuple[str, dict[str, Any]]]],
+    members: dict[str, set[str]],
 ) -> int | None:
     """The declared index of this endpoint's payload parameter, if that
     parameter carries the wire's BYTES rather than a decoded object.
@@ -352,14 +380,22 @@ def _bytes_parameter(
     signature = json.loads(str(declared))
     if not isinstance(signature, dict):
         return None
-    found = _body_parameter(signature, catalog)
+    owner = str(handler)
+    found = _body_parameter(
+        signature,
+        catalog,
+        owner=owner,
+        paths=paths.get(owner, frozenset()),
+        index=index,
+        members=members,
+    )
     if found is None:
         return None
-    index, parameter = found
+    position, parameter = found
     # The descriptor's answer: `bytes_payloads` is catalog-declared type names, and a
     # type variable's name is scoped to its own declaration and matches none of them.
     symbol = parameter.get("erased_symbol") or parameter["type"].get("symbol")
-    return index if symbol in vocabulary.bytes_payloads else None
+    return position if symbol in vocabulary.bytes_payloads else None
 
 
 def _descriptor_of(
@@ -374,7 +410,9 @@ def _descriptor_of(
     captured call argument goes through, because that is exactly what this
     is: a type named by a call site rather than by a signature.
     """
-    return _payload_descriptor(_bare_reference(payload_type), rules, enums, referenced)
+    return _payload_descriptor(
+        _bare_reference(payload_type), rules, enums, referenced, rules.wrappers
+    )
 
 
 def _binding(endpoint: dict[str, Any], descriptor: str) -> dict[str, Any]:

@@ -13,6 +13,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.conditions import AnnotationArg, parse_condition
 from sextant.application.resolve.dispatch import ancestry_of
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
@@ -187,7 +188,18 @@ class _Rules:
     already converted — the binding seam, crossed once so no rule below has to
     remember which notation it is holding."""
 
+    # UNCONDITIONAL entries only (spec 2026-09-18 §5a). This is the list shape
+    # expansion reads (`derive_shapes` below, `root_type` at line ~760): a
+    # conditional envelope is a ROOTING fact, evaluated per owner, and must
+    # never make a type an envelope module-wide just because a `when` on it
+    # held for one handler somewhere. `contracts.py`'s `_wrappers_for` is what
+    # adds the conditional entries back in, once per owner.
     wrappers: list[dict[str, Any]]
+    # Each `when`-guarded wrapper entry, parsed once at catalog load (D02
+    # §2a): the condition beside the entry it guards, `when` itself already
+    # stripped out — `holds(condition, owner, index)` is the per-owner test
+    # `_wrappers_for` runs.
+    conditional_wrappers: tuple[tuple[AnnotationArg, dict[str, Any]], ...]
     known_types: dict[str, dict[str, Any]]
     name_from: list[dict[str, str]]
     ignore: tuple[str, ...]
@@ -307,9 +319,27 @@ def _substituted(returns: object, substitution: dict[str, str]) -> object:
 def _rules_of(catalog: Catalog) -> _Rules:
     serialization = catalog.serialization
     nullability = catalog.nullability
+    # Split on `when` (D02 §2a; spec §5a): an entry with no `when` is the
+    # unconditional list expansion also reads; one that has it is parsed into
+    # an `AnnotationArg` beside the entry minus the `when` key itself, so
+    # `_wrappers_for` never has to strip it again per owner.
+    unconditional_wrappers: list[dict[str, Any]] = []
+    conditional_wrappers: list[tuple[AnnotationArg, dict[str, Any]]] = []
+    for wrapper in catalog.wrappers:
+        when = wrapper.get("when")
+        if when is None:
+            unconditional_wrappers.append(wrapper)
+        else:
+            condition = parse_condition(
+                when, f"loading catalog {catalog.source}: wrappers[type={wrapper['type']}]"
+            )
+            conditional_wrappers.append(
+                (condition, {key: value for key, value in wrapper.items() if key != "when"})
+            )
     return _Rules(
         # Wrappers stay dotted: `root_type` crosses the same seam itself.
-        wrappers=catalog.wrappers,
+        wrappers=unconditional_wrappers,
+        conditional_wrappers=tuple(conditional_wrappers),
         known_types={_catalog_symbol(known["type"]): known for known in catalog.known_types},
         name_from=[
             {"annotation": _catalog_symbol(source["annotation"]), "arg": source["arg"]}

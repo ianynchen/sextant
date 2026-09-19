@@ -347,6 +347,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         (None, "order-.*-dlq"),
         # `onBatch`: `List<OrderEvent>` — asserted below for its `wire_type`.
         (None, "order-batches"),
+        # `onRecords`/`onRecordsUpper` (Groups B and C Task 1): `batch = "true"`/`"TRUE"`
+        # — derived today by the same unconditional catalog `onBatch` is, off the same
+        # `List<OrderEvent>` parameter shape; the `kafka-batch-generics` xfail pins that
+        # the ROW here is wrong, not that it is missing.
+        (None, "order-batch-records"),
+        (None, "order-batch-records-upper"),
         # `escalate`: value-returning, no `@SendTo` — the dynamic-reply
         # listener; its own `unresolved` outbound row is `(None, None)`,
         # asserted separately below.
@@ -1042,7 +1048,16 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # four inline chains (the helper-built DELETE derives nothing, `fluent`'s rule) and
     # `ApacheOrdersClient`'s three — one builder form, two constructor forms, the
     # `<init>` root itself the terminal (fix round 1).
-    assert len(report.endpoints) == 204
+    # 206 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
+    # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
+    # `kafka-listener` catalog `onBatch` is, wrongly as a list-of-`OrderEvent` row rather
+    # than one `OrderEvent` per record (`kafka-batch-generics`, not landed yet).
+    # 207 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`, one row,
+    # `POST /kt/orders` — the same (method, path) `KotlinOrderRoutes#ktRoutes`'s own
+    # functional-routing row already carries (a coincidental address reuse between two
+    # unrelated fixtures), so the SET of routes above is unchanged and only the ROW COUNT
+    # moves.
+    assert len(report.endpoints) == 207
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1919,7 +1934,10 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 112 since A2 Task 8: the JDK client's four chains and the Apache client's
         # three, outbound, every one a `fluent` row — two of them on `POST /v1/orders`
         # beside the Feign client's, an outbound row being per caller and peer.
-        "http": 112,
+        # 113 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
+        # `POST /kt/orders` — a genuinely new row, at the same address
+        # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
+        "http": 113,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -1935,7 +1953,8 @@ def test_nothing_but_the_two_sse_routes_moves(
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
         # row. Self-publish/self-consume is real, and so is a client calling somebody else's
         # copy of an address; `self_exchange` asks rather than deciding
-        "kafka": 26,
+        # 28 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, two more inbound rows.
+        "kafka": 28,
         # `order-notifications`, published and subscribed here, is two rows since W27
         "pubsub": 7,
         # 12 since A2 Task 2 (`sqs-template-receive`): `OrderPoller`'s four
@@ -1963,7 +1982,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 204
+    assert sum(counts.values()) == len(report.endpoints) == 207
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2190,6 +2209,33 @@ def test_a_batch_listeners_request_shape_is_an_array(
     descriptor = json.loads(batch["request_shape"])
     assert descriptor["wire_type"] == "array"
     assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
+
+
+@pytest.mark.parametrize("topic", ["order-batch-records", "order-batch-records-upper"])
+def test_a_batch_true_listener_publishes_the_element_not_the_list(resolved_fixture, topic):
+    """`batch = "true"` (and `"TRUE"`: Spring parses it with Boolean.parseBoolean): one
+    element per record, so the wire payload is OrderEvent and `List` is the envelope."""
+    _, report = resolved_fixture
+    [row] = _messaging_rows(report, "kafka", topic)
+    descriptor = json.loads(row["request_shape"])
+    assert descriptor["wire_type"] == "object"
+    assert descriptor["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
+
+
+def test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract(resolved_fixture):
+    _, report = resolved_fixture
+    # `/kt/orders` is ALSO `KotlinOrderRoutes#ktRoutes`'s own address (the pre-existing
+    # functional-routing DSL fixture, `test_pipeline.py:1250-1251`) — a coincidental
+    # address collision between two unrelated fixtures, not a wire-identity conflict:
+    # that row is call-site-shaped (`caller` set, `handler` NULL); this one is an
+    # annotation-driven JAX-RS handler row. Filtering on `handler` picks this one out
+    # uniquely rather than assuming `/kt/orders POST` names exactly one row.
+    [row] = [
+        r
+        for r in report.endpoints
+        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["handler"] is not None
+    ]
+    assert json.loads(row["request_shape"])["shape_id"].endswith("KotlinOrderResource$KtOrder#")
 
 
 def test_a_dead_letter_listeners_consumer_record_envelope_yields_no_request_shape(
@@ -3578,6 +3624,11 @@ def test_the_format_ladder_answers_every_live_row(
         ("kafka", "inbound", None, "composed-orders"),
         ("kafka", "inbound", None, "order-.*-dlq"),
         ("kafka", "inbound", None, "order-batches"),
+        # Groups B and C Task 1: `onRecords`/`onRecordsUpper` share `OrderEventsListener`'s
+        # own consumer config, so rung 3 answers them exactly as it answers `onBatch` —
+        # the row is wrong (`kafka-batch-generics` has not landed), the rung is not.
+        ("kafka", "inbound", None, "order-batch-records"),
+        ("kafka", "inbound", None, "order-batch-records-upper"),
         ("kafka", "inbound", None, "order-escalations"),
         ("kafka", "inbound", None, "order-polymorphic"),
         ("kafka", "inbound", None, "raw-.*"),
@@ -3604,7 +3655,8 @@ def test_the_format_ladder_answers_every_live_row(
     # rows that differ only in their handler and payload. 12 became 15 with W27 (F5 §6.1)
     # — the inbound halves of the three self-published topics, which used to be merged
     # rows answering `json` off the producer's stamp.
-    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 15
+    # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, two more rung-3 rows.
+    assert len([e for e in report.endpoints if e["format"] == "protobuf"]) == 17
     # Every other kafka row is rung 2's, off the producer stamp.
     assert {
         answer for key, answer in answers.items() if key[0] == "kafka" and key not in protobuf
@@ -3669,7 +3721,10 @@ def test_the_format_ladder_answers_every_live_row(
     # + 1 (`OI-74`, W57): the SQS builder-lambda row gained a declared payload — read from
     # `payload(arg0)` inside the lambda — so the ladder now has a type to answer off for a
     # row that carried none. Same mechanism as the nine above, one catalog over.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 76
+    # + 1 (B/C Task 10, `jakarta-jaxrs.yml`): `POST /kt/orders` — `KotlinOrderResource#create`
+    # declares no `@Produces`/`@Consumes` at all, so it is a json-bodied http row reaching the
+    # same rung 5 default every other undeclared json body does.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 77
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
