@@ -1961,6 +1961,9 @@ def test_the_messaging_catalogs_wrappers_include_the_harvested_baseline_plus_bro
     kafka_extra = [w for w in catalogs["spring-kafka"].wrappers if w not in baseline]
     assert {w["type"] for w in kafka_extra} == {
         "org.apache.kafka.clients.consumer.ConsumerRecord",
+        # `kafka-batch-generics` (spec §5a, B/C Task 11): the conditional `List`
+        # envelope, `when`-guarded on `@KafkaListener(batch = true)`.
+        "java.util.List",
     }
     assert [w for w in catalogs["spring-jms"].wrappers if w not in baseline] == []
     assert [w for w in catalogs["spring-sqs"].wrappers if w not in baseline] == []
@@ -2008,6 +2011,22 @@ def test_a_conditional_wrapper_unwraps_only_where_its_condition_holds():
     record = _wrappers_for(rules, owner, {owner: [(_KL, {"batch": "false"})]})
     assert [w["type"] for w in batch] == ["java.util.List"] and record == []
     assert rules.wrappers == []  # nothing conditional reaches the unconditional list
+
+
+@pytest.mark.declines("spring-kafka")
+@pytest.mark.pins("contracts.conditional-wrapper-needs-its-condition")
+def test_the_shipped_spring_kafka_catalogs_list_wrapper_declines_a_record_listener():
+    """§10 near-miss for the shipped catalog, not the invented one above: a real
+    `@KafkaListener(batch = "false")` owner, read off the REAL loaded `spring-kafka.yml`
+    rather than a hand-built `_catalog_with_wrappers`, still gets no `java.util.List`
+    envelope — `"false"` fails `Boolean.parseBoolean` exactly as CP-20 row 2 measured, so
+    a record listener whose parameter happens to be a `List<Foo>` keeps that list as its
+    own payload rather than having it unwrapped."""
+    catalog = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "spring-kafka")
+    rules = _rules_of(catalog)
+    owner = "m com/acme/L#onRecords(sig_1)."
+    index = {owner: [(_KL, {"batch": "false"})]}
+    assert "java.util.List" not in {w["type"] for w in _wrappers_for(rules, owner, index)}
 
 
 def test_a_conditional_wrapper_never_reaches_expansion():

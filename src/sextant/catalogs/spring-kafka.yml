@@ -125,6 +125,31 @@ wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
   - { type: org.apache.kafka.clients.consumer.ConsumerRecord, payload_arg: 1, semantics: envelope }
+  # `kafka-batch-generics` (spec 2026-09-18 §5a). CP-20 row 2: the post-processor reads
+  # `batch()` through `StringUtils.hasText` as a gate and, only past it, through
+  # `Boolean.parseBoolean` — case-insensitive, no placeholder resolution — before calling
+  # `setBatchListener`; `parses_true` is exactly that predicate. CP-20 row 3: the batch
+  # adapter's `List<ConsumerRecord<K,V>>` overload hands the handler one element PER
+  # RECORD, so on a batch listener `List` is the container's envelope the same way
+  # `ConsumerRecord` already is above, not the payload.
+  #
+  # `when`, not an unconditional row: `onBatch(List<OrderEvent> events)` above carries no
+  # `batch` attribute at all and is an ordinary RECORD listener whose wire payload genuinely
+  # IS the list — the shipped `test_a_batch_listeners_request_shape_is_an_array` pins that
+  # row and would break if `List` unwrapped everywhere.
+  #
+  # Stated boundary, not built: `spring.kafka.listener.type=batch` is a container-factory
+  # property (CP-20 row 4) that makes every listener under that factory a batch listener
+  # with no annotation trace at all — a module relying on it publishes the array; COVERAGE
+  # names the property rather than this file inventing a `config_join` read for it.
+  #
+  # `batch = "${listener.batch}"` (a placeholder) is NOT a boundary — it is AGREEMENT.
+  # `StringUtils.hasText` sees a non-blank string and `Boolean.parseBoolean` of the literal
+  # `"${listener.batch}"` is `false` exactly like ours (CP-20 row 2): Spring parses the same
+  # unresolved text we do and reaches the same answer, a record listener either way.
+  - { type: java.util.List, payload_arg: 0, semantics: envelope,
+      when: { annotation_arg: { annotation: org.springframework.kafka.annotation.KafkaListener,
+                                name: batch, parses_true: true } } }
 
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
@@ -156,3 +181,10 @@ measured:
   # another. Same artifact, same two versions, different question.
   - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
       identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
+  # A THIRD row, same reason as the second: CP-20 asked the `batch` attribute's own
+  # question (its type and default, the post-processor's parse, the batch adapter's
+  # accepted shapes, the factory's independent config-driven trigger) — a reader chasing
+  # the `wrappers` entry above needs to land on the probe that measured it, not on CP-16 or
+  # CP-17, which never asked about `batch` at all.
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
+      identity: reported, by: scripts/probes/cp20_spring_kafka_batch.md }

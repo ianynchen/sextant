@@ -2211,7 +2211,6 @@ def test_a_batch_listeners_request_shape_is_an_array(
     assert descriptor["item"]["shape_id"] == "com/acme/orders/contracts/OrderEvent#"
 
 
-@pytest.mark.xfail(strict=True, reason="kafka-batch-generics: wrappers are unconditional; spec §5a")
 @pytest.mark.parametrize("topic", ["order-batch-records", "order-batch-records-upper"])
 def test_a_batch_true_listener_publishes_the_element_not_the_list(resolved_fixture, topic):
     """`batch = "true"` (and `"TRUE"`: Spring parses it with Boolean.parseBoolean): one

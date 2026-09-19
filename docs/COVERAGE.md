@@ -3081,7 +3081,7 @@ Task 5):**
 
 | Framework | Status | Rows shipped | Missing |
 |---|---|---|---|
-| Spring Kafka | ◐ partial | 4/4 | `kafka-batch-generics` |
+| Spring Kafka | ◐ partial | 5/5 | `kafka-batch-generics` |
 | kafka-clients (raw) | ✅ full | 2/2 | — |
 | Kafka Streams | ✅ full | 1/1 | — |
 | Spring Cloud Stream | ✅ full | 1/1 | — |
@@ -3093,6 +3093,7 @@ Task 5):**
 | Language | Framework | Library | Form | Shape | Tier |
 |---|---|---|---|---|---|
 | Java | Spring Kafka | Spring `@KafkaListener` (`topics`, `topicPattern`), class-level `@KafkaListener` + `@KafkaHandler` included | — | `annotation` | ✅ shipped |
+| Java | Spring Kafka | `@KafkaListener(batch = "true")` (case-insensitive; the post-processor's own `StringUtils.hasText` then `Boolean.parseBoolean`, no placeholder resolution — CP-20 rows 1–2) | one element per record: `List` is the container's envelope, not the payload — `java.util.List` unwraps only where the owner's own `batch` attribute parses true (`kafka-batch-generics`, `wrappers[].when`) | `annotation` | ✅ shipped. **Boundary:** `spring.kafka.listener.type=batch`, a container-factory property with no annotation trace at all (CP-20 row 4), is not read — a module relying on it publishes the array. Pinned by `test_a_batch_true_listener_publishes_the_element_not_the_list` |
 | Java | Micronaut Kafka | Micronaut `@KafkaListener`/`@KafkaClient` + `@Topic` (`value[]`, `patterns[]`) | the class marker decides the direction, so two catalogs gate on it — `micronaut-kafka.yml` inbound, `micronaut-kafka-client.yml` outbound on the interface | `annotation` | ✅ shipped (micronaut-kafka 5.6.0, W58). Pinned by `tests/e2e/test_messaging_micronaut_delivered.py` |
 | Java | Spring Kafka | `ReplyingKafkaTemplate.sendAndReceive(ProducerRecord)`, and a `@KafkaListener` method returning a value annotated `@SendTo` | the reply derives as its own outbound row | `registration_call` + `annotation` | ✅ shipped |
 | Java | Spring Kafka | `KafkaTemplate.send(topic, …)`, `.sendDefault(…)` | **all ten overloads** since `A-M6` — the partition- and timestamp-carrying `send` forms take the topic at argument 0 and the payload last, and every `sendDefault` form derives `path: NULL` at `unresolved` because its destination is config-borne. **`G-44`'s Kafka receive half**: `receive(String topic, int partition, long offset, Duration)` is a synchronous read of one record and derives one INBOUND row on the topic at argument 0 (spring-kafka 3.1.4, `scripts/probes/w59_template_receive_halves.md`). Its sibling `receive(Collection<TopicPartitionOffset>, Duration)` takes addresses built elsewhere — each `TopicPartitionOffset` assembled from a topic, partition and offset the caller already has — and stays outside; there is no `channel_via` form for a constructor, so a row here would need one that does not exist | `registration_call` | ✅ shipped |
