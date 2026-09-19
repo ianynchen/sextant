@@ -49,7 +49,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1B 4C, 9 open) | ◐ (1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1B 4C, 8 open) | ◐ (1B, 1 open) | ✅ | ✅ | ✅ | ✅ |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -61,7 +61,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ◐ (1 open) | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
+| **Java / Kotlin** | ◐ (1A) | ◐ (1B, 1 open) | ✅ | ✅ | ◐ (1B, 1 open) | ◐ (1 limited, 2A 1B 1C, 2 open) |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -81,14 +81,14 @@ register.
 
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (7 open, 2 not shipped, 2 limited) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1 open) | ✅ | ✅ | ◐ (1 open, 1 not shipped) | ◐ (1 limited) |
-| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ◐ (2 open) | ◐ (1 open) | — | ✅ | — | ◐ (2 open) | ◐ (1 not shipped) | ◐ (1 not shipped) | — | — | — | — |
-| **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ◐ (1 open) | ✅ | — |
+| **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (7 open, 2 not shipped, 2 limited) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1 open, 1 not shipped) | ◐ (1 limited) |
+| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ✅ | ✅ | — | ✅ | — | ✅ | ◐ (1 not shipped) | ◐ (1 open, 1 not shipped) | — | — | — | — |
+| **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ✅ | ✅ | — |
 | **Ktor** | ◐ (3 open) | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ◐ (1 open) | — | — | — | — | — | — | — | — | — | — | — |
 | **Vert.x** | ◐ (1 not shipped) | ✗ | — | — | — | — | — | — | — | — | — | ◐ (1 open, 1 not shipped) |
-| **Helidon (MP via JAX-RS; SE)** | ◐ (2 open, 1 line unsupported) | — | — | — | — | ◐ (2 open) | — | — | — | — | — | — |
-| **Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)** | ◐ (2 open, 1 not shipped) | — | ✅ | — | ✅ | ◐ (2 open) | — | — | ✅ | — | — | — |
+| **Helidon (MP via JAX-RS; SE)** | ◐ (1 line unsupported) | — | — | — | — | ✅ | — | — | — | — | — | — |
+| **Jakarta / Java EE standards (Servlet, JAX-RS, JAX-WS, JMS, WebSocket)** | ◐ (1 not shipped) | — | ✅ | — | ✅ | ✅ | — | — | ✅ | — | — | — |
 | **Raw clients and SDKs (JDK/Apache HTTP, kafka-clients, grpc-java, AWS, GCP, graphql-java)** | — | ✅ | — | ✅ | — | — | ✅ | ✅ | — | ✅ | ✅ | — |
 | **Kafka Streams** | — | — | — | — | — | — | — | ✅ | — | — | — | — |
 | **Netflix DGS** | — | — | — | ✅ | — | — | — | — | — | — | — | — |
@@ -2091,7 +2091,7 @@ arrive there.
 | Spring Data REST | ◐ partial | 7/8 | not shipped: 1 at C; 7 stated boundaries |
 | Spring Cloud Gateway | ◐ partial | 1/1 | `gateway-properties-routes` |
 | Jakarta / javax Servlet | ◐ partial | 9/10 | not shipped: 1 at C; 9 stated boundaries |
-| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 5/5 | `quarkus-jaxrs`; 3 stated boundaries |
+| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ✅ full | 5/5 | 3 stated boundaries |
 | Quarkus Reactive Routes | ✅ full | 1/1 | — |
 | Micronaut HTTP | ✅ full | 1/1 | — |
 | Ktor | ◐ partial | 1/1 | `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-default-bridge-calls` |
@@ -2335,7 +2335,7 @@ the `combinator` vocabulary can read a verb off an argument the way `fluent` now
 | Spring Cloud Gateway (forwarding) | ✅ full | 1/1 | — |
 | JDK / Apache HttpClient | ✅ full | 1/1 | — |
 | Micronaut HTTP client | ✅ full | 1/1 | — |
-| MicroProfile REST Client | ◐ partial | 1/1 | `mp-rest-client` |
+| MicroProfile REST Client | ✅ full | 1/1 | — |
 | Apache Camel | ◐ partial | 0/1 | not shipped: 1 at B; `apache-camel` |
 | Ktor HttpClient | ✗ unsupported | 0/0 | no row yet |
 | Vert.x WebClient | ✗ unsupported | 0/0 | no row yet |
@@ -2908,7 +2908,7 @@ Boundaries, each verified against the shipped code:
 |---|---|---|---|
 | Spring MVC | ✅ full | 1/1 | — |
 | Spring WebFlux | ✅ full | 1/1 | — |
-| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ◐ partial | 2/2 | `jaxrs-sse` |
+| JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon) | ✅ full | 2/2 | — |
 | Ktor SSE | ✗ unsupported | 0/0 | no row yet |
 <!-- END GENERATED: frameworks 5.6 -->
 
@@ -3083,12 +3083,12 @@ Task 5):**
 
 | Framework | Status | Rows shipped | Missing |
 |---|---|---|---|
-| Spring Kafka | ◐ partial | 5/5 | `kafka-batch-generics` |
+| Spring Kafka | ✅ full | 5/5 | — |
 | kafka-clients (raw) | ✅ full | 2/2 | — |
 | Kafka Streams | ✅ full | 1/1 | — |
 | Spring Cloud Stream | ✅ full | 1/1 | — |
 | Micronaut Kafka | ✅ full | 1/1 | — |
-| SmallRye Reactive Messaging (Quarkus) | ◐ partial | 0/1 | not shipped: 1 at B |
+| SmallRye Reactive Messaging (Quarkus) | ◐ partial | 0/1 | not shipped: 1 at B; `smallrye-reactive-messaging` |
 | Pekko / Alpakka Connectors Kafka | ✅ full | 1/1 | — |
 <!-- END GENERATED: frameworks 5.8 -->
 
@@ -3416,7 +3416,7 @@ one.
 | Spring Cloud AWS SQS 3.x / 4.x | ✅ full | 3/3 | 2 stated boundaries |
 | Spring Cloud AWS 1.x / 2.x (legacy) | ✅ full | 2/2 | 1 stated boundary |
 | AWS SDK v2 (raw) | ✅ full | 1/1 | — |
-| Micronaut (raw AWS SDK; JMS over SQS) | ◐ partial | 1/1 | `micronaut-jms-over-sqs` |
+| Micronaut (raw AWS SDK; JMS over SQS) | ✅ full | 1/1 | — |
 <!-- END GENERATED: frameworks 5.10 -->
 
 | Language | Framework | Library | Form | Shape | Tier |

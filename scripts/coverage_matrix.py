@@ -199,7 +199,6 @@ FRAMEWORK_NONE = {"any", "—", ""}
 ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
     "kotlin-null-handler": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
-    "quarkus-jaxrs": ["JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)"],
     "dsl-media-route": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
     "ktor-route-extensions": [
         "Ktor",
@@ -213,12 +212,9 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
         "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
         "Ktor",
     ],
-    "mp-rest-client": ["MicroProfile REST Client"],
     "apache-camel": ["Apache Camel"],
-    "jaxrs-sse": ["JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)"],
-    "kafka-batch-generics": ["Spring Kafka"],
-    "micronaut-jms-over-sqs": ["Micronaut (raw AWS SDK; JMS over SQS)"],
     "pubsub-channel-adapter": ["Spring Cloud GCP Pub/Sub (Spring Integration)"],
+    "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
     "temporal-cadence": ["Temporal / Cadence"],
     "vertx-eventbus": ["Vert.x EventBus"],
 }
