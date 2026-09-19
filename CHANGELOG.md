@@ -79,37 +79,50 @@ here would restate those documents rather than add anything.
   written as a property placeholder, is not knowable from bytecode and still reads as JMS —
   only the framework's own constant is matched, stated as a boundary.
 
-- **Five engine words, one condition shape, make the five catalog changes above possible —
-  every one optional and inert unless a catalog declares it, so nothing already shipped
-  moves.** `produces_from_siblings`/`consumes_from_siblings` read a method's media type off
-  a sibling annotation of the same method (`@Produces`/`@Consumes` beside `@GET`) where no
-  ordinary `produces_from`/`consumes_from` alias is present; `type_media_from_siblings`
-  reads the same off the enclosing CLASS's own sibling annotation, as the framework's own
-  class-level default, the method's declaration always winning when it has one. Sibling
-  inheritance carries a catalog's own declared sibling lists along with an inherited
-  mapping, all-or-nothing, reproducing JAX-RS's "any own annotation on the implementor
-  method means none of the interface's are read" rule rather than merging the two.
-  `sole_unbound` is a new request-body fallback: the body is the one parameter that carries
-  NONE of the framework's own binding annotations — measured against that list, unlike the
-  old `sole_unannotated` fallback, which lost a body under Kotlin's compiler-generated
-  `@NotNull` or Bean Validation's `@Valid`; `implicit_bindings` names further ways a
-  framework binds a parameter with no annotation at all (Quarkus's path-variable-by-name and
-  parameter-container rules). One condition shape, `annotation_arg`, reads an attribute on
-  an annotation and compares it — `equals` for an exact string match, or `parses_true` for
-  Java's own `Boolean.parseBoolean` after a blank-string guard, case-insensitive, with no
-  placeholder resolution (Spring's own predicate, not ours). `wrappers[].when` attaches that
-  condition to an envelope-unwrapping rule, so `List` only unwraps to its element where the
-  condition holds (a batch listener), never for every `List` everywhere.
-  `protocol_hint.hint_when` and `protocol_hint.hint_annotations` are two new ways a row gets
-  reclassified to a different protocol after the fact — an annotation attribute's value (the
-  SQS connection-factory name) or an annotation's mere presence (Quarkus's SSE element-type
+- **`produces_from_siblings`/`consumes_from_siblings`** read a method's media type off a
+  sibling annotation of the same method (`@Produces`/`@Consumes` beside `@GET`) where no
+  ordinary `produces_from`/`consumes_from` alias is present — one of eight engine words this
+  branch adds, every one optional and inert unless a catalog declares it, so nothing already
+  shipped moves.
+
+- **`type_media_from_siblings`** reads the same off the enclosing CLASS's own sibling
+  annotation, as the framework's own class-level default, the method's declaration always
+  winning when it has one.
+
+- **Sibling inheritance** carries a catalog's own declared sibling lists along with an
+  inherited mapping, all-or-nothing, reproducing JAX-RS's "any own annotation on the
+  implementor method means none of the interface's are read" rule rather than merging the
+  two.
+
+- **`sole_unbound` and `implicit_bindings`** are a new request-body fallback and its
+  companion: the body is the one parameter that carries NONE of the framework's own binding
+  annotations — measured against that list, unlike the old `sole_unannotated` fallback,
+  which lost a body under Kotlin's compiler-generated `@NotNull` or Bean Validation's
+  `@Valid` — and `implicit_bindings` names further ways a framework binds a parameter with
+  no annotation at all (Quarkus's path-variable-by-name and parameter-container rules).
+
+- **`annotation_arg`, with `equals`/`parses_true`**, is one condition shape that reads an
+  attribute on an annotation and compares it — `equals` for an exact string match, or
+  `parses_true` for Java's own `Boolean.parseBoolean` after a blank-string guard,
+  case-insensitive, with no placeholder resolution (Spring's own predicate, not ours).
+
+- **`wrappers[].when`** attaches that condition to an envelope-unwrapping rule, so `List`
+  only unwraps to its element where the condition holds (a batch listener), never for every
+  `List` everywhere.
+
+- **`protocol_hint.hint_when`/`hint_annotations`** are two new ways a row gets reclassified
+  to a different protocol after the fact — an annotation attribute's value (the SQS
+  connection-factory name) or an annotation's mere presence (Quarkus's SSE element-type
   marker) — beside the existing media-type and return-type evidence.
-  `detect.superseded_by` lets a catalog declare that another catalog IS the framework's own
-  implementation on a module that declares it, and stand aside rather than run and risk
+
+- **`detect.superseded_by`** lets a catalog declare that another catalog IS the framework's
+  own implementation on a module that declares it, and stand aside rather than run and risk
   winning a naming tie-break with the wrong rule (`jakarta-jaxrs.yml`/`javax-jaxrs.yml`
-  yielding to `quarkus-rest.yml`). `peer_annotation` lets a catalog read the identity that
-  names a client's peer off a DIFFERENT annotation than the one that supplies its address
-  prefix (MicroProfile's `@RegisterRestClient` versus `@Path`).
+  yielding to `quarkus-rest.yml`).
+
+- **`peer_annotation`** lets a catalog read the identity that names a client's peer off a
+  DIFFERENT annotation than the one that supplies its address prefix (MicroProfile's
+  `@RegisterRestClient` versus `@Path`).
 
 - **Six more frameworks derive their HTTP/SQS surface — Spring Cloud Gateway (inbound and
   outbound), Ktor's routing DSL, Javalin's nested `ApiBuilder`, the JDK and Apache HTTP

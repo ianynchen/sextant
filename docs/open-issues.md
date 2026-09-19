@@ -1260,8 +1260,9 @@ default-media word is designed — a further measurement and a schema addition, 
 edit alone.
 
 ### OI-89 — `annotation_arg.equals` compares Python's `str()` of a non-string fact value, which is not Java's string form
-**Minor — unreachable by any shipped catalog today · logged 2026-09-18, ruled at B/C Task 7's
-review (spec §2) · `src/sextant/application/resolve/conditions.py:204`**
+**Minor — unreachable by any shipped catalog today · logged 2026-09-18, ruled by the
+controller during B/C Task 7's review (SDD ledger; spec §2) ·
+`src/sextant/application/resolve/conditions.py:204`**
 
 `_compare`'s `equals` arm reads `any(v is not None and str(v) == condition.equals for v in
 values)`, where `v` is the extracted fact's own Python-typed value. For a `String`
@@ -1273,17 +1274,37 @@ therefore compare `"True" == "true"`, false, and the condition would never hold,
 the row it gates would read as though the attribute were always absent or always the other
 value.
 
-**Why logged rather than fixed:** measured against every catalog on this branch — `equals`
-is declared exactly three places (`grep -n 'equals:' src/sextant/catalogs/*.yml`,
-`jakarta-jws.yml` ×2 and `jakarta-jws-client.yml` ×2, all a DIFFERENT word, `unless.attribute`,
-not `annotation_arg`; `micronaut-jms.yml` and `micronaut-jms-producer.yml`'s
-`hint_when.equals: sqsJmsConnectionFactory`, a `String` attribute both ways) — no shipped
-consumer of `annotation_arg`'s `equals` compares a non-string attribute, so the register's
-own rule (an issue real input cannot trigger is logged, not fixed) applies: the input a
-future boolean-`equals` catalog would supply does not exist yet.
+**Why logged rather than fixed:** measured against every catalog on this branch —
+`grep -n 'equals:' src/sextant/catalogs/*.yml` returns SEVEN hits, not the six an earlier
+draft of this entry undercounted:
 
-**Verify:** `grep -n "equals:" src/sextant/catalogs/*.yml` — the two `annotation_arg`
-consumers are both `String` attributes. **Closes** with two changes together: `_compare`
+```
+src/sextant/catalogs/jakarta-jws.yml:223:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws.yml:225:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws-client.yml:111:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/jakarta-jws-client.yml:113:          unless: { attribute: exclude, equals: true } }
+src/sextant/catalogs/micronaut-jms.yml:59:      equals: sqsJmsConnectionFactory
+src/sextant/catalogs/micronaut-jms-producer.yml:54:      equals: sqsJmsConnectionFactory
+src/sextant/catalogs/spring-kafka-message.yml:54:    - { method: setHeader, when: { arg: 0, equals: "kafka_topic" }, captures: { channel: arg1 } }
+```
+
+Four of the seven (`jakarta-jws.yml` ×2, `jakarta-jws-client.yml` ×2) are a DIFFERENT word,
+`unless.attribute`, not `annotation_arg` — a pre-existing mechanism this branch did not
+touch. Two (`micronaut-jms.yml`, `micronaut-jms-producer.yml`) are the `annotation_arg`
+consumers this branch added, both `hint_when.equals: sqsJmsConnectionFactory` against a
+`String` attribute. **The seventh, `spring-kafka-message.yml:54`, is a THIRD word again** —
+`single_call`'s own `when: { arg: 0, equals: … }`, an argument-equality guard on a call-site
+step (`setHeader`'s first argument matching the literal `"kafka_topic"`), not
+`annotation_arg`'s attribute-on-an-annotation read at all; `_compare` above is never called
+for it. So of the seven hits, exactly two exercise `annotation_arg`'s `equals`, and both are
+`String` attributes — no shipped consumer of `annotation_arg`'s `equals` compares a
+non-string attribute, so the register's own rule (an issue real input cannot trigger is
+logged, not fixed) applies: the input a future boolean-`equals` catalog would supply does
+not exist yet.
+
+**Verify:** `grep -n "equals:" src/sextant/catalogs/*.yml` — seven hits, sorted above by
+which word each belongs to; the two `annotation_arg` consumers are both `String` attributes.
+**Closes** with two changes together: `_compare`
 reads Java's own string form for a non-string value (`"true"`/`"false"` for `bool`, decimal
 for numeric types) rather than Python's `str()`, and `parse_condition` refuses a non-string
 `equals` value at catalog load until that mapping is declared — a parse-time refusal rather
