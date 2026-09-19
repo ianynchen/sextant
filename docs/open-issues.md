@@ -1421,6 +1421,104 @@ annotation universe (`_synthetic_annotations`'s output folded into the index it 
 or the walk persists its synthesized rows into a table every downstream reader folds — one
 change, made once, rather than a second inheritance walk inside the pass.
 
+### OI-93 — a REPEATED `@KafkaListener(batch = "true")` never satisfies `wrappers[].when`, because `conditions.holds` reads raw rows while the SQL side unfolds the container
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/conditions.py::holds`,
+`src/sextant/application/resolve/engines/annotation_driven.py::_synthetic_annotations`**
+
+`@KafkaListener` is `@Repeatable(KafkaListeners.class)` (CP-16 rows 2a/2b), so two uses on
+one method reach the class file as ONE `@KafkaListeners` row whose `value` holds both
+(JLS 9.7.5). `spring-kafka.yml` names the container (`OI-36`), and the engine unfolds it
+into two ordinary `@KafkaListener` rows — but only into `derive_endpoints.sql`'s
+`$synthetic` parameter (`folded_rows`, `_synthetic_annotations`). `conditions.holds`, which
+`wrappers[].when` (spec §5a) and `hint_when` read through, folds the raw `annotations`
+table (`annotation_index`): on the repeated method it finds `@KafkaListeners`, never
+`@KafkaListener`, and the `batch` attribute is inside the container's `value` array where
+the condition's `names` lookup does not reach. The condition is therefore false, the
+`List` wrapper stays unconditional-off, and the row publishes the array.
+
+**Real triggering input:** `@KafkaListener(topics = "a", batch = "true") @KafkaListener(topics
+= "b", batch = "true") void onBatch(List<OrderEvent> events)` — two batch listeners on one
+handler. Not present in any fixture: `fixtures/orders-service`'s `OrderEventsListener`
+carries one `@KafkaListener` per batch method, and its repeated-listener fixture
+(`OI-36`'s) is a record listener with no `batch` attribute.
+
+**Cost:** the array is published as the request shape — the pre-branch answer for that
+handler, never a fabricated one; the two rows' addresses and the listener itself are right.
+
+**Verify:** `grep -n "annotation_index(workspace)" src/sextant/application/resolve/shapes/contracts.py src/sextant/application/resolve/protocol_hint.py`
+— both readers fold the raw table; `grep -n "folded" src/sextant/application/resolve/engines/annotation_driven.py`
+— the unfold reaches the SQL parameter only. **Closes** with `OI-92`'s fix and by the same
+change: one composed annotation universe (folded, composed, inherited) that every
+annotation reader folds, rather than a second unfold inside `conditions.py`.
+
+### OI-94 — a batch listener's reply row roots its payload with the unconditional wrappers, so `@SendTo` on a `List<X>`-returning batch listener publishes `X` as the response and `array<X>` on the reply
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/engines/annotation_driven.py::_derive_replies`,
+`src/sextant/application/resolve/shapes/contracts.py::_contracts_of`**
+
+`_contracts_of` roots one handler's request AND response with `_wrappers_for(rules, owner,
+index)` — the unconditional wrappers plus each conditional one whose `when` holds on the
+owner (spec §5a, once per owner for both columns). `_derive_replies` roots the same
+handler's return type for the reply row with `rules.wrappers` alone — the unconditional
+list, `conditional_wrappers` never consulted. For a listener declaring `batch = "true"` and
+returning `List<X>` under `@SendTo`, the conditional `List` wrapper holds on the handler:
+the response column unwraps to `X`, and the reply row, rooted a moment later without it,
+publishes `array<X>`. One handler, one return type, two answers.
+
+**Real triggering input:** `@KafkaListener(topics = "t", batch = "true") @SendTo("replies")
+List<Reply> onBatch(List<OrderEvent> events)` — a batch listener that replies. Not present
+in any fixture: `fixtures/orders-service`'s batch methods return `void`, and its `@SendTo`
+listener is a record listener. Whether Spring's batch reply is one message per element or
+one message carrying the list is itself unmeasured — the two rows disagree with EACH OTHER,
+which is the defect here, before either is checked against the framework.
+
+**Cost:** two columns describing one return type differently; both are real types the
+handler names, neither fabricated.
+
+**Verify:** `grep -n "rules.wrappers" src/sextant/application/resolve/engines/annotation_driven.py`
+— the reply rooting's wrapper argument; `grep -n "_wrappers_for" src/sextant/application/resolve/shapes/contracts.py`
+— the per-owner list the response uses. **Closes** when `_derive_replies` roots with the
+same per-owner `_wrappers_for` list `_contracts_of` uses, after CP-20 says which of the two
+answers Spring's batch reply actually is.
+
+### OI-95 — a `jakarta.*` API coordinate at a Jakarta EE 8 version is `javax`-packaged, and the family's coordinate lists cannot say so
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C, logged
+once for the whole `javax`/`jakarta` family · `src/sextant/catalogs/jakarta-jaxrs.yml`,
+`javax-jaxrs.yml`, `jakarta-jms.yml`, `javax-jms.yml`; `src/sextant/application/resolve/dependencies.py`**
+
+`jakarta.ws.rs:jakarta.ws.rs-api` 2.1.x (Jakarta EE 8) ships `javax.ws.rs.*` classes under
+the `jakarta` coordinate; the `jakarta.ws.rs.*` packages arrive at 3.0. The same is true of
+`jakarta.jms:jakarta.jms-api` 2.0.x. `detect.coordinates` is `group:artifact` with no
+version, so a module on the EE 8 artifact matches `jakarta-jaxrs.yml`'s coordinate and
+declares nothing that matches `javax-jaxrs.yml`'s (`javax.ws.rs:javax.ws.rs-api`), while its
+bytecode carries `javax/ws/rs/GET` — the spelling only `javax-jaxrs.yml` reads.
+`javax-jaxrs.yml`'s own header comment records that CP-18 never opened the 2.1.6 artifact,
+which is why the coordinate is not simply added to that file (§5.4).
+
+**What happens today:** nothing wrong. An `annotation_driven` catalog gates on the
+annotation fqn, not the coordinate (`dependencies.py::gate_reason` reads coordinates only
+for `DEPENDENCY_GATED` styles and `detect.required` catalogs, and neither JAX-RS catalog
+declares the latter), so `javax-jaxrs.yml` runs, matches every `javax.ws.rs` use and
+derives every row; `jakarta-jaxrs.yml` runs, matches nothing and derives nothing. The
+`jms` pair is the same shape on `single_call`, which gates on descriptors. **The shape is
+unhandled, not wrong**: the day `detect.coordinates` becomes the module-wide activation
+gate D02 §12 describes (`OI-83`), or any coordinate read of the `superseded_by` kind is
+applied to this family, the EE 8 module activates the `jakarta` catalog and not the `javax`
+one, and derives nothing — an under-derivation the coordinate lists as written cannot
+prevent, because neither can say "this coordinate below 3.0 is the other spelling".
+
+**Real triggering input:** a Jakarta EE 8 module — `jakarta.ws.rs:jakarta.ws.rs-api:2.1.6`
+or `jakarta.jms:jakarta.jms-api:2.0.3` in its POM, `javax.*` imports in its sources. Not
+present in any fixture.
+
+**Verify:** `grep -n "coordinates" src/sextant/catalogs/jakarta-jaxrs.yml src/sextant/catalogs/javax-jaxrs.yml`
+— one unversioned coordinate each; `grep -n "DEPENDENCY_GATED = " src/sextant/application/resolve/dependencies.py`
+— the two styles coordinates gate today. **Closes** when the coordinate grammar can carry a
+version bound (`jakarta.ws.rs:jakarta.ws.rs-api:>=3.0` on the `jakarta` file, `<3.0` on the
+`javax` one) and the EE 8 artifact's packaging is measured on the artifact itself, or when
+the activation gate is designed to fall back to the annotation fqn for this family.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

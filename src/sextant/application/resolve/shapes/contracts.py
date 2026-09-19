@@ -184,7 +184,10 @@ def _contracts_of(
     # LOAD (`Workspace.once`), and an owner's composed paths are one pass over
     # the rows this catalog owns.
     index = annotation_index(workspace)
-    members = member_annotations_by_type(workspace)
+    # The per-type member fold is built only for a catalog whose body rule
+    # reads it (`container`); every other catalog is handed an empty map and
+    # never pays for a fold over `located_symbols` it would not consult.
+    members = member_annotations_by_type(workspace) if declares_container(catalog) else {}
     paths = _paths_by_owner(endpoints, catalog)
     found: dict[str, dict[str, str]] = {}
     for endpoint in endpoints:
@@ -368,6 +371,15 @@ def _body_parameter(
     declared = catalog.matches.get("request_body")
     if declared is None:
         return None
+    if not isinstance(declared, dict) or not set(declared) <= _REQUEST_BODY_KEYS:
+        # A closed vocabulary: a misspelt key read as absent turns the body
+        # rule the author wrote into a different one, silently — `excluded`
+        # missing makes a context type the body, `bound_by` missing is a
+        # refusal below only because that word is required.
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `request_body` must be a mapping of "
+            f"{'/'.join(sorted(_REQUEST_BODY_KEYS))}, got {declared!r}"
+        )
     marker = declared.get("annotation")
     parameters = signature.get("parameters", [])
     if marker is not None:
@@ -417,6 +429,23 @@ def _body_parameter(
         ]
         return unbound[0] if len(unbound) == 1 else None
     return None
+
+
+# Every key a `request_body` block may carry (D02 §2's `request_body` paragraphs,
+# spec 2026-09-18 §4). Closed for the reason `protocol_hint`'s block is: a key
+# this rule does not read is refused rather than ignored.
+_REQUEST_BODY_KEYS = frozenset(
+    {"annotation", "fallback", "bound_by", "excludes", "implicit_bindings"}
+)
+
+
+def declares_container(catalog: Catalog) -> bool:
+    """Whether this catalog's body rule reads the per-type member fold — the
+    `container` implicit binding (`_is_bound`'s third predicate). The two
+    callers that build the fold (`_contracts_of`, `parse_binding`) ask this
+    first, so a run with no such catalog never builds it."""
+    declared = catalog.matches.get("request_body") or {}
+    return "container" in (declared.get("implicit_bindings") or [])
 
 
 # The closed vocabulary of `request_body.implicit_bindings` (spec 2026-09-18 §4):

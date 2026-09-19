@@ -12,7 +12,11 @@ needed (row 2, spec §3f); and, for the Quarkus implementation specifically,
 what order `baseUri` (from the annotation), `configKey` (mapped to
 `/mp-rest/url`-style properties) and Quarkus's own
 `quarkus.rest-client.<key>.url` config resolve in — the boundary statement a
-catalog's `measured:` block needs (row 3).
+catalog's `measured:` block needs (row 3). Row 4, added after the final
+review of Groups B and C: which Quarkus CLIENT artifact names exist on Maven
+Central across the 3.9.0 rename, so `microprofile-rest-client.yml`'s
+`detect.coordinates` can list the pre-3.9 reactive names and the
+RESTEasy-classic names without naming a coordinate nobody ever published.
 
 **What this probe does not settle.** Nothing was deployed; no HTTP request was
 dispatched, no CDI container was booted. Row 3 opens exactly the class its
@@ -34,8 +38,11 @@ treats `4.0.0` as that jar's identity because that is what the archive itself
 wrote); `derive_endpoints.sql` as it exists on this branch (row 2, not
 version-scoped — it is this repository's own SQL, identified by the git
 commit the harness resolves HEAD to); `io.quarkus:quarkus-rest-client`
-**3.39.4** (row 3, the same generation as CP-19's sources). Every verdict
-below is bounded by those three.
+**3.39.4** (row 3, the same generation as CP-19's sources); Maven Central's
+own `maven-metadata.xml` for six `io.quarkus` client artifacts (row 4, not
+version-scoped — it is the repository's index of every version, read the way
+CP-19 row 5 reads the server-side relocation, and its cells name the versions
+they list). Every verdict below is bounded by those four.
 
 ## Environment
 
@@ -52,10 +59,12 @@ by reading the jar's own class listing, see row 3.
 
 **How to run.** `bash scripts/probes/cp22_microprofile_rest_client/run.sh`. It
 resolves all three jars through Maven (network on the first run only, cached
-in `~/.m2` afterwards), asks `javap` rows 1 and 3's questions, and reads this
-repository's own `derive_endpoints.sql` for row 2. Needs a JDK, Maven and
-`git`. Not a test: nothing in the suite runs it, and NFR-1's no-network rule
-governs the suite rather than evidence gathering.
+in `~/.m2` afterwards), asks `javap` rows 1 and 3's questions, reads this
+repository's own `derive_endpoints.sql` for row 2, and fetches six
+`maven-metadata.xml` files from Maven Central for row 4 (network on every
+run for that row). Needs a JDK, Maven and `git`. Not a test: nothing in the
+suite runs it, and NFR-1's no-network rule governs the suite rather than
+evidence gathering.
 
 ## Observations
 
@@ -70,7 +79,10 @@ version it believed beside output from a version it had not run. (The
 `microprofile-rest-client-api` 4.0 COORDINATE and its `4.0.0` self-reported
 `Bundle-Version` are two different spellings of the same OSGi convention, not
 a disagreement — see the harness comment.) Row 2 is not a jar read at all —
-its identity is the git commit `run.sh` resolves HEAD to.
+its identity is the git commit `run.sh` resolves HEAD to. Rows 4a–4f are not
+jar reads either — each is one `maven-metadata.xml` fetched from
+`repo1.maven.org` over the network, and the cell records what that index
+listed at the time of the run.
 
 ```
 | what the run read | 3.0.1 | 3.39.4 | 4.0.0 |
@@ -82,8 +94,14 @@ its identity is the git commit `run.sh` resolves HEAD to.
 |---|---|---|---|---|
 | 1a | @RegisterRestClient: @Target, @Retention, baseUri()/configKey() defaults | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 4.0.0 | `@Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME) ; baseUri(): String default "" ; configKey(): String default ""` |
 | 1b | @RegisterRestClient: @Target, @Retention, baseUri()/configKey() defaults | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1 | `@Target([Ljava/lang/annotation/ElementType;.TYPE]) ; @Retention(Ljava/lang/annotation/RetentionPolicy;.RUNTIME) ; baseUri(): String default "" ; configKey(): String default ""` |
-| 2 | derive_endpoints.sql's prefixes CTE: peer off the prefix-gate row only? | `src/sextant/storage/duckdb/derive_endpoints.sql` | repo@7fc977b | `joins: JOIN prefix_gates ON pg.fqn = a.annotation ; JOIN catalog_params ON cp.catalog_id = pg.catalog_id ; reads cp.prefix_from: True ; reads cp.peer_from: True ; distinct annotation joins: 1` |
+| 2 | derive_endpoints.sql's prefixes CTE: peer off the prefix-gate row only? | `src/sextant/storage/duckdb/derive_endpoints.sql` | repo@df8b15d | `joins: JOIN prefix_gates ON pg.fqn = a.annotation ; JOIN catalog_params ON cp.catalog_id = pg.catalog_id ; reads cp.prefix_from: True ; reads cp.peer_from: True ; distinct annotation joins: 1` |
 | 3 | Quarkus's configureBaseUrl: config vs. annotation baseUri precedence | `io.quarkus:quarkus-rest-client` | 3.39.4 | `invokeinterface InterfaceMethod io/quarkus/restclient/config/RestClientsConfig$RestClientConfig.uriReload:()Ljava/util/Optional; ; invokeinterface InterfaceMethod io/quarkus/restclient/config/RestClientsConfig$RestClientConfig.urlReload:()Ljava/util/Optional; ; invokestatic Method oneOf:([Ljava/util/Optional;)Ljava/util/Optional; ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; getfield Field configKey:Ljava/lang/String; ; getfield Field configKey:Ljava/lang/String; ; getfield Field jaxrsInterface:Ljava/lang/Class; ; new class java/lang/IllegalArgumentException ; ldc_w String Unable to determine the proper baseUrl/baseUri. Consider registering using @RegisterRestClient(baseUri=\"someuri\"), @RegisterRestClient(configKey=\"orkey\"), or by adding \'%s\' or \'%s\' to your Quarkus configuration ; ldc_w String quarkus.rest-client.%s.url ; ldc_w String quarkus.rest-client.%s.uri ; invokespecial Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;)V ; getfield Field baseUriFromAnnotation:Ljava/lang/String; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; invokeinterface InterfaceMethod io/quarkus/rest/client/reactive/QuarkusRestClientBuilder.baseUri:(Ljava/net/URI;)Lio/quarkus/rest/client/reactive/QuarkusRestClientBuilder; ; new class java/lang/IllegalArgumentException ; invokespecial Method java/lang/IllegalArgumentException."<init>":(Ljava/lang/String;Ljava/lang/Throwable;)V` |
+| 4a | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-rest-client` | n/a | `maven-metadata.xml: 492 versions ; earliest GA 3.x: 3.3.0 ; last listed: 3.40.0.CR1` |
+| 4b | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-rest-client-jackson` | n/a | `maven-metadata.xml: 458 versions ; earliest GA 3.x: 3.3.0 ; last listed: 3.40.0.CR1` |
+| 4c | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-rest-client-reactive` | n/a | `maven-metadata.xml: 238 versions ; earliest GA 3.x: 3.3.0 ; last listed: 3.15.7` |
+| 4d | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-rest-client-reactive-jackson` | n/a | `maven-metadata.xml: 236 versions ; earliest GA 3.x: 3.3.0 ; last listed: 3.15.7` |
+| 4e | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-resteasy-client` | n/a | `maven-metadata.xml: 229 versions ; earliest GA 3.x: 3.7.0 ; last listed: 3.40.0.CR1` |
+| 4f | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:quarkus-resteasy-client-jackson` | n/a | `maven-metadata.xml: 229 versions ; earliest GA 3.x: 3.7.0 ; last listed: 3.40.0.CR1` |
 ```
 
 ## Rows
@@ -240,6 +258,40 @@ is not measured here; the boundary statement for `quarkus-rest.yml`'s
 other, since only the LATTER's precedence over the annotation was actually
 observed.
 
+### 4 — which Quarkus client artifact names exist on Maven Central
+
+**Command.**
+```
+for a in quarkus-rest-client quarkus-rest-client-jackson quarkus-rest-client-reactive \
+         quarkus-rest-client-reactive-jackson quarkus-resteasy-client quarkus-resteasy-client-jackson; do
+  curl -sI https://repo1.maven.org/maven2/io/quarkus/$a/maven-metadata.xml | head -1
+done
+```
+(`probe.py::q4_client_artifacts` fetches the same six files and counts their
+`<version>` elements; rows 4a–4f above are its output.)
+
+**Output.** Six `HTTP/2 200` lines — every one of the six names resolves to a
+metadata file. Per the generated rows: `quarkus-rest-client` and
+`quarkus-rest-client-jackson` list versions from before 3.9.0 (earliest GA
+3.x listed 3.3.0) through `3.40.0.CR1`; `quarkus-rest-client-reactive` and
+`quarkus-rest-client-reactive-jackson` stop at `3.15.7`, the last release
+under the pre-rename name, exactly as CP-19 row 5b records for the
+server-side `quarkus-resteasy-reactive`; `quarkus-resteasy-client` and
+`quarkus-resteasy-client-jackson` list versions from 3.7.0 through
+`3.40.0.CR1`.
+
+**Claim.** All six coordinates are published artifacts. The reactive client
+was renamed at 3.9.0 the same way the server was — `quarkus-rest-client-reactive`
+→ `quarkus-rest-client` — and the last old-name release is 3.15.7 on both
+sides; `quarkus-resteasy-client` is the RESTEasy-classic client's name from
+the same rename onward. A module on either side of 3.9.0, on either
+implementation, declares one of these six and nothing else names MicroProfile
+REST Client in its POM, so `microprofile-rest-client.yml`'s
+`detect.coordinates` lists all six (`measured 2026-09-18`, this row). What
+this row does NOT measure: whether the classic client's annotation set is the
+same `@RegisterRestClient` (it is the same MicroProfile API artifact, row 1,
+but the classic client jar itself was not opened here).
+
 ## Verdict
 
 1. Row 1: `@RegisterRestClient` is confirmed `@Target(TYPE)`, two `String`
@@ -265,5 +317,9 @@ observed.
    NOT traced by this probe and must not be assumed to share Quarkus config's
    precedence without a further reading.
 
-`measured: 2026-09-18` for rows 1 and 2. Row 3 is measured but scoped as
+4. Row 4: all six Quarkus client coordinates exist on Maven Central; the
+   reactive names end at 3.15.7 (the 3.9.0 rename, mirroring CP-19 row 5) and
+   the `quarkus-rest-client*`/`quarkus-resteasy-client*` names continue.
+
+`measured: 2026-09-18` for rows 1, 2 and 4. Row 3 is measured but scoped as
 stated above — its boundary is explicit rather than assumed.

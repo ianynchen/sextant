@@ -178,9 +178,12 @@ shape_model: json
 # - Sub-resource locators (a @Path method with no verb, returning a resource
 #   class) derive nothing — the target is a return type this style would have
 #   to recurse into.
-# - A hand-rolled custom verb via `@HttpMethod("LINK")` on a MODULE-LOCAL
-#   annotation resolves through the effective-annotations pre-pass; one on a
-#   framework jar is D02 §7's standing boundary.
+# - A hand-rolled custom verb via `@HttpMethod("LINK")` derives nothing,
+#   module-local or on a framework jar: the composition pre-pass rewrites
+#   only uses of annotations meta-annotated with a MAPPING fqn listed above,
+#   and `@HttpMethod` is the verbs' meta-annotation, not a mapping — so
+#   `@LINK` composes to nothing (corrected after the final review; an earlier
+#   line here claimed the module-local case resolved).
 # - `{id: \d+}` regex path templates are kept verbatim in `path`; the body
 #   rule's implicit path-variable match (declared only on `quarkus-rest.yml`)
 #   reads the name before the `:`.

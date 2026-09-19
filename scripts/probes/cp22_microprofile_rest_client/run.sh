@@ -12,8 +12,10 @@
 # from `VERSION`, which is only the Maven coordinate used to resolve it.
 #
 # Needs a JDK (for `javap`), Maven, and network on first run; the jars are
-# cached in ~/.m2 afterwards. Not a test: nothing in the suite runs it, and
-# NFR-1's no-network rule governs the suite rather than evidence gathering.
+# cached in ~/.m2 afterwards. Row 4 (`probe.py::q4_client_artifacts`) reads
+# Maven Central's `maven-metadata.xml` for six client artifacts and needs the
+# network on EVERY run. Not a test: nothing in the suite runs it, and NFR-1's
+# no-network rule governs the suite rather than evidence gathering.
 set -euo pipefail
 
 cd "$(dirname "$0")"

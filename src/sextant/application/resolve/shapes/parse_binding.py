@@ -51,6 +51,7 @@ from sextant.application.resolve.shapes.contracts import (
     _body_parameter,
     _paths_by_owner,
     _payload_descriptor,
+    declares_container,
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of, derive_shapes
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
@@ -123,7 +124,11 @@ def bind_parse_calls(workspace: Workspace, catalogs: list[Catalog]) -> ParseBind
     # rebinds is the one the shape pass picked, never a second reading.
     endpoints = workspace.query("endpoints")
     index = annotation_index(workspace)
-    members = member_annotations_by_type(workspace)
+    members = (
+        member_annotations_by_type(workspace)
+        if any(declares_container(catalog) for catalog in catalogs)
+        else {}
+    )
     paths_of: dict[str, dict[str, frozenset[str]]] = {}
     for endpoint in endpoints:
         catalog = by_id.get(str(endpoint.get("catalog_id")))

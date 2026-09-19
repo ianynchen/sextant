@@ -15,8 +15,20 @@ direction: outbound
 # attributes, `baseUri()` and `configKey()`, both defaulting to `""` —
 # unchanged 3.0.1 → 4.0.
 detect:
+  # The API artifact itself, plus the six Quarkus client names a module may
+  # declare instead (CP-22 row 4, each one's own `maven-metadata.xml` on
+  # Maven Central): `quarkus-rest-client`/`-jackson` (the 3.9.0-onward name of
+  # the reactive client), `quarkus-rest-client-reactive`/`-jackson` (the same
+  # client's name through 3.15.7, the last release under it — CP-19 row 5's
+  # server-side rename, mirrored), and `quarkus-resteasy-client`/`-jackson`
+  # (the RESTEasy-classic client). Maven records no transitives, so a module
+  # declaring only a Jackson facet and never the bare client would otherwise
+  # go undetected — `quarkus-rest.yml`'s own reason for listing its facets.
   coordinates: ["org.eclipse.microprofile.rest.client:microprofile-rest-client-api",
-                "io.quarkus:quarkus-rest-client", "io.quarkus:quarkus-rest-client-jackson"]
+                "io.quarkus:quarkus-rest-client", "io.quarkus:quarkus-rest-client-jackson",
+                "io.quarkus:quarkus-rest-client-reactive",
+                "io.quarkus:quarkus-rest-client-reactive-jackson",
+                "io.quarkus:quarkus-resteasy-client", "io.quarkus:quarkus-resteasy-client-jackson"]
 
 measured:
   - { artifact: org.eclipse.microprofile.rest.client:microprofile-rest-client-api,

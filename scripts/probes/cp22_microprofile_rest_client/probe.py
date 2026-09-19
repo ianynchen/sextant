@@ -3,10 +3,12 @@ defaults (across the MP 6->7 platform boundary), whether `derive_endpoints
 .sql`'s `prefixes` CTE reads `peer` off the same annotation row as `prefix`,
 and Quarkus's own `RestClientCDIDelegateBuilder.configureBaseUrl` precedence
 between the annotation's `baseUri` and `quarkus.rest-client.<key>.url`/`.uri`
-config.
+config; and (row 4) which Quarkus client artifact names exist on Maven
+Central across the 3.9.0 rename, read off the repository's own
+`maven-metadata.xml` the way CP-19 row 5 reads the server-side relocation.
 
-Called by `run.sh`, which resolves the jars; this script never downloads
-anything. Like CP-16/CP-17/CP-18/CP-19/CP-20/CP-21 it reads each jar's own
+Called by `run.sh`, which resolves the jars; this script downloads nothing
+but row 4's metadata files. Like CP-16/CP-17/CP-18/CP-19/CP-20/CP-21 it reads each jar's own
 identity out of its own bytes before it measures anything and refuses to file
 a cell under a version the artifact did not claim (GUIDELINES §5.4, and CP-5's
 failure it exists to prevent).
@@ -20,6 +22,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -178,6 +181,39 @@ def q3_quarkus_base_uri(jar: Path) -> str:
     return _STEP.join(kept)
 
 
+# The client-side artifact names a module may declare instead of, or beside,
+# `io.quarkus:quarkus-rest-client`: the pre-3.9.0 reactive names and the
+# RESTEasy-classic names, each with its Jackson facet. Row 4 asks Maven
+# Central whether each exists and what it carries, so the catalog's
+# `detect.coordinates` lists nothing that was never published.
+_CLIENT_ARTIFACTS = (
+    "quarkus-rest-client",
+    "quarkus-rest-client-jackson",
+    "quarkus-rest-client-reactive",
+    "quarkus-rest-client-reactive-jackson",
+    "quarkus-resteasy-client",
+    "quarkus-resteasy-client-jackson",
+)
+
+
+def q4_client_artifacts() -> dict[str, str]:
+    """Q4. Which Quarkus client artifact names exist on Maven Central, read
+    off each artifact's own `maven-metadata.xml` (CP-19 row 5's method):
+    the version count, the earliest GA `3.x.y` and the last version listed."""
+    observed: dict[str, str] = {}
+    for artifact in _CLIENT_ARTIFACTS:
+        url = f"https://repo1.maven.org/maven2/io/quarkus/{artifact}/maven-metadata.xml"
+        with urllib.request.urlopen(url, timeout=30) as response:
+            text = response.read().decode("utf-8", "replace")
+        versions = re.findall(r"<version>([^<]+)</version>", text)
+        ga = [v for v in versions if re.fullmatch(r"3\.\d+\.\d+", v)]
+        observed[artifact] = (
+            f"maven-metadata.xml: {len(versions)} versions ; earliest GA 3.x: "
+            f"{ga[0] if ga else 'none'} ; last listed: {versions[-1] if versions else 'none'}"
+        )
+    return observed
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     repo = None
@@ -230,6 +266,11 @@ def main(specs: list[str]) -> int:
     print(
         f"| 3 | Quarkus's configureBaseUrl: config vs. annotation baseUri precedence | `{qrc.group}:{qrc.name}` | {qrc.observed} | `{q3_quarkus_base_uri(qrc.jar)}` |"
     )
+
+    for letter, (artifact, observed) in zip("abcdef", q4_client_artifacts().items(), strict=True):
+        print(
+            f"| 4{letter} | client artifact exists on Maven Central (metadata, not a jar) | `io.quarkus:{artifact}` | n/a | `{observed}` |"
+        )
     return 0
 
 

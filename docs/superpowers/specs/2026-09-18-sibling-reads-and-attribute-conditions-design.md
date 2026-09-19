@@ -357,9 +357,12 @@ Each is measured 2026-09-18 on quarkus-rest 3.39.4 sources unless marked P2:
 - **Sub-resource locators** — a `@Path` method with no verb returning a resource class.
   Derives nothing, and says so; the target is a return type the engine would have to recurse
   into.
-- **Custom verbs** via `@HttpMethod("LINK")` on a framework-jar annotation. A **module-local**
-  one resolves through the effective-annotations pre-pass; the jar half is D02 §7's standing
-  boundary. Measured: `@HttpMethod` is `@Target(ANNOTATION_TYPE)` with `value(): String`.
+- **Custom verbs** via `@HttpMethod("LINK")`, module-local or on a framework jar, derive
+  nothing *(amended after the final review: the draft said a module-local one resolves through
+  the effective-annotations pre-pass, and it does not — `composed_mapping_rows` rewrites only
+  uses of annotations meta-annotated with a listed MAPPING fqn, and `@HttpMethod` is the
+  verbs' meta-annotation, not a mapping)*; the jar half is D02 §7's standing boundary.
+  Measured: `@HttpMethod` is `@Target(ANNOTATION_TYPE)` with `value(): String`.
 - **Regex path templates** `{id: \d+}` are kept verbatim in `path`; the §4 name match reads
   the variable name before the `:`.
 - **Implicit `HEAD` and `OPTIONS`** are not minted, as for Spring and Micronaut.

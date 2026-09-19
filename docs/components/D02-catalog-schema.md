@@ -603,6 +603,13 @@ matches:
     annotation on a parameter — `@Valid`, `@NotNull`, Jackson's, Lombok's — is invisible to
     this word, because it is invisible to the framework. Zero or several unbound parameters
     mean no contract, as with `sole_unannotated`.
+  - **The block's key set is closed** — `annotation`, `fallback`, `bound_by`, `excludes`,
+    `implicit_bindings`, and nothing else (`contracts.py::_REQUEST_BODY_KEYS`, added after
+    the final review). An unknown key is refused by name rather than ignored, because a
+    misspelt `excludes` read as absent would make a context type the body, silently. The
+    per-type member fold `container` reads (`conditions.member_annotations_by_type`) is
+    built only for a run in which some catalog declares `container`; every other run is
+    handed an empty map.
 - **`prefix_from` and `peer_from` replace the single `path_from` alias list at the type
   level**, because the type-level and method-level annotations play different roles.
   `path_from` still serves method mappings, where it is correct: `@RequestMapping`'s

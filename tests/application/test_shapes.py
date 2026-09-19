@@ -2413,6 +2413,49 @@ def test_an_unknown_implicit_binding_is_refused():
         )
 
 
+def test_an_unknown_request_body_key_is_refused():
+    """`request_body`'s vocabulary is closed (final review of Groups B and C): a
+    misspelt `excludes` read as absent would make a context type the body,
+    silently, so the block is refused by the key's own name."""
+    with pytest.raises(CatalogError, match="request_body"):
+        contracts._body_parameter(
+            _handler_signature([]),
+            _catalog_with({**_JAXRS_BODY, "exclude": ["jakarta.ws.rs.core.UriInfo"]}),
+            owner="o",
+            paths=frozenset(),
+            index={},
+            members={},
+        )
+
+
+def test_the_member_fold_is_never_built_for_a_run_with_no_container_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`member_annotations_by_type` folds `located_symbols` for the `container`
+    implicit binding alone (`_is_bound`'s third predicate). A run whose catalogs
+    declare no such binding — the Spring-shaped `_ENDPOINT_CATALOG` here, and
+    every catalog but `quarkus-rest.yml` on the shipped tree — must never build
+    it; the builder is replaced with one that counts, and the count stays zero
+    through the whole shape pass (GUIDELINES §8.7)."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        contracts, "member_annotations_by_type", lambda workspace: calls.append(workspace) or {}
+    )
+    root = tmp_path / "facts"
+    _contract_facts(root)
+    _handler_facts(root, _signature(returns=_string()))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(root)
+    derive_endpoints(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    derive_endpoint_shapes(workspace, [_ENDPOINT_CATALOG], capabilities=set())
+    workspace.close()
+    assert calls == []
+    assert not contracts.declares_container(_ENDPOINT_CATALOG)
+    assert contracts.declares_container(
+        _catalog_with({**_JAXRS_BODY, "implicit_bindings": ["container"]})
+    )
+
+
 def test_the_derivation_names_no_language():
     """Language-blind by test, not by intention. The per-language rules live in
     the extractors; this file must contain none of them. (The pass itself lives
