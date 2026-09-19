@@ -536,24 +536,6 @@ def test_quarkus_route_base_media_reaches_every_route(quarkus_media):
     ), f"the route's own consumes was lost or the class produces did not reach it: {quarkus_media}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "quarkus-rest.yml's own implicit-binding/excludes rules are correct in isolation "
-        "(pinned at the unit level by contracts.implicit-path-variable-reads-the-composed-path "
-        "and the quarkus-rest near-miss in test_endpoints.py) but never apply to THIS fixture: "
-        "orders-quarkus's OrderResource carries jakarta.ws.rs annotations that jakarta-jaxrs.yml "
-        "ALSO matches (Quarkus REST implements the same jakarta.ws.rs spec), so both catalogs "
-        "derive the identical (protocol, direction, method, path) row for it, and "
-        "insert_endpoints.sql's earlier-catalog-wins guard is a pure FILENAME tie-break — "
-        "'jakarta-jaxrs.yml' sorts before 'quarkus-rest.yml' — with no way for the more specific "
-        "catalog to win. Unlike the spring-web.yml/spring-mvc.yml precedent spec §3a cites, the "
-        "two catalogs' body rules genuinely DIFFER here, so the wrong one winning is not "
-        "harmless: jakarta-jaxrs.yml's own request_body rule (no implicit_bindings, no Vert.x "
-        "excludes) is what actually runs against every OrderResource row. Engine gap, not a "
-        "catalog defect — B/C Task 10 diagnosis, reported DONE_WITH_CONCERNS."
-    ),
-)
 def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
     def row(method, path):
         return next(r for r in quarkus_endpoints if r["method"] == method and r["path"] == path)

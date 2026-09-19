@@ -20,8 +20,30 @@ direction: inbound
 # `jakarta.ws.rs-api:2.1.6` at all, so that specific coordinate's packaging is
 # unmeasured here and is not added on the strength of a sibling artifact's
 # reading (§5.4).
+#
+# `detect.superseded_by` mirrors `jakarta-jaxrs.yml`'s own (B/C Task 10 fix
+# round 1): Quarkus REST is a `jakarta.ws.rs` implementation, never a
+# `javax.ws.rs` one, so this list is defensive symmetry with the jakarta
+# spelling's own reasoning rather than a case CP-18 or CP-19 measured — a
+# module declaring both a `javax.ws.rs-api` and a Quarkus REST facet directly
+# is not one either probe's fixture exercises.
 detect:
   coordinates: ["javax.ws.rs:javax.ws.rs-api"]
+  superseded_by:
+    - io.quarkus:quarkus-rest
+    - io.quarkus:quarkus-rest-jackson
+    - io.quarkus:quarkus-rest-jsonb
+    - io.quarkus:quarkus-rest-jaxb
+    - io.quarkus:quarkus-rest-kotlin
+    - io.quarkus:quarkus-rest-kotlin-serialization
+    - io.quarkus:quarkus-rest-qute
+    - io.quarkus:quarkus-resteasy-reactive
+    - io.quarkus:quarkus-resteasy-reactive-jackson
+    - io.quarkus:quarkus-resteasy-reactive-jsonb
+    - io.quarkus:quarkus-resteasy-reactive-jaxb
+    - io.quarkus:quarkus-resteasy-reactive-kotlin
+    - io.quarkus:quarkus-resteasy-reactive-kotlin-serialization
+    - io.quarkus:quarkus-resteasy-reactive-qute
 
 measured:
   - { artifact: javax.ws.rs:javax.ws.rs-api, versions: ["2.1.1"],

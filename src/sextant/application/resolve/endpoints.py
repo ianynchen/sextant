@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
-from sextant.application.resolve.dependencies import unmet_dependency
+from sextant.application.resolve.dependencies import _declared_coordinates, unmet_dependency
 from sextant.application.resolve.engines import (
     annotation_driven,
     combinator,
@@ -147,6 +147,20 @@ def derive_endpoints(
         if unmet is not None:
             skipped.append(SkippedCatalog(catalog.id, (unmet,)))
             continue
+        # The third gate (B/C Task 10 fix round 1): `detect.superseded_by`'s
+        # negative twin of `detect.coordinates`. Two catalogs may read the
+        # SAME evidence — JAX-RS's own annotations, which Quarkus REST
+        # implements with — while their rules genuinely differ, and the
+        # merge's insert-if-absent guard (`insert_endpoints.sql`) has no
+        # notion of which catalog is more specific, only a filename
+        # tie-break. Where the module's build records one of a catalog's
+        # `detect_superseded_by` coordinates, the framework's own fact is
+        # that the superseding artifact IS the implementation there, so this
+        # catalog must not run at all rather than win — or lose — that race.
+        superseded = _superseded_by(workspace, catalog)
+        if superseded is not None:
+            skipped.append(SkippedCatalog(catalog.id, (f"superseded by {superseded}",)))
+            continue
         running.append((catalog, engine))
     # Both gates are asked before any engine runs, so that the staged style
     # below knows its whole batch up front. That moves no answer: each gate
@@ -183,6 +197,29 @@ def derive_endpoints(
     # The two rows now stand, and `record_self_exchange` asks the question instead.
     workspace.derive("borrowed_endpoints_drop")
     return skipped
+
+
+def _superseded_by(workspace: Workspace, catalog: Catalog) -> str | None:
+    """The FIRST of `catalog.detect_superseded_by`'s coordinates the module's
+    build recorded, in the catalog's own declared order, or `None` when none
+    apply — no superseding coordinates declared at all, or the build recorded
+    none of them.
+
+    Reads the module fact the SAME way `unmet_dependency` does
+    (`_declared_coordinates`, `resolve/dependencies.py`), rather than a second
+    query: a workspace recording no module fact at all answers "could not
+    tell" there, and the honest answer here is the same — a catalog is never
+    refused by a question nothing answered.
+    """
+    if not catalog.detect_superseded_by:
+        return None
+    declared = _declared_coordinates(workspace)
+    if declared is None:
+        return None
+    for coordinate in catalog.detect_superseded_by:
+        if coordinate in declared:
+            return coordinate
+    return None
 
 
 def _derives_rows(catalog: Catalog) -> int:

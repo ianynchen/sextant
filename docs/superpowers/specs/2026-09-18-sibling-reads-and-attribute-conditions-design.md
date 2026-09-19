@@ -162,9 +162,15 @@ defers the list semantics "until the semantics is built".
 | `quarkus-rest.yml` | `io.quarkus:quarkus-rest`, and `io.quarkus:quarkus-resteasy-reactive` (its name through 3.15.x; both artifacts exist on Central, measured 2026-09-18 via `maven-metadata.xml`; P2 records the relocation version) | Quarkus REST adds rules the spec does not have (§3c): SSE by element annotation, two implicit body bindings, Vert.x context types. Same source under Jersey and under Quarkus derives differently, and each catalog says only what its framework does (DR-6) |
 
 Two catalogs owning the same HTTP rows in one module is the `spring-web.yml`/`spring-mvc.yml`
-precedent: identical identities meet the insert-if-absent guard and one row survives.
-`type_annotation` and `prefix_annotation` naming the same fqn is the `jakarta-websocket.yml`
-and `micronaut-http.yml` precedent.
+precedent: identical identities meet the insert-if-absent guard and one row survives — **where
+the two catalogs' rules agree wherever they overlap.** `jakarta-jaxrs.yml` and
+`quarkus-rest.yml` do not (their `request_body` rules genuinely differ), so `jakarta-jaxrs.yml`
+and `javax-jaxrs.yml` instead declare `detect.superseded_by` naming `quarkus-rest.yml`'s own
+coordinates and are SKIPPED outright on a module that declares one — the framework's own fact
+that Quarkus REST IS the JAX-RS implementation there — rather than run and risk winning a
+filename tie-break they should not be in (amended in execution, Task 10 fix round 1; D02's
+`detect.superseded_by` entry has the mechanism). `type_annotation` and `prefix_annotation`
+naming the same fqn is the `jakarta-websocket.yml` and `micronaut-http.yml` precedent.
 
 The plain catalog. Every key exists today except the three marked new (§3b) and the body
 rule (§4):

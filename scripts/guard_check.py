@@ -675,6 +675,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "endpoints.superseded-catalog-does-not-run": Guard(
+        what="a catalog declaring `detect.superseded_by` is SKIPPED, not merely deprioritised, "
+        "on a module whose recorded build declares one of those coordinates",
+        why="B/C Task 10 fix round 1. `jakarta-jaxrs.yml` and `quarkus-rest.yml` read the SAME "
+        "`jakarta.ws.rs` annotations — Quarkus REST implements the specification with the "
+        "specification's own classes — and derive the byte-identical wire identity for every "
+        "resource method a Quarkus module declares, with genuinely different body rules "
+        "(`request_body.implicit_bindings`, `excludes`). Without this gate the merge's "
+        "insert-if-absent guard picks a winner by FILENAME alone, and `jakarta-jaxrs.yml` sorts "
+        "first — so a Quarkus module's own `OrderResource#upload(Upload form)` publishes the "
+        "parameter CONTAINER as the request body instead of excluding it, silently, on every "
+        "row Jersey's rule and Quarkus's disagree about",
+        edits=(
+            Edit(
+                path=_ENDPOINTS_DRIVER,
+                find="        superseded = _superseded_by(workspace, catalog)\n"
+                "        if superseded is not None:",
+                replace="        superseded = _superseded_by(workspace, catalog)\n"
+                "        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     # The flip's OTHER conjunct is Python rather than SQL, for the reason the
     # catalog guards below are YAML: what decides where a guard lives is where
     # the claim is written. This one is written where the framework's own

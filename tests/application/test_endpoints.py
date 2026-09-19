@@ -8582,6 +8582,43 @@ def test_quarkus_rest_declines_the_body_jakarta_jaxrs_derives(tmp_path: Path):
     assert jakarta is not None and jakarta[1]["type"]["symbol"] == "java/lang/String#"
 
 
+@pytest.mark.declines("jakarta-jaxrs")
+@pytest.mark.pins("endpoints.superseded-catalog-does-not-run")
+def test_jakarta_jaxrs_derives_nothing_where_quarkus_rest_is_declared(tmp_path: Path):
+    """B/C Task 10 fix round 1 (`detect.superseded_by`): `jakarta-jaxrs.yml` and
+    `quarkus-rest.yml` read the SAME `jakarta.ws.rs` annotations — Quarkus REST implements
+    the specification with the specification's own classes — so a module whose build
+    records `io.quarkus:quarkus-rest` directly is running Quarkus REST, the framework's own
+    implementation there, and `jakarta-jaxrs.yml` must not run at all rather than merely
+    risk losing the merge's filename tie-break. The paired positive — the SAME facts with
+    no Quarkus coordinate recorded — is `test_a_jaxrs_resource_derives_its_row` above."""
+    _gate_facts(
+        tmp_path / "facts",
+        owner_kind=ConstructKind.CLASS,
+        type_annotations={"jakarta/ws/rs/Path#": {"value": "/orders"}},
+        method_annotation="jakarta/ws/rs/GET#",
+        method_args={},
+    )
+    write_fixture_module_fact_with(
+        tmp_path / "facts", ["io.quarkus:quarkus-rest", "jakarta.ws.rs:jakarta.ws.rs-api"]
+    )
+    catalog = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "jakarta-jaxrs")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace,
+        [catalog],
+        capabilities={"annotation_args", "typed_signatures", "type_annotations"},
+    )
+    rows = [
+        (r["protocol"], r["direction"], r["method"], r["path"])
+        for r in workspace.query("endpoints")
+    ]
+    workspace.close()
+    assert rows == [], f"jakarta-jaxrs derived rows on a Quarkus REST module: {rows}"
+    assert [s.catalog_id for s in skipped] == ["jakarta-jaxrs"]
+
+
 @pytest.mark.declines("jakarta-jws")
 @pytest.mark.pins("derive_endpoints.members-exclude-final")
 def test_a_final_public_method_on_a_web_service_derives_nothing(tmp_path: Path):

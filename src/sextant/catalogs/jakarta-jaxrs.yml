@@ -16,11 +16,39 @@ direction: inbound
 # that does not relax the spec's own `@Path`-on-the-class requirement. Quarkus
 # REST reads the same annotations but adds rules of its own (implicit body
 # bindings, an SSE hint by element type, extra context types), so it is a
-# SEPARATE catalog, `quarkus-rest.yml`, rather than a variant of this one — the
-# `spring-web.yml`/`spring-mvc.yml` precedent of two catalogs owning one HTTP
-# row set, stated at spec §3a's last table row.
+# SEPARATE catalog, `quarkus-rest.yml`, rather than a variant of this one.
+#
+# **`detect.superseded_by` (B/C Task 10 fix round 1, amending spec §3a's last
+# table row).** The spec originally read this as the `spring-web.yml`/
+# `spring-mvc.yml` precedent — "identical identities meet the insert-if-absent
+# guard and one row survives" — which does not hold here: that precedent's two
+# catalogs derive BYTE-IDENTICAL answers wherever they overlap, and this
+# file's `request_body` rule genuinely differs from `quarkus-rest.yml`'s
+# (no `implicit_bindings`, a narrower `excludes`). On a Quarkus module Quarkus
+# REST IS the JAX-RS implementation — Jersey's and RESTEasy classic's own
+# rules do not apply there — so this catalog must not run at all where one of
+# `quarkus-rest.yml`'s own server-side facet coordinates is declared, rather
+# than run and possibly win the merge's filename tie-break on the strength of
+# reading the same annotations. The full list, and why it is a list rather
+# than `quarkus-rest`/`quarkus-resteasy-reactive` alone, is on
+# `quarkus-rest.yml`'s own `detect.coordinates`, which this mirrors exactly.
 detect:
   coordinates: ["jakarta.ws.rs:jakarta.ws.rs-api"]
+  superseded_by:
+    - io.quarkus:quarkus-rest
+    - io.quarkus:quarkus-rest-jackson
+    - io.quarkus:quarkus-rest-jsonb
+    - io.quarkus:quarkus-rest-jaxb
+    - io.quarkus:quarkus-rest-kotlin
+    - io.quarkus:quarkus-rest-kotlin-serialization
+    - io.quarkus:quarkus-rest-qute
+    - io.quarkus:quarkus-resteasy-reactive
+    - io.quarkus:quarkus-resteasy-reactive-jackson
+    - io.quarkus:quarkus-resteasy-reactive-jsonb
+    - io.quarkus:quarkus-resteasy-reactive-jaxb
+    - io.quarkus:quarkus-resteasy-reactive-kotlin
+    - io.quarkus:quarkus-resteasy-reactive-kotlin-serialization
+    - io.quarkus:quarkus-resteasy-reactive-qute
 
 measured:
   - { artifact: jakarta.ws.rs:jakarta.ws.rs-api, versions: ["3.1.0", "4.0.0"],

@@ -38,7 +38,7 @@ matches:
 | `id` | Stable. Appears in `evidence` and in skip reports. |
 | `style` | Which engine interprets `matches` |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
-| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required` and `satisfied_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`** — see below |
+| `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required`, `satisfied_by` and `superseded_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`; `superseded_by` is read for every catalog that declares it** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
 | `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1c. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
@@ -206,6 +206,46 @@ starter's own transitives are not recorded — derived nothing from a `@ConnectM
 and asked nothing either. Declared per catalog rather than computed as "an annotation only
 one catalog claims", because a rule that changes when an unrelated catalog is added is a
 rule nobody can read off the file that states it.
+
+**`detect.superseded_by` is `detect.coordinates`' negative twin** (B/C Task 10 fix round 1):
+the coordinates whose presence in the module's recorded build means ANOTHER catalog is the
+real implementation of THIS catalog's rule, so this one must not run there at all.
+
+```yaml
+detect:
+  coordinates: ["jakarta.ws.rs:jakarta.ws.rs-api"]
+  superseded_by: ["io.quarkus:quarkus-rest", "io.quarkus:quarkus-rest-jackson", …]
+```
+
+It exists because two catalogs can read the SAME evidence while their rules genuinely
+differ, and D02 §5's own precedent for "two catalogs match one module" — "identical
+identities meet the insert-if-absent guard and one row survives" — only holds where the two
+catalogs' rules AGREE wherever they overlap (`spring-web.yml`/`spring-mvc.yml`, whose
+`request_body` blocks are the same annotation and fallback). `jakarta-jaxrs.yml` and
+`quarkus-rest.yml` are the case that breaks it: Quarkus REST implements the JAX-RS
+specification with the specification's own `jakarta.ws.rs` annotation classes, so a Quarkus
+module's resource methods satisfy BOTH catalogs' matches identically, and the two catalogs'
+`request_body` rules (implicit bindings, excludes) genuinely disagree. The merge's
+insert-if-absent guard has no notion of which catalog is more specific — only a filename
+comparison — so letting both run would leave the WRONG catalog's rule governing a row on the
+strength of alphabetical order rather than of which framework the module actually runs.
+
+The framework's own fact settles it: on a module declaring one of Quarkus REST's own
+server-side facet coordinates, Quarkus REST IS the JAX-RS implementation there, and Jersey's,
+RESTEasy classic's and Helidon's own rules do not apply — so `jakarta-jaxrs.yml` (and
+`javax-jaxrs.yml`, defensively) declare `detect.superseded_by` naming every one of
+`quarkus-rest.yml`'s own coordinates, and refuse to run wherever the build records one of
+them. **Refused unless the catalog also declares `detect.coordinates`** — the
+`detect.satisfied_by`/`detect.required` precedent: a catalog that yields to something must
+say what it is FOR, or the key describes a bypass of a gate that is not there.
+
+**A superseded catalog is SKIPPED, visibly, through the exact same channel a missing
+capability or an unmet dependency already uses** (`resolve/endpoints.py`, the third gate,
+after `unmet_dependency`) — `SkippedCatalog(catalog.id, ("superseded by <coordinate>",))` —
+never a silent zero. The coordinate read is the SAME one `unmet_dependency` uses
+(`_declared_coordinates`, `resolve/dependencies.py`) rather than a second query: a module
+recording no module fact at all answers "could not tell" here exactly as it does there, and a
+catalog is never refused by a question nothing answered.
 
 **A gated catalog that does not derive files a question rather than going quiet**, on
 either failing branch of the gate: no module fact recorded, and coordinates recorded that

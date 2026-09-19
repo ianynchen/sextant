@@ -23,9 +23,40 @@ detect:
   # 3.15.x; `io.quarkus:quarkus-rest` is the relocated name from 3.9.0
   # onward, and every 3.15.x release up to and including the LAST one ever
   # published under the old name (3.15.7) carries a Maven relocation POM
-  # pointing at the new one (CP-19 row 5). Both coordinates are listed so a
-  # module on either side of the 3.9.0 rename is still detected.
-  coordinates: ["io.quarkus:quarkus-rest", "io.quarkus:quarkus-resteasy-reactive"]
+  # pointing at the new one (CP-19 row 5). Both base coordinates are listed
+  # so a module on either side of the 3.9.0 rename is still detected.
+  #
+  # **The other twelve are the server-side JSON/Kotlin/templating FACETS**
+  # (B/C Task 10 fix round 1) — `quarkus-rest-jackson`, `-jsonb`, `-jaxb`,
+  # `-kotlin`, `-kotlin-serialization`, `-qute`, and the six identically-named
+  # `quarkus-resteasy-reactive-*` facets the pre-3.9.0 name carried. Maven
+  # records no transitives, so a module declaring only `quarkus-rest-jackson`
+  # (the ordinary Quarkus REST + Jackson combination) and never the bare
+  # `quarkus-rest` coordinate directly would otherwise go undetected — and,
+  # since B/C Task 10 fix round 1, `jakarta-jaxrs.yml`/`javax-jaxrs.yml` read
+  # this SAME list as their own `detect.superseded_by`, so an incomplete list
+  # here would leave one of those two catalogs running where this one is the
+  # real implementation. Every one of the fourteen coordinates below was
+  # confirmed present on Maven Central at 3.39.4 (`quarkus-rest*`) and 3.15.7
+  # (`quarkus-resteasy-reactive*`) — `curl -sI
+  # https://repo1.maven.org/maven2/io/quarkus/<artifact>/<version>/<artifact>-<version>.pom`,
+  # one 200 per coordinate, 2026-09-18 — a coordinate-existence fact rather
+  # than a bytecode rule, so this comment is its own citation; no probe row.
+  coordinates:
+    - io.quarkus:quarkus-rest
+    - io.quarkus:quarkus-rest-jackson
+    - io.quarkus:quarkus-rest-jsonb
+    - io.quarkus:quarkus-rest-jaxb
+    - io.quarkus:quarkus-rest-kotlin
+    - io.quarkus:quarkus-rest-kotlin-serialization
+    - io.quarkus:quarkus-rest-qute
+    - io.quarkus:quarkus-resteasy-reactive
+    - io.quarkus:quarkus-resteasy-reactive-jackson
+    - io.quarkus:quarkus-resteasy-reactive-jsonb
+    - io.quarkus:quarkus-resteasy-reactive-jaxb
+    - io.quarkus:quarkus-resteasy-reactive-kotlin
+    - io.quarkus:quarkus-resteasy-reactive-kotlin-serialization
+    - io.quarkus:quarkus-resteasy-reactive-qute
 
 measured:
   - { artifact: io.quarkus:quarkus-rest, versions: ["3.17.5", "3.39.4"],

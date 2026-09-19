@@ -16,7 +16,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.domain.symbols import is_type_descriptor, owner_of, type_descriptor
+from sextant.domain.symbols import bare_descriptor, is_type_descriptor, owner_of, type_descriptor
 
 # `type_descriptor`, not `shapes/rooting.py`'s `_catalog_symbol` re-export of the
 # same function: that name is `rooting`'s own private seam for `rooting`'s own
@@ -72,11 +72,24 @@ def _member_annotations_by_type(workspace: Workspace) -> dict[str, set[str]]:
         for row in workspace.query("located_symbols")
         if row.get("enclosing") and str(row["construct_kind"]) in ("field", "method")
     }
+    # `bare_descriptor` on the KEY (fix, B/C Task 10 fix round 1): `located_symbols.enclosing`
+    # carries the fact's own FULL symbol — module coordinates and all — while every caller
+    # of this map (`shapes/contracts.py::_is_bound`, predicate 3) compares against a
+    # parameter's `erased_symbol`/`type.symbol`, which a `Signature` always carries BARE
+    # (D00 §5a: "a symbol is module coordinates then a descriptor... only the descriptor is
+    # ever compared"). Left full, `found`'s keys never matched a real parameter's type —
+    # `container` silently matched nothing outside a hand-built unit test using bare symbols
+    # on both sides (`test_container_binding_reads_the_parameters_class_members`,
+    # `test_shapes.py`), and a Quarkus module's own `@RestForm`-carrying parameter container
+    # (`OrderResource#upload(Upload form)`, `fixtures/orders-quarkus`) was reported as the
+    # request BODY rather than excluded, live, the first time this ran end to end.
     found: dict[str, set[str]] = {}
     for target, entries in annotation_index(workspace).items():
         owner = enclosing.get(target)
         if owner is not None:
-            found.setdefault(owner, set()).update(annotation for annotation, _ in entries)
+            found.setdefault(bare_descriptor(owner), set()).update(
+                annotation for annotation, _ in entries
+            )
     return found
 
 
