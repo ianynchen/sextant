@@ -1386,6 +1386,41 @@ when `quarkus-rest.yml` gains its own per-level annotation walk distinct from wo
 shared §3.6 emulation — a catalog-scoped variant of sibling inheritance, not a change to the
 word every other catalog relies on.
 
+### OI-92 — the `protocol_hint` pass reads raw annotation facts, so an inherited `hint_annotations` marker never reaches it
+**Minor · logged 2026-09-18, found at the final whole-branch review of Groups B and C ·
+`src/sextant/application/resolve/protocol_hint.py::apply_protocol_hints`,
+`src/sextant/application/resolve/conditions.py::annotation_index`**
+
+`apply_protocol_hints` reads `annotation_index`, a fold over the raw `annotations` table.
+The inheritance walk (`effective_annotations.py::inherited_rows_over`) synthesizes an
+interface method's mapping — and, for a catalog declaring `inherit_siblings:
+all_or_nothing`, its declared siblings, `protocol_hint.hint_annotations` among them — onto
+an annotation-free implementor method, but those rows exist only as the `$synthetic`
+parameter `derive_endpoints.sql` binds; nothing persists them, and the hint pass never sees
+them. So the walk carries `@RestStreamElementType` onto the implementor for the SQL's
+purposes and the pass, asked about the same handler a moment later, finds nothing there.
+The three documents that said the pass "needs no inheritance awareness" (D02 §3b word 3,
+spec §3b, the module docstring) are corrected with this entry.
+
+**Real triggering input:** a Quarkus REST interface declaring `@GET @Path("/events")
+@RestStreamElementType(APPLICATION_JSON) Multi<T> events()` and a class implementing it
+with a bare `@Override` — the `OrdersApi`/`OrdersResource` shape `fixtures/orders-spring7`
+carries, with the element-type marker on the interface method. The implementor's row
+derives with the right verb and address (the walk carried both) and `protocol: http`, where
+Quarkus serves SSE (CP-19 row 2a). Not present in any fixture: `fixtures/orders-quarkus`'s
+`OrderResource#events` writes the marker on the class's own method.
+
+**Cost:** an `http` row where the framework serves an event stream — under-classified,
+never fabricated; the address and verb are right, the protocol column is the pre-`jaxrs-sse`
+answer for that one row.
+
+**Verify:** `grep -n "annotation_index(workspace)" src/sextant/application/resolve/protocol_hint.py`
+— the pass's one annotation read; `grep -n "synthetic" src/sextant/storage/duckdb/derive_endpoints.sql`
+— the only consumer of the walk's rows. **Closes** when the pass reads the composed
+annotation universe (`_synthetic_annotations`'s output folded into the index it consults)
+or the walk persists its synthesized rows into a table every downstream reader folds — one
+change, made once, rather than a second inheritance walk inside the pass.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

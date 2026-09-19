@@ -273,9 +273,12 @@ of the catalog's annotations of its own** (mapping or sibling). That is JAX-RS �
 annotations on the superclass or interface method are ignored."* Spring's own rule (merge
 per annotation, mapping-only own-check) stays as today for catalogs declaring no siblings.
 
-- The synthesized siblings are ordinary annotation rows downstream, so the SQL sibling CTEs,
-  words 1–2 and the hint pass need no inheritance awareness — one module knows about
-  inheritance, as today.
+- The synthesized siblings are ordinary annotation rows to the SQL, so the sibling CTEs and
+  words 1–2 need no inheritance awareness — one module knows about inheritance, as today.
+  *(Amended after the final review: this sentence also named the hint pass, and the hint pass
+  reads the raw `annotations` table, not the walk's `$synthetic` rows — an interface-declared
+  `@GET @RestStreamElementType(...)` with an annotation-free implementor derives `http`;
+  `OI-92`.)*
 - The type-level gate already inherits: the walk synthesizes `{target: type_symbol,
   annotation: <prefix fqn>}` for a class whose interface or superclass carries the prefix
   (`effective_annotations.py`, the `found_prefix` block), and `@Path` is both prefix and

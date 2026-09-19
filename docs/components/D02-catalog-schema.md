@@ -1158,11 +1158,14 @@ mapping:
   missing one. A catalog declaring no `inherit_siblings` keeps the mapping-only own-check
   and the per-annotation merge it had — Spring's own rule, byte-identical — whether or not
   it names siblings.
-  - **One module knows about inheritance.** The synthesized siblings are ordinary
-    annotation rows downstream, so the sibling reads (`path_from_siblings` and the two
-    media words above), the class-level default and the hint pass never learn that an
-    inheritance happened — the same reason a composed or folded row is an ordinary row by
-    the time the SQL runs.
+  - **One module knows about inheritance — and only the SQL sees its output.** The
+    synthesized siblings are ordinary annotation rows to `derive_endpoints.sql`, so the
+    sibling reads (`path_from_siblings` and the two media words above) and the class-level
+    default never learn that an inheritance happened — the same reason a composed or
+    folded row is an ordinary row by the time the SQL runs. The hint pass is NOT among
+    those readers (amended after the final review, `OI-92`): it folds the raw `annotations`
+    table, and the synthesized rows never reach it — see the `protocol_hint` section's
+    boundary.
   - **Agreement is measured on the whole set.** Two ancestors mapping one method — the
     shape a class overriding covariantly against both an interface and a superclass has —
     already yielded nothing where their verbs differed (ambiguous evidence, §8). Under §3.6
@@ -3024,11 +3027,18 @@ EITHER holds, exactly as the union rule above already reads for the other three 
 catalog's parsed `hint_when` condition is collected rather than merged into the others',
 so nothing has to agree on one shared condition across a family.
 
-**A stated boundary, not a built one.** The inheritance walk (§3b) synthesizes only PREFIX
-fqns at the type level, so a class-level hint annotation declared on an INTERFACE the
-handler's class implements is never carried onto the implementor's class.
-`hint_annotations` therefore sees a class-level annotation on the handler's own class,
-never one declared on an interface it implements.
+**A stated boundary, not a built one — the pass reads raw facts only** (`OI-92`). The
+pass folds the `annotations` table (`conditions.annotation_index`); the inheritance walk's
+synthesized rows — the type-level prefix, an inherited mapping and, under
+`inherit_siblings`, its siblings — reach only `derive_endpoints.sql`'s `$synthetic`
+parameter, never that fold. So a class-level hint annotation declared on an INTERFACE the
+handler's class implements is never carried onto the implementor's class, AND a
+method-level one declared on an interface method (`@GET @RestStreamElementType(...)` on
+the interface, an annotation-free implementor) is never carried onto the implementing
+method, even though the walk carried the verb and `@Path` beside it. `hint_annotations`
+therefore sees only annotations written on the handler's own declaration or its own class;
+the inherited form derives `http` where the framework serves an event stream —
+under-classified, never fabricated.
 
 **A malformed block is refused at run start**, four ways, each a case where reading on
 would make a broken catalog look like an absent one: an unknown key; a target outside

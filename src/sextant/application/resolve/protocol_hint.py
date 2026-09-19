@@ -69,8 +69,8 @@ rows that already exist.
 **`hint_annotations` yields to a declared media sibling on the owner** (the
 final review's Important 2, CP-19 row 2a). Quarkus implies SSE from the
 element-type annotation only when the METHOD-level `@Produces` is empty —
-`EndpointIndexer.java:720-723` reads `@Produces` off the method first and
-falls to the element type only when that read is empty — so a handler
+CP-19 row 2a's `EndpointIndexer` lines 720-723 read `@Produces` off the
+method first and fall to the element type only when that read is empty — so a handler
 carrying `@Produces(APPLICATION_STREAM_JSON)` beside `@RestStreamElementType`
 serves what it declares, not an event stream. The pass mirrors that with the
 declaring catalog's own `mapping.produces_from_siblings` annotations
@@ -80,12 +80,22 @@ the check, because `type_media_from_siblings` fills it from the class
 default too, and a class-level `@Produces` is exactly what Quarkus does NOT
 consult here.
 
-**A stated boundary, not a built one** (Task 5's review): the inheritance
-walk synthesizes only PREFIX fqns at the type level, so a class-level hint
-annotation declared on an INTERFACE the handler's class implements is never
-carried onto the implementor's class. `hint_annotations` therefore sees a
-class-level annotation on the handler's own class, never one declared on an
-interface it implements — that gap is left open rather than closed here.
+**A stated boundary, not a built one** (Task 5's review, widened by the
+final review — `OI-92`): this pass reads RAW annotation facts only.
+`annotation_index` folds the `annotations` table, and the inheritance walk's
+synthesized rows — a type-level prefix, an inherited mapping and, for a
+catalog opting in, its siblings — exist only as `derive_endpoints.sql`'s
+`$synthetic` parameter, which nothing here sees. So neither of the two
+inherited forms reaches evidence 3 or 4: a class-level hint annotation
+declared on an INTERFACE the handler's class implements is never carried
+onto the implementor's class, and a METHOD-level one declared on an
+interface method (`@GET @RestStreamElementType(...)` on the interface, an
+annotation-free implementor) is never carried onto the implementing method
+either, even though the walk carried the verb and the `@Path` beside it.
+`hint_annotations` therefore sees only annotations written on the handler's
+own declaration or its own class. The row derives `http` where the
+framework serves an event stream — under-classified, never fabricated —
+and the gap is left open rather than closed here.
 
 Every framework, protocol, MIME and type name this pass compares against is
 catalog data (2H design §6). No such name appears below.
