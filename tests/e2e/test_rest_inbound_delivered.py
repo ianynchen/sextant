@@ -549,9 +549,16 @@ def test_quarkus_rest_binds_the_body_the_way_quarkus_does(quarkus_endpoints):
 
 
 def test_quarkus_element_type_alone_makes_a_stream_sse(quarkus_endpoints):
+    """CP-19 row 2a, both branches: the element type ALONE implies SSE (`/events`),
+    `@Produces(SERVER_SENT_EVENTS)` alone is SSE by media (`/ticks`), and the element
+    type beside a method-level `@Produces("application/x-ndjson")` is NOT — Quarkus reads
+    the method's `@Produces` first and falls to the marker only when that read is empty
+    (`/ndjson`, the final review's Important 2; `OrderResource#ndjson` took the fixture's
+    `endpoints` rows from 16 to 17, all of them HTTP-surfaced)."""
     protocols = {r["path"]: r["protocol"] for r in quarkus_endpoints if r["direction"] == "inbound"}
     assert protocols["/q/orders/events"] == "sse"
     assert protocols["/q/orders/ticks"] == "sse"
+    assert protocols["/q/orders/ndjson"] == "http"
 
 
 JAVALIN = FIXTURES / "orders-javalin"

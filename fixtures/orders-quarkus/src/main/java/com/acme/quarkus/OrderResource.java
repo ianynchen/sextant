@@ -48,4 +48,12 @@ public class OrderResource {
     @Path("/ticks")
     @Produces(MediaType.SERVER_SENT_EVENTS)
     public Multi<String> ticks() { return Multi.createFrom().empty(); }
+
+    // CP-19 row 2a's other branch: a method-level @Produces beside the element type —
+    // Quarkus reads @Produces first and never implies SSE here (final review, Important 2)
+    @GET
+    @Path("/ndjson")
+    @Produces("application/x-ndjson")
+    @RestStreamElementType(MediaType.APPLICATION_JSON)
+    public Multi<OrderEvent> ndjson() { return Multi.createFrom().empty(); }
 }

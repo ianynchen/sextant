@@ -66,6 +66,20 @@ the same two targets. This is the one widening of what the pass reads —
 annotation facts for the owner — and it still writes exactly one column on
 rows that already exist.
 
+**`hint_annotations` yields to a declared media sibling on the owner** (the
+final review's Important 2, CP-19 row 2a). Quarkus implies SSE from the
+element-type annotation only when the METHOD-level `@Produces` is empty —
+`EndpointIndexer.java:720-723` reads `@Produces` off the method first and
+falls to the element type only when that read is empty — so a handler
+carrying `@Produces(APPLICATION_STREAM_JSON)` beside `@RestStreamElementType`
+serves what it declares, not an event stream. The pass mirrors that with the
+declaring catalog's own `mapping.produces_from_siblings` annotations
+(`_Hint.media_annotations`): evidence 3 fires only when the OWNER itself —
+never its type — carries none of them. The row's `produces` column is not
+the check, because `type_media_from_siblings` fills it from the class
+default too, and a class-level `@Produces` is exactly what Quarkus does NOT
+consult here.
+
 **A stated boundary, not a built one** (Task 5's review): the inheritance
 walk synthesizes only PREFIX fqns at the type level, so a class-level hint
 annotation declared on an INTERFACE the handler's class implements is never
@@ -271,6 +285,13 @@ def _owner_annotated(
     owner = _owner(endpoint)
     if owner is None or not hint.annotations:
         return False
+    # CP-19 row 2a: a method-level media sibling on the OWNER wins over the
+    # element-type marker — the framework reads `@Produces` first and only
+    # an empty read falls to the marker (module docstring). The owner alone:
+    # a class-level `@Produces` is the default Quarkus consults AFTER this
+    # decision, never before it.
+    if any(annotation in hint.media_annotations for annotation, _ in index.get(owner, [])):
+        return False
     for target in (owner, enclosing_type_of(owner)):
         if target and any(
             annotation in hint.annotations for annotation, _ in index.get(target, [])
@@ -315,13 +336,18 @@ class _Hint:
     notation — the binding-seam discipline every other catalog reader keeps,
     so no rung above has to remember which notation it is holding.
     `conditions` holds one `AnnotationArg` per catalog that declared a
-    `hint_when` (already parsed, never a raw block)."""
+    `hint_when` (already parsed, never a raw block). `media_annotations`
+    holds the declaring catalogs' `mapping.produces_from_siblings`
+    annotation symbols — the method-level media declaration that, when
+    present on the owner, stops `annotations` from firing (CP-19 row 2a);
+    unioned across a family exactly as the evidence lists are."""
 
     target: str
     media: frozenset[str]
     returns: frozenset[str]
     annotations: frozenset[str]
     conditions: tuple[AnnotationArg, ...]
+    media_annotations: frozenset[str]
 
 
 def _vocabulary(catalogs: list[Catalog]) -> dict[str, _Hint]:
@@ -369,9 +395,25 @@ def _vocabulary(catalogs: list[Catalog]) -> dict[str, _Hint]:
             returns=returns | (held.returns if held else frozenset()),
             annotations=annotations | (held.annotations if held else frozenset()),
             conditions=(held.conditions if held else ()) + ((condition,) if condition else ()),
+            media_annotations=_media_siblings(catalog)
+            | (held.media_annotations if held else frozenset()),
         )
         origin.setdefault(source, catalog)
     return hints
+
+
+def _media_siblings(catalog: Catalog) -> frozenset[str]:
+    """The catalog's `mapping.produces_from_siblings` annotations as symbols —
+    the method-level media declaration evidence 3 yields to. Empty for a
+    catalog that declares none (every non-JAX-RS-shaped one), which leaves
+    evidence 3 reading presence alone, as before. Read here rather than
+    validated: `annotation_driven._sibling_sources` already refused a
+    malformed list at load."""
+    mapping = catalog.matches.get("mapping") or {}
+    return frozenset(
+        type_descriptor(str(source["annotation"]))
+        for source in (mapping.get("produces_from_siblings") or [])
+    )
 
 
 def _checked(

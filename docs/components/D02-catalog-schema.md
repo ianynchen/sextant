@@ -2998,10 +2998,16 @@ the pass reads: everything above is a column on the row itself, and these two ar
 and only annotation facts it consults.
 
 - **`hint_annotations` is presence, not comparison** — a list of fqns, and the row
-  reclassifies wherever one of them targets the owner or its enclosing type. Quarkus's
-  `@RestStreamElementType` is the shipped case: a class-level use implies SSE for every
-  method the class exposes, which only the enclosing-type fallback reaches, since the
-  annotation names no member of its own (CP-19 row 2).
+  reclassifies wherever one of them targets the owner or its enclosing type **and the
+  owner itself carries none of the declaring catalog's `produces_from_siblings`
+  annotations** (amended after the final review). Quarkus's `@RestStreamElementType` is
+  the shipped case: a class-level use implies SSE for every method the class exposes,
+  which only the enclosing-type fallback reaches, since the annotation names no member of
+  its own (CP-19 row 2) — and CP-19 row 2a reads the METHOD-level `@Produces` first, so a
+  handler declaring `@Produces("application/x-ndjson")` beside the marker serves what it
+  declares and stays `http`. The owner alone is checked, never its type: a class-level
+  `@Produces` is the default Quarkus consults after this decision, not before it
+  (`protocol_hint.py::_owner_annotated`, `_Hint.media_annotations`).
 - **`hint_when` is §2's `annotation_arg` condition** (one per catalog block, parsed once at
   load, never a raw mapping read again downstream) — the row reclassifies where the
   condition HOLDS for the owner, read the same way §2 and §5a already read it: the owner

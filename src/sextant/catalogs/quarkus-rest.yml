@@ -175,7 +175,13 @@ protocol_hint:
   # (`EndpointIndexer.java:713-723`). Both are PRESENCE evidence (the value
   # is the per-event format, a named follow-up outside this group, spec §3c);
   # the annotation targets the handler method or, per the shared
-  # `hint_annotations` contract, its enclosing type.
+  # `hint_annotations` contract, its enclosing type. **Row 2a's condition:
+  # the METHOD-level `@Produces` is read first, and the marker implies SSE
+  # only when that read is empty** (`produces == null || produces.length ==
+  # 0`, line 721) — so the pass yields to this file's own
+  # `produces_from_siblings` annotation on the handler, and `@GET
+  # @Produces("application/x-ndjson") @RestStreamElementType(...)` stays
+  # `http` (`fixtures/orders-quarkus`'s `OrderResource#ndjson`).
   hint_annotations: [org.jboss.resteasy.reactive.RestStreamElementType,
                      org.jboss.resteasy.reactive.RestSseElementType]
 

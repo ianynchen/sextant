@@ -304,7 +304,12 @@ Each is measured 2026-09-18 on quarkus-rest 3.39.4 sources unless marked P2:
   element type is read from the method, else the class; if the method has no `@Produces`
   and an element type is present, `produces` **becomes `text/event-stream`**. The
   deprecated `@RestSseElementType` is read as an alias (`getStreamAnnotationValue`, lines
-  862-866). So the annotation's **presence** is the SSE evidence, and its **value** is the
+  862-866). So the annotation's **presence with no method-level `@Produces`** is the SSE
+  evidence *(amended after the final review: the draft said presence alone, and CP-19 row
+  2a's own condition is `produces == null || produces.length == 0` on the METHOD's
+  `@Produces` — a handler declaring `@Produces(APPLICATION_STREAM_JSON)` beside the marker
+  serves what it declares; the pass yields to the catalog's `produces_from_siblings`
+  annotation on the owner)*, and its **value** is the
   per-event type. The catalog declares a third `protocol_hint` evidence kind:
 
   ```yaml
@@ -316,8 +321,9 @@ Each is measured 2026-09-18 on quarkus-rest 3.39.4 sources unless marked P2:
   ```
   `hint_annotations` is a list of fqns in `hint_returns`' shape, unioned across catalogs;
   the pass fires when one targets the row's handler **or its enclosing type** (the class-level
-  form). Same contract as the other two kinds: protocol only, existing rows only, source
-  protocol scoped.
+  form) **and the handler itself carries none of the catalog's `produces_from_siblings`
+  annotations** (amended, above). Same contract as the other two kinds: protocol only,
+  existing rows only, source protocol scoped.
 
   **The value as per-event format is a named follow-up, not in this group.** Today an SSE
   row's per-event payload falls to rung 5 (`json`, `narrowed`, rendered *json (assumed)*);

@@ -51,9 +51,12 @@ here would restate those documents rather than add anything.
   `@RestStreamElementType`, are now read as Server-Sent Events** (`jaxrs-sse`, spec §3c).
   The plain JAX-RS catalogs read the media type the same way every other framework's SSE
   row already does. Quarkus REST adds a second way: `@RestStreamElementType` (or the older
-  `@RestSseElementType`) with no `@Produces` at all still makes the response SSE, because
-  Quarkus itself treats the element-type annotation's mere PRESENCE as the signal — its
-  VALUE is the per-event format, which is not carried yet and stays a known follow-up.
+  `@RestSseElementType`) with no `@Produces` on the method still makes the response SSE,
+  because Quarkus itself treats the element-type annotation's PRESENCE as the signal
+  whenever the method declares no media type of its own — a method declaring
+  `@Produces("application/x-ndjson")` beside the marker serves what it declares and stays
+  HTTP. The annotation's VALUE is the per-event format, which is not carried yet and stays
+  a known follow-up.
 
 - **A Spring `@KafkaListener(batch = "true")` listener's payload is now the record, not the
   list it arrives in** (`kafka-batch-generics`, spec §5a). Spring hands a batch listener's

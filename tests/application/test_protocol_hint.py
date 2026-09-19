@@ -644,10 +644,12 @@ _JMS_LISTENER = "io/micronaut/jms/annotations/JMSListener#"
 _JMS_PRODUCER = "io/micronaut/jms/annotations/JMSProducer#"
 
 _STREAM_ELEMENT_TYPE = "org/jboss/resteasy/reactive/RestStreamElementType#"
+_PRODUCES = "jakarta/ws/rs/Produces#"
 _EVENTS_HANDLER = "com/acme/qk/EventsResource#events()."
 _TICKS_TYPE = "com/acme/qk/TicksResource#"
 _TICKS_HANDLER = _TICKS_TYPE + "ticks()."
 _PLAIN_HANDLER = "com/acme/qk/PlainResource#plain()."
+_NDJSON_HANDLER = "com/acme/qk/EventsResource#ndjson()."
 
 
 def _hint_catalog(catalog_id: str, protocol: str, hint: dict) -> Catalog:
@@ -829,6 +831,84 @@ def test_hint_annotations_fires_on_the_handler_or_its_type(tmp_path):
     workspace.close()
 
     assert result == {("/events", "sse"), ("/ticks", "sse"), ("/plain", "http")}
+
+
+def _element_type_facts() -> tuple[AnnotationFact, ...]:
+    """`/events`'s handler carries the marker alone; `/ndjson`'s carries the marker
+    AND its own `@Produces("application/x-ndjson")` — CP-19 row 2a's other branch."""
+    return (
+        AnnotationFact(
+            document_id="doc_1",
+            target=_EVENTS_HANDLER,
+            retention="runtime",
+            use=AnnotationUse(annotation=_STREAM_ELEMENT_TYPE, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_NDJSON_HANDLER,
+            retention="runtime",
+            use=AnnotationUse(annotation=_STREAM_ELEMENT_TYPE, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_NDJSON_HANDLER,
+            retention="runtime",
+            use=AnnotationUse(annotation=_PRODUCES, args={"value": ["application/x-ndjson"]}),
+        ),
+    )
+
+
+@pytest.mark.declines("quarkus-rest")
+@pytest.mark.pins("protocol_hint.hint-annotations-yield-to-a-declared-produces")
+def test_the_shipped_quarkus_rest_catalog_declines_an_element_type_beside_a_declared_produces(
+    tmp_path,
+):
+    """§10 near-miss, read off the REAL loaded `quarkus-rest.yml`: CP-19 row 2a
+    (`EndpointIndexer.java:720-723`) reads the METHOD-level `@Produces` first and
+    falls to the element-type marker only when that read is empty. So `@GET
+    @Produces("application/x-ndjson") @RestStreamElementType(APPLICATION_JSON)
+    Multi<T>` serves what it declares and stays `http`, while the marker alone
+    (`/events`) and `@Produces(SERVER_SENT_EVENTS)` alone (`/ticks`, evidence 1)
+    are `sse` exactly as before. The `produces` column is deliberately empty on
+    every row: the check reads the owner's own annotation, not the column
+    `type_media_from_siblings` would have filled from the class."""
+    workspace = _owner_workspace(tmp_path, *_element_type_facts())
+    _seed(
+        workspace,
+        {"path": "/events", "handler": _EVENTS_HANDLER},
+        {"path": "/ndjson", "handler": _NDJSON_HANDLER},
+        {"path": "/ticks", "handler": _TICKS_HANDLER, "produces": '["text/event-stream"]'},
+    )
+    catalog = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "quarkus-rest")
+    apply_protocol_hints(workspace, [catalog])
+    result = {(r["path"], r["protocol"]) for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert result == {("/events", "sse"), ("/ndjson", "http"), ("/ticks", "sse")}
+
+
+def test_a_catalog_declaring_no_media_sibling_reads_presence_alone(tmp_path):
+    """The guard is the declaring catalog's OWN `produces_from_siblings`; a
+    catalog naming none (the hand-built block above, `matches={}`) has no
+    media sibling to yield to, so the same `/ndjson` facts reclassify on the
+    marker's presence exactly as Task 9 shipped it."""
+    workspace = _owner_workspace(tmp_path, *_element_type_facts())
+    _seed(workspace, {"path": "/ndjson", "handler": _NDJSON_HANDLER})
+    catalogs = [
+        _hint_catalog(
+            "quarkus-rest",
+            "http",
+            {
+                "protocol": "sse",
+                "hint_annotations": ["org.jboss.resteasy.reactive.RestStreamElementType"],
+            },
+        )
+    ]
+    apply_protocol_hints(workspace, catalogs)
+    result = {(r["path"], r["protocol"]) for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert result == {("/ndjson", "sse")}
 
 
 def test_a_block_with_only_the_new_kinds_is_a_valid_block():

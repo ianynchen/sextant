@@ -972,6 +972,26 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "protocol_hint.hint-annotations-yield-to-a-declared-produces": Guard(
+        what="`hint_annotations` fires only when the row's OWNER carries none of the declaring "
+        "catalog's `produces_from_siblings` annotations — never on the marker's presence alone "
+        "beside a method-level media declaration",
+        why="CP-19 row 2a (`EndpointIndexer.java:720-723`, the final review's Important 2). "
+        "Quarkus reads the method-level `@Produces` FIRST and falls to `@RestStreamElementType` "
+        "only when that read is empty, so `@GET @Produces(APPLICATION_STREAM_JSON) "
+        "@RestStreamElementType(APPLICATION_JSON) Multi<Book>` serves an NDJSON stream, not "
+        "SSE. On presence alone the pass would publish that row as `sse` — a protocol the "
+        "framework never serves there, at `resolved`/`compiler` where nothing downstream can "
+        "tell it from an observation",
+        edits=(
+            Edit(
+                path=_PROTOCOL_HINT,
+                find="    if any(annotation in hint.media_annotations for annotation, _ in index.get(owner, [])):\n"
+                "        return False\n",
+                replace="",
+            ),
+        ),
+    ),
     "derive_endpoints.path-fallback-is-per-annotation": Guard(
         what="an annotated declaration takes the fallback word of the annotation that MATCHED "
         "it, not the catalog's own default",
