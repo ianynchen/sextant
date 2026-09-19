@@ -72,9 +72,6 @@ def test_micronaut_pubsub_both_directions(messaging_rows):
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="micronaut-jms-over-sqs: protocol_hint has no attribute condition; spec §5b"
-)
 def test_micronaut_jms_over_sqs_is_sqs_on_both_sides(messaging_rows):
     assert {
         ("sqs", "inbound", "mn.orders.sqs"),

@@ -797,7 +797,9 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `micronaut-http-client` | `io.micronaut:micronaut-http-client-core` | 4.7.6 |
 | `micronaut-http` | `io.micronaut:micronaut-http` | 4.7.6 |
 | `micronaut-jms-producer` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |
+|  | `io.micronaut.jms:micronaut-jms-sqs` | 4.2.0 |
 | `micronaut-jms` | `io.micronaut.jms:micronaut-jms-core` | 4.2.0 |
+|  | `io.micronaut.jms:micronaut-jms-sqs` | 4.2.0 |
 | `micronaut-kafka-client` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
 | `micronaut-kafka` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
 | `micronaut-pubsub-client` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
@@ -3416,7 +3418,7 @@ one.
 | **Python** | boto3 | **`boto3`** `boto3.client("sqs").send_message(QueueUrl=…)` | **clients synthesised at runtime from JSON service models — `send_message` is defined in no Python file** | `runtime_dynamic` | **C — ceiling is a `name_match` on the service string; `resolution: narrowed` at best** |
 | Rust | aws-sdk-rust | `aws-sdk-rust` `client.send_message().queue_url(u).send()` | — | `fluent_chain` | B |
 | Swift | Soto | `Soto`, the community AWS SDK for Swift — actively maintained, Linux/macOS/iOS | `sqs.sendMessage(.init(queueUrl: …))` | `registration_call` | B |
-| Java | Micronaut (raw AWS SDK; JMS over SQS) | Micronaut | raw AWS SDK `SqsClient.sendMessage`, the same `aws-sqs-sdk.yml` chain as row above — Micronaut ships no first-party SQS annotation | `fluent_chain` | ✅ raw SDK (`aws-sqs-sdk.yml`, pinned in a Micronaut module by `test_aws_sqs_delivered.py`). **Boundary — JMS over SQS reads as `jms`:** `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms`; choosing the protocol from the factory attribute is a per-attribute switch no word has. A Spring SQS sender and a Micronaut JMS-over-SQS listener will not link (DR-5) |
+| Java | Micronaut (raw AWS SDK; JMS over SQS) | Micronaut | raw AWS SDK `SqsClient.sendMessage`, the same `aws-sqs-sdk.yml` chain as row above — Micronaut ships no first-party SQS annotation | `fluent_chain` | ✅ raw SDK (`aws-sqs-sdk.yml`, pinned in a Micronaut module by `test_aws_sqs_delivered.py`). **Shipped — JMS over SQS reads as `sqs`:** `@JMSListener(SqsConfiguration.CONNECTION_FACTORY_BEAN_NAME)` (CP-21 rows 1a, 3a/3d: `value()` is the sole address-bearing attribute, and the SQS module's own bean-name constant is the literal `"sqsJmsConnectionFactory"`) reclassifies through `protocol_hint.hint_when` on both `micronaut-jms.yml` and `micronaut-jms-producer.yml`, so a listener AND a producer bound to that factory both publish `sqs` and a Spring SQS sender links with a Micronaut JMS-over-SQS listener on the shared queue name (DR-5, `micronaut-jms-over-sqs`). Pinned by `test_micronaut_jms_over_sqs_is_sqs_on_both_sides`. **Boundary:** a user-named factory bean wired to SQS in a hand-written `@Factory`, and a `value` written as a property placeholder, are both unknowable from bytecode alone and stay `jms` — only the framework's own constant is matched |
 
 Raw AWS SDK v2 `SqsClient` ships as a `fluent` catalog reaching `SqsClient.sendMessage` through
 the OkHttp `terminal_via_argument` pattern verbatim. Its `queueUrl` capture is the one messaging

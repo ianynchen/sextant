@@ -30,6 +30,8 @@ from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
 from sextant.domain.symbols import type_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # Invented vocabulary. None of it is a real MIME type or class — every one is
@@ -759,6 +761,34 @@ def test_hint_when_reclassifies_the_owners_type_binding_on_both_directions(tmp_p
         ("mn.orders.sqs-out", "sqs"),
         ("mn.orders.classic", "jms"),
     }
+
+
+@pytest.mark.declines("micronaut-jms")
+@pytest.mark.pins("protocol_hint.hint-when-reads-the-owner")
+def test_the_shipped_micronaut_jms_catalog_declines_another_brokers_factory_name(tmp_path):
+    """§10 near-miss for the positive test above, read off the REAL loaded
+    `micronaut-jms.yml` rather than the hand-built `_hint_catalog`: a `jms` row whose
+    enclosing type carries `@JMSListener("activeMqConnectionFactory")` — ActiveMQ classic's
+    own `CONNECTION_FACTORY_BEAN_NAME` (CP-21 row 3b) — stays `jms`, because `equals`
+    compares the exact literal and `activeMqConnectionFactory` is not `sqsJmsConnectionFactory`."""
+    workspace = _owner_workspace(
+        tmp_path,
+        AnnotationFact(
+            document_id="doc_1",
+            target=_ACTIVEMQ_TYPE,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation=_JMS_LISTENER, args={"value": "activeMqConnectionFactory"}
+            ),
+        ),
+    )
+    _seed(workspace, {"path": "mn.orders.classic", "protocol": _JMS, "handler": _ACTIVEMQ_HANDLER})
+    catalog = next(c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "micronaut-jms")
+    apply_protocol_hints(workspace, [catalog])
+    result = {(r["path"], r["protocol"]) for r in workspace.query("endpoints")}
+    workspace.close()
+
+    assert result == {("mn.orders.classic", _JMS)}
 
 
 def test_hint_annotations_fires_on_the_handler_or_its_type(tmp_path):

@@ -9,6 +9,8 @@ detect:
 measured:
   - { artifact: io.micronaut.jms:micronaut-jms-core, versions: ["4.2.0"],
       identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+  - { artifact: io.micronaut.jms:micronaut-jms-sqs, versions: ["4.2.0"],
+      identity: reported, by: scripts/probes/cp21_micronaut_jms_sqs.md }
 requires: [annotation_args]
 # One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
 # and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
@@ -30,3 +32,23 @@ matches:
     annotations:
       - { fqn: io.micronaut.jms.annotations.Queue }
       - { fqn: io.micronaut.jms.annotations.Topic }
+
+# `micronaut-jms-over-sqs` (spec 2026-09-18 §5b) — the producer's own gate, identical in
+# shape to `micronaut-jms.yml`'s but read off `@JMSProducer` rather than `@JMSListener`:
+# CP-21 row 1b measured `@JMSProducer` too, and it declares the same one attribute,
+# `value(): String`, with no `connectionFactory` of its own either. `value` still names the
+# connection-factory bean (CP-21 row 2's `Qualifiers.byName` resolution reads either
+# annotation's `value` the same way), so this catalog needs its OWN `hint_when` — a Micronaut
+# module publishing through the SQS producer and listening through the SQS listener are two
+# different catalogs' own rows, and D02's union rule collects each catalog's condition rather
+# than asking one to speak for the other.
+#
+# Same stated boundaries as the listener's: a hand-wired factory bean stays `jms`, and a
+# placeholder `value` compares unequal to the literal and stays `jms` too.
+protocol_hint:
+  protocol: sqs
+  hint_when:
+    annotation_arg:
+      annotation: io.micronaut.jms.annotations.JMSProducer
+      name: value
+      equals: sqsJmsConnectionFactory
