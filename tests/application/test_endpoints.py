@@ -4091,6 +4091,115 @@ def test_an_outbound_catalog_produces_caller_rows_with_peer_and_prefixed_path(tm
     workspace.close()
 
 
+def _peer_annotation_facts(root: Path) -> None:
+    """The MicroProfile REST Client shape in miniature (CP-22 row 2, B/C Task 10b):
+    ONE type carries TWO type-level annotations — `@ServiceClient(path = …)` supplies
+    the prefix, a SEPARATE `@Registration(service = …)` supplies the peer. Neither
+    annotation carries the other's attribute, so a derivation that read `peer_from`
+    off the PREFIX annotation's own row (the pre-Task-10b behaviour, correct for
+    `@FeignClient`) would find no `service` attribute there and derive `peer` NULL."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/peer/PeerClient.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    client = "com/acme/peer/PeerClient#"
+    submit = "com/acme/peer/PeerClient#submit(sig_2a3b4c5d)."
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=client, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=submit,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=client,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void")),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/ServiceClient#", args={"path": "/billing"}
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=client,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/Registration#",
+                args={"service": "billing-service"},
+            ),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=submit,
+            retention="runtime",
+            use=AnnotationUse(
+                annotation="com/acme/peer/annotation/PostExchange#", args={"value": ["/invoices"]}
+            ),
+        ),
+    ]
+    write_fact_file(root / "PeerClient.jsonl", document, facts)
+
+
+_PEER_ANNOTATION_CATALOG = Catalog(
+    id="invented-peer-annotation",
+    style="annotation_driven",
+    protocol="http",
+    direction="outbound",
+    requires=("annotation_args",),
+    source=Path("tests/invented.yml"),
+    matches={
+        "type_annotation": "com.acme.peer.annotation.ServiceClient",
+        "request_body": {"annotation": "com.acme.peer.annotation.Body", "fallback": "none"},
+        "mapping": {
+            "path_from": ["value"],
+            "prefix_from": ["path"],
+            "prefix_annotation": "com.acme.peer.annotation.ServiceClient",
+            # The one key this catalog adds beyond `_OUTBOUND_CATALOG` above: a SECOND
+            # annotation `peer_from` reads off, distinct from `prefix_annotation`.
+            "peer_annotation": "com.acme.peer.annotation.Registration",
+            "peer_from": ["service"],
+            "method_from": "method",
+            "all_methods": ["GET"],
+            "annotations": [
+                {"fqn": "com.acme.peer.annotation.PostExchange", "method": ["POST"]},
+            ],
+        },
+    },
+)
+
+
+@pytest.mark.pins("derive_endpoints.peer-read-off-the-peer-annotation")
+def test_peer_annotation_reads_peer_off_its_own_row_not_the_prefix_annotations(tmp_path: Path):
+    """CP-22 row 2 (spec §3f): `peer_annotation` names the annotation `peer_from` is read
+    off, and it need not be `prefix_annotation` — `@ServiceClient` supplies the prefix
+    `/billing`, `@Registration` supplies the peer `billing-service`, and neither carries
+    the other's attribute. Forcing `peer_annotation` back to `prefix_annotation`
+    unconditionally (the guard this pins) reads `peer_from: [service]` off `@ServiceClient`,
+    which has no `service` attribute, and `peer` derives NULL instead."""
+    _peer_annotation_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    skipped = derive_endpoints(
+        workspace, [_PEER_ANNOTATION_CATALOG], capabilities={"annotation_args"}
+    )
+    assert skipped == []
+    [endpoint] = [e for e in workspace.query("endpoints") if e["direction"] == "outbound"]
+    assert endpoint["path"] == "/billing/invoices"
+    assert endpoint["peer"] == "billing-service"
+    workspace.close()
+
+
 def _orders_controller_facts(root: Path) -> None:
     """A controller exposing exactly one route, POST /v1/orders — deliberately
     narrower than `_controller_facts` (which also exposes two GET routes
@@ -8454,12 +8563,13 @@ def test_a_micronaut_or_quarkus_annotation_from_another_package_derives_nothing(
     ), f"{catalog_id} matched an annotation from another package"
 
 
-# B/C Task 10: the `_W58_ANNOTATION_CATALOGS`-style package near-miss for the three JAX-RS
-# catalogs. A separate list rather than an extension of `_W58_ANNOTATION_CATALOGS` because
-# the verb annotation itself carries no address attribute (CP-18 row 1) — the class-level
-# `@Path` alone (`type_annotations`) supplies the whole address here, `method_args` stays
-# empty, and the shared test functions below are named for what they cover rather than
-# borrowed from the Micronaut/Quarkus-reactive-routes ones.
+# B/C Task 10 (extended by Task 10b): the `_W58_ANNOTATION_CATALOGS`-style package
+# near-miss for the four JAX-RS-worded catalogs — three inbound plus `mp-rest-client`'s
+# outbound twin. A separate list rather than an extension of `_W58_ANNOTATION_CATALOGS`
+# because the verb annotation itself carries no address attribute (CP-18 row 1) — the
+# class-level `@Path` alone (`type_annotations`) supplies the whole address here,
+# `method_args` stays empty, and the shared test functions below are named for what they
+# cover rather than borrowed from the Micronaut/Quarkus-reactive-routes ones.
 _JAXRS_ANNOTATION_CATALOGS = [
     pytest.param(
         "jakarta-jaxrs",
@@ -8488,6 +8598,24 @@ _JAXRS_ANNOTATION_CATALOGS = [
         ("http", "inbound", "GET", "/orders"),
         id="quarkus-rest",
     ),
+    # B/C Task 10b: `mp-rest-client`'s OWN type-level gate is
+    # `@RegisterRestClient` rather than `@Path` alone — both annotations sit on
+    # the same INTERFACE, `@Path` supplying the prefix `matches.type_annotation`
+    # does not read, `@RegisterRestClient` supplying the gate `peer_from` reads
+    # (CP-22 row 2, spec §3f). The row is `outbound`, the one difference from the
+    # three inbound entries above.
+    pytest.param(
+        "microprofile-rest-client",
+        ConstructKind.INTERFACE,
+        {
+            "org/eclipse/microprofile/rest/client/inject/RegisterRestClient#": {},
+            "jakarta/ws/rs/Path#": {"value": "/orders"},
+        },
+        "jakarta/ws/rs/GET#",
+        {},
+        ("http", "outbound", "GET", "/orders"),
+        id="microprofile-rest-client",
+    ),
 ]
 
 
@@ -8514,6 +8642,7 @@ def test_a_jaxrs_resource_derives_its_row(
 @pytest.mark.declines("jakarta-jaxrs")
 @pytest.mark.declines("javax-jaxrs")
 @pytest.mark.declines("quarkus-rest")
+@pytest.mark.declines("microprofile-rest-client")
 @pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
 @pytest.mark.parametrize(
     ("catalog_id", "owner_kind", "type_annotations", "method_annotation", "method_args", "row"),
@@ -8522,9 +8651,10 @@ def test_a_jaxrs_resource_derives_its_row(
 def test_a_jaxrs_verb_annotation_from_another_package_derives_nothing(
     tmp_path: Path, catalog_id, owner_kind, type_annotations, method_annotation, method_args, row
 ):
-    """§10 near-miss for the three JAX-RS catalogs, on the verb annotation's fully-qualified
-    NAME alone: the type gate, the construct kind and the address attribute are exactly as
-    in the positive above; only the verb annotation's package is `com.acme.own`."""
+    """§10 near-miss for the four JAX-RS-worded catalogs, on the verb annotation's
+    fully-qualified NAME alone: the type gate, the construct kind and the address
+    attribute are exactly as in the positive above; only the verb annotation's package
+    is `com.acme.own`."""
     simple_name = method_annotation.rsplit("/", 1)[1]
     assert (
         _gate_rows(
@@ -8537,6 +8667,33 @@ def test_a_jaxrs_verb_annotation_from_another_package_derives_nothing(
         )
         == []
     ), f"{catalog_id} matched an annotation from another package"
+
+
+@pytest.mark.declines("microprofile-rest-client")
+@pytest.mark.pins("derive_endpoints.declared-on-construct-kind")
+def test_a_register_rest_client_annotated_class_derives_no_outbound_row(tmp_path: Path):
+    """B/C Task 10b's construct-kind half of the near-miss the `mp-rest-client`/JAX-RS
+    partition needs (`jakarta-jws-client.yml`'s own precedent): `microprofile-rest-client.yml`
+    declares `declared_on: interface`, so the SAME `@RegisterRestClient @Path` facts —
+    the paired positive above derives from — mint nothing when the enclosing type is a
+    CLASS rather than an interface. Without the fence a `@Path`-annotated CLASS every
+    inbound JAX-RS catalog already reports (`jakarta-jaxrs.yml`, `quarkus-rest.yml`)
+    would ALSO derive an outbound row here, publishing a served operation as one the
+    module calls too."""
+    assert (
+        _gate_rows(
+            tmp_path,
+            "microprofile-rest-client",
+            owner_kind=ConstructKind.CLASS,
+            type_annotations={
+                "org/eclipse/microprofile/rest/client/inject/RegisterRestClient#": {},
+                "jakarta/ws/rs/Path#": {"value": "/orders"},
+            },
+            method_annotation="jakarta/ws/rs/GET#",
+            method_args={},
+        )
+        == []
+    )
 
 
 @pytest.mark.declines("quarkus-rest")

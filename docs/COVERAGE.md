@@ -49,7 +49,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | Scanner | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) |
 |---|---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1B 4C, 9 open) | ◐ (1A 1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1 open) |
+| **Java / Kotlin** | ✅ ASM | ◐ (2 limited, 1B 4C, 9 open) | ◐ (1B, 2 open) | ✅ | ✅ | ✅ | ◐ (1 open) |
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
@@ -82,7 +82,7 @@ register.
 | Framework family | [REST in](#51-rest-inbound) | [REST out](#52-rest-outbound) | [SOAP](#53-soap) | [GraphQL](#54-graphql) | [WebSocket](#55-websocket) | [SSE](#56-server-sent-events) | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **Spring Boot (Spring MVC / WebFlux, Cloud, Data, Integration, Kafka, AMQP, JMS, GCP, AWS)** | ◐ (7 open, 2 not shipped, 2 limited) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1 open) | ✅ | ✅ | ◐ (1 open, 1 not shipped) | ◐ (1 limited) |
-| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ◐ (2 open) | ◐ (1 open, 1 not shipped) | — | ✅ | — | ◐ (2 open) | ◐ (1 not shipped) | ◐ (1 not shipped) | — | — | — | — |
+| **Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)** | ◐ (2 open) | ◐ (1 open) | — | ✅ | — | ◐ (2 open) | ◐ (1 not shipped) | ◐ (1 not shipped) | — | — | — | — |
 | **Micronaut** | ✅ | ✅ | — | — | — | — | — | ✅ | ✅ | ◐ (1 open) | ✅ | — |
 | **Ktor** | ◐ (3 open) | ✗ | — | — | ✗ | ✗ | — | — | — | — | — | — |
 | **Javalin** | ◐ (1 open) | — | — | — | — | — | — | — | — | — | — | — |
@@ -762,7 +762,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**74 of 89 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**75 of 90 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -803,6 +803,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `micronaut-pubsub-client` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `micronaut-pubsub` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
+| `microprofile-rest-client` | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1, 4.0.0 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
@@ -2332,7 +2333,7 @@ the `combinator` vocabulary can read a verb off an argument the way `fluent` now
 | Spring Cloud Gateway (forwarding) | ✅ full | 1/1 | — |
 | JDK / Apache HttpClient | ✅ full | 1/1 | — |
 | Micronaut HTTP client | ✅ full | 1/1 | — |
-| MicroProfile REST Client | ◐ partial | 0/1 | not shipped: 1 at A; `mp-rest-client` |
+| MicroProfile REST Client | ◐ partial | 1/1 | `mp-rest-client` |
 | Apache Camel | ◐ partial | 0/1 | not shipped: 1 at B; `apache-camel` |
 | Ktor HttpClient | ✗ unsupported | 0/0 | no row yet |
 | Vert.x WebClient | ✗ unsupported | 0/0 | no row yet |
@@ -2448,7 +2449,7 @@ can name a plain-string attribute and `path_from` can be declared per annotation
 |---|---|---|---|---|
 | Java | Feign / Retrofit / @HttpExchange (annotated client interfaces) | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |
 | Java | Micronaut HTTP client | Micronaut `@Client` + `@Get`/`@Post`… on an interface | `annotation` | ✅ shipped (`micronaut-http-client.yml`, `declared_on: interface`, W58). `@Client` declares `value` and `path` and no media (W58 rows 45-46) |
-| Java | MicroProfile REST Client | MicroProfile `@RegisterRestClient` | `annotation` | A |
+| Java | MicroProfile REST Client | MicroProfile `@RegisterRestClient` | `annotation` | ✅ shipped (`microprofile-rest-client.yml`, `declared_on: interface`, CP-22, B/C Task 10b). `jakarta-jaxrs.yml` with the direction flipped and the construct kind fixed; `peer_from: [baseUri, configKey]` reads off `@RegisterRestClient` itself (`peer_annotation`, CP-22 row 2) rather than off `@Path`, which supplies only the prefix. **Boundary:** the base URI resolved from configuration — `<fqn>/mp-rest/url`, `quarkus.rest-client.<configKey>.url` — is not read; a client declaring only `configKey` carries the KEY as its peer, the Feign service-id precedent |
 | Java | Spring @HttpExchange (client registration) | Spring 7 `ImportHttpServices` registration | `annotation` | ✅ shipped — measured 2026-09-12 (`spring7-import-http-services`, register §0 "Retired as not-gaps"): the `@HttpExchange` interface derives its rows through `spring-http-interface.yml` (`declared_on: interface`) before any catalog reads the registration; there were no missing rows. Pinned by `tests/e2e/test_rest_outbound_delivered.py` |
 | Java | Spring RestTemplate | `RestTemplate` | `registration_call` | ✅ shipped |
 | Java | RestClient / WebClient / OkHttp (fluent clients) | `RestClient`, `WebClient`, OkHttp | `fluent_chain` | ✅ shipped |

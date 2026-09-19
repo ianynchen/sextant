@@ -233,10 +233,14 @@ def quarkus_endpoints(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True, reason="mp-rest-client: no catalog reads @RegisterRestClient; spec §3f"
-)
 def test_a_microprofile_rest_client_interface_derives_its_outbound_operations(quarkus_endpoints):
+    """`mp-rest-client` (B/C Task 10b, spec §3f): `OrdersClient`'s two `@Path`-gated
+    methods derive two outbound rows whose `peer` is `configKey` ("orders"), and
+    `BillingClient`'s single method derives one whose `peer` is `baseUri`
+    ("http://billing.internal/api") — CP-22 row 2's `peer_annotation` key, read off
+    `@RegisterRestClient` rather than off `@Path`. The client interface mints no
+    INBOUND row: `jakarta-jaxrs.yml`/`quarkus-rest.yml` both declare `declared_on:
+    class`, so a `@Path`-carrying INTERFACE is invisible to them."""
     out = {
         (r["method"], r["path"], r["peer"])
         for r in quarkus_endpoints

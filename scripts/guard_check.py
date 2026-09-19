@@ -599,6 +599,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "derive_endpoints.declared-on-construct-kind": Guard(
+        what="a catalog declaring `$declared_on` derives only from a declaration whose "
+        "enclosing type is that CONSTRUCT KIND",
+        why="2I design §4. The same annotation family means opposite things on a CLASS (a "
+        "server resource JAX-RS or JAX-WS publishes) and an INTERFACE (a generated "
+        "client stub or an MP REST Client) — `@RegisterRestClient`/`@Path` on a CLASS is "
+        "not `microprofile-rest-client.yml`'s shape at all. Without this fence an "
+        "outbound catalog gated on `declared_on: interface` would also derive from "
+        "every annotated CLASS an inbound catalog already reports, publishing a served "
+        "operation as one the module calls too",
+        edits=(
+            Edit(
+                path=_DERIVE_ENDPOINTS,
+                find="      AND (cp.declared_on IS NULL OR e.construct_kind = cp.declared_on)",
+                replace="      AND TRUE  -- guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
     "derive_endpoints.handler-is-a-method": Guard(
         what="a handler or caller is always a method (or a free function) — a TYPE-level use "
         "of a mapping annotation joins no declaration at all",
@@ -694,6 +712,29 @@ GUARDS: dict[str, Guard] = {
                 "        if superseded is not None:",
                 replace="        superseded = _superseded_by(workspace, catalog)\n"
                 "        if False:  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    # B/C Task 10b (CP-22 row 2, spec §3f). `peer_annotation`'s DEFAULT is
+    # Python rather than SQL — `derive_endpoints.sql`'s `peer_gates` reads
+    # whatever `$peer_annotation` already resolved to, so the fallback that
+    # makes every catalog written before this word byte-identical is written
+    # where the resolution happens.
+    "derive_endpoints.peer-read-off-the-peer-annotation": Guard(
+        what="`peer_from` is read off `mapping.peer_annotation` where a catalog declares one, "
+        "not unconditionally off `mapping.prefix_annotation`",
+        why="CP-22 row 2: MicroProfile REST Client's prefix (`@Path`) and peer "
+        "(`@RegisterRestClient`'s `baseUri`/`configKey`) sit on two different annotations. "
+        "Forcing the fallback unconditionally reads `peer_from` off `@Path`, which carries "
+        "neither attribute, so every MP REST Client row's `peer` derives NULL instead of "
+        "the config key or base URI Feign's own `peer_from` precedent says a client's "
+        "peer should be",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    peer_annotation = mapping.get("peer_annotation") or prefix_annotation',
+                replace="    peer_annotation = prefix_annotation  # guard disabled by "
+                "scripts/guard_check.py",
             ),
         ),
     ),

@@ -1,0 +1,128 @@
+id: microprofile-rest-client
+displayName: MicroProfile REST Client
+style: annotation_driven
+protocol: http
+direction: outbound
+
+# `jakarta-jaxrs.yml` with the direction flipped and the construct kind fixed
+# — the `jakarta-jws.yml`/`jakarta-jws-client.yml` partition, and the
+# `spring-http-interface.yml` shape (spec 2026-09-18 §3f). MicroProfile REST
+# Client declares an HTTP CLIENT as an INTERFACE carrying the same JAX-RS
+# annotations a server resource carries — `@Path` on the type, `@GET`/
+# `@Path`/`@Produces`/`@Consumes` on the methods — gated by
+# `@RegisterRestClient`. CP-22 row 1: `@RegisterRestClient` is
+# `@Target(TYPE)`, `@Retention(RUNTIME)`, and declares exactly two `String`
+# attributes, `baseUri()` and `configKey()`, both defaulting to `""` —
+# unchanged 3.0.1 → 4.0.
+detect:
+  coordinates: ["org.eclipse.microprofile.rest.client:microprofile-rest-client-api",
+                "io.quarkus:quarkus-rest-client", "io.quarkus:quarkus-rest-client-jackson"]
+
+measured:
+  - { artifact: org.eclipse.microprofile.rest.client:microprofile-rest-client-api,
+      versions: ["3.0.1", "4.0.0"], identity: reported,
+      by: scripts/probes/cp22_microprofile_rest_client.md }
+
+requires: [annotation_args, typed_signatures]
+
+matches:
+  type_annotation: org.eclipse.microprofile.rest.client.inject.RegisterRestClient
+  # 2I design §4: a `@Path` INTERFACE is EITHER a generated contract a server
+  # class inherits from (`jakarta-jaxrs.yml`'s own type-level gate, which
+  # already reaches an interface an implementing class inherits from) OR this
+  # catalog's client — never both for the same interface, because
+  # `jakarta-jaxrs.yml`, `javax-jaxrs.yml` and `quarkus-rest.yml` all declare
+  # `declared_on: class`. THE FENCE THAT COMPLETES IT: an outbound
+  # interface-gated derivation subtracts every interface the module's own
+  # classes implement (D00 §5a's `implemented_interfaces`) — a client
+  # interface is implemented by nobody in the module, so it survives; a
+  # hand-written contract a server class DOES implement is subtracted, and
+  # its operations are `jakarta-jaxrs.yml`'s row on the implementing class
+  # alone. Without this fence `fixtures/orders-quarkus/.../OrdersClient.java`
+  # would mint an inbound row for an operation nothing here serves.
+  declared_on: interface
+  # `jakarta-jaxrs.yml`'s own `bound_by`/`excludes` shape, minus its
+  # `excludes`: those ten types (`SseEventSink`, `UriInfo`, …) are context
+  # objects a JAX-RS RUNTIME injects into a server resource method, and a
+  # client interface — whose methods this catalog derives as CALLS, not as
+  # dispatched handlers — never receives one. `bound_by` stays identical: the
+  # binding annotations mean the same thing whichever direction the interface
+  # faces, because they are read off the SAME parameter, by the SAME rule,
+  # regardless of who ends up invoking the method.
+  request_body:
+    fallback: sole_unbound
+    bound_by: [jakarta.ws.rs.PathParam, jakarta.ws.rs.QueryParam, jakarta.ws.rs.HeaderParam,
+               jakarta.ws.rs.CookieParam, jakarta.ws.rs.FormParam, jakarta.ws.rs.MatrixParam,
+               jakarta.ws.rs.BeanParam, jakarta.ws.rs.DefaultValue, jakarta.ws.rs.core.Context,
+               jakarta.ws.rs.container.Suspended]
+    excludes: []
+  mapping:
+    prefix_annotation: jakarta.ws.rs.Path      # the interface's own @Path, as the resource's is
+    prefix_from: [value]
+    # CP-22 row 2 (spec §3f): `peer_from` reads OFF THIS annotation, not off
+    # `prefix_annotation` — `@RegisterRestClient` carries no prefix attribute
+    # at all (row 1), so the prefix comes from `@Path` while the peer comes
+    # from the gate. The `derive_endpoints.sql` measurement (row 2) confirms
+    # `prefixes` joined a SINGLE annotation row for both halves — true for
+    # `spring-cloud-openfeign.yml`'s `@FeignClient`, which carries `name`
+    # (the peer) and `path` (the prefix) on the one annotation, but not here.
+    # `peer_annotation` is the second-annotation key that measurement showed
+    # was missing; every OTHER shipped catalog leaves it unset, so
+    # `annotation_driven.py::params_for` defaults it to `prefix_annotation`
+    # and derives exactly as it did before this key existed.
+    peer_annotation: org.eclipse.microprofile.rest.client.inject.RegisterRestClient
+    # `spring-cloud-openfeign.yml`'s own precedent, restated: `peer_from`
+    # names the SERVICE IDENTIFIER a client carries, not a resolved address.
+    # A client declaring `baseUri` carries the literal URI as its peer
+    # (`BillingClient`, `fixtures/orders-quarkus`); one declaring only
+    # `configKey` (no `baseUri`) carries the KEY as its peer instead
+    # (`OrdersClient`) — Feign's `name` restated, one attribute over. Both are
+    # the framework's own identifier for who is being called, never a value
+    # this catalog RESOLVES (the boundary below).
+    peer_from: [baseUri, configKey]
+    path_separator: "/"
+    path_from: []
+    path_from_siblings: [{ annotation: jakarta.ws.rs.Path, arg: value }]
+    produces_from_siblings: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+    consumes_from_siblings: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    type_media_from_siblings:
+      produces: [{ annotation: jakarta.ws.rs.Produces, arg: value }]
+      consumes: [{ annotation: jakarta.ws.rs.Consumes, arg: value }]
+    method_from: method
+    all_methods: []
+    annotations:
+      - { fqn: jakarta.ws.rs.GET,     method: [GET] }
+      - { fqn: jakarta.ws.rs.POST,    method: [POST] }
+      - { fqn: jakarta.ws.rs.PUT,     method: [PUT] }
+      - { fqn: jakarta.ws.rs.DELETE,  method: [DELETE] }
+      - { fqn: jakarta.ws.rs.PATCH,   method: [PATCH] }
+      - { fqn: jakarta.ws.rs.HEAD,    method: [HEAD] }
+      - { fqn: jakarta.ws.rs.OPTIONS, method: [OPTIONS] }
+
+# **Boundary, stated (CP-22 row 3).** The base URI resolved from
+# CONFIGURATION — the standard MicroProfile `<fqn>/mp-rest/url` /
+# `<configKey>/mp-rest/url` legacy property, and Quarkus's own
+# `quarkus.rest-client.<configKey>.url`/`.uri`, which
+# `RestClientCDIDelegateBuilder.configureBaseUrl` prefers over the
+# annotation's `baseUri` whenever both are present — is not read. A client
+# declaring `configKey` and no `baseUri` carries the KEY as its `peer`,
+# exactly as a Feign client carries its service id
+# (`spring-cloud-openfeign.yml`'s `peer_from: [name, value]` precedent):
+# neither catalog resolves the identifier to the address configuration
+# ultimately supplies. Reading the property is D02 §2d's `config_join`
+# territory and a later item, not this one.
+
+# spring-web.yml's own table, copied verbatim (2G design §7 rung 2) — the
+# inbound twin's exact copy, so a module pulling in only this catalog still
+# gets the vocabulary.
+media_formats:
+  application/json: json
+  application/x-protobuf: protobuf
+  application/protobuf: protobuf
+  avro/binary: avro
+  application/xml: xml
+  text/xml: xml
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json

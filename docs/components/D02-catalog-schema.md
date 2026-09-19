@@ -613,6 +613,12 @@ matches:
   separately, so `@RequestMapping` declares `prefix_from: [value, path]`, `@FeignClient`
   declares `prefix_from: [path]` and `peer_from: [name, value]`, and `@HttpExchange`
   declares `prefix_from: [value, url]`.
+- **`peer_from` is read off `peer_annotation`, which defaults to the prefix annotation**;
+  MicroProfile puts the prefix on `@Path` and the peer on `@RegisterRestClient` (CP-22
+  row 2, spec §3f). Every catalog above shares one annotation for both roles — Feign's
+  `@FeignClient` carries `path` and `name` on the same row — so `peer_annotation` is
+  optional and inert everywhere `peer_from`'s own attribute already sits on the prefix
+  annotation; `microprofile-rest-client.yml` is the one catalog that declares it.
 - **`path_separator` says what joins the prefix to the address it prefixes**, and it is
   the character deduped at that seam. Optional; a catalog declaring none concatenates the
   two halves bare, which is what every catalog did before the key existed.

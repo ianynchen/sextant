@@ -63,6 +63,15 @@
 --                           file never asks which level declared it.
 --   $prefix_annotation   -- LIST of fqns for the type-level annotation carrying the
 --                           path prefix (§3.1: one annotation, several spellings)
+--   $peer_annotation     -- LIST of fqns for the type-level annotation $peer_from is
+--                           read off (CP-22 row 2, spec §3f). Defaults to
+--                           $prefix_annotation where the catalog declares no
+--                           `peer_annotation` key of its own — true for every
+--                           catalog shipped before this word, which is why
+--                           they derive byte-identically. MicroProfile REST
+--                           Client is the one framework where prefix and peer
+--                           sit on two different annotations: the prefix is
+--                           `@Path`, the peer is `@RegisterRestClient`.
 --   $path_from           -- attribute names that alias one another, first present wins
 --   $path_from_siblings  -- `OI-35`: {ordinal, annotation, arg} rows naming a
 --                           name source that lives on ANOTHER annotation of the
@@ -271,7 +280,7 @@ WITH RECURSIVE catalog_params AS (
         $catalogs::STRUCT(
             catalog_id VARCHAR, protocol VARCHAR, direction VARCHAR,
             type_annotation VARCHAR[], declared_on VARCHAR, locally_implemented VARCHAR[],
-            prefix_annotation VARCHAR[], class_level VARCHAR,
+            prefix_annotation VARCHAR[], peer_annotation VARCHAR[], class_level VARCHAR,
             mapping_annotations STRUCT(
                 fqn VARCHAR, methods VARCHAR[], requires_qualifier BOOLEAN,
                 unless_attribute VARCHAR, unless_equals VARCHAR,
@@ -307,6 +316,15 @@ type_gates AS (
 ),
 prefix_gates AS (
     SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.prefix_annotation)) AS fqn
+    FROM catalog_params cp
+),
+-- CP-22 row 2 (spec §3f): `peers` below reads `peer_from` off THIS annotation
+-- rather than `prefix_gates` — identical shape, mirrors `prefix_gates`
+-- exactly, because `$peer_annotation` already defaults to `$prefix_annotation`
+-- for every catalog that declares none, so this list is `prefix_gates`'s own
+-- fqns for every shipped catalog but the one that names a different one.
+peer_gates AS (
+    SELECT cp.catalog_id AS catalog_id, UNNEST(list_distinct(cp.peer_annotation)) AS fqn
     FROM catalog_params cp
 ),
 mapping_catalog AS (
@@ -1016,6 +1034,33 @@ prefixes AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
 ),
+-- CP-22 row 2 (spec §3f): `prefixes.peer` above is read off the PREFIX gate's
+-- own row, which is correct for every catalog whose peer and prefix share one
+-- annotation (`@FeignClient`) but wrong for MicroProfile REST Client, whose
+-- peer (`baseUri`/`configKey`) sits on `@RegisterRestClient` while the prefix
+-- sits on `@Path` — two different annotation rows on the same type. `peers`
+-- mirrors `prefixes` exactly (same keying, same scalar-or-array read) but
+-- joins through `peer_gates` instead, so it reads `$peer_from` off the row
+-- `$peer_annotation` actually names. Below, the final select coalesces
+-- `peers.peer` ahead of `prefixes.peer` — `peers` wins wherever it has a row,
+-- which is every catalog that declares its own `peer_annotation`; every other
+-- catalog's `peer_gates` is byte-identical to its `prefix_gates` (the default
+-- in `annotation_driven.py::params_for`), so `peers` joins the SAME
+-- annotation row `prefixes` did and the two columns agree — the coalesce is
+-- inert for them.
+peers AS (
+    SELECT
+        pg.catalog_id AS catalog_id,
+        a.target AS type_symbol,
+        list_extract(list_filter(list_transform(
+            cp.peer_from,
+            n -> coalesce(a.args -> n ->> 0, a.args ->> n)
+        ), v -> v IS NOT NULL), 1) AS peer
+    FROM annotations_effective a
+    JOIN peer_gates pg ON pg.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
+),
 -- Spec 2026-09-18 §3b word 2: the class-level media default read off a TYPE-level sibling
 -- (`@Produces` on a JAX-RS resource class). Keyed on the type so it joins exactly as
 -- `prefixes` does; the combine below is coalesce — the method's declaration, else the
@@ -1355,7 +1400,11 @@ derived AS (
         CASE WHEN resolved_direction = 'outbound' THEN NULL
              ELSE coalesce(fh.handler, s.symbol) END AS handler,
         CASE WHEN resolved_direction = 'outbound' THEN s.symbol END AS caller,
-        p.peer      AS peer,
+        -- `peers.peer` ahead of `prefixes.peer` (CP-22 row 2, spec §3f): the
+        -- two agree for every catalog whose `peer_annotation` defaults to its
+        -- `prefix_annotation`, and `peers` is the one that reads MicroProfile
+        -- REST Client's `@RegisterRestClient` row correctly.
+        coalesce(pr.peer, p.peer) AS peer,
         s.signature AS handler_signature,
         -- THE UNRESOLVED-PATH GATE (2O Task 7 Step 1). Every row this CTE
         -- derives used to be stamped `resolved` unconditionally, which is a
@@ -1425,6 +1474,11 @@ derived AS (
            AND coalesce(m.gate_type, s.enclosing) = c.type_symbol
     LEFT JOIN prefixes p ON p.catalog_id = m.catalog_id
            AND p.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- CP-22 row 2 (spec §3f): `peers`'s own row for this type, read off
+    -- `$peer_annotation` rather than `$prefix_annotation` — see `peers`'s own
+    -- comment for why the two agree for every catalog but this group's new one.
+    LEFT JOIN peers pr ON pr.catalog_id = m.catalog_id
+           AND pr.type_symbol = coalesce(m.gate_type, s.enclosing)
     -- `type_media` only ever matches a TYPE symbol because the join key is the
     -- enclosing type; a method-level `@Produces` row in `annotations_effective`
     -- has a method target and never joins here.

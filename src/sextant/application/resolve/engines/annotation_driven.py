@@ -127,6 +127,20 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
             catalog_symbols(prefix_annotation, f"{catalog.source}: mapping.prefix_annotation")
         )
     )
+    # CP-22 row 2 (spec §3f): `peer_from` used to be read off the SAME
+    # annotation row `prefix_from` is — true for `@FeignClient`, where prefix
+    # and peer share one annotation, but not for MicroProfile REST Client,
+    # whose prefix sits on `@Path` and whose peer sits on `@RegisterRestClient`
+    # — two different annotations. `peer_annotation` names the second one and
+    # defaults to `prefix_annotation` where a catalog declares none, so every
+    # catalog shipped before this word reads `peer_from` exactly where it
+    # always did and derives byte-identically.
+    peer_annotation = mapping.get("peer_annotation") or prefix_annotation
+    peer_fqns = (
+        None
+        if peer_annotation is None
+        else list(catalog_symbols(peer_annotation, f"{catalog.source}: mapping.peer_annotation"))
+    )
     mapping_annotations = [_mapping_annotation(mapping, m) for m in mapping["annotations"]]
     return {
         "protocol": catalog.protocol,
@@ -152,6 +166,9 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
             else []
         ),
         "prefix_annotation": prefix_fqns,
+        # `peer_from` reads off THIS annotation, not `prefix_annotation` —
+        # the two differ only for MicroProfile REST Client today (spec §3f).
+        "peer_annotation": peer_fqns,
         # F2 §3.5's relationship conjunct. How a class-level annotation relates
         # to the methods inside it — `prefix` (compose, the HTTP shape) or
         # `sibling` (a method naming its own destination is its OWN
