@@ -243,9 +243,15 @@ say what it is FOR, or the key describes a bypass of a gate that is not there.
 capability or an unmet dependency already uses** (`resolve/endpoints.py`, the third gate,
 after `unmet_dependency`) — `SkippedCatalog(catalog.id, ("superseded by <coordinate>",))` —
 never a silent zero. The coordinate read is the SAME one `unmet_dependency` uses
-(`_declared_coordinates`, `resolve/dependencies.py`) rather than a second query: a module
-recording no module fact at all answers "could not tell" here exactly as it does there, and a
-catalog is never refused by a question nothing answered.
+(`_declared_coordinates`, `resolve/dependencies.py`) rather than a second query, but **the
+"could not tell" case resolves to the OPPOSITE consequence from the positive gate** — this is
+a negative condition, not `detect.coordinates` restated with the sense flipped. A module
+recording no module fact at all makes `unmet_dependency` SKIP the catalog it gates (a
+dependency it cannot confirm is present is treated as absent); the same "could not tell" makes
+`_superseded_by` return `None` and the catalog RUNS — a coordinate it cannot confirm is
+present is never treated as present either, and a catalog is never refused by a question
+nothing answered in either direction, which is what keeps every catalog's behaviour
+unchanged on a workspace whose facts predate the module fact.
 
 **A gated catalog that does not derive files a question rather than going quiet**, on
 either failing branch of the gate: no module fact recorded, and coordinates recorded that

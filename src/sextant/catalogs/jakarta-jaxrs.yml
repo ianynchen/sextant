@@ -1,5 +1,5 @@
 id: jakarta-jaxrs
-displayName: JAX-RS (jakarta.ws.rs) — Quarkus REST, Jersey, RESTEasy, Helidon
+displayName: JAX-RS (jakarta.ws.rs) — Jersey, RESTEasy, Helidon
 style: annotation_driven
 protocol: http
 direction: inbound

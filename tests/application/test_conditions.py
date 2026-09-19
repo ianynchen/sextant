@@ -26,6 +26,15 @@ from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document, SymbolFact
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
+# A real module prefix, the `test_shapes.py` precedent (`_MODULE`): a fact's own `symbol`
+# always carries module coordinates ahead of the bare descriptor (D00 §5a), and a fixture
+# using bare descriptors throughout cannot catch a bug in code that forgets to strip them —
+# which is exactly what happened here (B/C Task 10 fix round 1, `conditions.py`'s
+# `_member_annotations_by_type`: its returned dict was keyed on the FULL fact symbol while
+# every real caller compares a BARE `erased_symbol` against it, and this file's own bare-only
+# fixture passed under both the broken and the fixed keying because it never had a "full"
+# form to tell them apart).
+_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 _UPLOAD = "com/acme/Upload#"
 _FILE = "com/acme/Upload#file."
 _SETTER = "com/acme/Upload#setName()."
@@ -62,45 +71,52 @@ def _loaded(tmp_path: Path) -> DuckDbWorkspace:
         redaction_set_hash="sha256:b",
     )
     facts = [
-        SymbolFact(document_id="doc_1", symbol=_UPLOAD, construct_kind=ConstructKind.CLASS),
         SymbolFact(
-            document_id="doc_1", symbol=_FILE, construct_kind=ConstructKind.FIELD, enclosing=_UPLOAD
+            document_id="doc_1", symbol=_MODULE + _UPLOAD, construct_kind=ConstructKind.CLASS
         ),
         SymbolFact(
             document_id="doc_1",
-            symbol=_SETTER,
-            construct_kind=ConstructKind.METHOD,
-            enclosing=_UPLOAD,
+            symbol=_MODULE + _FILE,
+            construct_kind=ConstructKind.FIELD,
+            enclosing=_MODULE + _UPLOAD,
         ),
-        SymbolFact(document_id="doc_1", symbol=_RESOURCE, construct_kind=ConstructKind.CLASS),
         SymbolFact(
             document_id="doc_1",
-            symbol=_CREATE,
+            symbol=_MODULE + _SETTER,
             construct_kind=ConstructKind.METHOD,
-            enclosing=_RESOURCE,
+            enclosing=_MODULE + _UPLOAD,
+        ),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + _RESOURCE, construct_kind=ConstructKind.CLASS
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + _CREATE,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _RESOURCE,
         ),
         AnnotationFact(
             document_id="doc_1",
-            target=_FILE,
+            target=_MODULE + _FILE,
             retention="runtime",
             use=AnnotationUse(annotation=_REST_FORM, args={"value": "file"}),
         ),
         AnnotationFact(
             document_id="doc_1",
-            target=_SETTER,
+            target=_MODULE + _SETTER,
             retention="runtime",
             use=AnnotationUse(annotation=_REST_FORM, args={}),
         ),
         AnnotationFact(
             document_id="doc_1",
-            target=_CREATE,
+            target=_MODULE + _CREATE,
             retention="runtime",
             use=AnnotationUse(annotation=_POST, args={}),
         ),
         # On the TYPE itself: not a member, so it reaches no type's member set.
         AnnotationFact(
             document_id="doc_1",
-            target=_RESOURCE,
+            target=_MODULE + _RESOURCE,
             retention="runtime",
             use=AnnotationUse(annotation="jakarta/ws/rs/Path#", args={"value": "/r"}),
         ),
@@ -116,21 +132,32 @@ def test_annotation_index_groups_every_annotation_row_by_its_target(tmp_path):
     index = annotation_index(workspace)
     workspace.close()
 
-    assert index[_FILE] == [(_REST_FORM, {"value": "file"})]
-    assert index[_CREATE] == [(_POST, {})]
-    assert _UPLOAD not in index
+    # `annotation_index` returns the row's `target` UNCHANGED — the full fact symbol, module
+    # coordinates included, exactly as `annotations.target` carries it (it is `member_annotations_
+    # by_type`, tested below, that strips to the bare descriptor for its own callers).
+    assert index[_MODULE + _FILE] == [(_REST_FORM, {"value": "file"})]
+    assert index[_MODULE + _CREATE] == [(_POST, {})]
+    assert _MODULE + _UPLOAD not in index
 
 
 def test_member_annotations_are_grouped_by_the_declaring_type(tmp_path):
     """Quarkus's parameter-container rule (CP-19 row 4): a class whose FIELD or
     METHOD carries a binding annotation. The type's own annotation is not a
-    member's and must not put `@Path` into `R`'s set."""
+    member's and must not put `@Path` into `R`'s set.
+
+    The facts carry the FULL module-prefixed symbol, the real shape (`_MODULE`,
+    `test_shapes.py`'s own precedent) — a bare-only fixture cannot catch a keying bug, which
+    is exactly what let this word's own defect ship unnoticed (B/C Task 10 fix round 1). The
+    returned dict's keys must be the BARE descriptor: every real caller
+    (`shapes/contracts.py::_is_bound`, predicate 3) compares against a parameter's
+    `erased_symbol`, which a `Signature` always carries bare."""
     workspace = _loaded(tmp_path)
     members = member_annotations_by_type(workspace)
     workspace.close()
 
     assert members[_UPLOAD] == {_REST_FORM}
     assert members[_RESOURCE] == {_POST}
+    assert _MODULE + _UPLOAD not in members
 
 
 def test_both_folds_are_built_once_per_load(tmp_path):
