@@ -74,6 +74,17 @@ kotlin {
     compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
 }
 
+// A second Kotlin test source set, compiled with `-Xlambdas=class` so a lambda is a
+// class file the scanner can be handed (`lambda_body`, spec 2026-09-19 §3b). Kept apart
+// from `test` because `KotlinCaptureSample` there asserts the default `invokedynamic`
+// shape, and the flag is per compilation, not per file. Its classes reach the tests
+// through the runtime classpath only; nothing here reaches the shaded jar.
+val testLambdaClass: SourceSet by sourceSets.creating
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileTestLambdaClassKotlin") {
+    compilerOptions.freeCompilerArgs.add("-Xlambdas=class")
+}
+dependencies { testRuntimeOnly(testLambdaClass.output) }
+
 tasks.test { useJUnitPlatform() }
 
 // The third-party libraries that actually read a class file, with the versions

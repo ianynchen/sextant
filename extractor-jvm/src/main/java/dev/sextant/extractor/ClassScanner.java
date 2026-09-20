@@ -149,6 +149,14 @@ public final class ClassScanner {
         private String defaultImplsOf;
         private int defaultImplsMethods;
         private boolean defaultImplsShape = true;
+        // R2 (spec §3b): a lambda kotlinc compiled as a class, recognised from its
+        // superclass in `visit`. Which of its methods is the BODY is settled per method
+        // as they are visited — the typed `invoke` and `invokeSuspend`, each as the
+        // bare symbol a `lambda` argument spells — so the class's own fact, emitted
+        // last, can name it (`lambda_body`).
+        private boolean kotlinLambdaClass;
+        private String lambdaTypedInvoke;
+        private String lambdaInvokeSuspend;
         // Populated from @Metadata before any field is visited (ASM visits class-level
         // annotations before fields — see visitAnnotation below); empty for every
         // non-Kotlin class, which leaves Java's rule as the only source.
@@ -233,6 +241,14 @@ public final class ClassScanner {
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
             this.superName = superName;
+            // R2 (spec §3b): a lambda kotlinc compiled as a class — the two base classes the
+            // compiler uses, `Lambda` for a plain lambda and `SuspendLambda` for a suspend
+            // one (kotlin-stdlib 2.2.0). Which of its methods is the BODY is settled per
+            // method below, and the type's own fact states it (`lambda_body`), exactly as a
+            // `$default` bridge states `bridge_of`: the extractor knows its own compiler;
+            // the resolve layer joins on the key and names no language.
+            kotlinLambdaClass = "kotlin/jvm/internal/Lambda".equals(superName)
+                || "kotlin/coroutines/jvm/internal/SuspendLambda".equals(superName);
             // D00 §5a's PTR carrier. `superName` says only "extends
             // ParameterizedTypeReference"; the Signature attribute is the only
             // place its argument is written down, and for an anonymous subclass
@@ -478,6 +494,19 @@ public final class ClassScanner {
             }
             String bridgeOf = standsFor != null ? standsFor
                 : defaultBridge == null ? null : defaultBridge.function();
+            // R2: inside a Kotlin lambda class, remember the two methods that can be its
+            // body. Spelled as `MethodFlow.lambdaSymbol` spells a `lambda` argument — the
+            // bare descriptor path, no coordinates — so the key joins to
+            // `call_sites.arguments[].symbol` and to the body's own symbol fact.
+            if (kotlinLambdaClass) {
+                String bare = internalName + "#" + name + "(" + disambiguatorOf(descriptor) + ").";
+                if ("invokeSuspend".equals(name) && "(Ljava/lang/Object;)Ljava/lang/Object;".equals(descriptor)) {
+                    lambdaInvokeSuspend = bare;
+                } else if ("invoke".equals(name) && (access & Opcodes.ACC_SYNTHETIC) == 0
+                        && lambdaTypedInvoke == null) {
+                    lambdaTypedInvoke = bare;
+                }
+            }
 
             // Parameter names (visitParameter) and parameter annotations
             // (visitParameterAnnotation) arrive as callbacks during the visit, so the
@@ -1781,6 +1810,15 @@ public final class ClassScanner {
                 // `enclosing` does; the KEY is the statement.
                 if (defaultImplsOf != null && defaultImplsMethods > 0 && defaultImplsShape) {
                     fact.put("implements_default_of", JsonOut.string(symbolOf(defaultImplsOf + "#")));
+                }
+                // R2: the body method of a Kotlin lambda class — `invokeSuspend` where the
+                // class declares one (a suspend lambda's `invoke` only builds the
+                // continuation), else the one non-synthetic `invoke` (the erased
+                // `invoke(Object)` is the compiler's bridge). Absent on every other type and
+                // on a lambda class with neither — an unreadable one is left alone.
+                if (kotlinLambdaClass) {
+                    String body = lambdaInvokeSuspend != null ? lambdaInvokeSuspend : lambdaTypedInvoke;
+                    if (body != null) fact.put("lambda_body", JsonOut.string(body));
                 }
                 if (!nestMembers.isEmpty()) fact.put("nest_members", JsonOut.array(nestMembers));
                 if (!unreadAttributes.isEmpty()) {
