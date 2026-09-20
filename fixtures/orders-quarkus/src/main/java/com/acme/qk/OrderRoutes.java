@@ -26,8 +26,11 @@ public class OrderRoutes {
         return "[]";
     }
 
+    // `id` names the path segment — Vert.x serves it through the same `getParam` — and
+    // gets no row; `verbose` is the query parameter beside it (spec 2026-09-19 §5b,
+    // `skip_path_variables`).
     @Route(path = "/:id", methods = HttpMethod.GET)
-    public String find(@Param String id) {
+    public String find(@Param String id, @Param String verbose) {
         return "{}";
     }
 

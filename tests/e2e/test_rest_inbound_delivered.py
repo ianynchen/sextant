@@ -1222,10 +1222,11 @@ def test_quarkus_rest_and_reactive_routes_parameters_are_optional(quarkus_tables
     `@Nullable` (rows 11–12): `optional`, as §5b's table asked CP-25 to confirm.
 
     The fixture's older handlers carry `@Param String id` under `/:id` — the guide's
-    idiom for a PATH segment, which Vert.x also serves through `getParam` — and §5b
-    writes them as `query id optional` too: an imprecise kind rather than a false
-    requirement, pinned as it is and reported for a ruling (a `@Param` naming one of the
-    row's own path variables could be skipped the way §5d's reads skip path variables)."""
+    idiom for a PATH segment, which Vert.x serves through the same `getParam` — and the
+    entry's `skip_path_variables` (ruled 2026-09-20, fix round 1) gives them NO row: `id`
+    is the path parameter, and `query id` would be a false statement about what the
+    handler binds. `find(@Param id, @Param verbose)` on `/:id` is the pair: one row,
+    `verbose`, and none for `id`."""
     rows = quarkus_tables["endpoints"]
     rest = bare_descriptor(_handler_of(rows, "GET", "/q/orders/search"))
     routes = bare_descriptor(_handler_of(rows, "GET", "/qk/orders/search"))
@@ -1238,12 +1239,9 @@ def test_quarkus_rest_and_reactive_routes_parameters_are_optional(quarkus_tables
         ("GET", routes, "query", "q", None, "optional", "resolved"),
         ("GET", routes, "header", "X-Tenant", None, "optional", "resolved"),
     }
-    path_bound = {r for r in requirements if r[1].startswith("/qk/orders/:id")}
-    assert {(r[0], r[1], r[3], r[4], r[6]) for r in path_bound} == {
-        ("GET", "/qk/orders/:id", "query", "id", "optional"),
-        ("PUT", "/qk/orders/:id", "query", "id", "optional"),
-        ("DELETE", "/qk/orders/:id", "query", "id", "optional"),
-        ("POST", "/qk/orders/:id/cancel", "query", "id", "optional"),
-        ("POST", "/qk/orders/:id/void", "query", "id", "optional"),
+    find = bare_descriptor(_handler_of(rows, "GET", "/qk/orders/:id"))
+    assert _at(requirements, "/qk/orders/:id") == {
+        ("GET", find, "query", "verbose", None, "optional", "resolved"),
     }
-    assert len(requirements) == 4 + len(path_bound), sorted(requirements, key=str)
+    assert not any(r[4] == "id" for r in requirements), sorted(requirements, key=str)
+    assert len(requirements) == 5, sorted(requirements, key=str)

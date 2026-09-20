@@ -23,8 +23,13 @@ matches:
   # `params().get(name)` / `headers().get(name)` — wrapping an `Optional` parameter in
   # `Optional.ofNullable` (quarkus-reactive-routes-deployment 3.17.5, vertx-core 4.5.11,
   # CP-25 row 12). Absent → null, never a 400: confirmed, as §5b's table asked.
+  # `skip_path_variables` on `@Param`: Vert.x's `getParam` serves path and query
+  # parameters alike (row 12: `params().get(name)`, the map Vert.x Web fills with the
+  # route's path parameters too), and `@Param String id` under `/:id` — the guide's own
+  # idiom — is the path segment, not a query parameter; a `@Param` naming one of the
+  # row's `:name` segments gets no row.
   request_params:
-    - { annotation: io.quarkus.vertx.web.Param,  kind: query,  name_attrs: [value], requirement: optional }
+    - { annotation: io.quarkus.vertx.web.Param,  kind: query,  name_attrs: [value], requirement: optional, skip_path_variables: true }
     - { annotation: io.quarkus.vertx.web.Header, kind: header, name_attrs: [value], requirement: optional }
   mapping:
     # MEASURED at 3.17.5 (`javap`): `@Route` declares `path`, `regex`, `methods`

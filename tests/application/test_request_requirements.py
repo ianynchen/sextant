@@ -35,7 +35,10 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.request_requirements import record_request_requirements
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+CATALOGS = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 ROUTES = _MODULE + "com/acme/orders/OrderRoutes#routes(sig_00000001)."
@@ -287,11 +290,11 @@ def _row(name: object, requirement: object, **overrides: object) -> dict[str, ob
     }
 
 
-def _run(tmp_path: Path, signature: dict[str, object] | None, *catalogs: Catalog) -> list:
+def _run(
+    tmp_path: Path, signature: dict[str, object] | None, *catalogs: Catalog, path: str = "/orders"
+) -> list:
     tmp_path.mkdir(exist_ok=True)
-    workspace = _workspace(
-        tmp_path, ("http", "GET", "/orders", HANDLER, ROUTES), signature=signature
-    )
+    workspace = _workspace(tmp_path, ("http", "GET", path, HANDLER, ROUTES), signature=signature)
     record_request_requirements(workspace, list(catalogs) or [_params_catalog(BINDER_ENTRY)])
     entries = _entries(workspace)
     workspace.close()
@@ -349,6 +352,39 @@ def test_each_binder_disjunct_alone_flips_the_parameter_to_optional(
     nullable type reaches here without the language being named); `declares_default`
     is the Kotlin delegate's `KParameter.isOptional()` (R1)."""
     assert _run(tmp_path, _signature(parameter)) == [_row("q", "optional")]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "jakarta.annotation.Nullable",
+        "io.micronaut.core.annotation.Nullable",
+        "javax.annotation.Nullable",
+        "org.jetbrains.annotations.Nullable",
+        "org.jspecify.annotations.Nullable",
+        "edu.umd.cs.findbugs.annotations.Nullable",
+        "androidx.annotation.Nullable",
+        "org.eclipse.jdt.annotation.Nullable",
+        "reactor.util.annotation.Nullable",
+        "io.reactivex.annotations.Nullable",
+        "io.reactivex.rxjava3.annotations.Nullable",
+        "org.springframework.lang.Nullable",
+        "org.checkerframework.checker.nullness.qual.Nullable",
+    ],
+)
+def test_every_measured_nullable_spelling_in_the_shipped_shape_model_flips_to_optional(
+    tmp_path: Path, spelling: str
+):
+    """The SHIPPED list, not an invented one: CP-25 row 8's eleven (the stereotype and the
+    ten spellings Micronaut's processor maps onto it), plus the two more Spring's
+    simple-name rule accepts in real code. A spelling missing from `shape-models/json.yml`
+    reads `required` on a parameter both binders serve without — the false positive the
+    2026-09-20 ruling forbids — so each is pinned against the file itself."""
+    shipped = next(c for c in YamlCatalogSource(CATALOGS).load() if c.nullability.get("nullable"))
+    assert spelling in shipped.nullability["nullable"], spelling
+    catalog = _params_catalog(BINDER_ENTRY, nullable=tuple(shipped.nullability["nullable"]))
+    signature = _signature(_parameter("q", annotations=[_use(spelling), _use(QUERY)]))
+    assert _run(tmp_path, signature, catalog) == [_row("q", "optional")]
 
 
 def test_required_true_written_out_stays_required(tmp_path: Path):
@@ -413,6 +449,56 @@ def test_an_unreadable_parameter_is_a_miss_never_required(tmp_path: Path):
     assert _run(tmp_path / "null-signature", None) == []
     signature = _signature(_parameter("untyped", erased=None), _parameter("q"))
     assert _run(tmp_path / "untyped-parameter", signature) == [_row("q", "required")]
+
+
+def test_a_use_whose_args_were_never_read_writes_nothing(tmp_path: Path):
+    """D00 §5a: past the nesting bound the scanner records `{annotation, unresolved:
+    depth_limit}` with NO `args` key — an empty `args` would read as an annotation
+    written with none. An attribute list that was never opened states nothing about
+    `required` or `defaultValue`, so the parameter gets no row rather than a `required`
+    off a list nobody read; the readable sibling still derives."""
+    unread = _parameter(
+        "q", annotations=[{"annotation": _descriptor(QUERY), "unresolved": "depth_limit"}]
+    )
+    assert _run(tmp_path, _signature(unread, _parameter("r"))) == [_row("r", "required")]
+
+
+@pytest.mark.parametrize(
+    ("path", "variable"),
+    [
+        ("/orders/:id", "id"),
+        ("/orders/{id}", "id"),
+        ("/orders/{id?}", "id"),
+        ("/files/{rest...}", "rest"),
+    ],
+    ids=["colon", "braces", "optional-suffix", "tailcard"],
+)
+def test_a_name_that_is_one_of_the_rows_path_variables_is_skipped_when_the_entry_says_so(
+    tmp_path: Path, path: str, variable: str
+):
+    """`skip_path_variables: true` (reactive routes' `@Param`, CP-25 row 12: Vert.x's
+    `getParam` serves path and query parameters alike): a name equal to one of the row's
+    own path variables — `:name`, `{name}`, with A6's `?`/`...` suffixes stripped — is the
+    path segment, not a query parameter, and gets no row. The query parameter beside it
+    on the same handler still derives, which is the paired positive."""
+    entry = {**OPTIONAL_ENTRY, "kind": "query", "skip_path_variables": True}
+    signature = _signature(
+        _parameter(variable, annotations=[_use(HEADER)]),
+        _parameter("verbose", annotations=[_use(HEADER)]),
+    )
+    entries = _run(tmp_path, signature, _params_catalog(entry), path=path)
+    assert entries == [_row("verbose", "optional", kind="query", path=path)]
+
+
+def test_a_path_variable_name_still_derives_where_the_entry_does_not_skip(tmp_path: Path):
+    """The near-miss's other side: an entry without `skip_path_variables` (Spring,
+    JAX-RS, Micronaut — their path binding is a different annotation) writes the row
+    whatever the path spells, because there `@RequestParam id` under `/{id}` really is
+    a second, query-borne `id`."""
+    signature = _signature(_parameter("id"))
+    assert _run(tmp_path, signature, path="/orders/{id}") == [
+        _row("id", "required", path="/orders/{id}")
+    ]
 
 
 def test_an_annotation_no_entry_names_writes_nothing(tmp_path: Path):
@@ -484,6 +570,10 @@ def test_every_row_sharing_the_handler_gets_the_entries(tmp_path: Path):
         ),
         ({"request_params": [{**BINDER_ENTRY, "requried_attr": "required"}]}, "requried_attr"),
         ({"request_params": [{**BINDER_ENTRY, "skip_types": WHOLE_MAP}]}, "skip_types"),
+        (
+            {"request_params": [{**BINDER_ENTRY, "skip_path_variables": "yes"}]},
+            "skip_path_variables",
+        ),
     ],
     ids=[
         "not-a-list",
@@ -493,6 +583,7 @@ def test_every_row_sharing_the_handler_gets_the_entries(tmp_path: Path):
         "annotation",
         "misspelt-key",
         "skip_types",
+        "skip_path_variables",
     ],
 )
 def test_a_malformed_request_params_entry_is_refused_naming_the_file(

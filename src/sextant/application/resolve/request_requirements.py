@@ -20,6 +20,7 @@ what the handler row already carries.
 """
 
 import json
+import re
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -153,6 +154,7 @@ def _from_parameters(
         signature = signatures.of(endpoint)
         if signature is None:
             continue
+        variables = _path_variables(endpoint["path"])
         for parameter in signature.get("parameters", []):
             erased = parameter.get("erased_symbol")
             if not erased:
@@ -161,8 +163,20 @@ def _from_parameters(
                 entry = entries.get(use["annotation"])
                 if entry is None or erased in entry["skip_types"]:
                     continue
-                args = use.get("args") or {}
+                # A use with NO `args` key is one the scanner did not read — D00 §5a's
+                # `unresolved: depth_limit`, where an empty `args` would be
+                # indistinguishable from an annotation written with none. Nothing read,
+                # nothing written: `required` here would be a claim off an attribute
+                # list that was never opened.
+                if "args" not in use:
+                    continue
+                args = use["args"]
                 name = _name(parameter, args, entry)
+                # A name that is one of the row's own path variables is bound from the
+                # path — Vert.x's `getParam` serves both alike (CP-25 row 12) — and is
+                # not a query parameter; the entry says so with `skip_path_variables`.
+                if entry["skip_path_variables"] and name in variables:
+                    continue
                 out.append(
                     _entry(
                         endpoint,
@@ -175,6 +189,17 @@ def _from_parameters(
                     )
                 )
     return out
+
+
+def _path_variables(path: object) -> frozenset[str]:
+    """The variables a row's `path` declares, spelled `{name}` (`{name: regex}`, or with
+    the `?`/`...` suffixes a combinator's `{id?}`/`{rest...}` carry — A6) or `:name`
+    (Vert.x). The same rule §5d's `skip_path_variables` gives handler reads."""
+    if not isinstance(path, str):
+        return frozenset()
+    return frozenset(
+        name.rstrip("?.") for pattern in _PATH_VARIABLES for name in pattern.findall(path)
+    )
 
 
 def _name(parameter: dict[str, Any], args: dict[str, Any], entry: dict[str, Any]) -> str | None:
@@ -269,9 +294,13 @@ def _request_params(catalog: Catalog) -> dict[str, dict[str, Any]]:
             isinstance(attribute, str) for attribute in entry["name_attrs"]
         ):
             raise CatalogError(f"{where} `name_attrs` must be a list of attribute names: {entry!r}")
+        skip_variables = entry.get("skip_path_variables", False)
+        if not isinstance(skip_variables, bool):
+            raise CatalogError(f"{where} `skip_path_variables` must be true or false: {entry!r}")
         # The two type lists, converted once to the descriptor form the facts spell
         # (`_catalog_symbol`), and always present so the readers above index them.
         read = dict(entry)
+        read["skip_path_variables"] = skip_variables
         for key in ("optional_types", "skip_types"):
             declared_types = entry.get(key, [])
             if not isinstance(declared_types, list):
@@ -287,6 +316,9 @@ def _request_params(catalog: Catalog) -> dict[str, dict[str, Any]]:
 # `optional_types` names the binder's optional-value container and `skip_types` the
 # whole-map bindings §5b skips — both TYPE names, so both live on the catalog: this
 # module names no language's types (`tests/architecture/test_language_confinement.py`).
+# `skip_path_variables: true` is for an annotation whose read serves path and query
+# parameters alike (reactive routes' `@Param`): a name that is one of the row's own path
+# variables is a path parameter, not a query, and gets no row.
 _REQUEST_PARAMS_KEYS = frozenset(
     {
         "annotation",
@@ -298,7 +330,13 @@ _REQUEST_PARAMS_KEYS = frozenset(
         "default_annotation",
         "optional_types",
         "skip_types",
+        "skip_path_variables",
     }
+)
+# `{name}`, `{name: regex}`, `{name?}`, `{rest...}` — and Vert.x's `:name`.
+_PATH_VARIABLES = (
+    re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*(?:\?|\.\.\.)?)\s*(?::[^}]*)?\}"),
+    re.compile(r":([A-Za-z_][A-Za-z0-9_]*)"),
 )
 # D01 §3's inbound `kind` set: `param` only for an API that cannot tell query from form
 # (Spring's `@RequestParam`), said on the entry.
