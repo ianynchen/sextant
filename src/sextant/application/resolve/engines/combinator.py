@@ -1242,26 +1242,26 @@ def _requirement_of(site: dict[str, Any], declared: dict[str, Any]) -> _Requirem
     — filled from the call's own arguments (spec 2026-09-19 §4b, §5c). The name is the
     string literal at `name_arg`, or NULL with the row `unresolved`: the requirement
     exists and is recorded, its name is what could not be read. The value is the
-    literal at `value_arg`; a `value_arg` the call CARRIES but not as a literal — a
-    variable, a predicate — reads NULL and `unresolved` too, the fluent engine's own
-    rule for a header whose value is a variable; a `value_arg` the call does not carry
-    at all (the one-argument overload of a name one continuation rule covers, or a rule
-    declaring none — a presence check) has no value to read and stays resolved.
+    literal at `value_arg`, or NULL — for a `value_arg` the call does not carry (the
+    one-argument overload of a name one continuation rule covers, or a rule declaring
+    none), AND for one it carries as anything but a literal: a predicate, a variable.
+    The row stays RESOLVED either way (fix round 1, spec §5c's "NULL for the Predicate
+    form"): the NAME is what the requirement is keyed on and it was read; the value
+    column says "name required, value unread", the same statement the Predicate
+    overloads make by construction, and the Gateway's `query(name, predicate)` and the
+    router's `queryParam(name, predicate)` must not read two ways for one fact.
     `evidence` is the D00 §4 value every metadata row carries."""
     arguments = site["arguments"]
     name = _string_literal(_arg_at(arguments, declared["name_arg"]))
-    resolved = name is not None
     value: str | None = None
     if "value_arg" in declared:
-        carried = _arg_at(arguments, declared["value_arg"])
-        value = _string_literal(carried)
-        resolved = resolved and (carried is None or value is not None)
+        value = _string_literal(_arg_at(arguments, declared["value_arg"]))
     return _Requirement(
         kind=str(declared["kind"]),
         name=name,
         value=value,
         requirement=str(declared["requirement"]),
-        resolution="resolved" if resolved else "unresolved",
+        resolution="resolved" if name is not None else "unresolved",
         evidence="compiler",
     )
 
@@ -1976,6 +1976,22 @@ def _union(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(set(left) | set(right)))
 
 
+def _shared(
+    kept: tuple[_Requirement, ...], other: tuple[_Requirement, ...]
+) -> tuple[_Requirement, ...]:
+    """The requirements two COLLAPSING alternatives have in common, in the kept row's
+    order (spec 2026-09-19 §4d, fix round 1). Two routes that collapse to one row are two
+    ways the framework may dispatch one address — two `header` selectors over one `get`,
+    two gateway `route()`s on one path — and a request satisfying EITHER is served, so
+    only a demand every alternative makes is one the tree enforces at that address; a
+    union would publish `X-Version=1` AND `X-Version=2` as both required where the
+    idiom serves each alone. Whatever one alternative demands and another does not is
+    dropped: a miss, stated, never a demand the framework does not make. A route
+    FANNED out over `all_methods` is one route seven times, not seven alternatives, and
+    copies its whole set (`_fanned`)."""
+    return tuple(requirement for requirement in kept if requirement in other)
+
+
 def _appended(
     left: tuple[_Requirement, ...], right: tuple[_Requirement, ...]
 ) -> tuple[_Requirement, ...]:
@@ -2103,9 +2119,11 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
     one wire identity are two facts (the `interface_implementation` parity
     rule), and a key without it would silently discard the second.
 
-    A duplicate's requirements are not discarded with it: two routes that collapse
-    to one row are one address whose tree demands everything either declared, so
-    the kept row carries the union (spec 2026-09-19 §4d), as the media union does.
+    A duplicate's requirements are not discarded with it, nor added to the kept
+    row's: two routes that collapse to one row are two alternatives for one address,
+    and the kept row keeps only the requirements EVERY alternative makes (`_shared`,
+    spec 2026-09-19 §4d) — unlike the media union, where a second alternative's
+    media widens what the address serves rather than narrowing who it serves.
     """
     seen: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     emitted: list[dict[str, Any]] = []
@@ -2120,7 +2138,7 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
             )
             kept = seen.get(key)
             if kept is not None:
-                kept[_REQUIREMENTS] = _appended(kept[_REQUIREMENTS], row[_REQUIREMENTS])
+                kept[_REQUIREMENTS] = _shared(kept[_REQUIREMENTS], row[_REQUIREMENTS])
                 continue
         serialized = {
             **row,
@@ -2159,7 +2177,8 @@ def _media_unioned(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         for field in _MEDIA_FIELDS:
             existing[field] = sorted(set(existing[field]) | set(row[field]))
-        existing[_REQUIREMENTS] = _appended(existing[_REQUIREMENTS], row[_REQUIREMENTS])
+        # Media widen, requirements narrow: the alternatives' shared demands only (`_shared`).
+        existing[_REQUIREMENTS] = _shared(existing[_REQUIREMENTS], row[_REQUIREMENTS])
     return unioned
 
 

@@ -820,7 +820,9 @@ matches:
     # this case (the reactive twin's `queryParam` reads the query string alone and is
     # `query`). A REQUIREMENT contributor, folded where a predicate argument or an `and(...)`
     # reaches it, as `media` is: present and equal to the value, or present and satisfying a
-    # predicate the walk cannot read (no `value_arg`, value NULL). Both `required`: `test`
+    # predicate the walk cannot read (no `value_arg`, value NULL: "name required, value
+    # unread", `resolved`; a variable in the String overload's value position is
+    # recorded the same way). Both `required`: `test`
     # returns false without the parameter and the route does not match. The two share a
     # name and an arity, so `arg_types` tells them apart (spec §3c). `headers(Predicate)` is
     # an arbitrary function over the whole header map and is NOT read — stated here, no

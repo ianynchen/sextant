@@ -6333,16 +6333,18 @@ def test_selector_requirements_reach_the_stash_and_the_stash_reaches_endpoint_me
     assert metadata == expected
 
 
-def test_a_fanned_out_route_carries_its_requirements_to_every_row_and_unions_on_collapse(
+def test_a_fanned_out_route_carries_its_requirements_to_every_row_and_collapsing_alternatives_intersect(
     tmp_path: Path,
 ):
-    """Two shapes of the same rule. `param("debug") { route("/h") { handle { } } }` fans out
-    through `all_methods`, and every one of the seven rows carries the `debug`
-    requirement — the stash is per (row × requirement), keyed by the row's own verb. And
-    two routes that COLLAPSE to one row — `header("A", "1") { get("/x") { } }` beside
-    `header("B", "2") { get("/x") { } }`, one address, one handler — keep BOTH
-    requirements, in declaration order: the dedup unions them rather than discarding the
-    second route's with the row (spec §4d)."""
+    """Two shapes of one rule, and they differ. `param("debug") { route("/h") { handle { } } }`
+    fans out through `all_methods`: ONE route seven times, and every one of the seven rows
+    carries the `debug` requirement — the stash is per (row × requirement), keyed by the
+    row's own verb. But two routes that COLLAPSE to one row — `header("A", "1") { get("/x")
+    { } }` beside `header("B", "2") { get("/x") { } }`, one address, one handler — are two
+    ALTERNATIVES for that address: a request carrying only `A=1` is served, so `B=2` is
+    not a demand the tree makes at `/x`. The kept row keeps only what every alternative
+    demands — here nothing (fix round 1, spec §4d): the stash holds no row for `/x`, and
+    the two demands are a stated miss, never a union the framework does not enforce."""
     facts = _selector_tree(
         ("param", [_literal("debug")], []),
         ("header", [_literal("A"), _literal("1")], [("get", "/x")]),
@@ -6378,16 +6380,49 @@ def test_a_fanned_out_route_carries_its_requirements_to_every_row_and_unions_on_
         [*((verb, "/h", handler, "resolved") for verb in verbs), ("GET", "/x", handler, "resolved")]
     )
     assert sorted(stash, key=str) == sorted(
-        [
-            *(
-                (verb, "/h", handler, "query", "debug", None, "required", "resolved")
-                for verb in verbs
-            ),
-            ("GET", "/x", handler, "header", "A", "1", "required", "resolved"),
-            ("GET", "/x", handler, "header", "B", "2", "required", "resolved"),
-        ],
+        [(verb, "/h", handler, "query", "debug", None, "required", "resolved") for verb in verbs],
         key=str,
     )
+
+
+def test_collapsing_alternatives_keep_the_requirements_they_share(tmp_path: Path):
+    """The positive half of the intersection: three `header` blocks over one `get("/x")`,
+    every one also under `param("v", "2")` — `param("v", "2") { header("A", "1") { get } ;
+    header("A", "1") { get } ; header("C", "3") { get } }`. The three alternatives collapse
+    to one row; `v=2` is demanded by all of them and is kept, `A=1` by two of three and is
+    dropped with `C=3`. The gateway's header-versioning idiom is this shape: two
+    `route()`s on `/api/**` differing only in `header("X-Version", …)` publish `/api/**`
+    demanding neither version, not both."""
+    outer = _selector_body(0)
+    facts = _selector_tree(("param2", [_literal("v"), _literal("2")], []))
+    for index, (name, value) in enumerate((("A", "1"), ("A", "1"), ("C", "3"))):
+        body = DECLARER + f"orders$lambda$1$lambda$0$lambda${index}(sig_h{index})."
+        facts.append(_method_symbol(body))
+        facts.append(
+            _site(
+                outer,
+                index,
+                _ROUTING_BUILDER,
+                "header",
+                result=700 + index,
+                descriptor=_SELECTOR_DESCS["header"],
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    _literal(name),
+                    _literal(value),
+                    CallArgument(kind="lambda", symbol=body, source=600 + index, captures=0),
+                ],
+            )
+        )
+        facts.append(_verb_in(body, 0, "get", "/x"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [("GET", "/x", handler, "resolved")]
+    assert stash == [("GET", "/x", handler, "query", "v", "2", "required", "resolved")]
 
 
 def test_a_requirement_whose_name_is_not_a_literal_is_recorded_unresolved(tmp_path: Path):
@@ -6471,15 +6506,16 @@ def test_requirement_continuations_carry_their_demand_onto_every_branch_of_the_c
     ]
 
 
-def test_a_requirement_whose_value_is_a_predicate_is_unresolved_and_an_or_onto_one_is_a_branch(
+def test_a_requirement_whose_value_is_a_predicate_is_name_only_and_an_or_onto_one_is_a_branch(
     tmp_path: Path,
 ):
     """Two edges of the chain fold. `query("debug", p)` — the `Predicate` overload — carries a
-    second argument the walk cannot read as a literal: the demand is recorded, `value`
-    NULL, `unresolved` (the fluent engine's own rule for a header whose value is a
-    variable). And `path("/a").or().header("X")`: the alternative an `or()` opened IS the
-    requirement pass-through, so it is a branch of its own — every path, header `X`
-    required — beside `/a`, which demands nothing."""
+    second argument that is not a literal: the demand is recorded by its NAME, `value`
+    NULL, and the row is RESOLVED — "debug required, value unread", the same statement the
+    router's `queryParam(name, predicate)` makes (fix round 1). And `path("/a").or().
+    header("X")`: the alternative an `or()` opened IS the requirement pass-through, so it
+    is a branch of its own — every path, header `X` required — beside `/a`, which demands
+    nothing."""
     chain = [
         (SPEC, "path", [CallArgument(kind="string", value="/a")]),
         (BOOL, "or", []),
@@ -6496,8 +6532,8 @@ def test_a_requirement_whose_value_is_a_predicate_is_unresolved_and_an_or_onto_o
     assert _identities(rows) == [(None, "/**", None, "resolved"), (None, "/a", None, "resolved")]
     assert stash == [
         (None, "/**", None, "header", "X", None, "required", "resolved"),
-        (None, "/**", None, "query", "debug", None, "required", "unresolved"),
-        (None, "/a", None, "query", "debug", None, "required", "unresolved"),
+        (None, "/**", None, "query", "debug", None, "required", "resolved"),
+        (None, "/a", None, "query", "debug", None, "required", "resolved"),
     ]
 
 

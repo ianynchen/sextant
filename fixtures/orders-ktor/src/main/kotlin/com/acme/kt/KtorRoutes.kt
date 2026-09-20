@@ -1,8 +1,10 @@
 // Ktor's routing DSL (`ktor-routing`, spec §14): every verb is a STATIC extension function
 // whose receiver is the Route the enclosing block was handed — argument 0 in the bytecode —
 // and every block is a `Function1<Route, Unit>` lambda the extractor links. Handlers are
-// `suspend` lambdas, which compile to classes rather than `invokedynamic` bodies, so their
-// rows carry a NULL handler (spec §13 case 8) until `kotlin-null-handler` lands.
+// `suspend` lambdas, which compile to classes rather than `invokedynamic` bodies; the
+// extractor marks each class with the `invokeSuspend` holding its body (`lambda_body`) and
+// every engine reads the instance as that lambda (spec 2026-09-19 §3b), so each row's
+// handler is the body's own symbol (`KtorRoutesKt$orders$1$1$1#invokeSuspend`).
 package com.acme.kt
 
 import io.ktor.http.ContentType

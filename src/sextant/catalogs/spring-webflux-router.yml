@@ -972,7 +972,9 @@ matches:
     # about the address — a REQUIREMENT contributor, folded where a predicate argument or an
     # `and(...)` reaches it, as `media` is. `queryParam(String, String)` requires the
     # parameter present and equal to the value; `queryParam(String, Predicate)` present and
-    # satisfying a predicate the walk cannot read — no `value_arg`, value NULL. Both
+    # satisfying a predicate the walk cannot read — no `value_arg`, value NULL: "name
+    # required, value unread", `resolved` (a variable in the String overload's value
+    # position is recorded the same way). Both
     # `required`: `QueryParamPredicate.test` is `ServerRequest.queryParam(name).filter(p).
     # isPresent()`, false without the parameter, and the route does not match. `query`,
     # because the reactive `ServerRequest.queryParam` reads the query string alone (the
