@@ -22,7 +22,16 @@ from pathlib import Path
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+    Parameter,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
 from sextant.domain.symbols import method_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -79,9 +88,11 @@ def _method_symbol(
     enclosing: str | None = None,
     bridge_of: str | None = None,
     static: bool = False,
+    signature: Signature | None = None,
 ) -> SymbolFact:
     """A method's own symbol fact; `static` lands in `modifiers` the way the extractor
-    writes it, `bridge_of` only where a caller sets it (absent on every other fact)."""
+    writes it, `bridge_of` only where a caller sets it (absent on every other fact), and
+    `signature` only where a test reads a parameter's own flags off the declaration."""
     return SymbolFact(
         document_id="doc_1",
         symbol=_MODULE + bare,
@@ -89,6 +100,7 @@ def _method_symbol(
         enclosing=None if enclosing is None else _MODULE + enclosing,
         modifiers={"static": static, "synthetic": bridge_of is not None},
         bridge_of=bridge_of,
+        signature=signature,
     )
 
 
@@ -270,6 +282,167 @@ def test_a_thirty_three_parameter_function_reads_its_second_mask(tmp_path: Path)
     assert row["arguments"] == raw["arguments"][1:33] + [DEFAULTED]
 
 
+def _extension_signature(*slots: str) -> Signature:
+    """A declaration whose FIRST slot is its extension receiver — the extractor's
+    `receiver: true` on that parameter (`kotlin-extension-functions`), the other slots
+    plain — so a test states the flag exactly where the fact stream carries it."""
+    first, *rest = slots
+    return Signature(
+        parameters=[
+            Parameter(type=TypeRef(symbol=first), erased_symbol=first, receiver=True),
+            *(Parameter(type=TypeRef(symbol=slot), erased_symbol=slot) for slot in rest),
+        ]
+    )
+
+
+ROUTE, STRING, FUNCTION1 = (
+    "Lio/ktor/server/routing/Route;",
+    "Ljava/lang/String;",
+    "Lkotlin/jvm/functions/Function1;",
+)
+FACADE = "com/acme/kt/KtorRoutesKt#"
+MOUNT = "(" + ROUTE + STRING + STRING + FUNCTION1 + ")" + ROUTE
+MOUNT_BRIDGE = "(" + ROUTE + STRING + STRING + FUNCTION1 + "ILjava/lang/Object;)" + ROUTE
+
+
+def test_a_static_siblings_extension_receiver_is_not_a_mask_bit(tmp_path: Path):
+    """`fun Route.mount(path, version = "v1", build)` is a STATIC method whose slot 0 is the
+    receiver the author wrote, and the compiler's mask counts the parameters the author
+    declared — `version` is bit 1, though it is the sibling's slot 2. MEASURED on
+    `fixtures/orders-ktor` (`javap -c -p KtorRoutesKt.class`, kotlinc 2.2.0): the call
+    `mount("/d") { }` is `mount$default(this, "/d", null, build, 2, null)` and the bridge's
+    body is `iload 4; iconst_2; iand; ifeq; ldc "v1"; astore_2` — slot 2 is the one
+    substituted. The declaration says which slot is the receiver (`receiver: true`, the
+    extractor's `kotlin-extension-functions`), so bit *i* is the slot AFTER it: `/d`, the
+    path, stays the string it is, and `version` is the argument marked defaulted. Read
+    the other way round, the path a rule reads would be unresolved and a null `version`
+    would pass as a value — a wrong argument on the idiomatic shape of every DSL helper."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(
+                FACADE,
+                "mount",
+                MOUNT,
+                static=True,
+                signature=_extension_signature(ROUTE, STRING, STRING, FUNCTION1),
+            ),
+            _method(FACADE, "mount$default", MOUNT_BRIDGE, bridge_of="mount", static=True),
+            _site(
+                CALLER,
+                0,
+                FACADE,
+                "mount$default",
+                descriptor=MOUNT_BRIDGE,
+                result=1,
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    CallArgument(kind="string", value="/d"),
+                    CallArgument(kind="null"),
+                    CallArgument(kind="lambda", symbol=FACADE + "body(sig_b).", captures=0),
+                    CallArgument(kind="int", value=2),
+                    CallArgument(kind="null"),
+                ],
+            ),
+        ],
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["name"], row["descriptor"]) == ("mount", MOUNT)
+    assert row["arguments"] == [
+        raw["arguments"][0],
+        raw["arguments"][1],
+        DEFAULTED,
+        raw["arguments"][3],
+    ]
+    assert (row["invoke_kind"], row["receiver"], row["receiver_parameter"]) == (
+        "static",
+        None,
+        None,
+    )
+    assert row["evidence_bridge"] == FACADE + "mount$default" + MOUNT_BRIDGE
+
+
+def test_a_member_siblings_extension_receiver_is_not_a_mask_bit_either(tmp_path: Path):
+    """A member extension, `class Owner { fun String.m(n: Int = 1) }`: the bridge is
+    `m$default(Owner, String, int, int, Object)` — the owner slot, then the receiver the
+    author wrote as the first slot the sibling owns (the extractor's own measured comment
+    on `kotlin-extension-functions`, kotlinc 2.2.0) — and the instance sibling is
+    `m(String, int)` with slot 0 flagged `receiver`. Mask 1 is bit 0, the FIRST declared
+    parameter, which is `n`: the sibling's slot 1, not its receiver."""
+    owner = "com/x/Owner#"
+    m, bridge = "(Ljava/lang/String;I)V", "(Lcom/x/Owner;Ljava/lang/String;IILjava/lang/Object;)V"
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(owner, "m", m, signature=_extension_signature(STRING, "I")),
+            _method(owner, "m$default", bridge, bridge_of="m", static=True),
+            _site(
+                CALLER,
+                0,
+                owner,
+                "m$default",
+                descriptor=bridge,
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    CallArgument(kind="string", value="s"),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="int", value=1),
+                    CallArgument(kind="null"),
+                ],
+            ),
+        ],
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["name"], row["descriptor"]) == ("m", m)
+    assert row["arguments"] == [raw["arguments"][1], DEFAULTED]
+    assert (row["invoke_kind"], row["receiver_parameter"]) == ("virtual", 0)
+
+
+def test_thirty_two_declared_parameters_after_an_extension_receiver_need_one_mask(
+    tmp_path: Path,
+):
+    """The mask count follows the DECLARED parameters, not the sibling's slots: 32
+    declared after a receiver is 33 slots and ONE mask (ceil(32/32)), where a slot count
+    would demand two and find no sibling at all — the site left untouched, and a
+    defaulted argument passed to a rule as the placeholder value the caller pushed."""
+    wide = "com/x/WideKt#"
+    declared = 32
+    sibling = "(" + STRING + "I" * declared + ")V"
+    bridge = "(" + STRING + "I" * declared + "ILjava/lang/Object;)V"
+    arguments = [
+        CallArgument(kind="string", value="r"),
+        *(CallArgument(kind="int", value=index) for index in range(declared)),
+        CallArgument(kind="int", value=1 << 31),
+        CallArgument(kind="null"),
+    ]
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(
+                wide,
+                "f",
+                sibling,
+                static=True,
+                signature=_extension_signature(STRING, *(["I"] * declared)),
+            ),
+            _method(wide, "f$default", bridge, bridge_of="f", static=True),
+            _site(CALLER, 0, wide, "f$default", descriptor=bridge, arguments=arguments),
+        ],
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["name"], row["descriptor"]) == ("f", sibling)
+    assert row["arguments"] == raw["arguments"][0:32] + [DEFAULTED]
+
+
 def test_a_default_call_whose_bridge_carries_no_bridge_of_is_left_alone(tmp_path: Path):
     """The extractor's stated declines (a library not scanned, an ambiguity it would not
     guess at) reach here as a `$default` symbol with no `bridge_of` — and the site stays
@@ -443,6 +616,42 @@ def test_an_instance_of_a_class_with_no_lambda_body_is_left_alone(tmp_path: Path
     workspace = _workspace(
         tmp_path,
         _lambda_facts(CallArgument(kind="instance", symbol=PLAIN_CLASS, source=4)),
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_a_named_constant_of_a_lambda_class_reaches_engines_as_that_lambda(tmp_path: Path):
+    """A closure that captures nothing is not `new`ed at all under `-Xlambdas=class`: the
+    compiler gives its class one `INSTANCE` and the call site reads it — `getstatic
+    Routes$orders$1.INSTANCE` (CP-23 Q7b, kotlinc 2.2.0), which the extractor emits as the
+    `enum` kind it gives every named constant of its own type, saying the consumer that
+    needs the distinction joins for it. The join is `lambda_body` on the constant's OWNER:
+    the argument is that lambda, as an `instance` of the class would be, and with no
+    `source` because a field read produces no value id. Every prefix block of a routing
+    tree takes this shape (`routing { }`, `route("/api") { }` capture nothing), so without
+    it a class-compiled routing tree is never entered and derives nothing at all."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(CallArgument(kind="enum", symbol=LAMBDA_CLASS + "INSTANCE.")),
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert row["arguments"] == [
+        raw["arguments"][0],
+        raw["arguments"][1],
+        {"kind": "lambda", "symbol": LAMBDA_BODY, "captures": 0},
+    ]
+
+
+def test_a_named_constant_of_a_class_with_no_lambda_body_is_left_alone(tmp_path: Path):
+    """The same near-miss on the constant read: `BigDecimal.ZERO`, a Kotlin `object`'s
+    `INSTANCE`, a real enum constant — every one is `enum`-kind, and none has an owner
+    marked `lambda_body`, so every one stays the constant it is."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(CallArgument(kind="enum", symbol=PLAIN_CLASS + "INSTANCE.")),
     )
 
     assert effective_call_sites(workspace) == workspace.query("call_sites")

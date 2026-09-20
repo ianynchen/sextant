@@ -62,6 +62,7 @@ PRIMED_FIXTURES = (
     "orders-javalin",
     "orders-pekko",
     "orders-ktor",
+    "orders-ktor-classlambdas",
     "orders-gateway",
 )
 

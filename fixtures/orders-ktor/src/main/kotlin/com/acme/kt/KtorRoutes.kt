@@ -54,3 +54,19 @@ fun Application.elsewhere(other: Route) {
         }
     }
 }
+
+// A module-local DSL function with a DEFAULT parameter (`kotlin-default-bridge-calls`): a
+// call that omits `version` compiles to `mount$default(this, "/d", null, build, 2, null)` —
+// a different name and arity, which no rule matched until the bridge projection. `version`
+// does not shape the path, so a rule reading `path_arg: 1` states the truth.
+val mountedVersions = mutableListOf<String>()
+fun Route.mount(path: String, version: String = "v1", build: Route.() -> Unit): Route {
+    mountedVersions += version
+    return route(path, build)
+}
+fun Application.defaults() {
+    routing {
+        mount("/d") { get("/x") { call.respondText("x") } }         // version defaulted → mount$default
+        mount("/e", "v2") { get("/y") { call.respondText("y") } }   // both passed → plain mount
+    }
+}

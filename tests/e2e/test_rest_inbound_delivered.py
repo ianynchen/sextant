@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 FIXTURE = FIXTURES / "orders-service"
@@ -687,7 +688,14 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     the walk never reaches that verb: `api` is an ordinary method no linking call names
     as its body, and a static, receiver-less verb inside it is no root of its own — the
     boundary spec §7 case 4 states for a builder received as a PARAMETER. Pinned as
-    silence, so a walk that one day follows `api()` moves a pinned value."""
+    silence, so a walk that one day follows `api()` moves a pinned value.
+
+    The same silence, for now, on `defaults()`: its two `mount(…) { get(…) { } }` calls
+    name a module-local DSL function the shipped catalog has no rule for, so under this
+    catalog they are unknown calls in the routing body and derive nothing — the row count
+    stays at eight. The bridge projection that `mount("/d")` exercises is pinned where a
+    rule for `mount` can exist, `tests/application/test_ktor_defaults_fixture.py`; helper
+    following is a later task, and moving this pin is its job."""
     rows = {
         (r["method"], r["path"], r["resolution"], r["handler"])
         for r in ktor_rows
@@ -715,6 +723,77 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         "the Route-extension helper's route was derived — a walk now follows `api()`; "
         "move this pin and the catalog's stated boundary together"
     )
+    assert not any("#defaults(" in str(r["caller"]) for r in ktor_rows), (
+        "a `mount(…)` route was derived under the shipped catalog — a walk now follows "
+        "the module-local DSL function; move this pin and the count of eight together"
+    )
+
+
+KTOR_CLASSLAMBDAS = FIXTURES / "orders-ktor-classlambdas"
+
+
+def test_the_class_lambda_twin_is_built_from_the_very_same_source():
+    """`orders-ktor-classlambdas` compiles a COPY of `KtorRoutes.kt` — a symlink is not
+    allowed in the fixture tree — so the two files can drift apart silently, and then the
+    "identical rows" test below would compare two different programs. Byte-identical, or
+    this says which one moved."""
+    original = KTOR / "src" / "main" / "kotlin" / "com" / "acme" / "kt" / "KtorRoutes.kt"
+    twin = KTOR_CLASSLAMBDAS / "src" / "main" / "kotlin" / "com" / "acme" / "kt" / "KtorRoutes.kt"
+    assert original.read_bytes() == twin.read_bytes(), (
+        f"{twin} drifted from {original}: copy the original over it"
+    )
+
+
+@pytest.fixture(scope="module")
+def ktor_classlambda_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the `-Xlambdas=class` twin derives, whole, from its own analysis."""
+    workspace_dir = tmp_path_factory.mktemp("ktor-classlambdas")
+    compile_fixture(KTOR_CLASSLAMBDAS)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(KTOR_CLASSLAMBDAS), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        return [dict(row) for row in workspace.query("endpoints")]
+    finally:
+        workspace.close()
+
+
+def _rows_modulo_module(rows: list[dict]) -> set[tuple]:
+    """`(method, path, resolution, handler)` with the handler's module-coordinates prefix
+    dropped — the one thing that differs by construction between the two builds, whose
+    `artifactId`s differ. Class names do not: the same source compiles to the same
+    `KtorRoutesKt$orders$1$1$1` counters under both profiles."""
+    return {
+        (
+            r["method"],
+            r["path"],
+            r["resolution"],
+            None if r["handler"] is None else bare_descriptor(str(r["handler"])),
+        )
+        for r in rows
+    }
+
+
+def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambda_rows):
+    """`kotlin-class-lambdas`, spec 2026-09-19 §3b and §9, on real bytecode: the same
+    `KtorRoutes.kt` compiled with `-Xlambdas=class` — every `Function1` block a `Lambda`
+    CLASS `new`ed (or a shared `INSTANCE` read) at the call site where the default profile
+    emits an `invokedynamic` — derives the SAME endpoint rows, handler included. The
+    extractor marks each lambda class's type fact with the method holding its body
+    (`lambda_body`, commit e6497f0's family), and `effective_call_sites` hands every
+    engine the `instance` argument as that `lambda`, so the routing walk enters the block
+    exactly as it enters an `invokedynamic` one. The handlers are `invokeSuspend` bodies
+    under BOTH profiles — a suspend lambda is a class either way — so even the handler
+    column agrees once the module prefix is dropped. A difference here is a shape one
+    profile reads and the other does not, and it is reported, not tolerated."""
+    default, classes = _rows_modulo_module(ktor_rows), _rows_modulo_module(ktor_classlambda_rows)
+    assert default == classes, {
+        "only under the default profile": sorted(default - classes, key=str),
+        "only under -Xlambdas=class": sorted(classes - default, key=str),
+    }
+    assert len(ktor_classlambda_rows) == len(ktor_rows) == 8
 
 
 GATEWAY = FIXTURES / "orders-gateway"
