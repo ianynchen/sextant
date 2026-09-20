@@ -38,7 +38,16 @@ is therefore a fold over that tree rather than a walk along a line.
   A verb rule may read its verb off the call instead — `verb_arg`, an enum
   member's name, a string literal as written, or an array of those, one
   branch per element — and any path position may hold an array of string
-  literals, likewise one branch per element (spec §12 words 4–5).
+  literals, likewise one branch per element (spec §12 words 4–5). A PREFIX may set
+  more than a path (spec 2026-09-19 §4b): `verb_arg` sets the verb of every route
+  beneath it — a route beneath carrying a DIFFERENT verb is a node the framework
+  registers and never dispatches, and derives NOTHING (A2) — `media_arg` + `fills`
+  sets a media column, and `request_requirement` `{kind, name_arg, value_arg?,
+  requirement}` a header/query/cookie demand every route beneath carries to
+  `endpoint_metadata`; a prefix declaring none of these is a pure scope. Both value
+  tables take a `getters:` form beside the member-name one — `"<owner>#<method>":
+  value` — for a constant that reaches a call site as the RESULT of a getter call,
+  looked up through the argument's `source`.
   `verbs` and `prefixes` are scanned lists, so one name may carry several
   rules: `arity` and `arg_types` (position to dotted type, compared against the
   call's own erased descriptor) tell same-name overloads apart, a call the
@@ -209,6 +218,17 @@ _ROUTING_DEPTH = "routing_depth"
 # a catalog reads (`ports/catalogs.py`'s own discipline).
 _MEDIA_FIELDS = ("consumes", "produces")
 
+# A `request_requirement`'s two closed sets (spec 2026-09-19 §5a): what KIND of thing a
+# route demands, and what the framework enforces about it. Validated at load for the
+# reason `_MEDIA_FIELDS` is — a misspelt kind would file a header under a word nothing
+# downstream reads.
+_REQUIREMENT_KINDS = ("header", "query", "cookie", "param")
+_REQUIREMENT_LEVELS = ("required", "optional", "absent")
+# The row key a route's requirements ride under between `_row_of` and `run`, where they
+# are stripped before the insert (and, once the stash lands, stashed beside it).
+# Underscored so it can never be mistaken for an `endpoints` column.
+_REQUIREMENTS = "_requirements"
+
 # Every row column except the two media lists — the grouping key for the
 # within-batch union below (spec §4, mirroring `derive_endpoints.sql`'s own
 # `GROUP BY ALL`): rows differing ONLY in declared media are one endpoint.
@@ -257,7 +277,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 continue
             for route in _routes_of(site, scope):
                 rows.append(_row_of(route, caller, catalog))
-    workspace.derive("call_endpoints", rows=_emitted(rows, catalog))
+    emitted = _emitted(rows, catalog)
+    workspace.derive(
+        "call_endpoints",
+        rows=[
+            {key: value for key, value in row.items() if key != _REQUIREMENTS} for row in emitted
+        ],
+    )
     # Filed after the rows, as `interface_implementation` files its own: a tree that both
     # derives and asks cannot have its question written and its rows lost to a later
     # failure. The candidates are the run's, accumulated by every tree (`_helper_routes`).
@@ -284,6 +310,31 @@ class _Route:
     produces: tuple[str, ...] = ()
     handler: str | None = None
     poisons: tuple[str, ...] = ()
+    # What the routing tree demands of a request before this route serves it (spec
+    # 2026-09-19 §4d): a header, query parameter or cookie a selector or predicate names.
+    # Inherited down scopes as a path prefix is, in declaration order and distinct, and
+    # carried on the emitted row for the `route_requirements` stash — never part of the
+    # route's identity, so two routes differing only here are still one address.
+    requirements: tuple["_Requirement", ...] = ()
+
+
+@dataclass(frozen=True)
+class _Requirement:
+    """One request requirement a route carries (spec 2026-09-19 §4d, §5a): what the
+    FRAMEWORK'S ROUTING TREE enforces, never what a handler does with the value. `kind`
+    is `header`/`query`/`cookie`/`param`; `requirement` is `required` (the tree refuses a
+    request without it), `optional` (it serves one without it) or `absent`; `name` and
+    `value` are the literals the declaring call was handed, `name` NULL and the row
+    `unresolved` where the name was not a literal — "this route demands a header it does
+    not name" is a different statement from "demands none" (§5a). `evidence` is the
+    D00 §4 value every metadata row this system writes carries (`compiler`)."""
+
+    kind: str
+    name: str | None
+    value: str | None
+    requirement: str
+    resolution: str
+    evidence: str
 
 
 @dataclass(frozen=True)
@@ -322,6 +373,14 @@ class _TreeContext:
     media: dict[tuple[str, str], dict[str, Any]]
     media_owners: tuple[str, ...] | None
     media_values: dict[str, str]
+    # The GETTER forms of the two value tables (spec 2026-09-19 §4b): a constant read
+    # through a getter on a companion or nested object reaches a call site as the RESULT
+    # of a call — `{kind: unresolved, source: <the getter's result>}`, never an `enum` —
+    # so the value is keyed on the getter call's own `(owner, name)`, which
+    # `_producing_site` reaches through `source`. `media_values.getters` and
+    # `verb_values.getters`, owners converted as every rule owner is.
+    media_getters: dict[tuple[str, str], str]
+    verb_getters: dict[tuple[str, str], str]
     composers: dict[tuple[str, str], str]
     # The chain-form composers and the negators (spec §12 words 3–4): `and()`/`or()`
     # written on the RECEIVER chain a terminal folds, keyed exactly as `composers`
@@ -473,6 +532,8 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
             else None
         ),
         media_values=dict(media_values.get("values", {})),
+        media_getters=_getters_of(media_values.get("getters", {})),
+        verb_getters=_getters_of(vocabulary.get("verb_values", {}).get("getters", {})),
         composers=composers,
         chain_composers=chain_composers,
         negators=frozenset(
@@ -543,6 +604,26 @@ def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
         )
         for entry in declared
     )
+
+
+def _getters_of(declared: dict[str, Any]) -> dict[tuple[str, str], str]:
+    """A `getters:` table — `"<owner>#<method>": <value>` — keyed as the facts key a
+    call: the dotted spelling converted to the descriptor form (`type_descriptor`'s own
+    conversion, so the owner half compares as every rule owner does), then split by the
+    symbol seam into the owner's descriptor and the member's name. Only ever called on
+    a table `_validate_matches` already passed."""
+    getters: dict[tuple[str, str], str] = {}
+    for key, value in declared.items():
+        descriptor = _getter_descriptor(str(key))
+        getters[(str(owner_of(descriptor)), member_name(descriptor))] = str(value)
+    return getters
+
+
+def _getter_descriptor(key: str) -> str:
+    """A `getters:` key in the descriptor form the facts carry: the dotted owner becomes
+    the slashed one, the `#` and the member name stay as written — exactly what
+    `type_descriptor` does to a rule owner, applied to a member spelling."""
+    return key.replace(".", "/")
 
 
 def _by_owner_method(rules: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -893,7 +974,7 @@ def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         return _prefix_constraints(site, prefix, scope)
     media = context.media.get(key)
     if media is not None:
-        return [_media_constraints(site, media, context)]
+        return [_media_constraints(site, media, scope)]
     composer = context.composers.get(key)
     if composer is not None:
         return _composed_constraints(site, composer, scope)
@@ -1031,7 +1112,21 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
         return []
     routes = list(_chained_routes(site, scope)) if rule.get("extends_receiver") else []
     prefixes = _prefix_constraints(site, rule, scope)
-    routes.extend(_merged(prefix, route) for prefix in prefixes for route in subtree)
+    # A subtree route whose OWN verb disagrees with the verb the prefix sets — `method(Post)
+    # { get("/x") { } }` — is dropped here, before `_merged` could poison it (spec
+    # 2026-09-19 §4b, A2). The framework registers that node and can never dispatch it:
+    # its method selector compares the request's method to its own and returns the
+    # failure constant on a mismatch (CP-24 row 7, `HttpMethodRouteSelector.evaluate`),
+    # so every request one selector passes the other refuses. A row of either verb would
+    # be an endpoint that is not on the wire and an unresolved row a phantom — silence is
+    # the honest answer, stated on the catalog. A prefix whose verb could NOT be read
+    # (poisoned) sets none, so nothing is dropped and the poison lands as it should.
+    routes.extend(
+        _merged(prefix, route)
+        for prefix in prefixes
+        for route in subtree
+        if not _verbs_disagree(prefix, route)
+    )
     head = (
         _chain_head_on_the_origin(site, scope)
         if rule.get("extends_receiver")
@@ -1040,15 +1135,79 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
     return [_merged(head, route) for route in routes]
 
 
+def _verbs_disagree(prefix: _Route, route: _Route) -> bool:
+    """Whether a prefix sets one verb and the route beneath it carries another — the
+    subtree the framework can never dispatch (`_nested_routes`)."""
+    return prefix.verb is not None and route.verb is not None and prefix.verb != route.verb
+
+
 def _prefix_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> list[_Route]:
-    """What a prefix rule contributes: a literal path at `path_arg`, or the
-    constraints of the predicate at `predicate_arg` — a path prefix or a media
-    guard alike, whatever the predicate's producing call folds in. A rule naming
-    a `receiver_arg` reads nothing unless that argument is the origin."""
+    """What a prefix rule contributes, from whichever positions it declares (spec
+    2026-09-19 §4b): a literal path at `path_arg`, or the constraints of the predicate
+    at `predicate_arg` — a path prefix or a media guard alike, whatever the predicate's
+    producing call folds in; a verb at `verb_arg`, read as a verb rule reads its own
+    (an unreadable one poisons `method` alone); a media constraint at `media_arg`,
+    filling whichever column `fills` names, one value or a vararg of them; and a
+    `request_requirement` the call's own literals fill. A rule declaring several folds
+    them into one contribution, one declaring none contributes the empty route — a
+    pure scope, whose routes fold through unchanged. A rule naming a `receiver_arg`
+    reads nothing unless that argument is the origin."""
     if not _receiver_argument_is_the_origin(site, rule, scope):
         return [_Route(poisons=_IDENTITY_POISON)]
-    position = rule["path_arg"] if "path_arg" in rule else rule["predicate_arg"]
-    return _argument_constraints(_arg_at(site["arguments"], position), scope, (_PATH,))
+    arguments = site["arguments"]
+    branches = [_Route()]
+    if "path_arg" in rule or "predicate_arg" in rule:
+        position = rule["path_arg"] if "path_arg" in rule else rule["predicate_arg"]
+        branches = _argument_constraints(_arg_at(arguments, position), scope, (_PATH,))
+    if "verb_arg" in rule:
+        verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]), scope)
+        read = [_Route(verb=verb) for verb in verbs] or [_Route(poisons=(_METHOD,))]
+        branches = [_merged(branch, verb) for branch in branches for verb in read]
+    if "media_arg" in rule:
+        media = _media_constraints(site, rule, scope)
+        branches = [_merged(branch, media) for branch in branches]
+    if "request_requirement" in rule:
+        required = _Route(requirements=(_requirement_of(site, rule["request_requirement"]),))
+        branches = [_merged(branch, required) for branch in branches]
+    return branches
+
+
+def _requirement_of(site: dict[str, Any], declared: dict[str, Any]) -> _Requirement:
+    """One declared `request_requirement` — `{kind, name_arg, value_arg?, requirement}`
+    — filled from the call's own arguments (spec 2026-09-19 §4b, §5c). The name is the
+    string literal at `name_arg`, or NULL with the row `unresolved`: the requirement
+    exists and is recorded, its name is what could not be read. The value is the
+    literal at `value_arg`; a `value_arg` the call carries but not as a literal reads
+    NULL and `unresolved` too — the fluent engine's own rule for a header whose value
+    is a variable — while a rule declaring no `value_arg` (the `Predicate` form, a
+    presence check) has no value to read and stays resolved. `evidence` is the D00 §4
+    value every metadata row carries."""
+    arguments = site["arguments"]
+    name = _string_literal(_arg_at(arguments, declared["name_arg"]))
+    resolved = name is not None
+    value: str | None = None
+    if "value_arg" in declared:
+        value = _string_literal(_arg_at(arguments, declared["value_arg"]))
+        resolved = resolved and value is not None
+    return _Requirement(
+        kind=str(declared["kind"]),
+        name=name,
+        value=value,
+        requirement=str(declared["requirement"]),
+        resolution="resolved" if resolved else "unresolved",
+        evidence="compiler",
+    )
+
+
+def _string_literal(argument: dict[str, Any] | None) -> str | None:
+    """The string literal one argument carries, or None for anything else."""
+    if (
+        argument is not None
+        and argument.get("kind") == "string"
+        and isinstance(argument.get("value"), str)
+    ):
+        return str(argument["value"])
+    return None
 
 
 def _body_routes(
@@ -1442,7 +1601,7 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
         return [_Route(poisons=_IDENTITY_POISON)]
     arguments = site["arguments"]
     if "verb_arg" in rule:
-        verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]))
+        verbs = _verbs_at(_arg_at(arguments, rule["verb_arg"]), scope)
         branches = [_Route(verb=verb) for verb in verbs] or [_Route(poisons=(_METHOD,))]
     else:
         verb = rule.get("verb")
@@ -1460,12 +1619,15 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
     return branches
 
 
-def _verbs_at(argument: dict[str, Any] | None) -> list[str]:
+def _verbs_at(argument: dict[str, Any] | None, scope: _Scope) -> list[str]:
     """The verbs one `verb_arg` argument names, in the order written — empty for
-    anything that is not an enum member, a string literal, or an array of those."""
+    anything that is not an enum member, a string literal, a getter-valued constant the
+    catalog's `verb_values.getters` table names, or an array of those. A getter the
+    table does not name reads as nothing, and the caller poisons `method`: the verb was
+    written and is unreadable, which is an unresolved row and not a phantom."""
     elements = _array_elements(argument)
     if elements is not None:
-        verbs = [_verbs_at(element) for element in elements]
+        verbs = [_verbs_at(element, scope) for element in elements]
         return [verb for each in verbs for verb in each] if all(verbs) else []
     if argument is None:
         return []
@@ -1473,10 +1635,28 @@ def _verbs_at(argument: dict[str, Any] | None) -> list[str]:
         return [str(argument["value"])]
     if argument.get("kind") == "enum" and argument.get("symbol") is not None:
         return [member_name(str(argument["symbol"]))]
-    return []
+    verb = _getter_value(argument, scope, scope.context.verb_getters)
+    return [] if verb is None else [verb]
 
 
-def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _TreeContext) -> _Route:
+def _getter_value(
+    argument: dict[str, Any], scope: _Scope, getters: dict[tuple[str, str], str]
+) -> str | None:
+    """A constant read through a GETTER (spec 2026-09-19 §4b): the argument is the result
+    of a call — its `kind` neither `string` nor `enum`, its `source` the value id the
+    getter produced — and the call `_producing_site` reaches is looked up by its own
+    `(owner, name)` in the declared table. Anything else, and any getter the table does
+    not name, reads as nothing: one measured member at a time, never a name guessed to
+    be its value. One dict read per argument (GUIDELINES §8.7)."""
+    if argument.get("kind") in ("string", "enum") or argument.get("source") is None:
+        return None
+    producing = _producing_site(argument["source"], scope)
+    if producing is None:
+        return None
+    return getters.get((str(producing["owner"]), str(producing["name"])))
+
+
+def _media_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) -> _Route:
     """A media predicate's contribution: every argument the catalog can read as
     a wire value, sorted and distinct.
 
@@ -1496,10 +1676,19 @@ def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _Tre
     pre-9.15 fact and was why every predicate-derived media column came back
     NULL.* It still describes a vararg array the extractor cannot read end to
     end, which stays an unreadable slot and still contributes nothing.
+
+    A `media` rule reads every argument the call carries; a PREFIX rule declaring
+    `media_arg` (spec 2026-09-19 §4b — a selector block whose other arguments are
+    the receiver and the body) reads that one position, a single value or a
+    vararg slot alike.
     """
+    arguments = site["arguments"]
+    if "media_arg" in rule:
+        declared = _arg_at(arguments, rule["media_arg"])
+        arguments = [] if declared is None else [declared]
     values: list[str] = []
-    for argument in _expanded_arguments(site["arguments"]):
-        value = _media_value(argument, context)
+    for argument in _expanded_arguments(arguments):
+        value = _media_value(argument, scope)
         if value is not None and value not in values:
             values.append(value)
     read = tuple(sorted(values))
@@ -1508,17 +1697,19 @@ def _media_constraints(site: dict[str, Any], rule: dict[str, Any], context: _Tre
     return _Route(produces=read)
 
 
-def _media_value(argument: dict[str, Any], context: _TreeContext) -> str | None:
+def _media_value(argument: dict[str, Any], scope: _Scope) -> str | None:
     """One media argument as a wire value: an enum constant translated through
-    the catalog's declared member-name table, or a string literal taken
-    verbatim (some frameworks spell their media types inline). Anything else —
-    including an enum whose member the catalog never declared — reads as
-    nothing."""
+    the catalog's declared member-name table, a string literal taken verbatim
+    (some frameworks spell their media types inline), or the result of a getter
+    the catalog's `media_values.getters` table names (spec 2026-09-19 §4b).
+    Anything else — including an enum whose member, or a getter whose name, the
+    catalog never declared — reads as nothing."""
+    context = scope.context
     kind = argument.get("kind")
     if kind == "string" and isinstance(argument.get("value"), str):
         return str(argument["value"])
     if kind != "enum":
-        return None
+        return _getter_value(argument, scope, context.media_getters)
     symbol = argument.get("symbol")
     if symbol is None:
         return None
@@ -1702,6 +1893,7 @@ def _merged(left: _Route, right: _Route) -> _Route:
         produces=_union(left.produces, right.produces),
         handler=left.handler if left.handler is not None else right.handler,
         poisons=poisons,
+        requirements=_appended(left.requirements, right.requirements),
     )
 
 
@@ -1709,6 +1901,20 @@ def _union(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
     """Sorted and distinct — a tuple rather than a set, so every value the fold
     carries has one order and one order only (NFR-1)."""
     return tuple(sorted(set(left) | set(right)))
+
+
+def _appended(
+    left: tuple[_Requirement, ...], right: tuple[_Requirement, ...]
+) -> tuple[_Requirement, ...]:
+    """Distinct, in declaration order — outermost scope first, as `path_parts` are —
+    rather than sorted: a requirement has no natural order between its columns, and
+    the order the selectors were written in is the one a reader can check against
+    the source (NFR-1 holds because the fold's order is the source's)."""
+    appended = list(left)
+    for requirement in right:
+        if requirement not in appended:
+            appended.append(requirement)
+    return tuple(appended)
 
 
 def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
@@ -1730,6 +1936,8 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
         "response_shape": None,
         "consumes": list(route.consumes),
         "produces": list(route.produces),
+        # Carried beside the row to `run`, never inserted with it (`_REQUIREMENTS`).
+        _REQUIREMENTS: route.requirements,
     }
 
 
@@ -1785,8 +1993,12 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
     `handler` is part of the key rather than decoration — two handlers bound to
     one wire identity are two facts (the `interface_implementation` parity
     rule), and a key without it would silently discard the second.
+
+    A duplicate's requirements are not discarded with it: two routes that collapse
+    to one row are one address whose tree demands everything either declared, so
+    the kept row carries the union (spec 2026-09-19 §4d), as the media union does.
     """
-    seen: set[tuple[str, str, str, str, str]] = set()
+    seen: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
     emitted: list[dict[str, Any]] = []
     for row in _media_unioned(rows):
         if row["path"] is not None:
@@ -1797,16 +2009,18 @@ def _emitted(rows: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any
                 row["path"],
                 row["handler"] or "",
             )
-            if key in seen:
+            kept = seen.get(key)
+            if kept is not None:
+                kept[_REQUIREMENTS] = _appended(kept[_REQUIREMENTS], row[_REQUIREMENTS])
                 continue
-            seen.add(key)
-        emitted.append(
-            {
-                **row,
-                "consumes": _media_json(row["consumes"]),
-                "produces": _media_json(row["produces"]),
-            }
-        )
+        serialized = {
+            **row,
+            "consumes": _media_json(row["consumes"]),
+            "produces": _media_json(row["produces"]),
+        }
+        if row["path"] is not None:
+            seen[key] = serialized
+        emitted.append(serialized)
     return emitted
 
 
@@ -1836,6 +2050,7 @@ def _media_unioned(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         for field in _MEDIA_FIELDS:
             existing[field] = sorted(set(existing[field]) | set(row[field]))
+        existing[_REQUIREMENTS] = _appended(existing[_REQUIREMENTS], row[_REQUIREMENTS])
     return unioned
 
 
@@ -1927,18 +2142,42 @@ def _validate_matches(catalog: Catalog) -> None:
             )
         verb_arg = rule.get("verb_arg")
         if "verb_arg" in rule and (
-            role != "verbs"
+            role not in ("verbs", "prefixes")
             or "verb" in rule
-            or not isinstance(verb_arg, int)
-            or verb_arg < 0
-            or (rule.get("arity") is not None and verb_arg >= rule["arity"])
+            or not _position_inside(verb_arg, rule)
         ):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares "
                 f"`verb_arg: {verb_arg!r}` — a position from 0 below the rule's arity "
-                f"{rule.get('arity')}, on a verb rule declaring no `verb` of its own "
-                f"(D02 §2's `combinator` style)"
+                f"{rule.get('arity')}, on a verb rule declaring no `verb` of its own or on "
+                f"a prefix (D02 §2's `combinator` style)"
             )
+        # Spec 2026-09-19 §4b: a prefix may set a media column from one of its positions.
+        # `media_arg` and `fills` come together — one names where, the other which column —
+        # and only on a prefix; a `media` rule reads every argument and names no position.
+        if ("media_arg" in rule or (role == "prefixes" and "fills" in rule)) and (
+            role != "prefixes"
+            or not _position_inside(rule.get("media_arg"), rule)
+            or rule.get("fills") not in _MEDIA_FIELDS
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{name}` declares "
+                f"`media_arg: {rule.get('media_arg')!r}` / `fills: {rule.get('fills')!r}` — "
+                f"together, on a prefix, a position from 0 below the rule's arity "
+                f"{rule.get('arity')} filling `consumes` or `produces` (D02 §2's "
+                f"`combinator` style)"
+            )
+        # Spec 2026-09-19 §4b: a prefix may declare the request requirement its call
+        # states — `{kind, name_arg, value_arg?,
+        # requirement}`, both closed sets, both positions inside the rule's arity.
+        if "request_requirement" in rule:
+            if role != "prefixes":
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{name}` declares "
+                    f"`request_requirement` — a word for a prefix (D02 §2's `combinator` "
+                    f"style)"
+                )
+            _validate_requirement(rule["request_requirement"], rule, name, catalog)
         if "terminal" in rule and role != "verbs":
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares `terminal` — a "
@@ -2025,6 +2264,27 @@ def _validate_matches(catalog: Catalog) -> None:
             f"{catalog.matches.get('path_join')!r}` — the only value is `{_LEADING_SLASH}`; "
             f"leave it out for verbatim concatenation (D02 §2's `combinator` style)"
         )
+    # Spec 2026-09-19 §4b: the getter form of the two value tables. `verb_values` holds
+    # `getters` alone (a verb constant is never an enum member on the frameworks measured);
+    # `media_values.getters` sits beside `owner`/`values`. Every key is `<owner>#<method>`.
+    verb_values = vocabulary.get("verb_values", {})
+    if not isinstance(verb_values, dict) or set(verb_values) - {"getters"}:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `verb_values` holds `getters` alone, got "
+            f"{verb_values!r} (D02 §2's `combinator` style)"
+        )
+    for table, getters in (
+        ("verb_values", verb_values.get("getters", {})),
+        ("media_values", vocabulary.get("media_values", {}).get("getters", {})),
+    ):
+        if not isinstance(getters, dict) or not all(
+            isinstance(key, str) and _names_a_member(_getter_descriptor(key)) for key in getters
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{table}.getters` is a mapping of "
+                f"`<owner>#<method>` to a value, got {getters!r} (D02 §2's `combinator` "
+                f"style)"
+            )
     for origin in catalog.matches.get("origins", []):
         if not isinstance(origin, dict) or "owner" not in origin or "method" not in origin:
             raise CatalogError(
@@ -2049,6 +2309,45 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"`fills: {rule.get('fills')!r}` — a media rule fills `consumes` or "
                 f"`produces` (D02 §2's `combinator` style)"
             )
+
+
+def _names_a_member(descriptor: str) -> bool:
+    """Whether a converted `getters:` key is exactly one owner and one member name — the
+    seam's owner, the seam's member, and nothing between or after them."""
+    owner = owner_of(descriptor)
+    member = member_name(descriptor)
+    return owner is not None and bool(member) and owner + member == descriptor
+
+
+def _position_inside(position: Any, rule: dict[str, Any]) -> bool:
+    """Whether a declared argument position is one the rule's call can carry: an int
+    from 0, below the rule's `arity` where it declares one — the `receiver_arg` rule,
+    shared by every position word (spec §12)."""
+    return (
+        isinstance(position, int)
+        and position >= 0
+        and (rule.get("arity") is None or position < rule["arity"])
+    )
+
+
+def _validate_requirement(declared: Any, rule: dict[str, Any], name: Any, catalog: Catalog) -> None:
+    """One `request_requirement` — a prefix's mapping: `kind` and `requirement` from
+    their closed sets,
+    `name_arg` and the optional `value_arg` positions the rule's call can carry."""
+    if (
+        not isinstance(declared, dict)
+        or declared.get("kind") not in _REQUIREMENT_KINDS
+        or declared.get("requirement") not in _REQUIREMENT_LEVELS
+        or not _position_inside(declared.get("name_arg"), rule)
+        or ("value_arg" in declared and not _position_inside(declared["value_arg"], rule))
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{name}` declares `request_requirement: "
+            f"{declared!r}` — `{{kind, name_arg, value_arg?, requirement}}`, `kind` one of "
+            f"{list(_REQUIREMENT_KINDS)}, `requirement` one of {list(_REQUIREMENT_LEVELS)}, "
+            f"positions from 0 below the rule's arity {rule.get('arity')} (D02 §2's "
+            f"`combinator` style)"
+        )
 
 
 def _validate_overloads(catalog: Catalog) -> None:

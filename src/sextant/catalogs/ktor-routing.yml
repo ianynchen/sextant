@@ -26,8 +26,8 @@ requires: [call_site, string_constants, chain_reconstruction]
 #   RoutingRootKt.routing(Application, Function1<Routing, Unit>) → RoutingRoot
 #   RoutingBuilderKt:
 #     route(Route, String, Function1)                the nesting primitive
-#     route(Route, String, HttpMethod, Function1)     a prefix carrying a verb — NOT read
-#     method(Route, HttpMethod, Function1)            a verb block with no path — NOT read
+#     route(Route, String, HttpMethod, Function1)     a prefix carrying a verb (`verb_arg`)
+#     method(Route, HttpMethod, Function1)            a verb block with no path (`verb_arg`)
 #     get/post/put/patch/delete/head/options, each in TWO overloads:
 #       (Route, String, Function2)   (Route, Function2)
 #     postTyped/putTyped/patchTyped(Route, Function3), postTypedPath/putTypedPath/
@@ -36,7 +36,8 @@ requires: [call_site, string_constants, chain_reconstruction]
 #       caller's bytecode holds the inlined body, which calls the plain overload above —
 #       these names never appear at a user's call site
 #     param, optionalParam, header, accept, contentType (Route, …, Function1)
-#                                                     selector blocks, no path — NOT read
+#                                                     selector blocks, no path — prefixes
+#                                                     that set something else (below)
 #     createRouteFromPath(Route, String)              the plumbing every prefix calls
 #
 # The path-less overload, read off `javap -c`: `get(Route, Function2)` is
@@ -61,26 +62,49 @@ requires: [call_site, string_constants, chain_reconstruction]
 # per-catalog exception list before this reads right.
 #
 # Handlers are `suspend RoutingContext.() -> Unit` — a `Function2` the compiler emits as
-# a `SuspendLambda` CLASS, `new`ed at the call site, not an `invokedynamic` — so
-# `handler_arg` reads NULL on every row (spec §13 case 8), stated on the live test so
-# `kotlin-null-handler`'s landing moves a pinned value.
+# a `SuspendLambda` CLASS, `new`ed at the call site, not an `invokedynamic`. The
+# extractor marks that class with the `invokeSuspend` holding its body (`lambda_body`)
+# and `effective_call_sites` hands every engine the instance as that lambda (spec
+# 2026-09-19 §3b), so `handler_arg` reads the body's own symbol (`kotlin-null-handler`,
+# closed).
 #
-# Two stated boundaries, neither a slice entry — the w19 enumeration counts a candidate
-# by a `String` at argument 0, and every name here carries its `Route` receiver there,
-# so the audit would refuse a `slice.outside` naming them:
-#   * the four-argument `route(Route, String, HttpMethod, Function1)` — a prefix that
-#     ALSO sets the verb — is one unresolved row today (an arity no `route` rule accepts,
-#     spec §7 case 1), never a resolved prefix that forgot its verb. A `verb_arg` word on
-#     a prefix (A2 Task 6's word, on a verb) would read it.
-#   * the six SELECTOR blocks — `method`, `param`, `optionalParam`, `header`, `accept`,
-#     `contentType`, each `(Route, …, Function1)` — derive NOTHING, not even an
-#     unresolved row, and every route nested under one is LOST: `method(Get) { get { } }`
-#     and `accept(JSON) { get("/x") { } }` both derive `[]` (measured on hand-built facts
-#     through this catalog, Task 5 review). A name the vocabulary does not carry is not
-#     an unrecognised overload — the walk returns nothing for it and never enters its
-#     body — so the G-13 row does not fire. A real-input gap: `accept`/`contentType`
-#     blocks are Ktor's content-negotiation idiom. Logged, not guessed — Task 9 registers
-#     it as `ktor-selector-blocks`, Major.
+# THE SELECTOR BLOCKS (spec 2026-09-19 §4b; `ktor-selector-blocks`, `ktor-route-with-verb`;
+# every signature CP-24 row 1a). A selector is a PREFIX that sets something other than a
+# path, and the scope it opens applies to every route beneath it as a path prefix does:
+#   * `method(Route, HttpMethod, Function1)` and the four-argument `route(Route, String,
+#     HttpMethod, Function1)` set the VERB (`verb_arg`). `HttpMethod.Get` is a GETTER
+#     call on the companion object — `HttpMethod$Companion.getGet()`, never a `GETSTATIC`
+#     of a constant (CP-24 row 3) — so the argument reaches the facts as the getter's
+#     RESULT, and `verb_values.getters` below maps each getter to the literal its field
+#     was built from. A getter the table does not name poisons `method`: the verb was
+#     written and is unreadable, an unresolved row and not a phantom.
+#   * `accept(Route, ContentType[], Function1)` fills `produces` and `contentType(Route,
+#     ContentType, Function1)` fills `consumes` (`media_arg` + `fills`; `accept` is a
+#     VARARG, one array slot whose elements the media reader already walks). `ContentType.
+#     Application.Json` is `ContentType$Application.getJson()`, a getter on the nested
+#     object (CP-24 row 4), read through `media_values.getters`; an unknown getter leaves
+#     the media column NULL and the row resolved, as an undeclared enum member does.
+#   * `header(Route, String, String, Function1)`, `param(Route, String, Function1)`,
+#     `param(Route, String, String, Function1)` and `optionalParam(Route, String,
+#     Function1)` are REQUIREMENTS (`request_requirement`): the routing tree refuses a
+#     request without the header, or the query parameter — with the value, where one is
+#     given — so those three are `required`; `optionalParam` registers the route whether
+#     or not the parameter is present, `optional`. Each reaches `endpoint_metadata` on
+#     every row beneath it (`caller` = the row's handler).
+#   * VERB CONFLICT → SILENCE (A2). `method(HttpMethod.Post) { get("/never") { } }` is a
+#     node Ktor registers and can never dispatch: `HttpMethodRouteSelector.evaluate`
+#     compares the request's method to the selector's own and returns the failure
+#     constant on a mismatch (CP-24 row 7, read off the bytecode), so every request the
+#     outer selector passes the inner one refuses. A row of either verb would be an
+#     endpoint that is not on the wire, and an unresolved row a phantom: the engine drops
+#     the subtree route before the verbs are merged and publishes NOTHING for it — stated
+#     here and in COVERAGE.
+#
+# One stated boundary, not a slice entry (the w19 enumeration counts a candidate by a
+# `String` at argument 0, and every name here carries its `Route` receiver there): the
+# path-less `get { }` overload's `path: ""` is the empty literal, so under a selector at
+# the root — `method(Get) { get { } }` — it serves `/`, the routing root itself, which is
+# what Ktor's `RoutingPath.parse("")` (no parts) registers.
 #
 # A Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from `routing {
 # api() }`, Ktor's own recommended way to split a large routing tree — IS followed (spec
@@ -112,6 +136,43 @@ matches:
       # parameter is the new Route.
       - { owner: io.ktor.server.routing.RoutingBuilderKt, method: route, arity: 3,
           receiver_arg: 0, path_arg: 1, body_arg: 2, origin_param: 0 }
+      # The selector blocks (spec 2026-09-19 §4b, CP-24 row 1a): the receiver at 0 and the
+      # block last on every one, exactly as `route` above.
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: route,  arity: 4, receiver_arg: 0, path_arg: 1, verb_arg: 2, body_arg: 3, origin_param: 0 }   # ktor-route-with-verb
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: method, arity: 3, receiver_arg: 0, verb_arg: 1, body_arg: 2, origin_param: 0 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: accept,      arity: 3, receiver_arg: 0, media_arg: 1, fills: produces, body_arg: 2, origin_param: 0 }   # ContentType[] vararg
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: contentType, arity: 3, receiver_arg: 0, media_arg: 1, fills: consumes, body_arg: 2, origin_param: 0 }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: header,        arity: 4, receiver_arg: 0, body_arg: 3, origin_param: 0,
+          request_requirement: { kind: header, name_arg: 1, value_arg: 2, requirement: required } }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: param,         arity: 3, receiver_arg: 0, body_arg: 2, origin_param: 0,
+          request_requirement: { kind: query, name_arg: 1, requirement: required } }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: param,         arity: 4, receiver_arg: 0, body_arg: 3, origin_param: 0,
+          request_requirement: { kind: query, name_arg: 1, value_arg: 2, requirement: required } }
+      - { owner: io.ktor.server.routing.RoutingBuilderKt, method: optionalParam, arity: 3, receiver_arg: 0, body_arg: 2, origin_param: 0,
+          request_requirement: { kind: query, name_arg: 1, requirement: optional } }
+    # The getter forms of the two value tables (spec 2026-09-19 §4b, F5). Each key is the
+    # getter a Kotlin call site invokes — `HttpMethod.Get` is `getstatic HttpMethod.Companion;
+    # invokevirtual HttpMethod$Companion.getGet()` — and each value the string literal the
+    # static initialiser built the field from, read off the bytecode: CP-24 row 3 for the
+    # seven `HttpMethod` members (`DefaultMethods`, row 2), CP-24 row 4 for the four
+    # `ContentType$Application` members declared here. One measured member at a time, as the
+    # Spring `media_values` table is: a getter this table does not name reads as nothing —
+    # NULL media, a poisoned verb — never as its own name.
+    verb_values:
+      getters:
+        "io.ktor.http.HttpMethod$Companion#getGet": GET
+        "io.ktor.http.HttpMethod$Companion#getPost": POST
+        "io.ktor.http.HttpMethod$Companion#getPut": PUT
+        "io.ktor.http.HttpMethod$Companion#getPatch": PATCH
+        "io.ktor.http.HttpMethod$Companion#getDelete": DELETE
+        "io.ktor.http.HttpMethod$Companion#getHead": HEAD
+        "io.ktor.http.HttpMethod$Companion#getOptions": OPTIONS
+    media_values:
+      getters:
+        "io.ktor.http.ContentType$Application#getJson": application/json
+        "io.ktor.http.ContentType$Application#getXml": application/xml
+        "io.ktor.http.ContentType$Application#getOctetStream": application/octet-stream
+        "io.ktor.http.ContentType$Application#getFormUrlEncoded": application/x-www-form-urlencoded
     verbs:
       # Per verb: (Route, String, Function2) and (Route, Function2) — the second serves the
       # receiver route itself (the empty literal path). `receiver_arg: 0` on every rule:

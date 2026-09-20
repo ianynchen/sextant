@@ -5,11 +5,19 @@
 // rows carry a NULL handler (spec §13 case 8) until `kotlin-null-handler` lands.
 package com.acme.kt
 
+import io.ktor.http.ContentType
+import io.ktor.http.HttpMethod
 import io.ktor.server.application.Application
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
+import io.ktor.server.routing.accept
+import io.ktor.server.routing.contentType
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
+import io.ktor.server.routing.header
+import io.ktor.server.routing.method
+import io.ktor.server.routing.optionalParam
+import io.ktor.server.routing.param
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
@@ -83,5 +91,35 @@ fun Application.defaults() {
     routing {
         mount("/d") { get("/x") { call.respondText("x") } }         // version defaulted → mount$default
         mount("/e", "v2") { get("/y") { call.respondText("y") } }   // both passed → plain mount
+    }
+}
+
+// The SELECTOR blocks (`ktor-selector-blocks`, `ktor-route-with-verb`; spec 2026-09-19 §4b,
+// §4c), in a routing tree of their own so `orders()`'s pins above stay readable. Each
+// selector is a prefix that sets something other than a path: `method`/the four-argument
+// `route` set the VERB, `accept`/`contentType` set a media column (`ContentType.Application.
+// Json` is a GETTER call on the nested object, CP-24 Q4, read through the catalog's
+// `media_values.getters`), and `header`/`param`/`optionalParam` are REQUIREMENTS the
+// routing tree enforces — `endpoint_metadata` rows, `required` for the three that refuse a
+// request without the value and `optional` for `optionalParam`. `handle { }` is Ktor's
+// verb-less terminal (a MEMBER of `Route`, CP-24 Q1b): under `method(Get)` it takes the
+// scope's verb and serves the prefix chain itself — here the root, `/`; under a bare
+// `route("/health2")` it serves every method, one row per member of
+// `HttpMethod.DefaultMethods` (seven, CP-24 Q2). The last block is the CONFLICT: a `get`
+// under `method(Post)` is a node Ktor registers and can never dispatch
+// (`HttpMethodRouteSelector.evaluate` returns the failure constant on a mismatch, CP-24
+// Q7), and the honest row for it is NO row — `/never` is asserted absent.
+fun Application.selectors() {
+    routing {
+        method(HttpMethod.Get) { handle { call.respondText("m") } }               // GET /
+        route("/health2") { handle { call.respondText("any") } }                  // seven rows
+        accept(ContentType.Application.Json) { get("/j") { call.respondText("j") } }
+        contentType(ContentType.Application.Json) { post("/c") { call.respondText("c") } }
+        header("X-Api-Version", "2") { get("/orders") { call.respondText("v2") } }
+        param("debug") { get("/dbg") { call.respondText("dbg") } }
+        param("mode", "fast") { get("/fast") { call.respondText("fast") } }
+        optionalParam("page") { get("/paged") { call.respondText("paged") } }
+        route("/legacy2", HttpMethod.Put) { handle { call.respondText("put") } }  // PUT /legacy2
+        method(HttpMethod.Post) { get("/never") { call.respondText("never") } }   // no row
     }
 }

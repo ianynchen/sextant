@@ -733,7 +733,24 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     cannot read. One unresolved row per call, path NULL, attributed to `defaults()`: the
     honest statement that a route is declared there at an address the walk did not read.
     (Under a catalog that names `mount` as a prefix rule the same calls derive `/d/x` and
-    `/e/y` resolved — `tests/application/test_ktor_defaults_fixture.py`.)"""
+    `/e/y` resolved — `tests/application/test_ktor_defaults_fixture.py`.)
+
+    The SELECTOR blocks of `selectors()` (spec 2026-09-19 §4b, `ktor-selector-blocks`,
+    `ktor-route-with-verb`; every signature CP-24 row 1a): `accept(ContentType.Application.
+    Json) { get("/j") { } }` derives `GET /j` with `produces` read through the getter
+    `ContentType$Application.getJson()` (CP-24 row 4, `media_values.getters`), and
+    `contentType(…) { post("/c") { } }` fills `consumes`; `header("X-Api-Version", "2")`,
+    `param("debug")`, `param("mode", "fast")` and `optionalParam("page")` are scopes whose
+    routes derive beneath them (`GET /orders`, `/dbg`, `/fast`, `/paged`), each carrying
+    the requirement its block states (asserted on `endpoint_metadata` below). The verb
+    CONFLICT `method(HttpMethod.Post) { get("/never") { } }` is a node Ktor never
+    dispatches (`HttpMethodRouteSelector.evaluate` returns the failure constant on a
+    mismatch, CP-24 row 7) and publishes NOTHING — `/never` is absent, not unresolved (A2).
+    Every one of these blocks derived nothing before the rules, and `route("/legacy2",
+    HttpMethod.Put)` was one unresolved row. The three `handle { }` blocks —
+    `method(Get) { handle }`, `route("/health2") { handle }`, `route("/legacy2", Put) {
+    handle }` — are the verb-less terminal (spec §4c) and derive nothing until its rule
+    lands; pinned by the count."""
     rows = {
         (r["method"], r["path"], r["resolution"], r["handler"])
         for r in ktor_rows
@@ -752,15 +769,31 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         # caller `orders()` — asserted below
         ("GET", "/helper", "resolved", _suspend_body("api$1")),
         ("GET", "/api/deep", "resolved", _suspend_body("orders2$1")),
+        # the selector blocks, on `selectors()`
+        ("GET", "/j", "resolved", _suspend_body("selectors$1$3$1")),
+        ("POST", "/c", "resolved", _suspend_body("selectors$1$4$1")),
+        ("GET", "/orders", "resolved", _suspend_body("selectors$1$5$1")),
+        ("GET", "/dbg", "resolved", _suspend_body("selectors$1$6$1")),
+        ("GET", "/fast", "resolved", _suspend_body("selectors$1$7$1")),
+        ("GET", "/paged", "resolved", _suspend_body("selectors$1$8$1")),
     } <= rows, sorted(rows, key=str)
     assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
-    # Exactly twelve rows — the nine above, the stray, and the two `mount` rows — so an
-    # extra row (a selector block's nested route, a duplicate) cannot pass silently.
-    assert len(ktor_rows) == 12, sorted(rows, key=str)
+    assert not any(str(r["path"]) == "/never" for r in ktor_rows), "a verb conflict published"
+    media = {
+        (r["path"], r["consumes"], r["produces"]) for r in ktor_rows if r["path"] in ("/j", "/c")
+    }
+    assert media == {("/j", None, '["application/json"]'), ("/c", '["application/json"]', None)}
+    # Exactly eighteen rows — the fifteen above, the stray, and the two `mount` rows — so
+    # an extra row (a conflict's route, a duplicate) cannot pass silently.
+    assert len(ktor_rows) == 18, sorted(rows, key=str)
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
-    assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
+    assert all(
+        "#orders(" in str(r["caller"]) or "#selectors(" in str(r["caller"])
+        for r in ktor_rows
+        if r["resolution"] == "resolved"
+    )
     assert not any(
         "#api(" in str(r["caller"]) or "#v2(" in str(r["caller"]) or "#orders2(" in str(r["caller"])
         for r in ktor_rows
@@ -836,7 +869,7 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
         "only under the default profile": sorted(default - classes, key=str),
         "only under -Xlambdas=class": sorted(classes - default, key=str),
     }
-    assert len(ktor_classlambda_rows) == len(ktor_rows) == 12
+    assert len(ktor_classlambda_rows) == len(ktor_rows) == 18
 
 
 GATEWAY = FIXTURES / "orders-gateway"

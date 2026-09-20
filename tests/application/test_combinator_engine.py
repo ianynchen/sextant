@@ -263,6 +263,10 @@ def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> Duc
     write_fact_file(tmp_path / "facts" / "Routes.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
+    # The pipeline's own step before any engine runs (spec 2026-09-19 §4d): the stash the
+    # engine writes a route's requirements to is a TEMP table the pipeline re-creates once
+    # per resolve, so the harness re-creates it as `test_request_requirements.py` does.
+    workspace.derive("route_requirements_reset")
     skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
     assert skipped == []
     return workspace
@@ -5798,3 +5802,278 @@ def test_the_gateway_catalog_declines_a_route_call_on_another_owner(tmp_path: Pa
     workspace.close()
 
     assert identities == []
+
+
+# --- selector prefixes and getter-valued constants (spec 2026-09-19 §4b) ---------------
+
+_HTTP_METHOD_COMPANION = "io/ktor/http/HttpMethod$Companion#"
+_CONTENT_TYPE_APPLICATION = "io/ktor/http/ContentType$Application#"
+_HTTP_METHOD = "Lio/ktor/http/HttpMethod;"
+_CONTENT_TYPE = "Lio/ktor/http/ContentType;"
+_FN1 = "Lkotlin/jvm/functions/Function1;"
+_SELECTOR_DESCS = {
+    "method": f"({_ROUTE}{_HTTP_METHOD}{_FN1}){_ROUTE}",
+    "route": f"({_ROUTE}Ljava/lang/String;{_HTTP_METHOD}{_FN1}){_ROUTE}",
+    "accept": f"({_ROUTE}[{_CONTENT_TYPE}{_FN1}){_ROUTE}",
+    "contentType": f"({_ROUTE}{_CONTENT_TYPE}{_FN1}){_ROUTE}",
+    "header": f"({_ROUTE}Ljava/lang/String;Ljava/lang/String;{_FN1}){_ROUTE}",
+    "param": f"({_ROUTE}Ljava/lang/String;{_FN1}){_ROUTE}",
+    "param2": f"({_ROUTE}Ljava/lang/String;Ljava/lang/String;{_FN1}){_ROUTE}",
+    "optionalParam": f"({_ROUTE}Ljava/lang/String;{_FN1}){_ROUTE}",
+}
+# A getter this catalog's tables never name — `_getter_value`'s unknown case.
+_UNKNOWN_GETTERS = "com/example/Constants#"
+
+
+def _selector_body(index: int) -> str:
+    return DECLARER + f"orders$lambda$1$lambda${index}(sig_s{index})."
+
+
+def _getter(ordinal: int, owner: str, name: str, *, result: int) -> CallSiteFact:
+    """`getstatic Owner.Companion|INSTANCE ; invokevirtual Owner.getX()` — the getter call
+    a Kotlin `HttpMethod.Get` or `ContentType.Application.Json` compiles to (CP-24 rows 3
+    and 4): a `virtual` call on the object read one value id earlier, whose RESULT is what
+    the selector is handed as `{kind: unresolved, source: <result>}`."""
+    return _site(
+        _ROUTING_BODY,
+        ordinal,
+        owner,
+        name,
+        receiver=result - 1,
+        result=result,
+        invoke_kind="virtual",
+        descriptor="()Ljava/lang/Object;",
+    )
+
+
+def _selector(
+    ordinal: int, name: str, between: list[CallArgument], *, body: str, descriptor: str
+) -> CallSiteFact:
+    """One selector block in the routing body — `invokestatic RoutingBuilderKt.<name>(this,
+    …, block)`: the body's parameter 0 first, the block last with `captures: 0`, exactly
+    as `route` is written (the fixture's `selectors()`, read 2026-09-20)."""
+    return _site(
+        _ROUTING_BODY,
+        ordinal,
+        _ROUTING_BUILDER,
+        name,
+        result=ordinal + 300,
+        descriptor=descriptor,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            *between,
+            CallArgument(kind="lambda", symbol=body, source=ordinal + 200, captures=0),
+        ],
+    )
+
+
+def _verb_in(body: str, ordinal: int, name: str, path: str | None) -> CallSiteFact:
+    """A verb inside a selector block, on the block's own parameter — with a path, or the
+    path-less overload that serves the prefix itself."""
+    arguments = [CallArgument(kind="parameter", value=0)]
+    if path is not None:
+        arguments.append(CallArgument(kind="string", value=path))
+    arguments.append(CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50))
+    return _site(
+        body,
+        ordinal,
+        _ROUTING_BUILDER,
+        name,
+        result=ordinal + 100,
+        descriptor=_VERB_DESC if path is not None else _PATHLESS_VERB_DESC,
+        arguments=arguments,
+    )
+
+
+def _selector_tree(*blocks: tuple[str, list[CallArgument], list[tuple[str, str | None]]]) -> list:
+    """`routing { <selector>(…) { <verbs> } … }`: one block per tuple — the selector's
+    name (`param2` is the two-argument `param`), the arguments between the receiver and
+    the block, and the verbs written inside it as `(name, path)`."""
+    facts = _routing_entry()
+    for index, (name, between, verbs) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        facts.append(
+            _selector(
+                10 + index,
+                "param" if name == "param2" else name,
+                between,
+                body=body,
+                descriptor=_SELECTOR_DESCS[name],
+            )
+        )
+        for ordinal, (verb, path) in enumerate(verbs):
+            facts.append(_verb_in(body, ordinal, verb, path))
+    return facts
+
+
+def _by_source(result: int) -> CallArgument:
+    return CallArgument(kind="unresolved", source=result)
+
+
+def _literal(value: str) -> CallArgument:
+    return CallArgument(kind="string", value=value)
+
+
+def test_a_verb_selector_sets_the_verb_beneath_it_and_a_disagreeing_route_is_silence(
+    tmp_path: Path,
+):
+    """Spec 2026-09-19 §4b. `method(HttpMethod.Get) { get("/x") { }; get { }; post("/y") { } }`
+    on the shipped catalog: `HttpMethod.Get` is `HttpMethod$Companion.getGet()`, a getter
+    whose RESULT the selector is handed, so the verb is read through
+    `verb_values.getters` (CP-24 row 3) and the scope it opens is `GET`. `get("/x")`
+    agrees and derives `GET /x`; the path-less `get { }` serves the prefix itself — here
+    the routing root, `/`. `post("/y")` DISAGREES, and that subtree is a node the framework
+    registers and can never dispatch (`HttpMethodRouteSelector.evaluate` returns the
+    failure constant on a mismatch, CP-24 row 7): NOT a row of either verb, not an
+    unresolved row, nothing — the A2 ruling, dropped before `_merged` could poison it."""
+    facts = _selector_tree(
+        ("method", [_by_source(9)], [("get", "/x"), ("get", None), ("post", "/y")]),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/", handler, "resolved"),
+        ("GET", "/x", handler, "resolved"),
+    ]
+
+
+def test_a_route_prefix_carrying_a_verb_sets_both_the_path_and_the_verb(tmp_path: Path):
+    """`ktor-route-with-verb`: the four-argument `route("/v", HttpMethod.Put) { put("/x") {
+    }; get("/never") { } }` (CP-24 row 1a) is a prefix that sets the path AND the verb —
+    `path_arg: 1, verb_arg: 2` on one rule — so `put("/x")` is `PUT /v/x`, and the
+    disagreeing `get` is the same silence as under `method`. Before the rule this arity
+    was one unresolved row (spec §7 case 1's G-13 guard) and every route inside it lost."""
+    facts = _selector_tree(
+        (
+            "route",
+            [CallArgument(kind="string", value="/v"), _by_source(9)],
+            [("put", "/x"), ("get", "/never")],
+        ),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getPut", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("PUT", "/v/x", _MODULE + _SUSPEND_BODY, "resolved")]
+
+
+def test_an_unknown_verb_getter_poisons_the_method_alone(tmp_path: Path):
+    """A verb read through a getter the `verb_values.getters` table does not name —
+    `method(Constants.weird) { get("/x") { } }` — poisons `method` and nothing else: the
+    verb WAS written and is unreadable, so the row is unresolved with its path intact,
+    exactly as an undeclared enum member reads. Not a phantom — a route is declared at
+    `/x` — and not `GET`: with the selector's verb unknown, whether the inner `get` agrees
+    with it is unknown too, and picking either would be a guess presented as fact."""
+    facts = _selector_tree(("method", [_by_source(9)], [("get", "/x")]))
+    facts.append(_getter(0, _UNKNOWN_GETTERS, "getWeird", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/x", _MODULE + _SUSPEND_BODY, "unresolved")]
+
+
+def test_media_selectors_read_their_getter_valued_constants_and_an_unknown_one_reads_nothing(
+    tmp_path: Path,
+):
+    """`accept(ContentType.Application.Json) { get("/j") { } }` fills `produces` and
+    `contentType(ContentType.Application.Json) { post("/c") { } }` fills `consumes`
+    (`media_arg` + `fills`). `ContentType.Application.Json` is `ContentType$Application.
+    getJson()`, a getter on the nested object (CP-24 row 4), read through
+    `media_values.getters`; `accept` is a VARARG, so its constant arrives inside one
+    `array` slot whose element carries the getter's `source` (the fixture's compiled
+    shape), and the existing vararg reader walks it. A getter the table does not name —
+    `accept(Constants.weird) { get("/w") { } }` — contributes nothing: `produces` NULL and
+    the row RESOLVED, the media rule's own honesty (the verb and path are the identity,
+    both known)."""
+    facts = _selector_tree(
+        ("accept", [CallArgument(kind="array", elements=[_by_source(9)])], [("get", "/j")]),
+        ("contentType", [_by_source(19)], [("post", "/c")]),
+        ("accept", [CallArgument(kind="array", elements=[_by_source(29)])], [("get", "/w")]),
+    )
+    facts.append(_getter(0, _CONTENT_TYPE_APPLICATION, "getJson", result=9))
+    facts.append(_getter(1, _CONTENT_TYPE_APPLICATION, "getJson", result=19))
+    facts.append(_getter(2, _UNKNOWN_GETTERS, "getWeird", result=29))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert [
+        (row["method"], row["path"], row["resolution"], row["consumes"], row["produces"])
+        for row in rows
+    ] == [
+        ("GET", "/j", "resolved", None, json.dumps([JSON])),
+        ("GET", "/w", "resolved", None, None),
+        ("POST", "/c", "resolved", json.dumps([JSON]), None),
+    ]
+    assert {row["handler"] for row in rows} == {handler}
+
+
+def test_requirement_selectors_are_scopes_whose_routes_derive_beneath_them(tmp_path: Path):
+    """`header("X-Api-Version", "2") { get("/orders") { } }`, `param("debug") { … }`,
+    `param("mode", "fast") { … }` and `optionalParam("page") { … }` set no path, no verb
+    and no media — each is a pure scope carrying a requirement — so the route beneath
+    each derives as written, resolved. Before the rules every one of these blocks derived
+    NOTHING and the routes inside them were lost (the `ktor-selector-blocks` gap). What
+    each block demands of the request is the route's `requirements`, written to the
+    stash and asserted where it is joined to its row (`_from_stash`)."""
+    facts = _selector_tree(
+        ("header", [_literal("X-Api-Version"), _literal("2")], [("get", "/orders")]),
+        ("param", [_literal("debug")], [("get", "/dbg")]),
+        ("param2", [_literal("mode"), _literal("fast")], [("get", "/fast")]),
+        ("optionalParam", [_literal("page")], [("get", "/paged")]),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/dbg", handler, "resolved"),
+        ("GET", "/fast", handler, "resolved"),
+        ("GET", "/orders", handler, "resolved"),
+        ("GET", "/paged", handler, "resolved"),
+    ]
+
+
+def test_selector_words_of_the_wrong_shape_are_refused(tmp_path: Path):
+    """Each new prefix word is validated at load: `media_arg` without `fills` (or on a verb
+    rule), a `request_requirement` whose `kind` is not one of the four, or whose
+    `name_arg` lies outside the arity, a `verb_values` block holding anything but
+    `getters`, and a getter key without its `#` — every one a broken file, not a degraded
+    run."""
+    base = {"owner": "com.example.web.RouterDsl", "method": "path", "arity": 3, "body_arg": 2}
+    for broken in (
+        {**base, "media_arg": 1},
+        {**base, "media_arg": 1, "fills": "accepts"},
+        {**base, "request_requirement": {"kind": "form", "name_arg": 1, "requirement": "required"}},
+        {
+            **base,
+            "request_requirement": {"kind": "query", "name_arg": 3, "requirement": "required"},
+        },
+        {**base, "request_requirement": {"kind": "query", "name_arg": 1, "requirement": "maybe"}},
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["prefixes"] = [broken]  # type: ignore[index]
+        with pytest.raises(CatalogError):
+            _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verbs"][0]["media_arg"] = 0  # type: ignore[index]
+    matches["vocabulary"]["verbs"][0]["fills"] = "produces"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="media_arg"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verb_values"] = {"owner": "com.example.Verbs"}  # type: ignore[index]
+    with pytest.raises(CatalogError, match="verb_values"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["media_values"]["getters"] = {"com.example.Media.getJson": JSON}  # type: ignore[index]
+    with pytest.raises(CatalogError, match="getters"):
+        _resolve(tmp_path, [], _catalog(matches))
