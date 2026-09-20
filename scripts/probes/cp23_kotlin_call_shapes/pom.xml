@@ -1,0 +1,49 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>dev.sextant.probes</groupId>
+  <artifactId>cp23-kotlin-call-shapes</artifactId>
+  <version>0</version>
+  <!-- CP-23's subject: one Kotlin file, compiled twice by kotlinc 2.2.0 — once as the
+       compiler does by default (`indy`) and once under `-Xlambdas=class` (`class`).
+       Copied from `fixtures/orders-ktor/pom.xml`'s Kotlin plugin block, without Ktor: a
+       suspend lambda needs only `kotlin.coroutines` from the stdlib. Each profile builds
+       into ITS OWN `target/<profile>` directory, so a class file the probe reads can
+       only have come from the profile it is filed under (GUIDELINES §5.4: CP-5 rebuilt
+       without `clean` and measured the previous run's jar twice). -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <kotlin.version>2.2.0</kotlin.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <executions><execution><id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+  <profiles>
+    <profile>
+      <id>indy</id>
+      <activation><activeByDefault>true</activeByDefault></activation>
+      <build><directory>${project.basedir}/target/indy</directory></build>
+    </profile>
+    <profile>
+      <id>class</id>
+      <build>
+        <directory>${project.basedir}/target/class</directory>
+        <plugins>
+          <plugin>
+            <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId>
+            <configuration><args><arg>-Xlambdas=class</arg></args></configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
