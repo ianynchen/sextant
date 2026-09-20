@@ -322,6 +322,14 @@ prefixes:
       request_requirement: { kind: query, name_arg: 1, requirement: optional } }
 ```
 
+*(amended 2026-09-20 during implementation: `request_requirement` is `{kind, name_arg, value_arg?,
+requirement}` on a prefix, on a `pass_through` continuation (the Gateway's `header`/`query`/
+`cookie`) and as a verb-shaped `vocabulary.request_requirement` rule (§5c); `name_arg` must be a
+string literal or the row is `name` NULL, `unresolved`; a `value_arg` the call does not carry
+reads value NULL, and one it carries as anything but a string literal — a predicate, a variable
+— reads value NULL too and the row stays `resolved`: name-only, "name required, value unread",
+M4.)*
+
 **Value tables gain a getter form.** `HttpMethod.Get` compiles to `GETSTATIC
 HttpMethod.Companion; INVOKEVIRTUAL HttpMethod$Companion.getGet()`, so the argument is the
 *result* of a call. `media_values` and a new `verb_values` accept, beside the member-name
@@ -474,6 +482,10 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 - **Spring router DSL, Java:** `RequestPredicates.queryParam(String, String)` → query,
   required, value; `queryParam(String, Predicate)` → query, required, value NULL;
   `headers(Predicate<Headers>)` — an arbitrary function, unreadable — nothing, stated.
+  *(amended 2026-09-20 during implementation: a `value_arg` the call carries as anything but a string
+  literal — the `Predicate` here, a variable in the String overload's value position — reads
+  value NULL and the row stays `resolved`: the name is what the requirement is keyed on and it
+  was read, "name required, value unread", M4.)*
   Declared as a new `request_requirement:` list beside `media:` in both router catalogs. *(amended 2026-09-20 during implementation: the servlet twin, `spring-mvc-router.yml`, declares `RequestPredicates.param`,
   kind `param` — it has no `queryParam`, and `ParamPredicate.test` reads `ServerRequest.param`,
   backed by `getParameterMap`, query and form alike (CP-26 rows 2, 2b), M8.)* (Kotlin's
@@ -534,7 +546,8 @@ request_reads:
   Javalin declares its list once in `javalin.yml` and the rows `javalin-apibuilder.yml`
   derives get the same reads without a second copy; a cross-framework match is impossible
   in practice (`via`/`owner` are framework types), and each written row's `evidence` names
-  the catalog its entry came from.
+  the catalog its entry came from. *(amended 2026-09-20 during implementation: `evidence` is `compiler`, D00 §4's closed set —
+  a catalog id is not one of its values — M6.)*
 - **Boundaries stated:** the handler body only, never methods it delegates to; frameworks
   whose handlers bind by annotation declare no `request_reads` in this spec. *(amended 2026-09-20 during implementation: and a Javalin FLAT row's reads are invisible — a `single_call` row's `handler` is the
   registering method (`OrderApp#flat`), not the `Handler` lambda it passes, so

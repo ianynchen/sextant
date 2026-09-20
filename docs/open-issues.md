@@ -1541,8 +1541,9 @@ reclassified as SSE by its `Accept: text/event-stream` header, say) would produc
 metadata rows.
 
 **Verify:** `grep -n "endpoint_metadata_insert" src/sextant/application/resolve/engines/fluent.py
-src/sextant/application/resolve/pipeline.py` — the outbound insert inside the engine, the inbound
-one below `apply_protocol_hints`. **Closes** when the outbound entries are written through the
+src/sextant/application/resolve/request_requirements.py` — the outbound insert inside the
+engine (`fluent.py:~305`, called from `derive_endpoints`), the inbound one in
+`request_requirements.py:~55`, whose caller `pipeline.py` places below `apply_protocol_hints`. **Closes** when the outbound entries are written through the
 same post-hint writer, or when a hint pass rewrites the side table's `protocol` with the row's.
 
 ### OI-97 — two `combinator` catalogs exhausting the helper depth in one resolve file two `routing_depth` rows under one identity
@@ -1555,8 +1556,9 @@ A `routing_depth` question's identity is `(protocol, NULL, NULL, routing_depth)`
 is built per catalog: two `http` combinator catalogs (`ktor-routing.yml` and
 `spring-webflux-router.yml`, say) each exhausting the bound in one module would each file a
 row, and `insert_open_questions.sql` appends, so the ledger would hold two rows with one
-identity — the two-lines-a-verdict-cannot-tell-apart shape `service_identity._merged` was
-written to avoid, one catalog over.
+identity. The rendered document would then show two `routing_depth` lines for one module
+with nothing to say which catalog each came from — the same problem `service_identity._merged`
+solved by merging one kind's rows into one, only here across two catalogs.
 
 **What happens today:** nothing wrong. No fixture and no real module analysed so far nests
 routing helpers sixteen deep in any catalog, let alone two.
