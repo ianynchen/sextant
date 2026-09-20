@@ -96,8 +96,13 @@ missing a required field means these are not the same endpoint.
 are part of what the server REQUIRES: a client row whose own metadata carries no entry of
 that kind and name fails the test the way a missing required body field does. Entries
 marked `optional` or `absent`, and entries whose `requirement` is NULL (a bare read in the
-handler, stating nothing), do not affect matching. The rows exist today, written by the
-resolver; this paragraph is what the stitcher does with them when it is built.
+handler, stating nothing), do not affect matching. An entry's `value` is the framework's OWN
+spelling of the demand — a literal for Ktor and Spring, the regex as written for Spring Cloud
+Gateway's `header("X-Request-Id", "\\d+")`, matched there as a whole-string regex — so the
+stitcher compares a server entry's value with a client's for EQUALITY only where the spelling
+is a literal; a regex-valued demand is matched by name alone, its value a statement about the
+shape of what the client sends that this test does not evaluate. The rows exist today, written
+by the resolver; this paragraph is what the stitcher does with them when it is built.
 
 **Comparison is on wire identity, never on type names.** `OrderCreationCommand` and
 `CreateOrderRequest` may be the same contract; a rewritten schema with matching field

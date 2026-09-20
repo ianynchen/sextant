@@ -1691,6 +1691,64 @@ declares a default the reference omits, under `-Xlambdas=class` or as a suspend 
 **Closes** when CP-23 gains a Q compiling an adapted reference and the marked body is asserted
 in `KotlinLambdaBodyTest`.
 
+### OI-104 — a WRITTEN Micronaut name also accepts the parameter's hyphenated name, and the row states the written one alone
+**Minor · logged 2026-09-20, found at the whole-branch review (item 1, CP-25 row 18) ·
+`src/sextant/catalogs/micronaut-http.yml` (`request_params`),
+`src/sextant/application/resolve/request_requirements.py::_name`**
+
+`AbstractArgumentBinder.doResolve` (micronaut-core 4.7.6) reads the name the binder resolved
+— the written `value`/`name`, else the parameter's own — and, finding nothing, retries with
+`getFallbackFormat(argument)`, which is ALWAYS the hyphenated form of the PARAMETER'S name
+(`NameUtils.hyphenate`; the header binder capitalizes first), whether or not a name was
+written. So `@Header("X-Tenant") String tenantHeader` is served by `X-Tenant` OR
+`Tenant-Header`, and `@QueryValue("q") String query` by `?q=` or `?query=`. The row states the
+written name alone. Where NO name is written the branch already refuses the parameter's own
+name when the fallback respells it (`fallback_spelling`); the written case was ruled stated,
+not built: the written name is the one every client of the API is told to send, and a second
+accepted spelling is a leniency, not a requirement on it.
+
+**What happens today:** `header X-Tenant required` on the fixture's `search` — true of a
+client that sends `X-Tenant`; a client sending `Tenant-Header` is also served and the row
+does not say so.
+
+**Real triggering input:** any annotated Micronaut parameter with a written name whose
+declared name hyphenates to something a client actually sends — rare by construction, since
+the written name is the documented one.
+
+**Verify:** `grep -n "fallback_spelling" src/sextant/application/resolve/request_requirements.py`
+— read only where no name attribute was written. **Closes** when the writer records the
+fallback as a second accepted spelling (a second row, or a column for it) — a schema question,
+D01 §3.
+
+### OI-105 — `optional` for a Kotlin default or nullable parameter assumes `kotlin-reflect` at runtime
+**Minor · logged 2026-09-20, found at the whole-branch review (item 2, CP-25 row 3) ·
+`src/sextant/catalogs/spring-mvc.yml`, `spring-web.yml` (`request_params`),
+`src/sextant/application/resolve/request_requirements.py::_requirement`**
+
+`MethodParameter.isOptional()` (spring-core 6.1.6) reaches its Kotlin branch —
+`KotlinDelegate.isOptional`, which reads `KType.isMarkedNullable()` and
+`KParameter.isOptional()` — only behind `KotlinDetector.isKotlinReflectPresent()`, and
+`resolveArgument`'s default-value read is gated the same way. Without `kotlin-reflect` on the
+RUNTIME classpath, `@RequestParam page: Int = 0` is `required` to Spring (a `@RequestParam
+tag: String?` stays `optional`: kotlinc's `@Nullable` declaration annotation is read by
+`hasNullableAnnotation()` without reflection; the declared default has no such second path).
+The binder rule writes `optional` for `declares_default: true` unconditionally.
+
+**What happens today:** every Kotlin Spring module this repository has seen carries
+`kotlin-reflect` — Initializr adds it, `jackson-module-kotlin` depends on it — so the row is
+right on all of them; nothing checks.
+
+**Real triggering input:** a Kotlin Spring module that excludes `kotlin-reflect` (a
+size-trimmed image) and declares a defaulted `@RequestParam`.
+
+**Verify:** `grep -n "declares_default" src/sextant/application/resolve/request_requirements.py`
+— no dependency gate around it. **Closes** when the pass can gate the `declares_default`
+disjunct on `org.jetbrains.kotlin:kotlin-reflect` being on the module's RESOLVED runtime
+classpath — which needs transitive dependency resolution: the Gradle detector reports the
+resolved compile classpath, the Maven one declared-plus-inherited coordinates and no
+transitives (`resolve/dependencies.py`, F1), and `kotlin-reflect` most often arrives
+transitively through `jackson-module-kotlin`, exactly where a Maven-side gate would be blind.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

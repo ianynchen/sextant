@@ -264,7 +264,14 @@ symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs
 tell query from form) — and **`requirement`** states what is enforced: `required` (the
 framework rejects a request without it), `optional` (it serves one without it), `absent`
 (it requires it to be missing). The column states what the FRAMEWORK enforces, never what
-the handler body does with the value. NULL on an inbound row means the code states nothing
+the handler body does with the value. An inbound row's `value` is the framework's OWN
+spelling of the demanded value, or NULL: a literal for Ktor's `header(name, value)` and
+Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's
+`header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex
+(`Pattern.asMatchPredicate` for `header`, `String.matches` for `query`/`cookie`,
+spring-cloud-gateway-server-webflux 5.0.0) — so a
+consumer compares two values for equality only where the spelling is a literal
+([M06](M06-stitcher.md)). NULL on an inbound row means the code states nothing
 — a bare read in a handler body says only that the handler reads the value — and NULL on
 every outbound row is the existing meaning: an entry sent has no requirement. The insert is
 insert-if-absent on the full row, because two catalogs can describe one handler and their

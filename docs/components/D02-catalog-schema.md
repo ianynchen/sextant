@@ -4183,7 +4183,12 @@ are how an inbound catalog records what the endpoint's framework DEMANDS — a h
 parameter, a cookie — one `endpoint_metadata` row per entry, `direction = inbound`, `caller`
 the handler symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs
 that cannot tell query from form: Spring's `@RequestParam`/`params=` and the Servlet
-`getParameter`, said on the entry), `value` a fixed demanded value or NULL, `evidence:
+`getParameter`, said on the entry), `value` the framework's OWN spelling of the demanded
+value or NULL — a literal for Ktor's `header(name, value)` and Spring's `params = "view=summary"`,
+the regex AS WRITTEN for Spring Cloud Gateway's `header("X-Request-Id", "\\d+")`, which the
+framework matches as a whole-string regex (`Pattern.asMatchPredicate` for `header`,
+`String.matches` for `query`/`cookie`, spring-cloud-gateway-server-webflux 5.0.0; a consumer compares values for equality only where
+the spelling is a literal, [M06](M06-stitcher.md)) — `evidence:
 compiler`, and **`requirement`** stating what the FRAMEWORK enforces — `required` (it rejects
 a request without it), `optional` (it serves one without it), `absent` (it requires it
 missing) — or NULL where the code states nothing ([D01](D01-graph-schema.md) §3, A3). A read
@@ -4211,9 +4216,10 @@ request_params:
 ```
 
 An entry carries `annotation`, `kind`, `name_attrs` and `requirement`, and may carry
-`required_attr`, `default_attr`, `default_annotation`, `optional_types`, `skip_types` and
-`skip_path_variables`; any other key, a `kind` outside the closed set, or a `requirement`
-other than `binder`/`optional` is refused naming the file. **`requirement: optional`** is
+`required_attr`, `default_attr`, `default_annotation`, `optional_types`, `skip_types`,
+`skip_path_variables` and `fallback_spelling`; any other key, a `kind` outside the closed set,
+a `requirement` other than `binder`/`optional`, or a `fallback_spelling` other than
+`hyphenated`/`hyphenated-capitalized` is refused naming the file. **`requirement: optional`** is
 JAX-RS's and reactive routes' rule — absent → null or `@DefaultValue`, never a 400 (CP-25 rows
 9–12); `default_annotation` is informational. **`requirement: binder`** is Spring's
 `AbstractNamedValueMethodArgumentResolver.resolveArgument` and Micronaut's route match (CP-25
@@ -4225,8 +4231,25 @@ when a DECLARATION annotation on the parameter is one of the shape model's
 what Micronaut's transformers map onto `jakarta.annotation.Nullable`; the type reference's own
 `nullable` flag is NOT read, because every Java reference type carries `true` there by
 language rule), or when the parameter `declares_default: true` ([D00](D00-fact-schema.md) §6,
-R1); else `required`. The name is the first of `name_attrs` written as a non-empty literal,
-else the parameter's declared name, else NULL and `unresolved`. A parameter whose erased type
+R1); else `required`. **The `declares_default` step assumes `kotlin-reflect` on the runtime
+classpath**: Spring reads a Kotlin default and `KParameter.isOptional()` only behind
+`KotlinDetector.isKotlinReflectPresent()` (CP-25 row 3), so without it `@RequestParam page: Int
+= 0` is `required` — nearly always present (Initializr, `jackson-module-kotlin`), stated on the
+two Spring catalogs and as `OI-105`. The name is the first of `name_attrs` written as a
+non-empty literal, else the parameter's declared name, else NULL and `unresolved` — and the
+declared name only where the binder requires it by that name alone: **`fallback_spelling:
+hyphenated | hyphenated-capitalized`** names a binder's SECOND spelling of an unwritten name,
+the one it retries with when the parameter's own finds nothing (Micronaut's
+`AbstractArgumentBinder.doResolve`, CP-25 row 18: `NameUtils.hyphenate(name)` — `pageSize` →
+`page-size` — for `@QueryValue`/`@CookieValue`, `hyphenate(capitalize(name), false)` —
+`xTenant` → `x-Tenant` — for `@Header`, both mirrored from the bytecode in
+`request_requirements.py`). Where that spelling differs from the declared name — exactly for
+a query parameter or cookie, case-insensitively for a header, whose names the framework's own
+`CaseInsensitiveMutableHttpHeaders` compares that way — the row keeps its requirement and
+names nothing (`name` NULL, `unresolved`): a requirement on a name with two accepted spellings
+states neither. Where the two coincide (`tenant`) the declared name stands; a written name is
+never respelled (that the binder retries the parameter's hyphenated name after a written one
+too is `OI-104`, stated). A parameter whose erased type
 is one of `skip_types` — the whole-map bindings, which name nothing — is skipped, by exact
 erased type; `skip_path_variables: true` drops a name that is one of the row's own path
 variables (`{name}`, `{name: regex}`, `{name?}`, `{rest...}`, `:name`), for an annotation whose

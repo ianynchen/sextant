@@ -18,8 +18,9 @@ reads `declares_default` off a defaulted parameter; Q9 (added 2026-09-20, after 
 class a function REFERENCE compiles to under the default mode — its superclass and its
 `invoke` methods, for a plain and a suspend referent.
 
-**What this probe does not settle.** Nothing was run; every cell is a `javap` read of a
-class file, or (Q8) the extractor's own fact read off the same class files. It measures
+**What this probe does not settle.** Nothing of Kotlin's or a framework's was run; every
+cell is a `javap` read of a class file, except Q8, which RUNS this repository's extractor
+jar over the same class files and reads the fact it emits. It measures
 one compiler and one source file: kotlinc's OUTPUT for these shapes, not what the Kotlin
 language guarantees (the `$default` calling convention, the `Lambda`/`SuspendLambda`
 base classes and `-Xlambdas` are compiler mechanisms, not language). It does not measure

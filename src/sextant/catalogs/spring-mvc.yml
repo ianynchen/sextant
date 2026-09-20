@@ -53,7 +53,13 @@ matches:
   # spellings — NOT the type reference's own `nullable`, which every Java reference
   # type carries by language rule), or a Kotlin nullable/defaulted parameter, which
   # arrives as kotlinc's `@Nullable` and the extractor's `declares_default` (CP-25 row
-  # 3). `kind: param` on `@RequestParam` because Spring reads query string and form
+  # 3) — the Kotlin branch of `isOptional()` runs only behind
+  # `KotlinDetector.isKotlinReflectPresent()` (row 3), so `optional` for a Kotlin
+  # DEFAULT assumes `kotlin-reflect` on the runtime classpath; without it
+  # `@RequestParam page: Int = 0` is `required` (a `String?` stays `optional` through
+  # kotlinc's `@Nullable` annotation, read without reflection). Nearly always present
+  # (Initializr, `jackson-module-kotlin`), not checked here: `docs/open-issues.md` OI-105.
+  # `kind: param` on `@RequestParam` because Spring reads query string and form
   # body through one API and the annotation cannot tell them apart (§5a). The type
   # names live HERE because the pass names no language's types: `optional_types` is
   # `isOptional()`'s first disjunct; `skip_types` are the whole-map bindings — a

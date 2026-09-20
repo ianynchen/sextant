@@ -94,6 +94,10 @@ Every sentence the implementation changed carries an inline note; this table is 
 | M10 | §7 | CP-25 is shared by three sections: row 1 (Javalin `ApiBuilder`'s thread-local guard behind `follow_calls: all`), rows 2–12 (§5b's binder rules), rows 13–17 (§5c's expression grammar and §5d's reads) | Tasks 8, 12, 13–14 |
 | M11 | §1, §9 | The Ktor fixture gained `selectors()`, `reads()`, `defaults()` and the `mount` DSL function; the test-only catalog is built inside `tests/application/test_ktor_defaults_fixture.py`; a new `fixtures/orders-servlet` carries the Servlet reads; `KotlinParamController.kt` carries the R1 case | Tasks 6, 12, 14 |
 | M12 | §10 | The "request requirements" line is a hand-written `Request requirements` row per REST-inbound framework line in COVERAGE §5.1's table (nine ✅, nine Not recorded), not a line in the generated rollup, which has no place for one | Task 15 |
+| M13 | §5b | `declares_default` → `optional` assumes `kotlin-reflect` on the runtime classpath: Spring reads a Kotlin default only behind `KotlinDetector.isKotlinReflectPresent()` (CP-25 row 3); stated on `spring-mvc.yml`/`spring-web.yml`, COVERAGE and `OI-105` | whole-branch review, item 2 |
+| M14 | §5a, §5c | An inbound `value` is the framework's OWN spelling of the demand — a literal for Ktor and Spring, the regex as written for Spring Cloud Gateway (matched as a whole-string regex); D01 §3, D02 §2k and M06 say so, and M06 compares equality only where the spelling is a literal | whole-branch review, item 3 |
+| M15 | §5d | "A cross-framework match is impossible in practice" corrected: every catalog loads on every resolve, so a Spring MVC handler's `HttpServletRequest.getParameter`/`getHeader` calls ARE recorded through the Servlet catalogs' entries — true rows, kind `param`/`header`, `requirement` NULL; what cannot happen is a wrong one | whole-branch review, item 4 |
+| M16 | §5b, §7 | A parameter's own name is refused where the binder respells it: `fallback_spelling: hyphenated \| hyphenated-capitalized` on `micronaut-http.yml`'s three entries mirrors `AbstractArgumentBinder.doResolve` retrying `NameUtils.hyphenate` (the header binder's `capitalize` first) — a name the fallback respells writes `name` NULL, `unresolved`; one it does not (`tenant`) stands; a written name is kept (`OI-104`). CP-25 gains row 18 | whole-branch review, item 1 (Critical) |
 
 ---
 
@@ -401,7 +405,7 @@ NULL on every outbound row (an outbound entry is something *sent*). `schema.sql`
 column; the table is rebuilt every resolve, so nothing migrates. Inbound rows: `direction =
 inbound`; `caller` = handler symbol; `kind ∈ {header, query, cookie, param}` — `param` only
 for the two APIs that cannot tell query from form (Spring `@RequestParam`, Servlet
-`getParameter`), said on the catalog entry; `value` = a fixed demanded value or NULL. A read
+`getParameter`), said on the catalog entry; `value` = a fixed demanded value or NULL *(amended 2026-09-20 at the whole-branch review: the framework's OWN spelling of the demanded value — a literal for Ktor's `header(name, value)` and Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's `header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex (`Pattern.asMatchPredicate` in `HeaderRoutePredicateFactory`, `String.matches` in the query and cookie factories — spring-cloud-gateway-server-webflux 5.0.0, `javap`); M14)*. A read
 whose name is not a string literal/constant produces `name` NULL, `resolution = unresolved`
 — "this handler reads a header it does not name" is a different statement from "reads
 none", the reasoning the outbound table was built on.
@@ -449,12 +453,34 @@ request_params:
   `hasNullableAnnotation()` reads by simple name (CP-25 row 3) and what Micronaut's transformers
   map onto `jakarta.annotation.Nullable` (row 8) — the list widened to every measured
   spelling; kotlinc's `@Nullable` lands there too. `java.util.Optional` is named on the entry as
-  `optional_types`, because the pass names no language's types, M7.)*
+  `optional_types`, because the pass names no language's types, M7.)* *(amended 2026-09-20 at the whole-branch review: the
+  `declares_default` → `optional` step has a RUNTIME prerequisite the row does not check — Spring
+  reads a Kotlin default and `KParameter.isOptional()` only behind
+  `KotlinDetector.isKotlinReflectPresent()` (CP-25 row 3), so without `kotlin-reflect` on the
+  runtime classpath `@RequestParam page: Int = 0` is `required`. The row assumes it present —
+  nearly always true, Initializr and `jackson-module-kotlin` both bring it — stated on the two
+  Spring catalogs, in COVERAGE, and as `docs/open-issues.md` OI-105; a coordinate-gated variant
+  needs transitive dependency resolution, M13.)*
 - **`requirement: optional`** is JAX-RS's rule: absent → null or `@DefaultValue`, never a
   400 (`default_annotation: jakarta.ws.rs.DefaultValue`, informational — it does not change
   the requirement).
 - **Name:** the first present of `name_attrs`, else the parameter's declared `name`; a
-  parameter compiled without names → unresolved row.
+  parameter compiled without names → unresolved row. *(amended 2026-09-20 at the whole-branch review: else the
+  parameter's declared name ONLY where the binder requires it by that name alone. Micronaut's
+  `AbstractArgumentBinder.doResolve` reads the parameter's own name and, finding nothing,
+  retries `getFallbackFormat(argument)` — `NameUtils.hyphenate(name)` for `@QueryValue`/
+  `@CookieValue` (`pageSize` → `page-size`), `hyphenate(capitalize(name), false)` for `@Header`
+  (`xTenant` → `x-Tenant`; CP-25 row 18) — so `@QueryValue String pageSize` is served by
+  `?page-size=` alone and `query pageSize required` would state a name the framework does not
+  require by itself. The entry's `fallback_spelling: hyphenated | hyphenated-capitalized`
+  names the binder's second spelling, mirrored from the bytecode in
+  `request_requirements.py`; where it differs from the declared name (exactly for a query
+  parameter or cookie, case-insensitively for a header — the framework's own
+  `CaseInsensitiveMutableHttpHeaders`) the row keeps its requirement and names nothing
+  (`name` NULL, `unresolved`); where the two coincide (`tenant`) the name stands. A WRITTEN
+  name stands as written; that `doResolve` retries the parameter's hyphenated name after a
+  written one too is `docs/open-issues.md` OI-104, stated not built. Only `micronaut-http.yml`
+  declares the key, M16.)*
 - **Skipped, stated on the catalog:** whole-map bindings (`Map`, `MultiValueMap`,
   `HttpHeaders` types — no name); Micronaut's *unannotated* by-name binding. *(amended 2026-09-20 during implementation: the whole-map types are the entry's `skip_types` list, by exact erased type;
   `skip_path_variables: true` on an entry whose read serves path and query alike — reactive
@@ -494,7 +520,14 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
   measured: `header(String)`, `header(String, String)`, `query(String)`, `query(String,
   String)`, `query(String, Predicate)`, `cookie(String, String)`): the `pass_through: true`
   continuations become `request_requirement:` continuations — header/query/cookie, required, value =
-  the regex string where one is given, NULL for the `Predicate` form. The properties side
+  the regex string where one is given, NULL for the `Predicate` form. *(amended 2026-09-20 at the whole-branch review: the
+  `value` column carries the regex AS WRITTEN — `"\\d+"` for `header("X-Request-Id", "\\d+")`
+  — because that is the framework's own spelling of the demand (`HeaderRoutePredicateFactory`
+  matches it as a whole-string regex, `Pattern.compile(regex).asMatchPredicate()`; the query
+  and cookie factories use `String.matches` — spring-cloud-gateway-server-webflux 5.0.0,
+  `javap`); it is not a literal a client must send, and a consumer
+  comparing values for equality (M06's request test) does so only where the spelling is a
+  literal, M14.)* The properties side
   (`Header=X,regex`, `Query=x[,regex]`, `Cookie=name,regex`) is **not** in scope: property-
   declared routes derive nothing today (`gateway-properties-routes`, open), and their
   predicates land with that item, on the same `request_requirement:` word.
@@ -547,7 +580,13 @@ request_reads:
   derives get the same reads without a second copy; a cross-framework match is impossible
   in practice (`via`/`owner` are framework types), and each written row's `evidence` names
   the catalog its entry came from. *(amended 2026-09-20 during implementation: `evidence` is `compiler`, D00 §4's closed set —
-  a catalog id is not one of its values — M6.)*
+  a catalog id is not one of its values — M6.)* *(amended 2026-09-20 at the whole-branch review: "impossible in
+  practice" is false as written. Every catalog loads on every resolve, so the Servlet
+  catalogs' `getParameter`/`getHeader` entries match ANY handler body that calls them — a
+  Spring MVC handler taking `HttpServletRequest` included — and that is a TRUE row: the
+  handler reads the value, kind `param`/`header`, `requirement` NULL (rows 16–17). What
+  cannot happen is a WRONG cross-framework row, because `owner`/`via` name the API type
+  the read is made on and a body either calls it or does not, M15.)*
 - **Boundaries stated:** the handler body only, never methods it delegates to; frameworks
   whose handlers bind by annotation declare no `request_reads` in this spec. *(amended 2026-09-20 during implementation: and a Javalin FLAT row's reads are invisible — a `single_call` row's `handler` is the
   registering method (`OrderApp#flat`), not the `Handler` lambda it passes, so
@@ -594,7 +633,7 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 |---|---|---|
 | **CP-23** kotlinc 2.2.0 call-site shapes — a Maven module beside `orders-ktor` compiled twice, default and `-Xlambdas=class` | a `$default` call's mask literal and bit meaning (F3), receiver vs static sibling, a two-mask (33-parameter) function; a lambda class's superclass (`Lambda`/`SuspendLambda`), its `invoke`/`invokeSuspend` methods and synthetic flags, constructor-captured fields; `@kotlin.Metadata`'s `declaresDefaultValue` flag on a defaulted parameter | §3a, §3b, §3c |
 | **CP-24** Ktor 3.0.3 routing surface | the selector signatures (F4), `HttpMethod.DefaultMethods`, the `HttpMethod$Companion.get*` and `ContentType$Application.get*` getters (F5), `ParametersKt.getOrFail` and what it throws, the `StringValues.get` owners of the three containers; `HttpMethodRouteSelector.evaluate` returning `Failure` on a method mismatch (A11 — bytecode, no server run) | §4b, §4c, §5d |
-| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null. *(amended 2026-09-20 during implementation: shared by three sections — row 1 is Javalin `ApiBuilder`'s thread-local guard, the measured fact behind `follow_calls: all` (§4a); rows 2–12 are §5b's binder rules; rows 13–17 are `AbstractNameValueExpression`'s grammar (§5c), Javalin's `Context` read/set overloads by arity and `Validator.get()` throwing, and the Servlet API's `getParameter`/`getHeader` null-on-absent on Tomcat 10.1.50 and 9.0.121 (§5d), M10)* | §4a, §5b, §5c, §5d |
+| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null. *(amended 2026-09-20 during implementation: shared by three sections — row 1 is Javalin `ApiBuilder`'s thread-local guard, the measured fact behind `follow_calls: all` (§4a); rows 2–12 are §5b's binder rules; rows 13–17 are `AbstractNameValueExpression`'s grammar (§5c), Javalin's `Context` read/set overloads by arity and `Validator.get()` throwing, and the Servlet API's `getParameter`/`getHeader` null-on-absent on Tomcat 10.1.50 and 9.0.121 (§5d), M10; row 18, added at the whole-branch review, is Micronaut's unwritten-name fallback — `AbstractArgumentBinder.doResolve` retrying `NameUtils.hyphenate`, the header binder's `capitalize` — behind `fallback_spelling`, M16)* | §4a, §5b, §5c, §5d |
 | **CP-26** predicates — spring-webflux 6.1.6, gateway 5.0.0 | `RequestPredicates.queryParam` overloads; `PredicateSpec`/`BooleanOpSpec` header/query/cookie overloads; the properties spellings | §5c |
 
 ---

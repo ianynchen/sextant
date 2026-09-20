@@ -603,9 +603,13 @@ def _from_reads(
     one row per read. The entries of every loaded catalog are unioned and matched against
     every inbound row's handler — by handler, not by catalog (§5d): a framework declares
     its list once and the rows a sibling catalog derives on the same handler type get the
-    same reads; a cross-framework match is impossible in practice, `owner`/`via` being
-    framework types. The body is scanned ONCE per handler and its sites are indexed by
-    caller ONCE for the whole pass (GUIDELINES §8.7).
+    same reads. A body calling another framework's read API matches that framework's
+    entry too — a Spring handler taking `HttpServletRequest` gets its `getParameter`/
+    `getHeader` calls recorded through the Servlet catalogs' entries, every catalog
+    loading on every resolve — and the row is true: the handler reads the value,
+    `requirement` NULL (CP-25 rows 16–17). A WRONG cross-framework row cannot happen,
+    `owner`/`via` naming the API type the read is made on. The body is scanned ONCE per
+    handler and its sites are indexed by caller ONCE for the whole pass (GUIDELINES §8.7).
 
     A read's `requirement` is the entry's, NULL where the entry declares none (A3: a
     bare read states that the handler reads the value and nothing about what the
