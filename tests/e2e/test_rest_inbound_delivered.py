@@ -650,6 +650,16 @@ def ktor_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         workspace.close()
 
 
+def _suspend_body(handler_class: str) -> str:
+    """The module-prefixed symbol of a `KtorRoutesKt` suspend handler's `invokeSuspend` —
+    the one body shape every suspend lambda class has, so one disambiguator serves all."""
+    return (
+        "sextant-jvm maven com.acme/orders-ktor 1.0.0 com/acme/kt/KtorRoutesKt$"
+        + handler_class
+        + "#invokeSuspend(sig_262c527a)."
+    )
+
+
 def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     """`ktor-routing`, spec §14 test 13. `routing { route("/api") { get("/orders") { }
     … } }` on ktor-server-core 3.0.3: every verb is a static extension whose receiver is
@@ -660,8 +670,12 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
     which is the catalog's `path_join: leading_slash`.
 
-    Handler NULL on every row — a suspend lambda is a class, not a linked body — asserted
-    here so `kotlin-null-handler` moves a pinned value (spec §13 case 8).
+    Every row names its handler: a suspend lambda compiles to a class (kotlinc 2.2.0,
+    CP-23), the extractor marks that class's type fact with the `invokeSuspend` holding
+    its body, and `effective_call_sites` hands every engine the `instance` as that
+    `lambda` (spec 2026-09-19 §3b) — so the handler column that spec §13 case 8 had
+    pinned NULL is the body's own symbol. `kotlin-null-handler` closes here, on the Ktor
+    rows; the class counters (`$orders$1$1$3$2`) are kotlinc's own, by nesting position.
 
     Two outcomes are degraded by design, and both are stated rather than hidden. The
     wrong-receiver case: `other.get("/stray") { }` inside `route("/api") { }` registers
@@ -680,13 +694,14 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         if r["catalog_id"] == "ktor-routing"
     }
     assert {
-        ("GET", "/api/orders", "resolved", None),
-        ("POST", "/api/orders", "resolved", None),
-        ("GET", "/api/v2/orders", "resolved", None),
-        ("DELETE", "/api/v2/orders/{id}", "resolved", None),
-        ("GET", "/api/legacy/orders", "resolved", None),
-        ("GET", "/api", "resolved", None),  # get { } on the prefix: Ktor serves the prefix itself
-        ("GET", "/health", "resolved", None),
+        ("GET", "/api/orders", "resolved", _suspend_body("orders$1$1$1")),
+        ("POST", "/api/orders", "resolved", _suspend_body("orders$1$1$2")),
+        ("GET", "/api/v2/orders", "resolved", _suspend_body("orders$1$1$3$1")),
+        ("DELETE", "/api/v2/orders/{id}", "resolved", _suspend_body("orders$1$1$3$2")),
+        ("GET", "/api/legacy/orders", "resolved", _suspend_body("orders$1$1$4$1")),
+        # get { } on the prefix: Ktor serves the prefix itself
+        ("GET", "/api", "resolved", _suspend_body("orders$1$1$5")),
+        ("GET", "/health", "resolved", _suspend_body("orders$1$2")),
     } <= rows, sorted(rows, key=str)
     assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
     # Exactly eight rows — the seven above and the stray — so an extra row (a helper route

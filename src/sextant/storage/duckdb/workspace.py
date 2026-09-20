@@ -210,6 +210,19 @@ _NAMED_QUERIES = {
           AND m.document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Spec 2026-09-19 §3b (R2). Every type fact carrying `lambda_body` — the extractor's
+    # statement that this class is a compiled lambda and which method holds its body —
+    # which is what `resolve/effective_calls.py` needs to hand an `instance` argument of
+    # that class to the engines as the `lambda` it is. Read from `raw_facts` as
+    # `bridge_declarations` is, for the same reason: `symbols` does not project the key.
+    # Ordered on the symbol (NFR-1).
+    "lambda_bodies": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'lambda_body' AS body
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'lambda_body') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and visibility (2O design
     # §1b, Task 5): `method_declarations` above carries `signature` instead,
     # which this join has no use for, and `method_symbols` carries neither
@@ -1077,6 +1090,9 @@ _FACT_ONLY = frozenset(
         # A default-argument bridge's own fact, read once per resolve by the call-site
         # projection (spec 2026-09-19 §3a).
         "bridge_declarations",
+        # A class-compiled lambda's type fact, read once per resolve by the same
+        # projection (spec 2026-09-19 §3b).
+        "lambda_bodies",
         "fields",
         "enum_types",
         "annotations_of",

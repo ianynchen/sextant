@@ -269,10 +269,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/extra"),
         ("GET", "/other"),
         # `KotlinOrderRoutes#ktRoutes`'s `coRouter { }` DSL, nested under
-        # `/kt`: `GET`+`POST /kt/orders` and `GET /kt/rich`, handler NULL on
-        # all three (checkpoint (1b) Tier-0: the Kotlin compiler hands every
-        # handler here as an `instance` of a generated class, never a method
-        # reference — never fabricated into one).
+        # `/kt`: `GET`+`POST /kt/orders` and `GET /kt/rich`. The two suspend
+        # lambdas name their `invokeSuspend` as handler (spec 2026-09-19 §3b);
+        # the `::listOrders` function reference stays NULL (checkpoint (1b)
+        # Tier-0: an `instance` of a generated class, never fabricated into a
+        # method) — both pinned below.
         ("GET", "/kt/orders"),
         ("POST", "/kt/orders"),
         ("GET", "/kt/rich"),
@@ -869,7 +870,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # reference — sharing the existing `(None, None)` tuple above, so the
     # SET gains no new entry for it even though this count does), and 3 off
     # `KotlinOrderRoutes#ktRoutes`'s `coRouter` DSL (`GET`+`POST /kt/orders`,
-    # `GET /kt/rich`, handler NULL on all three). 72 + 10 = 82 — exactly the
+    # `GET /kt/rich`; handlers as pinned below). 72 + 10 = 82 — exactly the
     # checkpoint's own frozen target (checkpoint item (5)). Verified live
     # against real bytecode, not computed from the brief alone.
     #
@@ -1247,16 +1248,30 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     composite_unresolved = combinator_rows[(None, None)]
     assert composite_unresolved["resolution"] == "unresolved"
     assert composite_unresolved["caller"].endswith("OrderRoutes#composite(sig_30e7fc92).")
-    # Kotlin: `coRouter`'s own handlers arrive as `instance` of a generated
-    # class, never a method reference — Tier-0, honestly NULL rather than
-    # fabricated (checkpoint (1b)).
+    # Kotlin: `coRouter`'s handlers arrive as `instance` of a generated class. Where
+    # that class is a suspend LAMBDA (`POST("/orders") { }`, `GET("/rich") { }`) the
+    # extractor marks its type fact with `lambda_body` and `effective_call_sites`
+    # hands the engine the `invokeSuspend` it stands for (spec 2026-09-19 §3b) — the
+    # `kotlin-null-handler` closure on this fixture, pinned. `GET("/orders",
+    # ::listOrders)` is a suspend FUNCTION REFERENCE — a `FunctionReferenceImpl`
+    # subclass, not a `Lambda`/`SuspendLambda` one — which §3b does not mark, so its
+    # handler is still honestly NULL rather than fabricated (checkpoint (1b)); pinned
+    # here so the reference shape moves a value when it is read.
+    kt_prefix = "sextant-jvm maven com.acme/orders-service 1.0.0 com/acme/orders/routes/"
     kt_rows = [row for (m, p), row in combinator_rows.items() if p and p.startswith("/kt/")]
-    assert {(row["method"], row["path"]) for row in kt_rows} == {
-        ("GET", "/kt/orders"),
-        ("POST", "/kt/orders"),
-        ("GET", "/kt/rich"),
+    assert {(row["method"], row["path"], row["handler"]) for row in kt_rows} == {
+        ("GET", "/kt/orders", None),
+        (
+            "POST",
+            "/kt/orders",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$2#invokeSuspend(sig_262c527a).",
+        ),
+        (
+            "GET",
+            "/kt/rich",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$3$1#invokeSuspend(sig_262c527a).",
+        ),
     }
-    assert all(row["handler"] is None for row in kt_rows)
     # F1, and the boundary it named is CLOSED (2O Task 13). This assertion
     # read "every predicate-derived media column on every combinator row is
     # NULL — the vararg `accept`/`contentType` constants are unreadable
@@ -2227,13 +2242,14 @@ def test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract(resolved_
     # `/kt/orders` is ALSO `KotlinOrderRoutes#ktRoutes`'s own address (the pre-existing
     # functional-routing DSL fixture, `test_pipeline.py:1250-1251`) — a coincidental
     # address collision between two unrelated fixtures, not a wire-identity conflict:
-    # that row is call-site-shaped (`caller` set, `handler` NULL); this one is an
-    # annotation-driven JAX-RS handler row. Filtering on `handler` picks this one out
-    # uniquely rather than assuming `/kt/orders POST` names exactly one row.
+    # that row is call-site-shaped (`caller` set); this one is an annotation-driven
+    # JAX-RS handler row, which has no caller. Filtering on `caller` picks this one out
+    # uniquely rather than assuming `/kt/orders POST` names exactly one row. (It filtered
+    # on `handler` until the DSL row gained one, spec 2026-09-19 §3b.)
     [row] = [
         r
         for r in report.endpoints
-        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["handler"] is not None
+        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["caller"] is None
     ]
     assert json.loads(row["request_shape"])["shape_id"].endswith("KotlinOrderResource$KtOrder#")
 

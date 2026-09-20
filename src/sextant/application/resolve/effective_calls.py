@@ -54,20 +54,25 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
         bare_descriptor(str(row["symbol"])): str(row["bridge_of"])
         for row in workspace.query("bridge_declarations")
     }
+    bodies = _lambda_bodies(workspace)
     sites = workspace.query("call_sites")
-    if not bridges:
+    if not bridges and not bodies:
         return list(sites)
-    declared = {
-        bare_descriptor(str(row["symbol"])): _is_static(row["modifiers"])
-        for row in workspace.query("method_declarations")
-    }
+    declared = (
+        {
+            bare_descriptor(str(row["symbol"])): _is_static(row["modifiers"])
+            for row in workspace.query("method_declarations")
+        }
+        if bridges
+        else {}
+    )
     # A bridge is called from many sites; its sibling is settled once.
     settled: dict[str, _Bridge | None] = {}
     rows: list[dict[str, Any]] = []
     for site in sites:
         name = site["name"]
         row = site
-        if isinstance(name, str) and name.endswith(_DEFAULT_SUFFIX):
+        if bridges and isinstance(name, str) and name.endswith(_DEFAULT_SUFFIX):
             owner, descriptor = str(site["owner"]), str(site["descriptor"])
             symbol = method_descriptor(owner, name, descriptor)
             function = bridges.get(symbol)
@@ -77,8 +82,55 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
                 bridge = settled[symbol]
                 if bridge is not None:
                     row = _through_bridge(site, bridge) or site
+        if bodies:
+            row = _with_lambdas(row, bodies)
         rows.append(row)
     return rows
+
+
+def _lambda_bodies(workspace: Workspace) -> dict[str, str]:
+    """Every class-compiled lambda the facts mark, keyed the way an `instance` argument
+    names its class (the bare descriptor), to the body method it stands for."""
+    return {
+        bare_descriptor(str(row["symbol"])): str(row["body"])
+        for row in workspace.query("lambda_bodies")
+    }
+
+
+def _with_lambdas(row: dict[str, Any], bodies: dict[str, str]) -> dict[str, Any]:
+    """`row` with each class-compiled lambda among its arguments read as the `lambda` it
+    is (spec §3b), or `row` itself when none is — so a site untouched by either step is
+    the cached dict, not a copy of it. A projected argument is a fresh dict and the row
+    holding it a copy: the raw row's list and dicts are never written into."""
+    arguments = [_as_lambda(argument, bodies) for argument in row["arguments"]]
+    if all(after is before for after, before in zip(arguments, row["arguments"])):
+        return row
+    projected = dict(row)
+    projected["arguments"] = arguments
+    return projected
+
+
+def _as_lambda(argument: dict[str, Any], bodies: dict[str, str]) -> dict[str, Any]:
+    """The argument as the engines read it: an `instance` of a class whose type fact
+    carries `lambda_body` becomes `{kind: lambda, symbol: <body>, captures: 0}` — exact,
+    because constructor-captured values are fields of the class, never leading parameters
+    of the body, so the interface's own parameters start at index 0 — keeping `source`
+    where the instance carried one. An `array`'s elements are read the same way, because
+    `_expanded_arguments` reads them. Anything else is returned as it is, the same dict."""
+    if argument.get("kind") == "array" and isinstance(argument.get("elements"), list):
+        elements = [_as_lambda(element, bodies) for element in argument["elements"]]
+        if all(after is before for after, before in zip(elements, argument["elements"])):
+            return argument
+        return {**argument, "elements": elements}
+    if argument.get("kind") != "instance":
+        return argument
+    body = bodies.get(bare_descriptor(str(argument.get("symbol"))))
+    if body is None:
+        return argument
+    projected: dict[str, Any] = {"kind": "lambda", "symbol": body, "captures": 0}
+    if argument.get("source") is not None:
+        projected["source"] = argument["source"]
+    return projected
 
 
 def _is_static(modifiers: object) -> bool:

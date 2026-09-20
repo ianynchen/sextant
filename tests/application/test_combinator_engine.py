@@ -41,6 +41,7 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.symbols import method_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
@@ -135,6 +136,18 @@ def _method_symbol(bare: str) -> SymbolFact:
     being concatenated into existence."""
     return SymbolFact(
         document_id="doc_1", symbol=_MODULE + bare, construct_kind=ConstructKind.METHOD
+    )
+
+
+def _type_symbol(bare: str, *, lambda_body: str) -> SymbolFact:
+    """A class-compiled lambda's own TYPE fact, carrying the body method it stands for
+    (D00 §5 `lambda_body`) — what `effective_call_sites` reads to hand the engine an
+    `instance` of that class as the `lambda` it is (spec 2026-09-19 §3b)."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.CLASS,
+        lambda_body=lambda_body,
     )
 
 
@@ -4551,6 +4564,11 @@ _PATHLESS_VERB_DESC = f"({_ROUTE}Lkotlin/jvm/functions/Function2;){_ROUTE}"
 _ROUTING_BODY = DECLARER + "orders$lambda$1(sig_k0)."
 _API_BODY = DECLARER + "orders$lambda$1$lambda$0(sig_k1)."
 _SUSPEND_HANDLER = DECLARER + "Routes$orders$1$1$1#"
+# The body a suspend handler class compiles into (CP-23: `invokeSuspend(Object)`), spelled
+# as the extractor spells `lambda_body` — bare, with the hashed disambiguator.
+_SUSPEND_BODY = method_descriptor(
+    _SUSPEND_HANDLER, "invokeSuspend", "(Ljava/lang/Object;)Ljava/lang/Object;"
+)
 
 
 def _shipped_ktor_catalog() -> Catalog:
@@ -4565,11 +4583,15 @@ def _ktor_facts(entry_owner: str) -> list:
     `fixtures/orders-ktor/.../KtorRoutes.kt`'s `orders()` compiles to (its fact file, read
     2026-09-13): every DSL call `invokestatic` with the block's own parameter as argument
     0, each `Function1` block an `invokedynamic` body linked as a `lambda` argument with
-    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class.
+    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class —
+    whose type fact carries `lambda_body` naming its `invokeSuspend`, and whose body has
+    a method fact of its own (the class is scanned), so the handler join lands.
     `entry_owner` is the one cell the near-miss below varies."""
     return [
         _method_symbol(_ROUTING_BODY),
         _method_symbol(_API_BODY),
+        _type_symbol(_SUSPEND_HANDLER, lambda_body=_SUSPEND_BODY),
+        _method_symbol(_SUSPEND_BODY),
         _site(
             DECLARER + "orders(sig_o0).",
             0,
@@ -4627,15 +4649,19 @@ def test_the_ktor_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: 
     """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
     owner. `get("/orders") { }` under `route("/api") { }` is `GET /api/orders`; the
     path-less `get { }` is `GET /api` — the prefix alone, Ktor's `method(Get)` child of
-    the receiver itself (`path: ""`). Both handlers NULL: a suspend lambda arrives as an
-    `instance`, which is a class and not a method symbol (spec §13 case 8)."""
+    the receiver itself (`path: ""`). Both handlers are the suspend lambda's own
+    `invokeSuspend`: the handler arrives as an `instance` of a class, and the projection
+    every engine reads through (`effective_call_sites`, spec 2026-09-19 §3b) hands it
+    over as the `lambda` its type fact's `lambda_body` names — `kotlin-null-handler`
+    closes here, where spec §13 case 8 had pinned NULL."""
     workspace = _resolve(tmp_path, _ktor_facts(_ROUTING_ROOT), _shipped_ktor_catalog())
     identities = _identities(_rows(workspace))
     workspace.close()
 
+    handler = _MODULE + _SUSPEND_BODY
     assert identities == [
-        ("GET", "/api", None, "resolved"),
-        ("GET", "/api/orders", None, "resolved"),
+        ("GET", "/api", handler, "resolved"),
+        ("GET", "/api/orders", handler, "resolved"),
     ]
 
 

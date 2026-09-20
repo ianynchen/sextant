@@ -9,6 +9,12 @@ defaults marked `unresolved`/`defaulted` rather than guessed — read off the br
 symbol fact (`bridge_of`) and the mask literal the compiler passed. The mask semantics are
 the measured ones (spec §0 F3, CP-23): a SET bit means the caller did NOT supply that
 parameter, bit 0 being the first declared parameter after the receiver.
+
+Then §3b (Task 5): an `instance` argument whose class's type fact carries `lambda_body`
+reaches every engine as a `lambda` naming that body with `captures: 0` — the projection
+that makes a class-compiled closure indistinguishable from an `invokedynamic` one to a
+routing walk, and gives such a route its handler (`kotlin-class-lambdas`,
+`kotlin-null-handler`).
 """
 
 from pathlib import Path
@@ -355,3 +361,202 @@ def test_the_raw_call_sites_are_not_changed_by_the_projection(tmp_path: Path):
     )
     assert len(raw["arguments"]) == 5
     assert "evidence_bridge" not in raw
+
+
+# --- §3b: a class-compiled lambda is the `lambda` it stands for -------------------------
+
+LAMBDA_CLASS = "com/x/Routes$orders$1#"
+# The body a suspend closure compiles into (CP-23): `invokeSuspend(Object)`, spelled as
+# the extractor spells `lambda_body` — the bare descriptor with its hashed disambiguator.
+LAMBDA_BODY = method_descriptor(
+    LAMBDA_CLASS, "invokeSuspend", "(Ljava/lang/Object;)Ljava/lang/Object;"
+)
+PLAIN_CLASS = "com/x/Routes$plain$1#"
+VERB = "io/x/RoutingKt#"
+VERB_DESC = "(Lio/x/Route;Ljava/lang/String;Lkotlin/jvm/functions/Function2;)Lio/x/Route;"
+
+
+def _type_symbol(bare: str, *, lambda_body: str | None = None) -> SymbolFact:
+    """A class's own type fact; `lambda_body` only where the extractor marks the class a
+    compiled lambda (absent on every other fact, as `bridge_of` is)."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.CLASS,
+        lambda_body=lambda_body,
+    )
+
+
+def _lambda_facts(*arguments: CallArgument) -> list:
+    return [
+        _method_symbol(CALLER),
+        _type_symbol(LAMBDA_CLASS, lambda_body=LAMBDA_BODY),
+        _method_symbol(LAMBDA_BODY, enclosing=LAMBDA_CLASS),
+        _type_symbol(PLAIN_CLASS),
+        _site(
+            CALLER,
+            0,
+            VERB,
+            "get",
+            descriptor=VERB_DESC,
+            result=5,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/orders"),
+                *arguments,
+            ],
+        ),
+    ]
+
+
+def test_an_instance_of_a_class_carrying_lambda_body_reaches_engines_as_that_lambda(
+    tmp_path: Path,
+):
+    """`get("/orders") { … }` whose handler the compiler made a class: the site's third
+    argument is an `instance` of that class, and every engine reads it as a `lambda`
+    naming the body method — `captures: 0` exactly, because constructor-captured values
+    are fields of the class and never leading parameters of the body (spec §3b) — with
+    the value id the instance carried, so a follow through `source` still lands."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(CallArgument(kind="instance", symbol=LAMBDA_CLASS, source=4)),
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert row["arguments"] == [
+        raw["arguments"][0],
+        raw["arguments"][1],
+        {"kind": "lambda", "symbol": LAMBDA_BODY, "captures": 0, "source": 4},
+    ]
+    # Everything but the argument is the site's own: no bridge rewrite happened here.
+    assert (row["owner"], row["name"], row["descriptor"]) == (VERB, "get", VERB_DESC)
+    assert (row["caller"], row["ordinal"], row["result"]) == (raw["caller"], 0, 5)
+    assert "evidence_bridge" not in row
+
+
+def test_an_instance_of_a_class_with_no_lambda_body_is_left_alone(tmp_path: Path):
+    """The near-miss on the one conjunct: the class IS scanned (its type fact is in the
+    workspace) and carries no `lambda_body`, so it is an ordinary object handed to the
+    call — a handler adapter, a request object — and stays the `instance` it is. Nothing
+    is inferred from the class's name or its nesting."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(CallArgument(kind="instance", symbol=PLAIN_CLASS, source=4)),
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_a_lambda_class_inside_an_array_argument_is_projected_in_its_element(
+    tmp_path: Path,
+):
+    """A varargs call carries ONE `array` argument whose `elements` are the arguments
+    (capability 9.15), and `_expanded_arguments` reads those elements — so a compiled
+    lambda passed among varargs is projected where it sits, and the array keeps every
+    other element and its own keys as they were."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(
+            CallArgument(
+                kind="array",
+                elements=[
+                    CallArgument(kind="instance", symbol=LAMBDA_CLASS, source=4),
+                    CallArgument(kind="string", value="x"),
+                    CallArgument(kind="instance", symbol=PLAIN_CLASS, source=6),
+                ],
+            )
+        ),
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    array = raw["arguments"][2]
+    assert row["arguments"][2] == {
+        **array,
+        "elements": [
+            {"kind": "lambda", "symbol": LAMBDA_BODY, "captures": 0, "source": 4},
+            array["elements"][1],
+            array["elements"][2],
+        ],
+    }
+
+
+def test_a_lambda_instance_without_a_source_projects_without_one(tmp_path: Path):
+    """`source` travels only where the instance carried one: a projected argument never
+    invents a value id, because a follow through `source` -> `result` on an invented
+    number would land on an unrelated site."""
+    workspace = _workspace(
+        tmp_path, _lambda_facts(CallArgument(kind="instance", symbol=LAMBDA_CLASS))
+    )
+
+    assert _only(workspace)["arguments"][2] == {
+        "kind": "lambda",
+        "symbol": LAMBDA_BODY,
+        "captures": 0,
+    }
+
+
+def test_the_raw_call_sites_are_not_changed_by_the_lambda_projection(tmp_path: Path):
+    """The same guarantee the bridge step gives, for this step: the cached `call_sites`
+    rows and their argument dicts — including the elements of an `array` — are read and
+    never written into."""
+    workspace = _workspace(
+        tmp_path,
+        _lambda_facts(
+            CallArgument(kind="instance", symbol=LAMBDA_CLASS, source=4),
+            CallArgument(
+                kind="array",
+                elements=[CallArgument(kind="instance", symbol=LAMBDA_CLASS, source=8)],
+            ),
+        ),
+    )
+    before = [dict(row) for row in workspace.query("call_sites")]
+
+    effective_call_sites(workspace)
+
+    (raw,) = workspace.query("call_sites")
+    assert [raw] == before
+    assert raw["arguments"][2]["kind"] == "instance"
+    assert raw["arguments"][3]["elements"][0]["kind"] == "instance"
+
+
+def test_a_bridge_call_handing_a_lambda_class_gets_both_projections(tmp_path: Path):
+    """The two steps compose: `Api.greet$default(this, <lambda class>, false, mask, null)`
+    is re-targeted to `greet` (§3a) AND the instance in its first declared slot is read
+    as the body it stands for (§3b) — on the projected row, with the raw row untouched."""
+    greet = "(Lkotlin/jvm/functions/Function2;Z)Ljava/lang/String;"
+    bridge = "(Lcom/x/Api;Lkotlin/jvm/functions/Function2;ZILjava/lang/Object;)Ljava/lang/String;"
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _type_symbol(LAMBDA_CLASS, lambda_body=LAMBDA_BODY),
+            _method_symbol(LAMBDA_BODY, enclosing=LAMBDA_CLASS),
+            _method(API, "greet", greet),
+            _method(API, "greet$default", bridge, bridge_of="greet", static=True),
+            _site(
+                CALLER,
+                0,
+                API,
+                "greet$default",
+                descriptor=bridge,
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    CallArgument(kind="instance", symbol=LAMBDA_CLASS, source=4),
+                    CallArgument(kind="boolean", value=False),
+                    CallArgument(kind="int", value=2),
+                    CallArgument(kind="null"),
+                ],
+            ),
+        ],
+    )
+
+    row = _only(workspace)
+    assert (row["name"], row["descriptor"]) == ("greet", greet)
+    assert row["arguments"] == [
+        {"kind": "lambda", "symbol": LAMBDA_BODY, "captures": 0, "source": 4},
+        DEFAULTED,
+    ]
+    (raw,) = workspace.query("call_sites")
+    assert raw["arguments"][1]["kind"] == "instance"
