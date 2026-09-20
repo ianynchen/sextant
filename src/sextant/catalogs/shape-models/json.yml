@@ -72,9 +72,28 @@ serialization:
 # null applies to a package or class, so a field with no annotation inside one
 # is `not_null`, and only a declared scope rule recovers that absence.
 nullability:
+  # Also the list the inbound binder rule reads (spec 2026-09-19 §5b, `requirement:
+  # binder` in `request_params`): Spring's `MethodParameter.hasNullableAnnotation()`
+  # accepts ANY declaration annotation whose simple name is `Nullable` (CP-25 row 3),
+  # and Micronaut's processor maps its own and ten other spellings onto the
+  # `jakarta.annotation.Nullable` stereotype `Argument.isNullable()` asks for (CP-25
+  # rows 7–8). So every spelling the simple-name rule accepts that appears in real code
+  # is listed here, one per line — a spelling MISSING from this list reads as
+  # `required` on a parameter the framework would in fact serve without, which is the
+  # false claim the rule exists to avoid. SpotBugs' and AndroidX's are also in
+  # Micronaut's mapped set (row 8); `io.micronaut.core.annotation.Nullable` is
+  # Micronaut's own idiomatic spelling and its binder honours it (rows 7–8); the
+  # Checker Framework's is TYPE_USE-declared, so javac files it under a parameter's
+  # `type_annotations` where the 6.1.6 binder never looks (CP-25's stated boundary) —
+  # listed because the simple-name rule accepts it wherever a compiler places it as a
+  # declaration annotation, and because a field carrying it IS nullable.
   nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
              javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
+             org.jetbrains.annotations.Nullable,
+             edu.umd.cs.findbugs.annotations.Nullable,
+             androidx.annotation.Nullable,
+             org.checkerframework.checker.nullness.qual.Nullable,
+             io.micronaut.core.annotation.Nullable]
   not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
              org.jetbrains.annotations.NotNull]
   scope:

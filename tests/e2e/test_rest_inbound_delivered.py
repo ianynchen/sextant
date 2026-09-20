@@ -1098,3 +1098,152 @@ def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tab
         (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
         (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
     }
+
+
+# --- §5b `request_params`: what each framework's binder enforces (CP-25 rows 2–12) ------
+
+
+def _handler_of(rows: list[dict], method: str, path: str) -> str:
+    return next(str(r["handler"]) for r in rows if r["path"] == path and r["method"] == method)
+
+
+def _at(requirements: set[tuple], path: str) -> set[tuple]:
+    """The rows against one path, the caller shortened to its bare descriptor."""
+    return {(r[0], bare_descriptor(str(r[2])), *r[3:]) for r in requirements if r[1] == path}
+
+
+def test_spring_request_params_record_what_the_binder_enforces(http_requirements, http_rows):
+    """`inbound-request-requirements`, mechanism 1 on Spring MVC (spec 2026-09-19 §5b;
+    CP-25 rows 2, 3 and 5). `RequestParamsController#search` carries every form the rule
+    reads: `q` — a plain `String`, no attribute — is `required`, and it is the row that
+    proves the binder predicate reads the DECLARATION and not the type reference, which
+    is `nullable: true` for every Java reference type (D00 §5); `tag` is `optional` by
+    `required = false`; `page` by a WRITTEN `defaultValue` (row 5: an unwritten one never
+    reaches the class file); `sort` by its `Optional` type, and named `sort` by the
+    `name` attribute; the `Map` binding `all` is SKIPPED (a row would name the map
+    variable as a request parameter); `X-Tenant` a `required` header; `session` an
+    `optional` cookie. `kind: param` on `@RequestParam` because Spring cannot tell query
+    from form through it (§5a); `value` NULL — an annotation names, it never demands a
+    value; `caller` the handler. One row each although two catalogs (`spring-web`,
+    `spring-mvc`) can own the class: identical rows meet insert-if-absent (A8)."""
+    handler = bare_descriptor(_handler_of(http_rows, "GET", "/v1/params/search"))
+    assert handler.endswith("RequestParamsController#search(sig_089e06fc).")
+    assert _at(http_requirements, "/v1/params/search") == {
+        ("GET", handler, "param", "q", None, "required", "resolved"),
+        ("GET", handler, "param", "tag", None, "optional", "resolved"),
+        ("GET", handler, "param", "page", None, "optional", "resolved"),
+        ("GET", handler, "param", "sort", None, "optional", "resolved"),
+        ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
+        ("GET", handler, "cookie", "session", None, "optional", "resolved"),
+    }
+
+
+def test_a_kotlin_defaulted_or_nullable_parameter_is_optional_to_the_binder(
+    http_requirements, http_rows
+):
+    """R1, the false positive the spec's self-review found and ruled on: `@RequestParam
+    page: Int = 0` is optional to Spring — `MethodParameter.isOptional()` reaches
+    `KotlinDelegate.isOptional`, `KParameter.isOptional()` (CP-25 row 3) — but compiles
+    to an `int` slot that no attribute and no nullability marks; the extractor's
+    `declares_default: true` (D00 §5a) is what the rule reads. `tag: String?` is optional
+    through the `@org.jetbrains.annotations.Nullable` kotlinc emits on the parameter, one
+    of the shape model's `nullability.nullable` spellings — the same read as a Java
+    `@Nullable`, no language named. The handler is `search` itself, not its `$default`
+    bridge."""
+    handler = bare_descriptor(_handler_of(http_rows, "GET", "/ktparams/search"))
+    assert handler.endswith("KotlinParamController#search(sig_8a91df81).")
+    assert _at(http_requirements, "/ktparams/search") == {
+        ("GET", handler, "param", "page", None, "optional", "resolved"),
+        ("GET", handler, "param", "tag", None, "optional", "resolved"),
+    }
+
+
+@pytest.fixture(scope="module")
+def spring7_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(SPRING7, tmp_path_factory.mktemp("spring7-requirements"))
+
+
+def test_jaxrs_named_parameters_are_optional_in_both_spellings(spring7_tables):
+    """§5b on JAX-RS (CP-25 rows 9–10): `@QueryParam`/`@HeaderParam` declare `value` only,
+    and an absent value is null — or the SEPARATE `@DefaultValue`, informational — never a
+    400, so every row is `optional` whatever the parameter's type: `q` carries a default
+    and `X-Tenant` none, and they read the same. The `javax` spelling derives the same
+    row through `javax-jaxrs.yml`. Nothing else on the fixture carries an entry's
+    annotation, so these three rows are the whole inbound table."""
+    rows = spring7_tables["endpoints"]
+    jakarta = bare_descriptor(_handler_of(rows, "GET", "/jaxrs/orders/search"))
+    javax = bare_descriptor(_handler_of(rows, "GET", "/legacy/orders/search"))
+    requirements = _requirements(spring7_tables["endpoint_metadata"])
+    assert _at(requirements, "/jaxrs/orders/search") == {
+        ("GET", jakarta, "query", "q", None, "optional", "resolved"),
+        ("GET", jakarta, "header", "X-Tenant", None, "optional", "resolved"),
+    }
+    assert _at(requirements, "/legacy/orders/search") == {
+        ("GET", javax, "query", "q", None, "optional", "resolved"),
+    }
+    assert len(requirements) == 3, sorted(requirements, key=str)
+
+
+@pytest.fixture(scope="module")
+def micronaut_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(MICRONAUT, tmp_path_factory.mktemp("micronaut-requirements"))
+
+
+def test_micronaut_binds_required_unless_the_argument_is_nullable(micronaut_tables):
+    """§5b on Micronaut (CP-25 rows 6–8): no `required` attribute exists, so a
+    `@QueryValue String tenant` and a `@Header("X-Tenant")` are `required` — an
+    unsatisfied binding throws `UnsatisfiedRouteException` — and `@QueryValue @Nullable
+    String q` is `optional`, through Micronaut's OWN `io.micronaut.core.annotation.Nullable`,
+    which its processor maps onto the stereotype `Argument.isNullable()` asks for and
+    which the shape model lists for that reason. `byId(String id)`, the unannotated
+    by-name binding, writes nothing: skipped and stated on the catalog."""
+    rows = micronaut_tables["endpoints"]
+    handler = bare_descriptor(_handler_of(rows, "GET", "/mn/orders/search"))
+    requirements = _requirements(micronaut_tables["endpoint_metadata"])
+    assert _at(requirements, "/mn/orders/search") == {
+        ("GET", handler, "query", "q", None, "optional", "resolved"),
+        ("GET", handler, "query", "tenant", None, "required", "resolved"),
+        ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
+    }
+    assert len(requirements) == 3, sorted(requirements, key=str)
+
+
+@pytest.fixture(scope="module")
+def quarkus_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(QUARKUS, tmp_path_factory.mktemp("quarkus-requirements"))
+
+
+def test_quarkus_rest_and_reactive_routes_parameters_are_optional(quarkus_tables):
+    """§5b on Quarkus, both stacks. Quarkus REST binds its own `@RestQuery` — `value`
+    only, the name defaulting to the parameter's (A9, CP-25 row 9) — beside `@QueryParam`
+    through the same extractors that hand an absent value through as null (row 10): both
+    `optional`. Reactive routes' `@Param`/`@Header` compile to a plain
+    `HttpServerRequest.getParam`/`getHeader` read whose return Vert.x declares
+    `@Nullable` (rows 11–12): `optional`, as §5b's table asked CP-25 to confirm.
+
+    The fixture's older handlers carry `@Param String id` under `/:id` — the guide's
+    idiom for a PATH segment, which Vert.x also serves through `getParam` — and §5b
+    writes them as `query id optional` too: an imprecise kind rather than a false
+    requirement, pinned as it is and reported for a ruling (a `@Param` naming one of the
+    row's own path variables could be skipped the way §5d's reads skip path variables)."""
+    rows = quarkus_tables["endpoints"]
+    rest = bare_descriptor(_handler_of(rows, "GET", "/q/orders/search"))
+    routes = bare_descriptor(_handler_of(rows, "GET", "/qk/orders/search"))
+    requirements = _requirements(quarkus_tables["endpoint_metadata"])
+    assert _at(requirements, "/q/orders/search") == {
+        ("GET", rest, "query", "q", None, "optional", "resolved"),
+        ("GET", rest, "query", "tenant", None, "optional", "resolved"),
+    }
+    assert _at(requirements, "/qk/orders/search") == {
+        ("GET", routes, "query", "q", None, "optional", "resolved"),
+        ("GET", routes, "header", "X-Tenant", None, "optional", "resolved"),
+    }
+    path_bound = {r for r in requirements if r[1].startswith("/qk/orders/:id")}
+    assert {(r[0], r[1], r[3], r[4], r[6]) for r in path_bound} == {
+        ("GET", "/qk/orders/:id", "query", "id", "optional"),
+        ("PUT", "/qk/orders/:id", "query", "id", "optional"),
+        ("DELETE", "/qk/orders/:id", "query", "id", "optional"),
+        ("POST", "/qk/orders/:id/cancel", "query", "id", "optional"),
+        ("POST", "/qk/orders/:id/void", "query", "id", "optional"),
+    }
+    assert len(requirements) == 4 + len(path_bound), sorted(requirements, key=str)

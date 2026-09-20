@@ -29,6 +29,14 @@
       <version>4.7.6</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
     </dependency>
+    <!-- `io.micronaut.core.annotation.Nullable`, the idiomatic Micronaut spelling the
+         binder honours (CP-25 rows 7–8), for the §5b request-parameter fixture. -->
+    <dependency>
+      <groupId>io.micronaut</groupId>
+      <artifactId>micronaut-core</artifactId>
+      <version>4.7.6</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
     <!-- The three messaging integrations, annotation artifacts only. -->
     <dependency>
       <groupId>io.micronaut.kafka</groupId><artifactId>micronaut-kafka</artifactId><version>5.6.0</version>

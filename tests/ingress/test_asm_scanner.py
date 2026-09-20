@@ -98,6 +98,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         # a class of its own — one class file each.
         "KotlinOrderRoutesKt$extra$1.jsonl",
         "KotlinOrderRoutesKt.jsonl",
+        # Spec 2026-09-19 §5b (R1): `mvcroutes/KotlinParamController`, a Kotlin controller
+        # with a defaulted and a nullable `@RequestParam` — one class file.
+        "KotlinParamController.jsonl",
         "KotlinWebFluxRoutes.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyBillingWebService.jsonl",
@@ -171,6 +174,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "ReceiptView.jsonl",
         "Refiner.jsonl",
         "Repository.jsonl",
+        # Spec 2026-09-19 §5b: `RequestParamsController`, every `@RequestParam`/
+        # `@RequestHeader`/`@CookieValue` form the binder rule reads, on one handler.
+        "RequestParamsController.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "RoutingConditionsController.jsonl",
@@ -256,7 +262,10 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # `KotlinOrderResource$KtOrder`, one class file each.
     # 137 since spec 2026-09-19 §4a: `routes/KotlinOrderRoutesKt` (the file facade of the
     # top-level `extra()` helper) and its suspend handler class `KotlinOrderRoutesKt$extra$1`.
-    assert report.documents == 137
+    # 139 since spec 2026-09-19 §5b: `RequestParamsController` and
+    # `mvcroutes/KotlinParamController`, the parameter-annotation fixtures — one class
+    # file each (the Kotlin `$default` bridge is a method of the same class, not a file).
+    assert report.documents == 139
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -331,6 +340,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         # a class of its own — one class file each.
         "KotlinOrderRoutesKt$extra$1.jsonl",
         "KotlinOrderRoutesKt.jsonl",
+        # Spec 2026-09-19 §5b (R1): `mvcroutes/KotlinParamController`, a Kotlin controller
+        # with a defaulted and a nullable `@RequestParam` — one class file.
+        "KotlinParamController.jsonl",
         "KotlinWebFluxRoutes.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyBillingWebService.jsonl",
@@ -404,6 +416,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "ReceiptView.jsonl",
         "Refiner.jsonl",
         "Repository.jsonl",
+        # Spec 2026-09-19 §5b: `RequestParamsController`, every `@RequestParam`/
+        # `@RequestHeader`/`@CookieValue` form the binder rule reads, on one handler.
+        "RequestParamsController.jsonl",
         "RootSeamController.jsonl",
         "RouteHandlers.jsonl",
         "RoutingConditionsController.jsonl",

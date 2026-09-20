@@ -42,6 +42,48 @@ requires: [annotation_args, type_annotations]
 matches:
   type_annotation: org.springframework.stereotype.Controller
   request_body: { annotation: org.springframework.web.bind.annotation.RequestBody, fallback: none }
+  # Spec 2026-09-19 §5b, mechanism 1: what the BINDER enforces on each annotated
+  # parameter, one `endpoint_metadata` row per parameter with `requirement` set.
+  # `requirement: binder` is `AbstractNamedValueMethodArgumentResolver.resolveArgument`
+  # read off spring-web 6.1.6 (CP-25 row 2): a missing value takes `defaultValue` when
+  # one is WRITTEN — an unwritten one never reaches the class file, CP-25 row 5 — else
+  # the request is rejected when `required` (default true) and not
+  # `MethodParameter.isOptional()`: `java.util.Optional`, a declaration annotation whose
+  # simple name is `Nullable` (read here as the shape model's `nullability.nullable`
+  # spellings — NOT the type reference's own `nullable`, which every Java reference
+  # type carries by language rule), or a Kotlin nullable/defaulted parameter, which
+  # arrives as kotlinc's `@Nullable` and the extractor's `declares_default` (CP-25 row
+  # 3). `kind: param` on `@RequestParam` because Spring reads query string and form
+  # body through one API and the annotation cannot tell them apart (§5a). The type
+  # names live HERE because the pass names no language's types: `optional_types` is
+  # `isOptional()`'s first disjunct; `skip_types` are the whole-map bindings — a
+  # `Map`/`MultiValueMap` under `@RequestParam` or `@RequestHeader`, `HttpHeaders` under
+  # `@RequestHeader` — which bind everything and name nothing, so there is no row to
+  # write for them (`@CookieValue` has no map form).
+  request_params:
+    - annotation: org.springframework.web.bind.annotation.RequestParam
+      kind: param
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
+      skip_types: [java.util.Map, org.springframework.util.MultiValueMap]
+    - annotation: org.springframework.web.bind.annotation.RequestHeader
+      kind: header
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
+      skip_types: [java.util.Map, org.springframework.util.MultiValueMap, org.springframework.http.HttpHeaders]
+    - annotation: org.springframework.web.bind.annotation.CookieValue
+      kind: cookie
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
   mapping:
     # `value` and `path` are @AliasFor each other, so only the one the author
     # typed reaches the bytecode. First present wins, in this order.

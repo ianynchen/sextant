@@ -22,6 +22,26 @@ matches:
   # `@Controller` on the server, `@Client` on the client; either gates the type.
   type_annotation: io.micronaut.http.annotation.Controller
   request_body: { annotation: io.micronaut.http.annotation.Body, fallback: none }
+  # Spec 2026-09-19 §5b, mechanism 1. `requirement: binder` with NO `required_attr`:
+  # `@QueryValue`/`@CookieValue` declare `value` + `defaultValue`, `@Header` declares
+  # `value`, `name`, `defaultValue`, none declares `required` (CP-25 row 6). An
+  # unsatisfied binding reaches `AbstractRouteMatch.setBindingResultOfFail`
+  # (micronaut-router 4.7.6, CP-25 row 7): null when `Argument.isNullable()` — the
+  # `jakarta.annotation.Nullable` stereotype, which the processor maps eleven
+  # spellings onto including `io.micronaut.core.annotation.Nullable` and kotlinc's
+  # `org.jetbrains.annotations.Nullable` (row 8; all in the shape model's
+  # `nullability.nullable` list) — `Optional.empty()` when the type is
+  # `java.util.Optional` (`optional_types`, named here because the pass names no
+  # language's types), else `UnsatisfiedRouteException` (a 400). A WRITTEN
+  # `defaultValue` is present in the annotation's `args` (CP-25 row 5's rule holds for
+  # any annotation: an unwritten attribute never reaches the class file). SKIPPED,
+  # deliberately: Micronaut's UNANNOTATED by-name binding of a plain parameter to a
+  # query value of the same name — no annotation, no entry, no row; `byId(String id)`
+  # below is bound by the path variable and stays silent here.
+  request_params:
+    - { annotation: io.micronaut.http.annotation.QueryValue,  kind: query,  name_attrs: [value],       requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional] }
+    - { annotation: io.micronaut.http.annotation.Header,      kind: header, name_attrs: [name, value], requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional] }
+    - { annotation: io.micronaut.http.annotation.CookieValue, kind: cookie, name_attrs: [value],       requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional] }
   mapping:
     # MEASURED at 4.7.6 (`javap`): every verb annotation declares `value`, `uri` AND
     # `uris` — `value` is the alias of `uri`, `uris` the multi-address form; `@Controller`

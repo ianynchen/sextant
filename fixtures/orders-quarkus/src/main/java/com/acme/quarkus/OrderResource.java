@@ -7,7 +7,9 @@ import jakarta.ws.rs.POST;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import org.jboss.resteasy.reactive.RestQuery;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
 // The five Quarkus REST cases the spec §3e names. The class keeps @Path (R1: Quarkus
@@ -42,6 +44,13 @@ public class OrderResource {
     @Path("/events")
     @RestStreamElementType(MediaType.APPLICATION_JSON)
     public Multi<OrderEvent> events() { return Multi.createFrom().empty(); }
+
+    // Spec 2026-09-19 §5b (A9): Quarkus binds its own `@RestQuery` — `value` only, the name
+    // defaulting to the parameter's — beside the JAX-RS `@QueryParam`, through the same
+    // extractors that hand an absent value through as null (CP-25 rows 9–10): both `optional`.
+    @GET
+    @Path("/search")
+    public String search(@RestQuery String q, @QueryParam("tenant") String tenant) { return q; }
 
     // the explicit SSE form, for the media hint
     @GET

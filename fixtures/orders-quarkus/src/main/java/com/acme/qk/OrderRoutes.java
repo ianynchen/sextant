@@ -1,6 +1,7 @@
 package com.acme.qk;
 
 import io.quarkus.vertx.web.Body;
+import io.quarkus.vertx.web.Header;
 import io.quarkus.vertx.web.Param;
 import io.quarkus.vertx.web.Route;
 import io.quarkus.vertx.web.Route.HttpMethod;
@@ -46,5 +47,14 @@ public class OrderRoutes {
     @Route(path = "/:id/void", methods = HttpMethod.POST)
     public String cancel(@Param String id) {
         return "{}";
+    }
+
+    // Spec 2026-09-19 §5b: a `@Param` that IS a query parameter (the ones above name path
+    // segments, which Vert.x also serves through `getParam`) and a `@Header`. The generated
+    // read is `HttpServerRequest.getParam`/`getHeader`, `@Nullable` returns — absent → null,
+    // never a 400 (CP-25 rows 11–12): both `optional`.
+    @Route(path = "/search", methods = HttpMethod.GET)
+    public String search(@Param String q, @Header("X-Tenant") String tenant) {
+        return "[]";
     }
 }

@@ -124,7 +124,11 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # the row count moves.
     # 92 since spec 2026-09-19 §4a: `GET /kt/extra` — `coRouter { extra() }`, a helper
     # call the combinator now follows into the DSL-receiver extension.
-    assert metadata["endpoints"]["inbound"]["http"] == 92
+    # 94 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET /ktparams/search`,
+    # the two handlers carrying every parameter-annotation form the binder rule reads
+    # (`RequestParamsController`, `KotlinParamController`) — one row each, their
+    # requirements in `endpoint_metadata` rather than in this count.
+    assert metadata["endpoints"]["inbound"]["http"] == 94
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -224,7 +228,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 150 since spec 2026-09-19 §4a: `routes/KotlinOrderRoutesKt`, the file facade the
     # top-level `extra()` helper compiles into, and `KotlinOrderRoutesKt$extra$1`, its
     # suspend handler's class — one class file each.
-    assert metadata["coverage"]["documents"] == 150
+    # 152 since spec 2026-09-19 §5b: `RequestParamsController` and
+    # `mvcroutes/KotlinParamController` — one class file each.
+    assert metadata["coverage"]["documents"] == 152
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

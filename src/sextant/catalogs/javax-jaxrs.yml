@@ -65,6 +65,17 @@ matches:
                javax.ws.rs.core.SecurityContext, javax.ws.rs.ext.Providers,
                javax.ws.rs.container.ResourceContext, javax.ws.rs.core.Configuration,
                javax.ws.rs.core.Application]
+  # Spec 2026-09-19 §5b, mechanism 1. JAX-RS's rule is `requirement: optional` for every
+  # entry: `@QueryParam`/`@HeaderParam`/`@CookieParam` declare `value` only (CP-25 row 9)
+  # and an absent value is null — or `@DefaultValue`, a SEPARATE annotation carried on
+  # `default_annotation` as information, never a 400 (RESTEasy Reactive's extractors and
+  # `ParameterHandler.handleResult`, CP-25 row 10, the one implementation measured; the
+  # specification's own text says the same of every implementation and no other was
+  # opened here). The `value` alias defaults to the parameter's own name.
+  request_params:
+    - { annotation: javax.ws.rs.QueryParam,  kind: query,  name_attrs: [value], requirement: optional, default_annotation: javax.ws.rs.DefaultValue }
+    - { annotation: javax.ws.rs.HeaderParam, kind: header, name_attrs: [value], requirement: optional, default_annotation: javax.ws.rs.DefaultValue }
+    - { annotation: javax.ws.rs.CookieParam, kind: cookie, name_attrs: [value], requirement: optional, default_annotation: javax.ws.rs.DefaultValue }
   mapping:
     prefix_annotation: javax.ws.rs.Path
     prefix_from: [value]
