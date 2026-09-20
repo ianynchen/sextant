@@ -26,6 +26,21 @@ class KotlinDeclaresDefaultTest {
         assertEquals(null, parameters.get(2).get("declares_default"));  // tag: String?
     }
 
+    @Test
+    void aMisalignedDeclarationCarriesNoFlagOnAnySlot() throws Exception {
+        // `inner class Page(val size: Int = 20)`: kotlinc's constructor descriptor is
+        // `(LKotlinDefaultParams;I)V` — the enclosing instance first, then `size` — and
+        // metadata's value parameters list `size` alone, so `parametersAligned` is false
+        // and the flag rides NO slot: a partial alignment would put `size`'s default on
+        // the enclosing-instance slot, which is worse than not reading it. The same
+        // condition nullability declines under (`OI-82`); both slots keep the JVM's rule.
+        var ctor = methodFact("KotlinDefaultParams$Page", "<init>");
+        var parameters = parameterEntries(ctor);
+        assertEquals(2, parameters.size());
+        assertEquals(null, parameters.get(0).get("declares_default"));  // this$0
+        assertEquals(null, parameters.get(1).get("declares_default"));  // size: Int = 20
+    }
+
     // ---- reading the emitted facts -------------------------------------------------
 
     private Map<String, Object> methodFact(String className, String member) throws Exception {

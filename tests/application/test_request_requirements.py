@@ -37,6 +37,7 @@ import pytest
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.request_requirements import (
     _expression,
+    _fallback,
     record_request_requirements,
 )
 from sextant.domain.closed_sets import OriginTier
@@ -437,6 +438,72 @@ def test_name_is_the_first_present_name_attribute_else_the_parameters_own(tmp_pa
     }
 
 
+@pytest.mark.parametrize(
+    ("name", "hyphenated", "capitalized"),
+    [
+        ("xTenant", "x-tenant", "x-Tenant"),
+        ("pageSize", "page-size", "Page-Size"),
+        ("tenant", "tenant", "Tenant"),
+        ("contentType", "content-type", "Content-Type"),
+        ("apiKEY", "api-key", "Api-KEY"),
+        ("userID", "user-id", "User-ID"),
+        ("HTTPClient", "httpclient", "HTTPClient"),
+        ("page_size", "page-size", "Page-size"),
+        ("a1B", "a1b", "A1-B"),
+        ("ab1C", "ab1-c", "Ab1-C"),
+        ("x-tenant", "x-tenant", "X-tenant"),
+        ("a.b", "a.b", "A.b"),
+    ],
+)
+def test_the_fallback_spelling_is_the_binders_own(name: str, hyphenated: str, capitalized: str):
+    """CP-25 row 18: `hyphenated` is `NameUtils.hyphenate(name)` and
+    `hyphenated-capitalized` is `hyphenate(capitalize(name), false)`, mirrored from
+    micronaut-core 4.7.6's bytecode. Every expected value here is what the REAL
+    `NameUtils` returned for the name (`java -cp micronaut-core-4.7.6.jar`, 2026-09-20),
+    including the ones a reader would not guess: `capitalize` leaves `xTenant` alone
+    (lower-case first, upper-case second), so the header fallback is `x-Tenant`, not
+    `X-Tenant`; the lower-casing loop keeps an acronym together (`apiKEY` → `api-key`,
+    `HTTPClient` → `httpclient`) and splits after a digit only when the digit's own
+    predecessor was lower-case (`a1B` → `a1b`, `ab1C` → `ab1-c`)."""
+    assert _fallback(name, "hyphenated") == hyphenated
+    assert _fallback(name, "hyphenated-capitalized") == capitalized
+
+
+def test_a_declared_name_the_binder_respells_is_an_unresolved_row(tmp_path: Path):
+    """CP-25 row 18: Micronaut's `doResolve` reads the parameter's own name and, finding
+    nothing, retries with its hyphenated spelling — so `@QueryValue String pageSize` is
+    served by `?page-size=` alone and `@Header String xTenant` by `x-Tenant`. `query
+    pageSize required` would demand a name the framework does not require by itself:
+    the row keeps the requirement and names NOTHING (`name` NULL, `unresolved`). Where
+    the two spellings coincide the name stands — `tenant` exactly for a query, and a
+    header's `tenant` against its fallback `Tenant`, header names comparing
+    case-insensitively (the framework's own `CaseInsensitiveMutableHttpHeaders`, same
+    row). A WRITTEN name is never respelled: `@Header("X-Tenant")` is `X-Tenant`."""
+    query = {**BINDER_ENTRY, "kind": "query", "fallback_spelling": "hyphenated"}
+    header = {
+        **BINDER_ENTRY,
+        "annotation": HEADER,
+        "kind": "header",
+        "fallback_spelling": "hyphenated-capitalized",
+    }
+    signature = _signature(
+        _parameter("pageSize"),
+        _parameter("tenant"),
+        _parameter("xTenant", annotations=[_use(HEADER)]),
+        _parameter("tenant", annotations=[_use(HEADER)]),
+        _parameter("tenantHeader", annotations=[_use(HEADER, value="X-Tenant")]),
+    )
+    entries = _run(tmp_path, signature, _params_catalog(query, header))
+    assert {(e["kind"], e["name"], e["requirement"], e["resolution"]) for e in entries} == {
+        ("query", None, "required", "unresolved"),
+        ("query", "tenant", "required", "resolved"),
+        ("header", None, "required", "unresolved"),
+        ("header", "tenant", "required", "resolved"),
+        ("header", "X-Tenant", "required", "resolved"),
+    }
+    assert len(entries) == 5
+
+
 def test_a_parameter_with_no_name_anywhere_is_an_unresolved_row(tmp_path: Path):
     """A class compiled without `-parameters` and no `LocalVariableTable` states no
     name (D00 §5a), and the annotation wrote none: the handler binds SOMETHING it does
@@ -588,6 +655,7 @@ def test_every_row_sharing_the_handler_gets_the_entries(tmp_path: Path):
             {"request_params": [{**BINDER_ENTRY, "skip_path_variables": "yes"}]},
             "skip_path_variables",
         ),
+        ({"request_params": [{**BINDER_ENTRY, "fallback_spelling": "kebab"}]}, "fallback_spelling"),
     ],
     ids=[
         "not-a-list",
@@ -598,6 +666,7 @@ def test_every_row_sharing_the_handler_gets_the_entries(tmp_path: Path):
         "misspelt-key",
         "skip_types",
         "skip_path_variables",
+        "fallback_spelling",
     ],
 )
 def test_a_malformed_request_params_entry_is_refused_naming_the_file(

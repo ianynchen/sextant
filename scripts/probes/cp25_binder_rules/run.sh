@@ -8,7 +8,9 @@
 # two-method Java sample under `javac` against spring-web, then `javap -v`. Rows
 # 13–17 are the §5c/§5d rows: Spring's expression parse, Javalin's `Context`
 # read/set overloads and `Validator.get()`, and the Servlet API's reads on Tomcat
-# 10.1.50 (`jakarta`) and 9.0.121 (`javax`) — the two containers CP-9 measured.
+# 10.1.50 (`jakarta`) and 9.0.121 (`javax`) — the two containers CP-9 measured. Row
+# 18 is §5b again: the second spelling Micronaut's binders retry an unwritten name
+# under (`NameUtils.hyphenate`, the header binder's `capitalize`).
 #
 # THE TABLE IS GENERATED, AND ITS COLUMN HEADER COMES FROM THE JAR'S OWN BYTES
 # (GUIDELINES §5.4, and CP-5's failure it exists to prevent). `probe.py` reads the

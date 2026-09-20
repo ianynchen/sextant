@@ -1353,16 +1353,24 @@ def test_micronaut_binds_required_unless_the_argument_is_nullable(micronaut_tabl
     String q` is `optional`, through Micronaut's OWN `io.micronaut.core.annotation.Nullable`,
     which its processor maps onto the stereotype `Argument.isNullable()` asks for and
     which the shape model lists for that reason. `byId(String id)`, the unannotated
-    by-name binding, writes nothing: skipped and stated on the catalog."""
+    by-name binding, writes nothing: skipped and stated on the catalog.
+
+    `@QueryValue String pageSize` is `required` too, and names NOTHING (CP-25 row 18):
+    the binder reads `pageSize` and, finding no such parameter, retries `page-size` —
+    `NameUtils.hyphenate` of the parameter's own name — so a request carrying either
+    spelling is served, and `query pageSize required` would state a name the framework
+    does not require by itself. `tenant` hyphenates to itself and keeps its name; the
+    WRITTEN `X-Tenant` is never respelled."""
     rows = micronaut_tables["endpoints"]
     handler = bare_descriptor(_handler_of(rows, "GET", "/mn/orders/search"))
     requirements = _requirements(micronaut_tables["endpoint_metadata"])
     assert _at(requirements, "/mn/orders/search") == {
         ("GET", handler, "query", "q", None, "optional", "resolved"),
         ("GET", handler, "query", "tenant", None, "required", "resolved"),
+        ("GET", handler, "query", None, None, "required", "unresolved"),
         ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
     }
-    assert len(requirements) == 3, sorted(requirements, key=str)
+    assert len(requirements) == 4, sorted(requirements, key=str)
 
 
 @pytest.fixture(scope="module")

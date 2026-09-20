@@ -40,6 +40,19 @@ absent value — the one Javalin read that is `required`. Rows 16–17 are the S
 `getParameter`/`getHeader`: abstract on the interface, so the API states nothing, and
 null-on-absent in the container that implements them, under both package spellings.
 
+*Row 18* (added 2026-09-20 at the whole-branch review, back in §5b). A `request_params` row
+names the parameter's OWN name when the annotation writes none — and that is a claim
+about what the framework requires by that name. Micronaut's binders take the written
+`value` (`@Header`: `value`, then `name`), else the parameter's name, and hand it to
+`AbstractArgumentBinder.doBind`; row 18 reads what `doResolve` does when that name finds
+nothing — it retries with `getFallbackFormat(argument)` — and what the two spellings of
+that fallback are: `NameUtils.hyphenate(name)` on the base class (`@QueryValue`,
+`@CookieValue`) and `hyphenate(capitalize(name), false)` on the header binder's override.
+The cell quotes `hyphenate`'s two paths, `isHyphenatedLowerCase`'s regex, `capitalize`'s
+early return, the `Character` predicates of both `separateCamelCase` loops, and the
+comparator behind the framework's own `CaseInsensitiveMutableHttpHeaders` — the rule
+`micronaut-http.yml`'s `fallback_spelling` mirrors in `request_requirements.py`.
+
 **What this probe does not settle.** Nothing framework-side was run; every cell but row 5
 is a `javap` read of a class file, and row 5 reads the class file `javac` produced from a
 six-line sample. Row 1 shows the guard and that ONE verb (`get(String, Handler)`) opens by
@@ -65,7 +78,17 @@ hand for the catalog comment and is not a cell. Rows 16–17 measure Tomcat, the
 CP-9 measured; another container's `getParameter` is its own implementation of the same
 abstract method; that every container answers alike rests on the API's own documented
 contract for `getParameter` and `getHeader` — null when the request carries no such name
-— which the class file does not carry and this probe states rather than measures.
+— which the class file does not carry and this probe states rather than measures. Row
+18 quotes `separateCamelCase`'s branch predicates, not its whole 355-byte body; the Python
+mirror (`request_requirements.py::_separate_camel_case`) was written from the full `javap
+-c` listing and checked against the real `NameUtils` on fourteen names (`xTenant` →
+`x-tenant` / `x-Tenant`, `pageSize` → `page-size` / `Page-Size`, `contentType` →
+`Content-Type`, `apiKEY` → `api-key` / `Api-KEY`, `HTTPClient` → `httpclient`, …) in a
+scratch `java -cp micronaut-core-4.7.6.jar` run outside this harness — every cell here is
+still a `javap` read. Row 18 reads Micronaut's own header map; the Netty-backed headers a
+running server hands the binder are `micronaut-http-netty`'s and are not read here — that
+HTTP header names compare case-insensitively is the protocol's rule (RFC 9110 §5.1), and the
+row shows the framework honouring it in the one implementation it ships in this jar.
 
 **Version scope (§5.4).** Sixteen archives, each filed under the `Implementation-Version`
 its own `META-INF/MANIFEST.MF` reports, read as: `io.javalin:javalin` **6.4.0**;
@@ -120,6 +143,7 @@ mislabelled column.
 | 15 | Validator.get(): getOrThrow with a ValidationException function; NULLCHECK_FAILED on a null typed value outside NullableValidator (A3) | `io.javalin:javalin` | 6.4.0 | `Validator.get(): invokespecial Method io/javalin/validation/BaseValidator.get:()Ljava/lang/Object; ; invokestatic Method kotlin/jvm/internal/Intrinsics.checkNotNull:(Ljava/lang/Object;)V ; BaseValidator.get(): invokevirtual Method getOrThrow:(Lkotlin/jvm/functions/Function1;)Ljava/lang/Object; ; get$1.invoke: new class io/javalin/validation/ValidationException ; errors$2.invoke (offsets 229-259): invokevirtual Method io/javalin/validation/BaseValidator.getTypedValue$javalin:()Ljava/lang/Object; ; ifnonnull ; instanceof class io/javalin/validation/NullableValidator ; ifne ; ldc String NULLCHECK_FAILED` |
 | 16 | jakarta.servlet getParameter/getHeader: abstract on the API; Tomcat's connector returns null for an absent name | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50 | `declared: public abstract java.lang.String getParameter(java.lang.String); ; public abstract java.lang.String getHeader(java.lang.String); ; connector.Request.getParameter: invokevirtual Method org/apache/tomcat/util/http/Parameters.getParameter:(Ljava/lang/String;)Ljava/lang/String; ; Parameters.getParameter tail: ifnull ; areturn ; areturn ; aconst_null ; areturn ; connector.Request.getHeader: invokevirtual Method org/apache/coyote/Request.getHeader:(Ljava/lang/String;)Ljava/lang/String; ; MimeHeaders.getHeader tail: ifnull ; aconst_null ; areturn` |
 | 17 | javax.servlet getParameter/getHeader: the same, under the other package spelling | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 | `declared: public abstract java.lang.String getParameter(java.lang.String); ; public abstract java.lang.String getHeader(java.lang.String); ; connector.Request.getParameter: invokevirtual Method org/apache/tomcat/util/http/Parameters.getParameter:(Ljava/lang/String;)Ljava/lang/String; ; Parameters.getParameter tail: ifnull ; areturn ; areturn ; aconst_null ; areturn ; connector.Request.getHeader: invokevirtual Method org/apache/coyote/Request.getHeader:(Ljava/lang/String;)Ljava/lang/String; ; MimeHeaders.getHeader tail: ifnull ; aconst_null ; areturn` |
+| 18 | Micronaut's unwritten-name fallback: AbstractArgumentBinder.doResolve retries getFallbackFormat — NameUtils.hyphenate, the header binder's capitalize — and header names compare case-insensitively (§5b, fallback_spelling) | `io.micronaut:micronaut-core`, `io.micronaut:micronaut-http` | 4.7.6 | `AbstractArgumentBinder.doResolve: invokevirtual Method resolveValue:(Lio/micronaut/core/convert/ArgumentConversionContext;Lio/micronaut/core/convert/value/ConvertibleValues;Ljava/lang/String;)Ljava/lang/Object; ; ifnonnull ; invokevirtual Method getFallbackFormat:(Lio/micronaut/core/type/Argument;)Ljava/lang/String; ; invokevirtual Method java/lang/String.equals:(Ljava/lang/Object;)Z ; ifne ; invokevirtual Method resolveValue:(Lio/micronaut/core/convert/ArgumentConversionContext;Lio/micronaut/core/convert/value/ConvertibleValues;Ljava/lang/String;)Ljava/lang/Object; ; AbstractArgumentBinder.getFallbackFormat: aload_1 ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokestatic Method io/micronaut/core/naming/NameUtils.hyphenate:(Ljava/lang/String;)Ljava/lang/String; ; areturn ; HeaderAnnotationBinder.bind names by: invokeinterface InterfaceMethod io/micronaut/core/annotation/AnnotationMetadata.stringValue:(Ljava/lang/Class;)Ljava/util/Optional; ; invokevirtual Method java/util/Optional.orElseGet:(Ljava/util/function/Supplier;)Ljava/lang/Object; ; invokevirtual Method doBind:(Lio/micronaut/core/convert/ArgumentConversionContext;Lio/micronaut/core/convert/value/ConvertibleValues;Ljava/lang/String;)Lio/micronaut/core/bind/ArgumentBinder$BindingResult; ; lambda$bind$0: ldc String name ; invokeinterface InterfaceMethod io/micronaut/core/annotation/AnnotationMetadata.stringValue:(Ljava/lang/Class;Ljava/lang/String;)Ljava/util/Optional; ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; HeaderAnnotationBinder.getFallbackFormat: aload_1 ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokestatic Method io/micronaut/core/naming/NameUtils.capitalize:(Ljava/lang/String;)Ljava/lang/String; ; iconst_0 ; invokestatic Method io/micronaut/core/naming/NameUtils.hyphenate:(Ljava/lang/String;Z)Ljava/lang/String; ; areturn ; QueryValueArgumentBinder.bind names by: invokeinterface InterfaceMethod io/micronaut/core/annotation/AnnotationMetadata.stringValue:(Ljava/lang/Class;)Ljava/util/Optional; ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; getFallbackFormat: not overridden (AbstractArgumentBinder's) ; CookieAnnotationBinder.bind names by: invokeinterface InterfaceMethod io/micronaut/core/annotation/AnnotationMetadata.stringValue:(Ljava/lang/Class;)Ljava/util/Optional; ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokevirtual Method java/util/Optional.orElse:(Ljava/lang/Object;)Ljava/lang/Object; ; getFallbackFormat: aload_1 ; invokeinterface InterfaceMethod io/micronaut/core/type/Argument.getName:()Ljava/lang/String; ; invokestatic Method io/micronaut/core/naming/NameUtils.hyphenate:(Ljava/lang/String;)Ljava/lang/String; ; areturn ; NameUtils.hyphenate(String): aload_0 ; iconst_1 ; invokestatic Method hyphenate:(Ljava/lang/String;Z)Ljava/lang/String; ; areturn ; NameUtils.hyphenate(String, boolean): invokestatic Method isHyphenatedLowerCase:(Ljava/lang/String;)Z ; ifeq ; invokevirtual Method java/util/regex/Pattern.matcher:(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher; ; ldc String - ; invokevirtual Method java/util/regex/Matcher.replaceAll:(Ljava/lang/String;)Ljava/lang/String; ; bipush ; invokevirtual Method java/util/regex/Pattern.matcher:(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher; ; ldc String - ; invokevirtual Method java/util/regex/Matcher.replaceAll:(Ljava/lang/String;)Ljava/lang/String; ; invokestatic Method separateCamelCase:(Ljava/lang/String;ZC)Ljava/lang/String; ; NameUtils.isHyphenatedLowerCase: invokestatic Method io/micronaut/core/util/StringUtils.isNotEmpty:(Ljava/lang/CharSequence;)Z ; invokevirtual Method java/util/regex/Pattern.matcher:(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher; ; invokevirtual Method java/util/regex/Matcher.matches:()Z ; invokevirtual Method java/lang/String.charAt:(I)C ; invokestatic Method java/lang/Character.isLetter:(C)Z ; NameUtils patterns (static init, in order): \\.[A-Z\\$] | [\\p{javaLowerCase}\\d-]+ | ^[\\p{Lu}_{0-9}]+ | ^(([a-z0-9])+([-.:])?)*([a-z0-9])+$ | [_ ] ; NameUtils.capitalize: iconst_1 ; invokevirtual Method java/lang/String.substring:(I)Ljava/lang/String; ; iconst_0 ; invokevirtual Method java/lang/String.charAt:(I)C ; invokestatic Method java/lang/Character.isLowerCase:(C)Z ; ifeq ; invokevirtual Method java/lang/String.isEmpty:()Z ; ifne ; iconst_0 ; invokevirtual Method java/lang/String.charAt:(I)C ; invokestatic Method java/lang/Character.isUpperCase:(C)Z ; ifeq ; areturn ; iconst_0 ; iconst_1 ; invokevirtual Method java/lang/String.substring:(II)Ljava/lang/String; ; invokevirtual Method java/lang/String.toUpperCase:(Ljava/util/Locale;)Ljava/lang/String; ; invokedynamic InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String; ; areturn ; separateCamelCase lowerCase=false loop (offsets 47-144): ifeq ; if_icmpeq ; invokestatic Method java/lang/Character.isUpperCase:(C)Z ; ifeq ; invokestatic Method java/lang/Character.isUpperCase:(C)Z ; ifne ; if_icmpeq ; bipush ; if_icmpne ; if_icmpeq ; if_icmpne ; separateCamelCase lowerCase=true loop (offsets 191-330): invokestatic Method java/lang/Character.isLowerCase:(C)Z ; ifne ; invokestatic Method java/lang/Character.isLetter:(C)Z ; ifne ; if_icmpeq ; if_icmpne ; invokestatic Method java/lang/Character.toLowerCase:(C)C ; ifeq ; invokestatic Method java/lang/Character.isUpperCase:(C)Z ; ifne ; bipush ; if_icmpne ; invokestatic Method java/lang/Character.isDigit:(C)Z ; ifeq ; invokestatic Method java/lang/Character.isUpperCase:(C)Z ; ifne ; if_icmpne ; CaseInsensitiveMutableHttpHeaders backing map: getstatic Field java/lang/String.CASE_INSENSITIVE_ORDER:Ljava/util/Comparator; ; invokespecial Method java/util/TreeMap."<init>":(Ljava/util/Comparator;)V` |
 ```
 
 ## Verdicts
@@ -249,4 +273,32 @@ Null on absent, no throw, on 10.1.50 and 9.0.121 alike: `requirement` NULL on bo
 servlet catalogs' entries — the handler reads the value, and the container decides
 nothing.
 
-`measured: 2026-09-20`, rows 1–17, on the sixteen archives the scope names.
+**Q18 — the second spelling of an unwritten name (§5b, `fallback_spelling`).** Every binder
+resolves the name it binds by the same way — `stringValue(@X)` (the written `value`; the
+header binder tries `name` next in `lambda$bind$0`), `orElse(argument.getName())` — and hands
+it to `doBind`. `doResolve` calls `resolveValue(name)`; on null it computes
+`getFallbackFormat(argument)`, and when that differs from the name it retries `resolveValue`
+with it. The base class's fallback is `NameUtils.hyphenate(argument.getName())`, which
+`@QueryValue` inherits and `@CookieValue` restates; the header binder's override is
+`hyphenate(capitalize(argument.getName()), false)`. `hyphenate(String)` is `hyphenate(s,
+true)`; `hyphenate(s, lowerCase)` returns `s` with `[_ ]` replaced by `-` when
+`isHyphenatedLowerCase(s)` (non-empty, `[\p{javaLowerCase}\d-]+` throughout, first
+character a letter), else `separateCamelCase(replaced, lowerCase, '-')` — whose
+`lowerCase = false` loop puts the separator before an upper-case character following a
+non-upper-case one and keeps case, and whose `lowerCase = true` loop lower-cases every
+letter and puts the separator before an upper-case character unless it follows an
+upper-case character, a `.`, or a digit after an upper-case character or the separator.
+`capitalize` returns `s` unchanged when its first character is lower-case and its second
+upper-case (`xTenant`), else upper-cases the first. So `@QueryValue String pageSize` is
+served by `?pageSize=` OR `?page-size=`, and `@Header String xTenant` by `xTenant` or
+`x-Tenant` — two names, and `pageSize required` states one of them as if it were the only
+one. **The catalog rule:** where the fallback of the parameter's own name differs from it,
+the row keeps its requirement and names nothing (`name` NULL, `resolution: unresolved`);
+where the two coincide — `tenant` → `tenant`; a header's `tenant` → `Tenant`, header names
+comparing case-insensitively in the framework's `CaseInsensitiveMutableHttpHeaders`
+(`TreeMap(String.CASE_INSENSITIVE_ORDER)`) — the name stands. A WRITTEN name stands as
+written, though `doResolve` retries the parameter's hyphenated name after it too
+(`@Header("X-Tenant") String tenantHeader` also accepts `Tenant-Header`): stated as
+`docs/open-issues.md` OI-104, not built.
+
+`measured: 2026-09-20`, rows 1–18, on the sixteen archives the scope names.

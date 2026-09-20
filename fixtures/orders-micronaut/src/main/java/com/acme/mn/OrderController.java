@@ -36,9 +36,13 @@ public class OrderController {
     // `@QueryValue` is null only when the argument is nullable (`Argument.isNullable()`,
     // the `jakarta.annotation.Nullable` stereotype Micronaut's own `@Nullable` maps onto),
     // `Optional.empty()` for an `Optional`, and otherwise `UnsatisfiedRouteException`, a
-    // 400 (CP-25 rows 6–8). `q` is optional, `tenant` and the header are required.
+    // 400 (CP-25 rows 6–8). `q` is optional, `tenant`, `pageSize` and the header are
+    // required — but `pageSize` is served by `?pageSize=` OR `?page-size=`, the binder
+    // retrying an unwritten name in its hyphenated spelling (CP-25 row 18), so its row
+    // names nothing rather than one of the two.
     @Get("/search")
     public String search(@QueryValue @Nullable String q,
                          @QueryValue String tenant,
-                         @Header("X-Tenant") String tenantHeader) { return q; }
+                         @QueryValue String pageSize,
+                         @Header("X-Tenant") String tenantHeader) { return q + pageSize; }
 }

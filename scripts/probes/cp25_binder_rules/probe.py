@@ -13,12 +13,15 @@ spellings its processor maps to that `Nullable` stereotype, RESTEasy Reactive's
 extractors handing a null through and `ParameterHandler` substituting only a
 `@DefaultValue`, JAX-RS's `value`-only attributes, and reactive-routes' generated
 `HttpServerRequest.getParam`/`getHeader` read whose Vert.x return is `@Nullable`.
-Rows 13–16 are the §5c/§5d rows: Spring's `AbstractNameValueExpression` parse of a
+Rows 13–17 are the §5c/§5d rows: Spring's `AbstractNameValueExpression` parse of a
 `params`/`headers` expression (the four forms §5c reads), Javalin's `Context` read
 overloads against the same-named setters (F7) and its `Validator.get()` throwing on
 an absent value, and the Servlet API's `getParameter`/`getHeader` — abstract on the
 interface, null-on-absent in the container that implements them (Tomcat, both
-package spellings).
+package spellings). Row 18 is back in §5b: the name Micronaut's three binders bind
+by when none is written, and the SECOND spelling `AbstractArgumentBinder.doResolve`
+retries with — `NameUtils.hyphenate`, with the header binder's `capitalize` — the
+rule `micronaut-http.yml`'s `fallback_spelling` mirrors.
 
 Called by `run.sh`, which resolves the jars; this script downloads nothing. Like
 CP-16 through CP-24 it reads each jar's own identity out of its own bytes before it
@@ -638,6 +641,162 @@ def q16_servlet_reads_are_null_on_absent(tomcat: Path, package: str) -> str:
     )
 
 
+# --- Q18: Micronaut's fallback spelling of an unwritten name (§5b) ------------------
+
+
+def q18_micronaut_fallback_spelling(micronaut_core: Path, micronaut_http: Path) -> str:
+    """Where each binder takes the name it binds by, what `doResolve` does when that
+    name finds nothing, and the two `NameUtils` methods the retry spells the name
+    with — the rule `fallback_spelling: hyphenated | hyphenated-capitalized` mirrors."""
+    binder = _javap(
+        "-c",
+        "-p",
+        "io.micronaut.core.bind.annotation.AbstractArgumentBinder",
+        classpath=micronaut_core,
+    )
+    resolve = [
+        s
+        for s in _steps(_method_body(binder, "protected java.lang.Object doResolve("))
+        if "resolveValue" in s
+        or "getFallbackFormat" in s
+        or "String.equals" in s
+        or s.startswith(("ifnonnull", "ifne"))
+    ]
+    fallback = _steps(_method_body(binder, "protected java.lang.String getFallbackFormat("))
+    cells = ["AbstractArgumentBinder.doResolve: " + _STEP.join(resolve)]
+    cells.append("AbstractArgumentBinder.getFallbackFormat: " + _STEP.join(fallback))
+    classpath = f"{micronaut_http}:{micronaut_core}"
+    header = _javap(
+        "-c",
+        "-p",
+        "io.micronaut.http.bind.binders.HeaderAnnotationBinder",
+        classpath=Path(classpath),
+    )
+    cells.append(
+        "HeaderAnnotationBinder.bind names by: "
+        + _STEP.join(
+            s
+            for s in _steps(
+                _method_body(
+                    header, "public io.micronaut.core.bind.ArgumentBinder$BindingResult<T> bind("
+                )
+            )
+            if "stringValue" in s or "orElseGet" in s or "doBind" in s
+        )
+        + " ; lambda$bind$0: "
+        + _STEP.join(
+            s
+            for s in _steps(_method_body(header, "lambda$bind$0("))
+            if "String " in s or "stringValue" in s or "getName" in s or "orElse" in s
+        )
+    )
+    cells.append(
+        "HeaderAnnotationBinder.getFallbackFormat: "
+        + _STEP.join(_steps(_method_body(header, "protected java.lang.String getFallbackFormat(")))
+    )
+    for name, method in (
+        (
+            "QueryValueArgumentBinder",
+            "bind(io.micronaut.core.convert.ArgumentConversionContext<T>, io.micronaut.http.HttpRequest<?>)",
+        ),
+        (
+            "CookieAnnotationBinder",
+            "bind(io.micronaut.core.convert.ArgumentConversionContext<T>, io.micronaut.http.HttpRequest<?>)",
+        ),
+    ):
+        output = _javap(
+            "-c", "-p", f"io.micronaut.http.bind.binders.{name}", classpath=Path(classpath)
+        )
+        named_by = [
+            s
+            for s in _steps(_method_body(output, method))
+            if "stringValue" in s or "Argument.getName" in s or "orElse:" in s
+        ]
+        overrides = "getFallbackFormat(" in output
+        cells.append(
+            f"{name}.bind names by: "
+            + _STEP.join(named_by)
+            + (
+                " ; getFallbackFormat: "
+                + _STEP.join(
+                    _steps(_method_body(output, "protected java.lang.String getFallbackFormat("))
+                )
+                if overrides
+                else " ; getFallbackFormat: not overridden (AbstractArgumentBinder's)"
+            )
+        )
+    utils = _javap("-c", "-p", "io.micronaut.core.naming.NameUtils", classpath=micronaut_core)
+    cells.append(
+        "NameUtils.hyphenate(String): "
+        + _STEP.join(
+            _steps(
+                _method_body(utils, "public static java.lang.String hyphenate(java.lang.String);")
+            )
+        )
+    )
+    cells.append(
+        "NameUtils.hyphenate(String, boolean): "
+        + _STEP.join(
+            s
+            for s in _steps(
+                _method_body(
+                    utils, "public static java.lang.String hyphenate(java.lang.String, boolean);"
+                )
+            )
+            if "invoke" in s or s.startswith(("bipush", "ldc", "ifeq"))
+        )
+    )
+    cells.append(
+        "NameUtils.isHyphenatedLowerCase: "
+        + _STEP.join(
+            s
+            for s in _steps(_method_body(utils, "public static boolean isHyphenatedLowerCase("))
+            if "invoke" in s
+        )
+    )
+    literals = _literals(_method_body(utils, "static {};"))
+    cells.append("NameUtils patterns (static init, in order): " + " | ".join(literals))
+    cells.append(
+        "NameUtils.capitalize: "
+        + _STEP.join(
+            s
+            for s in _steps(_method_body(utils, "public static java.lang.String capitalize("))
+            if "invoke" in s or s.startswith(("ifeq", "ifne", "areturn", "iconst"))
+        )
+    )
+    camel = _method_body(utils, "private static java.lang.String separateCamelCase(")
+    cells.append(
+        "separateCamelCase lowerCase=false loop (offsets 47-144): "
+        + _STEP.join(
+            s
+            for s in _steps_between(camel, 47, 144)
+            if "Character" in s
+            or s.startswith(("bipush", "if_icmpeq", "if_icmpne", "ifeq", "ifne"))
+        )
+    )
+    cells.append(
+        "separateCamelCase lowerCase=true loop (offsets 191-330): "
+        + _STEP.join(
+            s
+            for s in _steps_between(camel, 191, 330)
+            if "Character" in s
+            or s.startswith(("bipush", "if_icmpeq", "if_icmpne", "ifeq", "ifne"))
+        )
+    )
+    headers = _javap(
+        "-c", "-p", "io.micronaut.http.CaseInsensitiveMutableHttpHeaders", classpath=Path(classpath)
+    )
+    cells.append(
+        "CaseInsensitiveMutableHttpHeaders backing map: "
+        + _STEP.join(
+            s
+            for s in _steps(headers.splitlines())
+            if "CASE_INSENSITIVE_ORDER" in s or 'TreeMap."<init>"' in s
+        )
+    )
+    return _STEP.join(cells)
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     for spec in specs:
@@ -755,6 +914,13 @@ def main(specs: list[str]) -> int:
             "javax.servlet getParameter/getHeader: the same, under the other package spelling",
             (artifacts["tomcat-javax"],),
             q16_servlet_reads_are_null_on_absent(artifacts["tomcat-javax"].jar, "javax"),
+        ),
+        (
+            "Micronaut's unwritten-name fallback: AbstractArgumentBinder.doResolve retries getFallbackFormat — NameUtils.hyphenate, the header binder's capitalize — and header names compare case-insensitively (§5b, fallback_spelling)",
+            (artifacts["micronaut-core"], artifacts["micronaut-http"]),
+            q18_micronaut_fallback_spelling(
+                artifacts["micronaut-core"].jar, artifacts["micronaut-http"].jar
+            ),
         ),
     ]
     for number, (question, measured, observed) in enumerate(rows, start=1):

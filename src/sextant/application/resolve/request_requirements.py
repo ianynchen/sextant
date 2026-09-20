@@ -148,7 +148,8 @@ def _from_parameters(
 ) -> list[dict[str, Any]]:
     """§5b, `request_params`: for each row this catalog owns, each parameter of the
     handler's signature carrying an annotation an entry names is one row — `kind` the
-    entry's, `name` the first written name attribute else the parameter's own, `value`
+    entry's, `name` the first written name attribute else the parameter's own (NULL
+    where the entry's `fallback_spelling` respells that, `_name`), `value`
     NULL (an annotation names a parameter, it never demands a value), `requirement`
     what `_requirement` reads. A parameter of one of the entry's `skip_types` — the
     whole-map bindings that name nothing — is skipped, and a parameter the scanner could
@@ -214,13 +215,131 @@ def _path_variables(path: object) -> frozenset[str]:
 def _name(parameter: dict[str, Any], args: dict[str, Any], entry: dict[str, Any]) -> str | None:
     """The first of `name_attrs` written as a non-empty string literal, else the
     parameter's declared name, else None — a parameter compiled without names whose
-    annotation wrote none binds something it does not name (§5b)."""
+    annotation wrote none binds something it does not name (§5b).
+
+    A declared name is refused where the entry's `fallback_spelling` respells it: the
+    binder that falls back from the parameter's own name to its hyphenated form (CP-25
+    row 18, `AbstractArgumentBinder.doResolve`) serves a request carrying EITHER
+    spelling, so `pageSize required` would demand a name the framework does not
+    require by itself — the row keeps the requirement and names nothing. Where the two
+    spellings coincide (`tenant`; a header's `Tenant`, header names comparing
+    case-insensitively — the framework's own `CaseInsensitiveMutableHttpHeaders`, the
+    same row) the declared name stands."""
     for attribute in entry["name_attrs"]:
         written = args.get(attribute)
         if isinstance(written, str) and written:
             return written
     declared = parameter.get("name")
-    return declared if isinstance(declared, str) and declared else None
+    if not (isinstance(declared, str) and declared):
+        return None
+    spelling = entry.get("fallback_spelling")
+    if spelling is not None and _respelled(declared, _fallback(declared, spelling), entry["kind"]):
+        return None
+    return declared
+
+
+def _respelled(declared: str, fallback: str, kind: str) -> bool:
+    """Whether the binder's fallback names a DIFFERENT request value than the declared
+    name: exact for a query parameter or cookie, case-insensitive for a header."""
+    if kind == "header":
+        return declared.casefold() != fallback.casefold()
+    return declared != fallback
+
+
+def _fallback(name: str, spelling: str) -> str:
+    """The binder's second spelling of a parameter name (CP-25 row 18):
+    `hyphenated` is `NameUtils.hyphenate(name)` — `hyphenate(name, true)`; and
+    `hyphenated-capitalized` is `hyphenate(capitalize(name), false)`, the header
+    binder's override. Both mirrored from micronaut-core 4.7.6's bytecode below."""
+    if spelling == "hyphenated-capitalized":
+        return _hyphenate(_capitalize(name), lower_case=False)
+    return _hyphenate(name, lower_case=True)
+
+
+def _capitalize(name: str) -> str:
+    """`NameUtils.capitalize`: a name whose first letter is lower-case and whose second
+    is upper-case is returned unchanged (`xTenant`); otherwise the first character is
+    upper-cased (`contentType` → `ContentType`, `tenant` → `Tenant`)."""
+    rest = name[1:]
+    if name[0].islower() and rest and rest[0].isupper():
+        return name
+    return name[0].upper() + rest
+
+
+def _hyphenate(name: str, *, lower_case: bool) -> str:
+    """`NameUtils.hyphenate(String, boolean)`: a name that is already lower-case letters,
+    digits and `-` starting with a letter (`isHyphenatedLowerCase`) only has `_` and
+    space replaced by `-`; any other has that replacement and then `separateCamelCase`
+    with `-` as the separator."""
+    replaced = re.sub(r"[_ ]", "-", name)
+    if _is_hyphenated_lower_case(name):
+        return replaced
+    return _separate_camel_case(replaced, lower_case, "-")
+
+
+def _is_hyphenated_lower_case(name: str) -> bool:
+    return bool(name) and all(c.islower() or c in "0123456789-" for c in name) and name[0].isalpha()
+
+
+def _separate_camel_case(name: str, lower_case: bool, separator: str) -> str:
+    """`NameUtils.separateCamelCase(String, boolean, char)`, both loops as compiled.
+    With `lowerCase` false: an upper-case character after a non-upper-case one gets the
+    separator before it and case is kept (`xTenant` → `x-Tenant`, `ContentType` →
+    `Content-Type`); a `.` restarts the word. With `lowerCase` true: every letter is
+    lower-cased, and an upper-case character gets the separator before it unless it
+    follows an upper-case character, a `.`, or a digit that itself follows an
+    upper-case character or the separator (`pageSize` → `page-size`, `apiKEY` →
+    `api-key`); a run of separators collapses to one in both."""
+    out: list[str] = []
+    if not lower_case:
+        first = True
+        last = "0"
+        for c in name:
+            if first:
+                if c != separator:
+                    out.append(c)
+                first = False
+            elif c.isupper() and not last.isupper():
+                if c != separator:
+                    out.append(separator)
+                out.append(c)
+            else:
+                if c == ".":
+                    first = True
+                if c != separator:
+                    if last == separator:
+                        out.append(separator)
+                    out.append(c)
+            last = c
+        return "".join(out)
+    first = True
+    last = "0"
+    second_last = separator
+    for i, c in enumerate(name):
+        if c.islower() or not c.isalpha():
+            first = False
+            if c != separator:
+                if last == separator:
+                    out.append(separator)
+                out.append(c)
+        else:
+            lower = c.lower()
+            if first:
+                first = False
+                out.append(lower)
+            elif (
+                last.isupper()
+                or last == "."
+                or (last.isdecimal() and (second_last.isupper() or second_last == separator))
+            ):
+                out.append(lower)
+            else:
+                out.append(separator)
+                out.append(lower)
+        if i > 1:
+            second_last = last
+        last = c
+    return "".join(out)
 
 
 def _requirement(
@@ -306,6 +425,11 @@ def _request_params(catalog: Catalog) -> dict[str, dict[str, Any]]:
         skip_variables = entry.get("skip_path_variables", False)
         if not isinstance(skip_variables, bool):
             raise CatalogError(f"{where} `skip_path_variables` must be true or false: {entry!r}")
+        if "fallback_spelling" in entry and entry["fallback_spelling"] not in _FALLBACK_SPELLINGS:
+            raise CatalogError(
+                f"{where} `fallback_spelling` must be one of {sorted(_FALLBACK_SPELLINGS)}, "
+                f"got {entry['fallback_spelling']!r}"
+            )
         # The two type lists, converted once to the descriptor form the facts spell
         # (`_catalog_symbol`), and always present so the readers above index them.
         read = dict(entry)
@@ -327,7 +451,10 @@ def _request_params(catalog: Catalog) -> dict[str, dict[str, Any]]:
 # module names no language's types (`tests/architecture/test_language_confinement.py`).
 # `skip_path_variables: true` is for an annotation whose read serves path and query
 # parameters alike (reactive routes' `@Param`): a name that is one of the row's own path
-# variables is a path parameter, not a query, and gets no row.
+# variables is a path parameter, not a query, and gets no row. `fallback_spelling` names
+# the binder's SECOND spelling of an unwritten name — the one it retries with when the
+# parameter's own name finds nothing (CP-25 row 18): a declared name the fallback respells
+# is a name with two accepted spellings, and the row names nothing rather than one of them.
 _REQUEST_PARAMS_KEYS = frozenset(
     {
         "annotation",
@@ -340,8 +467,12 @@ _REQUEST_PARAMS_KEYS = frozenset(
         "optional_types",
         "skip_types",
         "skip_path_variables",
+        "fallback_spelling",
     }
 )
+# `hyphenated` is `NameUtils.hyphenate(name)`; `hyphenated-capitalized` is
+# `hyphenate(capitalize(name), false)`, the header binder's override (CP-25 row 18).
+_FALLBACK_SPELLINGS = frozenset({"hyphenated", "hyphenated-capitalized"})
 # `{name}`, `{name: regex}`, `{name?}`, `{rest...}` — and Vert.x's `:name`.
 _PATH_VARIABLES = (
     re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*(?:\?|\.\.\.)?)\s*(?::[^}]*)?\}"),
