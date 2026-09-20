@@ -635,6 +635,14 @@ different levels where the descriptor and the `Signature` attribute spell them t
 Where the declared type and the signature disagree on shape, the reference keeps Java's rule
 at that level and below: less specific, never wrong.
 
+**A parameter that declares a default value carries `declares_default: true`** (absent means
+false, as `receiver` is), read off `@kotlin.Metadata`'s `declaresDefaultValue` flag and aligned
+exactly as the nullability projection is — never on a partial alignment. It is a shared field,
+not `ext.kotlin`, because a binding rule compares it across languages: Spring's binder treats a
+defaulted Kotlin parameter as optional (`MethodParameter.isOptional` → `KotlinDelegate.isOptional`,
+spring-core 6.1.6), and a .NET extractor sets the same key from a parameter's `HasDefault` (R1,
+2026-09-19).
+
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
 what lets a catalog's `response_arg: 2` on `postForObject(url, req, OrderResponse.class)`

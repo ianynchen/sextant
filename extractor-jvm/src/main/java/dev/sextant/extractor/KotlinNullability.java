@@ -38,7 +38,7 @@ public final class KotlinNullability {
     /** What every non-Kotlin class decodes to: no properties, no parameters, no
      *  suspend functions and no extension receivers, so nothing overrides Java's rule. */
     public static final Decoded NONE =
-        new Decoded(Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Set.of());
+        new Decoded(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Set.of());
 
     /** The eight Kotlin classifiers that compile to a JVM primitive when declared
      *  non-null, and to the box when declared nullable (`OI-80`). {@code kotlin/Int} is
@@ -96,6 +96,13 @@ public final class KotlinNullability {
      *  SOURCE declared while the descriptor may carry synthetics, so aligning an index
      *  here to a descriptor slot is the scanner's decision, not this class's.
      *
+     *  <p>{@code parameterDefaults} is R1 (spec §3c): the same key maps to whether each
+     *  value parameter declares a default, in the same declaration order
+     *  {@code parameterTypes} lists — {@code Attributes.getDeclaresDefaultValue}, read off
+     *  every function and every constructor exactly where {@code parameterTypes} is. It
+     *  rides the same alignment the scanner already computes for nullability, so a partial
+     *  alignment leaves both unread rather than putting either on the wrong parameter.
+     *
      *  <p>{@code suspendMethods} holds the JVM {@code name + descriptor} of every function
      *  metadata marks {@code suspend}. It is the ONLY admissible answer to "is this a
      *  suspending function", and it exists because the structural answer — "the last
@@ -124,6 +131,7 @@ public final class KotlinNullability {
             Map<String, Boolean> returnNullable,
             Map<String, String> returnClassifier,
             Map<String, List<KmType>> parameterTypes,
+            Map<String, List<Boolean>> parameterDefaults,
             Set<String> suspendMethods,
             Set<String> extensionReceivers) {
 
@@ -241,6 +249,7 @@ public final class KotlinNullability {
         Map<String, Boolean> returns = new HashMap<>();
         Map<String, String> returnClassifier = new HashMap<>();
         Map<String, List<KmType>> parameterTypes = new HashMap<>();
+        Map<String, List<Boolean>> parameterDefaults = new HashMap<>();
         Set<String> suspend = new HashSet<>();
         Set<String> receivers = new HashSet<>();
         for (KmFunction function : functions) {
@@ -256,6 +265,7 @@ public final class KotlinNullability {
                 returnClassifier.put(key, named.getName());
             }
             parameterTypes.put(key, declaredTypes(function.getValueParameters()));
+            parameterDefaults.put(key, declaredDefaults(function.getValueParameters()));
             if (Attributes.isSuspend(function)) suspend.add(key);
             if (function.getReceiverParameterType() != null) receivers.add(key);
         }
@@ -266,9 +276,9 @@ public final class KotlinNullability {
         for (KmConstructor constructor : kmConstructors) {
             JvmMethodSignature signature = JvmExtensionsKt.getSignature(constructor);
             if (signature == null) continue;
-            parameterTypes.put(
-                signature.getName() + signature.getDescriptor(),
-                declaredTypes(constructor.getValueParameters()));
+            String key = signature.getName() + signature.getDescriptor();
+            parameterTypes.put(key, declaredTypes(constructor.getValueParameters()));
+            parameterDefaults.put(key, declaredDefaults(constructor.getValueParameters()));
         }
         for (KmProperty property : kmProperties) {
             // The GETTER, not the field: `KotlinOrder#id` the field already reads
@@ -281,7 +291,8 @@ public final class KotlinNullability {
                 returns.put(getter.getName() + getter.getDescriptor(), getterNullable);
             }
         }
-        return new Decoded(properties, returns, returnClassifier, parameterTypes, suspend, receivers);
+        return new Decoded(
+            properties, returns, returnClassifier, parameterTypes, parameterDefaults, suspend, receivers);
     }
 
     /** The nullability a declared type states, or null where it states none.
@@ -307,6 +318,17 @@ public final class KotlinNullability {
         List<KmType> types = new ArrayList<>();
         for (KmValueParameter parameter : parameters) types.add(parameter.getType());
         return List.copyOf(types);
+    }
+
+    /** R1 (spec §3c): whether each value parameter declares a default, in declaration
+     *  order — `Attributes.getDeclaresDefaultValue`, the flag kotlinc writes for
+     *  `fun f(page: Int = 0)`. Java's rule has no such thing, so absent means false. */
+    private static List<Boolean> declaredDefaults(List<KmValueParameter> parameters) {
+        List<Boolean> defaults = new ArrayList<>();
+        for (KmValueParameter parameter : parameters) {
+            defaults.add(Attributes.getDeclaresDefaultValue(parameter));
+        }
+        return List.copyOf(defaults);
     }
 
     /** A plain implementation of the annotation interface {@code kotlin-metadata-jvm}

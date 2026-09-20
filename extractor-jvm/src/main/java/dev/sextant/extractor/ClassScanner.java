@@ -1318,6 +1318,15 @@ public final class ClassScanner {
                 parameter.put("annotations", JsonOut.array(parameterAnnotations.get(i)));
                 // Absent means false, as `bridge_of` is absent rather than null.
                 if (i == receiverSlot) parameter.put("receiver", "true");
+                List<Boolean> kotlinDefaults = kotlinNullability.parameterDefaults().get(methodKey);
+                // R1 (spec §3c): the default-value flag rides the same alignment nullability
+                // does — a partial alignment would put a default on the wrong parameter,
+                // which is worse than not reading it. Absent means false, as `receiver` is.
+                if (parametersAligned && kotlinDefaults != null
+                        && i >= alignedFrom && i < alignedFrom + alignedCount
+                        && kotlinDefaults.get(i - alignedFrom)) {
+                    parameter.put("declares_default", "true");
+                }
                 parameter.put("name", parameterNames[i] == null ? "null" : JsonOut.string(parameterNames[i]));
                 // The erased descriptor type wherever the alignment declined to answer.
                 // It is never wrong, only less specific.
