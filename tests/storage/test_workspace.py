@@ -765,8 +765,9 @@ def test_endpoint_metadata_insert_is_insert_if_absent_on_the_full_row(tmp_path: 
     `value` of NULL equals a `value` of NULL — and a row differing in any one column,
     `requirement` included, is a different entry and inserts.
 
-    Two separate `derive` calls, not one two-row batch, for the reason the media test
-    above gives: `NOT EXISTS` reads the table as it stood before the statement began."""
+    Separate `derive` calls here, one row each: this is the ACROSS-batches half of the
+    guard, the `NOT EXISTS` against rows an earlier statement wrote. The within-batch half
+    is the test below."""
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.derive("endpoint_metadata_reset")
     workspace.derive("endpoint_metadata_insert", rows=[_metadata_row("required")])
@@ -778,6 +779,26 @@ def test_endpoint_metadata_insert_is_insert_if_absent_on_the_full_row(tmp_path: 
     workspace.close()
 
     assert [row["requirement"] for row in rows] == ["optional", "required", None]
+
+
+def test_endpoint_metadata_insert_collapses_duplicates_within_one_batch(tmp_path: Path):
+    """The WITHIN-batch half of A8 (Task 7 fix round 1). The requirements writer gathers
+    every mechanism's and every catalog's rows into ONE `$rows` list and derives once, so
+    the two catalogs that describe one handler put their identical entry into the same
+    batch — where `NOT EXISTS`, reading the table as it stood before the statement, sees
+    neither. `SELECT DISTINCT` over the unnested rows is what collapses them, and it treats
+    NULLs as equal exactly as the guard's `IS NOT DISTINCT FROM` does: the same row twice
+    (NULL `value`, NULL `requirement`) plus a distinct one land as two rows."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[_metadata_row(None), _metadata_row(None), _metadata_row("required")],
+    )
+    rows = workspace.query("endpoint_metadata")
+    workspace.close()
+
+    assert [row["requirement"] for row in rows] == ["required", None]
 
 
 def test_route_requirements_is_a_temp_stash_outside_the_schema(tmp_path: Path):

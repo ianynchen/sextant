@@ -7,14 +7,18 @@
 -- Spring web catalogs both match a `@RestController` class — and the identical entry each
 -- derives is one entry, exactly as their identical `endpoints` rows already meet
 -- `insert_endpoints.sql`'s guard. Every column compares NULL-safely, because a NULL
--- `value` or `requirement` is a stated answer and two of them are equal. The guard reads
--- the table as it stood when the statement began, the caveat every such guard here
--- carries: rows within ONE call do not refuse each other.
+-- `value` or `requirement` is a stated answer and two of them are equal. Two halves, one
+-- per place a duplicate can come from: `NOT EXISTS` refuses a row an EARLIER statement
+-- wrote (it reads the table as it stood when this one began), and `SELECT DISTINCT`
+-- collapses duplicates WITHIN this batch — the requirements pass gathers every catalog's
+-- rows into one `$rows` list, so the two catalogs describing one handler meet here, not
+-- across statements. Row-level DISTINCT treats NULLs as equal, as the guard does; the
+-- table is a SET (D01 §3) and this is what makes the statement one.
 INSERT INTO endpoint_metadata (
     protocol, direction, method, path, caller, kind, name, value, resolution, evidence,
     requirement
 )
-SELECT r.protocol, r.direction, r.method, r.path, r.caller,
+SELECT DISTINCT r.protocol, r.direction, r.method, r.path, r.caller,
        r.kind, r.name, r.value, r.resolution, r.evidence, r.requirement
 FROM (SELECT UNNEST(
     $rows::STRUCT(
