@@ -2,7 +2,10 @@
 
 **Status:** design. Approved in conversation 2026-09-19, section by section; Approach B of
 three ruled by the user. Self-review against the frameworks' jars, kotlinc 2.2.0 output in
-the fixtures, the JVM extractor and the engines is folded in (§0). Not yet planned.
+the fixtures, the JVM extractor and the engines is folded in (§0); a second review against
+four lenses — no false positives, future languages, conflicts, over-engineering — found two
+issues the user ruled on 2026-09-19 (R1, R2) and twelve the author resolved (§0b). Not yet
+planned.
 
 **Closes — the four Kotlin/Ktor Majors, the one Group G item, and one new item:**
 `ktor-route-extensions` (a `fun Route.api()` helper called from `routing { }` derives
@@ -47,7 +50,28 @@ before any engine work.
 | F7 | Javalin 6.4.0 `Context.header(String)` **reads** and `header(String, String)` **sets** a response header; `cookie(String)` reads, `cookie(String, String[, int])`/`cookie(Cookie)` set. A `request_reads` entry must carry arity | §5d entries carry `arity` |
 | F8 | Micronaut `@QueryValue`/`@CookieValue` declare `value` + `defaultValue`; `@Header` declares `value`, `name`, `defaultValue`; none declares `required` — required-ness is nullability/`Optional`/default only | §5b Micronaut entries have no `required_attr` |
 | F9 | JAX-RS `@QueryParam`/`@HeaderParam`/`@CookieParam` declare `value` only; `@DefaultValue` is a separate annotation | §5b `default_annotation` key for JAX-RS |
+| R1 | **False positive:** a Kotlin `@RequestParam page: Int = 0` is optional to Spring (F6, `KotlinDelegate.isOptional`) and to Micronaut, but the facts carry nullability and not "declares a default", so §5b would have written `required` | **Ruled A:** the extractor publishes `declares_default: true` on the parameter (§3c); `binder` reads it |
+| R2 | **Conflict with D00 §5** ("every extractor normalizes its own mechanism into `lambda`") and with language-blindness: §3b keyed the resolve layer on the literal class names `kotlin.jvm.internal.Lambda`/`SuspendLambda` | **Ruled B:** the extractor marks the lambda **class** with a shared field `lambda_body` when it scans that class, as it marks a bridge with `bridge_of`; resolve joins on the field and names no language (§3b) |
 | F10 | Every engine reads call sites through one named query — `workspace.query("call_sites")` or `parsed_call_sites(workspace)` (`grep -rn 'query("call_sites")\|parsed_call_sites' src/sextant/application/resolve`) — so there is exactly one projection point, and the pattern already exists as `resolve/effective_annotations.py` | §3 is `resolve/effective_calls.py`, a second named query |
+
+### 0b. The four-lens review — resolved by the author
+
+| # | Lens | Finding | Resolution |
+|---|---|---|---|
+| A1 | no FP | Following *every* module-local call from an origin-less body was justified by Javalin's thread-local `ApiBuilder`; the Spring router's `Supplier<RouterFunction>` bodies are origin-less too and a callee there may build routers that are never returned | origin-less following is **opt-in per entry** (`follow_calls: all`, declared by `javalin-apibuilder.yml` only); the default follows origin-carrying calls only (§4a) |
+| A2 | no FP | An unresolved endpoint row on depth exhaustion or on a verb conflict is a phantom — a claim that an endpoint may exist where none was read, or where Ktor can never dispatch | depth exhaustion → one `open_questions` row (`routing_depth`); verb conflict → **silence**, stated on the catalog and in COVERAGE (§4a, §4b) |
+| A3 | no FP | A bare read in a handler body (`call.request.headers["X"]`, `ctx.queryParam("q")`, `getParameter`) says the handler *reads* the value; `optional` would claim the framework serves the request without it, which the handler may not (`?: throw`) | such rows carry `requirement` **NULL**; only what the framework itself enforces is stated — `required` for the throwing APIs (`getOrFail`, `Validator.get()`), `optional`/`required` for annotations and selectors. D01 says so (§5a, §5d) |
+| A4 | no FP | `HeadersRequestCondition` drops `Accept` and `Content-Type` expressions (Spring routes them into produces/consumes) | those two names are skipped when reading `headers=` (§5c; CP-25 records it) |
+| A5 | no FP | `$default` sibling lookup when **both** receiver candidates exist in `symbols` | the site is left untouched, the extractor's own "ambiguity is not a guess" (§3a) |
+| A6 | no FP | Ktor path variables spell `{id?}` (optional) and `{rest...}` (tailcard) | `skip_path_variables` strips `?` and `...` before comparing (§5d) |
+| A7 | conflict | `requires:` already exists at catalog top level (capabilities); the same word inside a prefix entry invites a mis-read | the entry key is **`request_requirement`**, matching `request_params`/`request_reads` (§4b, §5c) |
+| A8 | conflict | `spring-web.yml` (`@RestController`) and `spring-mvc.yml` (`@Controller`) can both match one class; identical endpoint rows already meet insert-if-absent, but two identical metadata rows would not | `insert_endpoint_metadata.sql` becomes insert-if-absent on the full row (§5a) |
+| A9 | conflict | Quarkus REST binds `@RestQuery`/`@RestHeader`/`@RestCookie` beside the JAX-RS names (already in its `bound_by`) | added to `quarkus-rest.yml`'s `request_params` (§5b) |
+| A10 | no FP | A helper call whose target is an interface/abstract method has no body; following "an implementation" would be dispatch, which is another pass's word | not followed, stated (§4a) |
+| A11 | over-eng. | CP-24 proposed an embedded-server run to show `method(Post) { get {} }` never dispatches | read `HttpMethodRouteSelector.evaluate` bytecode instead — it compares the call's method to the selector's and returns `Failure` (§7) |
+| A12 | over-eng. | reviewed: `absent` (Spring `!name` is real and one enum value); Javalin's `then: { method: get }` (the idiomatic typed-parameter form); the `-Xlambdas=class` fixture variant (Kotlin < 2.0 builds are common and it is CP-23's harness anyway); the two-mask unit test (cheap) | all **kept**; nothing else was found that real input does not produce |
+
+**Future languages (lens 2), checked:** every new key is language-neutral — `header/query/cookie/param`, `required/optional/absent`, `declares_default`, `lambda_body`, `bridge_of`; the resolve layer names no language. A .NET extractor would set `declares_default` from a parameter's `HasDefault` flag and `lambda_body` on a display class if it chose to emit `instance` for closures (it need not — emitting `lambda` directly is the D00 rule). C#'s optional arguments are filled at the call site, so §3a simply never fires.
 
 ---
 
@@ -98,7 +122,8 @@ Units, each understandable alone:
 | # | Unit | Where |
 |---|---|---|
 | 1 | `$default` bridge calls → the function they stand for | `resolve/effective_calls.py` (§3a) |
-| 2 | class-compiled Kotlin lambdas → `lambda` arguments | `resolve/effective_calls.py` (§3b) |
+| 2 | class-compiled Kotlin lambdas → `lambda` arguments | extractor `lambda_body` on the class (§3b, R2) + `resolve/effective_calls.py` |
+| 2′ | `declares_default` on Kotlin parameters | extractor `KotlinNullability.java` + D00 (§3c, R1) |
 | 3 | follow origin-carrying module-local calls | `engines/combinator.py` (§4a) |
 | 4 | selector prefixes, `getters:` value tables, verb-less `handle`, `all_methods` | `engines/combinator.py` + `ktor-routing.yml` (§4b–c) |
 | 5 | `endpoint_metadata.requirement` + inbound writer | `schema.sql`, `insert_endpoint_metadata.sql`, `workspace.py`, `resolve/request_requirements.py` (§5a) |
@@ -106,6 +131,11 @@ Units, each understandable alone:
 | 7 | route-tree predicates as requirements | combinator `_Route.requirements`, annotation engine, Gateway (§5c) |
 | 8 | `request_reads` — handler-body reads | `resolve/request_requirements.py` + four catalogs: `ktor-routing`, `javalin`, `jakarta-servlet`, `javax-servlet` (§5d) |
 | 9 | probes, fixtures, register, COVERAGE, D00/D01/D02/M06 | §7, §9, §10 |
+
+Approach B stands: the two projections stay one join each in resolve, keyed on **shared
+fields the extractor publishes on the declaration it scans** (`bridge_of`, `lambda_body`),
+never on a language's class names. Where the extractor lacked a fact (R1, R2), the fact is
+added there — the pattern OI-81 set.
 
 ---
 
@@ -129,8 +159,9 @@ on both). The join is on the target's owner + name + descriptor against `symbols
   the trailing `Object` marker removed — the same trimming `KotlinDefaultBridge.solve`
   performs, re-done here from the facts it published (`receiverSlots`, `declaredSlots` are
   not published; the trimming is recomputed from the descriptor and `bridge_of`, and the
-  receiver question is settled by which of the two candidate siblings exists in `symbols`,
-  exactly the extractor's rule).
+  receiver question is settled by which of the two candidate siblings exists in `symbols`;
+  when **both** exist the site is left untouched — the extractor's own "ambiguity is not a
+  guess", A5).
 - Arguments: the mask arguments are `kind: int` (D00 §5 — "constant instructions"), value
   read as an integer; for declared parameter *i* with bit *i* of mask ⌊i/32⌋ set, the
   argument becomes `{kind: unresolved, reason: defaulted}`; mask and marker slots are
@@ -148,20 +179,28 @@ argument that is not an `int` literal (the whole site is left as is — a wrong 
 worse than the silence there is today); constructor defaults (`<init>(…, int,
 DefaultConstructorMarker)`), which carry no `$default` name and no `bridge_of`.
 
-### 3b. Class-compiled Kotlin lambdas
+### 3b. Class-compiled Kotlin lambdas — `lambda_body` (R2)
 
-**Input.** An argument `{kind: instance, symbol: C, source}` where `C` is a module-local type
-whose `type_hierarchy` ancestors include `kotlin.jvm.internal.Lambda` or
-`kotlin.coroutines.jvm.internal.SuspendLambda` (both `public abstract class` in
-kotlin-stdlib 2.2.0 — `javap -cp ~/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0.jar kotlin.jvm.internal.Lambda kotlin.coroutines.jvm.internal.SuspendLambda`).
-
-**Rewrite.** The argument becomes `{kind: lambda, symbol: B, captures: 0, source}` where `B`
-is the body method of `C`:
-- `invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;` when `C` declares one (a suspend
-  lambda: `invoke` only builds the continuation and calls `invokeSuspend`; the author's
-  statements are in `invokeSuspend`) — **probe CP-23 records this**;
-- otherwise the one `invoke` that is not `modifiers.synthetic` (the typed one; the erased
+**Extractor.** When `ClassScanner` scans a class whose superclass chain reaches
+`kotlin.jvm.internal.Lambda` or `kotlin.coroutines.jvm.internal.SuspendLambda` (both
+`public abstract class` in kotlin-stdlib 2.2.0 — `javap -cp ~/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0.jar kotlin.jvm.internal.Lambda kotlin.coroutines.jvm.internal.SuspendLambda`;
+the direct superclass is read off the class file, and the two names are the extractor's
+knowledge of its own compiler, where D00 §5 puts it), the class's **type** symbol fact
+carries **`lambda_body: "<body method's bare descriptor>"`**, absent otherwise — the same
+shape and placement as `bridge_of`. The body method is:
+- `invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;` when the class declares one (a
+  suspend lambda: `invoke` only builds the continuation and calls `invokeSuspend`; the
+  author's statements are in `invokeSuspend`) — **CP-23 records this**;
+- otherwise the one `invoke` that is not `ACC_SYNTHETIC` (the typed one; the erased
   `invoke(Object)` is the compiler's bridge and is synthetic) — **CP-23**.
+A class with neither (unreadable) carries no `lambda_body` and is left alone. D00 §5 gains
+the field beside `bridge_of`; a Gradle test on a `-Xlambdas=class` sample pins both shapes.
+
+**Resolve.** An argument `{kind: instance, symbol: C, source}` whose type fact carries
+`lambda_body: B` becomes `{kind: lambda, symbol: B, captures: 0, source}`. The join names no
+language: any extractor that emits `instance` for its own closure classes and marks them the
+same way gets the same projection; one that already emits `lambda` (D00's rule) never needs
+it.
 
 `captures: 0` is exact: constructor-captured values are fields of `C`, never leading
 parameters of `B`, so the interface's own parameters start at index 0 and a routing walk's
@@ -170,9 +209,20 @@ rule wants a path gets a `field` argument and an unresolved row — honest, not 
 
 **Left alone, stated:** a Java anonymous class implementing `Function1` (not a Kotlin lambda
 class); a Kotlin `fun interface` SAM conversion (already `invokedynamic`); a lambda class
-from a library (not module-local — no body to walk).
+from a library (its type fact is scanned too, so it IS marked — but its body has no
+`call_sites` in the module facts, so a walk into it reads nothing).
 
-### 3c. What each engine sees afterwards
+### 3c. `declares_default` on parameters (R1)
+
+`KotlinNullability.java` already iterates every function's `KmValueParameter`
+(`declaredTypes`, line 306) to project nullability; it additionally reads
+`kotlin.metadata.Attributes.getDeclaresDefaultValue(parameter)` and the scanner writes
+**`declares_default: true`** on that parameter fact, absent otherwise (as `receiver` is).
+D00 §6 documents it beside the nullability projection: a shared field, not `ext.kotlin`,
+because a binder rule compares it across languages (a .NET extractor sets it from a
+parameter's `HasDefault`). Consumed by §5b's `binder` only.
+
+### 3d. What each engine sees afterwards
 
 A plain call to the real function with some arguments unreadable, and a plain lambda body to
 walk. No engine learns the word "Kotlin". `kotlin-default-bridge-calls` and
@@ -180,7 +230,7 @@ walk. No engine learns the word "Kotlin". `kotlin-default-bridge-calls` and
 because `handler_arg` now names `B`, which `roots`/`reachability` can walk (F1).
 
 **Cost per resolve:** one join `call_sites × symbols` on target (3a), one join of `instance`
-arguments × `type_hierarchy` × `symbols` (3b). Both once, set-based, before any engine.
+arguments × `symbols` on `lambda_body` (3b). Both once, set-based, before any engine.
 
 ---
 
@@ -196,21 +246,28 @@ method with a body is **followed**:
   origin}` after `captures` adjustment, exactly the test `_receiver_argument_is_the_origin`
   already makes). Inside the callee, that parameter index is the new `origin_parameter` and
   the same walk runs. A verb on any other `Route` inside the callee is silence, as today.
-- **Body without an origin** (Javalin `ApiBuilder`, thread-local): every module-local call is
-  followed — `ApiBuilder.get` throws outside `apiBuilder { }`, so a helper reaching it can
-  only ever be called from inside the block.
+- **Body without an origin:** followed only where the entry declares **`follow_calls:
+  all`** — `javalin-apibuilder.yml`'s `apiBuilder`/`path` bodies, because `ApiBuilder.get`
+  throws outside `apiBuilder { }` (thread-local), so a helper reaching it can only ever be
+  called from inside the block. The Spring router's `Supplier<RouterFunction>` bodies are
+  origin-less and declare nothing: a callee there may build routers that are never
+  returned, and following it would attach them (A1). They stay a miss, as today.
 - The caller's accumulated scope — path prefix, verb, media, requirements (§5c) — carries
   into the callee: `route("/api") { api() }` gives `/api/helper`.
 - **Guards, no semantics:** a visited set keyed `(callee symbol, origin index)`; depth bound
-  16 (Ktor's own documented structures nest 3–4). Exhausting the bound publishes one
-  unresolved row with poison `helper_depth`, not silence.
-- **Boundary stated:** a routing block held in a variable and invoked later (`val b:
-  Route.() -> Unit = {…}; b()`) is `Function1.invoke` on a local — not followed.
+  16 (Ktor's own documented structures nest 3–4). Exhausting the bound publishes **no
+  endpoint row** — a row there would claim an address nobody read (A2) — but one
+  `open_questions` row of a new kind **`routing_depth`** (endpoint identity = the entry's
+  caller; candidates = the callee symbol; one renderer arm, as every kind costs).
+- **Boundaries stated:** a routing block held in a variable and invoked later (`val b:
+  Route.() -> Unit = {…}; b()`) is `Function1.invoke` on a local — not followed; a callee
+  that is an interface or abstract method has no body — not followed (A10).
 
 ### 4b. Selector prefixes
 
 A `prefixes:` entry may now declare, besides `path_arg`, any of `verb_arg`, `media_arg` +
-`fills`, `requires`, or none of them (a pure scope). Measured signatures (F4, F5):
+`fills`, `request_requirement` (A7 — `requires:` is already the top-level capabilities key),
+or none of them (a pure scope). Measured signatures (F4, F5):
 
 ```yaml
 prefixes:
@@ -219,13 +276,13 @@ prefixes:
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: accept,      arity: 3, receiver_arg: 0, media_arg: 1, fills: produces, body_arg: 2, origin_param: 0 }   # ContentType[] vararg
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: contentType, arity: 3, receiver_arg: 0, media_arg: 1, fills: consumes, body_arg: 2, origin_param: 0 }
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: header,        arity: 4, receiver_arg: 0, body_arg: 3, origin_param: 0,
-      requires: { kind: header, name_arg: 1, value_arg: 2, requirement: required } }
+      request_requirement: { kind: header, name_arg: 1, value_arg: 2, requirement: required } }
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: param,         arity: 3, receiver_arg: 0, body_arg: 2, origin_param: 0,
-      requires: { kind: query, name_arg: 1, requirement: required } }
+      request_requirement: { kind: query, name_arg: 1, requirement: required } }
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: param,         arity: 4, receiver_arg: 0, body_arg: 3, origin_param: 0,
-      requires: { kind: query, name_arg: 1, value_arg: 2, requirement: required } }
+      request_requirement: { kind: query, name_arg: 1, value_arg: 2, requirement: required } }
   - { owner: io.ktor.server.routing.RoutingBuilderKt, method: optionalParam, arity: 3, receiver_arg: 0, body_arg: 2, origin_param: 0,
-      requires: { kind: query, name_arg: 1, requirement: optional } }
+      request_requirement: { kind: query, name_arg: 1, requirement: optional } }
 ```
 
 **Value tables gain a getter form.** `HttpMethod.Get` compiles to `GETSTATIC
@@ -250,8 +307,10 @@ media_values:
 **Scope semantics.** A selector's verb, media and requirements sit in the scope and apply to
 every route beneath, like a path prefix. A route whose own verb disagrees with the scope's
 (`method(HttpMethod.Post) { get("/x") { } }`) is a subtree Ktor registers but can never
-dispatch; it publishes one **unresolved** row with poison `verb_conflict` rather than
-either verb — **CP-24 records the non-dispatch**.
+dispatch — `HttpMethodRouteSelector.evaluate` compares the call's method to its own and
+returns `Failure` (**CP-24 reads the bytecode**). It publishes **nothing** (A2): a row of
+either verb would be an endpoint that is not on the wire, and an unresolved row a phantom.
+Stated on the catalog and in COVERAGE.
 
 ### 4c. `handle` — a verb-less terminal
 
@@ -294,10 +353,21 @@ whose name is not a string literal/constant produces `name` NULL, `resolution = 
 — "this handler reads a header it does not name" is a different statement from "reads
 none", the reasoning the outbound table was built on.
 
+**What `requirement` means, and NULL.** The column states what the **framework enforces**
+— its binder or its routing tree — never what the handler body does with the value.
+`required`: the framework rejects a request without it; `optional`: the framework serves
+the request without it (a binder default, `required=false`, `optionalParam`);
+`absent`: the framework requires it to be missing. **NULL** on an inbound row means the
+code states nothing about it — a bare read in a handler body (§5d) is such a row: *this
+handler reads header X* is all it says (A3). NULL on an outbound row is the existing
+meaning (an entry sent).
+
 `resolve/request_requirements.py` owns the writer: one function taking `(endpoint identity,
 handler, entries)` from the three mechanisms and one `derive("endpoint_metadata_insert")`
 call per engine run, after the engine's endpoints (the fluent engine's order, for the same
-reason: an entry names a row that has to exist).
+reason: an entry names a row that has to exist). The insert is **insert-if-absent on the
+full row** (A8): `spring-web.yml` and `spring-mvc.yml` can both match one `@RestController`
+class, and their identical endpoint rows already meet the same guard.
 
 ### 5b. Mechanism 1 — parameter annotations (`request_params`)
 
@@ -311,9 +381,10 @@ request_params:
 ```
 
 - **`requirement: binder`** is F6 exactly: `optional` when `required_attr` is `false`, when
-  `default_attr` is present, when the parameter type is `java.util.Optional`, or when the
+  `default_attr` is present, when the parameter type is `java.util.Optional`, when the
   parameter's type reference is `nullable: true` (Kotlin `?` and `@Nullable` both land
-  there, D00 §6); else `required`.
+  there, D00 §6), or when the parameter carries `declares_default: true` (§3c, R1); else
+  `required`.
 - **`requirement: optional`** is JAX-RS's rule: absent → null or `@DefaultValue`, never a
   400 (`default_annotation: jakarta.ws.rs.DefaultValue`, informational — it does not change
   the requirement).
@@ -321,11 +392,6 @@ request_params:
   parameter compiled without names → unresolved row.
 - **Skipped, stated on the catalog:** whole-map bindings (`Map`, `MultiValueMap`,
   `HttpHeaders` types — no name); Micronaut's *unannotated* by-name binding.
-- **Boundary (OI):** a Kotlin parameter with a **default value** and a non-null type is
-  `optional` to Spring (F6, `KotlinDelegate.isOptional`) but reads `required` here — the
-  per-parameter `declaresDefaultValue` flag is in `@kotlin.Metadata`, which the extractor
-  decodes for nullability and not for defaults. Over-reports the requirement; falsified by
-  any Kotlin controller with a defaulted `@RequestParam`.
 
 Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 
@@ -333,6 +399,7 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 |---|---|---|
 | `spring-mvc.yml`, `spring-web.yml` | `@RequestParam`→param, `@RequestHeader`→header, `@CookieValue`→cookie | binder |
 | `jakarta-jaxrs.yml`, `javax-jaxrs.yml`, `quarkus-rest.yml` | `@QueryParam`→query, `@HeaderParam`→header, `@CookieParam`→cookie (`value` only) | optional |
+| `quarkus-rest.yml` additionally | `org.jboss.resteasy.reactive.RestQuery`→query, `RestHeader`→header, `RestCookie`→cookie (`value` only; the name defaults to the parameter's — A9) | optional |
 | `micronaut-http.yml` | `@QueryValue`→query (`value`, `defaultValue`), `@Header`→header (`value`, `name`, `defaultValue`), `@CookieValue`→cookie | binder, no `required_attr` |
 | `quarkus-reactive-routes.yml` | `@Param`→query, `@Header`→header | optional — **CP-25 confirms** absent → null |
 
@@ -341,20 +408,22 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 - **Spring `@RequestMapping(params=, headers=)`**, read where `discriminators` already reads
   the two attributes (annotation engine): `name` → required; `name=v` → required, value `v`;
   `!name` → `absent`; `name!=v` → `optional`, the excluded value lost (stated). Class-level
-  and method-level union, as `ParamsRequestCondition.combine` does.
+  and method-level union, as `ParamsRequestCondition.combine` does. A `headers=` expression
+  naming `Accept` or `Content-Type` is **skipped**: `HeadersRequestCondition` drops them and
+  Spring reads them as produces/consumes instead (A4; CP-25 records it).
 - **Spring router DSL, Java:** `RequestPredicates.queryParam(String, String)` → query,
   required, value; `queryParam(String, Predicate)` → query, required, value NULL;
   `headers(Predicate<Headers>)` — an arbitrary function, unreadable — nothing, stated.
-  Declared as a new `requires:` list beside `media:` in both router catalogs. (Kotlin's
+  Declared as a new `request_requirement:` list beside `media:` in both router catalogs. (Kotlin's
   `queryParam` is the route-declaring overload already in `slice.outside`; unchanged.)
 - **Spring Cloud Gateway** (`PredicateSpec` and `BooleanSpec$BooleanOpSpec`, 5.0.0 — F-row
   measured: `header(String)`, `header(String, String)`, `query(String)`, `query(String,
   String)`, `query(String, Predicate)`, `cookie(String, String)`): the `pass_through: true`
-  continuations become `requires:` continuations — header/query/cookie, required, value =
+  continuations become `request_requirement:` continuations — header/query/cookie, required, value =
   the regex string where one is given, NULL for the `Predicate` form. The properties side
   (`Header=X,regex`, `Query=x[,regex]`, `Cookie=name,regex`) is **not** in scope: property-
   declared routes derive nothing today (`gateway-properties-routes`, open), and their
-  predicates land with that item, on the same `requires:` word.
+  predicates land with that item, on the same `request_requirement:` word.
 - **Ktor:** §4b.
 
 ### 5d. Mechanism 3 — handler reads (`request_reads`)
@@ -367,30 +436,33 @@ list. For Ktor the handler is the §3b body method (or the invokedynamic synthet
 request_reads:
   # Ktor 3.0.3 — the three containers all end in `StringValues.get(String)`, so the
   # receiver's PRODUCING call says which one (`via`, one `_producing_site` step)
-  - { via: io.ktor.server.request.ApplicationRequest#getHeaders,         method: get, arity: 1, name_arg: 0, kind: header, requirement: optional }
-  - { via: io.ktor.server.request.ApplicationRequest#getQueryParameters, method: get, arity: 1, name_arg: 0, kind: query,  requirement: optional }
-  - { via: io.ktor.server.application.ApplicationCall#getParameters,     method: get, arity: 1, name_arg: 0, kind: query,  requirement: optional, skip_path_variables: true }
+  - { via: io.ktor.server.request.ApplicationRequest#getHeaders,         method: get, arity: 1, name_arg: 0, kind: header }   # requirement NULL: a read states nothing (A3)
+  - { via: io.ktor.server.request.ApplicationRequest#getQueryParameters, method: get, arity: 1, name_arg: 0, kind: query }
+  - { via: io.ktor.server.application.ApplicationCall#getParameters,     method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true }
   - { owner: io.ktor.server.util.ParametersKt, method: getOrFail, arity: 2, name_arg: 1, kind: query, requirement: required }
 ```
 
 - `skip_path_variables: true`: `call.parameters` merges path and query; a name equal to a
-  `{name}` segment of the row's path is the path variable and is not recorded.
+  `{name}` segment of the row's path — `?` and `...` suffixes stripped (`{id?}`,
+  `{rest...}`, A6) — is the path variable and is not recorded.
+- An entry with no `requirement` writes NULL (A3). `requirement: required` is declared only
+  on APIs that reject the request themselves: `getOrFail` (`MissingRequestParameterException`
+  → 400), Javalin's `Validator#get()`.
 - **Javalin 6.4.0** (F7): `Context#queryParam(String)`→query, `header(String)`→header,
-  `cookie(String)`→cookie, all `arity: 1`, optional; `queryParamAsClass(String, Class)` /
-  `headerAsClass(String, Class)` → required **when** the result chain reaches
-  `Validator#get()` (`then: { method: get }`, one result→receiver step), else optional
-  (`getOrDefault`, `allowNullable`).
+  `cookie(String)`→cookie, all `arity: 1`, requirement NULL; `queryParamAsClass(String,
+  Class)` / `headerAsClass(String, Class)` → `required` **when** the result chain reaches
+  `Validator#get()` (`then: { method: get, requirement: required }`, one result→receiver
+  step), else NULL (`getOrDefault`, `allowNullable`, or an unread chain).
 - **Servlet ×2:** `HttpServletRequest#getParameter(String)`→param, `getHeader(String)`→header,
-  optional.
+  requirement NULL.
 - **One list per framework, applied by handler, not by catalog.** The `request_reads` of
   every loaded catalog are unioned and matched against every inbound row's handler body:
   Javalin declares its list once in `javalin.yml` and the rows `javalin-apibuilder.yml`
   derives get the same reads without a second copy; a cross-framework match is impossible
   in practice (`via`/`owner` are framework types), and each written row's `evidence` names
   the catalog its entry came from.
-- **Boundaries stated:** the handler body only, never methods it delegates to; a read behind
-  a branch still counts as `optional`; frameworks whose handlers bind by annotation declare
-  no `request_reads` in this spec.
+- **Boundaries stated:** the handler body only, never methods it delegates to; frameworks
+  whose handlers bind by annotation declare no `request_reads` in this spec.
 
 ### 5e. Downstream
 
@@ -399,7 +471,7 @@ document does not render metadata for outbound today and will not here. `M06-sti
 gets one paragraph: when built, a client lacking a server's `required` header/query/cookie
 entry fails the request-compatibility test the way a missing required body field does;
 `optional` and `absent` entries do not affect matching. D01 §3 documents the column and the
-inbound `caller` meaning; D02 documents `request_params`, `request_reads`, `requires`,
+inbound `caller` meaning; D02 documents `request_params`, `request_reads`, `request_requirement`,
 `verb_values`/`media_values.getters`, verb-less terminals and `all_methods` on combinator
 catalogs.
 
@@ -413,9 +485,10 @@ the catalog's `(owner|via, method, arity)` list.
 
 | Not built | Why | Where recorded |
 |---|---|---|
-| Kotlin defaulted-but-non-null parameters read `required` (§5b) | `@kotlin.Metadata` default flag not decoded | new OI; falsifiable by a fixture |
 | `name!=value` loses the excluded value; `headers(Predicate)` unread | no column / unreadable function | catalog comments, COVERAGE |
 | `call.request.headers` reads outside the handler body | the walk's boundary is the handler | COVERAGE boundary |
+| a route under disagreeing `method` selectors | Ktor never dispatches it; a row would be a phantom | catalog comment, COVERAGE |
+| helper calls from the Spring router's `Supplier` bodies | origin-less and not thread-local | COVERAGE boundary |
 | `dsl-media-route` (the `accept(JSON) { }` handler-taking overloads) | a media rule that is also a route — not this spec's words | stays on the register |
 | Java anonymous `Function1` classes; library lambda classes | not module-local Kotlin lambda classes | §3b |
 | `$default` calls with no `bridge_of` | the extractor's stated declines | §3a |
@@ -429,9 +502,9 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 
 | Probe | Records | Forces |
 |---|---|---|
-| **CP-23** kotlinc 2.2.0 call-site shapes — a Maven module beside `orders-ktor` compiled twice, default and `-Xlambdas=class` | a `$default` call's mask literal and bit meaning (F3), receiver vs static sibling, a two-mask (33-parameter) function; a lambda class's supertype (`Lambda`/`SuspendLambda`), its `invoke`/`invokeSuspend` methods and synthetic flags, constructor-captured fields | §3a, §3b |
-| **CP-24** Ktor 3.0.3 routing surface | the selector signatures (F4), `HttpMethod.DefaultMethods`, the `HttpMethod$Companion.get*` and `ContentType$Application.get*` getters (F5), `ParametersKt.getOrFail`, the `StringValues.get` owners of the three containers; that a `method(Post) { get {} }` subtree never dispatches (a run against an embedded server) | §4b, §4c, §5d |
-| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null | §5b, §5d |
+| **CP-23** kotlinc 2.2.0 call-site shapes — a Maven module beside `orders-ktor` compiled twice, default and `-Xlambdas=class` | a `$default` call's mask literal and bit meaning (F3), receiver vs static sibling, a two-mask (33-parameter) function; a lambda class's superclass (`Lambda`/`SuspendLambda`), its `invoke`/`invokeSuspend` methods and synthetic flags, constructor-captured fields; `@kotlin.Metadata`'s `declaresDefaultValue` flag on a defaulted parameter | §3a, §3b, §3c |
+| **CP-24** Ktor 3.0.3 routing surface | the selector signatures (F4), `HttpMethod.DefaultMethods`, the `HttpMethod$Companion.get*` and `ContentType$Application.get*` getters (F5), `ParametersKt.getOrFail` and what it throws, the `StringValues.get` owners of the three containers; `HttpMethodRouteSelector.evaluate` returning `Failure` on a method mismatch (A11 — bytecode, no server run) | §4b, §4c, §5d |
+| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null | §5b, §5c, §5d |
 | **CP-26** predicates — spring-webflux 6.1.6, gateway 5.0.0 | `RequestPredicates.queryParam` overloads; `PredicateSpec`/`BooleanOpSpec` header/query/cookie overloads; the properties spellings | §5c |
 
 ---
@@ -474,11 +547,16 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 - **Javalin fixture:** a static helper called from `apiBuilder`; `ctx.queryParam("q")`,
   `ctx.queryParamAsClass("n", Integer.class).get()`, `ctx.header("X-Api")`.
 - **Servlet, JAX-RS, Micronaut, Gateway fixtures:** one read/annotation of each kind.
+- **Extractor (Gradle) tests:** `lambda_body` on a `Lambda` and a `SuspendLambda` class,
+  absent on an ordinary class; `declares_default` on a defaulted parameter, absent
+  otherwise.
 - **Unit tests** on synthetic facts: §3a masks 0/1/mixed/two masks, static vs instance
-  sibling, no `bridge_of` untouched, non-int mask untouched; §3b `Lambda` vs `SuspendLambda`,
-  synthetic-bridge skipped, non-Kotlin `instance` untouched; §4a visited set, depth bound,
-  origin-less following; §4b getter tables, unknown getter; §4c `all_methods` expansion;
-  §5b binder predicate table-driven; §5d `via`, `then`, `skip_path_variables`.
+  sibling, no `bridge_of` untouched, both candidates untouched, non-int mask untouched; §3b
+  `lambda_body` join, `instance` without it untouched; §4a visited set, depth bound →
+  `routing_depth` question and no row, `follow_calls: all` vs default; §4b getter tables,
+  unknown getter, verb conflict → silence; §4c `all_methods` expansion; §5b binder predicate
+  table-driven including `declares_default`; §5d `via`, `then`, `skip_path_variables`
+  with `?`/`...`, NULL requirement on bare reads.
 - **e2e:** `test_rest_inbound_delivered.py` gains one test per closed item, each asserting
   the `endpoint_metadata` rows for its fixture; the bundle golden pins the new column.
 - **Gate:** `JAVA_HOME=… bash scripts/check.sh` at every commit — the lint gate is not the
@@ -500,18 +578,19 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 
 Register: the five ids leave the REST in ```delivery``` block; `inbound-request-requirements`
 is added and closed in the same PR; `ktor-route-with-verb` closes. `scripts/coverage_matrix.py`
-`ITEM_FRAMEWORKS` drops the closed ids. Docs: D00 (no fact change — a note that `bridge_of`
-and `instance` are consumed by §3), D01 (`requirement`, inbound `caller`), D02 (the new
-keys), M06 (§5e paragraph), COVERAGE §5.1 rows and rollups, `PROJECT.md` component table if
-`effective_calls` earns a line, the new OI.
+`ITEM_FRAMEWORKS` drops the closed ids. Docs: D00 (`lambda_body` beside `bridge_of`; `declares_default` beside the
+nullability projection), D01 (`requirement` and its NULL meaning, inbound `caller`), D02
+(the new keys), M06 (§5e paragraph), COVERAGE §5.1 rows and rollups, `PROJECT.md`
+component table if `effective_calls` earns a line, the `routing_depth` question kind.
 
 ---
 
 ## 11. Sizing and the plan's order
 
-1. §3 as a rename (proof step 1) → §3a → §3b, each with unit tests; the Kotlin handler
-   column changes here (`kotlin-null-handler`, `kotlin-class-lambdas`,
-   `kotlin-default-bridge-calls` close).
+1. Extractor first: `lambda_body` and `declares_default` with their Gradle tests and D00
+   (R1, R2), then the fixtures' facts regenerated. Then §3 as a rename (proof step 1) → §3a
+   → §3b, each with unit tests; the Kotlin handler column changes here
+   (`kotlin-null-handler`, `kotlin-class-lambdas`, `kotlin-default-bridge-calls` close).
 2. §5a schema + writer (inert until a mechanism writes).
 3. §4a helpers → §4b selectors + getter tables → §4c `handle` + `all_methods` → §4d, with
    `ktor-routing.yml` and `KtorRoutes.kt` growing per task (`ktor-route-extensions`,
@@ -522,5 +601,6 @@ keys), M06 (§5e paragraph), COVERAGE §5.1 rows and rollups, `PROJECT.md` compo
    step 3, CP-25/26 with step 4); register, COVERAGE, D-docs, M06 last, in one docs task
    gated by the full check.
 
-Roughly twice B+C: two projection units, four combinator units, one schema unit, three
-mechanism units over fourteen catalogs, four probes, two fixture variants.
+Roughly twice B+C: two small extractor units, two projection units, four combinator units,
+one schema unit, three mechanism units over fourteen catalogs, four probes, two fixture
+variants.
