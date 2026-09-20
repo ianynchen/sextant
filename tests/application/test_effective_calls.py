@@ -2,6 +2,13 @@
 projection point is a PURE RENAME before either Kotlin projection lands on it: with nothing
 to project yet, the function returns exactly `call_sites`'s own rows, and `Workspace.once`
 hands back the same list on a second call rather than rebuilding it.
+
+Then §3a (Task 4): a call to a compiler-emitted `$default` bridge reaches every engine as a
+call to the function the bridge stands for, with the arguments the caller left to their
+defaults marked `unresolved`/`defaulted` rather than guessed — read off the bridge's own
+symbol fact (`bridge_of`) and the mask literal the compiler passed. The mask semantics are
+the measured ones (spec §0 F3, CP-23): a SET bit means the caller did NOT supply that
+parameter, bit 0 being the first declared parameter after the receiver.
 """
 
 from pathlib import Path
@@ -10,10 +17,16 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.symbols import method_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 CALLER = "com/acme/orders/Caller#handle(sig_a1)."
+
+API = "com/x/Api#"
+GREET = "(Ljava/lang/String;Z)Ljava/lang/String;"
+GREET_BRIDGE = "(Lcom/x/Api;Ljava/lang/String;ZILjava/lang/Object;)Ljava/lang/String;"
+DEFAULTED = {"kind": "unresolved", "reason": "defaulted"}
 
 
 def _document() -> Document:
@@ -38,6 +51,7 @@ def _site(
     owner: str,
     name: str,
     *,
+    descriptor: str = "(...)V",
     arguments: list[CallArgument] | None = None,
     result: int | None = None,
     invoke_kind: str = "static",
@@ -45,7 +59,7 @@ def _site(
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(owner=owner, name=name, descriptor="(...)V"),
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
         invoke_kind=invoke_kind,
         ordinal=ordinal,
         result=result,
@@ -53,10 +67,27 @@ def _site(
     )
 
 
-def _method_symbol(bare: str) -> SymbolFact:
+def _method_symbol(
+    bare: str,
+    *,
+    enclosing: str | None = None,
+    bridge_of: str | None = None,
+    static: bool = False,
+) -> SymbolFact:
+    """A method's own symbol fact; `static` lands in `modifiers` the way the extractor
+    writes it, `bridge_of` only where a caller sets it (absent on every other fact)."""
     return SymbolFact(
-        document_id="doc_1", symbol=_MODULE + bare, construct_kind=ConstructKind.METHOD
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=None if enclosing is None else _MODULE + enclosing,
+        modifiers={"static": static, "synthetic": bridge_of is not None},
+        bridge_of=bridge_of,
     )
+
+
+def _method(owner: str, name: str, descriptor: str, **keys) -> SymbolFact:
+    return _method_symbol(method_descriptor(owner, name, descriptor), enclosing=owner, **keys)
 
 
 def _workspace(tmp_path: Path, facts: list) -> DuckDbWorkspace:
@@ -64,6 +95,40 @@ def _workspace(tmp_path: Path, facts: list) -> DuckDbWorkspace:
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     return workspace
+
+
+def _greet_bridge_call(mask: CallArgument, receiver: CallArgument | None = None) -> CallSiteFact:
+    """`invokestatic Api.greet$default(this, "y", false, <mask>, null)` — the shape kotlinc
+    emits for `api.greet("y")` when `greet`'s second parameter has a default (CP-23)."""
+    return _site(
+        CALLER,
+        0,
+        API,
+        "greet$default",
+        descriptor=GREET_BRIDGE,
+        result=1,
+        arguments=[
+            receiver or CallArgument(kind="parameter", value=0),
+            CallArgument(kind="string", value="y"),
+            CallArgument(kind="boolean", value=False),
+            mask,
+            CallArgument(kind="null"),
+        ],
+    )
+
+
+def _greet_facts(*sites: CallSiteFact, bridge_of: str | None = "greet") -> list:
+    return [
+        _method_symbol(CALLER),
+        _method(API, "greet", GREET),
+        _method(API, "greet$default", GREET_BRIDGE, bridge_of=bridge_of, static=True),
+        *sites,
+    ]
+
+
+def _only(workspace: DuckDbWorkspace) -> dict:
+    (row,) = effective_call_sites(workspace)
+    return row
 
 
 def test_effective_call_sites_is_the_raw_list_when_nothing_projects(tmp_path: Path):
@@ -74,3 +139,219 @@ def test_effective_call_sites_is_the_raw_list_when_nothing_projects(tmp_path: Pa
 
     assert effective_call_sites(workspace) == workspace.query("call_sites")
     assert effective_call_sites(workspace) is effective_call_sites(workspace)  # once per load
+
+
+def test_a_bridge_call_reaches_engines_as_the_function_with_the_defaulted_argument_unresolved(
+    tmp_path: Path,
+):
+    """Mask 2 = bit 1 set = the SECOND declared parameter was left to its default. The
+    engines see `greet("y", <defaulted>)` on the receiver the bridge's slot 0 carried — an
+    unresolved argument, never a guessed default (spec §3a, user ruling) — and the row
+    still says where it came from."""
+    workspace = _workspace(
+        tmp_path, _greet_facts(_greet_bridge_call(CallArgument(kind="int", value=2)))
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["owner"], row["name"], row["descriptor"]) == (API, "greet", GREET)
+    assert row["invoke_kind"] == "virtual"
+    assert (row["receiver"], row["receiver_parameter"]) == (None, 0)
+    assert row["arguments"] == [raw["arguments"][1], DEFAULTED]
+    assert row["evidence_bridge"] == API + "greet$default" + GREET_BRIDGE
+    # Everything the projection does not own is the site's own: identity and result.
+    assert (row["caller"], row["ordinal"], row["result"]) == (raw["caller"], 0, 1)
+
+
+def test_mask_zero_keeps_every_argument_and_a_receiver_value_becomes_the_row_receiver(
+    tmp_path: Path,
+):
+    """Nothing defaulted: the two declared arguments pass through as they were. The
+    receiver slot held a constructed value rather than a parameter, so `receiver` is its
+    value id and `receiver_parameter` stays NULL — D00 §5's two receiver columns."""
+    workspace = _workspace(
+        tmp_path,
+        _greet_facts(
+            _greet_bridge_call(
+                CallArgument(kind="int", value=0), CallArgument(kind="instance", source=7)
+            )
+        ),
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert row["arguments"] == raw["arguments"][1:3]
+    assert (row["receiver"], row["receiver_parameter"]) == (7, None)
+    assert row["invoke_kind"] == "virtual"
+
+
+def test_mask_three_marks_both_arguments_defaulted(tmp_path: Path):
+    workspace = _workspace(
+        tmp_path, _greet_facts(_greet_bridge_call(CallArgument(kind="int", value=3)))
+    )
+
+    assert _only(workspace)["arguments"] == [DEFAULTED, DEFAULTED]
+
+
+def test_a_static_sibling_moves_no_receiver(tmp_path: Path):
+    """`js$default(String, int, int, Object)` stands for a static `js(String, int)`: the
+    bridge's slot 0 is a real argument, not a receiver, so the dispatch form and both
+    receiver columns stay exactly what the bytecode said."""
+    statics = "com/x/Statics#"
+    js, bridge = "(Ljava/lang/String;I)V", "(Ljava/lang/String;IILjava/lang/Object;)V"
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(statics, "js", js, static=True),
+            _method(statics, "js$default", bridge, bridge_of="js", static=True),
+            _site(
+                CALLER,
+                0,
+                statics,
+                "js$default",
+                descriptor=bridge,
+                arguments=[
+                    CallArgument(kind="string", value="q"),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="int", value=2),
+                    CallArgument(kind="null"),
+                ],
+            ),
+        ],
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["name"], row["descriptor"]) == ("js", js)
+    assert row["arguments"] == [raw["arguments"][0], DEFAULTED]
+    assert (row["invoke_kind"], row["receiver"], row["receiver_parameter"]) == (
+        "static",
+        None,
+        None,
+    )
+    assert row["evidence_bridge"] == statics + "js$default" + bridge
+
+
+def test_a_thirty_three_parameter_function_reads_its_second_mask(tmp_path: Path):
+    """Parameter 32 is bit 0 of the SECOND mask int (ceil(33/32) = 2 mask slots). With the
+    first mask 0 and the second 1, exactly the last declared parameter is defaulted — and
+    the sibling descriptor is the bridge's minus receiver, both masks and the marker."""
+    wide = "com/x/Wide#"
+    declared = 33
+    sibling = "(" + "I" * declared + ")V"
+    bridge = "(Lcom/x/Wide;" + "I" * declared + "II" + "Ljava/lang/Object;)V"
+    arguments = [
+        CallArgument(kind="parameter", value=0),
+        *(CallArgument(kind="int", value=index) for index in range(declared)),
+        CallArgument(kind="int", value=0),
+        CallArgument(kind="int", value=1),
+        CallArgument(kind="null"),
+    ]
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(wide, "f", sibling),
+            _method(wide, "f$default", bridge, bridge_of="f", static=True),
+            _site(CALLER, 0, wide, "f$default", descriptor=bridge, arguments=arguments),
+        ],
+    )
+
+    row = _only(workspace)
+    (raw,) = workspace.query("call_sites")
+    assert (row["name"], row["descriptor"]) == ("f", sibling)
+    assert row["arguments"] == raw["arguments"][1:33] + [DEFAULTED]
+
+
+def test_a_default_call_whose_bridge_carries_no_bridge_of_is_left_alone(tmp_path: Path):
+    """The extractor's stated declines (a library not scanned, an ambiguity it would not
+    guess at) reach here as a `$default` symbol with no `bridge_of` — and the site stays
+    exactly as the bytecode said, rather than being re-derived from its name (spec §3a)."""
+    workspace = _workspace(
+        tmp_path,
+        _greet_facts(_greet_bridge_call(CallArgument(kind="int", value=2)), bridge_of=None),
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_both_candidate_siblings_declared_leaves_the_site_untouched(tmp_path: Path):
+    """A5: the bridge's descriptor fits an instance `greet(String, boolean)` AND a static
+    `greet(Api, String, boolean)` — both declared, so which slot is the receiver is a guess.
+    Ambiguity is not a guess: the site is left as it is."""
+    facts = _greet_facts(_greet_bridge_call(CallArgument(kind="int", value=2)))
+    facts.append(
+        _method(API, "greet", "(Lcom/x/Api;Ljava/lang/String;Z)Ljava/lang/String;", static=True)
+    )
+    workspace = _workspace(tmp_path, facts)
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_a_declared_sibling_whose_static_ness_contradicts_its_slot_reading_is_not_the_sibling(
+    tmp_path: Path,
+):
+    """The receiver reading says slot 0 is a receiver, so the sibling it names is an
+    instance method; a `greet(String, boolean)` declared STATIC on the same type fits the
+    descriptor and contradicts the reading. The compiler cannot emit that pair for one
+    function, so the contradiction is not settled either way: the site stays as it is."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(API, "greet", GREET, static=True),
+            _method(API, "greet$default", GREET_BRIDGE, bridge_of="greet", static=True),
+            _greet_bridge_call(CallArgument(kind="int", value=2)),
+        ],
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_a_bridge_whose_sibling_is_not_declared_leaves_the_site_untouched(tmp_path: Path):
+    """The near-miss for the sibling-existence check: `bridge_of` names `greet` but no
+    `greet` with either candidate descriptor is declared, so there is nothing to re-target
+    to and the site stays as it is."""
+    workspace = _workspace(
+        tmp_path,
+        [
+            _method_symbol(CALLER),
+            _method(API, "greet$default", GREET_BRIDGE, bridge_of="greet", static=True),
+            _greet_bridge_call(CallArgument(kind="int", value=2)),
+        ],
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_a_mask_that_is_not_an_int_literal_leaves_the_site_untouched(tmp_path: Path):
+    """A mask the bytecode computes rather than states cannot say which parameters were
+    supplied; a wrong trimming is worse than the silence there is today (spec §3a), so the
+    whole site stays as it is — not a partial projection with the mask guessed."""
+    workspace = _workspace(
+        tmp_path, _greet_facts(_greet_bridge_call(CallArgument(kind="unresolved")))
+    )
+
+    assert effective_call_sites(workspace) == workspace.query("call_sites")
+
+
+def test_the_raw_call_sites_are_not_changed_by_the_projection(tmp_path: Path):
+    """`call_sites` is the exported bundle's and the graph readers' statement of the
+    bytecode; the projection copies a row before changing it, never writes into the
+    cached list or its dicts."""
+    site = _greet_bridge_call(CallArgument(kind="int", value=2))
+    workspace = _workspace(tmp_path, _greet_facts(site))
+    before = [dict(row) for row in workspace.query("call_sites")]
+
+    effective_call_sites(workspace)
+
+    (raw,) = workspace.query("call_sites")
+    assert [raw] == before
+    assert (raw["name"], raw["descriptor"], raw["invoke_kind"]) == (
+        "greet$default",
+        GREET_BRIDGE,
+        "static",
+    )
+    assert len(raw["arguments"]) == 5
+    assert "evidence_bridge" not in raw

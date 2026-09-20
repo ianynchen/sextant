@@ -195,6 +195,21 @@ _NAMED_QUERIES = {
           AND m.document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Spec 2026-09-19 §3a. Every method fact carrying `bridge_of` — module and library
+    # documents alike — with the name of the function it stands for, which is what
+    # `resolve/effective_calls.py` needs to re-target a call to a compiler-emitted
+    # default-argument bridge: the site's own target names the bridge, this says which
+    # function, and `method_declarations` says whether the sibling exists and is static.
+    # `symbols` does not project `bridge_of`, so this reads `raw_facts` as `default_bodies`
+    # does. Ordered on the symbol (NFR-1).
+    "bridge_declarations": """
+        SELECT m.payload ->> 'symbol'    AS symbol,
+               m.payload ->> 'bridge_of' AS bridge_of
+        FROM raw_facts m
+        WHERE m.kind = 'symbol' AND (m.payload ->> 'bridge_of') IS NOT NULL
+          AND m.document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and visibility (2O design
     # §1b, Task 5): `method_declarations` above carries `signature` instead,
     # which this join has no use for, and `method_symbols` carries neither
@@ -1059,6 +1074,9 @@ _FACT_ONLY = frozenset(
         # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
         # every other declaration (the merge of the delivery branch added the query).
         "default_bodies",
+        # A default-argument bridge's own fact, read once per resolve by the call-site
+        # projection (spec 2026-09-19 §3a).
+        "bridge_declarations",
         "fields",
         "enum_types",
         "annotations_of",
