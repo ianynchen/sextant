@@ -277,6 +277,12 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/kt/orders"),
         ("POST", "/kt/orders"),
         ("GET", "/kt/rich"),
+        # `fun CoRouterFunctionDsl.extra() { GET("/kt/extra") { } }` called from inside
+        # `coRouter { }` (spec 2026-09-19 §4a): a static extension whose one argument is
+        # the block's own parameter, the origin, so the walk follows the call and the
+        # member `GET` inside derives on `ktRoutes` — `ktor-route-extensions` on the
+        # Spring functional side.
+        ("GET", "/kt/extra"),
         # Outbound (Phase 2B): the client interfaces' declared calls.
         ("POST", "/billing/invoices"),
         ("GET", "/billing/invoices"),
@@ -1058,7 +1064,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # functional-routing row already carries (a coincidental address reuse between two
     # unrelated fixtures), so the SET of routes above is unchanged and only the ROW COUNT
     # moves.
-    assert len(report.endpoints) == 207
+    # 208 since spec 2026-09-19 §4a (helper following): `KotlinOrderRoutes#ktRoutes`'s
+    # `extra()` helper, `GET /kt/extra`, one row.
+    assert len(report.endpoints) == 208
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1209,7 +1217,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 22 since A1 Task 5 (`GAP-1b`): `KotlinWebFluxRoutes`' three routes under `/ktflux`;
     # its own `GET /**` catch-all is a fourth row that shares the builder's key here.
     # 23 since the A1 final review (I-1): `BuilderRoutes`' Supplier-form `GET /bld/sup/inner`.
-    assert len(combinator_rows) == 23
+    # 24 since spec 2026-09-19 §4a: `KotlinOrderRoutes#ktRoutes`'s `extra()` helper,
+    # `GET /kt/extra`.
+    assert len(combinator_rows) == 24
     # Java: a bound method reference resolves to the real handler; the inline
     # lambda resolves to its synthetic body — both module-prefixed, joined
     # against the scanned symbol facts, never fabricated (checkpoint (1a)).
@@ -1276,6 +1286,14 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
             "GET",
             "/kt/rich",
             kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$3$1#invokeSuspend(sig_262c527a).",
+        ),
+        # The helper's route (spec 2026-09-19 §4a): `fun CoRouterFunctionDsl.extra()` is a
+        # top-level function, so its suspend handler class is `KotlinOrderRoutesKt$extra$1`
+        # — the file facade's, not the class's — and the row's caller is still `ktRoutes`.
+        (
+            "GET",
+            "/kt/extra",
+            kt_prefix + "KotlinOrderRoutesKt$extra$1#invokeSuspend(sig_262c527a).",
         ),
     }
     # F1, and the boundary it named is CLOSED (2O Task 13). This assertion
@@ -1958,7 +1976,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 113 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
         # `POST /kt/orders` — a genuinely new row, at the same address
         # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
-        "http": 113,
+        # 114 since spec 2026-09-19 §4a: `GET /kt/extra`, the DSL-receiver helper
+        # `coRouter { extra() }` now follows.
+        "http": 114,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2003,7 +2023,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 207
+    assert sum(counts.values()) == len(report.endpoints) == 208
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3806,7 +3826,10 @@ def test_the_format_ladder_answers_every_live_row(
     # 67 since A2 Task 8: the seven JDK/Apache client rows. A JDK `body` capture reads a
     # `BodyPublisher`, never a payload type, and the Apache forms capture no body at all,
     # so none of the seven carries a declared payload the ladder could answer off.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 67
+    # 68 since spec 2026-09-19 §4a: `GET /kt/extra`, the helper-declared Kotlin DSL route,
+    # declares no media predicate and its handler returns a bare `ServerResponse` — the
+    # same honest answer the other seven Kotlin DSL routes get.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 68
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -3817,8 +3840,16 @@ def test_the_format_ladder_answers_every_live_row(
     # consumer is configured for protobuf, so the question a reader now gets ("are these
     # the same endpoint?") sits beside two rows that visibly disagree about the wire.
     # The merged row had one format and no question.
+    #
+    # `registration_activation` joins them with spec 2026-09-19 §4a's pipeline fix, and it
+    # is a RECOVERY, not a new question: `RawPubSubSubscribers#withNamedReceiver` builds a
+    # `Subscriber` it returns without `startAsync()`, and `interface_implementation` has
+    # filed that question (`OI-64`) since commit 6fdb30f — inside `derive_endpoints`, which
+    # ran BEFORE `reset_open_questions`, so the reset erased the row every run and this
+    # set never saw it. The reset now runs above the engines.
     assert {str(row["question"]) for row in workspace.query("open_questions")} == {
         "payload_binding",
+        "registration_activation",
         "self_exchange",
     }
 

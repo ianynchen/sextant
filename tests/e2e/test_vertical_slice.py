@@ -309,7 +309,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # each constructor, plus a `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` null
     # check in each (KtOrder's own `sku` parameter, `create`'s `order` parameter). The
     # numerator is unmoved: no new edge's callee body is in this module. Still 29%.
-    assert "Calls whose callee body this workspace read: 520 of 1769 (29%)" in document
+    # 526 of 1786 since spec 2026-09-19 §4a: `KotlinOrderRoutes.kt`'s `extra()` helper —
+    # seventeen edges (the `coRouter` body's call to `extra`, `extra`'s three, and the
+    # suspend handler class `KotlinOrderRoutesKt$extra$1`'s thirteen across `<init>`,
+    # `create`, both `invoke`s and `invokeSuspend`), six of them into this module (the
+    # call to `extra`, and the handler class's own constructor/`create`/`invoke`/
+    # `invokeSuspend` chain). Still 29%.
+    assert "Calls whose callee body this workspace read: 526 of 1786 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -335,9 +341,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` are methods every other
     # class and every other Kotlin file here already looks up, so no new DISTINCT
     # method identity enters either bucket — only the per-call-site edge count moves.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1767." in document
+    # 1784 since spec 2026-09-19 §4a: the `extra()` helper's seventeen edges (comment above),
+    # all `resolved`. `declared_here` gains five (199): `KotlinOrderRoutesKt.extra` itself and
+    # the handler class's `<init>`, `create`, typed `invoke` and `invokeSuspend` — the
+    # distinct module-declared methods those edges look up. `owner_not_scanned` is UNCHANGED:
+    # the DSL's `GET`, `ServerResponse.ok()` and the coroutine plumbing are methods
+    # `ktRoutes`'s own handlers already look up.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1784." in document
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 194, "
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 199, "
         "inherited 2, owner_not_scanned 420."
     ) in document
 
@@ -640,7 +652,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 91 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
         # `POST /kt/orders` — the bundle answers what the workspace answers, so this
         # moves with `tests/cli/test_app.py`'s own count.
-        "http": 91,
+        # 92 since spec 2026-09-19 §4a: `GET /kt/extra`, the `coRouter { extra() }`
+        # helper's route, followed into the DSL-receiver extension.
+        "http": 92,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -876,7 +890,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 158 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
             # `POST /kt/orders` — one more http inbound row, at the address
             # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
-            ("inbound", 158),
+            # 159 since spec 2026-09-19 §4a: `GET /kt/extra`, the `coRouter { extra() }`
+            # helper's route.
+            ("inbound", 159),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),
@@ -1580,12 +1596,16 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(full
     # Two `payload_binding` questions and, since W27 (F5 §6.1), six `self_exchange` ones
     # — the identities this module both serves and calls, which used to be merged into a
     # single row that asked nothing. Seven since A2 Task 8: `ApacheOrdersClient#list`
-    # calls `GET /v1/orders`, which `OrderController` serves.
+    # calls `GET /v1/orders`, which `OrderController` serves. One `registration_activation`
+    # since spec 2026-09-19 §4a moved `reset_open_questions` ABOVE `derive_endpoints`: the
+    # `OI-64` question `interface_implementation` files for `RawPubSubSubscribers#
+    # withNamedReceiver` (a `Subscriber` built and returned, never `startAsync()`ed) had been
+    # written inside the engines and erased by the reset that followed them, every run.
     rows = duckdb.sql(
         "SELECT question, count(*) FROM read_parquet("
         f"'{bundle / 'graph' / 'open_questions.parquet'}') GROUP BY 1 ORDER BY 1"
     ).fetchall()
-    assert rows == [("payload_binding", 2), ("self_exchange", 7)]
+    assert rows == [("payload_binding", 2), ("registration_activation", 1), ("self_exchange", 7)]
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
@@ -1677,7 +1697,10 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # (`jdk-httpclient`, `apache-httpclient`, A2 Task 8).
     # 147: + `jaxrs/KotlinOrderResource` and its nested `KotlinOrderResource$KtOrder`
     # (Groups B and C Task 1).
-    assert (None, 147) in origins
+    # 149: + `routes/KotlinOrderRoutesKt` (the file facade the top-level `extra()` helper
+    # compiles into) and its suspend handler class `KotlinOrderRoutesKt$extra$1` (spec
+    # 2026-09-19 §4a).
+    assert (None, 149) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

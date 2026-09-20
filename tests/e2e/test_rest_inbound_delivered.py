@@ -228,6 +228,34 @@ def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved
     assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
 
 
+def test_a_dsl_receiver_helper_called_inside_the_kotlin_router_derives_its_route(http_rows):
+    """`ktor-route-extensions` on the Spring functional side (spec 2026-09-19 §4a).
+    `KotlinOrderRoutes.kt` calls `extra()` inside `coRouter { }`, and `fun
+    CoRouterFunctionDsl.extra() { GET("/kt/extra") { } }` is a top-level extension: a
+    STATIC `extra(CoRouterFunctionDsl)` whose one argument is the block's own parameter —
+    the origin `coRouter`'s entry names — so the walk follows the call, the member `GET`
+    inside sits on the callee's parameter 0 and derives resolved, and the row's caller is
+    `ktRoutes`, the tree's root, never `extra`. The handler is the helper's own suspend
+    lambda class (`KotlinOrderRoutesKt$extra$1`, the file facade's), read through
+    `lambda_body` as every Kotlin handler is."""
+    rows = [
+        (row["catalog_id"], row["resolution"], _short_caller(row), row["handler"])
+        for row in http_rows
+        if row["path"] == "/kt/extra"
+    ]
+    assert rows == [
+        (
+            "spring-webflux-router",
+            "resolved",
+            "KotlinOrderRoutes#ktRoutes",
+            (
+                "sextant-jvm maven com.acme/orders-service 1.0.0 "
+                "com/acme/orders/routes/KotlinOrderRoutesKt$extra$1#invokeSuspend(sig_262c527a)."
+            ),
+        )
+    ], rows
+
+
 def _short_caller(row: dict) -> str:
     """`Class#method` out of a module-prefixed caller symbol."""
     return str(row["caller"]).rsplit("/", 1)[1].partition("(")[0]
@@ -616,13 +644,20 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
     `config -> …` lambda `Javalin.create` was handed. The slashless `path("plain", () ->
     get("x", …))` reads `/jv/nested/plain/x` — the catalog's `path_join: leading_slash`
     is Javalin's own `prefixPath` rule, and the glued `/jv/nestedplainx` is the resolved
-    wrong row it prevents (Task 3 fix round 1)."""
+    wrong row it prevents (Task 3 fix round 1). A static helper CALLED from a block derives
+    under the prefix that reached the call (`ktor-route-extensions` on the Javalin side)."""
     expected = {
         ("inbound", "GET", "/jv/nested/{id}"),
         ("inbound", "POST", "/jv/nested"),
         ("inbound", "GET", "/jv/nested/{id}/items"),
         ("inbound", "DELETE", "/jv/nested/{id}/items/{itemId}"),
         ("inbound", "GET", "/jv/nested/plain/x"),
+        # `path("/jv/helped", () -> helped())` with `static void helped() { get("/h", h); }`:
+        # the helper is CALLED from the block, not linked as its body, and the catalog's
+        # `follow_calls: all` is what follows it — `ApiBuilder.staticInstance()` throws
+        # outside a block (6.4.0 jar), so the call can only ever run inside one (spec
+        # 2026-09-19 §4a).
+        ("inbound", "GET", "/jv/helped/h"),
     }
     assert expected <= javalin_routes, sorted(javalin_routes)
     assert ("inbound", "GET", "/{id}") not in javalin_routes
@@ -678,24 +713,27 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     pinned NULL is the body's own symbol. `kotlin-null-handler` closes here, on the Ktor
     rows; the class counters (`$orders$1$1$3$2`) are kotlinc's own, by nesting position.
 
+    The helpers (spec 2026-09-19 §4a, `ktor-route-extensions`): `fun Route.api() {
+    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
+    to split a routing tree — compiles to `invokestatic api(Route)` with the block's own
+    parameter as its argument, the origin, so the walk follows the call into `api`'s body
+    with ITS parameter 0 as the origin and `GET /helper` derives, resolved, on `orders()`
+    (one router, one declarer — never `api` as the caller). `route("/api") { v2() }` with
+    `fun Route.v2() { orders2() }` and `fun Route.orders2() { get("/deep") { } }` is two
+    helper calls deep and derives `GET /api/deep`: the prefix that reached the first call
+    carries all the way down. Both pins were silence until this walk existed.
+
     Two outcomes are degraded by design, and both are stated rather than hidden. The
     wrong-receiver case: `other.get("/stray") { }` inside `route("/api") { }` registers
     on ANOTHER route, so it is not under `/api`, and `receiver_arg`'s refusal is one
-    unresolved row that never carries the prefix. And the helper: `fun Route.api() {
-    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
-    to split a routing tree — derives NOTHING, not even an unresolved row. Task 4's log
-    predicted one unresolved row (`receiver_arg` with no origin to check against), but
-    the walk never reaches that verb: `api` is an ordinary method no linking call names
-    as its body, and a static, receiver-less verb inside it is no root of its own — the
-    boundary spec §7 case 4 states for a builder received as a PARAMETER. Pinned as
-    silence, so a walk that one day follows `api()` moves a pinned value.
-
-    The same silence, for now, on `defaults()`: its two `mount(…) { get(…) { } }` calls
-    name a module-local DSL function the shipped catalog has no rule for, so under this
-    catalog they are unknown calls in the routing body and derive nothing — the row count
-    stays at eight. The bridge projection that `mount("/d")` exercises is pinned where a
-    rule for `mount` can exist, `tests/application/test_ktor_defaults_fixture.py`; helper
-    following is a later task, and moving this pin is its job."""
+    unresolved row that never carries the prefix. And `defaults()`: its two `mount(…) {
+    get(…) { } }` calls name a module-local DSL function the shipped catalog has no rule
+    for, so each is a helper call the walk follows — and inside `mount`, `route(path,
+    build)` sits on the origin with `path` as `mount`'s own PARAMETER, which this body
+    cannot read. One unresolved row per call, path NULL, attributed to `defaults()`: the
+    honest statement that a route is declared there at an address the walk did not read.
+    (Under a catalog that names `mount` as a prefix rule the same calls derive `/d/x` and
+    `/e/y` resolved — `tests/application/test_ktor_defaults_fixture.py`.)"""
     rows = {
         (r["method"], r["path"], r["resolution"], r["handler"])
         for r in ktor_rows
@@ -710,23 +748,28 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         # get { } on the prefix: Ktor serves the prefix itself
         ("GET", "/api", "resolved", _suspend_body("orders$1$1$5")),
         ("GET", "/health", "resolved", _suspend_body("orders$1$2")),
+        # the helpers: the handler class is the HELPER's own (`api$1`, `orders2$1`), the
+        # caller `orders()` — asserted below
+        ("GET", "/helper", "resolved", _suspend_body("api$1")),
+        ("GET", "/api/deep", "resolved", _suspend_body("orders2$1")),
     } <= rows, sorted(rows, key=str)
     assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
-    # Exactly eight rows — the seven above and the stray — so an extra row (a helper route
-    # read one day, a selector block's nested route, a duplicate) cannot pass silently.
-    assert len(ktor_rows) == 8, sorted(rows, key=str)
+    # Exactly twelve rows — the nine above, the stray, and the two `mount` rows — so an
+    # extra row (a selector block's nested route, a duplicate) cannot pass silently.
+    assert len(ktor_rows) == 12, sorted(rows, key=str)
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
     assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
-    assert not any("#api(" in str(r["caller"]) or r["path"] == "/helper" for r in ktor_rows), (
-        "the Route-extension helper's route was derived — a walk now follows `api()`; "
-        "move this pin and the catalog's stated boundary together"
-    )
-    assert not any("#defaults(" in str(r["caller"]) for r in ktor_rows), (
-        "a `mount(…)` route was derived under the shipped catalog — a walk now follows "
-        "the module-local DSL function; move this pin and the count of eight together"
-    )
+    assert not any(
+        "#api(" in str(r["caller"]) or "#v2(" in str(r["caller"]) or "#orders2(" in str(r["caller"])
+        for r in ktor_rows
+    ), "a helper's route was attributed to the helper — the caller is the tree's root"
+    mounted = [r for r in ktor_rows if "#defaults(" in str(r["caller"])]
+    assert [(r["method"], r["path"], r["resolution"], r["handler"]) for r in mounted] == [
+        (None, None, "unresolved", None),
+        (None, None, "unresolved", None),
+    ], mounted
 
 
 KTOR_CLASSLAMBDAS = FIXTURES / "orders-ktor-classlambdas"
@@ -793,7 +836,7 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
         "only under the default profile": sorted(default - classes, key=str),
         "only under -Xlambdas=class": sorted(classes - default, key=str),
     }
-    assert len(ktor_classlambda_rows) == len(ktor_rows) == 8
+    assert len(ktor_classlambda_rows) == len(ktor_rows) == 12
 
 
 GATEWAY = FIXTURES / "orders-gateway"

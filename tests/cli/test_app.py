@@ -122,7 +122,9 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # `POST /kt/orders` — the same address `KotlinOrderRoutes#ktRoutes`'s own
     # functional-routing row already serves, so the route SET is unchanged and only
     # the row count moves.
-    assert metadata["endpoints"]["inbound"]["http"] == 91
+    # 92 since spec 2026-09-19 §4a: `GET /kt/extra` — `coRouter { extra() }`, a helper
+    # call the combinator now follows into the DSL-receiver extension.
+    assert metadata["endpoints"]["inbound"]["http"] == 92
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -219,7 +221,10 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # bodies of the same class.
     # 148 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
     # `KotlinOrderResource$KtOrder` — one class file each, one document each.
-    assert metadata["coverage"]["documents"] == 148
+    # 150 since spec 2026-09-19 §4a: `routes/KotlinOrderRoutesKt`, the file facade the
+    # top-level `extra()` helper compiles into, and `KotlinOrderRoutesKt$extra$1`, its
+    # suspend handler's class — one class file each.
+    assert metadata["coverage"]["documents"] == 150
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

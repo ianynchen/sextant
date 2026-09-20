@@ -116,6 +116,28 @@ containers for a block written inside the entry's own method, so naming one of
 them would report a synthetic artifact as the declarer. One router, one
 declarer.
 
+**Helper following (spec 2026-09-19 §4a).** A call inside a body that no catalog
+word claims, whose target is a module-local method with a body of its own, is
+FOLLOWED when the body's origin flows into it as an argument: the parameter that
+received it is the callee's origin, and the same walk runs there under the
+caller's accumulated prefix — `route("/api") { helpers() }` gives `/api/<route>`,
+which is how a routing tree is split across a file's extension functions. A body
+with no origin follows module-local calls only where its linking rule declares
+`follow_calls: all`: a builder that keeps the current prefix in a thread-local and
+throws outside its block can only ever be reached from inside it, so a helper
+that reaches a verb was called from there; a body handing back a value (a
+`Supplier` of routers) may call helpers whose routers nobody returns, and
+following those would attach routes the framework never registered (A1). Two
+guards and no semantics: a visited set keyed on `(callee, origin index)`, and a
+depth bound of `_HELPER_DEPTH` calls, whose exhaustion files one `routing_depth`
+open question and NO endpoint row — a row there would claim an address nobody
+read (A2). Stated boundaries: a member call ON the origin (the origin as the
+callee's receiver rather than an argument) is not followed — no receiver→`this`
+mapping is guessed; a callee with no body (an interface or abstract method) is
+not followed either, since following "an implementation" is dispatch (A10); a
+block held in a local and invoked later is a function-object `invoke`, not a
+module-local call.
+
 **Honesty (spec §1c).** An unreadable part poisons exactly its own column: an
 unreadable path leaves `path` NULL and the row unresolved; an unreadable media
 constant leaves only that media column NULL, since the verb and path — the wire
@@ -134,6 +156,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     _array_elements,
@@ -145,6 +168,7 @@ from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_parameter_types,
     member_name,
+    method_descriptor,
     owner_of,
 )
 
@@ -167,6 +191,18 @@ _LEADING_SLASH = "leading_slash"
 # The dispatch form of a call that has no receiver (D00 §5's `invoke_kind`): the
 # one form the origin check of spec §12 word 1 has nothing to read on.
 _STATIC = "static"
+
+# `follow_calls`' one value (spec 2026-09-19 §4a): a body-linking rule declaring it
+# follows every module-local call in the body it links, origin or none. Named so a
+# misspelling is refused at load rather than read as absent — which would leave the
+# thread-local builder's helpers silently unfollowed, the outcome the word prevents.
+_FOLLOW_ALL = "all"
+# How many helper calls deep a walk follows before it stops and asks (§4a): a bound,
+# not a budget — the frameworks' own documented structures nest three or four deep,
+# and a chain this long is where a walk that never returns is stopped. Exhausting it
+# files a `routing_depth` question and never a row (A2).
+_HELPER_DEPTH = 16
+_ROUTING_DEPTH = "routing_depth"
 
 # The two roles a `media` rule may fill. Validated at load rather than
 # discovered at derive time: a typo here silently mislabels every media value
@@ -209,7 +245,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # and never scanned for roots of its own (`linked_bodies`).
         if bare_descriptor(caller) in context.linked_bodies:
             continue
-        scope = _scope_of(sites, context)
+        scope = replace(_scope_of(sites, context), caller=caller)
         # Sites arrive ordinal-ordered (the `call_sites` query), so the trees
         # of one method are rooted in source order and their rows accumulate
         # in that order too (NFR-1).
@@ -222,6 +258,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             for route in _routes_of(site, scope):
                 rows.append(_row_of(route, caller, catalog))
     workspace.derive("call_endpoints", rows=_emitted(rows, catalog))
+    # Filed after the rows, as `interface_implementation` files its own: a tree that both
+    # derives and asks cannot have its question written and its rows lost to a later
+    # failure. The list is the run's, accumulated by every tree (`_helper_routes`).
+    record_open_questions(workspace, context.questions)
 
 
 @dataclass(frozen=True)
@@ -329,6 +369,13 @@ class _TreeContext:
     # derived their route a second time, bare, with the lambda as `caller`
     # (A1 final review, I-1).
     linked_bodies: frozenset[str]
+    # The run's `open_questions` rows, accumulated by every tree as it walks — the one
+    # mutable thing here, because a question is filed where the walk gives up (a helper
+    # chain past `_HELPER_DEPTH`, spec 2026-09-19 §4a) and written once, by `run`, after
+    # the rows. Shared by every tree in the run, which is what this context is.
+    questions: list[dict[str, Any]]
+    # The catalog's own `protocol` — a question row's first identity column.
+    protocol: str
 
 
 @dataclass(frozen=True)
@@ -348,6 +395,19 @@ class _Scope:
     # has no origin, and a body linked without the word keeps the permissive
     # reading, where a null receiver is taken to be the body's own parameter.
     origin_parameter: int | None = None
+    # The containing method of the tree's ROOT — every row's `caller`, and the evidence
+    # a `routing_depth` question names. Set by `run` and carried into every body and
+    # helper the tree reaches.
+    caller: str | None = None
+    # Spec 2026-09-19 §4a's three words for helper following. `follow_all`: the linking
+    # rule declared `follow_calls: all`, so a body with NO origin follows module-local
+    # calls too (`_helper_routes`). `visited`: the `(callee, origin index)` pairs on the
+    # path from the root to here, so a helper calling itself — or two calling each other
+    # — is entered once. `depth`: how many helper calls deep this scope is; at
+    # `_HELPER_DEPTH` the walk asks instead of following.
+    follow_all: bool = False
+    visited: frozenset[tuple[str, int | None]] = frozenset()
+    depth: int = 0
 
 
 def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
@@ -432,6 +492,8 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         by_bare_caller=by_bare_caller,
         method_symbols=method_symbols,
         linked_bodies=frozenset(),
+        questions=[],
+        protocol=catalog.protocol,
     )
     # Read off the call sites the catalog claims, so the matchers above decide
     # which calls link a body — the same matchers the fold jumps through.
@@ -787,6 +849,7 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
             _arg_at(site["arguments"], body_entry["body_arg"]),
             scope,
             origin_param=body_entry.get("origin_param"),
+            follow_all=body_entry.get("follow_calls") == _FOLLOW_ALL,
         )
     continuation = _matching_continuation(site, context)
     if continuation is not None:
@@ -961,7 +1024,10 @@ def _nested_routes(site: dict[str, Any], rule: dict[str, Any], scope: _Scope) ->
         subtree = _argument_routes(_arg_at(arguments, rule["subtree_arg"]), scope)
     elif "body_arg" in rule:
         subtree = _body_routes(
-            _arg_at(arguments, rule["body_arg"]), scope, origin_param=rule.get("origin_param")
+            _arg_at(arguments, rule["body_arg"]),
+            scope,
+            origin_param=rule.get("origin_param"),
+            follow_all=rule.get("follow_calls") == _FOLLOW_ALL,
         )
     else:
         return []
@@ -988,7 +1054,11 @@ def _prefix_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scop
 
 
 def _body_routes(
-    argument: dict[str, Any] | None, scope: _Scope, *, origin_param: int | None = None
+    argument: dict[str, Any] | None,
+    scope: _Scope,
+    *,
+    origin_param: int | None = None,
+    follow_all: bool = False,
 ) -> list[_Route]:
     """The routes declared by the method a `lambda`-kind argument names — the
     jump a body-linked entry and a body-linked prefix both make (checkpoint
@@ -1007,6 +1077,10 @@ def _body_routes(
     linking argument, never guessed. A fact written before the extractor
     carried `captures` cannot be resolved that way, so the body keeps the
     permissive reading exactly as a rule declaring nothing does.
+
+    `follow_all` is the linking rule's `follow_calls: all` (spec 2026-09-19
+    §4a), and the caller's `visited`/`depth` carry in unchanged: a linked body
+    is a block written inside the enclosing method, not a call deeper.
     """
     if argument is None or argument.get("kind") != "lambda":
         return [_Route(poisons=_IDENTITY_POISON)]
@@ -1014,16 +1088,121 @@ def _body_routes(
     sites = scope.context.by_bare_caller.get(str(symbol)) if symbol is not None else None
     if not sites:
         return [_Route(poisons=_IDENTITY_POISON)]
-    body = _scope_of(sites, scope.context)
+    body = replace(
+        _scope_of(sites, scope.context),
+        caller=scope.caller,
+        follow_all=follow_all,
+        visited=scope.visited,
+        depth=scope.depth,
+    )
     if origin_param is not None and argument.get("captures") is not None:
         body = replace(body, origin_parameter=int(argument["captures"]) + origin_param)
+    return _walked(body)
+
+
+def _walked(body: _Scope) -> list[_Route]:
+    """One body's routes: every unconsumed call folded in source order, and every
+    call no catalog word claims offered to `_helper_routes`, which follows it or
+    declines."""
     routes: list[_Route] = []
     for site in body.sites:
         result = site["result"]
         if result is not None and result in body.consumed:
             continue
         routes.extend(_routes_of(site, body))
+        if not _claimed(site, body.context):
+            routes.extend(_helper_routes(site, body))
     return routes
+
+
+def _helper_routes(site: dict[str, Any], scope: _Scope) -> list[_Route]:
+    """Spec 2026-09-19 §4a: a module-local call reached inside a routing body is
+    followed when the body's origin flows into it as an argument — the parameter
+    at that position is the callee's origin — and, for a body whose linking rule
+    declared `follow_calls: all`, whenever the callee has a body at all. The
+    caller's accumulated scope is the caller's to fold: the routes come back
+    here and land under whatever prefix reached this body, exactly as a nested
+    block's do. Guards only, no semantics: a visited set keyed on `(callee,
+    origin)`, and `_HELPER_DEPTH`, whose exhaustion files one `routing_depth`
+    question and NO row (A2 — a row would claim an address nobody read).
+
+    Declined, each on its own conjunct: a callee that is not module-local, or
+    has no call sites of its own (an interface or abstract method has no body;
+    following "an implementation" is dispatch, A10); a call the origin does not
+    reach as an argument — including a member call ON the origin, where the
+    origin is the callee's receiver and not one of its parameters, a mapping
+    this walk does not guess at; an origin-less body whose rule did not opt in
+    (A1). Silence in every case, as a verb on another builder is today."""
+    context = scope.context
+    callee = context.method_symbols.get(
+        method_descriptor(str(site["owner"]), str(site["name"]), str(site["descriptor"]))
+    )
+    if callee is None:
+        return []
+    sites = context.by_bare_caller.get(bare_descriptor(callee))
+    if not sites:
+        return []
+    origin: int | None = None
+    if scope.origin_parameter is not None:
+        origin = next(
+            (
+                position
+                for position, argument in enumerate(site["arguments"])
+                if _is_the_origin(argument, scope)
+            ),
+            None,
+        )
+        if origin is None:
+            return []
+    elif not scope.follow_all:
+        return []
+    key = (bare_descriptor(callee), origin)
+    if key in scope.visited:
+        return []
+    if scope.depth >= _HELPER_DEPTH:
+        _ask_routing_depth(callee, scope)
+        return []
+    body = replace(
+        _scope_of(sites, context),
+        origin_parameter=origin,
+        caller=scope.caller,
+        follow_all=scope.follow_all,
+        visited=scope.visited | {key},
+        depth=scope.depth + 1,
+    )
+    return _walked(body)
+
+
+def _is_the_origin(argument: dict[str, Any], scope: _Scope) -> bool:
+    """Whether this argument IS the body's origin parameter — the one test
+    `_receiver_argument_is_the_origin` makes, on an argument a helper call
+    hands on rather than one a rule named."""
+    return bool(
+        argument.get("kind") == "parameter" and argument.get("value") == scope.origin_parameter
+    )
+
+
+def _ask_routing_depth(callee: str, scope: _Scope) -> None:
+    """One `routing_depth` row (spec 2026-09-19 §4a): the wire identity NULL on both
+    halves, because both genuinely are unread — the verb may be on any route or on
+    none — the first unread callee and the entry's caller as the candidate, and the
+    caller again as the evidence trail: where the walk started is where a reader
+    opens the file. Filed once per (caller, callee): two branches of one tree
+    giving up on the same helper are one question."""
+    row = {
+        "protocol": scope.context.protocol,
+        "method": None,
+        "path": None,
+        "question": _ROUTING_DEPTH,
+        "candidates": json.dumps(
+            [{"callee": callee, "caller": scope.caller}],
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "evidence": scope.caller,
+    }
+    if row not in scope.context.questions:
+        scope.context.questions.append(row)
 
 
 def _head_on_the_origin(site: dict[str, Any], scope: _Scope) -> _Route:
@@ -1680,7 +1859,10 @@ def _validate_matches(catalog: Catalog) -> None:
     argument position, so where the rule declares an `arity` it lies inside
     it — a position the call cannot carry would poison every row (spec §12).
     `verb_arg` is held to the same shape, on a verb rule alone, and is that
-    rule's ONE answer for its verb — beside `verb` it is two. `terminal` sits
+    rule's ONE answer for its verb — beside `verb` it is two. `follow_calls`
+    names what a BODY's walk follows, so it sits only on a rule that links one,
+    and its one value is `all` — misspelt and read as absent, the thread-local
+    builder's helpers would go silently unfollowed. `terminal` sits
     on a verb rule that says where its handler is or that there is none: it
     declares a whole route, and folds its chain as constraints where a builder
     verb carries routes on — `extends_receiver` beside it is two readings of one
@@ -1750,6 +1932,17 @@ def _validate_matches(catalog: Catalog) -> None:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares `terminal` — a "
                 f"word for a verb rule alone (D02 §2's `combinator` style)"
+            )
+        if "follow_calls" in rule and (
+            "body_arg" not in rule
+            or role not in ("entries", "prefixes")
+            or rule["follow_calls"] != _FOLLOW_ALL
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{name}` declares "
+                f"`follow_calls: {rule.get('follow_calls')!r}` — the only value is "
+                f"`{_FOLLOW_ALL}`, on a rule that links a body (`body_arg`), an entry or a "
+                f"prefix (D02 §2's `combinator` style)"
             )
     named: dict[tuple[str, str], str] = {}
     for role in ("verbs", "prefixes", "media"):

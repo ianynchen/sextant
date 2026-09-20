@@ -40,7 +40,20 @@ public class OrderApp {
                     ApiBuilder.get("x", ctx -> ctx.result("plain"));
                 });
             });
+            ApiBuilder.path("/jv/helped", () -> helped());                       // a static helper CALLED from the block
         }));
+    }
+
+    /** A static helper called from inside an `EndpointGroup` block (spec 2026-09-19 §4a,
+     *  `follow_calls: all` on `javalin-apibuilder`): `ApiBuilder`'s verbs register on a
+     *  thread-local instance that `staticInstance()` refuses outside a block
+     *  (`IllegalStateException`, measured on the 6.4.0 jar), so a helper reaching `get` can
+     *  only have been called from inside one, and the walk follows the CALL with no origin to
+     *  check — `GET /jv/helped/h`, under the prefix that reached the call. A method REFERENCE
+     *  (`path("/x", OrderApp::helped)`) would be a linked body already; the call is the shape
+     *  the word exists for. */
+    static void helped() {
+        ApiBuilder.get("/h", ctx -> ctx.result("h"));
     }
 
     /** The SECOND flat form — `RouterConfig.mount`, the same descriptors as {@link #flat()}

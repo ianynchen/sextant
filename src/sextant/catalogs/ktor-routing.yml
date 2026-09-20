@@ -81,12 +81,21 @@ requires: [call_site, string_constants, chain_reconstruction]
 #     body — so the G-13 row does not fire. A real-input gap: `accept`/`contentType`
 #     blocks are Ktor's content-negotiation idiom. Logged, not guessed — Task 9 registers
 #     it as `ktor-selector-blocks`, Major.
-#   * a Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from
-#     `routing { api() }`, Ktor's own recommended way to split a large routing tree —
-#     derives nothing, not even an unresolved row: spec §7 case 4's stated boundary (a
-#     builder received as a PARAMETER is, in the facts, indistinguishable from a body's
-#     own), and a call the walk would have to follow into another method (§15). Pinned
-#     on the live test as silence, so a walk that one day reads it moves a pinned value.
+#
+# A Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from `routing {
+# api() }`, Ktor's own recommended way to split a large routing tree — IS followed (spec
+# 2026-09-19 §4a, `ktor-route-extensions`): the extension receiver is argument 0 of the
+# static call, that argument is the block's own parameter (the origin `origin_param: 0`
+# names), so the walk enters `api`'s body with ITS parameter 0 as the origin and
+# `get("/x")` derives under whatever prefix reached the call — `route("/api") { api() }`
+# gives `/api/x`, a second-level helper chains the same way, and a module-local DSL
+# function whose path arrives as a PARAMETER (`fun Route.mount(path, build) = route(path,
+# build)`) is one unresolved row per call, honestly: the path is unreadable there. The
+# catalog declares nothing for this; it is the engine's word. Two stated boundaries of
+# the following: a chain deeper than sixteen helper calls stops and files a
+# `routing_depth` open question, never a row; and a routing block held in a `val` and
+# invoked later (`val b: Route.() -> Unit = { }; b()`) is `Function1.invoke` on a local,
+# not a module-local call, and is not followed.
 matches:
   path_join: leading_slash
   entries:

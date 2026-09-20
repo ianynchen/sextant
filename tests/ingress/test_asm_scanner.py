@@ -93,6 +93,11 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
+        # Spec 2026-09-19 §4a: the top-level `fun CoRouterFunctionDsl.extra()` helper
+        # compiles into the file facade `KotlinOrderRoutesKt`, and its suspend handler into
+        # a class of its own — one class file each.
+        "KotlinOrderRoutesKt$extra$1.jsonl",
+        "KotlinOrderRoutesKt.jsonl",
         "KotlinWebFluxRoutes.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyBillingWebService.jsonl",
@@ -249,7 +254,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # `invokedynamic`.
     # 135 since Groups B and C Task 1: `jaxrs/KotlinOrderResource` and its nested
     # `KotlinOrderResource$KtOrder`, one class file each.
-    assert report.documents == 135
+    # 137 since spec 2026-09-19 §4a: `routes/KotlinOrderRoutesKt` (the file facade of the
+    # top-level `extra()` helper) and its suspend handler class `KotlinOrderRoutesKt$extra$1`.
+    assert report.documents == 137
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -319,6 +326,11 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
         "KotlinOrderRoutes.jsonl",
+        # Spec 2026-09-19 §4a: the top-level `fun CoRouterFunctionDsl.extra()` helper
+        # compiles into the file facade `KotlinOrderRoutesKt`, and its suspend handler into
+        # a class of its own — one class file each.
+        "KotlinOrderRoutesKt$extra$1.jsonl",
+        "KotlinOrderRoutesKt.jsonl",
         "KotlinWebFluxRoutes.jsonl",
         "LegacyBillingApi.jsonl",
         "LegacyBillingWebService.jsonl",

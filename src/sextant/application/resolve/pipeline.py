@@ -171,6 +171,17 @@ def resolve(
     # `record_request_requirements` below joins them to `endpoints` once every row's
     # protocol is final. Re-created whole, once, for the reason above.
     workspace.derive("route_requirements_reset")
+    # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
+    # every pass that writes to it rather than inside one of them — the
+    # `resolved_config` reset discipline, lifted out of the writing pass
+    # because more than one pass writes these rows. A resolve whose passes
+    # had nothing to ask still leaves an empty table rather than the previous
+    # run's rows. ABOVE `derive_endpoints`, not below it (spec 2026-09-19 §4a): two
+    # engines file questions as they derive — `interface_implementation`'s
+    # `registration_activation` and the combinator's `routing_depth` — and a reset
+    # that ran after them erased both before any later pass read the table. Every
+    # other writer runs below `derive_endpoints` either way, so nothing else moves.
+    reset_open_questions(workspace)
     with _timed("derive_endpoints"):
         skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
@@ -178,13 +189,6 @@ def resolve(
     # just wrote.
     with _timed("derive_endpoint_shapes"):
         expanded = derive_endpoint_shapes(workspace, declared, capabilities)
-    # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
-    # every pass that writes to it rather than inside one of them — the
-    # `resolved_config` reset discipline, lifted out of the writing pass
-    # because more than one pass writes these rows. A resolve whose passes
-    # had nothing to ask still leaves an empty table rather than the previous
-    # run's rows.
-    reset_open_questions(workspace)
     # Above the ladder and below the reset, which is exactly where the
     # comment on that line asks a payload-binding pass to go (2G design §6):
     # it WRITES `open_questions` rows, so it must run after the reset, and

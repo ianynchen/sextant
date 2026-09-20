@@ -107,6 +107,12 @@ QUESTIONS = (
     # elsewhere: `@KafkaHandler` dispatches by payload type, and this repo's own fixture
     # has such a pair.
     "routing_conflict",
+    # Spec 2026-09-19 §4a (A2). A routing body's module-local helper chain deeper than the
+    # combinator's depth bound: the walk stopped following and read no address, so no
+    # endpoint row is published for it — a row there would claim an address nobody read.
+    # Candidates: the first unread callee and the entry's caller. Identity NULL on both
+    # halves, because both genuinely are unread — the verb may be on any route or none.
+    "routing_depth",
 )
 
 

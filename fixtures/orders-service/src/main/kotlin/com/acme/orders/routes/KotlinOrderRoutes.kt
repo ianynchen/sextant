@@ -6,6 +6,7 @@ package com.acme.orders.routes
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.MediaType
+import org.springframework.web.reactive.function.server.CoRouterFunctionDsl
 import org.springframework.web.reactive.function.server.ServerRequest
 import org.springframework.web.reactive.function.server.ServerResponse
 import org.springframework.web.reactive.function.server.buildAndAwait
@@ -30,5 +31,16 @@ class KotlinOrderRoutes {
                 }
             }
         }
+        extra()
+    }
+}
+
+// A DSL-receiver helper called from inside `coRouter { }` (spec 2026-09-19 §4a): a top-level
+// extension compiles to a STATIC `extra(CoRouterFunctionDsl)` whose one argument is the
+// block's own parameter -- the origin -- so the walk follows the call and `GET("/kt/extra")`,
+// a member call on that parameter, derives on `ktRoutes`.
+fun CoRouterFunctionDsl.extra() {
+    GET("/kt/extra") {
+        ServerResponse.ok().buildAndAwait()
     }
 }

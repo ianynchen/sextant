@@ -32,6 +32,9 @@ not read END TO END degrades to (9.15's five rejection rules), and that case is
 pinned beside the readable one.
 """
 
+import copy
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -4563,6 +4566,13 @@ _VERB_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function2;){_ROU
 _PATHLESS_VERB_DESC = f"({_ROUTE}Lkotlin/jvm/functions/Function2;){_ROUTE}"
 _ROUTING_BODY = DECLARER + "orders$lambda$1(sig_k0)."
 _API_BODY = DECLARER + "orders$lambda$1$lambda$0(sig_k1)."
+_HELPER_DESC = f"({_ROUTE})V"
+# A module-local `Route`-extension helper — `fun Route.api() { get("/helper") { } }` — is a
+# STATIC method taking the receiver as argument 0, and its symbol is what `method_descriptor`
+# composes from the call's own owner, name and JVM descriptor (D00 §5a): spelled through
+# that function here so the helper the routing body CALLS is the method whose body the
+# facts carry.
+_API_HELPER = method_descriptor(DECLARER, "api", _HELPER_DESC)
 _SUSPEND_HANDLER = DECLARER + "Routes$orders$1$1$1#"
 # The body a suspend handler class compiles into (CP-23: `invokeSuspend(Object)`), spelled
 # as the extractor spells `lambda_body` — bare, with the hashed disambiguator.
@@ -4585,11 +4595,16 @@ def _ktor_facts(entry_owner: str) -> list:
     0, each `Function1` block an `invokedynamic` body linked as a `lambda` argument with
     `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class —
     whose type fact carries `lambda_body` naming its `invokeSuspend`, and whose body has
-    a method fact of its own (the class is scanned), so the handler join lands.
+    a method fact of its own (the class is scanned), so the handler join lands. Plus the
+    fixture's `api()` helper (spec 2026-09-19 §4a, `ktor-route-extensions`): `routing {
+    api() }` is `invokestatic KtorRoutesKt.api(Route)` with the block's own parameter as
+    its one argument, and `fun Route.api() { get("/helper") { } }` is a method of its own
+    whose verb sits on ITS parameter 0 — the origin, once the walk carries it in.
     `entry_owner` is the one cell the near-miss below varies."""
     return [
         _method_symbol(_ROUTING_BODY),
         _method_symbol(_API_BODY),
+        _method_symbol(_API_HELPER),
         _type_symbol(_SUSPEND_HANDLER, lambda_body=_SUSPEND_BODY),
         _method_symbol(_SUSPEND_BODY),
         _site(
@@ -4642,6 +4657,27 @@ def _ktor_facts(entry_owner: str) -> list:
                 CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=4),
             ],
         ),
+        _site(
+            _ROUTING_BODY,
+            1,
+            DECLARER,
+            "api",
+            descriptor=_HELPER_DESC,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _API_HELPER,
+            0,
+            _ROUTING_BUILDER,
+            "get",
+            result=13,
+            descriptor=_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/helper"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=8),
+            ],
+        ),
     ]
 
 
@@ -4653,16 +4689,24 @@ def test_the_ktor_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: 
     `invokeSuspend`: the handler arrives as an `instance` of a class, and the projection
     every engine reads through (`effective_call_sites`, spec 2026-09-19 §3b) hands it
     over as the `lambda` its type fact's `lambda_body` names — `kotlin-null-handler`
-    closes here, where spec §13 case 8 had pinned NULL."""
+    closes here, where spec §13 case 8 had pinned NULL.
+
+    And the helper: `api()` inside the routing body hands the block's parameter — the
+    origin — to a module-local method as its argument 0, so the walk follows the call
+    into `api`'s body with parameter 0 as the new origin (spec 2026-09-19 §4a), and the
+    `get("/helper")` written there is `GET /helper`, resolved, on the entry's caller —
+    `ktor-route-extensions` closes here, where the catalog had pinned silence."""
     workspace = _resolve(tmp_path, _ktor_facts(_ROUTING_ROOT), _shipped_ktor_catalog())
-    identities = _identities(_rows(workspace))
+    rows = _rows(workspace)
     workspace.close()
 
     handler = _MODULE + _SUSPEND_BODY
-    assert identities == [
+    assert _identities(rows) == [
         ("GET", "/api", handler, "resolved"),
         ("GET", "/api/orders", handler, "resolved"),
+        ("GET", "/helper", handler, "resolved"),
     ]
+    assert {row["caller"] for row in rows} == {DECLARER + "orders(sig_o0)."}
 
 
 @pytest.mark.declines("ktor-routing")
@@ -4684,6 +4728,288 @@ def test_the_ktor_catalog_declines_a_routing_call_on_another_owner(tmp_path: Pat
     workspace.close()
 
     assert identities == []
+
+
+# --- helper following: the origin as an argument, the visited set, the depth bound, `follow_calls` (spec 2026-09-19 §4a) ---
+
+
+def _helper(name: str) -> str:
+    return method_descriptor(DECLARER, name, _HELPER_DESC)
+
+
+def _helper_call(caller: str, ordinal: int, name: str, *, argument: CallArgument) -> CallSiteFact:
+    """`invokestatic <DECLARER>.<name>(Route)` — a module-local helper handed one value,
+    normally the calling body's own parameter."""
+    return _site(caller, ordinal, DECLARER, name, descriptor=_HELPER_DESC, arguments=[argument])
+
+
+def _deep_verb(caller: str, ordinal: int, path: str) -> CallSiteFact:
+    return _site(
+        caller,
+        ordinal,
+        _ROUTING_BUILDER,
+        "get",
+        result=ordinal + 100,
+        descriptor=_VERB_DESC,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="string", value=path),
+            CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50),
+        ],
+    )
+
+
+def _routing_entry() -> list:
+    """`routing { … }` on the real entry owner, its body `_ROUTING_BODY` with `captures:
+    0`, plus the suspend handler's type and body facts — the frame every chain below
+    hangs off."""
+    return [
+        _method_symbol(_ROUTING_BODY),
+        _type_symbol(_SUSPEND_HANDLER, lambda_body=_SUSPEND_BODY),
+        _method_symbol(_SUSPEND_BODY),
+        _site(
+            DECLARER + "orders(sig_o0).",
+            0,
+            _ROUTING_ROOT,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_ROUTING_BODY, source=0, captures=0),
+            ],
+        ),
+    ]
+
+
+def _helper_chain(length: int) -> list:
+    """`routing { h1() }`, `fun Route.h1() { h2() }`, … `fun Route.h<length>() {
+    get("/deep") { } }` — every hop hands its own parameter 0 on as argument 0."""
+    facts = _routing_entry()
+    names = [f"h{i}" for i in range(1, length + 1)]
+    facts.append(
+        _helper_call(_ROUTING_BODY, 0, names[0], argument=CallArgument(kind="parameter", value=0))
+    )
+    for i, name in enumerate(names):
+        body = _helper(name)
+        facts.append(_method_symbol(body))
+        if i + 1 < len(names):
+            facts.append(
+                _helper_call(
+                    body, 0, names[i + 1], argument=CallArgument(kind="parameter", value=0)
+                )
+            )
+        else:
+            facts.append(_deep_verb(body, 0, "/deep"))
+    return facts
+
+
+def _questions(workspace: DuckDbWorkspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("open_questions")]
+
+
+def test_a_helper_chain_within_the_bound_derives_its_route_on_the_entrys_caller(tmp_path: Path):
+    """Spec 2026-09-19 §4a's guard is a BOUND, not a budget: sixteen helper calls deep — the
+    bound itself — every hop still carries the origin as argument 0, and the verb at the
+    end derives `GET /deep`, resolved, attributed to the entry's caller (one router, one
+    declarer), with nothing filed in the ledger. Ktor's own documented structures nest
+    three or four deep; the bound is where a walk that never returns is stopped, and a
+    chain that stays inside it is ordinary routing."""
+    workspace = _resolve(tmp_path, _helper_chain(16), _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/deep", _MODULE + _SUSPEND_BODY, "resolved")]
+    assert rows[0]["caller"] == DECLARER + "orders(sig_o0)."
+    assert questions == []
+
+
+def test_a_helper_chain_deeper_than_the_bound_files_one_question_and_no_row(tmp_path: Path):
+    """The seventeenth hop is not followed. What is published is ONE `open_questions` row of
+    kind `routing_depth` — the entry's caller as its evidence, the first unread callee as
+    its candidate — and NO endpoint row: an unresolved row there would claim an address
+    nobody read, where the verb may be on any route or on none (spec 2026-09-19 §0b A2).
+    The question's own identity columns are NULL because both halves genuinely are unread.
+    The same catalog, the same frame, the same hops as the test above; only the length
+    differs by one, so this is the bound and nothing else."""
+    workspace = _resolve(tmp_path, _helper_chain(17), _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [
+        (
+            q["protocol"],
+            q["method"],
+            q["path"],
+            q["question"],
+            json.loads(str(q["candidates"])),
+            q["evidence"],
+        )
+        for q in questions
+    ] == [
+        (
+            "http",
+            None,
+            None,
+            "routing_depth",
+            [{"callee": _MODULE + _helper("h17"), "caller": DECLARER + "orders(sig_o0)."}],
+            DECLARER + "orders(sig_o0).",
+        )
+    ]
+
+
+def test_a_helper_calling_itself_is_followed_once(tmp_path: Path):
+    """The visited set, keyed `(callee, origin index)`: `fun Route.loop() { loop();
+    get("/loop") { } }` calls itself with the same origin, and the second entry is
+    refused where the first was taken — so the verb derives exactly once and the walk
+    terminates on its own, well inside the depth bound, with nothing to file. Without
+    the set the same body would be re-entered until the bound stopped it and a
+    `routing_depth` question would be asked of a chain that is not deep at all."""
+    loop = _helper("loop")
+    facts = [
+        *_routing_entry(),
+        _method_symbol(loop),
+        _helper_call(_ROUTING_BODY, 0, "loop", argument=CallArgument(kind="parameter", value=0)),
+        _helper_call(loop, 0, "loop", argument=CallArgument(kind="parameter", value=0)),
+        _deep_verb(loop, 1, "/loop"),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/loop", _MODULE + _SUSPEND_BODY, "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("combinator.helper-follows-the-origin-only")
+def test_a_module_local_call_the_origin_does_not_reach_is_not_followed(tmp_path: Path):
+    """§10 near-miss on the origin conjunct, paired with the `/helper` positive on
+    `_ktor_facts`. Every cell is that positive — a module-local method with a body, called
+    from a body whose rule named its origin, a verb on the callee's parameter 0 — except
+    the ARGUMENT handed over: a field value the extractor could not follow, and the body's
+    OTHER parameter. Neither is the origin, so neither call is followed and the verb inside
+    derives nothing, not even an unresolved row: a route on a builder this body never
+    touched is not this tree's, and a row would say it was (spec §4a: "a verb on any other
+    `Route` inside the callee is silence, as today"). A callee with NO body — an interface
+    or abstract method, whose call sites the facts cannot carry — is the third cell: not
+    followed either (A10), and nothing is fabricated for it."""
+    stray = _helper("stray")
+    facts = [
+        *_routing_entry(),
+        _method_symbol(stray),
+        _method_symbol(_helper("abstractly")),
+        _helper_call(_ROUTING_BODY, 0, "stray", argument=CallArgument(kind="unresolved")),
+        _helper_call(_ROUTING_BODY, 1, "stray", argument=CallArgument(kind="parameter", value=1)),
+        _helper_call(
+            _ROUTING_BODY, 2, "abstractly", argument=CallArgument(kind="parameter", value=0)
+        ),
+        _deep_verb(stray, 0, "/stray"),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+_HELPED = method_descriptor(DECLARER, "helped", "()V")
+
+
+def _apibuilder_with_a_helper_call() -> list:
+    """`_apibuilder_facts` plus a static, argument-less `helped()` CALL inside the inner
+    group and `static void helped() { get("/h", h); }` as a method of its own — the thread-
+    local builder's helper shape: no origin flows anywhere, because `ApiBuilder` keeps the
+    current prefix in a `ThreadLocal` and every verb is static."""
+    return [
+        *_apibuilder_facts(_ROUTER_CONFIG),
+        _method_symbol(_HELPED),
+        _site(_GROUP_INNER, 2, DECLARER, "helped", descriptor="()V", arguments=[]),
+        _site(
+            _HELPED,
+            0,
+            _API_BUILDER,
+            "get",
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/h"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=0),
+            ],
+        ),
+    ]
+
+
+def _without_follow_calls(catalog: Catalog) -> Catalog:
+    """The shipped catalog with `follow_calls` struck from every rule that declares it —
+    the default, which follows origin-carrying calls only."""
+    matches = copy.deepcopy(catalog.matches)
+    for rule in (*matches["entries"], *matches["vocabulary"]["prefixes"]):
+        rule.pop("follow_calls", None)
+    return replace(catalog, matches=matches)
+
+
+def test_an_origin_less_body_follows_a_module_local_call_under_follow_calls_all(tmp_path: Path):
+    """The paired positive: the shipped `javalin-apibuilder` rules declare `follow_calls:
+    all` on the entry and on `path`, because `ApiBuilder.staticInstance()` throws
+    `IllegalStateException` outside the block (measured on the 6.4.0 jar) — a helper that
+    reaches a verb can only ever have been called from inside one. So `helped()` inside
+    `path("/orders", …)` is followed with no origin at all, and its `get("/h", h)` folds
+    under the prefix: `GET /orders/h`, on the entry's caller."""
+    workspace = _resolve(tmp_path, _apibuilder_with_a_helper_call(), _shipped_apibuilder_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/h", _MODULE + HEALTH, "resolved"),
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {_CONFIG_LAMBDA}
+
+
+@pytest.mark.pins("combinator.origin-less-following-is-opt-in")
+def test_an_origin_less_body_does_not_follow_a_module_local_call_by_default(tmp_path: Path):
+    """§10 near-miss on the `follow_calls` conjunct: the same facts, the same catalog with
+    the word struck. An origin-less body — a `Supplier<RouterFunction>` body is one too —
+    may call a helper that builds routers nobody returns, and following it would attach
+    routes the framework never registered (spec 2026-09-19 §0b A1). Nothing is derived
+    for `helped()`; the two routes written in the body itself derive exactly as before,
+    and nothing is filed: not following is the default, not a failure."""
+    catalog = _without_follow_calls(_shipped_apibuilder_catalog())
+    workspace = _resolve(tmp_path, _apibuilder_with_a_helper_call(), catalog)
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert questions == []
+
+
+def test_follow_calls_away_from_a_body_link_or_with_another_value_is_refused(tmp_path: Path):
+    """`follow_calls` is a word for a rule that LINKS a body — a body-linked entry or a
+    prefix with `body_arg` — and its one value is `all`. On a verb it names nothing the
+    engine could follow from; misspelt (`always`) it would be read as absent and the
+    thread-local builder's helpers would go silently unfollowed, which is the outcome the
+    word exists to prevent."""
+    matches = _matches()
+    matches["vocabulary"]["verbs"][0]["follow_calls"] = "all"
+    with pytest.raises(CatalogError, match="follow_calls"):
+        _resolve(tmp_path / "a", [], _catalog(matches))
+
+    matches = _matches()
+    matches["entries"].append(
+        {
+            "owner": "com.example.web.RouterDslFacade",
+            "method": "dsl",
+            "body_arg": 0,
+            "follow_calls": "always",
+        }
+    )
+    with pytest.raises(CatalogError, match="follow_calls"):
+        _resolve(tmp_path / "b", [], _catalog(matches))
 
 
 # --- chain-form composers, negators, a terminal, `verb_arg`, array paths (A2 Task 6, spec §12 words 3–5) ---

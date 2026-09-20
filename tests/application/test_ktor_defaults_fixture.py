@@ -14,10 +14,12 @@ Two pins, one primary. (a) `effective_call_sites` on the analysed workspace, no 
 involved — the raw `call_sites` row still names `mount$default`, the projected one names
 `mount`. (b) A TEST-ONLY catalog — the shipped `ktor-routing.yml` plus one prefix rule for
 `mount` — derives `GET /d/x` resolved, the row the projection makes possible, beside
-`GET /e/y` from the plain call. The shipped catalog carries no rule for `mount` (helper
-following is a later task), so `tests/e2e/test_rest_inbound_delivered.py` pins the two
-calls as deriving nothing there; this file is where the bridge itself is pinned, because
-the package's catalog directory is its only source and a test-only catalog cannot ship.
+`GET /e/y` from the plain call. The shipped catalog carries no rule for `mount`, so under
+it each call is a module-local helper the walk FOLLOWS (spec 2026-09-19 §4a) into a body
+whose path is a parameter — one unresolved row per call, which
+`tests/e2e/test_rest_inbound_delivered.py` pins; this file is where the bridge itself is
+pinned, because the package's catalog directory is its only source and a test-only
+catalog cannot ship.
 """
 
 from pathlib import Path
@@ -151,7 +153,10 @@ def test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route(
     control that derives with or without the projection. `version` does not shape the
     path (`mount` is `route(path, build)`), so a rule reading `path_arg: 1` states the
     truth and both rows are resolved; the two `mountedVersions` writes inside `mount` are
-    not on the walk. Every `orders()` row of the shipped catalog derives as before."""
+    not on the walk. Every `orders()` row of the shipped catalog derives as before — the
+    helpers' `/helper` and `/api/deep` included — and `mount`, now a catalog word, is no
+    longer followed as a helper, so its two unresolved rows are gone: twelve rows, not
+    fourteen."""
     catalogs = _defaults_catalog(tmp_path)
     workspace = DuckDbWorkspace(analyzed_ktor)
     try:
@@ -172,4 +177,4 @@ def test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route(
     assert ("GET", "/api/orders", "resolved") in {
         (str(r["method"]), str(r["path"]), str(r["resolution"])) for r in every
     }
-    assert len(every) == 10, sorted((r["method"], r["path"], r["caller"]) for r in every)
+    assert len(every) == 12, sorted((r["method"], r["path"], r["caller"]) for r in every)

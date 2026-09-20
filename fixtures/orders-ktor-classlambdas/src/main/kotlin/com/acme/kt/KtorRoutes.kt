@@ -33,16 +33,28 @@ fun Application.orders() {
         }
         get("/health") { call.respondText("ok") }
         api()
+        route("/api") { v2() }
     }
 }
 
 // A Route-extension helper called from inside `routing { }` — Ktor's own recommended way to
-// split a routing tree. `api()` is an ordinary method no linking call names as its body, and
-// a static, receiver-less verb inside it is no root of its own, so `/helper` derives NOTHING
-// — not even an unresolved row: spec §7 case 4's stated boundary for a builder received as
-// a parameter, pinned as silence on the live test (A2 Task 5; Task 4's log predicted a row).
+// split a routing tree (`ktor-route-extensions`, spec 2026-09-19 §4a). `api()` compiles to a
+// STATIC `api(Route)` whose one argument is the block's own parameter — the origin — so the
+// walk follows the call into this body with parameter 0 as the new origin, and `/helper`
+// derives resolved on `orders()`. (Before the walk followed helper calls this was pinned as
+// silence: spec §7 case 4's boundary for a builder received as a parameter.)
 fun Route.api() {
     get("/helper") { call.respondText("helper") }
+}
+
+// A second-level helper under a prefix: `route("/api") { v2() }` → `v2()` → `orders2()`,
+// two module-local calls deep, and the prefix that reached the first call carries all the
+// way down — `GET /api/deep`.
+fun Route.v2() {
+    orders2()
+}
+fun Route.orders2() {
+    get("/deep") { call.respondText("deep") }
 }
 
 // The wrong-receiver case (spec §14 test 13): a verb registered on ANOTHER route from inside
@@ -58,7 +70,10 @@ fun Application.elsewhere(other: Route) {
 // A module-local DSL function with a DEFAULT parameter (`kotlin-default-bridge-calls`): a
 // call that omits `version` compiles to `mount$default(this, "/d", null, build, 2, null)` —
 // a different name and arity, which no rule matched until the bridge projection. `version`
-// does not shape the path, so a rule reading `path_arg: 1` states the truth.
+// does not shape the path, so a rule reading `path_arg: 1` states the truth. Under the
+// shipped catalog, which has no rule for `mount`, each call is a helper call the walk
+// FOLLOWS: inside, `route(path, build)` sits on the origin but its path is this function's
+// PARAMETER, unreadable there — one unresolved row per call, honestly, never silence.
 val mountedVersions = mutableListOf<String>()
 fun Route.mount(path: String, version: String = "v1", build: Route.() -> Unit): Route {
     mountedVersions += version
