@@ -1554,7 +1554,8 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/catalogs/javax-servlet.yml",
                 find="javax.servlet",
                 replace="jakarta.servlet",
-                occurrences=22,
+                # 24 since spec 2026-09-19 §5d: the two `request_reads` owners.
+                occurrences=24,
             ),
         ),
     ),
@@ -1677,7 +1678,8 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/catalogs/jakarta-servlet.yml",
                 find="jakarta.servlet",
                 replace="javax.servlet",
-                occurrences=23,
+                # 25 since spec 2026-09-19 §5d: the two `request_reads` owners.
+                occurrences=25,
             ),
         ),
     ),

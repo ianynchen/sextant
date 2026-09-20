@@ -155,8 +155,8 @@ def test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route(
     truth and both rows are resolved; the two `mountedVersions` writes inside `mount` are
     not on the walk. Every `orders()` row of the shipped catalog derives as before — the
     helpers' `/helper` and `/api/deep` included — and `mount`, now a catalog word, is no
-    longer followed as a helper, so its two unresolved rows are gone: twenty-seven rows
-    (the e2e's count, `selectors()` included), not twenty-nine."""
+    longer followed as a helper, so its two unresolved rows are gone: twenty-eight rows
+    (the e2e's count, `selectors()` and `reads()` included), not thirty."""
     catalogs = _defaults_catalog(tmp_path)
     workspace = DuckDbWorkspace(analyzed_ktor)
     try:
@@ -177,4 +177,6 @@ def test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route(
     assert ("GET", "/api/orders", "resolved") in {
         (str(r["method"]), str(r["path"]), str(r["resolution"])) for r in every
     }
-    assert len(every) == 27, sorted((r["method"], r["path"], r["caller"]) for r in every)
+    assert len(every) == 28, sorted(
+        (str(r["method"]), str(r["path"]), str(r["caller"])) for r in every
+    )

@@ -41,7 +41,14 @@ from sextant.application.resolve.request_requirements import (
 )
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    CallArgument,
+    CallSiteFact,
+    CallTarget,
+    Document,
+)
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -889,3 +896,339 @@ def test_a_malformed_request_requirement_attrs_block_is_refused_naming_the_file(
         record_request_requirements(workspace, [_mapping_catalog(attrs)])
     workspace.close()
     assert names in str(raised.value)
+
+
+# --- §5d `request_reads` -------------------------------------------------------------
+
+# Invented request types. `Request` is read through OWNER entries (a call's own owner and
+# name); `Call` is the container getter a `via` entry names — the read itself is a `get`
+# on whatever the getter returned, told apart by the getter that produced the receiver.
+REQUEST = "com.acme.web.Request"
+CALL = "com.acme.web.Call"
+VALIDATOR = "com.acme.web.Checked"
+HEADER_READ = {"owner": REQUEST, "method": "header", "arity": 1, "name_arg": 0, "kind": "header"}
+PARAM_READ = {"owner": REQUEST, "method": "param", "arity": 1, "name_arg": 0, "kind": "param"}
+DEMAND = {
+    "owner": REQUEST,
+    "method": "demand",
+    "arity": 2,
+    "name_arg": 1,
+    "kind": "query",
+    "requirement": "required",
+}
+TYPED = {
+    "owner": REQUEST,
+    "method": "typed",
+    "arity": 2,
+    "name_arg": 0,
+    "kind": "query",
+    "then": {"method": "get", "requirement": "required"},
+}
+QUERY_VIA = {
+    "via": {"owner": CALL, "method": "getQuery"},
+    "method": "get",
+    "arity": 1,
+    "name_arg": 0,
+    "kind": "query",
+}
+ALL_VIA = {
+    "via": {"owner": CALL, "method": "getAll"},
+    "method": "get",
+    "arity": 1,
+    "name_arg": 0,
+    "kind": "query",
+    "skip_path_variables": True,
+}
+READS = [HEADER_READ, PARAM_READ, DEMAND, TYPED, QUERY_VIA, ALL_VIA]
+
+
+def _reads_catalog(*entries: object, catalog_id: str = CATALOG) -> Catalog:
+    return Catalog(
+        id=catalog_id,
+        style="combinator",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={"request_reads": list(entries)},
+        source=Path("tests/invented-reads.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+    )
+
+
+def _site(
+    ordinal: int,
+    owner: str,
+    name: str,
+    *arguments: CallArgument,
+    receiver: int | None = None,
+    result: int | None = None,
+    caller: str = HANDLER,
+) -> CallSiteFact:
+    """One call in the handler body: `receiver` the value id the call is made on (a
+    producing call's `result`, or None for a parameter/field), `result` this call's own
+    value id."""
+    return CallSiteFact(
+        document_id="doc",
+        caller=caller,
+        target=CallTarget(owner=_descriptor(owner), name=name, descriptor="(...)V"),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=list(arguments),
+    )
+
+
+def _literal(value: str) -> CallArgument:
+    return CallArgument(kind="string", value=value)
+
+
+def _reads_workspace(
+    tmp_path: Path, sites: list[CallSiteFact], *rows: tuple[str, str, str | None]
+) -> DuckDbWorkspace:
+    write_fact_file(tmp_path / "facts" / "OrderRoutes.jsonl", _document(), sites)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive("route_requirements_reset")
+    for method, path, handler in rows:
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            [method, path, handler, ROUTES, CATALOG],
+        )
+    return workspace
+
+
+def _reads(
+    tmp_path: Path,
+    sites: list[CallSiteFact],
+    *rows: tuple[str, str, str | None],
+    catalogs: list[Catalog] | None = None,
+) -> set[tuple]:
+    """`(method, path, kind, name, requirement, resolution)` per row written; every row
+    carries `value` NULL, `caller` the handler and `evidence: compiler`, asserted once
+    here for all of them."""
+    if not rows:
+        rows = (("GET", "/orders", HANDLER),)
+    workspace = _reads_workspace(tmp_path, sites, *rows)
+    record_request_requirements(workspace, catalogs or [_reads_catalog(*READS)])
+    entries = _entries(workspace)
+    workspace.close()
+    handlers = {handler for _, _, handler in rows if handler is not None}
+    assert all(
+        e["value"] is None and e["caller"] in handlers and e["evidence"] == "compiler"
+        for e in entries
+    ), entries
+    return {
+        (e["method"], e["path"], e["kind"], e["name"], e["requirement"], e["resolution"])
+        for e in entries
+    }
+
+
+def test_an_owner_read_is_a_row_with_null_requirement_at_its_arity_alone(tmp_path: Path):
+    """A3 and F7 (CP-25 rows 14, 16): `request.header("X-Api")` says the handler READS
+    the header and nothing more — `requirement` NULL, not `optional`, because the
+    framework hands a null through and the handler may `throw` on it. `header("X-Set",
+    "1")` is the same name at arity 2 — the response SETTER — and matches no entry: the
+    entry carries the arity for exactly this."""
+    sites = [
+        _site(0, REQUEST, "header", _literal("X-Api"), receiver=None, result=3),
+        _site(1, REQUEST, "header", _literal("X-Set"), _literal("1"), receiver=None),
+        _site(2, REQUEST, "param", _literal("q"), receiver=None, result=4),
+    ]
+    assert _reads(tmp_path, sites) == {
+        ("GET", "/orders", "header", "X-Api", None, "resolved"),
+        ("GET", "/orders", "param", "q", None, "resolved"),
+    }
+
+
+def test_a_via_read_is_told_apart_by_the_getter_that_produced_its_receiver(tmp_path: Path):
+    """CP-24 row 6: three containers end in one `get(String)`, so the read's own owner and
+    name say nothing about WHICH value it reads; the receiver's PRODUCING call does —
+    one `_producing_site` step, the `via` pair. `getQuery()` → `get("q")` is a query
+    row. `get` on a receiver produced by a getter no entry names (`getOther`), on a
+    receiver produced by nothing in the body (a parameter), or on a value id no site
+    produced: no row — a `via` read that cannot name its container is not guessed."""
+    sites = [
+        _site(0, CALL, "getQuery", receiver=None, result=10),
+        _site(1, "com.acme.web.Values", "get", _literal("q"), receiver=10, result=11),
+        _site(2, CALL, "getOther", receiver=None, result=20),
+        _site(3, "com.acme.web.Values", "get", _literal("other"), receiver=20, result=21),
+        _site(4, "com.acme.web.Values", "get", _literal("bare"), receiver=None, result=31),
+        _site(5, "com.acme.web.Values", "get", _literal("orphan"), receiver=99, result=41),
+    ]
+    assert _reads(tmp_path, sites) == {("GET", "/orders", "query", "q", None, "resolved")}
+
+
+def test_then_makes_the_read_required_only_where_the_result_reaches_the_named_method(
+    tmp_path: Path,
+):
+    """CP-25 row 15: `typed("n", Integer.class).get()` is `required` because the
+    framework's `get()` throws on an absent value; the SAME read ending in
+    `getOrDefault(1)`, or in nothing at all, stays NULL — the chain never reached the
+    throwing method. One result-to-receiver step, the entry's `then`."""
+    sites = [
+        _site(0, REQUEST, "typed", _literal("n"), CallArgument(kind="class"), result=5),
+        _site(1, VALIDATOR, "get", receiver=5, result=6),
+        _site(2, REQUEST, "typed", _literal("page"), CallArgument(kind="class"), result=7),
+        _site(3, VALIDATOR, "getOrDefault", CallArgument(kind="int", value=1), receiver=7),
+        _site(4, REQUEST, "typed", _literal("unread"), CallArgument(kind="class"), result=8),
+    ]
+    assert _reads(tmp_path, sites) == {
+        ("GET", "/orders", "query", "n", "required", "resolved"),
+        ("GET", "/orders", "query", "page", None, "resolved"),
+        ("GET", "/orders", "query", "unread", None, "resolved"),
+    }
+
+
+def test_an_entrys_own_requirement_is_written_where_the_api_throws(tmp_path: Path):
+    """CP-24 row 5: an API that refuses the request itself (`getOrFail`) is declared
+    `requirement: required` on its entry and the row says so — the framework's word,
+    not the handler's. `name_arg: 1` reads the second argument, the first being the
+    container an extension function receives."""
+    sites = [
+        _site(0, REQUEST, "demand", CallArgument(kind="parameter", value=0), _literal("cursor"))
+    ]
+    assert _reads(tmp_path, sites) == {
+        ("GET", "/orders", "query", "cursor", "required", "resolved")
+    }
+
+
+@pytest.mark.parametrize("path", ["/orders/{id}", "/orders/{id?}", "/orders/{id...}"])
+def test_skip_path_variables_drops_the_rows_own_path_variable(tmp_path: Path, path: str):
+    """A6: `call.parameters` merges path and query, so a `get("id")` on it under
+    `/orders/{id}` — or Ktor's `{id?}`/`{id...}`, suffixes stripped — is the path
+    variable and gets no row; `get("page")` on the same container is a query. The
+    entry WITHOUT `skip_path_variables` (`getQuery`) writes `id` whatever the path
+    spells, because there `id` really is a second, query-borne value."""
+    sites = [
+        _site(0, CALL, "getAll", result=10),
+        _site(1, "com.acme.web.Values", "get", _literal("id"), receiver=10, result=11),
+        _site(2, CALL, "getAll", result=12),
+        _site(3, "com.acme.web.Values", "get", _literal("page"), receiver=12, result=13),
+        _site(4, CALL, "getQuery", result=14),
+        _site(5, "com.acme.web.Values", "get", _literal("id"), receiver=14, result=15),
+    ]
+    assert _reads(tmp_path, sites, ("GET", path, HANDLER)) == {
+        ("GET", path, "query", "page", None, "resolved"),
+        ("GET", path, "query", "id", None, "resolved"),
+    }
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        CallArgument(kind="field", symbol="com/acme/web/Names#TRACE."),
+        CallArgument(kind="unresolved"),
+        CallArgument(kind="parameter", value=0),
+    ],
+    ids=["field", "unresolved", "parameter"],
+)
+def test_a_read_whose_name_is_not_a_literal_is_an_unresolved_row(
+    tmp_path: Path, argument: CallArgument
+):
+    """§5a: "this handler reads a header it does not name" is a different statement
+    from "reads none" — the row exists with `name` NULL and `resolution: unresolved`,
+    `requirement` still the entry's (NULL here)."""
+    sites = [_site(0, REQUEST, "header", argument, result=3)]
+    assert _reads(tmp_path, sites) == {("GET", "/orders", "header", None, None, "unresolved")}
+
+
+def test_reads_write_nothing_where_there_is_no_body_to_read(tmp_path: Path):
+    """A row naming no handler, and a handler whose body has no call sites (or none an
+    entry names): nothing. The absence of a row is the statement."""
+    sites = [_site(0, REQUEST, "header", _literal("X-Api"), result=3, caller=OTHER_HANDLER)]
+    assert _reads(tmp_path, sites, ("GET", "/orders", None)) == set()
+    assert _reads(tmp_path / "no-sites", sites, ("GET", "/orders", HANDLER)) == set()
+
+
+def test_request_reads_are_the_union_of_every_loaded_catalog_applied_by_handler(
+    tmp_path: Path,
+):
+    """§5d: the lists are unioned and matched against EVERY inbound row's handler body,
+    not the declaring catalog's rows alone — Javalin declares its list once and the
+    rows its `ApiBuilder` sibling derives get the same reads. Here the row belongs to
+    `CATALOG`, which declares nothing, and the entry comes from another catalog that
+    owns no row."""
+    sites = [_site(0, REQUEST, "header", _literal("X-Api"), result=3)]
+    catalogs = [_catalog(), _reads_catalog(HEADER_READ, catalog_id="lender")]
+    assert _reads(tmp_path, sites, catalogs=catalogs) == {
+        ("GET", "/orders", "header", "X-Api", None, "resolved")
+    }
+
+
+def test_every_row_sharing_the_handler_gets_the_reads(tmp_path: Path):
+    """Two verbs, one handler, one body scanned (GUIDELINES §8.7), two rows."""
+    sites = [_site(0, REQUEST, "header", _literal("X-Api"), result=3)]
+    rows = _reads(tmp_path, sites, ("GET", "/orders", HANDLER), ("HEAD", "/orders", HANDLER))
+    assert rows == {
+        ("GET", "/orders", "header", "X-Api", None, "resolved"),
+        ("HEAD", "/orders", "header", "X-Api", None, "resolved"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry", "names"),
+    [
+        ({**HEADER_READ, "kind": "form"}, "kind"),
+        ({**HEADER_READ, "requirement": "binder"}, "requirement"),
+        ({**HEADER_READ, "name_arg": 1}, "name_arg"),
+        ({**HEADER_READ, "arity": "1"}, "arity"),
+        ({**HEADER_READ, "via": {"owner": CALL, "method": "getQuery"}}, "exactly one of"),
+        ({k: v for k, v in HEADER_READ.items() if k != "owner"}, "exactly one of"),
+        ({**QUERY_VIA, "via": CALL + "#getQuery"}, "via"),
+        ({**HEADER_READ, "then": {"requirement": "required"}}, "then"),
+        ({**HEADER_READ, "then": {"method": "get", "requirement": "maybe"}}, "then"),
+        ({**HEADER_READ, "skip_path_variables": "yes"}, "skip_path_variables"),
+        ({**HEADER_READ, "name_args": 0}, "name_args"),
+    ],
+    ids=[
+        "kind",
+        "requirement",
+        "name_arg-beyond-arity",
+        "arity-not-int",
+        "owner-and-via",
+        "neither",
+        "via-without-method",
+        "then-without-method",
+        "then-requirement",
+        "skip_path_variables",
+        "misspelt-key",
+    ],
+)
+def test_a_malformed_request_reads_entry_is_refused_naming_the_file(
+    tmp_path: Path, entry: dict[str, object], names: str
+):
+    """Closed vocabulary, `request_params`' reason: a misspelt `name_args` read as absent
+    would make every read nameless; a `name_arg` beyond the arity can never be read; an
+    entry naming both `owner` and `via`, or neither, states two rules or none."""
+    sites = [_site(0, REQUEST, "header", _literal("X-Api"), result=3)]
+    workspace = _reads_workspace(tmp_path, sites, ("GET", "/orders", HANDLER))
+    with pytest.raises(CatalogError, match=r"invented-reads\.yml") as raised:
+        record_request_requirements(workspace, [_reads_catalog(entry)])
+    workspace.close()
+    assert names in str(raised.value)
+
+
+def test_request_reads_must_be_a_list(tmp_path: Path):
+    workspace = _reads_workspace(tmp_path, [], ("GET", "/orders", HANDLER))
+    catalog = Catalog(
+        id=CATALOG,
+        style="combinator",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={"request_reads": HEADER_READ},
+        source=Path("tests/invented-reads.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+    )
+    with pytest.raises(CatalogError, match=r"invented-reads\.yml.*must be a list"):
+        record_request_requirements(workspace, [catalog])
+    workspace.close()

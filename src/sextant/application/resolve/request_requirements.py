@@ -15,17 +15,22 @@ Runs AFTER `apply_protocol_hints`: an entry names its row by the row's identity 
 and `protocol` is final only there. `requirement` states what the framework enforces and
 NULL where the code states nothing (A3).
 
-Cost per resolve (GUIDELINES §8.7): one read of `endpoints`, one of the stash, one
-`endpoint_metadata_insert` — none of them per catalog. The per-catalog mechanisms read
-what the handler row already carries.
+Cost per resolve (GUIDELINES §8.7): one read of `endpoints`, one of the stash, one pass
+over `effective_call_sites` (already built once per load) indexed by handler, one
+`endpoint_metadata_insert` — none of them per catalog. Mechanism 1 reads what the handler
+row already carries; mechanism 2 walks the effective annotation set once per catalog that
+declares `request_requirement_attrs` and owns an inbound row (two shipped), the same walk
+`routing_conflicts` makes for the same two.
 """
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
 from sextant.application.resolve.routing_conflicts import _discriminators
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -463,5 +468,216 @@ _NEGOTIATION_HEADERS = frozenset({"accept", "content-type"})
 def _from_reads(
     workspace: Workspace, endpoints: list[dict[str, object]], catalogs: list[Catalog]
 ) -> list[dict[str, Any]]:
-    """§5d, `request_reads` — lands with its own task; nothing declares it yet."""
-    return []
+    """§5d, `request_reads`: what each inbound row's HANDLER BODY reads off the request,
+    one row per read. The entries of every loaded catalog are unioned and matched against
+    every inbound row's handler — by handler, not by catalog (§5d): a framework declares
+    its list once and the rows a sibling catalog derives on the same handler type get the
+    same reads; a cross-framework match is impossible in practice, `owner`/`via` being
+    framework types. The body is scanned ONCE per handler and its sites are indexed by
+    caller ONCE for the whole pass (GUIDELINES §8.7).
+
+    A read's `requirement` is the entry's, NULL where the entry declares none (A3: a
+    bare read states that the handler reads the value and nothing about what the
+    framework does without it); `then` lifts it where the read's result reaches the
+    named method — the framework's own throwing accessor. A name that is not a string
+    literal is a row with `name` NULL, `resolution: unresolved` (§5a). The handler body
+    only, never a method it delegates to — stated on the catalogs."""
+    entries = _request_reads(catalogs)
+    if not entries:
+        return []
+    handlers = {str(e["handler"]) for e in endpoints if e.get("handler") is not None}
+    if not handlers:
+        return []
+    by_caller: dict[str, list[dict[str, Any]]] = {}
+    for site in effective_call_sites(workspace):
+        caller = str(site["caller"])
+        if caller in handlers:
+            by_caller.setdefault(caller, []).append(site)
+    out: list[dict[str, Any]] = []
+    reads_of: dict[str, list[_Read]] = {}
+    for endpoint in endpoints:
+        handler = endpoint.get("handler")
+        if handler is None:
+            continue
+        if str(handler) not in reads_of:
+            reads_of[str(handler)] = _scan(by_caller.get(str(handler), []), entries)
+        variables = _path_variables(endpoint["path"])
+        for read in reads_of[str(handler)]:
+            if read.skip_path_variables and read.name in variables:
+                continue
+            out.append(
+                _entry(
+                    endpoint,
+                    kind=read.kind,
+                    name=read.name,
+                    value=None,
+                    requirement=read.requirement,
+                    resolution="resolved" if read.name is not None else "unresolved",
+                    evidence="compiler",
+                )
+            )
+    return out
+
+
+@dataclass(frozen=True)
+class _Read:
+    """One matched read in a handler body, before the row's own path is consulted."""
+
+    kind: str
+    name: str | None
+    requirement: str | None
+    skip_path_variables: bool
+
+
+def _scan(body: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[_Read]:
+    """Every read in one handler body an entry names. An `owner` entry matches on the
+    site's own `(owner, name, arity)`; a `via` entry on `(name, arity)` plus the site
+    whose `result` is this site's `receiver` — the call that PRODUCED the value being
+    read, one step (`_producing_site`), the way the combinator's `_scope_of` keys a
+    body's values. `then` asks the reverse question of the matched site's own `result`:
+    is it the receiver of a later call named `then.method`?"""
+    by_result: dict[int, dict[str, Any]] = {}
+    receivers_of: dict[int, set[str]] = {}
+    for site in body:
+        if site["result"] is not None:
+            by_result.setdefault(int(site["result"]), site)
+        if site["receiver"] is not None and site["name"] is not None:
+            receivers_of.setdefault(int(site["receiver"]), set()).add(str(site["name"]))
+    reads: list[_Read] = []
+    for site in body:
+        if site["name"] is None:
+            continue
+        arity = len(site["arguments"])
+        for entry in entries:
+            if entry["method"] != site["name"] or entry["arity"] != arity:
+                continue
+            if "owner" in entry:
+                if entry["owner"] != site["owner"]:
+                    continue
+            else:
+                producer = (
+                    None if site["receiver"] is None else by_result.get(int(site["receiver"]))
+                )
+                if producer is None or (producer["owner"], producer["name"]) != entry["via"]:
+                    continue
+            requirement = entry.get("requirement")
+            then = entry.get("then")
+            if (
+                then is not None
+                and site["result"] is not None
+                and then["method"] in receivers_of.get(int(site["result"]), ())
+            ):
+                requirement = then["requirement"]
+            argument = site["arguments"][entry["name_arg"]]
+            name = argument.get("value") if argument.get("kind") == "string" else None
+            reads.append(
+                _Read(
+                    kind=entry["kind"],
+                    name=name if isinstance(name, str) else None,
+                    requirement=requirement,
+                    skip_path_variables=entry["skip_path_variables"],
+                )
+            )
+    return reads
+
+
+def _request_reads(catalogs: list[Catalog]) -> list[dict[str, Any]]:
+    """Every loaded catalog's `request_reads` entries, validated and converted to the
+    descriptor forms the facts spell (`owner` a type descriptor, `via` — the producing
+    call, written `{ owner, method }` — an `(owner descriptor, name)` pair), in catalog
+    order. Closed vocabulary, refused naming the file, for
+    `request_params`' reason: a misspelt `name_args` read as absent would make every
+    read nameless."""
+    entries: list[dict[str, Any]] = []
+    for catalog in catalogs:
+        declared = catalog.matches.get("request_reads")
+        if declared is None:
+            continue
+        where = f"loading catalog {catalog.source}: `request_reads`"
+        if not isinstance(declared, list):
+            raise CatalogError(f"{where} must be a list of entries, got {declared!r}")
+        for entry in declared:
+            entries.append(_request_read(entry, where))
+    return entries
+
+
+def _request_read(entry: object, where: str) -> dict[str, Any]:
+    if not isinstance(entry, dict) or not set(entry) <= _REQUEST_READS_KEYS:
+        raise CatalogError(
+            f"{where} entries carry only {'/'.join(sorted(_REQUEST_READS_KEYS))}, got {entry!r}"
+        )
+    for key in ("method", "arity", "name_arg", "kind"):
+        if key not in entry:
+            raise CatalogError(f"{where} entry lacks `{key}`: {entry!r}")
+    if ("owner" in entry) == ("via" in entry):
+        raise CatalogError(f"{where} entry names exactly one of `owner`/`via`: {entry!r}")
+    if entry["kind"] not in _KINDS:
+        raise CatalogError(f"{where} `kind` must be one of {sorted(_KINDS)}, got {entry['kind']!r}")
+    for key in ("arity", "name_arg"):
+        if not isinstance(entry[key], int) or isinstance(entry[key], bool) or entry[key] < 0:
+            raise CatalogError(f"{where} `{key}` must be a non-negative integer: {entry!r}")
+    if entry["name_arg"] >= entry["arity"]:
+        raise CatalogError(f"{where} `name_arg` must be below `arity`: {entry!r}")
+    requirement = entry.get("requirement")
+    if requirement is not None and requirement not in _READ_REQUIREMENTS:
+        raise CatalogError(
+            f"{where} `requirement` must be one of {sorted(_READ_REQUIREMENTS)}, "
+            f"got {requirement!r}"
+        )
+    skip_variables = entry.get("skip_path_variables", False)
+    if not isinstance(skip_variables, bool):
+        raise CatalogError(f"{where} `skip_path_variables` must be true or false: {entry!r}")
+    then = entry.get("then")
+    if then is not None and (
+        not isinstance(then, dict)
+        or set(then) != {"method", "requirement"}
+        or not isinstance(then["method"], str)
+        or then["requirement"] not in _READ_REQUIREMENTS
+    ):
+        raise CatalogError(
+            f"{where} `then` is `{{ method, requirement }}` with a requirement in "
+            f"{sorted(_READ_REQUIREMENTS)}: {entry!r}"
+        )
+    read: dict[str, Any] = {
+        "method": str(entry["method"]),
+        "arity": entry["arity"],
+        "name_arg": entry["name_arg"],
+        "kind": str(entry["kind"]),
+        "requirement": requirement,
+        "then": then,
+        "skip_path_variables": skip_variables,
+    }
+    if "owner" in entry:
+        read["owner"] = _catalog_symbol(str(entry["owner"]))
+    else:
+        via = entry["via"]
+        if (
+            not isinstance(via, dict)
+            or set(via) != {"owner", "method"}
+            or not all(isinstance(part, str) and part for part in via.values())
+        ):
+            raise CatalogError(f"{where} `via` is `{{ owner, method }}`, got {via!r}")
+        read["via"] = (_catalog_symbol(via["owner"]), via["method"])
+    return read
+
+
+# Every key a `request_reads` entry may carry (spec 2026-09-19 §5d). `owner` names the
+# call's own type, `via` (`{ owner, method }`) the call that produced its receiver — one
+# or the other. `arity` because one name can read the request and set the response at two
+# argument counts (F7). `requirement` only where the API itself refuses the request;
+# `then` where a later call on the read's result does (Javalin's `Validator#get()`).
+_REQUEST_READS_KEYS = frozenset(
+    {
+        "owner",
+        "via",
+        "method",
+        "arity",
+        "name_arg",
+        "kind",
+        "requirement",
+        "then",
+        "skip_path_variables",
+    }
+)
+# What a read may state about the framework: never `binder` (an annotation's word).
+_READ_REQUIREMENTS = frozenset({"required", "optional", "absent"})

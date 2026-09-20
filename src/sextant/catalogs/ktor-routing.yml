@@ -131,6 +131,47 @@ requires: [call_site, string_constants, chain_reconstruction]
 # not a module-local call, and is not followed.
 matches:
   path_join: leading_slash
+  # HANDLER-BODY READS (spec 2026-09-19 §5d, mechanism 3). What a handler reads off the
+  # request is one `endpoint_metadata` row per read, `requirement` NULL unless the API
+  # itself refuses the request (A3). The three containers — `call.request.headers`,
+  # `call.request.queryParameters`, `call.parameters` — all end in ONE read,
+  # `StringValues.get(String)` (CP-24 row 6: `Headers` and `Parameters` both extend
+  # `StringValues`), so the read's own owner and name say nothing about WHICH value is
+  # read; the call that PRODUCED the receiver does, and each entry names it as `via`
+  # (one `_producing_site` step). The `via` owners are what a 3.0.3 handler body's
+  # bytecode NAMES, measured on `fixtures/orders-ktor`'s `KtorRoutesKt$reads$1$1.
+  # invokeSuspend` (`javap -c -p`, 2026-09-20): the body's `call` is
+  # `RoutingContext.getCall()`, a `RoutingCall`, so `call.parameters` is `invokevirtual
+  # RoutingCall.getParameters` and `call.request.headers` is `RoutingCall.getRequest` →
+  # `invokevirtual RoutingRequest.getHeaders` — the CLASS overrides, never the
+  # `ApplicationCall`/`ApplicationRequest` interface methods CP-24 row 6 lists; the
+  # `get` itself is `invokeinterface Parameters.get`/`Headers.get` on the static receiver
+  # type, which is why `via` matches on name and arity and never on the read's owner.
+  # `call.parameters` merges path and query: a name that is one of the row's own path
+  # variables (`{id}`, `{id?}`, `{rest...}` — A6) is the path variable and gets no row
+  # (`skip_path_variables`); every other name there is a query parameter.
+  #
+  # `getOrFail` (CP-24 row 5): `ParametersKt.getOrFail(Parameters, String)` reads the
+  # container and throws `MissingRequestParameterException` on an absent name — the
+  # framework refuses the request, so the entry declares `requirement: required`. THE
+  # STATED BOUNDARY: the function is `inline`. A caller compiled from the same language
+  # carries the function's BODY, not a call to it — the fixture's bytecode is
+  # `Parameters.get("cursor") ; ifnonnull ; new MissingRequestParameterException ;
+  # athrow`, and no `invokestatic ParametersKt.getOrFail` exists — so that spelling
+  # reaches this catalog as a plain `get` on `getParameters` and is written as a query
+  # read with `requirement` NULL: an under-statement (the framework does refuse), never
+  # a wrong one. The entry below matches the one caller that DOES emit the call — a
+  # caller compiled from a language without inlining — and the inlined shape is logged
+  # for a rule that can read a throw off a read's result (COVERAGE).
+  #
+  # Two boundaries more, both A3's line: a `?: throw` in the handler after a bare `get`
+  # is the handler's word, not the framework's, and stays NULL; and only the handler
+  # body is read — a `suspend fun ApplicationCall.x()` helper it delegates to is not.
+  request_reads:
+    - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getHeaders },         method: get, arity: 1, name_arg: 0, kind: header }
+    - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getQueryParameters }, method: get, arity: 1, name_arg: 0, kind: query }
+    - { via: { owner: io.ktor.server.routing.RoutingCall,    method: getParameters },      method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true }
+    - { owner: io.ktor.server.util.ParametersKt, method: getOrFail, arity: 2, name_arg: 1, kind: query, requirement: required }
   # `HttpMethod.DefaultMethods` at 3.0.3, in the static initialiser's order (CP-24 row 2):
   # what a verb-less `handle { }` under no `method` selector expands to.
   all_methods: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]

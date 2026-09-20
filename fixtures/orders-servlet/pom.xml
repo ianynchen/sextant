@@ -1,0 +1,23 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-servlet</artifactId>
+  <version>1.0.0</version>
+  <!-- A plain `@WebServlet` on an `HttpServlet` subclass (`jakarta-servlet`), in its own
+       module so that `orders-service`'s pinned row counts do not move. The Servlet API is
+       not published as a jar of its own in this repository's cache, so it arrives the way
+       CP-9's harness takes it: bundled inside `tomcat-embed-core` — the container CP-9 and
+       CP-25 rows 16–17 measured — `provided`, API classes only; never runs. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId><artifactId>tomcat-embed-core</artifactId><version>10.1.50</version>
+      <scope>provided</scope>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

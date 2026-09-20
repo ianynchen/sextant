@@ -23,6 +23,7 @@ import io.ktor.server.routing.param
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
+import io.ktor.server.util.getOrFail
 
 fun Application.orders() {
     routing {
@@ -123,5 +124,30 @@ fun Application.selectors() {
         optionalParam("page") { get("/paged") { call.respondText("paged") } }
         route("/legacy2", HttpMethod.Put) { handle { call.respondText("put") } }  // PUT /legacy2
         method(HttpMethod.Post) { get("/never") { call.respondText("never") } }   // no row
+    }
+}
+
+// HANDLER-BODY READS (`request_reads`, spec 2026-09-19 §5d; CP-24 Q5/Q6). What a handler
+// READS off the request is one `endpoint_metadata` row per read, `requirement` NULL unless
+// the API itself refuses the request (A3): `call.request.headers["X-Trace"]` → header,
+// `call.request.queryParameters["q"]` → query, `call.parameters["page"]` → query — all
+// three end in `StringValues.get(String)`, told apart by the getter that PRODUCED the
+// receiver (the catalog's `via`) — and `call.parameters.getOrFail("cursor")` → query,
+// `required`, because `ParametersKt.getOrFail` throws `MissingRequestParameterException`
+// on an absent name (CP-24 Q5). `call.parameters["id"]` names the route's own `{id}`:
+// `call.parameters` merges path and query, so that read is the path variable and gets NO
+// row (`skip_path_variables`, A6). Each read's static receiver type — `RoutingCall`,
+// `RoutingRequest`, `Parameters`/`Headers` — is what kotlinc wrote at the call site, and
+// the catalog's `via`/`owner` spellings are read off THIS class's bytecode.
+fun Application.reads() {
+    routing {
+        get("/reads/orders/{id}") {
+            val id = call.parameters["id"]
+            val page = call.parameters["page"]
+            val trace = call.request.headers["X-Trace"]
+            val q = call.request.queryParameters["q"]
+            val cursor = call.parameters.getOrFail("cursor")
+            call.respondText("$id $page $trace $q $cursor")
+        }
     }
 }

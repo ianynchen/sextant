@@ -634,23 +634,20 @@ JAVALIN = FIXTURES / "orders-javalin"
 
 
 @pytest.fixture(scope="module")
-def javalin_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+def javalin_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    """One `module analyze` of the Javalin fixture — the routes below and the handler-read
+    rows (§5d) both read it, so it runs once per file rather than once per fixture."""
+    return _analyzed_tables(JAVALIN, tmp_path_factory.mktemp("javalin"))
+
+
+@pytest.fixture(scope="module")
+def javalin_routes(javalin_tables: dict[str, list[dict]]) -> set[tuple[str, str, str]]:
     """`(direction, method, path)` for every inbound HTTP row the Javalin fixture derives."""
-    workspace_dir = tmp_path_factory.mktemp("javalin")
-    compile_fixture(JAVALIN)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(JAVALIN), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
-    try:
-        return {
-            (str(row["direction"]), str(row["method"]), str(row["path"]))
-            for row in workspace.query("endpoints")
-            if str(row["protocol"]) == "http"
-        }
-    finally:
-        workspace.close()
+    return {
+        (str(row["direction"]), str(row["method"]), str(row["path"]))
+        for row in javalin_tables["endpoints"]
+        if str(row["protocol"]) == "http"
+    }
 
 
 def test_javalin_flat_registrations_derive_every_route(javalin_routes):
@@ -698,6 +695,7 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
         # outside a block (6.4.0 jar), so the call can only ever run inside one (spec
         # 2026-09-19 §4a).
         ("inbound", "GET", "/jv/helped/h"),
+        ("inbound", "GET", "/jv/nested/reads"),  # the handler-read fixture (§5d), below
     }
     assert expected <= javalin_routes, sorted(javalin_routes)
     assert ("inbound", "GET", "/{id}") not in javalin_routes
@@ -872,14 +870,18 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         (r["path"], r["consumes"], r["produces"]) for r in ktor_rows if r["path"] in ("/j", "/c")
     }
     assert media == {("/j", None, '["application/json"]'), ("/c", '["application/json"]', None)}
-    # Exactly twenty-seven rows — the twenty-four above, the stray, and the two `mount`
-    # rows — so an extra row (a conflict's route, a duplicate) cannot pass silently.
-    assert len(ktor_rows) == 27, sorted(rows, key=str)
+    # Exactly twenty-eight rows — the twenty-four above, the stray, the two `mount` rows
+    # and `reads()`'s `GET /reads/orders/{id}` (the handler-read fixture, §5d, asserted on
+    # `endpoint_metadata` below) — so an extra row (a conflict's route, a duplicate) cannot
+    # pass silently.
+    assert len(ktor_rows) == 28, sorted(rows, key=str)
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
     assert all(
-        "#orders(" in str(r["caller"]) or "#selectors(" in str(r["caller"])
+        "#orders(" in str(r["caller"])
+        or "#selectors(" in str(r["caller"])
+        or "#reads(" in str(r["caller"])
         for r in ktor_rows
         if r["resolution"] == "resolved"
     )
@@ -892,6 +894,102 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
         (None, None, "unresolved", None),
         (None, None, "unresolved", None),
     ], mounted
+
+
+def test_ktor_handler_reads_reach_endpoint_metadata(ktor_tables):
+    """`inbound-request-requirements`, mechanism 3 on Ktor (spec 2026-09-19 §5d; CP-24
+    rows 5–6), on real bytecode. `reads()`'s one handler reads five values and the table
+    carries four: `call.request.headers["X-Trace"]` → header, `call.request.
+    queryParameters["q"]` → query, `call.parameters["page"]` → query — each `requirement`
+    NULL, a bare read stating that the handler reads the value and nothing about what
+    Ktor does without it (A3) — and `call.parameters["id"]` NOTHING, because `id` is the
+    route's own `{id}` and `call.parameters` merges path and query (`skip_path_variables`,
+    A6). The three `get`s are one method on one `StringValues` supertype, told apart by
+    the getter that produced the receiver (`via`): `RoutingRequest.getHeaders`,
+    `RoutingRequest.getQueryParameters`, `RoutingCall.getParameters` — the CLASS overrides
+    a 3.0.3 handler body's `call` (a `RoutingCall`) compiles to, measured on this very
+    class and declared as such on the catalog.
+
+    `call.parameters.getOrFail("cursor")` is the honest UNDER-statement this test pins:
+    `getOrFail` is `inline`, so this body carries its BODY — `Parameters.get("cursor") ;
+    ifnonnull ; new MissingRequestParameterException ; athrow` — and never a call to
+    `ParametersKt.getOrFail`; the read reaches the pass as a plain `get` on
+    `getParameters` and is written as query `cursor`, `requirement` NULL, where Ktor
+    does in fact refuse the request (CP-24 row 5). Pinned NULL so the day a rule reads
+    the throw off the read's result this line moves visibly, and never `required` off a
+    call site that is not there (stated on the catalog and in COVERAGE)."""
+    requirements = _requirements(ktor_tables["endpoint_metadata"])
+    reads = {r for r in requirements if "reads$" in r[2]}
+    handler = _suspend_body("reads$1$1")
+    assert reads == {
+        ("GET", "/reads/orders/{id}", handler, "header", "X-Trace", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "q", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "page", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "cursor", None, None, "resolved"),
+    }
+    assert not any(r[4] == "id" for r in requirements), "the path variable was written as a query"
+    # The selector rows and the read rows are the whole table: eight rows, nothing else.
+    assert len(requirements) == 8, sorted(requirements, key=str)
+
+
+def test_javalin_handler_reads_reach_endpoint_metadata(javalin_tables):
+    """`inbound-request-requirements`, mechanism 3 on Javalin (spec 2026-09-19 §5d; CP-25
+    rows 14–15), on real bytecode. The `ApiBuilder` handler under `/jv/nested/reads`:
+    `ctx.queryParam("q")` → query and `ctx.header("X-Api")` → header, `requirement` NULL
+    (A3: Javalin hands a null through); `ctx.queryParamAsClass("n", Integer.class).get()`
+    → query `n`, `required` — `Validator.get()` throws `ValidationException` on an absent
+    value, the framework's own refusal, reached through the catalog's `then: { method:
+    get }` one result-to-receiver step; the same chain on `headerAsClass("X-Page", …)`
+    ending in `getOrDefault(1)` stays NULL. `ctx.header("X-Set", "1")` — the two-argument
+    SET on the response (F7) — writes nothing: the entries carry the read's arity and no
+    other. The list is declared on `javalin.yml` and reaches this `javalin-apibuilder` row
+    because reads are applied by HANDLER, not by catalog (§5d).
+
+    The rows of `flat()` and `mounted()` carry NO reads, and could not: a `single_call`
+    row's `handler` is the registering method, not the `Handler` lambda, so the lambda's
+    body is outside what this pass scans — a stated boundary, not a claim (COVERAGE)."""
+    rows = javalin_tables["endpoints"]
+    handler = _handler_of(rows, "GET", "/jv/nested/reads")
+    assert "OrderApp#lambda$nested$" in handler
+    requirements = _requirements(javalin_tables["endpoint_metadata"])
+    assert requirements == {
+        ("GET", "/jv/nested/reads", handler, "query", "q", None, None, "resolved"),
+        ("GET", "/jv/nested/reads", handler, "query", "n", None, "required", "resolved"),
+        ("GET", "/jv/nested/reads", handler, "header", "X-Api", None, None, "resolved"),
+        ("GET", "/jv/nested/reads", handler, "header", "X-Page", None, None, "resolved"),
+    }
+
+
+SERVLET = FIXTURES / "orders-servlet"
+
+
+@pytest.fixture(scope="module")
+def servlet_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(SERVLET, tmp_path_factory.mktemp("servlet"))
+
+
+def test_servlet_handler_reads_reach_endpoint_metadata(servlet_tables):
+    """`inbound-request-requirements`, mechanism 3 on the Servlet API (spec 2026-09-19
+    §5d; CP-25 row 16), on real bytecode — the first servlet fixture, a `@WebServlet` on
+    an `HttpServlet` subclass compiled against the API `tomcat-embed-core` bundles.
+    `jakarta-servlet.yml` derives `GET /sv/orders` with `doGet` as its handler
+    (`supertype_dispatch`), and `doGet`'s body reads two values: `req.getParameter("q")`
+    → `param` (one method for the query string and a form body, §5a) and
+    `req.getHeader("X-Api")` → header, both `requirement` NULL — abstract on the API,
+    null-on-absent in the container, nothing refuses (A3). Both call sites name
+    `HttpServletRequest`, the parameter's declared type, even for the
+    `ServletRequest`-declared `getParameter` — which is the owner the entry names.
+    `resp.setHeader(...)` is on the response type and writes nothing."""
+    rows = servlet_tables["endpoints"]
+    assert [(r["catalog_id"], r["method"], r["path"], r["resolution"]) for r in rows] == [
+        ("jakarta-servlet", "GET", "/sv/orders", "resolved")
+    ]
+    handler = _handler_of(rows, "GET", "/sv/orders")
+    assert handler.endswith("com/acme/sv/OrderServlet#doGet(sig_55584cc2).")
+    assert _requirements(servlet_tables["endpoint_metadata"]) == {
+        ("GET", "/sv/orders", handler, "param", "q", None, None, "resolved"),
+        ("GET", "/sv/orders", handler, "header", "X-Api", None, None, "resolved"),
+    }
 
 
 KTOR_CLASSLAMBDAS = FIXTURES / "orders-ktor-classlambdas"
@@ -958,7 +1056,7 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
         "only under the default profile": sorted(default - classes, key=str),
         "only under -Xlambdas=class": sorted(classes - default, key=str),
     }
-    assert len(ktor_classlambda_rows) == len(ktor_rows) == 27
+    assert len(ktor_classlambda_rows) == len(ktor_rows) == 28
 
 
 def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
@@ -968,10 +1066,11 @@ def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
     "2")` → header, value `2`, `required` — the selector refuses a request without it;
     `param("debug")` → query, no value, `required`; `param("mode", "fast")` → query,
     value `fast`, `required`; `optionalParam("page")` → query, `optional` — the route is
-    registered whether or not the parameter is present. Nothing else on this fixture
-    states a requirement, so these four rows are the whole table; the rows they
-    describe are `selectors()`'s own, above."""
-    assert _requirements(ktor_tables["endpoint_metadata"]) == {
+    registered whether or not the parameter is present. These four rows are everything
+    `selectors()`'s tree states; the rest of the table is `reads()`'s handler-body reads,
+    asserted below, and the two together are the whole table."""
+    selectors = {r for r in _requirements(ktor_tables["endpoint_metadata"]) if "selectors$" in r[2]}
+    assert selectors == {
         (
             "GET",
             "/orders",

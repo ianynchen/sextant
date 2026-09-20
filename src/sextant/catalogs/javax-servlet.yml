@@ -48,6 +48,13 @@ matches:
 
   members: overridden_dispatch_methods
 
+  # Handler-body reads (spec 2026-09-19 §5d), the jakarta twin's two entries under this
+  # package spelling — CP-25 row 17 measures the same abstract declarations and the same
+  # null-on-absent container tails on Tomcat 9.0.121, so `requirement` is NULL here too.
+  request_reads:
+    - { owner: javax.servlet.http.HttpServletRequest, method: getParameter, arity: 1, name_arg: 0, kind: param }
+    - { owner: javax.servlet.http.HttpServletRequest, method: getHeader,    arity: 1, name_arg: 0, kind: header }
+
   # Seven entries, matched on name AND parameter types in order (§8.1's
   # language rule; CP-9 row 18 measured the 405 a name-only selector would
   # publish). `doTrace` carries the same stated connector dependency as its
