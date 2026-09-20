@@ -208,7 +208,7 @@ needs it.
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
-| `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence |
+| `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler |
 
 **`both` is reserved for the linking tier, and no pass here produces it** (F5 §6.1, W27).
 A wire identity a module both exposes and calls stays TWO rows; the shape of a `both` row is
@@ -256,6 +256,21 @@ table over. It is a side table rather than columns because the count is unbounde
 entry needs its own trust pair: a header whose value could not be read is visibly
 unresolved, and *sends a header we could not read* is a different claim from *sends no
 header*.
+
+**The same table holds what an inbound endpoint's framework DEMANDS of a request** (spec
+2026-09-19 §5a). An inbound row's entries are the headers, query parameters and cookies the
+framework's binder or routing tree enforces — `direction = inbound`, `caller` the handler
+symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs that cannot
+tell query from form) — and **`requirement`** states what is enforced: `required` (the
+framework rejects a request without it), `optional` (it serves one without it), `absent`
+(it requires it to be missing). The column states what the FRAMEWORK enforces, never what
+the handler body does with the value. NULL on an inbound row means the code states nothing
+— a bare read in a handler body says only that the handler reads the value — and NULL on
+every outbound row is the existing meaning: an entry sent has no requirement. The insert is
+insert-if-absent on the full row, because two catalogs can describe one handler and their
+identical entries are one entry. Written after `apply_protocol_hints`, for the reason every
+pass below that line gives: an entry names its row by the row's identity columns, and
+`protocol` is final only there.
 
 **Its `value` is redacted at the ORIGIN, alone among value columns.** Every other one is
 masked at export, because analysis reads it — substituting `REDACTED` into an address would

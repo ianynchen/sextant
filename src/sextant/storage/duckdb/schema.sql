@@ -480,6 +480,9 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- header or query parameter, a Kafka record header or partition key, an AMQP routing key,
 -- a JMS property, an SQS message attribute, a Pub/Sub attribute. It is what makes an
 -- outbound row identifiable — two calls to one path with different headers are two calls.
+-- And, since spec 2026-09-19 §5, what an INBOUND endpoint's framework demands of a
+-- request beside its address — the same columns, `caller` the handler, `requirement`
+-- stating what is enforced.
 --
 -- **A side table, not columns on `endpoints`**, for the reason `scheduled_work` is its own
 -- table: the count is unbounded and per-entry. One row per entry, each carrying its OWN
@@ -520,7 +523,13 @@ CREATE TABLE IF NOT EXISTS endpoint_metadata (
     -- D00 §4's sets. `unresolved` where the entry's presence is known and its value is
     -- not — a header built from a variable, a value read from configuration.
     resolution TEXT,
-    evidence   TEXT
+    evidence   TEXT,
+    -- Spec 2026-09-19 §5a. What the FRAMEWORK enforces about this entry on an inbound row:
+    -- `required` (it rejects a request without it), `optional` (it serves one without it),
+    -- `absent` (Spring's `params = "!name"`). NULL on every outbound row — an entry sent
+    -- has no requirement — and on an inbound row the code states nothing about: a bare
+    -- read in a handler body says only that the handler READS the value (A3).
+    requirement TEXT
 );
 
 CREATE TABLE IF NOT EXISTS type_hierarchy (

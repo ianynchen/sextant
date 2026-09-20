@@ -4510,6 +4510,7 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_service_identity_gaps",
         "record_environment_divergence",
         "apply_protocol_hints",
+        "record_request_requirements",
         "record_self_exchange",
         "record_routing_conflicts",
         "record_roots",

@@ -679,6 +679,10 @@ def _metadata_row(
         else (REDACTED if name is None else _REDACTOR.redact_value(name, literal)),
         "resolution": "resolved" if literal is not None else "unresolved",
         "evidence": "compiler",
+        # An entry a call SENDS has no requirement (spec 2026-09-19 §5a) — stated on the
+        # row, because a row missing a declared struct key takes the statement's
+        # per-value retry route (`workspace.derive`), which the pipeline test forbids.
+        "requirement": None,
     }
 
 
