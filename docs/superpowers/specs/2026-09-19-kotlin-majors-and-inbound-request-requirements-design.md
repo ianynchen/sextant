@@ -5,7 +5,9 @@ three ruled by the user. Self-review against the frameworks' jars, kotlinc 2.2.0
 the fixtures, the JVM extractor and the engines is folded in (§0); a second review against
 four lenses — no false positives, future languages, conflicts, over-engineering — found two
 issues the user ruled on 2026-09-19 (R1, R2) and twelve the author resolved (§0b). Not yet
-planned.
+planned. *(amended 2026-09-20 during implementation: implemented on `feat/kotlin-majors-and-request-requirements`, Tasks 1–15; every
+place the built code differs from the section as approved carries a note like this one, and
+§0c lists them all with the task that forced each.)*
 
 **Closes — the four Kotlin/Ktor Majors, the one Group G item, and one new item:**
 `ktor-route-extensions` (a `fun Route.api()` helper called from `routing { }` derives
@@ -72,6 +74,26 @@ before any engine work.
 | A12 | over-eng. | reviewed: `absent` (Spring `!name` is real and one enum value); Javalin's `then: { method: get }` (the idiomatic typed-parameter form); the `-Xlambdas=class` fixture variant (Kotlin < 2.0 builds are common and it is CP-23's harness anyway); the two-mask unit test (cheap) | all **kept**; nothing else was found that real input does not produce |
 
 **Future languages (lens 2), checked:** every new key is language-neutral — `header/query/cookie/param`, `required/optional/absent`, `declares_default`, `lambda_body`, `bridge_of`; the resolve layer names no language. A .NET extractor would set `declares_default` from a parameter's `HasDefault` flag and `lambda_body` on a display class if it chose to emit `instance` for closures (it need not — emitting `lambda` directly is the D00 rule). C#'s optional arguments are filled at the call site, so §3a simply never fires.
+
+### 0c. Amended during implementation
+
+Every sentence the implementation changed carries an inline note; this table is the index
+(GUIDELINES §1.1: a probe or a measured fact that contradicts the spec changes the spec).
+
+| # | Section | Amendment | Forced by |
+|---|---|---|---|
+| M1 | §3a | Mask bits index the DECLARED parameters, which exclude an extension-receiver slot carrying `receiver: true` on the sibling's declaration; when both receiver readings name a declared sibling the site is left untouched | Task 6 (`b81a2ae`), the fixture's `mount$default` bridge |
+| M2 | §3b | `lambda_body` is the body method's bare SCIP symbol (`owner#name(sig_xxxxxxxx).`), not a bare descriptor; the recognised superclasses are `Lambda`, `SuspendLambda`, `FunctionReferenceImpl` and `AdaptedFunctionReference`; a non-capturing class-compiled lambda is a singleton read as `GETSTATIC …$1.INSTANCE`, an `enum`-kind argument, and is projected the same way | Tasks 2, 5, 6 (`645dd1d`, `eefca79`, `b81a2ae`), CP-23 Q9 (`e6497f0`) |
+| M3 | §4a | The origin must flow into the helper as an ARGUMENT `{parameter, value: k}`; a member call ON the origin is a stated boundary. Depth exhaustion files ONE `routing_depth` question per run with every deep chain as a candidate `{callee, caller, depth}`, identity NULL. `reset_open_questions` runs before `derive_endpoints` | Task 8 (`11cc5ce`, `f488c3e`) |
+| M4 | §4b, §4c | `handle` carries `path: ""` (it registers on the receiver node itself); a NON-terminal verb rule with neither `verb` nor `verb_arg` is refused at load; a predicate- or variable-valued requirement is name-only and `resolved` | Task 10 (`e727f1c`), fix round (`c2d6792`) |
+| M5 | §4d | Alternatives collapsing to ONE address keep the INTERSECTION of their requirements, never the union; fan-out over `all_methods` copies the full set | fix round (`c2d6792`), the Gateway header-versioning idiom |
+| M6 | §5a | One writer, `record_request_requirements`, runs once per resolve below `apply_protocol_hints`, joining the combinator's `route_requirements` stash to `endpoints`; `evidence` is `compiler` (D00 §4's closed set) on every requirement row | Tasks 7, 11 (`51f363b`, `c3546e7`) |
+| M7 | §5b | `binder` never reads the type reference's `nullable` (Java's every reference type is `nullable: true` by rule); `optional` flips on a DECLARATION annotation in the shape model's `nullability.nullable` list, widened to every spelling Spring's simple-name rule and Micronaut's transformers accept (CP-25 rows 3, 8); the type names live on the catalog as `optional_types` and `skip_types`; `skip_path_variables` on an entry whose read serves path and query alike | Task 12 (`a45c0a3`, `6107170`) |
+| M8 | §5c | The servlet router twin (`spring-mvc-router.yml`) reads `RequestPredicates.param`, kind `param` — it has no `queryParam` (CP-26 row 2b) | Task 11 (`c3546e7`) |
+| M9 | §5d | `via` is a mapping `{ owner, method }`; Ktor's `via` owners are the 3.0.3 class overrides a handler body names (`RoutingCall`, `RoutingRequest`), not the interfaces; `required_when_thrown: <exception>` marks an INLINED throwing read (`getOrFail` is `inline`); a read's `requirement` is `required` or `optional`, never `absent`; a Javalin flat (`single_call`) row's lambda reads are invisible, a stated boundary | Tasks 13–14 (`d4ffd1a`, `e8cf642`) |
+| M10 | §7 | CP-25 is shared by three sections: row 1 (Javalin `ApiBuilder`'s thread-local guard behind `follow_calls: all`), rows 2–12 (§5b's binder rules), rows 13–17 (§5c's expression grammar and §5d's reads) | Tasks 8, 12, 13–14 |
+| M11 | §1, §9 | The Ktor fixture gained `selectors()`, `reads()`, `defaults()` and the `mount` DSL function; the test-only catalog is built inside `tests/application/test_ktor_defaults_fixture.py`; a new `fixtures/orders-servlet` carries the Servlet reads; `KotlinParamController.kt` carries the R1 case | Tasks 6, 12, 14 |
+| M12 | §10 | The "request requirements" line is a hand-written `Request requirements` row per REST-inbound framework line in COVERAGE §5.1's table (nine ✅, nine Not recorded), not a line in the generated rollup, which has no place for one | Task 15 |
 
 ---
 
@@ -165,7 +187,9 @@ on both). The join is on the target's owner + name + descriptor against `symbols
 - Arguments: the mask arguments are `kind: int` (D00 §5 — "constant instructions"), value
   read as an integer; for declared parameter *i* with bit *i* of mask ⌊i/32⌋ set, the
   argument becomes `{kind: unresolved, reason: defaulted}`; mask and marker slots are
-  dropped. A defaulted path therefore reaches a rule as unresolved — an unresolved row, never
+  dropped. *(amended 2026-09-20 during implementation: *i* counts the parameters the author DECLARED — an
+  extension receiver, the sibling's slot 0 carrying `receiver: true`, is not one of them, so
+  bit 0 is the first slot after it; measured on the fixture's `mount$default`, M1.)* A defaulted path therefore reaches a rule as unresolved — an unresolved row, never
   a guessed default (user ruling).
 - `receiver`: for an instance sibling, argument 0 (the receiver slot) becomes the row's
   `receiver`/`receiver_parameter` and `invoke_kind` becomes `virtual`; for a static sibling
@@ -182,11 +206,17 @@ DefaultConstructorMarker)`), which carry no `$default` name and no `bridge_of`.
 ### 3b. Class-compiled Kotlin lambdas — `lambda_body` (R2)
 
 **Extractor.** When `ClassScanner` scans a class whose superclass chain reaches
-`kotlin.jvm.internal.Lambda` or `kotlin.coroutines.jvm.internal.SuspendLambda` (both
+`kotlin.jvm.internal.Lambda` or `kotlin.coroutines.jvm.internal.SuspendLambda` *(amended 2026-09-20 during implementation: or `kotlin.jvm.internal.FunctionReferenceImpl` or
+`kotlin.jvm.internal.AdaptedFunctionReference` — a function reference `::listOrders` compiles
+to a `FunctionReferenceImpl` subclass in both lambda modes, with no `invokeSuspend` even when
+the referenced function suspends; its typed `invoke` is the body, and that body's call to the
+referenced function is the trace layer's to follow, CP-23 Q9, M2)* (both
 `public abstract class` in kotlin-stdlib 2.2.0 — `javap -cp ~/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib/2.2.0/kotlin-stdlib-2.2.0.jar kotlin.jvm.internal.Lambda kotlin.coroutines.jvm.internal.SuspendLambda`;
 the direct superclass is read off the class file, and the two names are the extractor's
 knowledge of its own compiler, where D00 §5 puts it), the class's **type** symbol fact
-carries **`lambda_body: "<body method's bare descriptor>"`**, absent otherwise — the same
+carries **`lambda_body: "<body method's bare descriptor>"`** *(amended 2026-09-20 during implementation: the body method's bare SCIP
+symbol, `owner#name(sig_xxxxxxxx).`, the spelling a `lambda` argument's `symbol` already has,
+so the join is on equal strings, M2)*, absent otherwise — the same
 shape and placement as `bridge_of`. The body method is:
 - `invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;` when the class declares one (a
   suspend lambda: `invoke` only builds the continuation and calls `invokeSuspend`; the
@@ -197,7 +227,9 @@ A class with neither (unreadable) carries no `lambda_body` and is left alone. D0
 the field beside `bridge_of`; a Gradle test on a `-Xlambdas=class` sample pins both shapes.
 
 **Resolve.** An argument `{kind: instance, symbol: C, source}` whose type fact carries
-`lambda_body: B` becomes `{kind: lambda, symbol: B, captures: 0, source}`. The join names no
+`lambda_body: B` becomes `{kind: lambda, symbol: B, captures: 0, source}`. *(amended 2026-09-20 during implementation: so does an `enum`-kind argument naming `C` — a NON-capturing class-compiled lambda is
+a singleton the call site reads as `GETSTATIC C.INSTANCE`, which D00 §5 classifies as `enum`;
+the join key is the same shared field, M2.)* The join names no
 language: any extractor that emits `instance` for its own closure classes and marks them the
 same way gets the same projection; one that already emits `lambda` (D00's rule) never needs
 it.
@@ -244,7 +276,9 @@ method with a body is **followed**:
 - **Body with an origin** (Ktor `Route`; Spring DSL receiver): followed when the origin flows
   into the call — as the site's `receiver`, or as argument *i* (`{kind: parameter, value:
   origin}` after `captures` adjustment, exactly the test `_receiver_argument_is_the_origin`
-  already makes). Inside the callee, that parameter index is the new `origin_parameter` and
+  already makes). *(amended 2026-09-20 during implementation: as an ARGUMENT only — a member call ON the origin, the
+  origin as the callee's receiver, is not followed, since no receiver-to-`this` mapping is
+  guessed; a stated boundary, M3.)* Inside the callee, that parameter index is the new `origin_parameter` and
   the same walk runs. A verb on any other `Route` inside the callee is silence, as today.
 - **Body without an origin:** followed only where the entry declares **`follow_calls:
   all`** — `javalin-apibuilder.yml`'s `apiBuilder`/`path` bodies, because `ApiBuilder.get`
@@ -258,7 +292,10 @@ method with a body is **followed**:
   16 (Ktor's own documented structures nest 3–4). Exhausting the bound publishes **no
   endpoint row** — a row there would claim an address nobody read (A2) — but one
   `open_questions` row of a new kind **`routing_depth`** (endpoint identity = the entry's
-  caller; candidates = the callee symbol; one renderer arm, as every kind costs).
+  caller; candidates = the callee symbol; one renderer arm, as every kind costs). *(amended 2026-09-20 during implementation: ONE row per run, method and path NULL — both genuinely unread — so every deep chain
+  of the run shares one identity and is one candidate `{callee, caller, depth}` of it, the
+  `service_identity._merged` shape; and `reset_open_questions` now runs ABOVE
+  `derive_endpoints`, because the combinator files this question while deriving, M3.)*
 - **Boundaries stated:** a routing block held in a variable and invoked later (`val b:
   Route.() -> Unit = {…}; b()`) is `Function1.invoke` on a local — not followed; a callee
   that is an interface or abstract method has no body — not followed (A10).
@@ -316,7 +353,7 @@ Stated on the catalog and in COVERAGE.
 
 ```yaml
 terminals:
-  - { owner: io.ktor.server.routing.Route, method: handle, arity: 1, handler_arg: 0 }
+  - { owner: io.ktor.server.routing.Route, method: handle, arity: 1, terminal: true, path: "", handler_arg: 0 }   # amended 2026-09-20: `terminal: true`, `path: ""` (M4)
 all_methods: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]   # HttpMethod.DefaultMethods, 3.0.3 (F4)
 ```
 
@@ -325,7 +362,10 @@ expands through the catalog's `all_methods` — the word `spring-mvc.yml` alread
 bare `@RequestMapping`, one row per method (user ruling). The owner is the `Route`
 interface (F4); the receiver is the site's own `receiver`, tested against the origin as
 member verbs already are. `all_methods` is now a combinator key too, validated as a
-non-empty list of upper-case tokens.
+non-empty list of upper-case tokens. *(amended 2026-09-20 during implementation: `handle` carries `path: ""` — it registers on the receiver
+node itself and serves exactly the prefix chain, `/` at the root, never `/**`; and the loader
+now refuses a NON-terminal verb rule with neither `verb` nor `verb_arg`, which it used to read
+silently as `verb: null`, M4.)*
 
 ### 4d. `_Route.requirements`
 
@@ -334,7 +374,12 @@ requirement, resolution, evidence)`, inherited down scopes and written per emitt
 with `caller` = the row's handler symbol — which keeps two `GET /orders` under different
 `header` selectors apart in the side table after they collapse to one address in
 `endpoints` (Ktor does not refuse the pair at startup; there is no `duplicate: conflict` on
-the catalog and nothing to mirror).
+the catalog and nothing to mirror). *(amended 2026-09-20 during implementation: two routes with the SAME handler that
+collapse to one row are two alternatives for one address, and a request satisfying either is
+served — so the kept row carries the INTERSECTION of their requirement sets, never the union;
+the Gateway's header-versioning idiom, two `route()`s on `/api/**` differing in
+`header("X-Version", …)`, published `/api/**` demanding both versions until this. Fan-out over
+`all_methods` is one route seven times and copies the whole set, M5.)*
 
 ---
 
@@ -365,7 +410,12 @@ meaning (an entry sent).
 `resolve/request_requirements.py` owns the writer: one function taking `(endpoint identity,
 handler, entries)` from the three mechanisms and one `derive("endpoint_metadata_insert")`
 call per engine run, after the engine's endpoints (the fluent engine's order, for the same
-reason: an entry names a row that has to exist). The insert is **insert-if-absent on the
+reason: an entry names a row that has to exist). *(amended 2026-09-20 during implementation: one call per RESOLVE, not per
+engine — `record_request_requirements` runs once, below `apply_protocol_hints`, because an
+entry names its row by the identity columns and `protocol` is final only there; the
+combinator writes its selector and predicate requirements to a `route_requirements` stash
+beside its rows, re-created by `derive_endpoints`, and the writer joins the stash to
+`endpoints`. Every requirement row's `evidence` is `compiler`, D00 §4's closed set, M6.)* The insert is **insert-if-absent on the
 full row** (A8): `spring-web.yml` and `spring-mvc.yml` can both match one `@RestController`
 class, and their identical endpoint rows already meet the same guard.
 
@@ -384,14 +434,24 @@ request_params:
   `default_attr` is present, when the parameter type is `java.util.Optional`, when the
   parameter's type reference is `nullable: true` (Kotlin `?` and `@Nullable` both land
   there, D00 §6), or when the parameter carries `declares_default: true` (§3c, R1); else
-  `required`.
+  `required`. *(amended 2026-09-20 during implementation: the type reference's `nullable` is NOT read — D00 §5 records
+  every Java reference type `nullable: true` by language rule, so reading it would make every
+  `@RequestParam String` optional; the disjunct is a DECLARATION annotation on the parameter
+  whose descriptor is in the shape model's `nullability.nullable` list, which is what Spring's
+  `hasNullableAnnotation()` reads by simple name (CP-25 row 3) and what Micronaut's transformers
+  map onto `jakarta.annotation.Nullable` (row 8) — the list widened to every measured
+  spelling; kotlinc's `@Nullable` lands there too. `java.util.Optional` is named on the entry as
+  `optional_types`, because the pass names no language's types, M7.)*
 - **`requirement: optional`** is JAX-RS's rule: absent → null or `@DefaultValue`, never a
   400 (`default_annotation: jakarta.ws.rs.DefaultValue`, informational — it does not change
   the requirement).
 - **Name:** the first present of `name_attrs`, else the parameter's declared `name`; a
   parameter compiled without names → unresolved row.
 - **Skipped, stated on the catalog:** whole-map bindings (`Map`, `MultiValueMap`,
-  `HttpHeaders` types — no name); Micronaut's *unannotated* by-name binding.
+  `HttpHeaders` types — no name); Micronaut's *unannotated* by-name binding. *(amended 2026-09-20 during implementation: the whole-map types are the entry's `skip_types` list, by exact erased type;
+  `skip_path_variables: true` on an entry whose read serves path and query alike — reactive
+  routes' `@Param`, Vert.x's `getParam` — drops a name that is one of the row's own path
+  variables; and an annotation use the scanner did not read (`args` absent) writes nothing, M7.)*
 
 Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 
@@ -414,7 +474,9 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
 - **Spring router DSL, Java:** `RequestPredicates.queryParam(String, String)` → query,
   required, value; `queryParam(String, Predicate)` → query, required, value NULL;
   `headers(Predicate<Headers>)` — an arbitrary function, unreadable — nothing, stated.
-  Declared as a new `request_requirement:` list beside `media:` in both router catalogs. (Kotlin's
+  Declared as a new `request_requirement:` list beside `media:` in both router catalogs. *(amended 2026-09-20 during implementation: the servlet twin, `spring-mvc-router.yml`, declares `RequestPredicates.param`,
+  kind `param` — it has no `queryParam`, and `ParamPredicate.test` reads `ServerRequest.param`,
+  backed by `getParameterMap`, query and form alike (CP-26 rows 2, 2b), M8.)* (Kotlin's
   `queryParam` is the route-declaring overload already in `slice.outside`; unchanged.)
 - **Spring Cloud Gateway** (`PredicateSpec` and `BooleanSpec$BooleanOpSpec`, 5.0.0 — F-row
   measured: `header(String)`, `header(String, String)`, `query(String)`, `query(String,
@@ -436,9 +498,14 @@ list. For Ktor the handler is the §3b body method (or the invokedynamic synthet
 request_reads:
   # Ktor 3.0.3 — the three containers all end in `StringValues.get(String)`, so the
   # receiver's PRODUCING call says which one (`via`, one `_producing_site` step)
-  - { via: io.ktor.server.request.ApplicationRequest#getHeaders,         method: get, arity: 1, name_arg: 0, kind: header }   # requirement NULL: a read states nothing (A3)
-  - { via: io.ktor.server.request.ApplicationRequest#getQueryParameters, method: get, arity: 1, name_arg: 0, kind: query }
-  - { via: io.ktor.server.application.ApplicationCall#getParameters,     method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true }
+  # amended 2026-09-20 (M9): `via` is a mapping, and the owners are the 3.0.3 CLASS overrides
+  # a handler body's bytecode names — `RoutingContext.getCall()` is a `RoutingCall` —
+  # never the interfaces this block first listed
+  - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getHeaders },         method: get, arity: 1, name_arg: 0, kind: header }   # requirement NULL: a read states nothing (A3)
+  - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getQueryParameters }, method: get, arity: 1, name_arg: 0, kind: query,
+      required_when_thrown: io.ktor.server.plugins.MissingRequestParameterException }
+  - { via: { owner: io.ktor.server.routing.RoutingCall,    method: getParameters },      method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true,
+      required_when_thrown: io.ktor.server.plugins.MissingRequestParameterException }
   - { owner: io.ktor.server.util.ParametersKt, method: getOrFail, arity: 2, name_arg: 1, kind: query, requirement: required }
 ```
 
@@ -447,7 +514,14 @@ request_reads:
   `{rest...}`, A6) — is the path variable and is not recorded.
 - An entry with no `requirement` writes NULL (A3). `requirement: required` is declared only
   on APIs that reject the request themselves: `getOrFail` (`MissingRequestParameterException`
-  → 400), Javalin's `Validator#get()`.
+  → 400), Javalin's `Validator#get()`. *(amended 2026-09-20 during implementation: `getOrFail` is `inline`, so a Kotlin caller
+  carries its BODY — `Parameters.get(name); ifnonnull; new MissingRequestParameterException;
+  athrow` — and never a call to `ParametersKt.getOrFail`; the `owner` entry matches only a
+  caller that emits the call. **`required_when_thrown: <exception>`** on a `via` entry reads
+  the inlined shape: the read is `required` when the SAME body constructs that exception with
+  the read's own literal name as its first argument; a bare `get` with the handler's own
+  `?: throw` stays NULL. A read's `requirement` is `required` or `optional`, never `absent` —
+  no read API demands absence, M9.)*
 - **Javalin 6.4.0** (F7): `Context#queryParam(String)`→query, `header(String)`→header,
   `cookie(String)`→cookie, all `arity: 1`, requirement NULL; `queryParamAsClass(String,
   Class)` / `headerAsClass(String, Class)` → `required` **when** the result chain reaches
@@ -462,7 +536,10 @@ request_reads:
   in practice (`via`/`owner` are framework types), and each written row's `evidence` names
   the catalog its entry came from.
 - **Boundaries stated:** the handler body only, never methods it delegates to; frameworks
-  whose handlers bind by annotation declare no `request_reads` in this spec.
+  whose handlers bind by annotation declare no `request_reads` in this spec. *(amended 2026-09-20 during implementation: and a Javalin FLAT row's reads are invisible — a `single_call` row's `handler` is the
+  registering method (`OrderApp#flat`), not the `Handler` lambda it passes, so
+  `app.get("/x", ctx -> ctx.queryParam("q"))` writes nothing; the `ApiBuilder` rows carry
+  the lambda body as `handler` and read fully, M9.)*
 
 ### 5e. Downstream
 
@@ -504,7 +581,7 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 |---|---|---|
 | **CP-23** kotlinc 2.2.0 call-site shapes — a Maven module beside `orders-ktor` compiled twice, default and `-Xlambdas=class` | a `$default` call's mask literal and bit meaning (F3), receiver vs static sibling, a two-mask (33-parameter) function; a lambda class's superclass (`Lambda`/`SuspendLambda`), its `invoke`/`invokeSuspend` methods and synthetic flags, constructor-captured fields; `@kotlin.Metadata`'s `declaresDefaultValue` flag on a defaulted parameter | §3a, §3b, §3c |
 | **CP-24** Ktor 3.0.3 routing surface | the selector signatures (F4), `HttpMethod.DefaultMethods`, the `HttpMethod$Companion.get*` and `ContentType$Application.get*` getters (F5), `ParametersKt.getOrFail` and what it throws, the `StringValues.get` owners of the three containers; `HttpMethodRouteSelector.evaluate` returning `Failure` on a method mismatch (A11 — bytecode, no server run) | §4b, §4c, §5d |
-| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null | §5b, §5c, §5d |
+| **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null. *(amended 2026-09-20 during implementation: shared by three sections — row 1 is Javalin `ApiBuilder`'s thread-local guard, the measured fact behind `follow_calls: all` (§4a); rows 2–12 are §5b's binder rules; rows 13–17 are `AbstractNameValueExpression`'s grammar (§5c), Javalin's `Context` read/set overloads by arity and `Validator.get()` throwing, and the Servlet API's `getParameter`/`getHeader` null-on-absent on Tomcat 10.1.50 and 9.0.121 (§5d), M10)* | §4a, §5b, §5c, §5d |
 | **CP-26** predicates — spring-webflux 6.1.6, gateway 5.0.0 | `RequestPredicates.queryParam` overloads; `PredicateSpec`/`BooleanOpSpec` header/query/cookie overloads; the properties spellings | §5c |
 
 ---
@@ -536,7 +613,11 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
   `call.request.headers["X-Trace"]`, `call.request.queryParameters["q"]`,
   `call.parameters["id"]` (path — skipped), `call.parameters.getOrFail("cursor")`; a
   module-local DSL function with a default parameter under a **test-only catalog**
-  (`tests/catalogs/kt-defaults.yml`), called with and without the argument.
+  (`tests/catalogs/kt-defaults.yml`), called with and without the argument. *(amended 2026-09-20 during implementation: as built, `KtorRoutes.kt` holds the blocks in `orders()`, `selectors()`, `reads()` and
+  `defaults()`, plus `fun Route.mount(path, version = "v1", build)` — the defaulted DSL
+  function — and `elsewhere()` for the wrong-receiver case; the test-only catalog naming
+  `mount` is built inside `tests/application/test_ktor_defaults_fixture.py`, not committed
+  under `tests/catalogs/`, M11.)*
 - **`orders-ktor-classlambdas`**: the same sources compiled with `-Xlambdas=class`
   (CP-23's harness doubles as the fixture) — the e2e asserts **identical endpoint rows** to
   `orders-ktor`.
@@ -546,7 +627,12 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
   `@RequestMapping(params = "v=1", headers = "!X-Legacy")`.
 - **Javalin fixture:** a static helper called from `apiBuilder`; `ctx.queryParam("q")`,
   `ctx.queryParamAsClass("n", Integer.class).get()`, `ctx.header("X-Api")`.
-- **Servlet, JAX-RS, Micronaut, Gateway fixtures:** one read/annotation of each kind.
+- **Servlet, JAX-RS, Micronaut, Gateway fixtures:** one read/annotation of each kind. *(amended 2026-09-20 during implementation: the Servlet reads live in a NEW fixture, `fixtures/orders-servlet`
+  (`@WebServlet("/sv/orders") OrderServlet.doGet`, the Servlet API taken from
+  `tomcat-embed-core` as CP-9 does), so no pinned count on `orders-service` moves; the
+  R1 case is `fixtures/orders-service/…/mvcroutes/KotlinParamController.kt`
+  (`page: Int = 0`, `tag: String?`); the Spring MVC conditions are
+  `MappingConditionsController.java`, M11.)*
 - **Extractor (Gradle) tests:** `lambda_body` on a `Lambda` and a `SuspendLambda` class,
   absent on an ordinary class; `declares_default` on a defaulted parameter, absent
   otherwise.
@@ -574,7 +660,7 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 | `kotlin-class-lambdas` | Spring functional ◐ → closed, engine-wide |
 | `kotlin-default-bridge-calls` | Ktor ◐, Spring functional ◐ → closed, engine-wide |
 | `kotlin-null-handler` | Spring functional ◐ → closed |
-| `inbound-request-requirements` (new, REST in) | — → a "request requirements" line on every REST-inbound framework rollup: ✅ for the fourteen catalogs in §5, "not recorded" for the rest |
+| `inbound-request-requirements` (new, REST in) | — → a "request requirements" line on every REST-inbound framework rollup: ✅ for the fourteen catalogs in §5, "not recorded" for the rest. *(amended 2026-09-20 during implementation: the generated rollup has one row per framework and no place for a capability line, so the line is a hand-written `Request requirements` ROW per framework line in §5.1's table — eighteen rows, nine ✅ shipped and nine **Not recorded**, which the rollup counts as shipped rows and as nothing respectively, M12)* |
 
 Register: the five ids leave the REST in ```delivery``` block; `inbound-request-requirements`
 is added and closed in the same PR; `ktor-route-with-verb` closes. `scripts/coverage_matrix.py`
