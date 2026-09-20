@@ -116,6 +116,22 @@ matches:
     # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
     # other and not with a method outside it.
     discriminators: [params, headers]
+    # Spec 2026-09-19 §5c, mechanism 2: the SAME two attributes read as REQUIREMENTS —
+    # one `endpoint_metadata` row per expression, attribute → `kind` (`params` → `param`,
+    # because the parameter condition reads the query string and a form body through one
+    # API; `headers` → `header`). Parsed as `AbstractNameValueExpression(String)` parses
+    # them (CP-25 row 13): `name` → `required`; `name=v` → `required`, value `v`; `!name` →
+    # `absent` — the request must NOT carry it; `name!=v` → `optional` — served whenever the
+    # value is not `v`, an absent name included, and the EXCLUDED VALUE IS LOST (no column
+    # says "not v"; stated here and in COVERAGE). Class-level and method-level expressions
+    # UNION (`ParamsRequestCondition.combine`), read off the effective annotation set
+    # exactly as `discriminators` above is. A `headers` expression naming `Accept` or
+    # `Content-Type` (case-insensitive) writes NO row: `HeadersRequestCondition.
+    # parseExpressions` drops both and Spring reads them as produces/consumes instead (A4,
+    # CP-25 row 4) — and this catalog's `consumes_from`/`produces_from` read the
+    # attributes of that name only, so a media type spelled through `headers=` reaches
+    # neither column (a stated boundary, rare in real code).
+    request_requirement_attrs: { params: param, headers: header }
     # The seventh condition, and the one no class file states: a custom `RequestCondition`
     # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
     # module declaring one is left alone entirely rather than told about a conflict it

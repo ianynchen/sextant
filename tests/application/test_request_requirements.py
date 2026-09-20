@@ -3,10 +3,11 @@ combinator's `route_requirements` stash joined to the `endpoints` rows it was mi
 with, and §5b's `request_params` — the parameter annotations on the handler, read off
 `endpoints.handler_signature` against a catalog's `request_params` entries.
 
-The two other mechanisms (§5c mapping attributes, §5d handler reads) arrive in their own
-tasks and are tested there; here they return nothing, which is what lets the first test
-say that a run with nothing declared writes NOTHING rather than an empty-looking
-something.
+Then §5c's mapping attributes — Spring's `@RequestMapping(params=, headers=)` expressions,
+read as `ParamsRequestCondition`/`HeadersRequestCondition` parse them (CP-25 rows 4 and
+13) — and §5d's `request_reads`, the handler body's own reads matched against every
+loaded catalog's list (CP-24 rows 5–6, CP-25 rows 14–17). A run with nothing declared
+still writes NOTHING rather than an empty-looking something, which the first test says.
 
 ## The binder predicate (§5b, CP-25 rows 2–8)
 
@@ -34,7 +35,13 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.request_requirements import record_request_requirements
+from sextant.application.resolve.request_requirements import (
+    _expression,
+    record_request_requirements,
+)
+from sextant.domain.closed_sets import OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -612,5 +619,273 @@ def test_a_malformed_request_params_entry_is_refused_naming_the_file(
     )
     with pytest.raises(CatalogError, match=r"invented-params\.yml") as raised:
         record_request_requirements(workspace, [catalog])
+    workspace.close()
+    assert names in str(raised.value)
+
+
+# --- §5c `mapping.request_requirement_attrs` -----------------------------------------
+
+# Invented mapping annotations, the routing-conflicts test's own pair: one per-verb
+# annotation and one class-level prefix annotation, both carrying the two attributes.
+GET_MAPPING = "com.acme.web.Get"
+CLASS_MAPPING = "com.acme.web.Path"
+CONTROLLER = "com/acme/orders/ParamsController#"
+METHOD = CONTROLLER + "search(sig_00000011)."
+OTHER_METHOD = CONTROLLER + "list(sig_00000012)."
+ATTRS = {"params": "param", "headers": "header"}
+
+
+def _document() -> Document:
+    return Document(
+        document_id="doc",
+        relative_path="com/acme/orders/ParamsController.class",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _mapping_catalog(attrs: object = ATTRS, catalog_id: str = CATALOG) -> Catalog:
+    """An inbound annotation catalog whose mapping block declares
+    `request_requirement_attrs` — the same `annotations`/`prefix_annotation` shape
+    `routing_conflicts` reads discriminators through."""
+    mapping: dict[str, object] = {
+        "annotations": [{"fqn": GET_MAPPING, "method": ["GET"]}],
+        "prefix_annotation": CLASS_MAPPING,
+    }
+    if attrs is not None:
+        mapping["request_requirement_attrs"] = attrs
+    return Catalog(
+        id=catalog_id,
+        style="annotation_driven",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={"mapping": mapping},
+        source=Path("tests/invented-mapping.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+    )
+
+
+def _annotated(target: str, annotation: str, **args: object) -> AnnotationFact:
+    """One mapping annotation on a method or its class, as the extractor writes it —
+    attribute values as the class file carries them, a `String[]` attribute a list."""
+    return AnnotationFact(
+        document_id="doc",
+        target=_MODULE + target,
+        use=AnnotationUse(annotation=_descriptor(annotation), args=args),  # type: ignore[arg-type]
+        retention="RUNTIME",
+    )
+
+
+def _mapping_workspace(
+    tmp_path: Path, annotations: list[AnnotationFact], *rows: tuple[str, str, str | None]
+) -> DuckDbWorkspace:
+    """Annotation facts loaded, then the inbound rows a test names as `(method, path,
+    handler)` — `handler` None a row naming no handler."""
+    write_fact_file(tmp_path / "facts" / "ParamsController.jsonl", _document(), annotations)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive("route_requirements_reset")
+    for method, path, handler in rows:
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES ('http', 'inbound', ?, ?, ?, ?, ?)",
+            [method, path, None if handler is None else _MODULE + handler, None, CATALOG],
+        )
+    return workspace
+
+
+def _mapping_rows(
+    tmp_path: Path,
+    annotations: list[AnnotationFact],
+    *rows: tuple[str, str, str | None],
+    catalog: Catalog | None = None,
+) -> set[tuple]:
+    """`(method, path, handler, kind, name, value, requirement, resolution)` per row
+    written, the handler as its bare descriptor."""
+    if not rows:
+        rows = (("GET", "/orders", METHOD),)
+    workspace = _mapping_workspace(tmp_path, annotations, *rows)
+    record_request_requirements(workspace, [catalog or _mapping_catalog()])
+    entries = _entries(workspace)
+    workspace.close()
+    return {
+        (
+            e["method"],
+            e["path"],
+            None if e["caller"] is None else str(e["caller"]).removeprefix(_MODULE),
+            e["kind"],
+            e["name"],
+            e["value"],
+            e["requirement"],
+            e["resolution"],
+        )
+        for e in entries
+    }
+
+
+@pytest.mark.parametrize(
+    ("expression", "parsed"),
+    [
+        ("v", ("v", None, "required")),
+        ("v=1", ("v", "1", "required")),
+        ("!legacy", ("legacy", None, "absent")),
+        ("v!=2", ("v", None, "optional")),
+        # `name=` is a written empty value: required, and the value IS the empty string.
+        ("v=", ("v", "", "required")),
+        # A `=` inside the value stays in the value — only the FIRST `=` separates.
+        ("q=a=b", ("q", "a=b", "required")),
+        ("", None),
+        ("=1", None),
+        ("!", None),
+        ("!=1", None),
+    ],
+)
+def test_the_expression_grammar_is_the_frameworks_own(
+    expression: str, parsed: tuple[str, str | None, str] | None
+):
+    """CP-25 row 13, `AbstractNameValueExpression(String)`: the first `=` splits name from
+    value; with none, a leading `!` negates (`!name` → the framework requires the name
+    to be ABSENT); with one, a `!` just before it negates (`name!=v` → served whenever
+    the value is not `v`, absent included — `optional`, the excluded value lost, stated
+    on the catalog). An empty name parses in Spring and matches nothing a client could
+    send, so here it is None — skipped, never a nameless row."""
+    assert _expression(expression) == parsed
+
+
+def test_method_and_class_expressions_union_into_one_row_each(tmp_path: Path):
+    """§5c: `ParamsRequestCondition.combine` adds the class's expressions to the method's
+    — union, the same read `routing_conflicts._discriminators` makes — so a method under
+    `@Path(params = "tenant")` carrying `@Get(params = "v=1", headers = "!X-Legacy")`
+    demands all three: `v` = `1` required, `X-Legacy` absent, `tenant` required.
+    `kind` is the attribute's, per the catalog (`params` → `param`: Spring cannot tell
+    query from form through it); `caller` the handler; `evidence: compiler`."""
+    annotations = [
+        _annotated(METHOD, GET_MAPPING, value=["/orders"], params=["v=1"], headers=["!X-Legacy"]),
+        _annotated(CONTROLLER, CLASS_MAPPING, params=["tenant"]),
+    ]
+    assert _mapping_rows(tmp_path, annotations) == {
+        ("GET", "/orders", METHOD, "param", "v", "1", "required", "resolved"),
+        ("GET", "/orders", METHOD, "header", "X-Legacy", None, "absent", "resolved"),
+        ("GET", "/orders", METHOD, "param", "tenant", None, "required", "resolved"),
+    }
+
+
+def test_a_class_level_expression_reaches_every_method_and_a_method_level_one_its_own(
+    tmp_path: Path,
+):
+    """The union's other face: the class's `tenant` lands on both handlers, `search`'s own
+    `v=1` on `search` alone — `list` carries no attribute of its own and still gets the
+    class's."""
+    annotations = [
+        _annotated(METHOD, GET_MAPPING, value=["/orders"], params=["v=1"]),
+        _annotated(OTHER_METHOD, GET_MAPPING, value=["/all"]),
+        _annotated(CONTROLLER, CLASS_MAPPING, params=["tenant"]),
+    ]
+    rows = _mapping_rows(
+        tmp_path, annotations, ("GET", "/orders", METHOD), ("GET", "/all", OTHER_METHOD)
+    )
+    assert rows == {
+        ("GET", "/orders", METHOD, "param", "v", "1", "required", "resolved"),
+        ("GET", "/orders", METHOD, "param", "tenant", None, "required", "resolved"),
+        ("GET", "/all", OTHER_METHOD, "param", "tenant", None, "required", "resolved"),
+    }
+
+
+def test_accept_and_content_type_header_expressions_are_skipped(tmp_path: Path):
+    """A4, CP-25 row 4: `HeadersRequestCondition.parseExpressions` drops an expression
+    whose name `equalsIgnoreCase` `Accept` or `Content-Type` — Spring routes those two
+    into produces/consumes — so a `headers=` naming either, in any case, writes nothing,
+    while the header beside them does. The skip is a HEADER rule: a `params = "Accept"`
+    is an ordinary request parameter and still derives."""
+    annotations = [
+        _annotated(
+            METHOD,
+            GET_MAPPING,
+            value=["/orders"],
+            headers=["Accept=application/json", "content-type=text/xml", "X-Api"],
+            params=["Accept"],
+        ),
+    ]
+    assert _mapping_rows(tmp_path, annotations) == {
+        ("GET", "/orders", METHOD, "header", "X-Api", None, "required", "resolved"),
+        ("GET", "/orders", METHOD, "param", "Accept", None, "required", "resolved"),
+    }
+
+
+def test_a_malformed_expression_is_skipped_and_the_rest_derive(tmp_path: Path):
+    """An empty expression, a bare `!`, a `=v` with no name: each parses to no name and
+    is skipped rather than written as a nameless requirement; the well-formed sibling
+    in the same attribute derives. A scalar attribute (one expression written without
+    the array braces reaches the class file as a one-element array; the scalar form is
+    the reader's tolerance, as `_discriminators` has it) reads the same as a list."""
+    annotations = [
+        _annotated(METHOD, GET_MAPPING, value=["/orders"], params=["", "!", "=v", "page"]),
+        _annotated(CONTROLLER, CLASS_MAPPING, headers="X-Tenant=acme"),
+    ]
+    assert _mapping_rows(tmp_path, annotations) == {
+        ("GET", "/orders", METHOD, "param", "page", None, "required", "resolved"),
+        ("GET", "/orders", METHOD, "header", "X-Tenant", "acme", "required", "resolved"),
+    }
+
+
+def test_mapping_attributes_write_nothing_where_nothing_is_written(tmp_path: Path):
+    """A mapping with neither attribute, a row naming no handler, a row another catalog
+    owns: each writes nothing — the absence of a row is the statement."""
+    annotations = [
+        _annotated(METHOD, GET_MAPPING, value=["/orders"]),
+        _annotated(OTHER_METHOD, GET_MAPPING, value=["/all"], params=["v=1"]),
+    ]
+    assert _mapping_rows(tmp_path, annotations, ("GET", "/orders", METHOD)) == set()
+    assert _mapping_rows(tmp_path / "no-handler", annotations, ("GET", "/all", None)) == set()
+    workspace = _mapping_workspace(
+        tmp_path / "other-owner", annotations, ("GET", "/all", OTHER_METHOD)
+    )
+    record_request_requirements(workspace, [_mapping_catalog(catalog_id="somebody-else")])
+    entries = _entries(workspace)
+    workspace.close()
+    assert entries == []
+
+
+def test_every_row_sharing_the_handler_gets_the_mapping_expressions(tmp_path: Path):
+    """A verbless mapping fans out to one row per verb, one handler; each row carries the
+    expression (read once per handler, GUIDELINES §8.7)."""
+    annotations = [_annotated(METHOD, GET_MAPPING, value=["/orders"], params=["v=1"])]
+    rows = _mapping_rows(
+        tmp_path, annotations, ("GET", "/orders", METHOD), ("HEAD", "/orders", METHOD)
+    )
+    assert {(r[0], r[4], r[5]) for r in rows} == {("GET", "v", "1"), ("HEAD", "v", "1")}
+
+
+@pytest.mark.parametrize(
+    ("attrs", "names"),
+    [
+        (["params", "headers"], "must be a mapping"),
+        ({"params": "form"}, "kind"),
+        ({3: "param"}, "attribute"),
+    ],
+    ids=["not-a-mapping", "kind", "attribute"],
+)
+def test_a_malformed_request_requirement_attrs_block_is_refused_naming_the_file(
+    tmp_path: Path, attrs: object, names: str
+):
+    """The vocabulary is closed for the same reason `request_params`' is: a kind outside
+    D01 §3's set, or a block of the wrong shape, is refused with a `CatalogError` naming
+    the file at the pass's first use."""
+    annotations = [_annotated(METHOD, GET_MAPPING, value=["/orders"], params=["v=1"])]
+    workspace = _mapping_workspace(tmp_path, annotations, ("GET", "/orders", METHOD))
+    with pytest.raises(CatalogError, match=r"invented-mapping\.yml") as raised:
+        record_request_requirements(workspace, [_mapping_catalog(attrs)])
     workspace.close()
     assert names in str(raised.value)

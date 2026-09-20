@@ -107,6 +107,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
+        # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
+        # expression form on two handlers — one class file.
+        "MappingConditionsController.jsonl",
         "MpOrderApi.jsonl",
         "MvcBuilderRoutes.jsonl",
         "MvcInvoiceRoutes.jsonl",
@@ -265,7 +268,8 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # 139 since spec 2026-09-19 §5b: `RequestParamsController` and
     # `mvcroutes/KotlinParamController`, the parameter-annotation fixtures — one class
     # file each (the Kotlin `$default` bridge is a method of the same class, not a file).
-    assert report.documents == 139
+    # 140 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
+    assert report.documents == 140
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -349,6 +353,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "LegacyOkHttp.jsonl",
         "LegacyOrderController.jsonl",
         "LiveEndpoint.jsonl",
+        # Spec 2026-09-19 §5c: `MappingConditionsController`, every `params=`/`headers=`
+        # expression form on two handlers — one class file.
+        "MappingConditionsController.jsonl",
         "MpOrderApi.jsonl",
         "MvcBuilderRoutes.jsonl",
         "MvcInvoiceRoutes.jsonl",

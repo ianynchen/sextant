@@ -4,8 +4,9 @@ outbound entries W29 records — three mechanisms, one writer.
 
 1. `request_params` — parameter annotations on the handler (§5b), read off
    `endpoints.handler_signature`.
-2. Route-tree predicates (§5c): Spring's `@RequestMapping(params=, headers=)` read here;
-   the combinator's selector/predicate requirements arrive through the `route_requirements`
+2. Route-tree predicates (§5c): a mapping annotation's own requirement attributes
+   (`mapping.request_requirement_attrs`) read here off the effective annotation set; the
+   combinator's selector/predicate requirements arrive through the `route_requirements`
    stash the engine wrote and are joined to their rows here.
 3. `request_reads` — reads in the handler body (§5d), one set-based pass over
    `effective_call_sites`.
@@ -25,7 +26,10 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
+from sextant.application.resolve.routing_conflicts import _discriminators
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.symbols import bare_descriptor
 
 
 def record_request_requirements(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -349,8 +353,111 @@ _REQUIREMENTS = frozenset({"binder", "optional"})
 def _from_mapping_attributes(
     endpoints: list[dict[str, object]], catalog: Catalog, workspace: Workspace
 ) -> list[dict[str, Any]]:
-    """§5c, the mapping's own `params`/`headers` attributes — lands with its own task."""
-    return []
+    """§5c, the mapping's own `params`/`headers` attributes
+    (`mapping.request_requirement_attrs`, attribute → kind): every expression written on
+    the handler's mapping annotation OR its type's is one row — `ParamsRequestCondition.
+    combine` UNIONS the two sets, and so does this. The expressions are read exactly where
+    `routing_conflicts` reads them for the conflict check — `_discriminators` over the
+    EFFECTIVE annotation set, so a composed or inherited mapping's attributes count here
+    as they count there — with the catalog's attribute names in the place of its
+    `discriminators`. Each expression is parsed as the framework's own constructor parses
+    it (`_expression`, CP-25 row 13); a header expression naming `Accept` or
+    `Content-Type` is skipped (A4, CP-25 row 4: the framework routes those two into
+    produces/consumes and never registers them as header conditions)."""
+    attrs = _request_requirement_attrs(catalog)
+    if not attrs:
+        return []
+    mine = [
+        endpoint
+        for endpoint in endpoints
+        if endpoint.get("catalog_id") == catalog.id and endpoint.get("handler") is not None
+    ]
+    if not mine:
+        return []
+    annotations = effective_annotation_uses(workspace, catalog)
+    mapping = {**catalog.matches["mapping"], "discriminators": sorted(attrs)}
+    out: list[dict[str, Any]] = []
+    # One read per handler (GUIDELINES §8.7): a verbless mapping is one handler and eight
+    # rows.
+    expressions_of: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {}
+    for endpoint in mine:
+        handler = bare_descriptor(str(endpoint["handler"]))
+        if handler not in expressions_of:
+            expressions_of[handler] = _discriminators(mapping, annotations, handler)
+        for attribute, expressions in expressions_of[handler]:
+            kind = attrs[attribute]
+            for expression in expressions:
+                parsed = _expression(expression)
+                if parsed is None:
+                    continue
+                name, value, requirement = parsed
+                if kind == "header" and name.lower() in _NEGOTIATION_HEADERS:
+                    continue
+                out.append(
+                    _entry(
+                        endpoint,
+                        kind=kind,
+                        name=name,
+                        value=value,
+                        requirement=requirement,
+                        resolution="resolved",
+                        evidence="compiler",
+                    )
+                )
+    return out
+
+
+def _expression(expression: str) -> tuple[str, str | None, str] | None:
+    """`(name, value, requirement)` for one `params`/`headers` expression, parsed as
+    `AbstractNameValueExpression(String)` parses it (spring-webmvc 6.1.6, CP-25 row 13):
+    the FIRST `=` splits name from value; with no `=`, a leading `!` negates; with one, a
+    `!` immediately before it negates. Un-negated is `required` — with the value where one
+    is written, the empty string included. Negated with no value is `absent`: the
+    framework refuses a request that carries the name. Negated with a value is
+    `optional`: the framework serves the request whenever the value is not the one
+    written, an absent name included, and the excluded value has no column (stated on
+    the catalogs). None for an expression with no name — the framework constructs it and
+    it can match nothing a client sends; writing it would be a nameless requirement."""
+    separator = expression.find("=")
+    if separator == -1:
+        negated = expression.startswith("!")
+        name, value = (expression[1:] if negated else expression), None
+    else:
+        negated = separator > 0 and expression[separator - 1] == "!"
+        name = expression[: separator - 1] if negated else expression[:separator]
+        value = expression[separator + 1 :]
+    if not name:
+        return None
+    if not negated:
+        return name, value, "required"
+    return name, None, "absent" if value is None else "optional"
+
+
+def _request_requirement_attrs(catalog: Catalog) -> dict[str, str]:
+    """The catalog's `mapping.request_requirement_attrs` — attribute name → `kind` — or
+    empty where the mapping declares none. Closed vocabulary, refused naming the file, as
+    `request_params` is."""
+    mapping = catalog.matches.get("mapping")
+    if not isinstance(mapping, dict) or "request_requirement_attrs" not in mapping:
+        return {}
+    declared = mapping["request_requirement_attrs"]
+    where = f"loading catalog {catalog.source}: `mapping.request_requirement_attrs`"
+    if not isinstance(declared, dict):
+        raise CatalogError(f"{where} must be a mapping of attribute name to kind, got {declared!r}")
+    attrs: dict[str, str] = {}
+    for attribute, kind in declared.items():
+        if not isinstance(attribute, str) or not attribute:
+            raise CatalogError(f"{where} keys are attribute names, got {attribute!r}")
+        if kind not in _KINDS:
+            raise CatalogError(f"{where} `kind` must be one of {sorted(_KINDS)}, got {kind!r}")
+        attrs[attribute] = str(kind)
+    return attrs
+
+
+# The two header names `HeadersRequestCondition.parseExpressions` drops (A4, CP-25 row 4),
+# compared case-insensitively as it compares them. Media negotiation is the endpoint row's
+# own `consumes`/`produces`, never a header requirement.
+_NEGOTIATION_HEADERS = frozenset({"accept", "content-type"})
 
 
 def _from_reads(

@@ -322,7 +322,9 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # bridge's one call into `search` (the numerator's +1, the only edge into this module),
     # `search`'s five string-template calls to the platform, and the two controllers'
     # constructors' `Object.<init>`. `RequestParamsController#search` calls nothing. Still 29%.
-    assert "Calls whose callee body this workspace read: 527 of 1796 (29%)" in document
+    # 527 of 1797 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's
+    # `Object.<init>` — its two handlers return null and call nothing. Still 29%.
+    assert "Calls whose callee body this workspace read: 527 of 1797 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -362,7 +364,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 1794 since spec 2026-09-19 §5b: the eight edges the coverage line above counts, every
     # one `resolved` — a `$default` bridge's call into its own function, the string
     # template's platform calls and two constructors' `Object.<init>`.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1794." in document
+    # 1795 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's one
+    # `Object.<init>`, `resolved`; no new distinct method identity, so `declared_here` and
+    # `owner_not_scanned` below are unchanged.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1795." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
@@ -675,7 +680,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # helper's route, followed into the DSL-receiver extension.
         # 94 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET /ktparams/search`,
         # the parameter-annotation handlers — moving with `tests/cli/test_app.py`'s count.
-        "http": 94,
+        # 96 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
+        # the mapping-expression handlers — moving with `tests/cli/test_app.py`'s count.
+        "http": 96,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -915,7 +922,9 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # helper's route.
             # 161 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET
             # /ktparams/search`, the parameter-annotation handlers.
-            ("inbound", 161),
+            # 163 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `GET
+            # /v1/conditions/legacy`, the mapping-expression handlers.
+            ("inbound", 163),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),
@@ -1725,7 +1734,8 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 2026-09-19 §4a).
     # 151: + `RequestParamsController` and `mvcroutes/KotlinParamController`, the
     # parameter-annotation fixtures (spec 2026-09-19 §5b).
-    assert (None, 151) in origins
+    # 152: + `MappingConditionsController`, the mapping-expression fixture (spec 2026-09-19 §5c).
+    assert (None, 152) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

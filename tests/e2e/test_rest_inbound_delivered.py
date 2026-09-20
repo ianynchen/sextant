@@ -1158,6 +1158,63 @@ def test_a_kotlin_defaulted_or_nullable_parameter_is_optional_to_the_binder(
     }
 
 
+# --- §5c `mapping.request_requirement_attrs`: what the mapping's own expressions demand ---
+
+
+def test_spring_mapping_params_and_headers_expressions_are_requirements(
+    http_requirements, http_rows
+):
+    """`inbound-request-requirements`, mechanism 2 on Spring MVC (spec 2026-09-19 §5c;
+    CP-25 rows 4 and 13). `MappingConditionsController` carries every expression form
+    on real bytecode: the class's `params = "tenant"` reaches BOTH handlers, `required`
+    — `ParamsRequestCondition.combine` unions the class's set with the method's; on
+    `versioned`, `v=1` is `required` with the value `1` and `!X-Legacy` is `absent`,
+    the request must not carry the header; on `legacy`, `v!=1` is `optional` (served
+    whenever `v` is not `1`, an absent `v` included — the excluded value has no column),
+    `X-Api` is `required`, and `Accept=application/json` writes NOTHING:
+    `HeadersRequestCondition.parseExpressions` drops `Accept`/`Content-Type` and Spring
+    reads them as produces/consumes (A4). `kind: param` for `params=`, the same word
+    `@RequestParam` carries and for the same reason; `caller` the handler; one row each
+    although `spring-web` and `spring-mvc` both read the class (A8)."""
+    versioned = bare_descriptor(_handler_of(http_rows, "GET", "/v1/conditions/orders"))
+    legacy = bare_descriptor(_handler_of(http_rows, "GET", "/v1/conditions/legacy"))
+    assert versioned.endswith("MappingConditionsController#versioned(sig_26be7569).")
+    assert _at(http_requirements, "/v1/conditions/orders") == {
+        ("GET", versioned, "param", "tenant", None, "required", "resolved"),
+        ("GET", versioned, "param", "v", "1", "required", "resolved"),
+        ("GET", versioned, "header", "X-Legacy", None, "absent", "resolved"),
+    }
+    assert _at(http_requirements, "/v1/conditions/legacy") == {
+        ("GET", legacy, "param", "tenant", None, "required", "resolved"),
+        ("GET", legacy, "param", "v", None, "optional", "resolved"),
+        ("GET", legacy, "header", "X-Api", None, "required", "resolved"),
+    }
+    assert not any(str(r[4]).lower() == "accept" for r in http_requirements), (
+        "an Accept header expression was written as a requirement"
+    )
+
+
+def test_the_conflict_detectors_discriminators_are_the_same_requirements(
+    http_requirements, http_rows
+):
+    """W28's `RoutingConditionsController` — three handlers on `GET /v1/routing/orders`
+    that Spring registers because `params`/`headers` separate them — now states WHAT
+    separates them on each row: `view=summary`, `view=full`, `X-Orders-Api=2`, each
+    `required` with its value against its own handler. The same attributes, read the
+    same way (the effective annotation set), serving the conflict check and this table
+    alike."""
+    rows = {
+        (bare_descriptor(str(r[2])).rsplit("#", 1)[1].split("(")[0], r[3], r[4], r[5], r[6])
+        for r in http_requirements
+        if r[1] == "/v1/routing/orders"
+    }
+    assert rows == {
+        ("summary", "param", "view", "summary", "required"),
+        ("full", "param", "view", "full", "required"),
+        ("versioned", "header", "X-Orders-Api", "2", "required"),
+    }
+
+
 @pytest.fixture(scope="module")
 def spring7_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
     return _analyzed_tables(SPRING7, tmp_path_factory.mktemp("spring7-requirements"))

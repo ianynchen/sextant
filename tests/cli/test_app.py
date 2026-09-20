@@ -128,7 +128,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # the two handlers carrying every parameter-annotation form the binder rule reads
     # (`RequestParamsController`, `KotlinParamController`) — one row each, their
     # requirements in `endpoint_metadata` rather than in this count.
-    assert metadata["endpoints"]["inbound"]["http"] == 94
+    # 96 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `GET /v1/conditions/legacy`
+    # (`MappingConditionsController`), the two handlers carrying every `params=`/`headers=`
+    # expression form — one row each, the expressions in `endpoint_metadata`.
+    assert metadata["endpoints"]["inbound"]["http"] == 96
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -230,7 +233,8 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # suspend handler's class — one class file each.
     # 152 since spec 2026-09-19 §5b: `RequestParamsController` and
     # `mvcroutes/KotlinParamController` — one class file each.
-    assert metadata["coverage"]["documents"] == 152
+    # 153 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
+    assert metadata["coverage"]["documents"] == 153
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(
