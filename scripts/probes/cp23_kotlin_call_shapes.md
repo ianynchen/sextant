@@ -13,7 +13,10 @@ under `-Xlambdas=class`, a plain lambda's superclass and its two `invoke`s (one 
 one synthetic bridge), a suspend lambda's superclass and `invokeSuspend`, and a capturing
 lambda's field and constructor; Q7 which lambdas are `invokedynamic` under the default
 mode and whether a suspend lambda is a class in BOTH modes; Q8 whether the extractor jar
-reads `declares_default` off a defaulted parameter.
+reads `declares_default` off a defaulted parameter; Q9 (added 2026-09-20, after Task 5 found
+`GET("/orders", ::listOrders)` in `fixtures/orders-service` carried no `lambda_body`) what
+class a function REFERENCE compiles to under the default mode — its superclass and its
+`invoke` methods, for a plain and a suspend referent.
 
 **What this probe does not settle.** Nothing was run; every cell is a `javap` read of a
 class file, or (Q8) the extractor's own fact read off the same class files. It measures
@@ -79,10 +82,12 @@ metadata library it reported.
 | 6a | -Xlambdas=class: Shapes$plain$1 | `class` | 2.2.0 | `extends kotlin/jvm/internal/Lambda ; field INSTANCE:Lcp23/Shapes$plain$1; [ACC_PUBLIC, ACC_STATIC, ACC_FINAL] ; method <init>()V [] ; method invoke(Ljava/lang/String;)Ljava/lang/Integer; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC] ; method <clinit>()V [ACC_STATIC]` |
 | 6b | -Xlambdas=class: Shapes$suspended$1 | `class` | 2.2.0 | `extends kotlin/coroutines/jvm/internal/SuspendLambda ; field label:I [] ; field L$0:Ljava/lang/Object; [ACC_SYNTHETIC] ; method <init>(Lkotlin/coroutines/Continuation;)V [] ; method invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_FINAL] ; method create(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Lkotlin/coroutines/Continuation; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC]` |
 | 6c | -Xlambdas=class: Shapes$capturing$1 | `class` | 2.2.0 | `extends kotlin/jvm/internal/Lambda ; field $prefix:Ljava/lang/String; [ACC_FINAL, ACC_SYNTHETIC] ; method <init>(Ljava/lang/String;)V [] ; method invoke(Ljava/lang/String;)Ljava/lang/String; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC]` |
-| 7a | default profile: which lambdas are invokedynamic, which are classes | `indy` | 2.2.0 | `plain: invokedynamic InvokeDynamic #0:invoke:()Lkotlin/jvm/functions/Function1; ; suspended: new class cp23/Shapes$suspended$1 ; capturing: invokedynamic InvokeDynamic #1:invoke:(Ljava/lang/String;)Lkotlin/jvm/functions/Function1; ; class files: Shapes$suspended$1.class` |
-| 7b | -Xlambdas=class: the same three | `class` | 2.2.0 | `plain: getstatic Field cp23/Shapes$plain$1.INSTANCE:Lcp23/Shapes$plain$1; ; suspended: new class cp23/Shapes$suspended$1 ; capturing: new class cp23/Shapes$capturing$1 ; class files: Shapes$capturing$1.class, Shapes$plain$1.class, Shapes$suspended$1.class` |
+| 7a | default profile: which lambdas are invokedynamic, which are classes | `indy` | 2.2.0 | `plain: invokedynamic InvokeDynamic #0:invoke:()Lkotlin/jvm/functions/Function1; ; suspended: new class cp23/Shapes$suspended$1 ; capturing: invokedynamic InvokeDynamic #1:invoke:(Ljava/lang/String;)Lkotlin/jvm/functions/Function1; ; class files: Shapes$ref$1.class, Shapes$sref$1.class, Shapes$suspended$1.class` |
+| 7b | -Xlambdas=class: the same three | `class` | 2.2.0 | `plain: getstatic Field cp23/Shapes$plain$1.INSTANCE:Lcp23/Shapes$plain$1; ; suspended: new class cp23/Shapes$suspended$1 ; capturing: new class cp23/Shapes$capturing$1 ; class files: Shapes$capturing$1.class, Shapes$plain$1.class, Shapes$ref$1.class, Shapes$sref$1.class, Shapes$suspended$1.class` |
 | 8a | extractor jar reads declares_default off greet's parameters | `indy` | 2.2.0 | `sextant-jvm-extractor with org.jetbrains.kotlin:kotlin-metadata-jvm:2.2.0 read name: declares_default=True ; loud: declares_default=True` |
 | 8b | extractor jar reads declares_default off greet's parameters | `class` | 2.2.0 | `sextant-jvm-extractor with org.jetbrains.kotlin:kotlin-metadata-jvm:2.2.0 read name: declares_default=True ; loud: declares_default=True` |
+| 9a | default profile: `::referenced` as a class — superclass, invoke methods | `indy` | 2.2.0 | `extends kotlin/jvm/internal/FunctionReferenceImpl ; method <init>(Ljava/lang/Object;)V [] ; method invoke(Ljava/lang/String;)Ljava/lang/Integer; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC]` |
+| 9b | default profile: suspend `::srefd` as a class — superclass, invoke methods | `indy` | 2.2.0 | `extends kotlin/jvm/internal/FunctionReferenceImpl ; method <init>(Ljava/lang/Object;)V [] ; method invoke(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object; [ACC_PUBLIC, ACC_FINAL] ; method invoke(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; [ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC]` |
 ```
 
 ## Verdicts
@@ -148,7 +153,25 @@ Shapes$plain$1.INSTANCE` rather than `new`. **A suspend lambda is a class in bot
 so `lambda_body` fires on every kotlinc 2.2.0 module that hands a suspend lambda to a
 call — Ktor's `get("/x") { … }` handler exactly — with no compiler flag anyone set; the
 `-Xlambdas=class` build is what makes a PLAIN lambda's class shape testable, not what
-makes the field matter.
+makes the field matter. The `class files` cell of 7a also lists `Shapes$ref$1` and
+`Shapes$sref$1`: a function reference is a class under the default mode too (Q9).
+
+**Q9 — a function reference as a class (§3b).** Under the DEFAULT mode, `::referenced`
+compiles to `Shapes$ref$1 extends kotlin/jvm/internal/FunctionReferenceImpl` with a
+constructor taking the bound receiver (`(Ljava/lang/Object;)V`), a typed
+`invoke(Ljava/lang/String;)Ljava/lang/Integer;` (`ACC_PUBLIC, ACC_FINAL`) and the erased
+synthetic bridge — the same typed-plus-bridge pair a `Lambda` subclass has, and NO
+`INSTANCE` singleton. The suspend referent `::srefd` compiles to the same superclass with a
+typed `invoke(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` and its
+bridge, and **no `invokeSuspend`**: a reference class does not extend `SuspendLambda`, so
+the typed `invoke` — whose body calls the referenced function — is the body in both
+cases. The extractor's rule therefore recognises `FunctionReferenceImpl` (and
+`AdaptedFunctionReference`, the stdlib's other reference base — present in
+kotlin-stdlib 2.2.0 by `javap`, not exercised by this source) beside `Lambda` and
+`SuspendLambda`, and names the typed `invoke`; what that `invoke` delegates to is the
+trace layer's read, not this fact's. Not measured here: which source shapes kotlinc
+compiles to `AdaptedFunctionReference` (a reference needing an adaptation — defaults,
+`Unit` coercion, varargs) — its class exists, its emission is unobserved.
 
 **Q8 — `declaresDefaultValue` (§3c).** The extractor jar, run on either profile's
 `Shapes.class`, emits `declares_default: true` on both of `greet`'s parameters (`name`,
@@ -156,4 +179,4 @@ makes the field matter.
 decodes it; the fact IS the observation. Identical across the two lambda modes, as it
 should be: the flag is on the function's declaration, which `-Xlambdas` does not touch.
 
-`measured: 2026-09-20`, all eight questions, on the one compiler the scope names.
+`measured: 2026-09-20`, all nine questions, on the one compiler the scope names.

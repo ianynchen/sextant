@@ -19,7 +19,11 @@ import org.junit.jupiter.api.Test;
  * `invoke(Ljava/lang/Object;)Ljava/lang/Object;` (`ACC_BRIDGE, ACC_SYNTHETIC`);
  * `KotlinLambdaSample$suspended$1 extends kotlin/coroutines/jvm/internal/SuspendLambda` with
  * `invokeSuspend(Ljava/lang/Object;)Ljava/lang/Object;`, `create`, a typed `invoke(String,
- * Continuation)` and its erased bridge. The value is the body's BARE symbol — the spelling a
+ * Continuation)` and its erased bridge. A function REFERENCE (`::referenced`) compiles in
+ * both modes to `KotlinLambdaSample$reference$1 extends kotlin/jvm/internal/FunctionReferenceImpl`
+ * (class-level `ACC_SYNTHETIC`) with the same typed-`invoke`-plus-bridge pair and no
+ * `invokeSuspend` — a suspend reference's typed `invoke(String, Continuation)` is the body
+ * (CP-23 Q9). The value is the body's BARE symbol — the spelling a
  * `lambda` argument's `symbol` carries (`MethodFlow.lambdaSymbol`), no module coordinates —
  * so it joins to the body's own symbol fact by descriptor suffix.
  */
@@ -27,6 +31,8 @@ class KotlinLambdaBodyTest {
 
     private static final String PLAIN = "KotlinLambdaSample$plain$1";
     private static final String SUSPENDED = "KotlinLambdaSample$suspended$1";
+    private static final String REFERENCE = "KotlinLambdaSample$reference$1";
+    private static final String SREFERENCE = "KotlinLambdaSample$sreference$1";
 
     @Test
     void a_plain_lambda_class_names_its_typed_invoke() throws Exception {
@@ -43,6 +49,24 @@ class KotlinLambdaBodyTest {
             + ClassScanner.disambiguatorOf("(Ljava/lang/Object;)Ljava/lang/Object;") + ").";
         assertEquals(body, typeFact(SUSPENDED).get("lambda_body"));
         assertTrue(bodyFact(SUSPENDED, body).toString().endsWith(" " + body), body);
+    }
+
+    @Test
+    void a_function_reference_class_names_its_typed_invoke() throws Exception {
+        String body = "dev/sextant/extractor/" + REFERENCE + "#invoke("
+            + ClassScanner.disambiguatorOf("(Ljava/lang/String;)Ljava/lang/Integer;") + ").";
+        assertEquals(body, typeFact(REFERENCE).get("lambda_body"));
+        assertTrue(bodyFact(REFERENCE, body).toString().endsWith(" " + body), body);
+    }
+
+    @Test
+    void a_suspend_function_reference_class_names_its_typed_invoke() throws Exception {
+        // No `invokeSuspend` on a reference class: the typed `invoke` takes the Continuation.
+        String body = "dev/sextant/extractor/" + SREFERENCE + "#invoke("
+            + ClassScanner.disambiguatorOf("(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;")
+            + ").";
+        assertEquals(body, typeFact(SREFERENCE).get("lambda_body"));
+        assertTrue(bodyFact(SREFERENCE, body).toString().endsWith(" " + body), body);
     }
 
     @Test

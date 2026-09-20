@@ -1254,13 +1254,19 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # hands the engine the `invokeSuspend` it stands for (spec 2026-09-19 §3b) — the
     # `kotlin-null-handler` closure on this fixture, pinned. `GET("/orders",
     # ::listOrders)` is a suspend FUNCTION REFERENCE — a `FunctionReferenceImpl`
-    # subclass, not a `Lambda`/`SuspendLambda` one — which §3b does not mark, so its
-    # handler is still honestly NULL rather than fabricated (checkpoint (1b)); pinned
-    # here so the reference shape moves a value when it is read.
+    # subclass (CP-23 Q9) with no `invokeSuspend`, whose typed
+    # `invoke(ServerRequest, Continuation)` calls `listOrders` — so its handler is that
+    # `invoke`: the object the framework dispatches to, not the method it delegates to,
+    # which is the trace layer's read. This row was pinned NULL until the extractor
+    # recognised the reference base class (Task 2 fix round 1, 2026-09-20).
     kt_prefix = "sextant-jvm maven com.acme/orders-service 1.0.0 com/acme/orders/routes/"
     kt_rows = [row for (m, p), row in combinator_rows.items() if p and p.startswith("/kt/")]
     assert {(row["method"], row["path"], row["handler"]) for row in kt_rows} == {
-        ("GET", "/kt/orders", None),
+        (
+            "GET",
+            "/kt/orders",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$1#invoke(sig_b7786253).",
+        ),
         (
             "POST",
             "/kt/orders",

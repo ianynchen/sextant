@@ -15,5 +15,9 @@ class Shapes {
     fun plain(): (String) -> Int = { it.length }
     fun suspended(): suspend (String) -> Int = { it.length }
     fun capturing(prefix: String): (String) -> String = { prefix + it }
+    fun referenced(s: String): Int = s.length
+    fun ref(): (String) -> Int = ::referenced
+    suspend fun srefd(s: String): Int = s.length
+    fun sref(): suspend (String) -> Int = ::srefd
 }
 object Statics { @JvmStatic fun js(a: String, b: Int = 0): String = a + b; fun callsJs() = js("a") }

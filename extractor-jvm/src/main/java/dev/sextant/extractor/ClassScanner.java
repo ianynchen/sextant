@@ -241,14 +241,18 @@ public final class ClassScanner {
         public void visit(int v, int access, String name, String sig, String superName, String[] ifaces) {
             typeSymbol = symbolOf(name + "#");
             this.superName = superName;
-            // R2 (spec §3b): a lambda kotlinc compiled as a class — the two base classes the
-            // compiler uses, `Lambda` for a plain lambda and `SuspendLambda` for a suspend
-            // one (kotlin-stdlib 2.2.0). Which of its methods is the BODY is settled per
-            // method below, and the type's own fact states it (`lambda_body`), exactly as a
-            // `$default` bridge states `bridge_of`: the extractor knows its own compiler;
-            // the resolve layer joins on the key and names no language.
+            // R2 (spec §3b): a lambda kotlinc compiled as a class — the four base classes the
+            // compiler uses (kotlin-stdlib 2.2.0): `Lambda` for a plain lambda,
+            // `SuspendLambda` for a suspend one, and `FunctionReferenceImpl` or
+            // `AdaptedFunctionReference` for a `::ref` compiled as a class, whose typed
+            // `invoke` calls the referenced function. Which of its methods is the BODY is
+            // settled per method below, and the type's own fact states it (`lambda_body`),
+            // exactly as a `$default` bridge states `bridge_of`: the extractor knows its own
+            // compiler; the resolve layer joins on the key and names no language.
             kotlinLambdaClass = "kotlin/jvm/internal/Lambda".equals(superName)
-                || "kotlin/coroutines/jvm/internal/SuspendLambda".equals(superName);
+                || "kotlin/coroutines/jvm/internal/SuspendLambda".equals(superName)
+                || "kotlin/jvm/internal/FunctionReferenceImpl".equals(superName)
+                || "kotlin/jvm/internal/AdaptedFunctionReference".equals(superName);
             // D00 §5a's PTR carrier. `superName` says only "extends
             // ParameterizedTypeReference"; the Signature attribute is the only
             // place its argument is written down, and for an anonymous subclass
@@ -1814,8 +1818,12 @@ public final class ClassScanner {
                 // R2: the body method of a Kotlin lambda class — `invokeSuspend` where the
                 // class declares one (a suspend lambda's `invoke` only builds the
                 // continuation), else the one non-synthetic `invoke` (the erased
-                // `invoke(Object)` is the compiler's bridge). Absent on every other type and
-                // on a lambda class with neither — an unreadable one is left alone.
+                // `invoke(Object)` is the compiler's bridge). A function reference class has
+                // no `invokeSuspend`, suspend or not: its typed `invoke` is the body, and
+                // that body's own call to the referenced function is the trace layer's to
+                // follow — the fact states the object the framework invokes, not the method
+                // it delegates to. Absent on every other type and on a lambda class with
+                // neither — an unreadable one is left alone.
                 if (kotlinLambdaClass) {
                     String body = lambdaInvokeSuspend != null ? lambdaInvokeSuspend : lambdaTypedInvoke;
                     if (body != null) fact.put("lambda_body", JsonOut.string(body));

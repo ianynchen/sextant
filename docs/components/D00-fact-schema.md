@@ -434,11 +434,16 @@ the declared value parameters laid from the slot after it; absent means false, a
 (`kotlin-extension-functions`).
 
 **A Kotlin lambda class carries `lambda_body: "<body method's bare symbol>"` on its type
-fact** (spec 2026-09-19 §3b): a class whose superclass is `kotlin/jvm/internal/Lambda` or
-`kotlin/coroutines/jvm/internal/SuspendLambda` names the method the author's statements
+fact** (spec 2026-09-19 §3b): a class whose superclass is `kotlin/jvm/internal/Lambda`,
+`kotlin/coroutines/jvm/internal/SuspendLambda`, `kotlin/jvm/internal/FunctionReferenceImpl` or
+`kotlin/jvm/internal/AdaptedFunctionReference` names the method the author's statements
 compiled into — `invokeSuspend(Object)` for a suspend lambda (its `invoke` only builds the
 continuation), else the one non-synthetic `invoke` (the erased `invoke(Object)` is the
-compiler's bridge). The value is spelled as a `lambda` argument's `symbol` is (§5a's bare
+compiler's bridge). A function reference (`GET("/orders", ::listOrders)`) compiles to a
+`FunctionReferenceImpl` subclass in both lambda modes, with no `invokeSuspend` even when the
+referenced function suspends: its typed `invoke` is the body, and that body's own call to the
+referenced function is the trace layer's to follow — the fact states the object the framework
+invokes, never the method it delegates to. The value is spelled as a `lambda` argument's `symbol` is (§5a's bare
 descriptor path, `owner#name(sig_…).`, no module coordinates), so it joins to
 `call_sites.arguments[].symbol` and to the body's own symbol fact by descriptor suffix.
 Measured on kotlinc 2.2.0 (`scripts/probes/cp23_kotlin_call_shapes.md`): plain lambdas

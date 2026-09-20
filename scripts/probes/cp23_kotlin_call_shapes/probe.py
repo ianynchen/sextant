@@ -2,7 +2,8 @@
 arguments (the `$default` bridge, its mask literals and marker, the bridge's own
 `iand`/`ifeq` body), a `@JvmStatic` default call with no receiver, and a lambda
 compiled as a class under `-Xlambdas=class` beside the compiler's default
-`invokedynamic` — plus what the extractor itself reads back as `declares_default`.
+`invokedynamic`, a function reference (`::ref`) as the class it compiles to in either
+mode — plus what the extractor itself reads back as `declares_default`.
 
 Called by `run.sh`, which compiles `src/main/kotlin/cp23/Shapes.kt` twice (one Maven
 profile per lambda mode, each into its own `target/<profile>`) and builds the
@@ -338,6 +339,20 @@ def main(arguments: list[str]) -> int:
             "extractor jar reads declares_default off greet's parameters",
             klass,
             lambda: q8_declares_default(klass, extractor, java_home),
+        ),
+        # Q9 reads the DEFAULT profile on purpose: a `::ref` is a class whether or not
+        # `-Xlambdas=class` is set, which is what makes it reach a real module's facts.
+        (
+            "9a",
+            "default profile: `::referenced` as a class — superclass, invoke methods",
+            indy,
+            lambda: q6_class_shape(indy, "cp23.Shapes$ref$1"),
+        ),
+        (
+            "9b",
+            "default profile: suspend `::srefd` as a class — superclass, invoke methods",
+            indy,
+            lambda: q6_class_shape(indy, "cp23.Shapes$sref$1"),
         ),
     ]
     for number, question, build, observe in rows:
