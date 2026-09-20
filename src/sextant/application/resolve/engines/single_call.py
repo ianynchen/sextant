@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
@@ -347,7 +348,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # (`_DECODED_COLUMNS`): both the matching loop below and the `call_wrappers`
     # one-hop (over a *different* call site's own arguments,
     # `contracts._linked_constructor`) read the list, never the text.
-    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
+    call_sites: list[dict[str, Any]] = effective_call_sites(workspace)
     # Indexed once per load, not once per catalog (`Workspace.once`, `CallSiteIndex`).
     index = workspace.once(call_site_index)
     by_caller = index.by_caller

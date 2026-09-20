@@ -45,6 +45,7 @@ from typing import Any, cast
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import annotation_index, member_annotations_by_type
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import _bare_reference, parameter_index
 from sextant.application.resolve.shapes.contracts import (
@@ -621,7 +622,7 @@ class _Facts:
 
 def _facts(workspace: Workspace) -> _Facts:
     sites: dict[str, list[dict[str, Any]]] = {}
-    for row in workspace.query("call_sites"):
+    for row in effective_call_sites(workspace):
         sites.setdefault(str(row["caller"]), []).append(row)
     ancestry: dict[str, list[str]] = {}
     for row in workspace.query("supertypes"):

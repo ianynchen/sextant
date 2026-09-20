@@ -133,6 +133,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     _array_elements,
@@ -375,7 +376,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     # Parsed once, as every other call-site engine does, for the same reason:
     # `call_sites` hands back `arguments` decoded (`_DECODED_COLUMNS`), and every
     # fold below reads that list.
-    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
+    call_sites: list[dict[str, Any]] = effective_call_sites(workspace)
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)
