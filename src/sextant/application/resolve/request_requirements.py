@@ -535,14 +535,27 @@ def _scan(body: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[_Re
     whose `result` is this site's `receiver` — the call that PRODUCED the value being
     read, one step (`_producing_site`), the way the combinator's `_scope_of` keys a
     body's values. `then` asks the reverse question of the matched site's own `result`:
-    is it the receiver of a later call named `then.method`?"""
+    is it the receiver of a later call named `then.method`? `required_when_thrown` asks a
+    third: does this body construct the named exception type with this read's own name
+    as its first argument — the shape an INLINED throwing read leaves behind (the
+    framework's `get ; ifnonnull ; new MissingRequestParameterException(name) ; athrow`
+    compiled into the caller). The name must be EQUAL: a body throwing for another name
+    says nothing about this read."""
     by_result: dict[int, dict[str, Any]] = {}
     receivers_of: dict[int, set[str]] = {}
+    # exception type → the string literals its constructors are handed at position 0
+    # in this body (`required_when_thrown`): an inlined throwing read leaves the
+    # framework's own `new <Exception>(name)` in the handler, with the read's name.
+    thrown_for: dict[str, set[str]] = {}
     for site in body:
         if site["result"] is not None:
             by_result.setdefault(int(site["result"]), site)
         if site["receiver"] is not None and site["name"] is not None:
             receivers_of.setdefault(int(site["receiver"]), set()).add(str(site["name"]))
+        if site["name"] == "<init>" and site["arguments"]:
+            first = site["arguments"][0]
+            if first.get("kind") == "string" and isinstance(first.get("value"), str):
+                thrown_for.setdefault(str(site["owner"]), set()).add(first["value"])
     reads: list[_Read] = []
     for site in body:
         if site["name"] is None:
@@ -570,10 +583,15 @@ def _scan(body: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[_Re
                 requirement = then["requirement"]
             argument = site["arguments"][entry["name_arg"]]
             name = argument.get("value") if argument.get("kind") == "string" else None
+            if not isinstance(name, str):
+                name = None
+            thrown = entry.get("required_when_thrown")
+            if thrown is not None and name is not None and name in thrown_for.get(thrown, ()):
+                requirement = "required"
             reads.append(
                 _Read(
                     kind=entry["kind"],
-                    name=name if isinstance(name, str) else None,
+                    name=name,
                     requirement=requirement,
                     skip_path_variables=entry["skip_path_variables"],
                 )
@@ -613,6 +631,13 @@ def _request_read(entry: object, where: str) -> dict[str, Any]:
         raise CatalogError(f"{where} entry names exactly one of `owner`/`via`: {entry!r}")
     if entry["kind"] not in _KINDS:
         raise CatalogError(f"{where} `kind` must be one of {sorted(_KINDS)}, got {entry['kind']!r}")
+    if not isinstance(entry["method"], str) or not entry["method"]:
+        raise CatalogError(f"{where} `method` must be a method name: {entry!r}")
+    thrown = entry.get("required_when_thrown")
+    if thrown is not None and (not isinstance(thrown, str) or not thrown):
+        raise CatalogError(
+            f"{where} `required_when_thrown` must be an exception type name: {entry!r}"
+        )
     for key in ("arity", "name_arg"):
         if not isinstance(entry[key], int) or isinstance(entry[key], bool) or entry[key] < 0:
             raise CatalogError(f"{where} `{key}` must be a non-negative integer: {entry!r}")
@@ -639,12 +664,13 @@ def _request_read(entry: object, where: str) -> dict[str, Any]:
             f"{sorted(_READ_REQUIREMENTS)}: {entry!r}"
         )
     read: dict[str, Any] = {
-        "method": str(entry["method"]),
+        "method": entry["method"],
         "arity": entry["arity"],
         "name_arg": entry["name_arg"],
         "kind": str(entry["kind"]),
         "requirement": requirement,
         "then": then,
+        "required_when_thrown": None if thrown is None else _catalog_symbol(thrown),
         "skip_path_variables": skip_variables,
     }
     if "owner" in entry:
@@ -665,7 +691,9 @@ def _request_read(entry: object, where: str) -> dict[str, Any]:
 # call's own type, `via` (`{ owner, method }`) the call that produced its receiver — one
 # or the other. `arity` because one name can read the request and set the response at two
 # argument counts (F7). `requirement` only where the API itself refuses the request;
-# `then` where a later call on the read's result does (Javalin's `Validator#get()`).
+# `then` where a later call on the read's result does (Javalin's `Validator#get()`);
+# `required_when_thrown` where the throwing accessor is INLINED into the caller and only
+# the exception it constructs, with the read's name, remains (Ktor's `getOrFail`).
 _REQUEST_READS_KEYS = frozenset(
     {
         "owner",
@@ -676,8 +704,10 @@ _REQUEST_READS_KEYS = frozenset(
         "kind",
         "requirement",
         "then",
+        "required_when_thrown",
         "skip_path_variables",
     }
 )
-# What a read may state about the framework: never `binder` (an annotation's word).
-_READ_REQUIREMENTS = frozenset({"required", "optional", "absent"})
+# What a read may state about the framework: `required` or `optional`, never `binder` (an
+# annotation's word) and never `absent` (a route-tree word — no read API demands absence).
+_READ_REQUIREMENTS = frozenset({"required", "optional"})

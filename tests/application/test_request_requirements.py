@@ -939,7 +939,9 @@ ALL_VIA = {
     "kind": "query",
     "skip_path_variables": True,
 }
-READS = [HEADER_READ, PARAM_READ, DEMAND, TYPED, QUERY_VIA, ALL_VIA]
+MISSING = "com.acme.web.MissingValue"
+THROWN_VIA = {**QUERY_VIA, "required_when_thrown": MISSING}
+READS = [HEADER_READ, PARAM_READ, DEMAND, TYPED, THROWN_VIA, ALL_VIA]
 
 
 def _reads_catalog(*entries: object, catalog_id: str = CATALOG) -> Catalog:
@@ -1085,6 +1087,48 @@ def test_then_makes_the_read_required_only_where_the_result_reaches_the_named_me
     }
 
 
+def test_required_when_thrown_marks_the_read_whose_name_the_body_throws_for(tmp_path: Path):
+    """The inlined throwing read (fix round 1; CP-24 row 5 measured on the fixture's own
+    class): `getOrFail` is `inline`, so the caller carries `get(name) ; ifnonnull ; new
+    MissingRequestParameterException(name) ; athrow` and never a call to it. The entry's
+    `required_when_thrown` names the exception; the read is `required` when the SAME body
+    constructs it with the read's OWN name as its first argument — `cursor` here. `page`
+    is a bare read beside it and stays NULL: the body throws for `cursor`, not for
+    `page`, and a body throwing for another name says nothing about this read. A
+    construction whose first argument is not a string literal (`other`) marks nothing;
+    a read whose own name is unresolved cannot be equal to anything and stays NULL."""
+    sites = [
+        _site(0, CALL, "getQuery", result=10),
+        _site(1, "com.acme.web.Values", "get", _literal("cursor"), receiver=10, result=11),
+        _site(2, MISSING, "<init>", _literal("cursor"), receiver=12),
+        _site(3, CALL, "getQuery", result=13),
+        _site(4, "com.acme.web.Values", "get", _literal("page"), receiver=13, result=14),
+        _site(5, CALL, "getQuery", result=15),
+        _site(6, "com.acme.web.Values", "get", _literal("other"), receiver=15, result=16),
+        _site(7, MISSING, "<init>", CallArgument(kind="unresolved"), receiver=17),
+        _site(8, CALL, "getQuery", result=18),
+        _site(9, "com.acme.web.Values", "get", CallArgument(kind="unresolved"), receiver=18),
+    ]
+    assert _reads(tmp_path, sites) == {
+        ("GET", "/orders", "query", "cursor", "required", "resolved"),
+        ("GET", "/orders", "query", "page", None, "resolved"),
+        ("GET", "/orders", "query", "other", None, "resolved"),
+        ("GET", "/orders", "query", None, None, "unresolved"),
+    }
+
+
+def test_an_exception_of_another_type_for_the_same_name_marks_nothing(tmp_path: Path):
+    """The type is part of the rule: a handler's own `throw IllegalArgumentException("q")`
+    is the handler's word, not the framework's (A3), and the entry names the framework's
+    exception alone."""
+    sites = [
+        _site(0, CALL, "getQuery", result=10),
+        _site(1, "com.acme.web.Values", "get", _literal("q"), receiver=10, result=11),
+        _site(2, "java.lang.IllegalArgumentException", "<init>", _literal("q"), receiver=12),
+    ]
+    assert _reads(tmp_path, sites) == {("GET", "/orders", "query", "q", None, "resolved")}
+
+
 def test_an_entrys_own_requirement_is_written_where_the_api_throws(tmp_path: Path):
     """CP-24 row 5: an API that refuses the request itself (`getOrFail`) is declared
     `requirement: required` on its entry and the row says so — the framework's word,
@@ -1176,6 +1220,9 @@ def test_every_row_sharing_the_handler_gets_the_reads(tmp_path: Path):
     [
         ({**HEADER_READ, "kind": "form"}, "kind"),
         ({**HEADER_READ, "requirement": "binder"}, "requirement"),
+        ({**HEADER_READ, "requirement": "absent"}, "requirement"),
+        ({**HEADER_READ, "method": ["header"]}, "method"),
+        ({**HEADER_READ, "required_when_thrown": [MISSING]}, "required_when_thrown"),
         ({**HEADER_READ, "name_arg": 1}, "name_arg"),
         ({**HEADER_READ, "arity": "1"}, "arity"),
         ({**HEADER_READ, "via": {"owner": CALL, "method": "getQuery"}}, "exactly one of"),
@@ -1189,6 +1236,9 @@ def test_every_row_sharing_the_handler_gets_the_reads(tmp_path: Path):
     ids=[
         "kind",
         "requirement",
+        "requirement-absent",
+        "method-not-a-name",
+        "required_when_thrown",
         "name_arg-beyond-arity",
         "arity-not-int",
         "owner-and-via",
@@ -1205,7 +1255,10 @@ def test_a_malformed_request_reads_entry_is_refused_naming_the_file(
 ):
     """Closed vocabulary, `request_params`' reason: a misspelt `name_args` read as absent
     would make every read nameless; a `name_arg` beyond the arity can never be read; an
-    entry naming both `owner` and `via`, or neither, states two rules or none."""
+    entry naming both `owner` and `via`, or neither, states two rules or none. `absent`
+    is refused on a read: no read API demands a value's absence (a route-tree word,
+    §5c). `method` and `required_when_thrown` are names, checked as names rather than
+    coerced — a list written by mistake would otherwise match nothing, silently."""
     sites = [_site(0, REQUEST, "header", _literal("X-Api"), result=3)]
     workspace = _reads_workspace(tmp_path, sites, ("GET", "/orders", HANDLER))
     with pytest.raises(CatalogError, match=r"invented-reads\.yml") as raised:

@@ -153,24 +153,31 @@ matches:
   #
   # `getOrFail` (CP-24 row 5): `ParametersKt.getOrFail(Parameters, String)` reads the
   # container and throws `MissingRequestParameterException` on an absent name — the
-  # framework refuses the request, so the entry declares `requirement: required`. THE
-  # STATED BOUNDARY: the function is `inline`. A caller compiled from the same language
-  # carries the function's BODY, not a call to it — the fixture's bytecode is
-  # `Parameters.get("cursor") ; ifnonnull ; new MissingRequestParameterException ;
-  # athrow`, and no `invokestatic ParametersKt.getOrFail` exists — so that spelling
-  # reaches this catalog as a plain `get` on `getParameters` and is written as a query
-  # read with `requirement` NULL: an under-statement (the framework does refuse), never
-  # a wrong one. The entry below matches the one caller that DOES emit the call — a
-  # caller compiled from a language without inlining — and the inlined shape is logged
-  # for a rule that can read a throw off a read's result (COVERAGE).
+  # framework refuses the request, so the `owner` entry declares `requirement: required`.
+  # BUT THE FUNCTION IS `inline`: a caller compiled from the same language carries its
+  # BODY, not a call to it. Measured on the fixture's `KtorRoutesKt$reads$1$1.invokeSuspend`:
+  # `Parameters.get("cursor") ; ifnonnull ; new MissingRequestParameterException ; athrow`
+  # and no `invokestatic ParametersKt.getOrFail` anywhere — so that spelling reaches this
+  # catalog as a plain `get` on `getParameters`, and the `owner` entry matches only a
+  # caller that emits the call (a language without inlining). `required_when_thrown` on
+  # the two `Parameters` entries reads the inlined shape instead: the read is `required`
+  # when the SAME body constructs `MissingRequestParameterException` with the read's OWN
+  # name as its first argument — the extractor hands that `<init>` site the literal
+  # (`{kind: string, value: "cursor"}`, the `ldc` carried through the local; measured on
+  # the analyzed workspace, 2026-09-20). A body that throws it for another name marks
+  # nothing; a bare `get` with a handler's own `?: throw SomethingElse` stays NULL (A3).
+  # Only `Parameters` has a `getOrFail` (both overloads take `Parameters`; no facade in the
+  # jar declares one for `Headers`), so the headers entry carries no such key.
   #
   # Two boundaries more, both A3's line: a `?: throw` in the handler after a bare `get`
   # is the handler's word, not the framework's, and stays NULL; and only the handler
   # body is read — a `suspend fun ApplicationCall.x()` helper it delegates to is not.
   request_reads:
     - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getHeaders },         method: get, arity: 1, name_arg: 0, kind: header }
-    - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getQueryParameters }, method: get, arity: 1, name_arg: 0, kind: query }
-    - { via: { owner: io.ktor.server.routing.RoutingCall,    method: getParameters },      method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true }
+    - { via: { owner: io.ktor.server.routing.RoutingRequest, method: getQueryParameters }, method: get, arity: 1, name_arg: 0, kind: query,
+        required_when_thrown: io.ktor.server.plugins.MissingRequestParameterException }
+    - { via: { owner: io.ktor.server.routing.RoutingCall,    method: getParameters },      method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true,
+        required_when_thrown: io.ktor.server.plugins.MissingRequestParameterException }
     - { owner: io.ktor.server.util.ParametersKt, method: getOrFail, arity: 2, name_arg: 1, kind: query, requirement: required }
   # `HttpMethod.DefaultMethods` at 3.0.3, in the static initialiser's order (CP-24 row 2):
   # what a verb-less `handle { }` under no `method` selector expands to.

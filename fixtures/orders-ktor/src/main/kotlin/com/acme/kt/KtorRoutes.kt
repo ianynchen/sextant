@@ -133,8 +133,11 @@ fun Application.selectors() {
 // `call.request.queryParameters["q"]` → query, `call.parameters["page"]` → query — all
 // three end in `StringValues.get(String)`, told apart by the getter that PRODUCED the
 // receiver (the catalog's `via`) — and `call.parameters.getOrFail("cursor")` → query,
-// `required`, because `ParametersKt.getOrFail` throws `MissingRequestParameterException`
-// on an absent name (CP-24 Q5). `call.parameters["id"]` names the route's own `{id}`:
+// `required`. NOT through a call to `ParametersKt.getOrFail`: the function is `inline`, so
+// this class carries its body — `Parameters.get("cursor") ; ifnonnull ; new
+// MissingRequestParameterException("cursor") ; athrow` (CP-24 Q5's throw, compiled in) —
+// and the catalog's `required_when_thrown` reads the exception the body constructs with
+// the read's own name. `call.parameters["id"]` names the route's own `{id}`:
 // `call.parameters` merges path and query, so that read is the path variable and gets NO
 // row (`skip_path_variables`, A6). Each read's static receiver type — `RoutingCall`,
 // `RoutingRequest`, `Parameters`/`Headers` — is what kotlinc wrote at the call site, and

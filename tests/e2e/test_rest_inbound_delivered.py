@@ -910,14 +910,15 @@ def test_ktor_handler_reads_reach_endpoint_metadata(ktor_tables):
     a 3.0.3 handler body's `call` (a `RoutingCall`) compiles to, measured on this very
     class and declared as such on the catalog.
 
-    `call.parameters.getOrFail("cursor")` is the honest UNDER-statement this test pins:
-    `getOrFail` is `inline`, so this body carries its BODY — `Parameters.get("cursor") ;
-    ifnonnull ; new MissingRequestParameterException ; athrow` — and never a call to
-    `ParametersKt.getOrFail`; the read reaches the pass as a plain `get` on
-    `getParameters` and is written as query `cursor`, `requirement` NULL, where Ktor
-    does in fact refuse the request (CP-24 row 5). Pinned NULL so the day a rule reads
-    the throw off the read's result this line moves visibly, and never `required` off a
-    call site that is not there (stated on the catalog and in COVERAGE)."""
+    `call.parameters.getOrFail("cursor")` → query `cursor`, `required`, and NOT through a
+    call site named `getOrFail`: the function is `inline`, so this body carries its BODY
+    — `Parameters.get("cursor") ; ifnonnull ; new MissingRequestParameterException("cursor")
+    ; athrow` — and the read reaches the pass as a plain `get` on `getParameters`. The
+    catalog's `required_when_thrown` reads what the inlining left behind: the body
+    constructs the framework's own exception with THIS read's name as its first argument
+    (the extractor hands the `<init>` site the literal, measured), and Ktor does refuse
+    the request (CP-24 row 5). `page` beside it, read the same way, stays NULL — the body
+    throws for `cursor`, not for `page` (fix round 1; this pin moved from NULL)."""
     requirements = _requirements(ktor_tables["endpoint_metadata"])
     reads = {r for r in requirements if "reads$" in r[2]}
     handler = _suspend_body("reads$1$1")
@@ -925,7 +926,7 @@ def test_ktor_handler_reads_reach_endpoint_metadata(ktor_tables):
         ("GET", "/reads/orders/{id}", handler, "header", "X-Trace", None, None, "resolved"),
         ("GET", "/reads/orders/{id}", handler, "query", "q", None, None, "resolved"),
         ("GET", "/reads/orders/{id}", handler, "query", "page", None, None, "resolved"),
-        ("GET", "/reads/orders/{id}", handler, "query", "cursor", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "cursor", None, "required", "resolved"),
     }
     assert not any(r[4] == "id" for r in requirements), "the path variable was written as a query"
     # The selector rows and the read rows are the whole table: eight rows, nothing else.
