@@ -2,7 +2,9 @@
 // `accept` and one `contentType` predicate, a method-ref handler and a
 // lambda handler, and a cross-method composition -- `other()`'s
 // RouterFunction crossing into `composite` below is the honest-unresolved
-// case the walk must not silently attribute to one method.
+// case the walk must not silently attribute to one method. `/fn/orders`'s GET
+// also demands `?v=2` (`RequestPredicates.queryParam(String, String)`, spec
+// 2026-09-19 §5c): a `required` query requirement on that row's metadata.
 package com.acme.orders.routes;
 
 import org.springframework.context.annotation.Bean;
@@ -20,7 +22,8 @@ public class OrderRoutes {
     public RouterFunction<ServerResponse> routes(RouteHandlers h) {
         return RouterFunctions.nest(RequestPredicates.path("/fn"),
             RouterFunctions.route(RequestPredicates.GET("/orders")
-                    .and(RequestPredicates.accept(MediaType.APPLICATION_JSON)), h::listOrders)
+                    .and(RequestPredicates.accept(MediaType.APPLICATION_JSON))
+                    .and(RequestPredicates.queryParam("v", "2")), h::listOrders)
                 .andRoute(RequestPredicates.POST("/orders")
                     .and(RequestPredicates.contentType(MediaType.APPLICATION_JSON)), h::createOrder)
                 .andRoute(RequestPredicates.GET("/health").or(RequestPredicates.HEAD("/health")),

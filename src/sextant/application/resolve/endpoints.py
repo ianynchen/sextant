@@ -101,6 +101,13 @@ def derive_endpoints(
     # in which every catalog is skipped still leaves an empty table rather
     # than the previous run's rows.
     workspace.derive("endpoints_reset")
+    # The combinator's `route_requirements` stash (spec 2026-09-19 §4d), re-created here
+    # for the same reason and at the same level: more than one catalog writes it during
+    # this call, so a reset owned by an engine would erase whichever ran first, and a
+    # resolve in which no route states a requirement leaves an empty table rather than
+    # the previous run's rows. A TEMP table of this connection, so it lives exactly as
+    # long as the resolve that reads it (`record_request_requirements`).
+    workspace.derive("route_requirements_reset")
     # D02 §3: the merge runs once, after every engine, so this ordering does
     # not affect which rows it finds — it exists for determinism only (NFR-1):
     # inbound before outbound, filename breaking the tie within a direction,

@@ -112,6 +112,46 @@ def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
     assert missing == set(), f"builder routes missing: {sorted(missing)}"
 
 
+@pytest.fixture(scope="module")
+def http_requirements(analyzed_orders_service: Path) -> set[tuple]:
+    """Every inbound `endpoint_metadata` row of the session's one `orders-service` analysis
+    (spec 2026-09-19 §5), as `_requirements` spells them."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return _requirements(
+            [
+                dict(row)
+                for row in workspace.query("endpoint_metadata")
+                if row["direction"] == "inbound"
+            ]
+        )
+    finally:
+        workspace.close()
+
+
+def test_a_query_param_predicate_reaches_endpoint_metadata_on_the_functional_router(
+    http_requirements, http_rows
+):
+    """`inbound-request-requirements` on the Spring functional side (spec 2026-09-19 §5c;
+    CP-26 row 1). `OrderRoutes.routes` guards `GET /fn/orders` with `.and(RequestPredicates.
+    queryParam("v", "2"))`: the predicate constrains no path and no verb — the row is
+    `GET /fn/orders`, `produces` JSON, exactly as before — and it demands `?v=2`, which
+    reaches `endpoint_metadata` as query `v`, value `2`, `required` (`QueryParamPredicate.
+    test` returns false without it), `caller` the row's handler `RouteHandlers#listOrders`.
+    The only `queryParam` on the fixture, so the only query row the router writes;
+    `headers(Predicate)` is stated unread on the catalog and no row claims otherwise."""
+    handler = next(
+        str(r["handler"]) for r in http_rows if r["path"] == "/fn/orders" and r["method"] == "GET"
+    )
+    assert handler.endswith("com/acme/orders/routes/RouteHandlers#listOrders(sig_a2451eb8).")
+    assert {r for r in http_requirements if r[1] == "/fn/orders"} == {
+        ("GET", "/fn/orders", handler, "query", "v", "2", "required", "resolved"),
+    }
+    assert not any(r[3] == "query" and r[1] != "/fn/orders" for r in http_requirements), (
+        "a query requirement appeared on a row nothing guards"
+    )
+
+
 def test_a_supplier_body_derives_its_route_once_under_the_prefix_and_never_bare(http_rows):
     """A1 final review, I-1. `nest(path("/bld/sup"), () -> route().GET("/inner", h).build())`
     is Spring's own Javadoc example for the Supplier overload, and its body is a chain of
@@ -668,22 +708,58 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
 KTOR = FIXTURES / "orders-ktor"
 
 
-@pytest.fixture(scope="module")
-def ktor_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
-    handler and the caller beside the identity, which the Javalin fixture's triples
-    do not carry."""
-    workspace_dir = tmp_path_factory.mktemp("ktor")
-    compile_fixture(KTOR)
+def _analyzed_tables(fixture: Path, workspace_dir: Path) -> dict[str, list[dict]]:
+    """One `module analyze` of `fixture`, and the two tables the tests below read —
+    `endpoints` whole, and the inbound `endpoint_metadata` rows the requirements pass
+    wrote against them (spec 2026-09-19 §5)."""
+    compile_fixture(fixture)
     result = CliRunner().invoke(
-        cli, ["module", "analyze", str(KTOR), "--workspace", str(workspace_dir)]
+        cli, ["module", "analyze", str(fixture), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        return [dict(row) for row in workspace.query("endpoints")]
+        return {
+            "endpoints": [dict(row) for row in workspace.query("endpoints")],
+            "endpoint_metadata": [
+                dict(row)
+                for row in workspace.query("endpoint_metadata")
+                if row["direction"] == "inbound"
+            ],
+        }
     finally:
         workspace.close()
+
+
+def _requirements(metadata: list[dict]) -> set[tuple]:
+    """`(method, path, caller, kind, name, value, requirement, resolution)` per inbound
+    metadata row — what a route's tree demands, keyed by the row it demands it of."""
+    return {
+        (
+            r["method"],
+            r["path"],
+            r["caller"],
+            r["kind"],
+            r["name"],
+            r["value"],
+            r["requirement"],
+            r["resolution"],
+        )
+        for r in metadata
+    }
+
+
+@pytest.fixture(scope="module")
+def ktor_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(KTOR, tmp_path_factory.mktemp("ktor"))
+
+
+@pytest.fixture(scope="module")
+def ktor_rows(ktor_tables: dict[str, list[dict]]) -> list[dict]:
+    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
+    handler and the caller beside the identity, which the Javalin fixture's triples
+    do not carry."""
+    return ktor_tables["endpoints"]
 
 
 def _suspend_body(handler_class: str) -> str:
@@ -885,24 +961,73 @@ def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambd
     assert len(ktor_classlambda_rows) == len(ktor_rows) == 27
 
 
+def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
+    """`inbound-request-requirements` on the Ktor side (spec 2026-09-19 §4b, §4d, §5c).
+    What `selectors()`'s tree DEMANDS of a request reaches `endpoint_metadata` against
+    the row it demands it of, `caller` = that row's handler (§4d): `header("X-Api-Version",
+    "2")` → header, value `2`, `required` — the selector refuses a request without it;
+    `param("debug")` → query, no value, `required`; `param("mode", "fast")` → query,
+    value `fast`, `required`; `optionalParam("page")` → query, `optional` — the route is
+    registered whether or not the parameter is present. Nothing else on this fixture
+    states a requirement, so these four rows are the whole table; the rows they
+    describe are `selectors()`'s own, above."""
+    assert _requirements(ktor_tables["endpoint_metadata"]) == {
+        (
+            "GET",
+            "/orders",
+            _suspend_body("selectors$1$5$1"),
+            "header",
+            "X-Api-Version",
+            "2",
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/dbg",
+            _suspend_body("selectors$1$6$1"),
+            "query",
+            "debug",
+            None,
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/fast",
+            _suspend_body("selectors$1$7$1"),
+            "query",
+            "mode",
+            "fast",
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/paged",
+            _suspend_body("selectors$1$8$1"),
+            "query",
+            "page",
+            None,
+            "optional",
+            "resolved",
+        ),
+    }
+
+
 GATEWAY = FIXTURES / "orders-gateway"
 
 
 @pytest.fixture(scope="module")
-def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+def gateway_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(GATEWAY, tmp_path_factory.mktemp("gateway"))
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(gateway_tables: dict[str, list[dict]]) -> list[dict]:
     """Every endpoint row the Spring Cloud Gateway fixture derives, whole — the test reads
     the handler and the caller beside the identity."""
-    workspace_dir = tmp_path_factory.mktemp("gateway")
-    compile_fixture(GATEWAY)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
-    try:
-        return [dict(row) for row in workspace.query("endpoints")]
-    finally:
-        workspace.close()
+    return gateway_tables["endpoints"]
 
 
 def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
@@ -929,10 +1054,13 @@ def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
     than silence. `not(p -> p.path("/admin/**"))` is the other unresolved row: a negated
     predicate serves something the negation does not say.
 
-    Both `route` overloads derive — the named six and the unnamed host-only one — because a
-    body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched on
-    owner and name alone, the first entry claimed both and the host-only route was one
-    unresolved row. Exactly nine rows from this catalog — the seven resolved and the two
+    Both `route` overloads derive — the named seven and the unnamed host-only one — because
+    a body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched
+    on owner and name alone, the first entry claimed both and the host-only route was one
+    unresolved row. `guarded` — `path("/guarded/**").and().header("X-Api", "v2").and().
+    query("debug")` — serves its path exactly as `orders` does: the two predicates narrow
+    WHO is served and are the row's requirements (asserted on `endpoint_metadata` below),
+    never its address. Exactly ten rows from this catalog — the eight resolved and the two
     unresolved — so an extra row (a negator's lambda body scanned as a tree of its own, a
     pass-through reached unconsumed, a duplicate) cannot pass silently."""
     rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway"]
@@ -945,10 +1073,28 @@ def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
         (None, "/b/**", "resolved"),
         (None, "/billing/**", "resolved"),  # captured `this`: the spec is parameter 0
         (None, "/**", "resolved"),  # host only, the `route(Function)` overload
+        (None, "/guarded/**", "resolved"),  # header + query predicates: requirements, not address
         (None, None, "unresolved"),  # not-admin, and legacy (captured local, concat path)
     } == identities, sorted(identities, key=str)
     unresolved = [r for r in rows if r["resolution"] == "unresolved"]
     assert len(unresolved) == 2 and all(r["method"] is None for r in unresolved), unresolved
-    assert len(rows) == 9, sorted(identities, key=str)
+    assert len(rows) == 10, sorted(identities, key=str)
     assert all(r["handler"] is None for r in rows), [r["handler"] for r in rows]
     assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
+
+
+def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tables):
+    """`inbound-request-requirements` on the Gateway side (spec 2026-09-19 §5c; CP-26 rows
+    3–4). `guarded`'s `header("X-Api", "v2")` and `query("debug")` were pass-throughs that
+    read nothing; they still carry the chain on, and now also state what the route
+    demands: header `X-Api` matching `v2` (the regex as written, the value column),
+    query `debug` present (the one-argument overload, no value), both `required` — the
+    `HeaderRoutePredicateFactory`/`QueryRoutePredicateFactory` each builds does not
+    match the route without them. Against the row they guard, `/guarded/**`, whose
+    `caller` is NULL: a gateway route has no handler, and an inbound metadata row's
+    `caller` is the handler (§4d). The fixture's other routes state nothing, so these two
+    rows are the table."""
+    assert _requirements(gateway_tables["endpoint_metadata"]) == {
+        (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
+        (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
+    }

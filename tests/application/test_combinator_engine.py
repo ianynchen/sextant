@@ -41,6 +41,7 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
@@ -263,10 +264,6 @@ def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> Duc
     write_fact_file(tmp_path / "facts" / "Routes.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    # The pipeline's own step before any engine runs (spec 2026-09-19 §4d): the stash the
-    # engine writes a route's requirements to is a TEMP table the pipeline re-creates once
-    # per resolve, so the harness re-creates it as `test_request_requirements.py` does.
-    workspace.derive("route_requirements_reset")
     skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
     assert skipped == []
     return workspace
@@ -6258,3 +6255,429 @@ def test_all_methods_and_a_verb_less_non_terminal_are_validated(tmp_path: Path):
     del matches["vocabulary"]["verbs"][0]["verb"]  # type: ignore[index]
     with pytest.raises(CatalogError, match="neither `verb` nor `verb_arg`"):
         _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- `_Route.requirements` → the stash → `endpoint_metadata` (spec 2026-09-19 §4d, §5c) ---
+
+
+def _stash(workspace: DuckDbWorkspace) -> list[tuple]:
+    """The `route_requirements` rows the engine wrote, as `(method, path, handler, kind,
+    name, value, requirement, resolution)`, in the query's own total order."""
+    return [
+        (
+            row["method"],
+            row["path"],
+            row["handler"],
+            row["kind"],
+            row["name"],
+            row["value"],
+            row["requirement"],
+            row["resolution"],
+        )
+        for row in workspace.query("route_requirements")
+    ]
+
+
+def _metadata(workspace: DuckDbWorkspace) -> list[tuple]:
+    return [
+        (
+            row["method"],
+            row["path"],
+            row["caller"],
+            row["kind"],
+            row["name"],
+            row["value"],
+            row["requirement"],
+            row["resolution"],
+        )
+        for row in workspace.query("endpoint_metadata")
+    ]
+
+
+def test_selector_requirements_reach_the_stash_and_the_stash_reaches_endpoint_metadata(
+    tmp_path: Path,
+):
+    """The end-to-end of the stash on synthetic facts. `header("X-Api-Version", "2") {
+    get("/orders") { } }`, `param("debug") { … }`, `param("mode", "fast") { … }` and
+    `optionalParam("page") { … }` each put ONE requirement on the route beneath them,
+    and `run` writes it to `route_requirements` under the SAME `caller`, `handler`,
+    `method`, `path` and `catalog_id` the endpoint row was inserted with — post
+    `_path_of`, post fan-out. Then the requirements pass, run as the pipeline runs it
+    after the engines, joins the stash to its rows and writes `endpoint_metadata`:
+    `caller` = the handler (§4d), `required` for the three the tree refuses a request
+    without, `optional` for `optionalParam`, `value` the literal where one was given.
+    A join that missed — a `method` or `path` spelled differently in the stash than in
+    the row — would leave this table empty, which is what this test refuses."""
+    facts = _selector_tree(
+        ("header", [_literal("X-Api-Version"), _literal("2")], [("get", "/orders")]),
+        ("param", [_literal("debug")], [("get", "/dbg")]),
+        ("param2", [_literal("mode"), _literal("fast")], [("get", "/fast")]),
+        ("optionalParam", [_literal("page")], [("get", "/paged")]),
+    )
+    catalog = _shipped_ktor_catalog()
+    workspace = _resolve(tmp_path, facts, catalog)
+    stash = _stash(workspace)
+    workspace.derive("endpoint_metadata_reset")
+    record_request_requirements(workspace, [catalog])
+    metadata = _metadata(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    expected = [
+        ("GET", "/dbg", handler, "query", "debug", None, "required", "resolved"),
+        ("GET", "/fast", handler, "query", "mode", "fast", "required", "resolved"),
+        ("GET", "/orders", handler, "header", "X-Api-Version", "2", "required", "resolved"),
+        ("GET", "/paged", handler, "query", "page", None, "optional", "resolved"),
+    ]
+    assert stash == expected
+    assert metadata == expected
+
+
+def test_a_fanned_out_route_carries_its_requirements_to_every_row_and_unions_on_collapse(
+    tmp_path: Path,
+):
+    """Two shapes of the same rule. `param("debug") { route("/h") { handle { } } }` fans out
+    through `all_methods`, and every one of the seven rows carries the `debug`
+    requirement — the stash is per (row × requirement), keyed by the row's own verb. And
+    two routes that COLLAPSE to one row — `header("A", "1") { get("/x") { } }` beside
+    `header("B", "2") { get("/x") { } }`, one address, one handler — keep BOTH
+    requirements, in declaration order: the dedup unions them rather than discarding the
+    second route's with the row (spec §4d)."""
+    facts = _selector_tree(
+        ("param", [_literal("debug")], []),
+        ("header", [_literal("A"), _literal("1")], [("get", "/x")]),
+        ("header", [_literal("B"), _literal("2")], [("get", "/x")]),
+    )
+    # `route("/h") { handle { } }` inside the `param` block (`_selector_body(0)`).
+    inner = DECLARER + "orders$lambda$1$lambda$0$lambda$0(sig_i0)."
+    facts.append(_method_symbol(inner))
+    facts.append(
+        _site(
+            _selector_body(0),
+            0,
+            _ROUTING_BUILDER,
+            "route",
+            result=900,
+            descriptor=_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/h"),
+                CallArgument(kind="lambda", symbol=inner, source=899, captures=0),
+            ],
+        )
+    )
+    facts.append(_handle_in(inner, 0))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    verbs = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+    assert _identities(rows) == sorted(
+        [*((verb, "/h", handler, "resolved") for verb in verbs), ("GET", "/x", handler, "resolved")]
+    )
+    assert sorted(stash, key=str) == sorted(
+        [
+            *(
+                (verb, "/h", handler, "query", "debug", None, "required", "resolved")
+                for verb in verbs
+            ),
+            ("GET", "/x", handler, "header", "A", "1", "required", "resolved"),
+            ("GET", "/x", handler, "header", "B", "2", "required", "resolved"),
+        ],
+        key=str,
+    )
+
+
+def test_a_requirement_whose_name_is_not_a_literal_is_recorded_unresolved(tmp_path: Path):
+    """`header(name, "2") { get("/x") { } }` with `name` a variable: the requirement EXISTS
+    — the tree demands a header — and its name could not be read, so the stash row
+    carries `name` NULL and `resolution: unresolved` (§5a: "demands a header it does not
+    name" is a different statement from "demands none"). The route itself is untouched:
+    resolved, `GET /x`."""
+    facts = _selector_tree(
+        ("header", [CallArgument(kind="unresolved"), _literal("2")], [("get", "/x")]),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [("GET", "/x", handler, "resolved")]
+    assert stash == [("GET", "/x", handler, "header", None, "2", "required", "unresolved")]
+
+
+def _gateway_requirement_matches() -> dict[str, object]:
+    """The invented gateway with `header`/`query`/`cookie` as REQUIREMENT continuations —
+    pass-throughs that also state what the route demands (spec §5c)."""
+    matches = copy.deepcopy(_gateway_matches())
+    continuations: list = matches["continuations"]  # type: ignore[assignment]
+    for name, kind in (("header", "header"), ("query", "query"), ("cookie", "cookie")):
+        continuations.append(
+            {
+                "name": name,
+                "owner": "com.example.gw.BooleanSpec",
+                "pass_through": True,
+                "request_requirement": {
+                    "kind": kind,
+                    "name_arg": 0,
+                    "value_arg": 1,
+                    "requirement": "required",
+                },
+            }
+        )
+    return matches
+
+
+def test_requirement_continuations_carry_their_demand_onto_every_branch_of_the_chain(
+    tmp_path: Path,
+):
+    """`path("/a").or().path("/b").and().header("X-Api", "v2").and().query("debug").and().
+    cookie("session", ".*").uri(x)`: the three requirement pass-throughs contribute no
+    path and no verb — the chain still folds to `/a` and `/b` — and each puts its demand
+    on BOTH branches (an `and()` binds to everything to its left). `header(String,
+    String)` and `cookie(String, String)` carry the regex as their value; `query(String)`
+    — the one-argument overload of a name one continuation rule covers — has no value to
+    read and stays resolved with `value` NULL. Handler-less routes stash `handler` NULL,
+    which is the identity the gateway's rows carry."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+        (BOOL, "and", []),
+        (BOOL, "header", [_literal("X-Api"), _literal("v2")]),
+        (BOOL, "and", []),
+        (BOOL, "query", [_literal("debug")]),
+        (BOOL, "and", []),
+        (BOOL, "cookie", [_literal("session"), _literal(".*")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_requirement_matches()))
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/a", None, "resolved"), (None, "/b", None, "resolved")]
+    assert stash == [
+        (None, path, None, kind, name, value, "required", "resolved")
+        for path in ("/a", "/b")
+        for kind, name, value in (
+            ("cookie", "session", ".*"),
+            ("header", "X-Api", "v2"),
+            ("query", "debug", None),
+        )
+    ]
+
+
+def test_a_requirement_whose_value_is_a_predicate_is_unresolved_and_an_or_onto_one_is_a_branch(
+    tmp_path: Path,
+):
+    """Two edges of the chain fold. `query("debug", p)` — the `Predicate` overload — carries a
+    second argument the walk cannot read as a literal: the demand is recorded, `value`
+    NULL, `unresolved` (the fluent engine's own rule for a header whose value is a
+    variable). And `path("/a").or().header("X")`: the alternative an `or()` opened IS the
+    requirement pass-through, so it is a branch of its own — every path, header `X`
+    required — beside `/a`, which demands nothing."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (BOOL, "header", [_literal("X")]),
+        (BOOL, "and", []),
+        (BOOL, "query", [_literal("debug"), CallArgument(kind="lambda", symbol=HEALTH)]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_requirement_matches()))
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/**", None, "resolved"), (None, "/a", None, "resolved")]
+    assert stash == [
+        (None, "/**", None, "header", "X", None, "required", "resolved"),
+        (None, "/**", None, "query", "debug", None, "required", "unresolved"),
+        (None, "/a", None, "query", "debug", None, "required", "unresolved"),
+    ]
+
+
+def _query_param(ordinal: int, *, result: int, value: CallArgument) -> CallSiteFact:
+    """`RequestPredicates.queryParam(String, String | Predicate)` — the two overloads share a
+    name and an arity and differ at position 1's type (spring-webflux 6.1.6, CP-26 row 1)."""
+    typed = "Ljava/lang/String;" if value.kind == "string" else "Ljava/util/function/Predicate;"
+    return _site(
+        ROUTES,
+        ordinal,
+        _REQUEST_PREDICATES,
+        "queryParam",
+        result=result,
+        descriptor=(
+            f"(Ljava/lang/String;{typed})"
+            "Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+        ),
+        arguments=[_literal("v"), value],
+    )
+
+
+def test_query_param_predicates_fold_their_requirement_through_and_on_the_shipped_router(
+    tmp_path: Path,
+):
+    """Spec §5c on the shipped reactive router catalog. `RouterFunctions.route(GET("/orders").
+    and(queryParam("v", "2")), h)` is `GET /orders` — the `queryParam` constrains no path
+    and no verb — with ONE stashed requirement: `query v = 2, required`. The `Predicate`
+    overload, `GET("/x").and(queryParam("v", p))`, is told apart by `arg_types` and has
+    no `value_arg`: `v` required, value NULL, resolved. Both rules ride the `and`
+    composer exactly as a media predicate does."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _method_symbol(HEALTH),
+        *_java_route(0, "GET", "/orders", LIST_ORDERS)[:1],
+        _query_param(2, result=300, value=_literal("2")),
+        _site(
+            ROUTES,
+            3,
+            "org/springframework/web/reactive/function/server/RequestPredicate#",
+            "and",
+            receiver=100,
+            result=301,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=300)],
+        ),
+        _site(
+            ROUTES,
+            4,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=302,
+            arguments=[
+                CallArgument(kind="unresolved", source=301),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_java_route(5, "GET", "/x", HEALTH)[:1],
+        _query_param(12, result=400, value=CallArgument(kind="lambda", symbol=HEALTH)),
+        _site(
+            ROUTES,
+            13,
+            "org/springframework/web/reactive/function/server/RequestPredicate#",
+            "and",
+            receiver=150,
+            result=401,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=400)],
+        ),
+        _site(
+            ROUTES,
+            14,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=402,
+            arguments=[
+                CallArgument(kind="unresolved", source=401),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/x", _MODULE + HEALTH, "resolved"),
+    ]
+    # The stash query orders on `handler` first: `health` before `listOrders`.
+    assert stash == [
+        ("GET", "/x", _MODULE + HEALTH, "query", "v", None, "required", "resolved"),
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "query", "v", "2", "required", "resolved"),
+    ]
+
+
+def test_the_servlet_twin_reads_param_as_kind_param(tmp_path: Path):
+    """CP-26 rows 2 and 2b: the servlet `RequestPredicates` has NO `queryParam` — its
+    predicate is `param(String, String)`, and `ServerRequest.param` reads the servlet
+    parameter map, query string and form body alike — so `spring-mvc-router.yml` declares
+    `param` with `kind: param`, the §5a kind for the one API that cannot tell the two
+    apart. `route(GET("/x").and(param("v", "2")), h)` on servlet owners: `GET /x`, one
+    requirement, kind `param`. A catalog copied from the reactive twin would match
+    nothing here, silently."""
+    facts: list = [
+        _method_symbol(HEALTH),
+        *_mvc_java_route(0, "GET", "/x", HEALTH)[:1],
+        _site(
+            ROUTES,
+            2,
+            _MVC_REQUEST_PREDICATES,
+            "param",
+            result=300,
+            descriptor=(
+                "(Ljava/lang/String;Ljava/lang/String;)"
+                "Lorg/springframework/web/servlet/function/RequestPredicate;"
+            ),
+            arguments=[_literal("v"), _literal("2")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            "org/springframework/web/servlet/function/RequestPredicate#",
+            "and",
+            receiver=100,
+            result=301,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=300)],
+        ),
+        _site(
+            ROUTES,
+            4,
+            _MVC_ROUTER_FUNCTIONS,
+            "route",
+            result=302,
+            arguments=[
+                CallArgument(kind="unresolved", source=301),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/x", _MODULE + HEALTH, "resolved")]
+    assert stash == [("GET", "/x", _MODULE + HEALTH, "param", "v", "2", "required", "resolved")]
+
+
+def test_requirement_words_of_the_wrong_shape_are_refused(tmp_path: Path):
+    """`request_requirement` on a continuation that is not a `pass_through` is two readings of
+    one call (it would read an argument a plain continuation treats as a handler slot); a
+    vocabulary `request_requirement` rule missing its owner, or naming a kind outside the
+    four, is a broken file; and two such rules that could both accept one call are refused
+    as two verbs would be (spec §3c)."""
+    matches = copy.deepcopy(_gateway_matches())
+    matches["continuations"].append(  # type: ignore[attr-defined]
+        {
+            "name": "header",
+            "owner": "com.example.gw.BooleanSpec",
+            "request_requirement": {"kind": "header", "name_arg": 0, "requirement": "required"},
+        }
+    )
+    with pytest.raises(CatalogError, match="request_requirement"):
+        _resolve(tmp_path, [], _catalog(matches))
+    rule = {
+        "owner": "com.example.web.Predicates",
+        "method": "queryParam",
+        "arity": 2,
+        "kind": "query",
+        "name_arg": 0,
+        "requirement": "required",
+    }
+    for broken in (
+        [{**rule, "kind": "form"}],
+        [{k: v for k, v in rule.items() if k != "owner"}],
+        [rule, {**rule, "value_arg": 1}],
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["request_requirement"] = broken  # type: ignore[index]
+        with pytest.raises(CatalogError):
+            _resolve(tmp_path, [], _catalog(matches))

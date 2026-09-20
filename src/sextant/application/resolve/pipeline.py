@@ -166,11 +166,10 @@ def resolve(
     # resolve whose calls carry no metadata leaves an empty table rather than the previous
     # run's rows.
     workspace.derive("endpoint_metadata_reset")
-    # Spec 2026-09-19 §4d/§5a, and beside the reset above because it feeds the same table:
-    # the combinator stashes each route's requirements here as it derives the route, and
-    # `record_request_requirements` below joins them to `endpoints` once every row's
-    # protocol is final. Re-created whole, once, for the reason above.
-    workspace.derive("route_requirements_reset")
+    # Its feeder, the combinator's `route_requirements` stash (spec 2026-09-19 §4d/§5a),
+    # is re-created by `derive_endpoints` beside `endpoints_reset` — the engines write it
+    # there, and `record_request_requirements` below joins it to `endpoints` once every
+    # row's protocol is final.
     # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
     # every pass that writes to it rather than inside one of them — the
     # `resolved_config` reset discipline, lifted out of the writing pass

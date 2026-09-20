@@ -53,6 +53,10 @@ is therefore a fold over that tree rather than a walk along a line.
   call's own erased descriptor) tell same-name overloads apart, a call the
   vocabulary names but no rule accepts is one unresolved row, and two rules
   that could both accept one call are refused at load (spec §3).
+- `request_requirement` — predicate factories that contribute a requirement and
+  nothing else (spec 2026-09-19 §5c), verb-rule shaped so `arity`/`arg_types` tell
+  `queryParam(String, String)` from `queryParam(String, Predicate)`; folded where a
+  predicate argument or an `and` reaches them, as `media` is.
 - `all_methods` (top level, spec 2026-09-19 §4c) — the framework's default-methods
   list: a RESOLVED route that read no verb at all — a verb-less `terminal` under no
   verb-setting scope — is one row per member. Without it such a route keeps `method`
@@ -64,7 +68,10 @@ is therefore a fold over that tree rather than a walk along a line.
   `subtree_arg`, which make it fold its argument's whole router under its own
   prefix rather than reading a handler it does not have. A mapping declaring
   `pass_through: true` carries the chain on and reads NO argument: a filter, an
-  attribute, an error handler is never a route (spec §4b).
+  attribute, an error handler is never a route (spec §4b) — unless it also declares
+  a `request_requirement`, in which case it reads that one thing: a header/query/
+  cookie predicate that narrows who is served, carried onto every branch of the chain
+  it is folded into (spec 2026-09-19 §5c).
 - `origins` — the calls a builder chain STARTS at, `{owner, method}` plus the
   same `arity`/`arg_types` a verb rule takes, because the argument-less
   builder factory shares its name with the two-argument route it is not: a
@@ -229,8 +236,8 @@ _MEDIA_FIELDS = ("consumes", "produces")
 _REQUIREMENT_KINDS = ("header", "query", "cookie", "param")
 _REQUIREMENT_LEVELS = ("required", "optional", "absent")
 # The row key a route's requirements ride under between `_row_of` and `run`, where they
-# are stripped before the insert (and, once the stash lands, stashed beside it).
-# Underscored so it can never be mistaken for an `endpoints` column.
+# are stripped before the insert and stashed beside it. Underscored so it can never be
+# mistaken for an `endpoints` column.
 _REQUIREMENTS = "_requirements"
 
 # Every row column except the two media lists — the grouping key for the
@@ -289,6 +296,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             {key: value for key, value in row.items() if key != _REQUIREMENTS} for row in emitted
         ],
     )
+    # The requirements each emitted row carries (spec 2026-09-19 §4d), stashed under the
+    # SAME `method`/`path` strings the row was just inserted with — after `_path_of`, after
+    # the fan-out, after the union — because the requirements pass joins them back on
+    # exactly those columns once every row's protocol is final (`request_requirements.
+    # _from_stash`). Written after the rows, for the reason the questions are.
+    stash = _stash_rows(emitted, catalog)
+    if stash:
+        workspace.derive("route_requirements_insert", rows=stash)
     # Filed after the rows, as `interface_implementation` files its own: a tree that both
     # derives and asks cannot have its question written and its rows lost to a later
     # failure. The candidates are the run's, accumulated by every tree (`_helper_routes`).
@@ -318,8 +333,8 @@ class _Route:
     # What the routing tree demands of a request before this route serves it (spec
     # 2026-09-19 §4d): a header, query parameter or cookie a selector or predicate names.
     # Inherited down scopes as a path prefix is, in declaration order and distinct, and
-    # carried on the emitted row for the `route_requirements` stash — never part of the
-    # route's identity, so two routes differing only here are still one address.
+    # written per emitted row to the `route_requirements` stash (`run`) — never part of
+    # the route's identity, so two routes differing only here are still one address.
     requirements: tuple["_Requirement", ...] = ()
 
 
@@ -358,6 +373,12 @@ class _Continuation:
     path_arg: int | None
     subtree_arg: int | None
     pass_through: bool
+    # A pass-through that READS one thing after all — not a route, a REQUIREMENT (spec
+    # 2026-09-19 §5c): a header/query/cookie predicate that narrows who is served and
+    # says so on the row's metadata. The declared `{kind, name_arg, value_arg?,
+    # requirement}` mapping, folded where the chain is folded as constraints
+    # (`_chained_constraints`); None on every other continuation.
+    request_requirement: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -391,6 +412,12 @@ class _TreeContext:
     # measured. Empty where the catalog declares none, and such a route then publishes
     # `method` NULL, resolved, exactly as before the word existed.
     all_methods: tuple[str, ...]
+    # `vocabulary.request_requirement` (spec 2026-09-19 §5c): the predicate factories
+    # that contribute a request requirement and nothing else — the same rule shape a
+    # verb takes (`arity`/`arg_types` tell overloads apart), matched by
+    # `_matching_rule`; `requirement_names` is the claimed set, as `verb_names` is.
+    request_requirements: tuple[dict[str, Any], ...]
+    requirement_names: frozenset[tuple[str, str]]
     composers: dict[tuple[str, str], str]
     # The chain-form composers and the negators (spec §12 words 3–4): `and()`/`or()`
     # written on the RECEIVER chain a terminal folds, keyed exactly as `composers`
@@ -525,6 +552,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
     verbs = _rules_of(vocabulary.get("verbs", []))
     prefixes = _rules_of(vocabulary.get("prefixes", []))
     origins = _rules_of(matches.get("origins", []))
+    request_requirements = _rules_of(vocabulary.get("request_requirement", []))
     context = _TreeContext(
         entries=entries,
         body_entries=body_entries,
@@ -545,6 +573,10 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         media_getters=_getters_of(media_values.get("getters", {})),
         verb_getters=_getters_of(vocabulary.get("verb_values", {}).get("getters", {})),
         all_methods=tuple(str(verb) for verb in matches.get("all_methods", [])),
+        request_requirements=request_requirements,
+        requirement_names=frozenset(
+            (rule["owner"], rule["method"]) for rule in request_requirements
+        ),
         composers=composers,
         chain_composers=chain_composers,
         negators=frozenset(
@@ -612,6 +644,7 @@ def _continuations_of(declared: list[Any]) -> tuple[_Continuation, ...]:
             path_arg=entry.get("path_arg"),
             subtree_arg=entry.get("subtree_arg"),
             pass_through=bool(entry.get("pass_through", False)),
+            request_requirement=entry.get("request_requirement"),
         )
         for entry in declared
     )
@@ -721,6 +754,7 @@ def _claimed(site: dict[str, Any], context: _TreeContext) -> bool:
         key in context.verb_names
         or key in context.prefix_names
         or key in context.media
+        or key in context.requirement_names
         or key in context.composers
         or key in context.chain_composers
         or key in context.negators
@@ -901,9 +935,10 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         # route served with no handler method (spec §6); a bare predicate factory
         # becomes a route only once some entry attaches a handler to it.
         return _verb_routes(site, verb, scope) if _declares_a_route(verb) else []
-    if key in context.media:
-        # A media call is a constraint contributor — it declares no route, and reaching
-        # it here (unconsumed) is nothing to report. UNLESS it was handed a handler: a
+    if key in context.media or key in context.requirement_names:
+        # A media call — or a requirement predicate (spec 2026-09-19 §5c), held to the same
+        # guard for the same reason — is a constraint contributor: it declares no route, and
+        # reaching it here (unconsumed) is nothing to report. UNLESS it was handed a handler: a
         # `lambda`-kind argument on a call whose rule reads media values is the
         # route-declaring overload of that name (a builder DSL's `accept(MediaType,
         # Function1)`, measured on both routing stacks), and a declared route absent
@@ -964,6 +999,16 @@ def _is_pass_through(site: dict[str, Any], context: _TreeContext) -> bool:
     return continuation is not None and continuation.pass_through
 
 
+def _requirement_constraint(site: dict[str, Any], context: _TreeContext) -> _Route:
+    """What a pass-through contributes to the chain it is folded into: the requirement
+    its continuation declares, filled from this call's literals, or the empty route for
+    a pass-through declaring none. Only ever called on a pass-through."""
+    continuation = _matching_continuation(site, context)
+    if continuation is None or continuation.request_requirement is None:
+        return _Route()
+    return _Route(requirements=(_requirement_of(site, continuation.request_requirement),))
+
+
 def _declares_a_route(rule: dict[str, Any]) -> bool:
     """Whether a verb rule declares a whole route on its own — it names where
     the handler sits, or says there is none — rather than a bare predicate."""
@@ -986,6 +1031,15 @@ def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     media = context.media.get(key)
     if media is not None:
         return [_media_constraints(site, media, scope)]
+    if key in context.requirement_names:
+        # Spec 2026-09-19 §5c: a predicate factory that demands a header, query
+        # parameter or cookie constrains WHO is served and nothing about the address —
+        # its whole contribution is one requirement on the route that reaches it. An
+        # overload no rule accepts is the G-13 row, as a verb's is.
+        rule = _matching_rule(site, context.request_requirements)
+        if rule is None:
+            return [_Route(poisons=_IDENTITY_POISON)]
+        return [_Route(requirements=(_requirement_of(site, rule),))]
     composer = context.composers.get(key)
     if composer is not None:
         return _composed_constraints(site, composer, scope)
@@ -1188,18 +1242,20 @@ def _requirement_of(site: dict[str, Any], declared: dict[str, Any]) -> _Requirem
     — filled from the call's own arguments (spec 2026-09-19 §4b, §5c). The name is the
     string literal at `name_arg`, or NULL with the row `unresolved`: the requirement
     exists and is recorded, its name is what could not be read. The value is the
-    literal at `value_arg`; a `value_arg` the call carries but not as a literal reads
-    NULL and `unresolved` too — the fluent engine's own rule for a header whose value
-    is a variable — while a rule declaring no `value_arg` (the `Predicate` form, a
-    presence check) has no value to read and stays resolved. `evidence` is the D00 §4
-    value every metadata row carries."""
+    literal at `value_arg`; a `value_arg` the call CARRIES but not as a literal — a
+    variable, a predicate — reads NULL and `unresolved` too, the fluent engine's own
+    rule for a header whose value is a variable; a `value_arg` the call does not carry
+    at all (the one-argument overload of a name one continuation rule covers, or a rule
+    declaring none — a presence check) has no value to read and stays resolved.
+    `evidence` is the D00 §4 value every metadata row carries."""
     arguments = site["arguments"]
     name = _string_literal(_arg_at(arguments, declared["name_arg"]))
     resolved = name is not None
     value: str | None = None
     if "value_arg" in declared:
-        value = _string_literal(_arg_at(arguments, declared["value_arg"]))
-        resolved = resolved and value is not None
+        carried = _arg_at(arguments, declared["value_arg"])
+        value = _string_literal(carried)
+        resolved = resolved and (carried is None or value is not None)
     return _Requirement(
         kind=str(declared["kind"]),
         name=name,
@@ -1554,10 +1610,16 @@ def _chained_constraints(site: dict[str, Any], scope: _Scope) -> list[_Route]:
             # The alternative an `or()` opened may BE the pass-through — `a.or().host(h)`
             # — and a predicate the walk reads as nothing is a branch constraining
             # nothing, which serves every path; leaving it pending would drop the
-            # catch-all half of the route.
+            # catch-all half of the route. A pass-through declaring a
+            # `request_requirement` (spec 2026-09-19 §5c) constrains the path exactly as
+            # little, and carries its requirement onto every branch it is folded into —
+            # or onto the branch it opens.
+            contributed = [_requirement_constraint(call, context)]
             if opening:
-                branches = [*branches, _Route()]
+                branches = [*branches, *contributed]
                 opening = False
+            else:
+                branches = [_merged(branch, c) for branch in branches for c in contributed]
             continue
         composer = context.chain_composers.get(key)
         if composer is not None:
@@ -1965,6 +2027,29 @@ def _fanned(route: _Route, context: _TreeContext) -> list[_Route]:
     return [replace(route, verb=verb) for verb in context.all_methods]
 
 
+def _stash_rows(emitted: list[dict[str, Any]], catalog: Catalog) -> list[dict[str, Any]]:
+    """One `route_requirements` row per (emitted row × requirement it carries), keyed by
+    the columns the row was minted with — `caller`, `handler`, `method`, `path`,
+    `catalog_id` — which is the join the requirements pass makes."""
+    return [
+        {
+            "caller": row["caller"],
+            "handler": row["handler"],
+            "method": row["method"],
+            "path": row["path"],
+            "catalog_id": catalog.id,
+            "kind": requirement.kind,
+            "name": requirement.name,
+            "value": requirement.value,
+            "requirement": requirement.requirement,
+            "resolution": requirement.resolution,
+            "evidence": requirement.evidence,
+        }
+        for row in emitted
+        for requirement in row[_REQUIREMENTS]
+    ]
+
+
 def _path_of(route: _Route, catalog: Catalog) -> str | None:
     """The folded route's own address, as the URL the framework serves it at.
 
@@ -2191,15 +2276,17 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"{rule.get('arity')} filling `consumes` or `produces` (D02 §2's "
                 f"`combinator` style)"
             )
-        # Spec 2026-09-19 §4b: a prefix may declare the request requirement its call
-        # states — `{kind, name_arg, value_arg?,
+        # Spec 2026-09-19 §4b/§5c: a prefix, or a pass-through continuation, may declare
+        # the request requirement its call states — `{kind, name_arg, value_arg?,
         # requirement}`, both closed sets, both positions inside the rule's arity.
         if "request_requirement" in rule:
-            if role != "prefixes":
+            if role not in ("prefixes", "continuations") or (
+                role == "continuations" and not rule.get("pass_through")
+            ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{name}` declares "
-                    f"`request_requirement` — a word for a prefix (D02 §2's `combinator` "
-                    f"style)"
+                    f"`request_requirement` — a word for a prefix or a `pass_through` "
+                    f"continuation (D02 §2's `combinator` style)"
                 )
             _validate_requirement(rule["request_requirement"], rule, name, catalog)
         if "terminal" in rule and role != "verbs":
@@ -2218,8 +2305,18 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"`{_FOLLOW_ALL}`, on a rule that links a body (`body_arg`), an entry or a "
                 f"prefix (D02 §2's `combinator` style)"
             )
+    # Spec 2026-09-19 §5c: a `request_requirement` vocabulary rule is a constraint
+    # contributor of the verb-rule shape, and says which requirement it contributes.
+    for rule in vocabulary.get("request_requirement", []):
+        if not isinstance(rule, dict) or "owner" not in rule or "method" not in rule:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: every `request_requirement` rule is "
+                f"`{{owner, method, kind, name_arg, value_arg?, requirement}}`, got {rule!r} "
+                f"(D02 §2's `combinator` style)"
+            )
+        _validate_requirement(rule, rule, rule["method"], catalog)
     named: dict[tuple[str, str], str] = {}
-    for role in ("verbs", "prefixes", "media"):
+    for role in ("verbs", "prefixes", "media", "request_requirement"):
         for rule in vocabulary.get(role, []):
             named.setdefault((_catalog_symbol(rule["owner"]), rule["method"]), role)
     for declared in vocabulary.get("composers", {}).values():
@@ -2379,8 +2476,8 @@ def _position_inside(position: Any, rule: dict[str, Any]) -> bool:
 
 
 def _validate_requirement(declared: Any, rule: dict[str, Any], name: Any, catalog: Catalog) -> None:
-    """One `request_requirement` — a prefix's mapping: `kind` and `requirement` from
-    their closed sets,
+    """One `request_requirement` — as a prefix's or continuation's mapping, or as a
+    vocabulary rule of its own: `kind` and `requirement` from their closed sets,
     `name_arg` and the optional `value_arg` positions the rule's call can carry."""
     if (
         not isinstance(declared, dict)
@@ -2411,6 +2508,10 @@ def _validate_overloads(catalog: Catalog) -> None:
     roles = {
         "verbs": vocabulary.get("verbs", []),
         "prefixes": vocabulary.get("prefixes", []),
+        # Requirement predicates too (spec 2026-09-19 §5c): `queryParam(String, String)`
+        # and `queryParam(String, Predicate)` share a name and an arity, and only
+        # `arg_types` tells them apart.
+        "request_requirement": vocabulary.get("request_requirement", []),
         # Origins are matched by the same rule, so the same two checks bind them: the
         # argument-less factory is told from the route of the same name by `arity`.
         "origins": catalog.matches.get("origins", []),
@@ -2514,7 +2615,7 @@ def _validate_continuations(catalog: Catalog) -> None:
         else:
             raise CatalogError(
                 f"loading catalog {catalog.source}: every `continuations` item is either a "
-                f"method name or `{{name, owner?, path_arg?, subtree_arg?, pass_through?}}`, "
+                f"method name or `{{name, owner?, path_arg?, subtree_arg?, pass_through?, request_requirement?}}`, "
                 f"got {entry!r} (D02 §2's `combinator` style)"
             )
         if len(positions) == 1:

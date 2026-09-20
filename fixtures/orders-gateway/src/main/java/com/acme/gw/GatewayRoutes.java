@@ -2,7 +2,10 @@
 // lambda handed to `route(…)`, its predicates a chain on the lambda's own parameter, its target
 // the `uri(…)` at the chain's end. Both `route` overloads; path only; path and method; `or`;
 // `not`; a lambda capturing a local and one capturing `this` — the two capture shapes a fixed
-// parameter index gets wrong; every route ends in `uri`, one `http://`, one `lb://`.
+// parameter index gets wrong; every route ends in `uri`, one `http://`, one `lb://`. And one
+// route whose predicates DEMAND something of the request — `header("X-Api", "v2")` then
+// `query("debug")` (spec 2026-09-19 §5c): the route still serves its path, and the two
+// demands reach `endpoint_metadata` as `required` requirements of that row.
 package com.acme.gw;
 
 import org.springframework.cloud.gateway.route.RouteLocator;
@@ -27,6 +30,8 @@ public class GatewayRoutes {
             .route("legacy", r -> r.path(prefix + "/**").uri("http://legacy-service"))          // captures a local
             .route("billing", r -> r.path("/billing/**").uri(billing))                          // captures this
             .route(r -> r.host("**.example.org").uri("http://host-service"))                    // route(Function): host only → /**
+            .route("guarded", r -> r.path("/guarded/**").and().header("X-Api", "v2").and().query("debug")
+                                         .uri("http://guarded-service"))                        // header + query requirements
             .build();
     }
 }

@@ -139,12 +139,34 @@ matches:
     # Predicates that narrow WHO is served, on both static receiver types.
     - { name: host,                    owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
     - { name: host,                    owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
-    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
-    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
-    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
-    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
-    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
-    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
+    # `header`, `query` and `cookie` (spec 2026-09-19 §5c; `inbound-request-requirements`)
+    # carry the chain on AND state what the route demands of the request: `header(String)`
+    # requires the header present, `header(String, String)` present and matching the
+    # regex — the value column carries the regex string as written; `query(String)` /
+    # `query(String, String)` the same for a query parameter; `query(String, Predicate)`
+    # present, the predicate unreadable (no value); `cookie(String, String)` present and
+    # matching (CP-26 rows 3–4 for the overloads; the `*RoutePredicateFactory` each builds
+    # is what refuses the request). All `required`: the route is not matched without the
+    # value, and the request falls to the next route or a 404. Every one is declared on
+    # both static receiver types, as every predicate here is. One rule per name and owner
+    # — a continuation is matched on name and owner alone, so `header(String)` and
+    # `header(String, String)` share a rule and `value_arg: 1` reads NULL where the call
+    # carries no second argument, and `query(String, Predicate)`'s predicate is not a
+    # literal and reads NULL (`unresolved`, honestly: the value was constrained by
+    # something the walk cannot read). The properties spellings (`Header=X,regex`) are
+    # `gateway-properties-routes`, open, and land there on this same word.
+    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true,
+        request_requirement: { kind: header, name_arg: 0, value_arg: 1, requirement: required } }
+    - { name: header,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true,
+        request_requirement: { kind: header, name_arg: 0, value_arg: 1, requirement: required } }
+    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true,
+        request_requirement: { kind: query, name_arg: 0, value_arg: 1, requirement: required } }
+    - { name: query,                   owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true,
+        request_requirement: { kind: query, name_arg: 0, value_arg: 1, requirement: required } }
+    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true,
+        request_requirement: { kind: cookie, name_arg: 0, value_arg: 1, requirement: required } }
+    - { name: cookie,                  owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true,
+        request_requirement: { kind: cookie, name_arg: 0, value_arg: 1, requirement: required } }
     - { name: remoteAddr,              owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }
     - { name: remoteAddr,              owner: org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec, pass_through: true }
     - { name: xForwardedRemoteAddr,    owner: org.springframework.cloud.gateway.route.builder.PredicateSpec, pass_through: true }

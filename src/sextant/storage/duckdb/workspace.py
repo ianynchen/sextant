@@ -1221,8 +1221,8 @@ _NAMED_DERIVATIONS = {
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
     # Spec 2026-09-19 §4d/§5a. A reset/insert pair like `endpoint_metadata`'s and
-    # for the same reason: the reset runs once per resolve from the pipeline, the
-    # insert once per engine run.
+    # for the same reason: the reset runs once per resolve from `derive_endpoints`
+    # (beside `endpoints_reset`, ahead of every engine), the insert once per engine run.
     "route_requirements_reset": "reset_route_requirements.sql",
     "route_requirements_insert": "insert_route_requirements.sql",
 }

@@ -315,7 +315,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `create`, both `invoke`s and `invokeSuspend`), six of them into this module (the
     # call to `extra`, and the handler class's own constructor/`create`/`invoke`/
     # `invokeSuspend` chain). Still 29%.
-    assert "Calls whose callee body this workspace read: 526 of 1786 (29%)" in document
+    # 526 of 1788 since spec 2026-09-19 §5c: `OrderRoutes.java`'s `.and(RequestPredicates.
+    # queryParam("v", "2"))` — two edges, both to the platform (`queryParam` and the
+    # `RequestPredicate.and` that composes it). The numerator is unmoved. Still 29%.
+    assert "Calls whose callee body this workspace read: 526 of 1788 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -347,10 +350,15 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # distinct module-declared methods those edges look up. `owner_not_scanned` is UNCHANGED:
     # the DSL's `GET`, `ServerResponse.ok()` and the coroutine plumbing are methods
     # `ktRoutes`'s own handlers already look up.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1784." in document
+    # 1786 since spec 2026-09-19 §5c: `queryParam` and its `and` (comment above), both
+    # `resolved` — the compiler names each static factory and interface default exactly.
+    # `owner_not_scanned` gains one (421): `RequestPredicates.queryParam(String, String)` is
+    # a method of the unscanned framework nothing in the fixture looked up before;
+    # `RequestPredicate.and` was already looked up by the `accept` composition beside it.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1786." in document
     assert (
         "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 199, "
-        "inherited 2, owner_not_scanned 420."
+        "inherited 2, owner_not_scanned 421."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
