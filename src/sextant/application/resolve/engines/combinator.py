@@ -53,6 +53,10 @@ is therefore a fold over that tree rather than a walk along a line.
   call's own erased descriptor) tell same-name overloads apart, a call the
   vocabulary names but no rule accepts is one unresolved row, and two rules
   that could both accept one call are refused at load (spec §3).
+- `all_methods` (top level, spec 2026-09-19 §4c) — the framework's default-methods
+  list: a RESOLVED route that read no verb at all — a verb-less `terminal` under no
+  verb-setting scope — is one row per member. Without it such a route keeps `method`
+  NULL, resolved, the builder's `route(predicate, handler)` reading.
 - `continuations` — the calls that merge route sets along `result` →
   `receiver`. A plain method name is owner-free, exactly like `fluent`'s
   steps; a mapping declares the same name with an `owner` that narrows it to
@@ -276,7 +280,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             if result is not None and result in scope.consumed:
                 continue
             for route in _routes_of(site, scope):
-                rows.append(_row_of(route, caller, catalog))
+                for fanned in _fanned(route, context):
+                    rows.append(_row_of(fanned, caller, catalog))
     emitted = _emitted(rows, catalog)
     workspace.derive(
         "call_endpoints",
@@ -381,6 +386,11 @@ class _TreeContext:
     # `verb_values.getters`, owners converted as every rule owner is.
     media_getters: dict[tuple[str, str], str]
     verb_getters: dict[tuple[str, str], str]
+    # `matches.all_methods` (spec 2026-09-19 §4c): the verbs a RESOLVED route that read no
+    # verb at all fans out to, one row each — the framework's own default-methods list,
+    # measured. Empty where the catalog declares none, and such a route then publishes
+    # `method` NULL, resolved, exactly as before the word existed.
+    all_methods: tuple[str, ...]
     composers: dict[tuple[str, str], str]
     # The chain-form composers and the negators (spec §12 words 3–4): `and()`/`or()`
     # written on the RECEIVER chain a terminal folds, keyed exactly as `composers`
@@ -534,6 +544,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         media_values=dict(media_values.get("values", {})),
         media_getters=_getters_of(media_values.get("getters", {})),
         verb_getters=_getters_of(vocabulary.get("verb_values", {}).get("getters", {})),
+        all_methods=tuple(str(verb) for verb in matches.get("all_methods", [])),
         composers=composers,
         chain_composers=chain_composers,
         negators=frozenset(
@@ -1941,6 +1952,19 @@ def _row_of(route: _Route, caller: str, catalog: Catalog) -> dict[str, Any]:
     }
 
 
+def _fanned(route: _Route, context: _TreeContext) -> list[_Route]:
+    """Spec 2026-09-19 §4c: a RESOLVED route that read no verb at all — a verb-less
+    terminal under no verb-setting scope — is one row per member of the catalog's
+    `all_methods`, the framework's own default-methods list, each carrying the route's
+    requirements. On a catalog declaring no `all_methods` the route is itself, `method`
+    NULL and resolved, exactly as the builder's `route(predicate, handler)` has always
+    read; a poisoned route is itself too — its verb was written and could not be read,
+    and fanning it out would present the poison as seven facts."""
+    if route.verb is not None or route.poisons or not context.all_methods:
+        return [route]
+    return [replace(route, verb=verb) for verb in context.all_methods]
+
+
 def _path_of(route: _Route, catalog: Catalog) -> str | None:
     """The folded route's own address, as the URL the framework serves it at.
 
@@ -2218,6 +2242,18 @@ def _validate_matches(catalog: Catalog) -> None:
                 )
             named[key] = role
     for rule in vocabulary.get("verbs", []):
+        # A verb rule answers for its verb — `verb` (null included: the predicate
+        # supplies one), or `verb_arg` — unless it is a TERMINAL (spec 2026-09-19 §4c):
+        # a verb-less terminal takes the scope's verb, or fans out through
+        # `all_methods`, so the missing key is its answer. On any other verb rule a
+        # missing key is a rule that forgot to say, read today as `verb: null`; refused
+        # so it is said.
+        if not rule.get("terminal") and "verb" not in rule and "verb_arg" not in rule:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` declares neither "
+                f"`verb` nor `verb_arg` — only a `terminal` may leave its verb to the scope "
+                f"(D02 §2's `combinator` style)"
+            )
         if rule.get("terminal") and not _declares_a_route(rule):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{rule.get('method')}` declares "
@@ -2263,6 +2299,18 @@ def _validate_matches(catalog: Catalog) -> None:
             f"loading catalog {catalog.source}: `path_join: "
             f"{catalog.matches.get('path_join')!r}` — the only value is `{_LEADING_SLASH}`; "
             f"leave it out for verbatim concatenation (D02 §2's `combinator` style)"
+        )
+    # Spec 2026-09-19 §4c: `all_methods` is the framework's own default-methods list, as
+    # the annotation style already spells it — a non-empty list of upper-case tokens.
+    all_methods = catalog.matches.get("all_methods")
+    if all_methods is not None and (
+        not isinstance(all_methods, list)
+        or not all_methods
+        or not all(isinstance(verb, str) and verb.isupper() for verb in all_methods)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `all_methods: {all_methods!r}` — a non-empty "
+            f"list of upper-case verbs (D02 §2's `combinator` style)"
         )
     # Spec 2026-09-19 §4b: the getter form of the two value tables. `verb_values` holds
     # `getters` alone (a verb constant is never an enum member on the frameworks measured);

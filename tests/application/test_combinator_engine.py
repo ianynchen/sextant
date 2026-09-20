@@ -6077,3 +6077,184 @@ def test_selector_words_of_the_wrong_shape_are_refused(tmp_path: Path):
     matches["vocabulary"]["media_values"]["getters"] = {"com.example.Media.getJson": JSON}  # type: ignore[index]
     with pytest.raises(CatalogError, match="getters"):
         _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- the verb-less terminal and `all_methods` (spec 2026-09-19 §4c) --------------------
+
+_KTOR_ROUTE_TYPE = "io/ktor/server/routing/Route#"
+_HANDLE_DESC = "(Lkotlin/jvm/functions/Function2;)V"
+
+
+def _handle_in(body: str, ordinal: int) -> CallSiteFact:
+    """`handle { }` inside a block: `invokeinterface Route.handle` on the block's own
+    parameter — `receiver_parameter: 0`, no `receiver` id, no result (the fixture's
+    compiled shape, read 2026-09-20; CP-24 row 1b)."""
+    return _site(
+        body,
+        ordinal,
+        _KTOR_ROUTE_TYPE,
+        "handle",
+        receiver_parameter=0,
+        invoke_kind="interface",
+        descriptor=_HANDLE_DESC,
+        arguments=[CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50)],
+    )
+
+
+def _handle_under(*blocks: tuple[str, list[CallArgument]]) -> list:
+    """`routing { <selector>(…) { handle { } } … }` — one `handle` per block."""
+    facts = _routing_entry()
+    for index, (name, between) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        descriptor = _ROUTE_DESC if name == "route3" else _SELECTOR_DESCS[name]
+        facts.append(
+            _selector(
+                10 + index,
+                "route" if name == "route3" else name,
+                between,
+                body=body,
+                descriptor=descriptor,
+            )
+        )
+        facts.append(_handle_in(body, 0))
+    return facts
+
+
+def test_a_verb_less_terminal_takes_the_scopes_verb_or_expands_through_all_methods(
+    tmp_path: Path,
+):
+    """Spec 2026-09-19 §4c on the shipped catalog. `handle { }` is a MEMBER of the `Route`
+    interface (CP-24 row 1b) declared as a terminal with no `verb`: under `method(Get)`
+    it takes the scope's verb — `GET /`, the routing root itself, since `handle`
+    registers on the receiver node and `path: ""` at the root canonicalises to `/`;
+    under `route("/legacy2", HttpMethod.Put)` it is `PUT /legacy2`; under a bare
+    `route("/health2")` no verb is in scope, the route is RESOLVED with no verb, and it
+    fans out through `all_methods` — `HttpMethod.DefaultMethods`' seven members (CP-24 row
+    2), one row each, never `/health2/**` and never a NULL verb. Three blocks, nine rows."""
+    facts = _handle_under(
+        ("method", [_by_source(9)]),
+        ("route3", [CallArgument(kind="string", value="/health2")]),
+        ("route", [CallArgument(kind="string", value="/legacy2"), _by_source(19)]),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    facts.append(_getter(1, _HTTP_METHOD_COMPANION, "getPut", result=19))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("DELETE", "/health2", handler, "resolved"),
+        ("GET", "/", handler, "resolved"),
+        ("GET", "/health2", handler, "resolved"),
+        ("HEAD", "/health2", handler, "resolved"),
+        ("OPTIONS", "/health2", handler, "resolved"),
+        ("PATCH", "/health2", handler, "resolved"),
+        ("POST", "/health2", handler, "resolved"),
+        ("PUT", "/health2", handler, "resolved"),
+        ("PUT", "/legacy2", handler, "resolved"),
+    ]
+
+
+def test_a_poisoned_verb_is_not_fanned_out(tmp_path: Path):
+    """`method(Constants.weird) { handle { } }`: the selector's verb was written and could
+    not be read, so the route is unresolved with `method` NULL — ONE row, not seven. The
+    fan-out is for a route that read no verb at all, never for one whose verb read
+    failed; seven resolved rows there would present the poison as seven facts."""
+    facts = _handle_under(("method", [_by_source(9)]))
+    facts.append(_getter(0, _UNKNOWN_GETTERS, "getWeird", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/", _MODULE + _SUSPEND_BODY, "unresolved")]
+
+
+def test_a_catalog_without_all_methods_keeps_a_verb_less_route_null_and_resolved(
+    tmp_path: Path,
+):
+    """The precedent that must not move: the builder's `route(predicate, handler)` —
+    `verb: null` on the shipped reactive router catalog — with a media-only predicate
+    is ONE row, `method` NULL, resolved, at `/**`. That catalog declares no
+    `all_methods`, and a verb-less route there means exactly what it always has: the
+    predicate supplied no verb. `route().route(accept(JSON), h).build()`, descriptors
+    the jar's own."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(
+            ROUTES,
+            0,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=200,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;",
+        ),
+        _site(
+            ROUTES,
+            1,
+            _REQUEST_PREDICATES,
+            "accept",
+            result=150,
+            arguments=[CallArgument(kind="array", elements=[_enum_member("APPLICATION_JSON")])],
+            descriptor=(
+                "([Lorg/springframework/http/MediaType;)"
+                "Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+            ),
+        ),
+        _site(
+            ROUTES,
+            2,
+            _BUILDER,
+            "route",
+            receiver=200,
+            result=201,
+            invoke_kind="interface",
+            descriptor=(
+                "(Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+                "Lorg/springframework/web/reactive/function/server/HandlerFunction;)"
+                "Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;"
+            ),
+            arguments=[
+                CallArgument(kind="unresolved", source=150),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            3,
+            _BUILDER,
+            "build",
+            receiver=201,
+            result=202,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunction;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/**", _MODULE + LIST_ORDERS, "resolved")]
+    assert [row["produces"] for row in rows] == [json.dumps([JSON])]
+
+
+def _enum_member(name: str) -> CallArgument:
+    return CallArgument(kind="enum", symbol=f"org/springframework/http/MediaType#{name}.")
+
+
+def test_all_methods_and_a_verb_less_non_terminal_are_validated(tmp_path: Path):
+    """`all_methods` is a non-empty list of upper-case tokens — a lower-case one would
+    publish a verb the framework never matches, an empty one would fan a route out to
+    nothing. And a verb rule that is NOT a terminal must still answer for its verb
+    (`verb`, null included, or `verb_arg`): only a terminal may leave it to the scope."""
+    for broken in ([], ["get"], "GET", [7]):
+        matches = copy.deepcopy(_matches())
+        matches["all_methods"] = broken
+        with pytest.raises(CatalogError, match="all_methods"):
+            _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    del matches["vocabulary"]["verbs"][0]["verb"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="neither `verb` nor `verb_arg`"):
+        _resolve(tmp_path, [], _catalog(matches))

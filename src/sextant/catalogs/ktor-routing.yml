@@ -100,11 +100,20 @@ requires: [call_site, string_constants, chain_reconstruction]
 #     the subtree route before the verbs are merged and publishes NOTHING for it — stated
 #     here and in COVERAGE.
 #
-# One stated boundary, not a slice entry (the w19 enumeration counts a candidate by a
-# `String` at argument 0, and every name here carries its `Route` receiver there): the
-# path-less `get { }` overload's `path: ""` is the empty literal, so under a selector at
-# the root — `method(Get) { get { } }` — it serves `/`, the routing root itself, which is
-# what Ktor's `RoutingPath.parse("")` (no parts) registers.
+# `handle { }` — THE VERB-LESS TERMINAL (spec 2026-09-19 §4c; CP-24 row 1b). `Route` is an
+# INTERFACE and `handle(Function2)V` its abstract member, not an extension on
+# `RoutingBuilderKt`: a call site is `invokeinterface Route.handle` on the block's own
+# parameter, so the rule is declared on owner `io.ktor.server.routing.Route` with NO
+# `receiver_arg` — the receiver is the site's own, tested against the origin as every
+# member verb is — and no `verb`: it takes the scope's. Under `method(Get) { handle { } }`
+# it is `GET`; under a bare `route("/health2") { handle { } }` no verb is in scope, and the
+# route expands through `all_methods` — `HttpMethod.DefaultMethods`, the seven members the
+# static initialiser lists in this order (CP-24 row 2; Ktor has no `TRACE`, so seven and
+# not Spring's eight) — one row per member. `path: ""`, as the path-less `get { }` carries:
+# `handle` registers on the receiver node ITSELF and serves exactly the prefix chain
+# (`RoutingResolveContext` succeeds at a node with handlers only when every segment is
+# consumed), so at the routing root it is `/` — `RoutingPath.parse("")` has no parts and
+# the empty literal canonicalises to `/` — and never `/**`.
 #
 # A Route-extension HELPER — `fun Route.api() { get("/x") { } }` called from `routing {
 # api() }`, Ktor's own recommended way to split a large routing tree — IS followed (spec
@@ -122,6 +131,9 @@ requires: [call_site, string_constants, chain_reconstruction]
 # not a module-local call, and is not followed.
 matches:
   path_join: leading_slash
+  # `HttpMethod.DefaultMethods` at 3.0.3, in the static initialiser's order (CP-24 row 2):
+  # what a verb-less `handle { }` under no `method` selector expands to.
+  all_methods: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
   entries:
     # `routing(Application, Function1<Routing, Unit>)` — the block's parameter is the
     # root `Routing` (a `Route`), and every verb inside is called on it: `origin_param: 0`.
@@ -193,3 +205,7 @@ matches:
       - { owner: io.ktor.server.routing.RoutingBuilderKt, method: head, verb: HEAD, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
       - { owner: io.ktor.server.routing.RoutingBuilderKt, method: options, verb: OPTIONS, arity: 3, receiver_arg: 0, path_arg: 1, handler_arg: 2 }
       - { owner: io.ktor.server.routing.RoutingBuilderKt, method: options, verb: OPTIONS, arity: 2, receiver_arg: 0, path: "", handler_arg: 1 }
+      # `Route.handle(Function2)` — the verb-less terminal (spec 2026-09-19 §4c, CP-24 row 1b):
+      # a MEMBER of the `Route` interface, so no `receiver_arg`; no `verb` — the scope's, or
+      # `all_methods`; `path: ""` — the receiver node itself.
+      - { owner: io.ktor.server.routing.Route, method: handle, arity: 1, terminal: true, path: "", handler_arg: 0 }
