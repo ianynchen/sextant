@@ -939,13 +939,16 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     if question == "routing_depth":
         # Spec 2026-09-19 §4a (A2): a routing body's helper chain the combinator engine
         # stopped following at its depth bound, filed by
-        # `resolve/engines/combinator.py::_ask_routing_depth` and verified against that
-        # writer's own `candidates` line. The sentence names the entry's caller because
+        # `resolve/engines/combinator.py::_routing_depth_rows` and verified against that
+        # writer's own `candidates` line — one row per run, one candidate per chain, the
+        # bound carried on the candidate so this arm states what the engine did rather
+        # than repeating its constant. The sentence names the entry's caller because
         # that is where a reader has to open the file, and the first unread callee
         # because that is where the walk stopped.
         return (
-            f"a routing helper chain deeper than 16 calls from {candidate['caller']} was not "
-            f"followed; its first unread callee is {candidate['callee']}"
+            f"a routing helper chain deeper than {candidate['depth']} calls from "
+            f"{candidate['caller']} was not followed; its first unread callee is "
+            f"{candidate['callee']}"
         )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list

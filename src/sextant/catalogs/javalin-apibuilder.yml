@@ -61,8 +61,9 @@ requires: [call_site, string_constants, chain_reconstruction]
 # CALLED from inside a block — `apiBuilder(() -> { orders(); })`, `static void orders()
 # { get("/x", h); }` — is followed and its verbs fold under the prefix that reached the
 # call, with no origin to check, because there is none to check: every `ApiBuilder` verb
-# is static and registers on the thread-local instance. MEASURED, `javap -c -p` on the
-# 6.4.0 jar: `staticInstance()` is `getstatic staticJavalin:ThreadLocal ; invokevirtual
+# is static and registers on the thread-local instance. MEASURED, `scripts/probes/
+# cp25_binder_rules.md` row 1 (`javap -c -p` on the 6.4.0 jar, identity read off its
+# manifest): `staticInstance()` is `getstatic staticJavalin:ThreadLocal ; invokevirtual
 # ThreadLocal.get ; ifnonnull … ; new IllegalStateException ; ldc "The static API can
 # only be used within a routes() call." ; athrow`, and every verb's first instruction is
 # `invokestatic staticInstance`. So a helper that reaches a verb can only ever have been

@@ -806,7 +806,8 @@ def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee()
     """Spec 2026-09-19 §4a's arm, for the reason every arm here has a test: an arm
     reached by nothing is an arm nobody has run, and the fixture files no `routing_depth`
     question (no fixture chain is seventeen helpers deep). Candidate shape (`callee`,
-    `caller`) matches what `combinator._ask_routing_depth` writes. Both identity halves
+    `caller`, `depth`) matches what `combinator._routing_depth_rows` writes — the bound
+    is the engine's, carried on the candidate, so this arm repeats no constant. Both identity halves
     are NULL and render `(unresolved)` twice, honestly: the walk stopped before it read
     either, and the sentence is where the reader learns which file to open."""
     report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
@@ -821,6 +822,7 @@ def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee()
                     {
                         "callee": "com/acme/RoutesKt#h17(sig_11).",
                         "caller": "com/acme/RoutesKt#orders(sig_o0).",
+                        "depth": 16,
                     }
                 ]
             ),

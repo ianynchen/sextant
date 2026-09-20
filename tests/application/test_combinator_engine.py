@@ -4853,10 +4853,70 @@ def test_a_helper_chain_deeper_than_the_bound_files_one_question_and_no_row(tmp_
             None,
             None,
             "routing_depth",
-            [{"callee": _MODULE + _helper("h17"), "caller": DECLARER + "orders(sig_o0)."}],
+            [
+                {
+                    "callee": _MODULE + _helper("h17"),
+                    "caller": DECLARER + "orders(sig_o0).",
+                    "depth": 16,
+                }
+            ],
             DECLARER + "orders(sig_o0).",
         )
     ]
+
+
+def test_two_deep_chains_in_one_run_are_one_question_with_two_candidates(tmp_path: Path):
+    """An `open_questions` row is identified by `(protocol, method, path, question)`
+    (`open_question_identity`), and a `routing_depth` row's method and path are NULL on
+    purpose — so every deep chain in one run shares ONE identity. Two rows would render
+    as two lines a `beside-open-question` verdict cannot tell apart, and the verdict
+    would anchor under the first and leave the second unanswered forever: the defect
+    `service_identity._merged` was written for. So two entry callers each exhausting the
+    bound — `orders()` through `h1…h17` and `more()` through `m1…m17` — file ONE row, its
+    candidates one per chain (sorted, NFR-1) and its evidence naming both callers."""
+    facts = _helper_chain(17)
+    more_body = DECLARER + "more$lambda$1(sig_m0)."
+    facts += [
+        _method_symbol(more_body),
+        _site(
+            DECLARER + "more(sig_m1).",
+            0,
+            _ROUTING_ROOT,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=more_body, source=0, captures=0),
+            ],
+        ),
+        _helper_call(more_body, 0, "m1", argument=CallArgument(kind="parameter", value=0)),
+    ]
+    names = [f"m{i}" for i in range(1, 18)]
+    for i, name in enumerate(names):
+        body = _helper(name)
+        facts.append(_method_symbol(body))
+        if i + 1 < len(names):
+            facts.append(
+                _helper_call(
+                    body, 0, names[i + 1], argument=CallArgument(kind="parameter", value=0)
+                )
+            )
+        else:
+            facts.append(_deep_verb(body, 0, "/deeper"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert len(questions) == 1
+    assert json.loads(str(questions[0]["candidates"])) == [
+        {"callee": _MODULE + _helper("h17"), "caller": DECLARER + "orders(sig_o0).", "depth": 16},
+        {"callee": _MODULE + _helper("m17"), "caller": DECLARER + "more(sig_m1).", "depth": 16},
+    ]
+    assert questions[0]["evidence"] == (
+        DECLARER + "more(sig_m1)." + "; and " + DECLARER + "orders(sig_o0)."
+    )
 
 
 def test_a_helper_calling_itself_is_followed_once(tmp_path: Path):

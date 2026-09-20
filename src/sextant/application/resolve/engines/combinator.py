@@ -260,8 +260,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     workspace.derive("call_endpoints", rows=_emitted(rows, catalog))
     # Filed after the rows, as `interface_implementation` files its own: a tree that both
     # derives and asks cannot have its question written and its rows lost to a later
-    # failure. The list is the run's, accumulated by every tree (`_helper_routes`).
-    record_open_questions(workspace, context.questions)
+    # failure. The candidates are the run's, accumulated by every tree (`_helper_routes`).
+    record_open_questions(workspace, _routing_depth_rows(context, catalog))
 
 
 @dataclass(frozen=True)
@@ -369,13 +369,12 @@ class _TreeContext:
     # derived their route a second time, bare, with the lambda as `caller`
     # (A1 final review, I-1).
     linked_bodies: frozenset[str]
-    # The run's `open_questions` rows, accumulated by every tree as it walks — the one
-    # mutable thing here, because a question is filed where the walk gives up (a helper
-    # chain past `_HELPER_DEPTH`, spec 2026-09-19 §4a) and written once, by `run`, after
-    # the rows. Shared by every tree in the run, which is what this context is.
-    questions: list[dict[str, Any]]
-    # The catalog's own `protocol` — a question row's first identity column.
-    protocol: str
+    # The helper chains the run gave up on — one `{callee, caller, depth}` per chain past
+    # `_HELPER_DEPTH` (spec 2026-09-19 §4a) — the one mutable thing here, because a chain
+    # is found where the walk gives up and the ONE `routing_depth` row they become is
+    # written by `run`, after the rows. Shared by every tree in the run, which is what
+    # this context is.
+    deep_chains: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -492,8 +491,7 @@ def _context_of(workspace: Workspace, catalog: Catalog) -> _TreeContext:
         by_bare_caller=by_bare_caller,
         method_symbols=method_symbols,
         linked_bodies=frozenset(),
-        questions=[],
-        protocol=catalog.protocol,
+        deep_chains=[],
     )
     # Read off the call sites the catalog claims, so the matchers above decide
     # which calls link a body — the same matchers the fold jumps through.
@@ -1183,26 +1181,39 @@ def _is_the_origin(argument: dict[str, Any], scope: _Scope) -> bool:
 
 
 def _ask_routing_depth(callee: str, scope: _Scope) -> None:
-    """One `routing_depth` row (spec 2026-09-19 §4a): the wire identity NULL on both
-    halves, because both genuinely are unread — the verb may be on any route or on
-    none — the first unread callee and the entry's caller as the candidate, and the
-    caller again as the evidence trail: where the walk started is where a reader
-    opens the file. Filed once per (caller, callee): two branches of one tree
-    giving up on the same helper are one question."""
-    row = {
-        "protocol": scope.context.protocol,
-        "method": None,
-        "path": None,
-        "question": _ROUTING_DEPTH,
-        "candidates": json.dumps(
-            [{"callee": callee, "caller": scope.caller}],
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
-        "evidence": scope.caller,
-    }
-    if row not in scope.context.questions:
-        scope.context.questions.append(row)
+    """One candidate for the run's `routing_depth` question (spec 2026-09-19 §4a): the
+    first unread callee, the entry's caller — where a reader opens the file — and the
+    bound that stopped the walk. Recorded once per (caller, callee): two branches of one
+    tree giving up on the same helper are one chain."""
+    candidate = {"callee": callee, "caller": scope.caller, "depth": _HELPER_DEPTH}
+    if candidate not in scope.context.deep_chains:
+        scope.context.deep_chains.append(candidate)
+
+
+def _routing_depth_rows(context: _TreeContext, catalog: Catalog) -> list[dict[str, Any]]:
+    """The run's `routing_depth` question: ONE row, or none. An `open_questions` row is
+    identified by `(protocol, method, path, question)` (`open_question_identity`), and
+    this row's method and path are NULL on purpose — both genuinely unread, the verb may
+    be on any route or none — so every deep chain of the run shares one identity. Two
+    rows there would render as two lines a verdict cannot tell apart, the defect
+    `service_identity._merged` was written for; so, as there, every chain is one
+    candidate of one row, sorted (NFR-1), and the evidence names every caller that gave
+    up."""
+    if not context.deep_chains:
+        return []
+    ordered = sorted(
+        context.deep_chains, key=lambda c: json.dumps(c, sort_keys=True, separators=(",", ":"))
+    )
+    return [
+        {
+            "protocol": catalog.protocol,
+            "method": None,
+            "path": None,
+            "question": _ROUTING_DEPTH,
+            "candidates": json.dumps(ordered, sort_keys=True, separators=(",", ":")),
+            "evidence": "; and ".join(sorted({str(c["caller"]) for c in ordered})),
+        }
+    ]
 
 
 def _head_on_the_origin(site: dict[str, Any], scope: _Scope) -> _Route:
