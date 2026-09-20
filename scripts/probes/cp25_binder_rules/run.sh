@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # CP-25 harness — see ../cp25_binder_rules.md for the questions, the version scope
-# and the verdicts. Row 1 (Javalin's `ApiBuilder` guard) is here now; the binder
-# rows the request-requirements work adds join this same harness.
+# and the verdicts. Row 1 is Javalin's `ApiBuilder` guard; rows 2–12 are the
+# parameter-annotation binder rules of spec 2026-09-19 §5b (spring-web/spring-core/
+# spring-webmvc 6.1.6, micronaut 4.7.6, RESTEasy Reactive and reactive-routes
+# 3.17.5, vertx-core 4.5.11, jakarta.ws.rs-api 3.1.0) plus the `defaultValue`
+# element_value_pairs check, which is the one cell that COMPILES something: a
+# two-method Java sample under `javac` against spring-web, then `javap -v`. The
+# §5d rows (Javalin `Validator.get()`, `jakarta.servlet` reads) join with that
+# mechanism's task.
 #
 # THE TABLE IS GENERATED, AND ITS COLUMN HEADER COMES FROM THE JAR'S OWN BYTES
 # (GUIDELINES §5.4, and CP-5's failure it exists to prevent). `probe.py` reads the
@@ -9,9 +15,11 @@
 # that resolved it, and aborts when the jar reports a version other than the one
 # the run expected.
 #
-# Needs a JDK (for `javap`), and Maven plus network on first run only; the jar is
-# cached in ~/.m2 afterwards. Nothing is executed — every cell is a `javap` read of
-# a class file. Not a test: nothing in the suite runs it.
+# Needs a JDK (for `javac` and `javap`), and Maven plus network on first run
+# only; the jars are cached in ~/.m2 afterwards. Nothing framework-side is
+# executed — every cell but row 5 is a `javap` read of a class file, and row 5
+# compiles a sample and reads the class file it produced. Not a test: nothing in
+# the suite runs it.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -22,6 +30,19 @@ M2="${HOME}/.m2/repository"
 # `<key>|<groupId>|<artifactId>|<version>`
 ARTIFACTS=(
   "javalin|io.javalin|javalin|6.4.0"
+  "spring-web|org.springframework|spring-web|6.1.6"
+  "spring-core|org.springframework|spring-core|6.1.6"
+  "spring-webmvc|org.springframework|spring-webmvc|6.1.6"
+  "micronaut-http|io.micronaut|micronaut-http|4.7.6"
+  "micronaut-core|io.micronaut|micronaut-core|4.7.6"
+  "micronaut-router|io.micronaut|micronaut-router|4.7.6"
+  "micronaut-core-processor|io.micronaut|micronaut-core-processor|4.7.6"
+  "resteasy-reactive|io.quarkus.resteasy.reactive|resteasy-reactive|3.17.5"
+  "resteasy-reactive-common|io.quarkus.resteasy.reactive|resteasy-reactive-common|3.17.5"
+  "jaxrs-api|jakarta.ws.rs|jakarta.ws.rs-api|3.1.0"
+  "reactive-routes|io.quarkus|quarkus-reactive-routes|3.17.5"
+  "reactive-routes-deployment|io.quarkus|quarkus-reactive-routes-deployment|3.17.5"
+  "vertx-core|io.vertx|vertx-core|4.5.11"
 )
 
 specs=()
