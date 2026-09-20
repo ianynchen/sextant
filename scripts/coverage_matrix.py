@@ -198,20 +198,8 @@ FRAMEWORK_NONE = {"any", "—", ""}
 # frameworks (`test_feature_delivery.py`); this is presentation data.
 ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
-    "kotlin-null-handler": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
     "dsl-media-route": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
-    "ktor-route-extensions": [
-        "Ktor",
-        "Javalin",
-        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
-    ],
-    "ktor-selector-blocks": ["Ktor"],
     "gateway-properties-routes": ["Spring Cloud Gateway"],
-    "kotlin-class-lambdas": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
-    "kotlin-default-bridge-calls": [
-        "Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)",
-        "Ktor",
-    ],
     "apache-camel": ["Apache Camel"],
     "pubsub-channel-adapter": ["Spring Cloud GCP Pub/Sub (Spring Integration)"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],

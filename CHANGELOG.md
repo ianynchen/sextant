@@ -15,6 +15,111 @@ here would restate those documents rather than add anything.
 ### Added
 
 - **No version bump with this entry — the standing gate still holds** (Spring Boot
+  end-to-end before any bump). The items below close six register ids and add one; each is
+  in the register's ```closed block with the test that pins it, and the CI run id is filled
+  in once the PR's pipeline is green.
+
+- **Every Kotlin route names its handler, and a Kotlin lambda compiled as a class reaches
+  every engine as the lambda it is** (`kotlin-null-handler`, `kotlin-class-lambdas`; spec
+  `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`
+  §3b). kotlinc 2.2.0 compiles every `suspend` handler — every Ktor route body, every Spring
+  Kotlin DSL `GET("/x") { }` block — to a class rather than an `invokedynamic`, so it reached
+  the engines as an `instance` argument with no body to read, and every Kotlin route row
+  carried a NULL handler. The JVM extractor now marks such a class's type fact with the
+  method holding the author's statements (`lambda_body`: `invokeSuspend` for a suspend
+  lambda, the typed `invoke` for a function reference such as `::listOrders`), and
+  `resolve/effective_calls.py` — the one place every engine now reads call sites through —
+  hands the engines that instance as a `lambda` argument before any engine runs. Every
+  Ktor fixture row and the three Spring Kotlin router rows went from handler NULL to the
+  body's own symbol, and the trace layer walks them; a new fixture,
+  `fixtures/orders-ktor-classlambdas`, compiles the Ktor fixture's sources with
+  `-Xlambdas=class` and derives byte-identical endpoint rows. No engine learned the word
+  Kotlin; the join is on a fact the extractor states about its own compiler.
+
+- **A Kotlin call that omits a defaulted argument reaches the catalog rules as the function
+  it stands for** (`kotlin-default-bridge-calls`, spec §3a). Such a call targets the
+  compiler's synthetic `name$default(…, mask, marker)` bridge — a different name and arity
+  no catalog rule matched, so the route derived nothing. The same projection point now
+  re-targets the site to its sibling, using the `bridge_of` fact the extractor already
+  published, and marks each argument the mask says the caller omitted as
+  `unresolved: defaulted` — a defaulted path is an unresolved row, never a guessed default.
+  The mask counts the parameters the author declared, so an extension receiver is not a bit;
+  a call the facts cannot settle (no `bridge_of`, both receiver readings plausible, a mask
+  that is not a literal) is left exactly as it was.
+
+- **Ktor's routing helpers, selector blocks, `handle { }` and the four-argument
+  `route(path, method) { }` all derive** (`ktor-route-extensions`, `ktor-selector-blocks`,
+  `ktor-route-with-verb`; spec §4). A `fun Route.api() { get("/x") { } }` helper called
+  from `routing { api() }` — Ktor's own recommended way to split a routing tree, and the
+  same shape as Javalin's static `ApiBuilder` helpers and a `fun CoRouterFunctionDsl.x()`
+  in the Spring Kotlin DSL — derived nothing on any of the three; the combinator engine now
+  follows a module-local call the routing origin flows into as an argument, under the
+  caller's prefix, and follows origin-less calls where a catalog says the framework's own
+  guard makes that safe (`follow_calls: all`, Javalin's thread-local `ApiBuilder`). A chain
+  deeper than sixteen helper calls stops and files one `routing_depth` open question, never
+  a row. The six selectors `method`, `accept`, `contentType`, `header`, `param`,
+  `optionalParam` are prefixes that set a verb, a media column or a request requirement
+  instead of a path (`verb_arg`, `media_arg` + `fills`, `request_requirement` on a prefix);
+  Ktor's `HttpMethod.Get`/`ContentType.Application.Json` are getter calls, read through a
+  new `getters:` form of the `media_values` and `verb_values` tables. A route whose verb
+  disagrees with its `method` scope is a node Ktor never dispatches and publishes nothing,
+  stated on the catalog. `handle { }` is a verb-less terminal taking the scope's verb, or
+  one row per member of `HttpMethod.DefaultMethods` under none (`all_methods` on a
+  combinator catalog). The Ktor rollup in COVERAGE §5.1 reads full; the Javalin rollup too.
+
+- **REST inbound rows now record what the endpoint's framework demands of a request — a
+  header, a query parameter, a cookie — the way outbound rows already record what the call
+  sends** (`inbound-request-requirements`, a new register item added by user ruling
+  2026-09-19 and closed in the same branch; spec §5). `endpoint_metadata` gained a
+  `requirement` column: `required` (the framework rejects a request without the entry),
+  `optional` (it serves one without it), `absent` (it requires it missing), and NULL where
+  the code states nothing — a bare `call.request.headers["X"]` or `ctx.header("X")` in a
+  handler body says only that the handler reads the value. Three mechanisms write it, one
+  pass, once per resolve: parameter annotations (`request_params` — Spring's
+  `@RequestParam`/`@RequestHeader`/`@CookieValue` through the binder rule read off
+  spring-web 6.1.6, JAX-RS's `@QueryParam`/`@HeaderParam`/`@CookieParam` in both spellings
+  plus Quarkus's `@Rest*`, Micronaut's `@QueryValue`/`@Header`/`@CookieValue`, reactive
+  routes' `@Param`/`@Header`); route-tree predicates (`@RequestMapping(params=, headers=)`
+  expressions, Ktor's `header`/`param`/`optionalParam` selectors, Spring Cloud Gateway's
+  `header`/`query`/`cookie`, `RequestPredicates.queryParam` and the MVC twin's `param`); and
+  handler-body reads (`request_reads` — Ktor's three request containers and the inlined
+  `getOrFail`, Javalin's `Context` reads with `Validator.get()` marking the required ones,
+  the Servlet API's `getParameter`/`getHeader`). Fourteen catalogs write it; COVERAGE §5.1
+  carries one `request requirements` row per framework line saying which do and what each
+  does not read. Two routing alternatives collapsing to one address keep only the
+  requirements they share. A Kotlin `@RequestParam page: Int = 0` is optional to Spring and
+  now to this pass too: the extractor publishes `declares_default: true` on a parameter with
+  a default value (D00 §6), and the binder rule reads it.
+
+- **Four probes record the facts the work above rests on** (`scripts/probes/`): CP-23,
+  kotlinc 2.2.0's call-site shapes (the `$default` mask and bit meaning, lambda and
+  function-reference class shapes in both lambda modes, `declaresDefaultValue`); CP-24,
+  Ktor 3.0.3's routing surface (selector signatures, `DefaultMethods`, the companion
+  getters, `getOrFail`, `HttpMethodRouteSelector.evaluate` refusing a mismatched method);
+  CP-25, the binder rules of spring-web 6.1.6, micronaut 4.7.6, RESTEasy Reactive and
+  reactive routes 3.17.5, javalin 6.4.0 and Tomcat 10.1.50/9.0.121; CP-26, the predicate
+  overloads of spring-webflux 6.1.6 and spring-cloud-gateway 5.0.0. Two new fixtures,
+  `fixtures/orders-ktor-classlambdas` and `fixtures/orders-servlet`, and new sources in
+  `orders-ktor`, `orders-service`, `orders-javalin`, `orders-gateway`, `orders-micronaut`,
+  `orders-quarkus` and `orders-spring7` exercise every mechanism.
+
+### Changed
+
+- **The open-questions ledger is emptied before the endpoint engines run, not after.**
+  `reset_open_questions` ran below `derive_endpoints`, and two engines file questions while
+  deriving — `interface_implementation`'s `registration_activation` (a `Subscriber` built and
+  never started) and now the combinator's `routing_depth` — so the reset erased both before
+  any later pass read the table. A module whose Pub/Sub subscriber is constructed and never
+  started now shows that question in its document where it was silently lost before; every
+  other question-filing pass already ran below the reset and is unaffected.
+
+- **`endpoint_metadata` rows are inserted once per distinct row** (`insert_endpoint_metadata.sql`
+  is insert-if-absent on the full row): `spring-web.yml` and `spring-mvc.yml` can both
+  describe one `@RestController`, and their identical requirement entries are one entry.
+
+### Added
+
+- **No version bump with this entry — the standing gate still holds** (Spring Boot
   end-to-end before any bump, `docs/java-kotlin-delivery-list.md`'s own "Target" section):
   the five items below are catalog and engine work only, and stay in the register's
   ```delivery block until a CI run closes them.

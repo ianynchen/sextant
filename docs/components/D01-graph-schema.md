@@ -717,9 +717,10 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed NINE-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed TWELVE-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
-`unselected_binding`, `handler_protocol` and `registration_activation`** — checked by the single owning module before any row is inserted,
+`unselected_binding`, `handler_protocol`, `registration_activation`, `self_exchange`,
+`routing_conflict` and `routing_depth`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -730,7 +731,10 @@ added `handler_protocol` without touching this file — the third time this coun
 which is why §3.6's review made the drift itself the finding rather than the number.*
 *`registration_activation` (`OI-64`) is the ninth, and it was added to this sentence in the
 same change that added it to the module — the drift above is why that is now the habit
-rather than an afterthought.* *This paragraph said "two-value set" and named the first two
+rather than an afterthought.* *And then it said NINE while the module enforced twelve:
+`self_exchange` (F5 §6.1, W27) and `routing_conflict` (W28) were added to the module without
+this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
+in the change that closed that spec's register items, the fourth drift of this one count.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -744,7 +748,11 @@ and `values`; a `registration_activation` candidate holds `registration`, `enclo
 — the construction call, the method that returns it without starting it, and the chain
 the framework requires before anything is delivered; a `handler_protocol` candidate holds `class`, `annotation` and `protocol` —
 the wire ONE framework would publish that class on, one candidate per framework in play,
-because the question is which of them serves it. Each array is sorted by the pass that writes it, so two runs produce the
+because the question is which of them serves it; a `routing_depth` candidate holds `callee`,
+`caller` and `depth` — the first helper the combinator's walk did not follow, the routing
+entry's own caller (where a reader opens the file) and the bound that stopped it — and ONE
+row per run carries every such chain, its `method` and `path` NULL because both genuinely are
+unread (spec 2026-09-19 §4a). Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.
 
 `evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence

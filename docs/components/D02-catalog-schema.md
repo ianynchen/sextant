@@ -571,6 +571,12 @@ matches:
   declares none, any type containing a matching mapping annotation participates, and the
   controller join — `type_annotation: …RestController` in the opening example — simply
   disappears for that catalog.
+- **`request_params` is the same kind of catalog data one level out** (spec 2026-09-19
+  §5b): the parameter annotations that bind a header, query parameter or cookie, and what
+  the framework's BINDER enforces for each — one `endpoint_metadata` row per annotated
+  parameter with `requirement` set. The entry vocabulary and the `binder` rule are in §2k;
+  `spring-mvc.yml`/`spring-web.yml`, the three JAX-RS catalogs, `micronaut-http.yml` and
+  `quarkus-reactive-routes.yml` declare it.
 - **`request_body` is catalog data**, not an engine assumption: which annotation marks the
   payload parameter, and which fallback finds it when none is marked. Spring inbound and
   `@HttpExchange` require `@RequestBody` with no fallback; Retrofit requires `@Body` with no
@@ -1373,7 +1379,19 @@ composed into a module-local meta-annotation, folded into a repeatable container
 declared on an interface method the class implements is not read as absent. Class-level and
 method-level values UNION, because `ParamsRequestCondition.combine` adds one expression set
 to the other, so two methods inside one `@RequestMapping(params = "v=1")` class still
-conflict with each other while neither conflicts with a method outside it. **`custom_condition`
+conflict with each other while neither conflicts with a method outside it. **The same two
+attributes, read as REQUIREMENTS, are `mapping.request_requirement_attrs: { params: param,
+headers: header }`** (spec 2026-09-19 §5c) — attribute name to `kind`, `param` because the
+parameter condition reads the query string and a form body through one API — one
+`endpoint_metadata` row per expression, parsed as `AbstractNameValueExpression(String)`
+parses it (CP-25 row 13): `name` → `required`; `name=v` → `required`, value `v`; `!name` →
+`absent`; `name!=v` → `optional`, the excluded value lost (no column says "not v"; stated).
+Class and method UNION as `discriminators` does, off the same effective set. A `headers`
+expression naming `Accept` or `Content-Type` (case-insensitive) writes no row:
+`HeadersRequestCondition.parseExpressions` drops both and Spring reads them as
+produces/consumes instead (A4, CP-25 row 4). The mapping's keys are attribute names, its
+values one of `header`/`query`/`cookie`/`param`; anything else is refused at load (§2k).
+**`custom_condition`
 names the framework's handler-mapping type**, whose subclasses may register a condition that
 is code rather than an attribute: a module declaring one is left alone entirely, because a
 conflict named against a service that starts perfectly well is a claim and a missing finding
@@ -1643,13 +1661,20 @@ could not be read" are different facts:
 
 ### `combinator`
 
-> **A call through a Kotlin `$default` bridge is unmatched.** Every rule in this style (and in
-> `single_call`/`fluent`) matches a call site's own name and erased descriptor. A Kotlin call that
-> omits a defaulted parameter invokes the synthetic `name$default(…, mask, marker)` bridge — a
-> different name and arity — so no rule names it and the route derives nothing. Named and
-> out-of-order arguments do not matter: the compiler emits them in the declaration's order. A
-> catalog for a Kotlin function that declares defaults must declare the bridge form too
-> (register `kotlin-default-bridge-calls`); no shipped catalog covers such a function yet.
+> **A call through a compiler-emitted `$default` bridge reaches every rule as the function it
+> stands for.** Every rule in this style (and in `single_call`/`fluent`) matches a call site's
+> own name and erased descriptor, and a call that omits a defaulted parameter invokes the
+> synthetic `name$default(…, mask, marker)` bridge — a different name and arity. Until
+> 2026-09-20 no rule named it and the route derived nothing (`kotlin-default-bridge-calls`,
+> closed). Now `resolve/effective_calls.py` re-targets such a site once per load, before any
+> engine runs, to the sibling its `bridge_of` fact names ([D00](D00-fact-schema.md) §5): the
+> mask and marker slots drop, each parameter the mask says the caller omitted becomes
+> `{kind: unresolved, reason: defaulted}` — a defaulted PATH is an unresolved row, never a
+> guessed default — and a catalog declares the function's own form alone. The same projection
+> point hands an engine a class-compiled lambda (`instance`, or the `enum`-kind singleton of a
+> non-capturing one) as the `lambda` its type fact's `lambda_body` names, so a `body_arg` or
+> `handler_arg` reads its body. Neither projection names a language; both leave the raw
+> `call_sites` facts untouched.
 
 Neither one call (`single_call`) nor one chain (`fluent`) carries the declaration here:
 the router is a **tree**, assembled by handing predicate objects, subtrees and whole
@@ -1799,7 +1824,13 @@ framework:**
   (an enum type's member names to their declared wire values), and `composers`
   (`and` merges constraint sets into one; `or` duplicates the route per branch, over
   ANY predicate kind — verbs, paths, media alike — the `all_methods` precedent
-  generalised). A verb rule may name its verb OFF THE CALL instead of beside the
+  generalised), and **`request_requirement`** — a LIST of verb-shaped rules `{owner,
+  method, arity?, arg_types?, kind, name_arg, value_arg?, requirement}` for predicate
+  factories that constrain WHO is served and nothing about the address
+  (`RequestPredicates.queryParam(String, String)` and `(String, Predicate)`, told apart by
+  `arg_types`; the servlet twin's `param`, kind `param`), folded where a predicate argument
+  or an `and` reaches them exactly as `media` is, and held to the same overload check
+  (§2k). A verb rule may name its verb OFF THE CALL instead of beside the
   owner — **`verb_arg: n`** in place of `verb` (spec §12 word 5): the argument at
   `n` is an enum member, whose name is the verb (`method(HttpMethod.GET)`); a
   string literal, the verb exactly as written — `HttpMethod.valueOf` keeps the
@@ -1814,6 +1845,61 @@ framework:**
   `path_arg`, a verb's, a nest-shaped continuation's), each element read through
   the same `path_join` a single literal is; an array holding anything else, or
   holding nothing, is an unreadable path.
+- **A prefix may set more than a path — the selector form** (spec 2026-09-19 §4b; Ktor's
+  `method(Get) { }`, `accept(Json) { }`, `header("X", "v") { }`). A `prefixes` rule may
+  declare, beside or instead of `path_arg`, any of: **`verb_arg`** — the verb of every route
+  beneath it; **`media_arg` + `fills`** (`consumes`/`produces`, both keys together, the
+  position read as a `media` rule reads its arguments, a vararg array included); a
+  **`request_requirement`** `{kind, name_arg, value_arg?, requirement}` — a header, query
+  parameter or cookie the routing tree demands of every route beneath (§2k); or none of
+  them, a pure scope. A selector's verb, media and requirements sit in the scope and apply
+  to every route beneath as a path prefix does. A route whose own verb DISAGREES with the
+  scope's (`method(Post) { get("/x") { } }`) is a node the framework registers and never
+  dispatches — Ktor's `HttpMethodRouteSelector.evaluate` returns its failure constant on a
+  mismatch (CP-24 row 7) — and publishes NOTHING: a row of either verb would be an endpoint
+  that is not on the wire, and an unresolved row a phantom (A2); stated on the catalog and
+  in COVERAGE. Both value tables take a **`getters:`** form beside the member-name one —
+  `media_values: { getters: { "<owner>#<method>": <value> } }` and a new **`verb_values`**
+  with the same shape — for a constant that reaches a call site as the RESULT of a getter
+  call (`HttpMethod.Get` is `HttpMethod$Companion.getGet()`, `ContentType.Application.Json`
+  is `ContentType$Application.getJson()`, CP-24 rows 3–4), looked up through the argument's
+  `source`; a getter the table does not name reads as nothing — media NULL, a poisoned
+  verb — never as its own name. `verb_arg` on a prefix, `media_arg` without `fills` or
+  outside a prefix, `request_requirement` on anything but a prefix or a `pass_through`
+  continuation, a `verb_values` holding anything but `getters`, and a getter key that is not
+  one owner and one member are each refused at load.
+- **A verb-less terminal and `all_methods`** (spec 2026-09-19 §4c). A `terminal: true` verb
+  rule may declare neither `verb` nor `verb_arg`: it takes the scope's verb, and where none
+  is in scope its RESOLVED route fans out through the catalog's top-level **`all_methods`**
+  — the framework's own default-methods list, one row per member, the word `spring-mvc.yml`
+  already uses for a bare `@RequestMapping` — while a catalog declaring no `all_methods`
+  keeps the route with `method` NULL, resolved (the builder's `route(predicate, handler)`
+  reading). `all_methods` on a `combinator` catalog is validated as a non-empty list of
+  upper-case tokens. Ktor's `handle { }` is the case: a MEMBER of the `Route` interface, so
+  its rule is on owner `Route` with no `receiver_arg` (the receiver is the site's own,
+  tested against the origin as member verbs are) and `path: ""` — it registers on the
+  receiver node itself, `/` at the routing root, never `/**`. **Every OTHER verb rule must
+  say its verb**: a non-terminal rule with neither `verb` nor `verb_arg` is refused at load,
+  where it used to be read silently as `verb: null`.
+- **Helper following and `follow_calls`** (spec 2026-09-19 §4a). A call inside a linked
+  body that no catalog word claims, whose target is a module-local method with a body, is
+  FOLLOWED when the body's origin flows into it as an ARGUMENT `{kind: parameter, value:
+  <origin>}` — Ktor's `fun Route.api() { get("/x") { } }` called from `routing { api() }` is
+  `invokestatic api(Route)` with the block's own parameter as its argument — and the walk
+  runs inside the callee with that parameter as its origin, under the caller's accumulated
+  prefix, verb, media and requirements: `route("/api") { api() }` gives `/api/x`. A body
+  with no origin follows module-local calls only where its linking rule — an entry or a
+  prefix carrying `body_arg` — declares **`follow_calls: all`**, the one value: Javalin's
+  `apiBuilder`/`path`, whose static verbs throw outside the block (CP-25 row 1), so a
+  helper reaching one was called from inside it; the Spring router's `Supplier` bodies
+  declare nothing and stay a miss. Two guards and no semantics: a visited set keyed
+  `(callee, origin index)` and a depth bound of sixteen calls, whose exhaustion publishes
+  NO endpoint row and ONE `routing_depth` open question per run with every deep chain as a
+  candidate ([D01](D01-graph-schema.md) §3). Stated boundaries: a member call ON the origin
+  (the origin as the callee's receiver) is not followed; a callee with no body — an
+  interface or abstract method — is not followed (A10); a block held in a local and invoked
+  later is `Function1.invoke`, not a module-local call. `follow_calls` anywhere but an
+  entry or prefix with `body_arg`, or with any value but `all`, is refused at load.
 - **The chain form** (spec §12 words 3–4). Some frameworks write a route not as a
   tree of predicate ARGUMENTS but as a RECEIVER chain of predicate calls on the
   body's parameter, composed by the zero-argument `and()`/`or()` and emitted by the
@@ -1864,7 +1950,14 @@ framework:**
   that argument under this call's own prefix rather than reading a handler it does
   not have; a mapping declaring `pass_through: true` carries the chain on and reads
   NO argument — a filter, an attribute, an error handler is never a route, and an
-  undeclared one costs every route to its left (§4b). **Every continuation that
+  undeclared one costs every route to its left (§4b) — unless it also declares a
+  **`request_requirement`** `{kind, name_arg, value_arg?, requirement}`, in which case it
+  reads that one thing: Spring Cloud Gateway's `header(String[, String])`,
+  `query(String[, String])`, `query(String, Predicate)` and `cookie(String, String)` carry the chain on
+  AND state what the route demands, folded onto every branch of the chain they sit in (or
+  the branch an `or()` opens); a `value_arg` the call does not carry reads value NULL, and
+  one it carries as anything but a string literal — a predicate, a variable — reads value
+  NULL too and stays `resolved`: "name required, value unread" (§2k). **Every continuation that
   can END a chain needs an `owner`.** A bare `and` matches a method name half the
   libraries on a classpath declare; rooting at every one of them would invent a
   router out of any two-argument call that happens to share the name. The cost is
@@ -4081,6 +4174,125 @@ for both. Values stay in `resolved_config`, and the per-environment answer stays
 method's return value — reaches no rung and is a named gap, not a guess.
 
 ---
+
+## 2k. What an inbound endpoint demands of a request — `request_params`, `request_requirement`, `request_reads`
+
+Spec 2026-09-19 §5 (`inbound-request-requirements`). Every REST outbound row already records
+the headers and query parameters the call SENDS (`endpoint_metadata`, W29); these three keys
+are how an inbound catalog records what the endpoint's framework DEMANDS — a header, a query
+parameter, a cookie — one `endpoint_metadata` row per entry, `direction = inbound`, `caller`
+the handler symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs
+that cannot tell query from form: Spring's `@RequestParam`/`params=` and the Servlet
+`getParameter`, said on the entry), `value` a fixed demanded value or NULL, `evidence:
+compiler`, and **`requirement`** stating what the FRAMEWORK enforces — `required` (it rejects
+a request without it), `optional` (it serves one without it), `absent` (it requires it
+missing) — or NULL where the code states nothing ([D01](D01-graph-schema.md) §3, A3). A read
+whose name is not a string literal writes `name` NULL, `resolution: unresolved`: "this
+handler reads a header it does not name" is a different statement from "reads none". One
+pass, `resolve/request_requirements.py::record_request_requirements`, writes all three
+mechanisms once per resolve, below `apply_protocol_hints` (an entry names its row by the
+row's identity columns, and `protocol` is final only there); the insert is insert-if-absent
+on the full row, because two catalogs can describe one handler. Every key here is optional
+and inert unless declared; a catalog declaring none derives exactly as before.
+
+**Mechanism 1 — `request_params`** (§5b), on an `annotation_driven` catalog, read over the
+handler's own parameters beside `request_body`:
+
+```yaml
+request_params:
+  - { annotation: org.springframework.web.bind.annotation.RequestParam, kind: param,
+      name_attrs: [name, value], requirement: binder, required_attr: required,
+      default_attr: defaultValue, optional_types: [java.util.Optional],
+      skip_types: [java.util.Map, org.springframework.util.MultiValueMap] }
+  - { annotation: jakarta.ws.rs.QueryParam, kind: query, name_attrs: [value],
+      requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+  - { annotation: io.quarkus.vertx.web.Param, kind: query, name_attrs: [value],
+      requirement: optional, skip_path_variables: true }
+```
+
+An entry carries `annotation`, `kind`, `name_attrs` and `requirement`, and may carry
+`required_attr`, `default_attr`, `default_annotation`, `optional_types`, `skip_types` and
+`skip_path_variables`; any other key, a `kind` outside the closed set, or a `requirement`
+other than `binder`/`optional` is refused naming the file. **`requirement: optional`** is
+JAX-RS's and reactive routes' rule — absent → null or `@DefaultValue`, never a 400 (CP-25 rows
+9–12); `default_annotation` is informational. **`requirement: binder`** is Spring's
+`AbstractNamedValueMethodArgumentResolver.resolveArgument` and Micronaut's route match (CP-25
+rows 2–3, 5–8): `optional` when `required_attr` is written as the literal `false`, when
+`default_attr` is present in the annotation's written attributes (an unwritten default never
+reaches the class file, row 5), when the parameter's erased type is one of `optional_types`,
+when a DECLARATION annotation on the parameter is one of the shape model's
+`nullability.nullable` spellings (what `hasNullableAnnotation()` reads by simple name, and
+what Micronaut's transformers map onto `jakarta.annotation.Nullable`; the type reference's own
+`nullable` flag is NOT read, because every Java reference type carries `true` there by
+language rule), or when the parameter `declares_default: true` ([D00](D00-fact-schema.md) §6,
+R1); else `required`. The name is the first of `name_attrs` written as a non-empty literal,
+else the parameter's declared name, else NULL and `unresolved`. A parameter whose erased type
+is one of `skip_types` — the whole-map bindings, which name nothing — is skipped, by exact
+erased type; `skip_path_variables: true` drops a name that is one of the row's own path
+variables (`{name}`, `{name: regex}`, `{name?}`, `{rest...}`, `:name`), for an annotation whose
+read serves path and query alike (Vert.x's `getParam`, CP-25 row 12); an annotation use the
+scanner did not read (`args` absent) writes nothing. The type names live on the catalog
+because the pass names no language's types. `value` is always NULL: an annotation names a
+parameter, it never demands a value.
+
+**Mechanism 2 — route-tree predicates** (§5c): three spellings of one fact, each read where
+the engine already reads the call. `mapping.request_requirement_attrs` on an
+`annotation_driven` catalog reads `@RequestMapping(params=, headers=)` (above, beside
+`discriminators`). On a `combinator` catalog, a `prefixes` rule's or a `pass_through`
+continuation's `request_requirement: {kind, name_arg, value_arg?, requirement}` reads the
+selector or predicate call it sits on (Ktor's `header`/`param`/`optionalParam`, the
+Gateway's `header`/`query`/`cookie`), and the `vocabulary.request_requirement` list reads
+predicate factories handed as arguments (`RequestPredicates.queryParam`, `param`) — all in
+the `combinator` section above. Requirements sit in the scope with the verb and the media,
+are inherited down it, and reach `endpoint_metadata` on every row emitted beneath through the
+engine's `route_requirements` stash, `caller` the row's handler. **Two routes that collapse
+to one address keep the INTERSECTION of their requirements** — a demand one alternative makes
+and another does not is not one the framework enforces there (the Gateway's header-versioning
+idiom); fan-out over `all_methods` copies the whole set. `kind` and `requirement` are closed
+sets and `name_arg`/`value_arg` lie below the rule's arity, or the catalog is refused.
+
+**Mechanism 3 — `request_reads`** (§5d), a top-level list on any catalog whose handlers read
+the request imperatively (`ktor-routing.yml`, `javalin.yml`, the two Servlet catalogs), matched
+against the HANDLER BODY's effective call sites of every inbound row, whichever catalog
+derived the row — declared once per framework, applied by handler:
+
+```yaml
+request_reads:
+  - { owner: io.javalin.http.Context, method: header, arity: 1, name_arg: 0, kind: header }
+  - { owner: io.javalin.http.Context, method: queryParamAsClass, arity: 2, name_arg: 0, kind: query,
+      then: { method: get, requirement: required } }
+  - { via: { owner: io.ktor.server.routing.RoutingCall, method: getParameters },
+      method: get, arity: 1, name_arg: 0, kind: query, skip_path_variables: true,
+      required_when_thrown: io.ktor.server.plugins.MissingRequestParameterException }
+  - { owner: jakarta.servlet.http.HttpServletRequest, method: getParameter, arity: 1, name_arg: 0, kind: param }
+```
+
+An entry names exactly one of **`owner`** (the call's own type, matched on owner, name and
+arity) or **`via: { owner, method }`** (the call that PRODUCED the read's receiver, one
+`source` step — Ktor's three containers all end in `StringValues.get(String)`, so only the
+producing getter says which value is read, and the owners are the 3.0.3 class overrides a
+handler body's bytecode names, `RoutingCall`/`RoutingRequest`, never the interfaces), plus
+`method`, `arity`, `name_arg`, `kind`. **`arity` is the whole distinction** between a read
+and a set on one name: Javalin's `header(String)` reads and `header(String, String)` sets a
+response header (CP-25 row 14), so an entry matches its arity alone. A bare read writes
+`requirement` NULL (A3): the handler reads the value, the framework decides nothing.
+**`requirement: required`** is declared only where the API itself refuses the request
+(`ParametersKt.getOrFail`); **`then: { method, requirement }`** marks a read whose RESULT is
+the receiver of a later call that refuses — `queryParamAsClass(…).get()`, Javalin's
+`Validator.get()` throwing on an absent value (row 15) — and writes NULL where the chain ends
+in `getOrDefault`, `allowNullable()` or nothing; **`required_when_thrown: <exception>`** marks
+a read whose throwing accessor is INLINED into the caller (Ktor's `getOrFail` is `inline`, so
+a Kotlin caller carries `get(name); ifnonnull; new MissingRequestParameterException; athrow`
+and never the call): the read is `required` when the same body constructs that exception with
+the read's own literal name as its first argument, and a bare `get` with the handler's own
+`?: throw` stays NULL. `skip_path_variables: true` drops a name that is one of the row's path
+variables, for a container that merges path and query (`call.parameters`). A read's
+`requirement` is `required` or `optional`, never `absent`; `name_arg` lies below `arity`;
+`then` is exactly `{method, requirement}`; anything else, or a key outside the closed set, is
+refused naming the file. **Boundaries, stated:** the handler body only, never a method it
+delegates to; and a `single_call` row's handler is the REGISTERING method, not the `Handler`
+lambda it passes, so a Javalin flat `app.get("/x", ctx -> ctx.queryParam("q"))` writes
+nothing — the `ApiBuilder` rows carry the lambda body as `handler` and read fully.
 
 ## 3. Ordering
 
