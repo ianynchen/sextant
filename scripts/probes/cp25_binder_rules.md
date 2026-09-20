@@ -1,4 +1,4 @@
-# CP-25 — binder rules: Javalin's `ApiBuilder` guard, and what six frameworks' parameter binders enforce
+# CP-25 — binder rules: Javalin's `ApiBuilder` guard, what six frameworks' parameter binders enforce, and what the handler-body reads and mapping expressions of §5c/§5d state
 
 **Question.** Two questions share this harness because they read the same kind of
 evidence — one class file's instructions — off jars of the same families.
@@ -27,6 +27,19 @@ whether "`default_attr` present in `args`" is a sound test. Row 8 is the set of
 `@Nullable` spellings Micronaut honours, which the shape model's `nullability.nullable`
 list has to cover for the binder rule to read them.
 
+*Rows 13–17.* Spec §5c reads Spring's `@RequestMapping(params=, headers=)` expressions as
+requirements and §5d reads what a handler BODY reads off the request, `requirement` only
+where the API itself refuses the request (A3). Row 13 is the grammar of a `params`/
+`headers` expression, read off `AbstractNameValueExpression`'s constructor — the four
+forms `name`, `name=v`, `!name`, `name!=v` the mapping reader has to parse the same way.
+Row 14 is F7 measured: Javalin's `Context` declares `header(String)` as a READ and
+`header(String, String)` as a response SET, `cookie` likewise by arity, so a
+`request_reads` entry that named the method alone would record every response header the
+handler sets as a request requirement. Row 15 is what `Validator.get()` does with an
+absent value — the one Javalin read that is `required`. Rows 16–17 are the Servlet API's
+`getParameter`/`getHeader`: abstract on the interface, so the API states nothing, and
+null-on-absent in the container that implements them, under both package spellings.
+
 **What this probe does not settle.** Nothing framework-side was run; every cell but row 5
 is a `javap` read of a class file, and row 5 reads the class file `javac` produced from a
 six-line sample. Row 1 shows the guard and that ONE verb (`get(String, Handler)`) opens by
@@ -45,17 +58,25 @@ Row 10 shows RESTEasy Reactive storing a null with no throw and substituting onl
 reject the request later, which is Hibernate Validator's rule and not the binder's. Row
 12 reads what the deployment GENERATES (`Methods.REQUEST_GET_PARAM` is the descriptor
 the generated handler invokes) and Vert.x's declared return nullability; the generated
-class itself is not compiled here. The §5d rows (Javalin `Validator.get()`,
-`jakarta.servlet` reads) are not in this table yet and join with that mechanism's task.
+class itself is not compiled here. Row 13 reads the constructor and not
+`ParamsRequestCondition`'s match: that `name!=v` is served when the parameter is ABSENT
+(`matchValue` false, negated → match) is read off `AbstractNameValueExpression.match` by
+hand for the catalog comment and is not a cell. Rows 16–17 measure Tomcat, the container
+CP-9 measured; another container's `getParameter` is its own implementation of the same
+abstract method; that every container answers alike rests on the API's own documented
+contract for `getParameter` and `getHeader` — null when the request carries no such name
+— which the class file does not carry and this probe states rather than measures.
 
-**Version scope (§5.4).** Fourteen archives, each filed under the `Implementation-Version`
+**Version scope (§5.4).** Sixteen archives, each filed under the `Implementation-Version`
 its own `META-INF/MANIFEST.MF` reports, read as: `io.javalin:javalin` **6.4.0**;
 `org.springframework:spring-web`, `spring-core` and `spring-webmvc` **6.1.6**;
 `io.micronaut:micronaut-http`, `micronaut-core`, `micronaut-router` and
 `micronaut-core-processor` **4.7.6**; `io.quarkus.resteasy.reactive:resteasy-reactive`
 and `resteasy-reactive-common`, `io.quarkus:quarkus-reactive-routes` and
 `quarkus-reactive-routes-deployment` **3.17.5**; `io.vertx:vertx-core` **4.5.11** (the
-Vert.x the Quarkus 3.17.5 BOM pins); `jakarta.ws.rs:jakarta.ws.rs-api` **3.1.0**. The
+Vert.x the Quarkus 3.17.5 BOM pins); `jakarta.ws.rs:jakarta.ws.rs-api` **3.1.0**;
+`org.apache.tomcat.embed:tomcat-embed-core` **10.1.50** (the `jakarta.servlet` API and
+its container) and **9.0.121** (the `javax.servlet` spelling) — the two CP-9 measured. The
 harness aborts when any archive reports a version other than the one the run expected.
 Every verdict below is bounded by those archives.
 
@@ -75,10 +96,10 @@ whole run when it disagrees with the version the run expected, rather than filli
 mislabelled column.
 
 ```
-| what the run read | 3.1.0 | 3.17.5 | 4.5.11 | 4.7.6 | 6.1.6 | 6.4.0 |
-|---|---|---|---|---|---|---|
-| artifacts reporting this version | jakarta.ws.rs:jakarta.ws.rs-api | io.quarkus.resteasy.reactive:resteasy-reactive, io.quarkus.resteasy.reactive:resteasy-reactive-common, io.quarkus:quarkus-reactive-routes, io.quarkus:quarkus-reactive-routes-deployment | io.vertx:vertx-core | io.micronaut:micronaut-core, io.micronaut:micronaut-core-processor, io.micronaut:micronaut-http, io.micronaut:micronaut-router | org.springframework:spring-core, org.springframework:spring-web, org.springframework:spring-webmvc | io.javalin:javalin |
-| identity read from the archive itself (`Implementation-Version`) | yes | yes | yes | yes | yes | yes |
+| what the run read | 10.1.50 | 3.1.0 | 3.17.5 | 4.5.11 | 4.7.6 | 6.1.6 | 6.4.0 | 9.0.121 |
+|---|---|---|---|---|---|---|---|---|
+| artifacts reporting this version | org.apache.tomcat.embed:tomcat-embed-core | jakarta.ws.rs:jakarta.ws.rs-api | io.quarkus.resteasy.reactive:resteasy-reactive, io.quarkus.resteasy.reactive:resteasy-reactive-common, io.quarkus:quarkus-reactive-routes, io.quarkus:quarkus-reactive-routes-deployment | io.vertx:vertx-core | io.micronaut:micronaut-core, io.micronaut:micronaut-core-processor, io.micronaut:micronaut-http, io.micronaut:micronaut-router | org.springframework:spring-core, org.springframework:spring-web, org.springframework:spring-webmvc | io.javalin:javalin | org.apache.tomcat.embed:tomcat-embed-core |
+| identity read from the archive itself (`Implementation-Version`) | yes | yes | yes | yes | yes | yes | yes | yes |
 
 | # | question | artifact | version | observed |
 |---|---|---|---|---|
@@ -94,6 +115,11 @@ mislabelled column.
 | 10 | RESTEasy Reactive extractors hand the request's read through; ParameterHandler.handleResult substitutes only a defaultValue | `io.quarkus.resteasy.reactive:resteasy-reactive` | 3.17.5 | `QueryParamExtractor.extractParameter: invokevirtual Method org/jboss/resteasy/reactive/server/core/ResteasyReactiveRequestContext.getQueryParameter:(Ljava/lang/String;ZZLjava/lang/String;)Ljava/lang/Object; ; areturn ; HeaderParamExtractor.extractParameter: invokevirtual Method org/jboss/resteasy/reactive/server/core/ResteasyReactiveRequestContext.getHeader:(Ljava/lang/String;Z)Ljava/lang/Object; ; areturn ; CookieParamExtractor.extractParameter: areturn ; invokevirtual Method org/jboss/resteasy/reactive/server/core/ResteasyReactiveRequestContext.getCookieParameter:(Ljava/lang/String;)Ljava/lang/String; ; areturn ; getQueryParameter single-valued path: invokeinterface InterfaceMethod org/jboss/resteasy/reactive/server/spi/ServerHttpRequest.getQueryParam:(Ljava/lang/String;)Ljava/lang/String; ; ifnull ; areturn ; ParameterHandler.handleResult (offsets 0-35): aload_0 ; getfield Field defaultValue:Ljava/lang/String; ; ifnull ; aload_1 ; ifnull ; aload_0 ; getfield Field isCollection:Z ; ifeq ; aload_1 ; checkcast class java/util/Collection ; invokeinterface InterfaceMethod java/util/Collection.isEmpty:()Z ; ifeq ; aload_0 ; getfield Field defaultValue:Ljava/lang/String; ; astore_1 ; aconst_null` |
 | 11 | @Param/@Header attributes | `io.quarkus:quarkus-reactive-routes` | 3.17.5 | `@Param: java.lang.String value ; @Header: java.lang.String value` |
 | 12 | The read the deployment generates for @Param/@Header, and Vert.x's declared return nullability | `io.quarkus:quarkus-reactive-routes-deployment`, `io.vertx:vertx-core` | 3.17.5, 4.5.11 | `Methods.REQUEST_GET_PARAM = ofMethod(owner io/vertx/core/http/HttpServerRequest, name getParam, returns java/lang/String, params java/lang/String) ; Methods.REQUEST_GET_HEADER = ofMethod(owner io/vertx/core/http/HttpServerRequest, name getHeader, returns java/lang/String, params java/lang/String) ; Methods.OPTIONAL_OF_NULLABLE = ofMethod(owner java/util/Optional, name ofNullable, returns java/util/Optional, params java/lang/Object) ; ParamAndHeaderProvider wraps an Optional parameter: getstatic Field io/quarkus/arc/processor/DotNames.OPTIONAL:Lorg/jboss/jandex/DotName; ; getstatic Field io/quarkus/vertx/web/deployment/Methods.OPTIONAL_OF_NULLABLE:Lio/quarkus/gizmo/MethodDescriptor; ; HttpServerRequest.getParam(String) return: @io.vertx.codegen.annotations.Nullable ; HttpServerRequest.getHeader(String) return: @io.vertx.codegen.annotations.Nullable` |
+| 13 | AbstractNameValueExpression(String): where a params/headers expression's `=` and `!` are read (§5c) | `org.springframework:spring-webmvc` | 6.1.6 | `bipush ; invokevirtual Method java/lang/String.indexOf:(I)I ; if_icmpne ; ldc String ! ; invokevirtual Method java/lang/String.startsWith:(Ljava/lang/String;)Z ; putfield Field isNegated:Z ; ifeq ; invokevirtual Method java/lang/String.substring:(I)Ljava/lang/String; ; putfield Field name:Ljava/lang/String; ; putfield Field value:Ljava/lang/Object; ; ifle ; invokevirtual Method java/lang/String.charAt:(I)C ; bipush ; if_icmpne ; putfield Field isNegated:Z ; ifeq ; invokevirtual Method java/lang/String.substring:(II)Ljava/lang/String; ; invokevirtual Method java/lang/String.substring:(II)Ljava/lang/String; ; putfield Field name:Ljava/lang/String; ; invokevirtual Method java/lang/String.substring:(I)Ljava/lang/String; ; putfield Field value:Ljava/lang/Object;` |
+| 14 | Context.queryParam/header/cookie by arity: the one-argument reads, the two- and three-argument sets, the AsClass validators (F7) | `io.javalin:javalin` | 6.4.0 | `queryParam/1: invokeinterface InterfaceMethod queryParams:(Ljava/lang/String;)Ljava/util/List; ; invokestatic Method kotlin/collections/CollectionsKt.firstOrNull:(Ljava/util/List;)Ljava/lang/Object; ; header/1: invokeinterface InterfaceMethod req:()Ljakarta/servlet/http/HttpServletRequest; ; invokeinterface InterfaceMethod jakarta/servlet/http/HttpServletRequest.getHeader:(Ljava/lang/String;)Ljava/lang/String; ; cookie/1: invokeinterface InterfaceMethod req:()Ljakarta/servlet/http/HttpServletRequest; ; invokestatic Method io/javalin/http/CookieKt.getCookie:(Ljakarta/servlet/http/HttpServletRequest;Ljava/lang/String;)Ljava/lang/String; ; header/2: invokeinterface InterfaceMethod res:()Ljakarta/servlet/http/HttpServletResponse; ; invokeinterface InterfaceMethod jakarta/servlet/http/HttpServletResponse.setHeader:(Ljava/lang/String;Ljava/lang/String;)V ; cookie/3: invokespecial Method io/javalin/http/Cookie."<init>":(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZIZLjava/lang/String;Ljava/lang/String;Lio/javalin/http/SameSite;ILkotlin/jvm/internal/DefaultConstructorMarker;)V ; invokeinterface InterfaceMethod cookie:(Lio/javalin/http/Cookie;)Lio/javalin/http/Context; ; queryParamAsClass/2: invokeinterface InterfaceMethod queryParam:(Ljava/lang/String;)Ljava/lang/String; ; invokevirtual Method io/javalin/validation/Validation.validator:(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/String;)Lio/javalin/validation/Validator; ; headerAsClass/2: invokeinterface InterfaceMethod header:(Ljava/lang/String;)Ljava/lang/String; ; invokevirtual Method io/javalin/validation/Validation.validator:(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/String;)Lio/javalin/validation/Validator;` |
+| 15 | Validator.get(): getOrThrow with a ValidationException function; NULLCHECK_FAILED on a null typed value outside NullableValidator (A3) | `io.javalin:javalin` | 6.4.0 | `Validator.get(): invokespecial Method io/javalin/validation/BaseValidator.get:()Ljava/lang/Object; ; invokestatic Method kotlin/jvm/internal/Intrinsics.checkNotNull:(Ljava/lang/Object;)V ; BaseValidator.get(): invokevirtual Method getOrThrow:(Lkotlin/jvm/functions/Function1;)Ljava/lang/Object; ; get$1.invoke: new class io/javalin/validation/ValidationException ; errors$2.invoke (offsets 229-259): invokevirtual Method io/javalin/validation/BaseValidator.getTypedValue$javalin:()Ljava/lang/Object; ; ifnonnull ; instanceof class io/javalin/validation/NullableValidator ; ifne ; ldc String NULLCHECK_FAILED` |
+| 16 | jakarta.servlet getParameter/getHeader: abstract on the API; Tomcat's connector returns null for an absent name | `org.apache.tomcat.embed:tomcat-embed-core` | 10.1.50 | `declared: public abstract java.lang.String getParameter(java.lang.String); ; public abstract java.lang.String getHeader(java.lang.String); ; connector.Request.getParameter: invokevirtual Method org/apache/tomcat/util/http/Parameters.getParameter:(Ljava/lang/String;)Ljava/lang/String; ; Parameters.getParameter tail: ifnull ; areturn ; areturn ; aconst_null ; areturn ; connector.Request.getHeader: invokevirtual Method org/apache/coyote/Request.getHeader:(Ljava/lang/String;)Ljava/lang/String; ; MimeHeaders.getHeader tail: ifnull ; aconst_null ; areturn` |
+| 17 | javax.servlet getParameter/getHeader: the same, under the other package spelling | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 | `declared: public abstract java.lang.String getParameter(java.lang.String); ; public abstract java.lang.String getHeader(java.lang.String); ; connector.Request.getParameter: invokevirtual Method org/apache/tomcat/util/http/Parameters.getParameter:(Ljava/lang/String;)Ljava/lang/String; ; Parameters.getParameter tail: ifnull ; areturn ; areturn ; aconst_null ; areturn ; connector.Request.getHeader: invokevirtual Method org/apache/coyote/Request.getHeader:(Ljava/lang/String;)Ljava/lang/String; ; MimeHeaders.getHeader tail: ifnull ; aconst_null ; areturn` |
 ```
 
 ## Verdicts
@@ -186,4 +212,41 @@ entry, `default_annotation` informational.
 Absent → null (or `Optional.empty()`), no throw: `requirement: optional`, confirming what
 §5b's table asked this probe to confirm.
 
-`measured: 2026-09-20`, rows 1–12, on the fourteen archives the scope names.
+**Q13 — the expression grammar (§5c).** The constructor finds `=` (`indexOf(61)`); with
+none, `isNegated` is `startsWith("!")` and the name is the rest (`!name` → absent-required;
+`name` → required); with one, `isNegated` is a `!` (33) at the character before it, the
+name is the text before `!=`/`=`, the value the text after (`name=v` → required with the
+value; `name!=v` → the value must NOT be `v`, which the framework serves when the
+parameter is absent — `optional`, the excluded value lost, stated on the catalog). An
+empty name parses (the constructor does not check it) and matches nothing a client could
+send, so the mapping reader SKIPS it rather than writing a nameless requirement.
+
+**Q14 — Javalin's reads by arity (§5d, F7).** `queryParam(String)` is
+`queryParams(key).firstOrNull()`, `header(String)` is `req().getHeader(name)`,
+`cookie(String)` is `CookieKt.getCookie(req(), name)` — three READS of the request, and
+all three hand a null through. `header(String, String)` is `res().setHeader` and
+`cookie(String, String, int)` builds a `Cookie` and hands it to `cookie(Cookie)` — SETS
+on the response. The same name, two directions, told apart by nothing but the argument
+count: every `request_reads` entry carries `arity`. `queryParamAsClass`/`headerAsClass`
+read through the one-argument read and hand back a `Validator`.
+
+**Q15 — `Validator.get()` throws (§5d, A3).** `Validator.get()` is `BaseValidator.get()`
+under a `checkNotNull`; `BaseValidator.get()` is `getOrThrow(get$1)`, and `get$1` builds a
+`ValidationException` from the error map; the lazily computed map (`errors$2`, offsets
+229–259) adds `NULLCHECK_FAILED` when the typed value is null and the validator is not a
+`NullableValidator`. So `ctx.queryParamAsClass("n", Integer.class).get()` cannot run
+without `n`: the FRAMEWORK refuses the request (`ValidationException` → 400 through
+Javalin's default mapper), and `required` is Javalin's word — declared as `then: { method:
+get, requirement: required }` on the `AsClass` entries, one result-to-receiver step. A
+chain ending in `getOrDefault`, `allowNullable()` or nothing at all stays NULL.
+
+**Q16–Q17 — the Servlet API's reads (§5d).** `ServletRequest.getParameter(String)` and
+`HttpServletRequest.getHeader(String)` are `public abstract` on both spellings: the API
+states nothing about an absent name. Tomcat's `connector.Request.getParameter` is
+`Parameters.getParameter`, whose tail is `ifnull … aconst_null ; areturn`; `getHeader` is
+`coyote.Request.getHeader` → `MimeHeaders.getHeader`, `ifnull ; aconst_null ; areturn`.
+Null on absent, no throw, on 10.1.50 and 9.0.121 alike: `requirement` NULL on both
+servlet catalogs' entries — the handler reads the value, and the container decides
+nothing.
+
+`measured: 2026-09-20`, rows 1–17, on the sixteen archives the scope names.

@@ -5,9 +5,10 @@
 # spring-webmvc 6.1.6, micronaut 4.7.6, RESTEasy Reactive and reactive-routes
 # 3.17.5, vertx-core 4.5.11, jakarta.ws.rs-api 3.1.0) plus the `defaultValue`
 # element_value_pairs check, which is the one cell that COMPILES something: a
-# two-method Java sample under `javac` against spring-web, then `javap -v`. The
-# §5d rows (Javalin `Validator.get()`, `jakarta.servlet` reads) join with that
-# mechanism's task.
+# two-method Java sample under `javac` against spring-web, then `javap -v`. Rows
+# 13–17 are the §5c/§5d rows: Spring's expression parse, Javalin's `Context`
+# read/set overloads and `Validator.get()`, and the Servlet API's reads on Tomcat
+# 10.1.50 (`jakarta`) and 9.0.121 (`javax`) — the two containers CP-9 measured.
 #
 # THE TABLE IS GENERATED, AND ITS COLUMN HEADER COMES FROM THE JAR'S OWN BYTES
 # (GUIDELINES §5.4, and CP-5's failure it exists to prevent). `probe.py` reads the
@@ -43,6 +44,8 @@ ARTIFACTS=(
   "reactive-routes|io.quarkus|quarkus-reactive-routes|3.17.5"
   "reactive-routes-deployment|io.quarkus|quarkus-reactive-routes-deployment|3.17.5"
   "vertx-core|io.vertx|vertx-core|4.5.11"
+  "tomcat-jakarta|org.apache.tomcat.embed|tomcat-embed-core|10.1.50"
+  "tomcat-javax|org.apache.tomcat.embed|tomcat-embed-core|9.0.121"
 )
 
 specs=()

@@ -13,8 +13,12 @@ spellings its processor maps to that `Nullable` stereotype, RESTEasy Reactive's
 extractors handing a null through and `ParameterHandler` substituting only a
 `@DefaultValue`, JAX-RS's `value`-only attributes, and reactive-routes' generated
 `HttpServerRequest.getParam`/`getHeader` read whose Vert.x return is `@Nullable`.
-The §5d rows (Javalin `Validator.get()`, `jakarta.servlet` reads) join with that
-mechanism's task.
+Rows 13–16 are the §5c/§5d rows: Spring's `AbstractNameValueExpression` parse of a
+`params`/`headers` expression (the four forms §5c reads), Javalin's `Context` read
+overloads against the same-named setters (F7) and its `Validator.get()` throwing on
+an absent value, and the Servlet API's `getParameter`/`getHeader` — abstract on the
+interface, null-on-absent in the container that implements them (Tomcat, both
+package spellings).
 
 Called by `run.sh`, which resolves the jars; this script downloads nothing. Like
 CP-16 through CP-24 it reads each jar's own identity out of its own bytes before it
@@ -470,6 +474,170 @@ def q12_reactive_routes_generated_read(deployment: Path, vertx: Path) -> str:
     return _STEP.join(cells)
 
 
+# --- Q13: Spring's expression parse (§5c) ----------------------------------------
+
+
+def q13_spring_name_value_expression(spring_webmvc: Path) -> str:
+    """`AbstractNameValueExpression.<init>(String)`: where `=` and `!` are read, which
+    is the whole grammar of a `params`/`headers` expression."""
+    output = _javap(
+        "-c",
+        "-p",
+        "org.springframework.web.servlet.mvc.condition.AbstractNameValueExpression",
+        classpath=spring_webmvc,
+    )
+    body = _method_body(output, "AbstractNameValueExpression(java.lang.String);")
+    kept = [
+        s
+        for s in _steps(body)
+        if s.startswith(("bipush", "ldc", "if_icmpne", "ifle", "ifeq"))
+        or "indexOf" in s
+        or "startsWith" in s
+        or "charAt" in s
+        or "substring" in s
+        or "putfield" in s
+    ]
+    return _STEP.join(kept)
+
+
+# --- Q14–Q15: Javalin reads and `Validator.get()` (§5d, F7, A3) --------------------
+
+
+def q14_javalin_context_reads_and_sets(javalin: Path) -> str:
+    """The `Context` overloads a `request_reads` entry has to tell apart by ARITY: the
+    one-argument `queryParam`/`header`/`cookie` READ the request and the two- and
+    three-argument `header`/`cookie` SET the response; `queryParamAsClass`/
+    `headerAsClass` read and hand back a `Validator`."""
+    output = _javap("-c", "-p", "io.javalin.http.Context", classpath=javalin)
+    cells = []
+    for label, header in (
+        ("queryParam/1", "public default java.lang.String queryParam(java.lang.String);"),
+        ("header/1", "public default java.lang.String header(java.lang.String);"),
+        ("cookie/1", "public default java.lang.String cookie(java.lang.String);"),
+        (
+            "header/2",
+            "public default io.javalin.http.Context header(java.lang.String, java.lang.String);",
+        ),
+        (
+            "cookie/3",
+            "public default io.javalin.http.Context cookie(java.lang.String, java.lang.String, int);",
+        ),
+        (
+            "queryParamAsClass/2",
+            "public default <T> io.javalin.validation.Validator<T> queryParamAsClass(java.lang.String, java.lang.Class<T>);",
+        ),
+        (
+            "headerAsClass/2",
+            "public default <T> io.javalin.validation.Validator<T> headerAsClass(java.lang.String, java.lang.Class<T>);",
+        ),
+    ):
+        steps = [
+            s
+            for s in _steps(_method_body(output, header))
+            if ("invoke" in s and "checkNotNullParameter" not in s and "appData" not in s)
+        ]
+        cells.append(f"{label}: " + _STEP.join(steps))
+    return _STEP.join(cells)
+
+
+def q15_javalin_validator_get_throws(javalin: Path) -> str:
+    """`Validator.get()` → `BaseValidator.get()` → `getOrThrow(get$1)`, whose function
+    builds a `ValidationException`; the lazily computed error map adds
+    `NULLCHECK_FAILED` when the typed value is null and the validator is not a
+    `NullableValidator` — so `get()` on an absent value throws."""
+    validator = _javap("-c", "-p", "io.javalin.validation.Validator", classpath=javalin)
+    base = _javap("-c", "-p", "io.javalin.validation.BaseValidator", classpath=javalin)
+    thrower = _javap("-c", "-p", "io.javalin.validation.BaseValidator$get$1", classpath=javalin)
+    errors = _javap("-c", "-p", "io.javalin.validation.BaseValidator$errors$2", classpath=javalin)
+    get = [s for s in _steps(_method_body(validator, "public T get();")) if "invoke" in s]
+    base_get = [s for s in _steps(_method_body(base, "public T get();")) if "invoke" in s]
+    thrown = [
+        s
+        for s in _steps(_method_body(thrower, "public final java.lang.Exception invoke("))
+        if s.startswith("new")
+    ]
+    window = _steps_between(
+        _method_body(
+            errors,
+            "public final java.util.Map<java.lang.String, java.util.List<io.javalin.validation.ValidationError<T>>> invoke();",
+        ),
+        229,
+        259,
+    )
+    null_check = [
+        s
+        for s in window
+        if "getTypedValue" in s or s.startswith(("ifnonnull", "instanceof", "ifne", "ldc"))
+    ]
+    return _STEP.join(
+        [
+            "Validator.get(): " + _STEP.join(get),
+            "BaseValidator.get(): " + _STEP.join(base_get),
+            "get$1.invoke: " + _STEP.join(thrown),
+            "errors$2.invoke (offsets 229-259): " + _STEP.join(null_check),
+        ]
+    )
+
+
+# --- Q16: the Servlet API's reads (§5d) ---------------------------------------------
+
+
+def q16_servlet_reads_are_null_on_absent(tomcat: Path, package: str) -> str:
+    """What the API declares — abstract, so the interface states nothing — and what the
+    container that implements it returns for a name the request does not carry."""
+    request = _javap("-p", f"{package}.servlet.ServletRequest", classpath=tomcat)
+    http = _javap("-p", f"{package}.servlet.http.HttpServletRequest", classpath=tomcat)
+    declared = [
+        line.strip()
+        for output, member in (
+            (request, "getParameter(java.lang.String)"),
+            (http, "getHeader(java.lang.String)"),
+        )
+        for line in output.splitlines()
+        if member in line
+    ]
+    connector = _javap("-c", "-p", "org.apache.catalina.connector.Request", classpath=tomcat)
+    parameters = _javap("-c", "-p", "org.apache.tomcat.util.http.Parameters", classpath=tomcat)
+    headers = _javap("-c", "-p", "org.apache.tomcat.util.http.MimeHeaders", classpath=tomcat)
+    get_parameter = [
+        s
+        for s in _steps(
+            _method_body(connector, "public java.lang.String getParameter(java.lang.String);")
+        )
+        if "Parameters.getParameter" in s
+    ]
+    parameter_tail = [
+        s
+        for s in _steps(
+            _method_body(parameters, "public java.lang.String getParameter(java.lang.String);")
+        )
+        if s.startswith(("ifnull", "aconst_null", "areturn"))
+    ]
+    get_header = [
+        s
+        for s in _steps(
+            _method_body(connector, "public java.lang.String getHeader(java.lang.String);")
+        )
+        if "invoke" in s
+    ]
+    header_tail = [
+        s
+        for s in _steps(
+            _method_body(headers, "public java.lang.String getHeader(java.lang.String);")
+        )
+        if s.startswith(("ifnull", "aconst_null", "areturn"))
+    ]
+    return _STEP.join(
+        [
+            "declared: " + _STEP.join(declared),
+            "connector.Request.getParameter: " + _STEP.join(get_parameter),
+            "Parameters.getParameter tail: " + _STEP.join(parameter_tail),
+            "connector.Request.getHeader: " + _STEP.join(get_header),
+            "MimeHeaders.getHeader tail: " + _STEP.join(header_tail),
+        ]
+    )
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     for spec in specs:
@@ -562,6 +730,31 @@ def main(specs: list[str]) -> int:
             q12_reactive_routes_generated_read(
                 artifacts["reactive-routes-deployment"].jar, artifacts["vertx-core"].jar
             ),
+        ),
+        (
+            "AbstractNameValueExpression(String): where a params/headers expression's `=` and `!` are read (§5c)",
+            (artifacts["spring-webmvc"],),
+            q13_spring_name_value_expression(artifacts["spring-webmvc"].jar),
+        ),
+        (
+            "Context.queryParam/header/cookie by arity: the one-argument reads, the two- and three-argument sets, the AsClass validators (F7)",
+            (javalin,),
+            q14_javalin_context_reads_and_sets(javalin.jar),
+        ),
+        (
+            "Validator.get(): getOrThrow with a ValidationException function; NULLCHECK_FAILED on a null typed value outside NullableValidator (A3)",
+            (javalin,),
+            q15_javalin_validator_get_throws(javalin.jar),
+        ),
+        (
+            "jakarta.servlet getParameter/getHeader: abstract on the API; Tomcat's connector returns null for an absent name",
+            (artifacts["tomcat-jakarta"],),
+            q16_servlet_reads_are_null_on_absent(artifacts["tomcat-jakarta"].jar, "jakarta"),
+        ),
+        (
+            "javax.servlet getParameter/getHeader: the same, under the other package spelling",
+            (artifacts["tomcat-javax"],),
+            q16_servlet_reads_are_null_on_absent(artifacts["tomcat-javax"].jar, "javax"),
         ),
     ]
     for number, (question, measured, observed) in enumerate(rows, start=1):
