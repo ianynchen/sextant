@@ -3042,6 +3042,84 @@ def test_the_map_form_reads_the_same_item(tmp_path: Path):
     )
 
 
+def test_the_tail_flag_is_found_by_value_and_two_or_a_misplaced_one_are_unread(
+    tmp_path: Path,
+):
+    """Fix round 2. `resolved_config` carries no declaration order, and the round-1 read
+    took the LAST gathered value (by key order) as the flag — so the documented map form
+    `{patterns: /foo/**, matchTrailingSlash: false}` sorted to `[false, /foo/**]` and
+    published a RESOLVED served path `/false`. The flag is found by VALUE now: the one
+    `true`/`false` literal among the gathered values is the flag wherever it sits, and
+    the rest are the patterns — the map form and the positional `Path=/foo/**,false`
+    both derive one row `/foo/**`. Two boolean literals, or one in a gather with no tail
+    flag (`Method=true`), are a binding nobody can settle: the inbound row is
+    `unresolved` with `path` NULL, never a choice; the target row is untouched."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args.patterns", "/foo/**"),
+            ("predicates[0].args.matchTrailingSlash", "false"),
+            ("uri", "lb://foo"),
+        )
+        + _route(1, ("predicates[0]", "Path=/bar/**,false"), ("uri", "lb://bar"))
+        + _route(
+            2,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args.patterns", "/a/**"),
+            ("predicates[0].args.matchTrailingSlash", "true"),
+            ("predicates[0].args.extra", "false"),
+            ("uri", "lb://two"),
+        )
+        + _route(
+            3, ("predicates[0]", "Path=/m/**"), ("predicates[1]", "Method=true"), ("uri", "lb://m")
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("inbound", None, "/foo/**", None, None, None, "resolved"),
+            ("inbound", None, "/bar/**", None, None, None, "resolved"),
+            ("inbound", None, None, None, None, None, "unresolved"),
+            ("inbound", None, "/m/**", None, None, None, "unresolved"),
+            ("outbound", None, "lb://foo", None, None, None, "resolved"),
+            ("outbound", None, "lb://bar", None, None, None, "resolved"),
+            ("outbound", None, "lb://two", None, None, None, "resolved"),
+            ("outbound", None, "lb://m", None, None, None, "resolved"),
+        ],
+        key=str,
+    )
+
+
+def test_a_row_with_no_address_carries_no_requirement(tmp_path: Path):
+    """Fix round 2. A requirement on an address nobody read states nothing useful — and
+    the requirements pass keys the stash on `path`, so two NULL-path items both carrying
+    a `Header=` would have joined the LAST row it read. Two items whose `Path` no
+    environment resolved, each with a header: two unresolved NULL-path rows, an empty
+    stash."""
+    a, b = f"{_ROUTES}[0].predicates[0]", f"{_ROUTES}[1].predicates[0]"
+    workspace = _edge_workspace(
+        tmp_path,
+        [(a, "default", None), (a, "prod", None), (b, "default", None), (b, "prod", None)]
+        + _route(0, ("predicates[1]", "Header=X-A,1"), ("uri", "lb://a"))
+        + _route(1, ("predicates[1]", "Header=X-B,2"), ("uri", "lb://b")),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    stash = _edge_stash(workspace)
+    workspace.close()
+
+    assert [r for r in rows if r[0] == "inbound"] == [
+        ("inbound", None, None, None, None, None, "unresolved"),
+        ("inbound", None, None, None, None, None, "unresolved"),
+    ]
+    assert stash == []
+
+
 def test_two_items_on_one_address_intersect_their_requirements(tmp_path: Path):
     """Fix round 1; spec 2026-09-19 §4d, the combinator's `_shared` rule restated: two
     items collapsing to ONE address — header-versioned `/api/**`, `Header=X-Version,v1`

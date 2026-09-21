@@ -75,7 +75,12 @@ requires: [resolved_config]
 #     a pattern except a trailing `true`/`false`, which is the flag — `gather:
 #     list_tail_flag`); `Method` is `GATHER_LIST` over `[methods]` (`gather: list`);
 #     `Header` `[header, regexp]`, `Query` `[param, regexp, predicate]` and `Cookie`
-#     `[name, regexp]` inherit `DEFAULT` (positional N is field N). The two GATHERING
+#     `[name, regexp]` inherit `DEFAULT` (positional N is field N). The flag is found BY
+#     VALUE, not as the last value: `resolved_config` carries no declaration order, so
+#     which value an author wrote last is unknowable here (an open issue for the docs
+#     round) — the one `true`/`false` literal among `Path`'s gathered values is
+#     `matchTrailingSlash` wherever it sits; two such literals, or one under `Method`,
+#     leave the inbound row unresolved with no path rather than guessing. The two GATHERING
 #     normalisers read `args.values()` and test NO key (row 7), so in the map form EVERY
 #     argument of `Path`/`Method` is collected whatever it is keyed — `args.pattern:
 #     /x/**` is one pattern, `args.patterns: [/a/**, /b/**]` two — and a scalar is ONE

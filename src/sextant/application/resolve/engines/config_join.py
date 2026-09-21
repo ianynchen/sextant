@@ -898,19 +898,29 @@ def _shortcut(spelling: str, positional: str) -> _Predicate:
 
 def _fields_of(
     predicate: _Predicate, rule: dict[str, Any], positional: str
-) -> dict[str, list[str]]:
+) -> dict[str, list[str]] | None:
     """The predicate's arguments bound onto the rule's declared field order (CP-29 row
-    7). Under `gather: list` / `list_tail_flag` the framework's normaliser reads
-    `args.values()` and tests NO key (`ShortcutType$2`/`$3.normalize`, CP-29 row 7) —
-    so EVERY argument is collected: the positional `<positional>K` by K, then the
-    remaining keys in flattened order (`k[N]` by N, then by name — `args.patterns:
-    [/a/**, /b/**]` reaches here as `patterns[0]`, `patterns[1]`; `args.pattern:
-    /x/**` as one value under a key the framework would not have tested either),
-    into a list under field 0; under `list_tail_flag` a trailing `true`/`false` is
-    field 1 (`matchTrailingSlash`). A map-form scalar is ONE value, never split on
-    `,` (fix round 1: the split was unmeasured; the binder wraps a scalar in a
-    one-element list). Without `gather` (`DEFAULT`) positional K is field K and a
-    named key binds to its own field."""
+    7), or None where they cannot be read as one binding. Under `gather: list` /
+    `list_tail_flag` the framework's normaliser reads `args.values()` and tests NO key
+    (`ShortcutType$2`/`$3.normalize`, CP-29 row 7) — so EVERY argument is collected:
+    the positional `<positional>K` by K, then the remaining keys in flattened order
+    (`k[N]` by N, then by name — `args.patterns: [/a/**, /b/**]` reaches here as
+    `patterns[0]`, `patterns[1]`; `args.pattern: /x/**` as one value under a key the
+    framework would not have tested either), into a list under field 0. A map-form
+    scalar is ONE value, never split on `,` (fix round 1: the split was unmeasured;
+    the binder wraps a scalar in a one-element list).
+
+    The tail flag is found by VALUE, not by position (fix round 2). The framework
+    hands the LAST value to the flag when it parses as a boolean, but `resolved_config`
+    carries no declaration order (`ORDER BY environment, key`; an OI for the docs
+    round), so which value the author wrote last is unknowable here — the documented
+    map form `{patterns: /foo/**, matchTrailingSlash: false}` sorts as `[false,
+    /foo/**]` by key. So: among the gathered values, the one that is literally
+    `true`/`false` (case-insensitive, as `Boolean.parseBoolean` reads it) is the flag
+    (field 1) wherever it sits, and the rest are the list. Two or more boolean
+    literals, or a boolean literal in a gather that has no tail flag, is a binding
+    this engine cannot settle — None, never a choice. Without `gather` (`DEFAULT`)
+    positional K is field K and a named key binds to its own field."""
     order = [str(name) for name in rule["args"]]
     gather = rule.get("gather")
     indexed = sorted(
@@ -929,8 +939,12 @@ def _fields_of(
                 if not (key.startswith(positional) and key[len(positional) :].isdigit())
             )
         )
-        if gather == _GATHER_LIST_TAIL_FLAG and values and values[-1].lower() in ("true", "false"):
-            fields[order[1]] = [values.pop()]
+        flags = [value for value in values if value.lower() in ("true", "false")]
+        if len(flags) > 1 or (flags and gather != _GATHER_LIST_TAIL_FLAG):
+            return None
+        if flags:
+            fields[order[1]] = flags
+            values = [value for value in values if value.lower() not in ("true", "false")]
         if values:
             fields[order[0]] = values
         return fields
@@ -1007,27 +1021,37 @@ def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
         resolved = True
         served = not any(field.startswith(predicates_field) for field in item.unread)
         for predicate in _predicates_of(item, block):
-            if predicate.name == path_rule["name"]:
-                fields = _fields_of(predicate, path_rule, positional)
+            rule = (
+                path_rule
+                if predicate.name == path_rule["name"]
+                else method_rule
+                if predicate.name == method_rule["name"]
+                else requirement_rules.get(str(predicate.name))
+            )
+            if rule is None:
+                if predicate.name not in pass_through:
+                    resolved = False
+                continue
+            fields = _fields_of(predicate, rule, positional)
+            if fields is None:
+                # A binding the engine could not settle (two flag literals, a flag
+                # where none is declared): the address is in doubt, the target is not.
+                served = False
+            elif rule is path_rule:
                 patterns.extend(fields.get(str(path_rule["args"][0]), []))
-            elif predicate.name == method_rule["name"]:
-                fields = _fields_of(predicate, method_rule, positional)
+            elif rule is method_rule:
                 for spelled in fields.get(str(method_rule["args"][0]), []):
                     if "," in spelled:
                         served = False
                     elif spelled not in verbs:
                         verbs.append(spelled)
-            elif predicate.name in requirement_rules:
-                rule = requirement_rules[predicate.name]
-                fields = _fields_of(predicate, rule, positional)
+            else:
                 name = fields.get(str(rule["args"][0]))
                 value = fields.get(str(rule["args"][1])) if len(rule["args"]) > 1 else None
                 if name:
                     requirements.append((str(rule["kind"]), name[0], value[0] if value else None))
                 else:
                     resolved = False
-            elif predicate.name not in pass_through:
-                resolved = False
         if not patterns:
             patterns = [_ANY_PATH] if served else [None]
         for pattern in patterns:
@@ -1089,14 +1113,18 @@ def _mint(
     the two have in common, in the kept row's order (`combinator._shared`'s rule —
     only a demand every alternative makes is one the framework enforces at that
     address), and `unresolved` if either is. A row with no address never collapses
-    (SQL's `NULL = NULL` is unknown, and each is its own unread declaration)."""
+    (SQL's `NULL = NULL` is unknown, and each is its own unread declaration) and
+    carries NO requirement (fix round 2): a demand on an address nobody read states
+    nothing useful, and the requirements pass keys the stash on `path`, so two such
+    rows' demands would both land on whichever one it read last."""
     resolution = "resolved" if resolved else "unresolved"
     # A NULL address is keyed by its own ordinal, so it never collapses.
     identity = (direction, method, len(minted) if path is None else path)
     kept = minted.get(identity)
     if kept is None:
         minted[identity] = _Minted(
-            _indexed_row(catalog, direction, method, path, resolution), list(requirements)
+            _indexed_row(catalog, direction, method, path, resolution),
+            [] if path is None else list(requirements),
         )
         return
     kept.requirements = [each for each in kept.requirements if each in requirements]
