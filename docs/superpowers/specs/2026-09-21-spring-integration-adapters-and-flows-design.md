@@ -44,7 +44,7 @@ layer names no language (`tests/architecture/test_language_confinement.py`).
 | F9 | `HttpMethod.values()` at spring-web 6.1.6 is `GET HEAD POST PUT PATCH DELETE OPTIONS TRACE` (static initialiser `ldc` sequence) | recorded in CP-29; §7a does NOT use it (A1) |
 | F10 | `PubSubInboundChannelAdapter(PubSubSubscriberOperations, String)` extends `MessageProducerSupport` (`setOutputChannel(MessageChannel)`, `setOutputChannelName(String)`); `PubSubMessageHandler(PubSubPublisherOperations, String)` extends `AbstractMessageHandler` with `setTopic(String)`, `setTopicExpression(Expression)`, `setTopicExpressionString(String)` — spring-cloud-gcp-pubsub 5.1.2 | §4 and §6; the two expression setters → unresolved |
 | F11 | Placeholders are already resolved by the **field ladder** (`shapes/arguments.py`, `field_sources` on a catalog: a `@Value("${…}")` field/parameter or a `@ConfigurationProperties` getter becomes the `${…}` expression the row carries, substituted per environment by `resolved_peers`) — the user's "we must have resolution for placeholders" holds today for HTTP clients and holds here by reusing it | §3 |
-| F12 | `config_join.gaps` files `channel_destination` questions from the `service_identity` seam **after** the pipeline's reset; the new engine's rows must be visible to it | §3: the `channel_destinations` derived table, read by `gaps` |
+| F12 | `config_join.gaps` files `channel_destination` questions from the `service_identity` seam **after** the pipeline's reset; fluent's rows must be visible to it | §3b: the `channel_bindings` derived table, read by `gaps` |
 
 ### 0b. The four-lens review — resolved by the author (2026-09-21)
 
@@ -57,7 +57,17 @@ layer names no language (`tests/architecture/test_language_confinement.py`).
 | A5 | over-eng. | following `to(IntegrationFlow)` into the target flow through bean rules | `to` is a `divert` (handler unresolved); `trigger`, `controlBus` likewise; `nullChannel` is its own kind `discard` (no handler — TRUE, not unresolved); `fixedSubscriberChannel()` no-arg is pass-through, the `(String)` form a `channel` |
 | A6 | conflict | a catalog carries one `style`; §7b hedged between adding `indexed_routes` to the combinator Gateway catalog and a sibling | a sibling `spring-cloud-gateway-properties.yml` (`config_join`), emitting inbound and outbound rows per rule — `config_join` already carries `direction` per rule (`_row(catalog, protocol, channel.direction, …)`) |
 | A7 | consistency | properties routes with no `Method=` were to fan out through `all_methods`; the DSL Gateway catalog renders a method-less route with `method` NULL | properties routes render the same: `method` NULL, resolved — one family, one rendering |
-| A8 | future languages | `bean_wiring` is a framework term, not a language: the keys (`destination_arg`, `channel_links`, `containers`, `flows`) describe DI registrations by name and type, which .NET's container has too | kept; the engine names no language |
+| A8 | future languages | the keys describe DI registrations by name and type (`new:` roots, `bean_via`, `channel_link`), which .NET's container has too; no language word reaches the engine | kept |
+
+### 0c. First-principles and adversarial review (user request, 2026-09-21)
+
+| # | Finding | Resolution |
+|---|---|---|
+| B1 | Bean identity — "a value built in one `@Bean` method, injected into another" — is the shape behind several EXISTING boundaries (the field-held `Publisher`, `WebClient`, `KafkaTemplate` gaps), not this feature's private need | `resolve/beans.py`, a shared fold with a narrow API; this spec is its first consumer, the field ladder's bean rung a named follow-up (§3a) |
+| B2 | "adapters + channel links" is a special case of "a registration object wired to a consumer" — raw listener containers (`DefaultMessageListenerContainer.setDestinationName` + `setMessageListener`, Kafka's `ConcurrentMessageListenerContainer`) are the same walk | the vocabulary is capture KINDS (`channel`, `channel_link`, `handler`), not framework words; a listener container is one more catalog on the same keys (§4) |
+| B3 | `channel_destinations` + a `gaps` skip patched two engines together; the general object is the channel EDGE | `channel_bindings(channel, role fed_by/read_by/sends_to, …)`: fluent writes `fed_by`, `config_join` writes `read_by`, a join pass mints rows, `gaps` asks only about unfed channels; `sends_to` is the slot for later writers (§3b) |
+| B4 | the flow walk and the bean-wired walk are BOTH "walk forward from a root along result→receiver, capture from arguments, join argument chains" — `fluent`'s definition; a second walker would drift | **ruled by the user: extend `fluent`** — one root kind, one continuation kind, three capture kinds, one step effect, inbound rows (§2, §4, §5); no new engine |
+| B5 | adversarial: `@Profile`-conditional twin beans; a spec configurer adding queues (`configureContainer(c -> c.addQueueNames(…))`); Gateway `filters` rewriting the upstream path; a link set in a different method; `${…}` channel names | the first shares `conditional-controllers`' exposure and is stated with it; the second and fourth are misses, stated; the third matches the DSL outbound catalog's rendering, stated; the fifth is resolved through `_agreed` before the join (§3b) |
 
 ---
 
@@ -81,247 +91,255 @@ layer names no language (`tests/architecture/test_language_confinement.py`).
 
 ---
 
-## 2. Approach — one join, two entry shapes, existing pieces plus bean identity
+## 2. Approach — extend `fluent`; bean identity as a shared fold; the channel as a table
 
-Weighed: (A) a `bean_wiring:` block inside `config_join`; (B) a new style for the bean-wired
-adapters; (C) also the DSL flows. **C was ruled** ("which allows us to solve Kafka as well").
-The engine is new because its evidence spans **several methods of a class through bean identity**
-— no shipped style crosses methods that way — but every piece except bean identity exists:
+Weighed in conversation: (A) a `bean_wiring:` block inside `config_join`; (B) a new style for
+bean-wired adapters; (C) also the DSL flows. **C was ruled.** The first-principles review (§0c)
+then asked what the walk IS: a value constructed at a root, configured along a receiver chain,
+its address captured from arguments, and consumers attached by further calls — which is the
+`fluent` engine's own definition, already with argument-chain joins (`terminal_via_argument`),
+lambda-body captures (`lambda_steps`), destination-via-producing-call (`channel_via`) and the
+field ladder. **Ruled (user, 2026-09-21): extend `fluent`; no new engine.** The broker catalogs
+are `style: fluent`. Three general additions carry the whole feature:
 
-| Piece | Exists as | Used for |
+| Piece | Exists as | Added here |
 |---|---|---|
-| receiver-chain walk inside one method | `fluent` (`result → receiver`), `_producing_site` | `new Adapter(…)` then its setters; the flow chain |
-| a value built by one chain and consumed as another's argument | `fluent`'s `terminal_via_argument` | `from(<spec chain>)`, `handle(<sink spec chain>)` |
-| placeholder resolution | the field ladder (`field_sources`), `resolved_peers` | every destination argument (F11) |
-| the handler side of a channel | `config_join._channels` | `@ServiceActivator(inputChannel)` and siblings |
-| class-compiled lambdas as `lambda` arguments | `effective_calls.py` (2026-09-19 spec) | `.handle((p, h) -> …)` bodies |
-| **bean identity** — which bean an injected parameter or a `@Bean` call names | **new** (§3) | `setOutputChannel(param)`, `new AmqpInboundChannelAdapter(container)`, `from(adapterBean)` |
+| walk forward from a root along `result → receiver`, folding captures | `fluent._walk` | a **constructor root** (`new: <type>`) beside the call roots |
+| a value built by one chain consumed as another call's argument | `terminal_via_argument` (the join ends the chain) | **`continue_via_argument`**: the consuming call's own chain continues the walk with the same captures (`from(<spec>) … .handle(h)`) |
+| an argument that is a bean built elsewhere | — | **`resolve/beans.py`** (§3), and the capture kind **`bean_via`**: fold the captures of that bean's own construction chain |
+| the consumer attached to the chain | — (rows carry `caller`; `handler` NULL) | capture kinds **`handler`** (a lambda body or a bean's method) and **`channel_link`** (a channel name or channel bean); a **`poisons:`** step effect (a `divert` poisons `handler`); an inbound row carries `handler` |
+| a channel named on the constructing method's annotation | — | root option `method_annotation: { annotation, arg, into }` |
+| the channel edge between an adapter and its consumer | `config_join` files a question per `read_by` | **`channel_bindings`** (§3): `fed_by` rows from fluent, `read_by` from the channel index; a join pass mints rows and `gaps` asks only about unfed channels |
+| placeholders | the field ladder (`field_sources`) | reused unchanged (F11) |
 
 Units:
 
 | # | Unit | Where |
 |---|---|---|
-| 1 | bean table + resolution rungs | `engines/bean_wiring.py` (§3) |
-| 2 | bean-wired adapter walk, inbound + outbound, container hop | `engines/bean_wiring.py` (§4) |
-| 3 | DSL flow walk, sources / steps / handler / sinks | `engines/bean_wiring.py` (§5) |
-| 4 | `channel_destinations` table; `gaps` reads it; rows join `_channels` | `config_join.py`, SQL (§3) |
-| 5 | three broker catalogs + `flows.steps` on `spring-integration.yml` | `catalogs/` (§6) |
-| 6 | `dsl-media-route` — `verb: null` rules on the media overloads | router catalogs (§7a) |
-| 7 | `gateway-properties-routes` — `indexed_routes` in `config_join` | `config_join.py`, Gateway catalogs (§7b) |
-| 8 | probes CP-27..29, fixtures, register, COVERAGE, D02 | §9, §11, §12 |
+| 1 | `resolve/beans.py` — bean table and resolution rungs | new module (§3) |
+| 2 | `channel_bindings` table; `read_by` from `config_join`'s index; join pass; `gaps` reads it | `config_join.py`, new `resolve/channel_bindings.py`, SQL (§3) |
+| 3 | fluent: `new:` roots, `continue_via_argument`, `bean_via`, `handler`, `channel_link`, `poisons`, `method_annotation`, inbound rows | `engines/fluent.py` (§4–§5) |
+| 4 | three broker catalogs + `flows.steps` on `spring-integration.yml` | `catalogs/` (§6) |
+| 5 | `dsl-media-route` — `verb: null` rules on the media overloads | router catalogs (§7a) |
+| 6 | `gateway-properties-routes` — `indexed:` address form in `config_join` | `config_join.py`, `spring-cloud-gateway-properties.yml` (§7b) |
+| 7 | probes CP-27..29, fixtures, register, COVERAGE, D02 | §9, §11, §12 |
 
 ---
 
-## 3. The join and bean identity
+## 3. Bean identity, the channel table, and the rows
 
-**Three facts joined.** A destination (subscription / queue / topic / exchange+routingKey), the
-channel it is linked to, and the handler reading that channel. The link and the handler are
-absent when a flow's handler is inline: the row is then emitted directly.
+### 3a. `resolve/beans.py` — a shared fold
 
-**Output rows.** Inbound: `protocol` from the adapter's catalog, `direction: inbound`, `path` =
-destination, `handler` = the activator method (the `_channels` index) or the inline handler's
-body, `caller` = the `@Bean` method that built the adapter/flow, `evidence: compiler`. Outbound:
-`path` = topic / `exchange/routingKey`, `caller` = the `@Bean` method that built the handler
-or the flow, `handler` NULL. `request_shape`/`response_shape` NULL (a channel handler's
-signature is the framework's convention; no probe measured one — the same statement
-`config_join._derive_channels` makes). Media NULL.
+One `once` fold over the annotation index and `method_declarations`: every `@Bean` method of the
+module (name from `name()`/`value()` else the method name — F8; erased return type; `@Profile`/
+conditional annotations recorded but not evaluated), every `@Qualifier` on a parameter. API:
+`bean_of(reference) → BeanRef(method symbol) | Unresolved(reason)` where a reference is an
+injected parameter of a `@Bean` method (or any method — the fold is engine-neutral) or a direct
+call to a `@Bean` method of the same class. Rungs depend on WHAT is referenced (§0b A2):
 
-**Destinations go through the field ladder.** The adapter catalogs declare `field_sources`
-exactly as `spring-resttemplate.yml` does. A `string` literal is the address; a `@Value("${…}")`
-field or parameter, or a `@ConfigurationProperties` getter, is the `${…}` expression the row
-carries and `resolved_peers` substitutes per environment; a vararg `array` is one row per
-element (each through the ladder); anything else poisons `path` → an unresolved row. The row is
-never absent for a declared adapter: the adapter's existence is the declaration.
+- a **channel** reference (erased type `MessageChannel` or a subtype): `@Qualifier` → the
+  parameter's declared name, when it is a `@Bean` name OR a channel name the channel index knows
+  (Spring auto-creates a channel under a referenced name and resolves an ambiguous `MessageChannel`
+  injection by parameter name — `errorChannel`/`nullChannel` are always candidates); never by type;
+- any **other** reference (a catalog-declared registration or container type — nothing a
+  framework bean shares): `@Qualifier` → exactly one `@Bean` method of that erased type → the
+  parameter's name — Spring's own order (`DefaultListableBeanFactory.determineAutowireCandidate`,
+  CP-27).
 
-**Questions become rows, once.** The engine writes `channel_destinations(channel, direction,
-protocol, destination, catalog_id)` — a temp table reset with the endpoint tables. `config_join.gaps`
-skips a `(channel, direction)` present there, so the `channel_destination` question is not filed
-for a channel an adapter feeds; a channel nothing feeds keeps its question. `spring-integration.yml`
-is otherwise unchanged.
+No rung answers, or a rung has two candidates → `Unresolved`. A parameter compiled without
+`-parameters` skips the name rung. **This module is the general answer to "a value built in one
+`@Bean` method and used in another"** — the field ladder's missing rung for the field-held
+`Publisher`/`WebClient`/`KafkaTemplate` boundaries in COVERAGE. It is built here and consumed by
+fluent's `bean_via`; adding it as a ladder rung is a named follow-up, not part of this spec.
 
-**Bean identity — the new capability, and its no-guess rule.** A *bean reference* is an
-injected parameter of a `@Bean` method, or the argument of a channel link / constructor. A direct
-call `amqpInputChannel()` to a `@Bean` method of the same class names that bean. A parameter
-resolves by rungs that depend on WHAT is referenced (A2 — Spring's candidates include beans the
-module never declares):
+### 3b. `channel_bindings` — the channel edge as data
 
-- a **channel** reference (`setOutputChannel(param)`, `from(param)` where the parameter's erased
-  type is `MessageChannel` or a subtype): (1) `@Qualifier("name")` → `name`; (2) the parameter's
-  declared name (`signature.parameters[i].name`) when it is a `@Bean` method's bean name
-  (`name()`/`value()` element, else the method name — F8) OR a channel name the handler index
-  (`_channels`) already knows — Spring auto-creates a `DirectChannel` under a referenced name, and
-  resolves an ambiguous `MessageChannel` injection by parameter name (`errorChannel` and
-  `nullChannel` are always candidates too); **never by type**;
-- a **container / adapter** reference (a catalog `containers` or `adapters` type — types no
-  framework bean shares): (1) `@Qualifier`; (2) exactly one `@Bean` method of that erased return
-  type in the module; (3) the parameter's name as a bean name — Spring's own order
-  (`DefaultListableBeanFactory.determineAutowireCandidate`, CP-27).
+A derived temp table `channel_bindings(channel, role, symbol, protocol, destination, direction,
+catalog_id, resolution)`, reset with the endpoint tables:
 
-No rung answers, or a rung has two candidates → the reference is **unresolved**: an adapter row
-still derives with its destination (handler NULL); a container hop yields `path` unresolved. A
-parameter compiled without `-parameters` has `name: null` and skips the name rung.
-The bean table — `@Bean` methods by name and by erased return type, plus `@Qualifier`s — is one
-fold over the annotation index and `method_declarations`, built once per resolve.
+- `fed_by` — written by fluent when a chain captured `channel_link` (an adapter or flow feeding
+  the channel): `symbol` = the constructing method, `destination` = the captured address (through
+  the ladder; may be a `${…}` expression or unresolved), `protocol` = the catalog's;
+- `read_by` — written by `config_join` from the index it already builds (`_channels`): the
+  handler and the direction the annotation means; a channel name spelled `${…}` is first resolved
+  through `_agreed` (the fixture's `@ServiceActivator(inputChannel = "${probe.audit-channel}")`
+  now joins);
+- `sends_to` — no writer in this spec; the slot where `@MessagingGateway` and `channel.send(…)`
+  land later.
 
-**Cost per resolve:** one pass over the `@Bean` methods' call sites (already loaded), the
-annotation index (a `once` fold), the bean table (one dict), one `channel_destinations` insert.
+`resolve/channel_bindings.py` joins `fed_by ⋈ read_by` on `channel` and mints one endpoint row per
+pair: inbound, `protocol`/`destination` from the feeder, `handler` = the reader, `caller` = the
+feeder's method. A `fed_by` with no reader still has its adapter row (the adapter exists — the
+chain derived it with `handler` NULL); a `read_by` with no feeder keeps its `channel_destination`
+question — `config_join.gaps` asks only for those. Outbound handler beans (`@ServiceActivator` on
+the `@Bean` method that builds a `PubSubMessageHandler`) write a `fed_by`-shaped row with
+`direction: outbound` so the question is not asked, and derive their outbound row in the chain.
+
+### 3c. Rows
+
+Inbound: `protocol` from the catalog, `path` = destination, `handler` = the consumer (a lambda
+body — class-compiled lambdas already arrive as `lambda`; a bean's method; or the channel's
+reader), `caller` = the constructing/flow method, `evidence: compiler`, shapes NULL (a channel
+handler's signature is the framework's convention — `_derive_channels`' own statement). Outbound:
+`path` = topic / `exchange/routingKey`, `caller` = the method, `handler` NULL. **Destinations go
+through the field ladder** (`field_sources` on each catalog as `spring-resttemplate.yml`): a
+literal; a `@Value("${…}")` field/parameter or properties getter → the `${…}` expression,
+substituted per environment by `resolved_peers`; a vararg `array` → one row per element; anything
+else → `path` unresolved. A declared registration always derives a row.
 
 ---
 
-## 4. Entry shape 1 — the bean-wired adapter
-
-Inside one `@Bean` method, rooted at the construction of a catalog-declared type.
+## 4. Entry shape 1 — the bean-wired registration
 
 ```yaml
-# spring-integration-pubsub.yml — style: bean_wiring, protocol: pubsub
-adapters:
-  inbound:
-    - type: com.google.cloud.spring.pubsub.integration.inbound.PubSubInboundChannelAdapter
-      destination_arg: 1                                   # (PubSubSubscriberOperations, String) — F10
-  outbound:
-    - type: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler
-      destination_arg: 1                                   # (PubSubPublisherOperations, String)
-      destination_setters: [setTopic]                      # setTopic(String) overrides; the two *Expression setters → unresolved
-channel_links:                                              # MessageProducerSupport, core 6.2.4 (F10)
-  - { method: setOutputChannelName, arg: 0, kind: name }
-  - { method: setOutputChannel,     arg: 0, kind: bean }
-field_sources:
-  value_annotation: org.springframework.beans.factory.annotation.Value
-  properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
-  prefix_from: prefix
-  getter_prefixes: [get, is]
+# spring-integration-pubsub.yml — style: fluent, protocol: pubsub, direction: inbound
+matches:
+  roots:
+    - { new: com.google.cloud.spring.pubsub.integration.inbound.PubSubInboundChannelAdapter,   # (PubSubSubscriberOperations, String) — F10
+        captures: { channel: arg1 } }
+    - { new: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,         # (PubSubPublisherOperations, String)
+        captures: { channel: arg1 }, direction: outbound,
+        method_annotation: { annotation: org.springframework.integration.annotation.ServiceActivator, arg: inputChannel, into: channel_link } }
+  steps:
+    - { method: setOutputChannelName, captures: { channel_link: arg0 } }                       # MessageProducerSupport — F10
+    - { method: setOutputChannel,     captures: { channel_link: { bean_via: arg0 } } }
+    - { method: setTopic,             captures: { channel: arg0 } }                            # last wins — Spring setter semantics
+    - { method: setTopicExpression,       poisons: [channel] }                                  # a function is not a literal
+    - { method: setTopicExpressionString, poisons: [channel] }
+  field_sources: { value_annotation: org.springframework.beans.factory.annotation.Value,
+                   properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties,
+                   prefix_from: prefix, getter_prefixes: [get, is] }
 ```
 
-**Inbound.** An `<init>` site of an `adapters.inbound` type → destination = `arguments[destination_arg]`
-through the ladder. Every later site in the method whose receiver is that value is matched against
-`channel_links`: `kind: name` reads a string literal (else the link is unresolved); `kind: bean`
-resolves the argument by §3 (a `@Bean` method call in the class, or an injected parameter). The
-channel name joins `_channels` → one inbound row per handler on that channel; the pair goes into
-`channel_destinations`. No link, or an unresolved one → one row with the destination and handler
-NULL; no question is answered.
+- **`new:` root** — the chain starts at an `<init>` site of the type; `arg0…` are the
+  constructor's arguments (the receiver slot is not an argument). The chain is the value's later
+  calls (`result → receiver`, as today). A root may carry `direction:` to override the catalog's
+  for that registration (the outbound handler in an inbound catalog).
+- **`channel_link: arg0`** — a string literal is the channel name; **`{ bean_via: arg0 }`** — the
+  argument is a bean reference (a `@Bean` method call in the class, or an injected parameter) →
+  `beans.py` → the channel's bean name. Unresolved → the row derives with `handler` NULL, no
+  `fed_by` written (a channel we cannot name is not a channel we can bind).
+- **`method_annotation`** — on a root: the constructing method's own annotation supplies a
+  capture (`@ServiceActivator(inputChannel)` → `channel_link`, direction outbound).
+- **`poisons: [field]`** on a step — the capture is marked unreadable from here on; for
+  `channel` the row is unresolved on `path`.
 
-**Outbound.** An `<init>` of an `adapters.outbound` type inside a `@Bean` method that itself
-carries `@ServiceActivator(inputChannel = "x")` (read from the annotation index): destination
-from `destination_arg`, overridden by the LAST `destination_setters` call on the same value
-(Spring setter semantics); the row is outbound with `caller` = the `@Bean` method; `x` is recorded
-outbound in `channel_destinations`. Who sends to `x` is the trace layer's question.
-
-**The container hop (AMQP).**
+The container hop (AMQP), same words:
 
 ```yaml
-# spring-integration-amqp.yml — protocol: amqp
-adapters:
-  inbound:
-    - type: org.springframework.integration.amqp.inbound.AmqpInboundChannelAdapter
-      destination_via: { arg: 0, setters: [setQueueNames, addQueueNames, setQueues] }   # F5
-  outbound:
-    - type: org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint
-      destination_setters: [setExchangeName, setRoutingKey]          # composed `exchange/routingKey` — F4
-      destination_join: "/"
-containers:
-  - org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer
-  - org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer
+# spring-integration-amqp.yml — style: fluent, protocol: amqp, direction: inbound
+matches:
+  roots:
+    - { new: org.springframework.integration.amqp.inbound.AmqpInboundChannelAdapter,
+        captures: { channel: { bean_via: arg0 } } }                        # the container BEAN's own chain supplies `channel`
+    - { new: org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint, direction: outbound,
+        captures: {}, compose: { channel: [exchange, routing_key], join: "/" },
+        method_annotation: { annotation: org.springframework.integration.annotation.ServiceActivator, arg: inputChannel, into: channel_link } }
+  beans:                                                                    # chains `bean_via` may fold from — rooted at THEIR constructors
+    - { new: org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer, captures: {} }
+    - { new: org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer, captures: {} }
+  steps:
+    - { method: setQueueNames, captures: { channel: arg0 } }                # String… → one row per element (9.15 arrays)
+    - { method: addQueueNames, collects: { channel: arg0 } }
+    - { method: setQueues,     captures: { channel: { channel_via: [{ owner: org.springframework.amqp.core.Queue, method: <init>, arg: 0 }] } } }
+    - { method: setExchangeName, captures: { exchange: arg0 } }
+    - { method: setRoutingKey,   captures: { routing_key: arg0 } }
+    - { method: setOutputChannelName, captures: { channel_link: arg0 } }
+    - { method: setOutputChannel,     captures: { channel_link: { bean_via: arg0 } } }
 ```
 
-`destination_via` resolves `arguments[arg]` as a bean (§3), finds that bean's `@Bean` method,
-and in it the `<init>` of a `containers` type plus the `setters` calls on that value:
-`setQueueNames`/`addQueueNames(String…)` → one row per element; `setQueues(Queue…)` → each
-element's producing `new Queue("name")` (`org.springframework.amqp.core.Queue(String…)`) or a
-`@Bean` `Queue` method resolved by §3, else unresolved. One hop only. Outbound composition:
-`destination_setters` in the declared order joined by `destination_join`; a half whose setter is
-absent is filled by the framework from the `RabbitTemplate` bean's own defaults
-(`RabbitTemplate.setExchange`/`setRoutingKey`), which this walk does not read → `path` unresolved
-(A3). Both halves set → `exchange/routingKey`, the form `spring-rabbit-template.yml` publishes.
+`bean_via` on a `captures.channel` value means: resolve the argument as a bean; find that bean's
+`@Bean` method; walk ITS chain from the matching `beans:` root and fold the captures it produced
+into this chain (one hop; a container built in a third bean is `Unresolved`). `compose:` builds
+one field from two captured halves in order; a half never captured leaves `channel` unresolved
+(§0b A3 — the framework fills it from the `RabbitTemplate`'s defaults, which the walk does not
+read). `channel_via` on the `Queue` constructor is the existing word (`TopicName.of(p, t)` uses it).
 
-**Boundaries stated:** an adapter built outside a `@Bean` method or through a factory method; a
-container configured in a third bean; `setOutputChannel(new DirectChannel())` (anonymous — the
-destination row derives, no handler); XML beans; `setTopicExpression*`.
+**Boundaries stated:** a registration built outside a `@Bean` method or through a factory method;
+a link set in a different method than the construction (`@PostConstruct`, a second `@Bean` taking
+the adapter); `setOutputChannel(new DirectChannel())` (anonymous — the destination row derives, no
+`fed_by`); XML beans.
 
 ---
 
 ## 5. Entry shape 2 — the DSL flow
 
-One receiver chain inside a `@Bean` method returning `IntegrationFlow`:
-`IntegrationFlow.from(<source>) … .handle(<handler>) … .get()` (F1: only `IntegrationFlow.from`
-exists at 6.2.4). Rooted at `from`, walked forward along `result → receiver`; `from`'s and
-`handle`'s arguments are chains of their own, joined as `terminal_via_argument` joins the SQS
-request builder to its send.
-
 ```yaml
-# spring-integration-kafka.yml — protocol: kafka
-flows:
-  sources:                                     # measured F2; every overload declared (D02 slice rule)
+# spring-integration-kafka.yml — style: fluent, protocol: kafka, direction: inbound
+matches:
+  roots:                                          # the SOURCE spec chains — every overload declared (F2, D02 slice rule)
     - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
-        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;[Ljava/lang/String;)…", destination_arg: 1 }
-    - { …, descriptor: "(…ConsumerFactory;…ListenerMode;[Ljava/lang/String;)…", destination_arg: 2 }
-    - { …, descriptor: "(…ConsumerFactory;…ContainerProperties;)…", destination_via_properties: 1 }   # `new ContainerProperties(String…)` one hop
-    - { …, descriptor: "(…ConsumerFactory;…ContainerProperties;…ListenerMode;)…", destination_via_properties: 1 }
-    - { …, descriptor: "(…ConsumerFactory;Ljava/util/regex/Pattern;)…", unresolved: pattern }          # a Pattern is not a topic name
-    - { …, descriptor: "(…ConsumerFactory;…ListenerMode;Ljava/util/regex/Pattern;)…", unresolved: pattern }
-    - { …, descriptor: "(…ConsumerFactory;[…TopicPartitionOffset;)…", unresolved: partitions }
-    - { …, descriptor: "(…ConsumerFactory;…ListenerMode;[…TopicPartitionOffset;)…", unresolved: partitions }
-    - { …, descriptor: "(…AbstractMessageListenerContainer;)…", unresolved: container }                # two hops — stated
-    - { …, descriptor: "(…AbstractMessageListenerContainer;…ListenerMode;)…", unresolved: container }
-    - { owner: …Kafka, method: inboundChannelAdapter, descriptor: "(…ConsumerFactory;…ConsumerProperties;)…", destination_via_properties: 1 }   # polled; + its 3 siblings
-  sinks:
-    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: outboundChannelAdapter, destination_setters: [topic] }   # `.topic(String)`; `.topic(Function)` → unresolved
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;[Ljava/lang/String;)…", captures: { channel: arg1 } }
+    - { …, descriptor: "(…ConsumerFactory;…ListenerMode;[Ljava/lang/String;)…", captures: { channel: arg2 } }
+    - { …, descriptor: "(…ConsumerFactory;…ContainerProperties;)…",
+        captures: { channel: { channel_via: [{ owner: org.springframework.kafka.listener.ContainerProperties, method: <init>, descriptor: "([Ljava/lang/String;)V", arg: 0 }] } } }
+    - { …, descriptor: "(…ConsumerFactory;Ljava/util/regex/Pattern;)…", captures: { channel: unresolved } }          # a Pattern is not a topic
+    - …  # the TopicPartitionOffset[], container and ListenerMode twins likewise (ten in all)
+    - { owner: …Kafka, method: inboundChannelAdapter, descriptor: "(…ConsumerFactory;…ConsumerProperties;)…",
+        captures: { channel: { channel_via: [{ owner: org.springframework.kafka.listener.ConsumerProperties, method: <init>, descriptor: "([Ljava/lang/String;)V", arg: 0 }] } } }   # polled; + 3 siblings
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from, descriptor: "(Ljava/lang/String;)…",
+        captures: { channel_link: arg0 }, direction: outbound }            # an OUTBOUND flow reads a channel …
+    - { owner: …IntegrationFlow, method: from, descriptor: "(Lorg/springframework/messaging/MessageChannel;)…",
+        captures: { channel_link: { bean_via: arg0 } }, direction: outbound }
+  terminal:
+    - { method: build, continue_via_argument: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from } }   # spec → from(spec) → the flow chain continues
+  sinks:                                          # `handle(<sink spec>)` — the spec chain's own captures
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: outboundChannelAdapter, captures: {} }
+    - { method: topic, captures: { channel: arg0 } }                       # `.topic(Function)` → poisons
 ```
 
-The AMQP twin: `Amqp.inboundAdapter(ConnectionFactory, String…)` `destination_arg: 1`;
-`(ConnectionFactory, Queue…)` elements as §4; `(SimpleMessageListenerContainer)` /
-`(DirectMessageListenerContainer)` through `destination_via`; `Amqp.outboundAdapter(AmqpTemplate)`
-with `destination_setters: [exchangeName, routingKey]`. Pub/Sub has no DSL factory:
-`from(<bean reference>)` where the reference resolves (§3) to a `@Bean` method whose §4 walk gives
-the destination.
+- **`continue_via_argument`** — the spec chain reaches `IntegrationFlow.from(spec)`: instead of
+  ending there (`terminal_via_argument`), the walk continues along `from(…)`'s own result chain with
+  the same captures. (A source spec is consumed by `from` directly, without `build()` — the
+  terminal is the `from` call itself, so the entry is `{ via_argument_of: { owner: IntegrationFlow,
+  method: from }, continue: true }`; the plan spells one form.)
+- **Steps** — declared once on `spring-integration.yml` under `flows.steps`, imported by the three
+  broker catalogs (the flow definition is core's — F3, all 35):
 
-**Steps — declared once on `spring-integration.yml`** (`BaseIntegrationFlowDefinition`, core
-6.2.4, all 35 — F3):
-
-| Kind | Members (all 35 — F3) | Effect |
+| Kind | Members | Effect |
 |---|---|---|
-| `pass_through` | `aggregate barrier bridge claimCheckIn claimCheckOut convert delay enrich enrichHeaders filter fluxTransform headerFilter intercept log resequence split splitWith transform transformWith wireTap`, `fixedSubscriberChannel()` (no-arg) | none — the message still reaches what follows |
-| `channel` | `channel(String)`, `channel(MessageChannel)`, `channel(MessageChannelSpec)`, `fixedSubscriberChannel(String)` | the source's destination is joined to that channel (§3) — and the walk CONTINUES: a later `handle` is a handler too (A4) |
-| `handler` | `handle(GenericHandler)`, `handle(Class, GenericHandler)`, `handle(MessageHandler)`, `handle(Object, String)`, `handle(MessageHandlerSpec)`, `handleReactive` | the row's handler: the lambda body, the bean's method, or the sink spec (outbound) |
-| `discard` | `nullChannel` | the message is dropped: handler NULL is the TRUE answer, the row is resolved |
-| `divert` | `route routeByException routeToRecipients gateway scatterGather publishSubscribeChannel controlBus trigger to` | the message may not reach what follows, or goes to a flow this walk does not enter: handler **unresolved**, destination row kept (A5) |
+| `pass_through` | `aggregate barrier bridge claimCheckIn claimCheckOut convert delay enrich enrichHeaders filter fluxTransform headerFilter intercept log resequence split splitWith transform transformWith wireTap`, `fixedSubscriberChannel()` (no-arg) | no captures |
+| `channel_link` | `channel(String)`, `channel(MessageChannel)` (`bean_via`), `channel(MessageChannelSpec)` (its `id`), `fixedSubscriberChannel(String)` | captures `channel_link`; **the walk continues** (§0b A4) |
+| `handler` | `handle(GenericHandler)`, `handle(Class, GenericHandler)`, `handle(MessageHandler)`, `handle(Object, String)`, `handleReactive` | captures `handler` from the lambda argument (its body symbol) or the bean + method name; `handle(MessageHandlerSpec)` → the `sinks` chain's captures fold in (an OUTBOUND row) |
+| `discard` | `nullChannel` | `handler` NULL is the TRUE answer; the row is resolved |
+| `divert` | `route routeByException routeToRecipients gateway scatterGather publishSubscribeChannel controlBus trigger to` | `poisons: [handler]` — the message may leave the linear flow (§0b A5) |
 
-A member not in the table (a future minor's addition) is `divert`. The flow's `get()` and the
-`IntegrationFlowBuilder` return are the chain's end. CP-27 records, for each `divert` member, the
-handler class it constructs (the justification that the message leaves the linear flow).
+An undeclared member is `divert`. `get()` and the builder return end the chain. A flow whose source
+is a channel (`from(String)`) and whose handler is a `sinks` spec derives the **outbound** row
+(`caller` = the flow method) and a `fed_by` row with `direction: outbound`; a channel-sourced flow
+with an inline handler is a channel consumer, not a wire — it writes `read_by` (handler = the
+lambda body) so the inbound adapter feeding that channel gains it as a handler through the join.
 
-**Rows.** Inbound: `path` = the source's destination, `handler` = the first `handler` step reached
-without a `divert`, `caller` = the flow's `@Bean` method. Outbound: a flow whose source is
-`from(String)` / `from(MessageChannel)` and whose handler is a `sinks` spec → `path` = the
-setters' value, `caller` = the flow method, channel recorded outbound. A flow from a channel
-whose handler is inline is a channel *consumer*, not a wire: no row, and its channel joins the
-inbound adapter that feeds it (the composition case resolves through the channel join).
+The AMQP DSL twin: `Amqp.inboundAdapter(ConnectionFactory, String…)` `captures: { channel: arg1 }`;
+`(ConnectionFactory, Queue…)` through the `Queue` `channel_via`; `(SimpleMessageListenerContainer)`
+/ `(DirectMessageListenerContainer)` through `bean_via`; `Amqp.outboundAdapter(AmqpTemplate)` as a
+sink with `exchangeName`/`routingKey` steps and `compose`. Pub/Sub: `from(<bean>)` resolves through
+`bean_via` to the §4 root's captures.
 
-**Boundaries stated:** the lambda form (`return f -> f.handle(…)`, implicit `<beanName>.input`);
-`from(Supplier)`/`from(MessageSource)` generic sources; two-hop container sources; `Pattern` and
-partition-offset subscriptions; `handle(Object bean, String method)` where the bean is not a
-`@Bean` of the module.
+**Boundaries stated:** the lambda flow form (`return f -> f.handle(…)`; implicit `<beanName>.input`);
+`from(Supplier)`/`from(MessageSource)`; two-hop container sources; `Pattern`/partition
+subscriptions; `configureContainer(c -> c.addQueueNames(…))` inside a source spec (a MISS — fewer
+queues, never a wrong one); `handle(Object bean, String method)` where the bean is not the
+module's.
 
 ---
 
-## 6. Catalogs and the engine home
+## 6. Catalogs and validation
 
-`engines/bean_wiring.py` — one engine, `style: bean_wiring`; §4 and §5 are two entry points into
-one join. It imports `fluent`'s chain helpers and the field ladder; it reads `_channels` through
-a small public function exported from `config_join.py` (`channel_index(workspace, catalog)`),
-and `config_join.gaps` reads `channel_destinations`. Catalog keys — all optional, validated
-with `CatalogError` naming the file: `adapters.{inbound,outbound}[]` (`type`, one of
-`destination_arg` | `destination_via{arg, setters}`, optional `destination_setters`,
-`destination_join`), `containers[]`, `channel_links[]` (`method`, `arg`, `kind ∈ {name, bean}`),
-`flows.sources[]` (`owner`, `method`, `descriptor`, one of `destination_arg` |
-`destination_via_properties` | `unresolved: <reason>`), `flows.sinks[]`, `field_sources` (the
-ladder's own validator), and on `spring-integration.yml` `flows.steps.{pass_through, channel,
-handler, divert}` — the union must equal the measured member list (a `slice` check like the
-combinator's: every declared member classified).
-
-Detection: `spring-integration-pubsub.yml` on `com.google.cloud:spring-cloud-gcp-pubsub`;
-`spring-integration-amqp.yml` on `org.springframework.integration:spring-integration-amqp`;
-`spring-integration-kafka.yml` on `org.springframework.integration:spring-integration-kafka`;
-each `measured:` at the versions §9 records. `spring-integration.yml` keeps `config_join`.
+Three catalogs of `style: fluent`: `spring-integration-pubsub.yml` (detect
+`com.google.cloud:spring-cloud-gcp-pubsub`), `spring-integration-amqp.yml`
+(`org.springframework.integration:spring-integration-amqp`), `spring-integration-kafka.yml`
+(`org.springframework.integration:spring-integration-kafka`), each `measured:` at §9's versions.
+`spring-integration.yml` (still `config_join`) gains `flows.steps` — the shared step table — which
+the three import by reference (`steps_from: spring-integration`; the loader already lets catalogs
+share a shape model by name — the same mechanism). New fluent keys, all optional and validated with
+`CatalogError` naming the file: root `new:` (a type; exclusive with `owner`/`method`), root
+`direction:`, root `method_annotation: {annotation, arg, into}`, capture values `{ bean_via: argN }`
+and `unresolved`, capture fields `channel_link` and `handler`, step `poisons: [fields]`,
+`compose: { field: [halves], join }`, `beans:` (roots reachable only through `bean_via`),
+`continue_via_argument`/`via_argument_of … continue: true`, `sinks:`. A `direction: inbound`
+fluent catalog writes `handler` on its rows; today's outbound catalogs are untouched (byte-identical
+goldens are the proof — §10).
 
 ---
 
@@ -342,14 +360,14 @@ GET/HEAD/OPTIONS only — a fan-out would publish five wrong rows per static rou
 
 ### 7b. `gateway-properties-routes`
 
-Routes declared in configuration are `config_join`'s territory. A new address form:
+Routes declared in configuration are `config_join`'s territory. A new, general address form — `indexed:`, "items under a list prefix, each with fields" — of which Gateway's route list is the first instance; the shortcut grammar (`Name=args`) is catalog data:
 
 ```yaml
 # spring-cloud-gateway-properties.yml — style: config_join, protocol: http (A6: one style per
 # catalog; `config_join` carries `direction` per rule, so this one file emits the served path
 # rows AND the `uri` peer rows, as the DSL pair `spring-cloud-gateway.yml` +
 # `spring-cloud-gateway-outbound.yml` does between them)
-indexed_routes:
+indexed:
   prefix: spring.cloud.gateway.server.webflux.routes        # F6; a second prefix only if CP-29 shows 5.0.0 binds it
   predicates: predicates                                    # `[N].predicates[M]`
   uri: uri
@@ -398,9 +416,10 @@ environments is one `environment_divergence` question, no row — the existing `
 
 ## 10. Nothing existing moves — the proof
 
-1. Every new key is optional; a catalog that declares none derives as before. The new engine
-   runs only for catalogs of its style; `config_join` changes only in `gaps` (skip when
-   `channel_destinations` has the channel) and the `indexed_routes` form.
+1. Every new fluent key is optional; the thirteen shipped fluent catalogs declare none and their
+   goldens stay byte-identical (the plan lands the keys before any catalog uses them and runs the
+   gate). `config_join` changes only in `gaps` (ask only for a `read_by` with no `fed_by`) and the
+   `indexed:` form.
 2. The only intended change to an existing pin: the Spring Integration probe fixture's
    `channel_destination` questions become rows (asserted gone where rows appear); the router
    fixtures' `accept(...) { }` unresolved row becomes a resolved one.
@@ -423,10 +442,11 @@ environments is one `environment_divergence` question, no row — the existing `
   (one resolved row, `method` NULL, `/**`, `produces: application/json`).
 - **`orders-gateway`**: `src/main/resources/application.yml` with two routes — shortcut form
   (`Path=/cfg/orders/**`, `Method=GET,POST`, `Header=X-Api,v2`) and map form — and a `lb://orders` uri.
-- **Unit tests** on synthetic facts: each bean rung and each ambiguity; the ladder on a destination
-  (literal, `@Value`, properties getter, unread); vararg elements; the container hop; every step
-  kind incl. unknown → divert; sink setters last-wins and composition; `channel_destinations`
-  suppressing a question; `indexed_routes` shortcut and map parsing, unknown predicate → unresolved,
+- **Unit tests** on synthetic facts: each bean rung and each ambiguity (channel vs container
+  kinds); the ladder on a destination (literal, `@Value`, properties getter, unread); vararg
+  elements; the container hop (`bean_via`); `new:` roots; `continue_via_argument`; every step
+  kind incl. unknown → divert; sink setters last-wins and `compose`; `channel_bindings` join
+  (fed ⋈ read; unfed → question; unread → adapter row alone); `indexed:` shortcut and map parsing, unknown predicate → unresolved,
   environment disagreement → no row.
 - **e2e**: rows per fixture; questions gone; `endpoint_metadata` rows for the Gateway properties
   `Header=`; the register's pins for the closed items.
@@ -442,12 +462,12 @@ environments is one `environment_divergence` question, no row — the existing `
 | §5.8 | new framework line "Spring Integration Kafka (DSL + adapters)" ✅ |
 | §5.9 | AMQP adapter line ✅ |
 | `dsl-media-route`, `gateway-properties-routes` | closed; REST inbound holds `conditional-controllers` only; Gateway rollup ✅ |
-| D02 | `bean_wiring` style and its keys; `indexed_routes`; the media-overload verb rules |
-| D01 | `channel_destinations` (derived, temp) |
+| D02 | fluent's new keys (`new:` roots, `bean_via`, `channel_link`, `handler`, `poisons`, `compose`, `beans:`, `continue_via_argument`, `sinks:`, `method_annotation`); `config_join`'s `indexed:`; the media-overload verb rules |
+| D01 | `channel_bindings` (derived, temp; roles `fed_by`/`read_by`/`sends_to`) |
 
 ## 13. Sizing and order
 
-1. §3 bean table + `channel_destinations` + `gaps` skip (inert until an engine writes).
+1. `beans.py`; `channel_bindings` + `read_by` from `config_join` + the join pass + `gaps` (inert until fluent writes `fed_by`); fluent's new keys with unit tests and the byte-identical proof.
 2. §4 Pub/Sub inbound → outbound → AMQP container hop (CP-27/28 with it).
 3. §5 flows: Kafka sources/sinks, steps table, AMQP DSL, `from(bean)`.
 4. §7a, §7b (CP-29).
