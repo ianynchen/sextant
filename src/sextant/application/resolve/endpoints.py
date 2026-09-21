@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
+from sextant.application.resolve.channel_bindings import mint_channel_rows
 from sextant.application.resolve.dependencies import _declared_coordinates, unmet_dependency
 from sextant.application.resolve.engines import (
     annotation_driven,
@@ -68,6 +69,19 @@ _DERIVES_ROWS: dict[str, Callable[[Catalog], bool]] = {
     "config_join": config_join.derives_rows,
 }
 
+# The one exception to running last, ahead of every other rank (spec
+# 2026-09-21 §3a): a catalog whose only effect on the loop is the `read_by`
+# end of the channel edge — the shipped channel index — runs FIRST, because
+# an engine in this same loop reads those names to resolve a channel
+# reference by parameter name (the fluent engine's bean fold), and a name
+# written after that engine ran resolves nothing. Such a catalog mints no
+# row and stamps nothing, so nothing that made the style run last applies to
+# it. The predicate lives on the engine, as `_DERIVES_ROWS`' does: which
+# blocks mean "only the edge" is that style's own vocabulary.
+_WRITES_ONLY_THE_CHANNEL_EDGE: dict[str, Callable[[Catalog], bool]] = {
+    "config_join": config_join.writes_only_the_channel_edge,
+}
+
 # The one style whose derivation runs once per resolve over every catalog of
 # the style, with a per-catalog half at each catalog's turn (P-4). Named here
 # because `derive_endpoints` calls the style's `stage` before the turns begin;
@@ -108,6 +122,13 @@ def derive_endpoints(
     # the previous run's rows. A TEMP table of this connection, so it lives exactly as
     # long as the resolve that reads it (`record_request_requirements`).
     workspace.derive("route_requirements_reset")
+    # The channel edge (spec 2026-09-21 §3b), re-created here for the same reason again:
+    # `config_join` writes its `read_by` end, and an engine that reads a channel's
+    # destination (the fluent engine, from the spec's §4) writes its `fed_by` end, so
+    # neither may own the reset, and a module naming no channel leaves an empty table.
+    # Read by `mint_channel_rows` below and by `config_join.gaps` from the
+    # `service_identity` seam, both on this connection.
+    workspace.derive("channel_bindings_reset")
     # D02 §3: the merge runs once, after every engine, so this ordering does
     # not affect which rows it finds — it exists for determinism only (NFR-1):
     # inbound before outbound, filename breaking the tie within a direction,
@@ -131,6 +152,7 @@ def derive_endpoints(
     ordered = sorted(
         engines,
         key=lambda pair: (
+            not _writes_only_the_channel_edge(pair[0]),
             pair[0].style in _RUNS_LAST,
             _derives_rows(pair[0]),
             pair[0].direction != "inbound",
@@ -189,6 +211,13 @@ def derive_endpoints(
     )
     for catalog, engine in running:
         engine(workspace, catalog)
+    # After every engine, because both ends of a channel edge must have been written
+    # before the join can find a pair (spec 2026-09-21 §3b); before the drop below, so a
+    # sibling module's channel rows are dropped like any other; and inside this call
+    # rather than a pipeline step of its own, so the row set every later pass reads —
+    # `apply_protocol_hints` first among them — is complete when `derive_endpoints`
+    # returns, as it always was.
+    mint_channel_rows(workspace, catalogs)
     # Once per resolve, after every catalog. F4 §5.2 (W24): a sibling module's own
     # rows are this module's to drop, never to publish.
     #
@@ -227,6 +256,13 @@ def _superseded_by(workspace: Workspace, catalog: Catalog) -> str | None:
         if coordinate in declared:
             return coordinate
     return None
+
+
+def _writes_only_the_channel_edge(catalog: Catalog) -> bool:
+    """Whether `catalog` is the channel index alone (`_WRITES_ONLY_THE_CHANNEL_EDGE`),
+    and so runs before every engine that reads its names."""
+    predicate = _WRITES_ONLY_THE_CHANNEL_EDGE.get(catalog.style)
+    return predicate is not None and predicate(catalog)
 
 
 def _derives_rows(catalog: Catalog) -> int:

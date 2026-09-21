@@ -23,7 +23,10 @@ Three jobs, two of them here:
 
 * `address_from_config` derives endpoint rows — one per selected binding —
   through the standard `call_endpoints` insert-if-absent every other style
-  uses.
+  uses. `indexed` (spec 2026-09-21 §7b) is the address block's third form and
+  the first whose NAME is in configuration too: items under a list prefix,
+  each with fields, one of them a list of predicates read through a
+  catalog-named grammar — a route declared wholly in configuration.
 * `media_from_config` STAMPS `consumes`/`produces` onto rows other engines
   already minted, which is why this style runs LAST in the engine loop
   (`resolve/endpoints.py`, the `protocol_hint` ordering precedent, D02 §3):
@@ -37,6 +40,12 @@ hand-off an `annotation_value` catalog files for a name configuration never
 answered, and it rides the `service_identity` seam rather than `run` because
 the ledger is reset AFTER the engine loop (`resolve/pipeline.py`).
 
+The channel edge is data since spec 2026-09-21 §3b: `run` also writes one
+`read_by` row per indexed channel to `channel_bindings` (`_derive_channels`),
+so an engine that learns what FEEDS a channel can be joined to the handler
+reading it (`resolve/channel_bindings.py`), and `gaps` asks only about a
+channel no `fed_by` row names.
+
 Framework knowledge — which key template names a destination, which
 functional interface means which binding suffix and direction, which
 serializer class means which MIME type, which binder name means which
@@ -48,6 +57,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.config import _DEFAULT_PLACEHOLDERS
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -58,6 +68,25 @@ from sextant.domain.symbols import bare_descriptor, method_name
 
 _ADDRESS = "address_from_config"
 _MEDIA = "media_from_config"
+# The third address form (spec 2026-09-21 §7b): `{prefix, item}` — items are the
+# `<prefix>[N]` keys the config layer flattens a list to, and `item` says which fields
+# to read and how. Every word in it is catalog data: the predicate names, the field
+# order each one binds its positional arguments into, the positional-key prefix the
+# framework spells (`positional`), and which names narrow WHO is served and are passed
+# through. The engine knows one grammar, `shortcut` — `Name=a,b`, split on the first
+# `=`, tokenised on `,` — and two ways a predicate gathers its positional arguments.
+_INDEXED = "indexed"
+_SHORTCUT = "shortcut"
+_GATHER_LIST = "list"
+_GATHER_LIST_TAIL_FLAG = "list_tail_flag"
+_GATHERS = (_GATHER_LIST, _GATHER_LIST_TAIL_FLAG)
+# The four requirement kinds the stash's readers know (`request_requirements.py`,
+# the combinator's `_REQUIREMENT_KINDS`) — closed for the same reason `_FILLABLE` is.
+_REQUIREMENT_KINDS = ("header", "query", "cookie", "param")
+# The served any-path pattern a route naming no path serves (the DSL sibling's rule,
+# spec §7 case 3 as ruled for the combinator: a host-only route serves every path).
+_ANY_PATH = "/**"
+_ENVIRONMENT_DIVERGENCE = "environment_divergence"
 # The one placeholder a key template carries. A template names the binding
 # it is asking about; everything else in the key is literal.
 _BINDING = "{binding}"
@@ -115,6 +144,45 @@ _NO_KEY_TEMPLATE = (
     "key names this channel's destination"
 )
 _NO_AGREED_VALUE = "resolved_config carries no value every environment agrees on for `{key}`"
+# The two ends of the channel edge this engine touches (spec 2026-09-21 §3b): it WRITES
+# `read_by` — a handler whose annotation names a channel — and READS `fed_by` in `gaps`,
+# to ask only about a channel nothing fed. `sends_to` — a handler's output channel,
+# written by the fluent engine — is read by nothing here (`OI-107`).
+_READ_BY = "read_by"
+_FED_BY = "fed_by"
+
+
+def writes_only_the_channel_edge(catalog: Catalog) -> bool:
+    """Whether this catalog's whole effect on the engine loop is the `read_by`
+    end of the channel edge (spec 2026-09-21 §3b): an annotation-valued
+    address block with no `key` — so `_derive_channels` mints no row — and no
+    media block to stamp. Read by `resolve/endpoints.py`'s ordering, which
+    runs such a catalog FIRST.
+
+    The style runs last so that its rows meet the insert-if-absent guard after
+    every observing engine has written, and its stamps reach rows that already
+    exist; a catalog with neither has nothing to order after them (`derives_rows`
+    already says such a file "may sort anywhere"). It has one thing to order
+    BEFORE them: the names it writes are what a bean-resolving engine reads to
+    tell a channel a handler subscribes to from a parameter name that is
+    nothing (spec §3a's name rung, `fluent._READ_BY`), and that engine runs
+    in the same loop. `gaps` is unaffected: it runs from the `service_identity`
+    seam, after everything.
+
+    The shipped channel index (`spring-integration.yml`) is exactly this shape.
+    A channels catalog that ALSO declares a `key` keeps its last turn — its
+    rows must — and its names reach no engine that ran before it: stated here
+    as the boundary, with no shipped instance."""
+    address = catalog.matches.get(_ADDRESS)
+    if (
+        not isinstance(address, dict)
+        or "key" in address
+        or _MEDIA in catalog.matches
+        or _INDEXED in catalog.matches
+    ):
+        return False
+    binding = address.get("binding")
+    return isinstance(binding, dict) and binding.get("from") == _ANNOTATION_VALUE
 
 
 def derives_rows(catalog: Catalog) -> bool:
@@ -149,6 +217,9 @@ def derives_rows(catalog: Catalog) -> bool:
     `endpoints.py` asks this BEFORE any engine runs: a malformed block is
     refused by `run`'s own validation, with the message that names the field."""
     address = catalog.matches.get(_ADDRESS)
+    if isinstance(catalog.matches.get(_INDEXED), dict):
+        # The third form always mints rows: its items ARE the declarations.
+        return True
     return isinstance(address, dict) and "key" in address
 
 
@@ -167,6 +238,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             _derive_channels(workspace, catalog)
         else:
             _derive_bindings(workspace, catalog)
+    if _INDEXED in catalog.matches:
+        _derive_indexed(workspace, catalog)
     if _MEDIA in catalog.matches:
         _stamp_media(workspace, catalog)
 
@@ -717,6 +790,404 @@ def _row(
     }
 
 
+# --- job 1, the third address form: `indexed:` (spec 2026-09-21 §7b) ------
+
+
+class _Predicate:
+    """One predicate of an item, parsed and NOT yet interpreted: its name and its
+    arguments as the framework's own definition holds them (CP-29 row 3: a name and
+    a `Map<String, String>` of args, positional ones keyed `<positional>N`). `name` is
+    None for a spelling the framework itself refuses — a shortcut with no `=`."""
+
+    __slots__ = ("args", "name")
+
+    def __init__(self, name: str | None, args: dict[str, str]) -> None:
+        self.name = name
+        self.args = args
+
+
+class _Item:
+    """One `<prefix>[N]` item: the values every environment agreed on, by field; the
+    fields declared and resolved NOWHERE (a placeholder no environment answers —
+    `unread`, rendered unresolved); and the keys environments answer DIFFERENTLY
+    (`diverged` — no row, one question). Read once for `run` and `gaps` alike."""
+
+    __slots__ = ("diverged", "index", "unread", "values")
+
+    def __init__(self, index: int) -> None:
+        self.index = index
+        self.values: dict[str, str] = {}
+        self.unread: set[str] = set()
+        self.diverged: dict[str, dict[str, str | None]] = {}
+
+
+def _indexed_items(
+    config: dict[str, dict[str, str | None]], catalog: Catalog
+) -> tuple[str, list[_Item]]:
+    """Every item under the block's prefix, in index order, with only the fields the
+    block reads — the predicate list and the peer field. `id`, `order`, `metadata` and
+    `filters[…]` are not read: the served path is the predicate's, and a filter that
+    rewrites it changes the UPSTREAM path (spec §7b's stated boundary). Each read key
+    is settled across environments three ways — `_agreed`'s one answer, split (fix
+    round 1): one value everywhere is the value; a value in SOME environments, or two
+    values, is true divergence (`diverged` — `run` mints nothing for the item, `gaps`
+    files the question); declared and unresolved EVERYWHERE — `uri: ${ORDERS_URL}`
+    with no environment answering — is `unread`, and the field renders unresolved
+    while the item's other rows are minted."""
+    block = catalog.matches[_INDEXED]
+    prefix = str(block["prefix"]) + "["
+    predicates = str(block["item"]["predicates"]["field"]) + "["
+    peer = str(block["item"]["peer"]["field"])
+    items: dict[int, _Item] = {}
+    for key, per_environment in config.items():
+        if not key.startswith(prefix):
+            continue
+        close = key.find("].", len(prefix))
+        if close < 0 or not key[len(prefix) : close].isdigit():
+            continue
+        index = int(key[len(prefix) : close])
+        field = key[close + 2 :]
+        if not (field.startswith(predicates) or field == peer):
+            continue
+        item = items.setdefault(index, _Item(index))
+        distinct = set(per_environment.values())
+        if len(distinct) > 1:
+            item.diverged[key] = per_environment
+        elif distinct == {None}:
+            item.unread.add(field)
+        elif distinct:
+            item.values[field] = str(distinct.pop())
+    return str(block["prefix"]), [items[index] for index in sorted(items)]
+
+
+def _predicates_of(item: _Item, block: dict[str, Any]) -> list[_Predicate]:
+    """The item's predicate list, in `[M]` order, each in either spelling: a scalar at
+    `predicates[M]` is a shortcut string; `predicates[M].name` plus
+    `predicates[M].args.<k>` is the map form, its args taken as written."""
+    field = str(block["item"]["predicates"]["field"])
+    positional = str(block["item"]["predicates"]["positional"])
+    by_index: dict[int, _Predicate] = {}
+    for key, value in item.values.items():
+        if not key.startswith(field + "["):
+            continue
+        close = key.find("]", len(field) + 1)
+        index = int(key[len(field) + 1 : close])
+        rest = key[close + 1 :]
+        if rest == "":
+            by_index[index] = _shortcut(value, positional)
+        elif rest == ".name":
+            by_index.setdefault(index, _Predicate(None, {})).name = value
+        elif rest.startswith(".args."):
+            by_index.setdefault(index, _Predicate(None, {})).args[rest[len(".args.") :]] = value
+    return [by_index[index] for index in sorted(by_index)]
+
+
+def _shortcut(spelling: str, positional: str) -> _Predicate:
+    """The `shortcut` grammar (CP-29 row 3): the name is everything before the FIRST
+    `=` — none, and the framework refuses the definition, so the name is None here —
+    and each `,`-separated token after it is a positional argument, trimmed, empties
+    dropped, keyed `<positional>N` in order."""
+    at = spelling.find("=")
+    if at <= 0:
+        return _Predicate(None, {})
+    tokens = [token.strip() for token in spelling[at + 1 :].split(",")]
+    return _Predicate(
+        spelling[:at],
+        {f"{positional}{n}": token for n, token in enumerate(t for t in tokens if t)},
+    )
+
+
+def _fields_of(
+    predicate: _Predicate, rule: dict[str, Any], positional: str
+) -> dict[str, list[str]] | None:
+    """The predicate's arguments bound onto the rule's declared field order (CP-29 row
+    7), or None where they cannot be read as one binding. Under `gather: list` /
+    `list_tail_flag` the framework's normaliser reads `args.values()` and tests NO key
+    (`ShortcutType$2`/`$3.normalize`, CP-29 row 7) — so EVERY argument is collected:
+    the positional `<positional>K` by K, then the remaining keys in flattened order
+    (`k[N]` by N, then by name — `args.patterns: [/a/**, /b/**]` reaches here as
+    `patterns[0]`, `patterns[1]`; `args.pattern: /x/**` as one value under a key the
+    framework would not have tested either), into a list under field 0. A map-form
+    scalar is ONE value, never split on `,` (fix round 1: the split was unmeasured;
+    the binder wraps a scalar in a one-element list).
+
+    The tail flag is found by VALUE, not by position (fix round 2). The framework
+    hands the LAST value to the flag when it parses as a boolean, but `resolved_config`
+    carries no declaration order (`ORDER BY environment, key`; an OI for the docs
+    round), so which value the author wrote last is unknowable here — the documented
+    map form `{patterns: /foo/**, matchTrailingSlash: false}` sorts as `[false,
+    /foo/**]` by key. So: among the gathered values, the one that is literally
+    `true`/`false` (case-insensitive, as `Boolean.parseBoolean` reads it) is the flag
+    (field 1) wherever it sits, and the rest are the list. Two or more boolean
+    literals, or a boolean literal in a gather that has no tail flag, is a binding
+    this engine cannot settle — None, never a choice; so is a gather left with NO value
+    once the flag is taken (`Path=true`): the factory over an empty list matches
+    nothing, and the route is unreachable rather than served everywhere. Without
+    `gather` (`DEFAULT`)
+    positional K is field K and a named key binds to its own field."""
+    order = [str(name) for name in rule["args"]]
+    gather = rule.get("gather")
+    indexed = sorted(
+        (int(key[len(positional) :]), value)
+        for key, value in predicate.args.items()
+        if key.startswith(positional) and key[len(positional) :].isdigit()
+    )
+    values = [value for _, value in indexed]
+    fields: dict[str, list[str]] = {}
+    if gather in _GATHERS:
+        values.extend(
+            value
+            for _, value in sorted(
+                (_flattened_order(key), value)
+                for key, value in predicate.args.items()
+                if not (key.startswith(positional) and key[len(positional) :].isdigit())
+            )
+        )
+        flags = [value for value in values if value.lower() in ("true", "false")]
+        if len(flags) > 1 or (flags and gather != _GATHER_LIST_TAIL_FLAG):
+            return None
+        if flags:
+            fields[order[1]] = flags
+            values = [value for value in values if value.lower() not in ("true", "false")]
+        if not values:
+            # The predicate was declared and gathers nothing (`Path=true`, a flag and no
+            # pattern; fix round 3): the framework's factory over an empty list matches
+            # nothing, so the route is unreachable — unread, never the any-path row a
+            # route with NO such predicate serves.
+            return None
+        fields[order[0]] = values
+        return fields
+    for n, value in enumerate(values):
+        if n < len(order):
+            fields[order[n]] = [value]
+    for key, value in predicate.args.items():
+        if key in order:
+            fields[key] = [value]
+    return fields
+
+
+def _flattened_order(key: str) -> tuple[str, int]:
+    """`(base, N)` for a flattened list key `base[N]`, `(key, -1)` for a bare one —
+    the order the config layer wrote a list in (`ingress/read/yaml_config.py`)."""
+    if key.endswith("]") and "[" in key:
+        base, _, index = key[:-1].rpartition("[")
+        if index.isdigit():
+            return (base, int(index))
+    return (key, -1)
+
+
+def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
+    """One inbound row per (pattern × verb) and one outbound row per target, per item
+    no environment answers differently. The rows carry no handler and no caller — a
+    route declared in configuration dispatches to no method — so their identity is the
+    address alone, and their requirements join the stash by `None == None`
+    (`request_requirements._from_stash`). A predicate whose name the block does not
+    read — neither the path, the verbs, a requirement nor a pass-through — narrows the
+    served set in a way nothing here can read, and every row of that item says
+    `unresolved` with the address it did read (§8: unresolved is an answer, invention
+    is not); the framework's own refusal (a shortcut with no `=`) is the same answer;
+    a predicate resolved in no environment is unread — the item's INBOUND rows say
+    `unresolved` (the target is untouched: it was read), and where no pattern was read
+    at all the path is NULL rather than the any-path pattern (nothing here names an
+    address). A verb that is not one verb — a map-form scalar still carrying the
+    grammar's `,` — is unread the same way: `method` NULL, the inbound row
+    `unresolved` (the framework binds a method that matches nothing; publishing it as
+    a verb would be a phantom). The target is written VERBATIM with `peer` NULL
+    — a routing destination the framework resolves, kept whole (D02), exactly as the
+    DSL sibling publishes it — or NULL and `unresolved` where no environment resolved
+    it.
+
+    Two items collapsing to ONE address (fix round 1; spec 2026-09-19 §4d, the
+    combinator's `_shared` rule restated): two header-versioned routes on `/api/**`
+    are two ways the framework may dispatch one address, and a request satisfying
+    EITHER is served — so the row's requirements are those every alternative makes
+    (an intersection, in the first item's order), and any unresolved alternative
+    makes the row unresolved."""
+    block = catalog.matches[_INDEXED]
+    item_block = block["item"]
+    predicates_field = str(item_block["predicates"]["field"]) + "["
+    positional = str(item_block["predicates"]["positional"])
+    path_rule, method_rule = item_block["path"], item_block["method"]
+    requirement_rules: dict[str, dict[str, Any]] = item_block.get("requirements", {})
+    pass_through = {str(name) for name in item_block.get("pass_through", [])}
+    peer_field = str(item_block["peer"]["field"])
+    peer_direction = str(item_block["peer"].get("direction", catalog.direction))
+    inbound = str(Direction.INBOUND)
+    config = _config_values(workspace)
+    _, items = _indexed_items(config, catalog)
+    # Insertion-ordered by wire identity: a later item on an address already minted
+    # folds into the row rather than adding one or being dropped.
+    minted: dict[tuple[str, str | None, str | int], _Minted] = {}
+    for item in items:
+        if item.diverged:
+            continue
+        patterns: list[str | None] = []
+        verbs: list[str | None] = []
+        requirements: list[tuple[str, str, str | None]] = []
+        # `resolved` is the ITEM's: an unknown predicate name unsettles every row of it
+        # (spec §7b). `served` is the inbound rows' alone: a predicate or a verb nobody
+        # could read leaves the address in doubt and says nothing about the target.
+        resolved = True
+        served = not any(field.startswith(predicates_field) for field in item.unread)
+        for predicate in _predicates_of(item, block):
+            rule = (
+                path_rule
+                if predicate.name == path_rule["name"]
+                else method_rule
+                if predicate.name == method_rule["name"]
+                else requirement_rules.get(str(predicate.name))
+            )
+            if rule is None:
+                if predicate.name not in pass_through:
+                    resolved = False
+                continue
+            fields = _fields_of(predicate, rule, positional)
+            if fields is None:
+                # A binding the engine could not settle (two flag literals, a flag
+                # where none is declared): the address is in doubt, the target is not.
+                served = False
+            elif rule is path_rule:
+                patterns.extend(fields.get(str(path_rule["args"][0]), []))
+            elif rule is method_rule:
+                for spelled in fields.get(str(method_rule["args"][0]), []):
+                    if "," in spelled:
+                        served = False
+                    elif spelled not in verbs:
+                        verbs.append(spelled)
+            else:
+                name = fields.get(str(rule["args"][0]))
+                value = fields.get(str(rule["args"][1])) if len(rule["args"]) > 1 else None
+                if name:
+                    requirements.append((str(rule["kind"]), name[0], value[0] if value else None))
+                else:
+                    resolved = False
+        if not patterns:
+            patterns = [_ANY_PATH] if served else [None]
+        for pattern in patterns:
+            path = None if pattern is None else _addressed(pattern, catalog.protocol, inbound)
+            for verb in verbs or [None]:
+                _mint(minted, catalog, inbound, verb, path, resolved and served, requirements)
+        if peer_field in item.unread:
+            _mint(minted, catalog, peer_direction, None, None, False, [])
+        target = item.values.get(peer_field)
+        if target is not None:
+            destination = _addressed(target, catalog.protocol, peer_direction)
+            _mint(minted, catalog, peer_direction, None, destination, resolved, [])
+    rows = [each.row for each in minted.values()]
+    stash = [
+        {
+            "caller": None,
+            "handler": None,
+            "method": each.row["method"],
+            "path": each.row["path"],
+            "catalog_id": catalog.id,
+            "kind": kind,
+            "name": name,
+            "value": value,
+            "requirement": "required",
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+        for each in minted.values()
+        for kind, name, value in each.requirements
+    ]
+    workspace.derive("call_endpoints", rows=rows)
+    if stash:
+        workspace.derive("route_requirements_insert", rows=stash)
+
+
+class _Minted:
+    """One row on its way to `call_endpoints` and the requirements every item that
+    collapsed onto it makes."""
+
+    __slots__ = ("requirements", "row")
+
+    def __init__(
+        self, row: dict[str, Any], requirements: list[tuple[str, str, str | None]]
+    ) -> None:
+        self.row = row
+        self.requirements = requirements
+
+
+def _mint(
+    minted: dict[tuple[str, str | None, str | int], _Minted],
+    catalog: Catalog,
+    direction: str,
+    method: str | None,
+    path: str | None,
+    resolved: bool,
+    requirements: list[tuple[str, str, str | None]],
+) -> None:
+    """Adds one row, or folds it into the row of the same identity: the requirements
+    the two have in common, in the kept row's order (`combinator._shared`'s rule —
+    only a demand every alternative makes is one the framework enforces at that
+    address), and `unresolved` if either is. A row with no address never collapses
+    (SQL's `NULL = NULL` is unknown, and each is its own unread declaration) and
+    carries NO requirement (fix round 2): a demand on an address nobody read states
+    nothing useful, and the requirements pass keys the stash on `path`, so two such
+    rows' demands would both land on whichever one it read last."""
+    resolution = "resolved" if resolved else "unresolved"
+    # A NULL address is keyed by its own ordinal, so it never collapses.
+    identity = (direction, method, len(minted) if path is None else path)
+    kept = minted.get(identity)
+    if kept is None:
+        minted[identity] = _Minted(
+            _indexed_row(catalog, direction, method, path, resolution),
+            [] if path is None else list(requirements),
+        )
+        return
+    kept.requirements = [each for each in kept.requirements if each in requirements]
+    if not resolved:
+        kept.row["resolution"] = "unresolved"
+
+
+def _indexed_row(
+    catalog: Catalog, direction: str, method: str | None, path: str | None, resolution: str
+) -> dict[str, Any]:
+    """`_row`'s shape with the verb the item's method predicate named and the
+    resolution the item's predicates earned — the one place this style writes a
+    resolved address under `unresolved`, because the address WAS read and the
+    predicate beside it was not."""
+    return {
+        **_row(catalog, catalog.protocol, direction, path, None, None),
+        "method": method,
+        "resolution": resolution,
+    }
+
+
+def _indexed_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """One `environment_divergence` question per item some environment answers
+    differently (spec §7b: a route that differs between environments is one question,
+    no row) — keyed on the item's own prefix key, every disagreeing key and its
+    per-environment values as the candidates, the shape `derived_resource.gaps` files
+    for a base path."""
+    config = _config_values(workspace)
+    prefix, items = _indexed_items(config, catalog)
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        if not item.diverged:
+            continue
+        keys = sorted(item.diverged)
+        rows.append(
+            {
+                "protocol": catalog.protocol,
+                "method": None,
+                "path": f"{prefix}[{item.index}]",
+                "question": _ENVIRONMENT_DIVERGENCE,
+                "candidates": json.dumps(
+                    [
+                        {"key": key, "values": dict(sorted(item.diverged[key].items()))}
+                        for key in keys
+                    ],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence": f"{', '.join(f'`{key}`' for key in keys)} differs between environments",
+            }
+        )
+    return rows
+
+
 # --- job 1, the second binding source: `from: annotation_value` -----------
 
 
@@ -756,16 +1227,52 @@ def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
     framework passes a channel handler is its own convention, and no probe
     has measured one), so both shape columns and `handler_signature` stay
     NULL rather than claiming a contract nobody read.
+
+    **The same walk also writes the channel edge** (spec 2026-09-21 §3b): one
+    `read_by` row per indexed channel — the handler, the direction the
+    annotation's attribute means, and nothing about the wire, so `protocol` and
+    `destination` are NULL and a feeder's row supplies both when the join pass
+    finds one. Collected in this loop rather than in a second one so the
+    annotation facts, the method symbols and `resolved_config` are each read
+    once per run (GUIDELINES §8.7), and BEFORE the key-template gate below:
+    the edge is written whether or not the catalog declares a `key`, and that
+    is the point of the table — this catalog's destinations are not in
+    configuration at all, so the only thing that can answer for a channel is
+    an engine that read the adapter feeding it, and this edge is how that
+    answer reaches the handler.
+
+    The channel NAME on the edge is resolved on the way in, unlike the key
+    lookup one line down, because the two ask different things. The key
+    template asks configuration about the name AS WRITTEN — a project
+    convention keyed on the spelling. The edge must carry the name the
+    framework actually subscribes the handler to, which for a placeholder is
+    the configured VALUE, or the feeder that read that value never joins
+    (§0c B5).
     """
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
+    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
     rows: list[dict[str, Any]] = []
+    readers: list[dict[str, Any]] = []
     # Every row here has a known identity — a channel with no answered
     # destination derives nothing at all — so unlike `_derive_bindings` this
     # set can never hold the NULL-path rows that must not collapse.
     seen: set[tuple[str, str, str]] = set()
     for channel in _channels(workspace, catalog):
+        name, resolution = _channel_name(config, placeholders, channel.name)
+        readers.append(
+            {
+                "channel": name,
+                "role": _READ_BY,
+                "symbol": channel.handler,
+                "protocol": None,
+                "direction": channel.direction,
+                "destination": None,
+                "catalog_id": catalog.id,
+                "resolution": resolution,
+            }
+        )
         if template is None:
             continue
         protocol = _protocol_of(config, address, channel.name, catalog)
@@ -792,6 +1299,7 @@ def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
         seen.add(identity)
         rows.append(_row(catalog, protocol, channel.direction, destination, channel.handler, None))
     workspace.derive("call_endpoints", rows=rows)
+    workspace.derive("channel_bindings_insert", rows=readers)
 
 
 def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
@@ -846,6 +1354,55 @@ def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
     return sorted(found, key=lambda channel: (channel.name, channel.direction, channel.handler))
 
 
+def channel_index(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
+    """`_channels` under its public name (spec 2026-09-21 §3a): the channel names a
+    module's handlers subscribe to, which a bean-identity caller reads to resolve a
+    channel reference by name — the container auto-creates a channel under any
+    referenced name, so a name this index knows is a channel whether or not a method
+    declares it. Each entry carries `name`, `handler` and `direction`."""
+    return _channels(workspace, catalog)
+
+
+def _channel_name(
+    config: dict[str, dict[str, str | None]], placeholders: dict[str, str], raw: str
+) -> tuple[str, str]:
+    """The channel name the framework subscribes a handler to, and whether it was read:
+    `(value, "resolved")` for a name whose every placeholder configuration answered
+    with one value (`_agreed`), `(raw, "unresolved")` where any placeholder went
+    unanswered, and `(raw, "resolved")` for a name carrying no placeholder at all —
+    nothing was asked, so nothing went unanswered.
+
+    The delimiters are the config model's, read as `resolve/config.py` reads them and
+    defaulting as it defaults, never hard-coded here. An opening delimiter with no
+    closing one is text, as it is there. A `default_separator` inside a placeholder
+    splits the KEY off for the lookup and nothing more: a spelled default is not
+    substituted when configuration does not answer, so such a name stays `unresolved`
+    rather than resolving to a default this pass did not verify the framework applies
+    under every layering — the conservative answer, revisited if a fixture spells one."""
+    open_ = placeholders.get("open", "${")
+    close_ = placeholders.get("close", "}")
+    separator = placeholders.get("default_separator", ":")
+    parts: list[str] = []
+    index = 0
+    while True:
+        start = raw.find(open_, index)
+        if start == -1:
+            parts.append(raw[index:])
+            break
+        end = raw.find(close_, start + len(open_))
+        if end == -1:
+            parts.append(raw[index:])
+            break
+        key = raw[start + len(open_) : end].split(separator, 1)[0]
+        value = _agreed(config, key)
+        if value is None:
+            return raw, "unresolved"
+        parts.append(raw[index:start])
+        parts.append(value)
+        index = end + len(close_)
+    return "".join(parts), "resolved"
+
+
 def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     """The `channel_destination` open questions this catalog's unanswered
     channels earn — one per `(channel, handler)` whose destination
@@ -882,13 +1439,29 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     finds nothing here either.
     """
     _validate_matches(catalog)
+    # The third form's questions ride beside whichever address arm follows (spec
+    # 2026-09-21 §7b): one per item some environment answers differently.
+    indexed = _indexed_questions(workspace, catalog) if _INDEXED in catalog.matches else []
     if _ADDRESS not in catalog.matches:
-        return []
+        return indexed
     if _binding_source(catalog) != _ANNOTATION_VALUE:
-        return _bean_name_questions(workspace, catalog)
+        return indexed + _bean_name_questions(workspace, catalog)
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
+    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
+    # A channel some engine FED (spec 2026-09-21 §3b) has its destination answered — the
+    # join pass minted the row, or the feeder's own chain derived it — so the question
+    # would ask a human for what the document states. Any direction and any protocol:
+    # an outbound handler bean's edge says `outbound` and answers the channel just the
+    # same. An `unresolved` feeder counts too: it both mints an `unresolved` row and
+    # suppresses this question, so the human hand-off for that unread destination is the
+    # feeding engine's own row, not a `channel_destination` question here. Keyed on the
+    # name the framework uses, which for a placeholder-spelled channel is the configured
+    # value the feeder read, never the handler's spelling.
+    fed = {
+        str(row["channel"]) for row in workspace.query("channel_bindings") if row["role"] == _FED_BY
+    }
     rows: list[dict[str, Any]] = []
     # One question per channel-and-handler pair, not per direction: the
     # question is "what destination does this channel carry", and a method
@@ -898,6 +1471,9 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     for channel in _channels(workspace, catalog):
         key = None if template is None else str(template).replace(_BINDING, channel.name)
         if key is not None and _agreed(config, key) is not None:
+            continue
+        name, resolution = _channel_name(config, placeholders, channel.name)
+        if resolution == "resolved" and name in fed:
             continue
         if (channel.name, channel.handler) in seen:
             continue
@@ -922,7 +1498,7 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
                 "evidence": _NO_KEY_TEMPLATE if key is None else _NO_AGREED_VALUE.format(key=key),
             }
         )
-    return rows
+    return indexed + rows
 
 
 def _bean_name_questions(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
@@ -1115,16 +1691,96 @@ def _validate_matches(catalog: Catalog) -> None:
     below reaches either a derived row's identity columns or a bound SQL
     parameter, where a typo is indistinguishable from an observation."""
     matches = catalog.matches
-    if _ADDRESS not in matches and _MEDIA not in matches:
+    if _ADDRESS not in matches and _MEDIA not in matches and _INDEXED not in matches:
         raise CatalogError(
-            f"loading catalog {catalog.source}: `matches` declares neither "
-            f"`{_ADDRESS}` nor `{_MEDIA}` — a `config_join` catalog declares at "
-            f"least one of D02 §2d's two vocabularies"
+            f"loading catalog {catalog.source}: `matches` declares none of "
+            f"`{_ADDRESS}`, `{_INDEXED}` and `{_MEDIA}` — a `config_join` catalog declares at "
+            f"least one of D02 §2d's vocabularies"
         )
     if _ADDRESS in matches:
         _validate_address(catalog, matches[_ADDRESS])
+    if _INDEXED in matches:
+        _validate_indexed(catalog, matches[_INDEXED])
     if _MEDIA in matches:
         _validate_media(catalog, matches[_MEDIA])
+
+
+def _validate_indexed(catalog: Catalog, block: Any) -> None:
+    """The third form's shape (spec 2026-09-21 §7b). Every value below reaches a
+    derived row's identity, the stash, or the key match against `resolved_config`, so
+    a misspelling is a silent miss or a wrong row: the one grammar and the two gather
+    words are closed; a requirement's `kind` is one of the stash readers' four; the
+    peer's direction is D00's; `args` is the field order a rule binds positional
+    arguments into, so it is a non-empty list of names."""
+    where = f"loading catalog {catalog.source}: `{_INDEXED}`"
+    item = block.get("item") if isinstance(block, dict) else None
+    if not isinstance(
+        block.get("prefix") if isinstance(block, dict) else None, str
+    ) or not isinstance(item, dict):
+        raise CatalogError(f"{where} needs `prefix` and `item` (D02 §2d)")
+    predicates = item.get("predicates")
+    if (
+        not isinstance(predicates, dict)
+        or not isinstance(predicates.get("field"), str)
+        or not isinstance(predicates.get("positional"), str)
+        or predicates.get("grammar") != _SHORTCUT
+    ):
+        raise CatalogError(
+            f"{where}.item.predicates must be `{{field, grammar: {_SHORTCUT}, positional}}` — "
+            f"the one grammar this engine reads — got {predicates!r}"
+        )
+
+    def rule(name: str, declared: Any, *, kind: bool = False) -> None:
+        shaped = (
+            isinstance(declared, dict)
+            and (kind or isinstance(declared.get("name"), str))
+            and isinstance(declared.get("args"), list)
+            and declared["args"]
+            and all(isinstance(field, str) for field in declared["args"])
+            and ("gather" not in declared or declared["gather"] in _GATHERS)
+        )
+        if not shaped:
+            raise CatalogError(
+                f"{where}.item.{name} must be `{{{'kind' if kind else 'name'}, args: [<field>, ...], "
+                f"gather?: {' | '.join(_GATHERS)}}}` — got {declared!r}"
+            )
+        if declared.get("gather") == _GATHER_LIST_TAIL_FLAG and len(declared["args"]) < 2:
+            raise CatalogError(
+                f"{where}.item.{name}: `gather: {_GATHER_LIST_TAIL_FLAG}` needs two fields"
+            )
+        if kind:
+            _closed_string(
+                catalog, f"{_INDEXED}.item.{name}.kind", declared.get("kind"), _REQUIREMENT_KINDS
+            )
+
+    rule("path", item.get("path"))
+    rule("method", item.get("method"))
+    requirements = item.get("requirements", {})
+    if not isinstance(requirements, dict):
+        raise CatalogError(
+            f"{where}.item.requirements must map a predicate name to `{{kind, args}}`"
+        )
+    for name, declared in requirements.items():
+        rule(f"requirements.{name}", declared, kind=True)
+    if not isinstance(item.get("pass_through", []), list):
+        raise CatalogError(f"{where}.item.pass_through must be a list of predicate names")
+    peer = item.get("peer")
+    if not isinstance(peer, dict) or not isinstance(peer.get("field"), str):
+        raise CatalogError(f"{where}.item.peer must be `{{field, direction?}}`, got {peer!r}")
+    _closed(
+        catalog,
+        f"{_INDEXED}.item.peer.direction",
+        peer.get("direction", catalog.direction),
+        Direction,
+    )
+
+
+def _closed_string(catalog: Catalog, field: str, value: Any, values: tuple[str, ...]) -> None:
+    if value not in values:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{field}: {value}` is not one of "
+            f"{', '.join(values)} (NFR-5)"
+        )
 
 
 def _validate_address(catalog: Catalog, address: Any) -> None:

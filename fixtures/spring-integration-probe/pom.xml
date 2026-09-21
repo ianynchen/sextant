@@ -65,5 +65,14 @@
       <groupId>jakarta.jms</groupId>
       <artifactId>jakarta.jms-api</artifactId>
     </dependency>
+    <!-- Spring Integration adapters and flows (spec 2026-09-21 §11): the Pub/Sub
+         channel adapter and message handler `Shape4PubSub` builds. Not managed by
+         the Boot BOM, so pinned here — the same version `fixtures/orders-service`
+         builds against, and the one CP-28 measures. -->
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>spring-cloud-gcp-pubsub</artifactId>
+      <version>5.1.2</version>
+    </dependency>
   </dependencies>
 </project>

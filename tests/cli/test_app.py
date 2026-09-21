@@ -131,7 +131,10 @@ def test_analyze_writes_metadata_and_reports_endpoint_count(analyzed_orders_serv
     # 96 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `GET /v1/conditions/legacy`
     # (`MappingConditionsController`), the two handlers carrying every `params=`/`headers=`
     # expression form — one row each, the expressions in `endpoint_metadata`.
-    assert metadata["endpoints"]["inbound"]["http"] == 96
+    # 97 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes.kt`'s
+    # `accept(JSON) { }` at the top of `coRouter { }` — `(None, /**)`, one row; the 88 gap
+    # row is now `(None, /ktmvc/**)` resolved, the same count.
+    assert metadata["endpoints"]["inbound"]["http"] == 97
     assert metadata["endpoints"]["inbound"]["sse"] == 2
 
 
@@ -234,7 +237,9 @@ def test_analyze_document_count_matches_the_real_compiled_and_source_files(
     # 152 since spec 2026-09-19 §5b: `RequestParamsController` and
     # `mvcroutes/KotlinParamController` — one class file each.
     # 153 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
-    assert metadata["coverage"]["documents"] == 153
+    # 154 since spec 2026-09-21 §7a: `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend
+    # lambda class of `coRouter { accept(JSON) { } }` — one class file.
+    assert metadata["coverage"]["documents"] == 154
 
 
 def test_receipt_avsc_reaches_the_graph_as_a_source_only_declared_shape(

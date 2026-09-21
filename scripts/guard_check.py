@@ -266,9 +266,25 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if site["owner"] in root["owners"] and site["name"] '
-                '== root["method"]',
-                replace='            if site["owner"] in root["owners"]  # guard disabled',
+                find='            and site["name"] == root["method"]\n',
+                replace="            and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.root-owner-is-the-declared-type": Guard(
+        what="a chain roots only on a call whose OWNER is one the root declares — the "
+        "other half of the pair above",
+        why="rooting on a method name (and parameter types) alone would start a chain on "
+        "any type that happens to declare the same member: a module's own helper named "
+        "`messageDrivenChannelAdapter`, or the framework's polled `PubSubMessageSource` "
+        "beside its `PubSubInboundChannelAdapter` — same `(operations, String)` "
+        "constructor, a different registration — would publish a destination at "
+        "`resolved`/`compiler` on evidence about a type the catalog never read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if site["owner"] in root["owners"]\n',
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -1627,6 +1643,22 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/dependencies.py",
                 find="    if _carries_satisfying_annotation(workspace, catalog):\n        return None",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n        return None",
+            ),
+        ),
+    ),
+    "config_join.indexed-item-exists-through-its-read-fields": Guard(
+        what="an `indexed:` item is read into existence only by the fields the block "
+        "declares — its predicate list and its peer field; a `<prefix>[N]` carrying only "
+        "`id`, `order`, `filters[…]` or `metadata` is no item at all",
+        why="spec 2026-09-21 §7b: an item naming no path serves every path, `/**`. Without "
+        "this filter an entry whose only keys are the unread ones — an `id`, a filter "
+        "list — becomes an item with no predicates and mints a resolved `/**` row for a "
+        "route that declares no address and no target",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if not (field.startswith(predicates) or field == peer):\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            continue",
             ),
         ),
     ),

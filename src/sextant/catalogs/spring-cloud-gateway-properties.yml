@@ -1,0 +1,131 @@
+id: spring-cloud-gateway-properties
+displayName: Spring Cloud Gateway (property routes)
+style: config_join
+# The protocol of every row this file mints — the served path rows AND the `uri` target
+# rows both, because a catalog carries one `style` (spec 2026-09-21 §0b A6) and
+# `config_join` carries `direction` per rule: the `peer` rule below declares its own.
+protocol: http
+direction: inbound
+
+# The same coordinates the DSL pair declares (`spring-cloud-gateway.yml`,
+# `spring-cloud-gateway-outbound.yml`): a `config_join` catalog is dependency-gated
+# (`resolve/dependencies.py`), because its evidence — configuration keys — names no
+# framework on its own.
+detect:
+  coordinates: ["org.springframework.cloud:spring-cloud-gateway-server-webflux", "org.springframework.cloud:spring-cloud-starter-gateway", "org.springframework.cloud:spring-cloud-gateway-server"]
+
+measured:
+  - { artifact: org.springframework.cloud:spring-cloud-gateway-server-webflux, versions: ["5.0.0"],
+      identity: reported, by: scripts/probes/cp29_gateway_properties.md }
+
+# The pipeline-declared capability (D02 §1): M04's pass 2 produced `resolved_config` in
+# THIS run. A config-less run skips this catalog visibly rather than silently deriving
+# nothing.
+requires: [resolved_config]
+
+# Spring Cloud Gateway's PROPERTY routes (`gateway-properties-routes`, spec 2026-09-21
+# §7b) — the twin of the Java DSL the `spring-cloud-gateway` pair reads, declared wholly
+# in configuration:
+#
+#   spring:
+#     cloud:
+#       gateway:
+#         server:
+#           webflux:
+#             routes:
+#               - id: orders
+#                 uri: lb://orders
+#                 predicates:
+#                   - Path=/orders/**            # the shortcut form: `Name=arg,arg`
+#                   - Method=GET,POST
+#                   - Header=X-Api,v2
+#               - id: items
+#                 uri: http://items.internal:8080
+#                 predicates:
+#                   - name: Path                 # the map form: `name` + `args.<field>`
+#                     args:
+#                       patterns: /items/**
+#
+# The config layer flattens the list to `…routes[N].predicates[M]` (a scalar, the
+# shortcut) or `…routes[N].predicates[M].name` + `…routes[N].predicates[M].args.<k>` (the
+# map form), and `…routes[N].uri`; the `indexed:` block reads exactly those keys.
+#
+# MEASURED (`scripts/probes/cp29_gateway_properties.md`, spring-cloud-gateway-server-webflux
+# 5.0.0, identity read off the jar's own manifest):
+#   * row 1 — `GatewayProperties.PREFIX` is `spring.cloud.gateway.server.webflux`, and
+#     `routes` is its `List<RouteDefinition>`; that is the `prefix` below.
+#   * row 2 — the pre-4.2 prefix `spring.cloud.gateway.routes` binds NOWHERE in the 5.0.0
+#     jar (no class, no metadata, no deprecation, no migrating post-processor), so it is
+#     NOT declared here (spec §7b: "a second prefix only if CP-29 shows 5.0.0 binds it").
+#     STATED BOUNDARY: a module whose classpath carries some OTHER artifact that binds
+#     the old prefix is not read by this file.
+#   * row 3 — `PredicateDefinition(String)`: the name is everything before the FIRST
+#     `=`, the rest is tokenised on `,`, each token keyed `_genkey_N` in order
+#     (`NameUtils.GENERATED_NAME_PREFIX`); a definition with no `=` is refused by the
+#     framework. That is the `shortcut` grammar, and `_genkey_` is the `positional` key
+#     prefix the map form may also spell.
+#   * row 4 — `RouteDefinition` carries `id predicates filters uri metadata order enabled`;
+#     only `predicates` and `uri` are read. `filters[M]` are NOT read — `RewritePath`,
+#     `StripPrefix` and their kin change the UPSTREAM path at runtime; the served path
+#     is the predicate's (spec §7b's stated boundary). `id`, `order`, `metadata`,
+#     `enabled` name no wire.
+#   * rows 5 and 7 — each predicate factory binds its positional arguments into the
+#     fields `shortcutFieldOrder` names, by `shortcutType`: `Path` is
+#     `GATHER_LIST_TAIL_FLAG` over `[patterns, matchTrailingSlash]` (every positional is
+#     a pattern except a trailing `true`/`false`, which is the flag — `gather:
+#     list_tail_flag`); `Method` is `GATHER_LIST` over `[methods]` (`gather: list`);
+#     `Header` `[header, regexp]`, `Query` `[param, regexp, predicate]` and `Cookie`
+#     `[name, regexp]` inherit `DEFAULT` (positional N is field N). The flag is found BY
+#     VALUE, not as the last value: `resolved_config` carries no declaration order, so
+#     which value an author wrote last is unknowable here (an open issue for the docs
+#     round) — the one `true`/`false` literal among `Path`'s gathered values is
+#     `matchTrailingSlash` wherever it sits; two such literals, or one under `Method`,
+#     leave the inbound row unresolved with no path rather than guessing. The two GATHERING
+#     normalisers read `args.values()` and test NO key (row 7), so in the map form EVERY
+#     argument of `Path`/`Method` is collected whatever it is keyed — `args.pattern:
+#     /x/**` is one pattern, `args.patterns: [/a/**, /b/**]` two — and a scalar is ONE
+#     value, never split on `,`: `methods: PUT,PATCH` binds a method that matches
+#     nothing, so `method` reads NULL and the inbound row `unresolved` (a phantom verb
+#     is the one thing not to publish).
+#   * row 6 — fifteen predicate factories at 5.0.0, named by their class name less
+#     `RoutePredicateFactory`: `After Before Between CloudFoundryRouteService Cookie
+#     Header Host Method Path Query ReadBody RemoteAddr Version Weight
+#     XForwardedRemoteAddr`. `Host After Before Between RemoteAddr Weight
+#     XForwardedRemoteAddr CloudFoundryRouteService ReadBody` narrow WHO is served and
+#     nothing about the address — pass-throughs, as the DSL catalog declares their
+#     builder spellings. `Version` (an API-version predicate, new at this line) is NOT
+#     on spec §7b's list, so a route carrying `Version=…` derives its rows `unresolved`
+#     — an unknown name, stated rather than read as a pass-through nobody ruled on.
+#   * row 8 — `lb://name` is the load balancer's scheme and `http(s)://host…` is dialled
+#     as written; the `uri` row nonetheless carries the URI VERBATIM with `peer` NULL —
+#     a routing destination the gateway resolves, kept whole (D02), exactly as
+#     `spring-cloud-gateway-outbound.yml` publishes the DSL's `uri(…)`.
+#   * row 9 — `HttpMethod.valueOf("get")` is a `new HttpMethod("get")` that the `Method`
+#     predicate compares by IDENTITY (`if_acmpne`) against the request's `GET` constant
+#     and never matches; the verb is published exactly as written — the DSL catalog's
+#     rule for `method("get")` — never a `GET` the route does not declare. No `Method=`
+#     → `method` NULL, resolved (§0b A7: the DSL's rendering, one family one rendering;
+#     `HttpMethod.values()` is recorded on the probe and NOT fanned out).
+#
+# A route whose predicates name no path serves every path, `/**` — the DSL sibling's
+# rule (spec §7 case 3). A route naming no `uri` mints no target row (the framework
+# refuses such a definition at startup). `Header`/`Query`/`Cookie` are the route's
+# request requirements (spec 2026-09-19 §5c), written to the combinator's
+# `route_requirements` stash against every inbound row of the item — `caller` and
+# `handler` NULL, `required`, the regexp as written as the value — and joined to the
+# rows by the requirements pass. A value that differs between environments is one
+# `environment_divergence` question for the item and no row (`config_join`'s
+# cross-environment rule, per item).
+matches:
+  indexed:
+    prefix: spring.cloud.gateway.server.webflux.routes
+    item:
+      predicates: { field: predicates, grammar: shortcut, positional: _genkey_ }
+      path:   { name: Path,   args: [patterns, matchTrailingSlash], gather: list_tail_flag }
+      method: { name: Method, args: [methods], gather: list }
+      requirements:
+        Header: { kind: header, args: [header, regexp] }
+        Query:  { kind: query,  args: [param, regexp, predicate] }
+        Cookie: { kind: cookie, args: [name, regexp] }
+      pass_through: [Host, After, Before, Between, RemoteAddr, Weight, XForwardedRemoteAddr, CloudFoundryRouteService, ReadBody]
+      peer: { field: uri, direction: outbound }

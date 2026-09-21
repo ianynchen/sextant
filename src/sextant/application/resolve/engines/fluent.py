@@ -38,12 +38,21 @@ positional slot.
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.beans import (
+    BeanRef,
+    BeanTable,
+    Parameter,
+    Unresolved,
+    bean_table,
+    qualifier_of,
+)
+from sextant.application.resolve.conditions import annotation_index
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
@@ -54,7 +63,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     call_site_index,
     carries_expression,
-    channel_of,
+    channels_of,
     declared_parameters_of,
     field_facts,
     linked_channels,
@@ -65,9 +74,10 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -81,18 +91,94 @@ from sextant.domain.symbols import bare_descriptor
 # the `url` capture at derive time rather than read as an address of its own.
 _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
 
-# The capture fields a catalog may spell EITHER as its own literal or as an
-# `argN` reference (`A-C2`, principles sweep §3.2). Only `http_method`, and
-# only because the framework itself offers both spellings: OkHttp names the
-# verb in the method (`.post(body)`) AND takes it as an argument
-# (`.method(verb, body)`), so a grammar that could read only the first left
-# the second as an unmatched step, passing through uncaptured while the root's
-# own `http_method: GET` default stood at `resolved`/`compiler` — a verb no
-# evidence supports. Kept apart from `_ARGUMENT_FIELDS` rather than folded
-# into it because those five are argument positions ALWAYS, which is what
-# `_validate_captures` refuses a non-`argN` value for; a verb literal is the
-# ordinary case here and must keep loading.
-_LITERAL_OR_ARGUMENT_FIELDS = ("http_method",)
+# Every other capture field a catalog may spell EITHER as its own literal or
+# as an `argN` reference, and the value itself says which (`_reads_an_argument`).
+# `http_method` was the first (`A-C2`, principles sweep §3.2), because the
+# framework itself offers both spellings: OkHttp names the verb in the method
+# (`.post(body)`) AND takes it as an argument (`.method(verb, body)`), so a
+# grammar that could read only the first left the second as an unmatched step,
+# passing through uncaptured while the root's own `http_method: GET` default
+# stood at `resolved`/`compiler` — a verb no evidence supports. The
+# registration words (spec 2026-09-21 §4) made it the rule rather than the
+# exception: `handler` is `argN` or the literal `none`, and the halves a
+# `compose:` joins are fields the catalog itself names (`exchange: arg0`), so
+# no fixed list could hold them. Kept apart from `_ARGUMENT_FIELDS` rather than
+# folded into it because those five are argument positions ALWAYS, which is
+# what `_validate_captures` refuses a non-`argN` value for; a verb literal is
+# the ordinary case elsewhere and must keep loading.
+#
+# The two consumer-side captures of a registration chain (spec 2026-09-21 §2,
+# §4), each with the one literal spelling it admits beside `argN`: `handler`
+# takes `none` — a `discard` step's TRUE answer, a registration that hands its
+# messages to nobody (§5) — and `channel_link` takes `{bean_via: argN}`, the
+# channel named through a bean reference rather than a string, which the bean
+# fold (§3a) reads. Neither is an address field: `_validate_captures` checks
+# each against exactly these two shapes.
+_HANDLER_NONE = "none"
+_BEAN_VIA = "bean_via"
+
+# The `read_by` end of the channel edge (spec 2026-09-21 §3b), read here for the
+# names the channel index knows — the bean fold's name rung for a channel
+# reference (§3a): the container auto-creates a channel under any referenced
+# name, so a name a handler's annotation carries is a channel whether or not a
+# factory method declares it. Only a RESOLVED reader's name counts: one still
+# spelled as a placeholder configuration never answered names nothing. The
+# rows are there when this engine runs because `resolve/endpoints.py` runs the
+# index's catalog first (`_writes_only_the_channel_edge`).
+_READ_BY = "read_by"
+# The edge's third role (§3b's reserved slot), and its first writer (fix round
+# 1, finding 3): a `channel_link` captured AFTER a handler is that handler's
+# OUTPUT channel, not the wire's feed.
+_SENDS_TO = "sends_to"
+
+# The two consumer-side channel captures that name a channel rather than an
+# address: `channel_link` — the channel this registration FEEDS (§3b) — and
+# `channel_source` — the channel a flow CONSUMES (`from("ch")`, §5; fix round
+# 1, finding 4). Each reads `argN` or `{bean_via: argN}` (the bean's name).
+_CHANNEL_NAME_FIELDS = ("channel_link", "channel_source")
+
+_DIRECTIONS = sorted(member.value for member in Direction)
+
+# Spec 2026-09-21 §4's `poisons:` — the value a poisoned capture holds from
+# the poisoning step to the chain's end. The SAME shape as `_UNRESOLVED_ARGUMENT`
+# below, so every reader answers it the same way (path NULL, `unresolved`,
+# no handler), but a DISTINCT object, because the two are overwritten
+# differently: a guard's poison is a step's own read failure, and a later
+# step that reads the field lifts it (`_step_captures`' own docstring walks
+# that case); a catalog poison is a statement about the CHAIN — a `divert`
+# step means the message may leave the linear flow, so a `handle` after it is
+# not certainly what receives it (§5, §0b A5) — and stays for the rest of the
+# walk, which `_fold` enforces by identity.
+_POISONED = MappingProxyType({"kind": "unresolved", "reason": "poisoned"})
+
+# Two more reserved keys inside `captures`, the `_COLLECTED` precedent: a root's
+# own `direction:` override and its `compose:` declaration ride with the chain
+# they start, because `_derive` reads them where it reads the captures and the
+# walk already copies `captures` per branch.
+_DIRECTION = "\x00direction"
+_COMPOSE = "\x00compose"
+# Two more (spec 2026-09-21 §5): the consumer a root's `via_argument_of …
+# continue: true` names, riding with the chain so its end — wherever the
+# value is handed on — can find that consumer (`_continuations`); and the
+# `channel_link` value the chain's `handler` was captured AFTER — present
+# exactly when a link step of ANY readability preceded the handler, holding
+# that link's value as it stood then — which is what makes that handler a
+# READER of the linked channel rather than the wire's (or the source's) own
+# consumer (`_derive`'s `read_by` edge). The VALUE, not a flag, and never
+# reset by a later link (residual fix, 2026-09-21): a link after the handler
+# overwrites `channel_link` but not what the handler read, so
+# `.channel("b").handle(h).channel("c")` keeps `b` here while `channel_link`
+# holds `c`. An unreadable value here (a poisoned spec form, a read failure)
+# says the handler reads a channel nobody can name — no edge, and never the
+# source or the wire in its place.
+_CONTINUE = "\x00continue"
+_READS_LINK = "\x00reads_link"
+# The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
+# present exactly when the link sits after a handler step, holding that
+# handler's argument: the link is then that handler's output channel
+# (`sends_to`), and the row's handler is that handler, whatever a later
+# `handle` after the link captured (a reader of the channel, `_READS_LINK`).
+_LINK_SENDER = "\x00link_sender"
 
 # F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
 # A reserved key inside `captures` rather than a second parameter threaded through
@@ -143,7 +229,23 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     the calling method symbol; `handler` and `peer` follow the same rule
     `single_call` does — NULL unless the captured url is itself absolute
     (CP-2) — and `direction`/`protocol` are the catalog's own declared
-    fields."""
+    fields.
+
+    A registration chain (spec 2026-09-21 §4) differs in three ways, each an
+    optional word no request catalog spells: a root may carry its own
+    `direction:`, an INBOUND chain's row carries the `handler` it captured,
+    and a chain that captured a `channel_link` writes a `channel_bindings`
+    `fed_by` edge — INSTEAD of a row when inbound (the join pass mints the
+    row from the edge, so a linked adapter is never counted twice), beside
+    its row when outbound (§3b: so the question is not asked).
+
+    Since 2026-09-21 (Task 6) the field ladder's parameter rung answers in this
+    engine as it does in `single_call`: an address handed in as the calling
+    method's own `@Value` parameter — `uri(url)`, `new Adapter(ops, subscription)`
+    — derives its `${…}` expression where it derived `unresolved`, and so does
+    each element of a varargs slot. Every shipped fluent catalog sees it; it is
+    more resolution in the direction the ladder already took, never a new claim
+    (`_own_parameter`, `_address_read`)."""
     matches = catalog.matches
     # Validated on the RAW (pre-`_catalog_symbol`) entries, before
     # `_channel_via_forms` ever dereferences an `owner` — the same two-phase
@@ -152,23 +254,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # known-good).
     _validate_channel_via_entries(matches.get("roots", []), catalog)
     _validate_channel_via_entries(matches.get("steps", []), catalog)
-    roots = [
-        {
-            # A LIST or a scalar (§3.1): one library reachable under its class name
-            # and under the interface a codebase more often declares its field as.
-            # `owners`, not `owner` — the plural name is what makes every consumer
-            # of the old singular key fail loudly rather than compare a call site's
-            # owner against a tuple and silently match nothing.
-            "owners": catalog_symbols(root["owner"], f"{catalog.source}: roots[].owner"),
-            "method": root["method"],
-            "captures": _merged_captures(root),
-            # Carried forward (never a root's own field, D02 §2's `fluent`
-            # style) purely so `_validate_captures` can see and refuse it,
-            # exactly as an unchecked value must not silently survive the file.
-            "when": root.get("when"),
-        }
-        for root in matches.get("roots", [])
-    ]
+    _validate_channel_via_entries(matches.get("beans", []), catalog)
+    roots = [_root_entry(root, catalog, "roots") for root in matches.get("roots", [])]
+    # Spec 2026-09-21 §4's `beans:` — root-shaped entries reachable only through a
+    # `bean_via` capture: the chain a referenced bean's own factory method
+    # builds, walked for its captures and never for a row of its own
+    # (`_bean_chain_capture`). The same shape as `roots`, validated the same
+    # way, kept apart so a container's constructor never starts a chain of
+    # this catalog's on its own.
+    bean_roots = [_root_entry(root, catalog, "beans") for root in matches.get("beans", [])]
     steps = [
         {
             "method": step["method"],
@@ -182,6 +276,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 if "owner" in step
                 else None
             ),
+            # Spec 2026-09-21 §5 (Task 6): an optional `descriptor` narrows a step
+            # to ONE overload of its name — `handle(Class, GenericHandler)` carries
+            # the handler at slot 1, `handle(GenericHandler)` at slot 0, and a name
+            # alone would read one slot for both. None for the ordinary step.
+            "descriptor": _validated_descriptor(step, catalog, "steps"),
             "captures": _merged_captures(step),
             # F5 §6.2 (W29): the repeatable half. A step declaring `collects` accumulates
             # an entry per visit instead of overwriting, because a request may carry any
@@ -196,14 +295,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # by `_walk` (`_step_captures`) where `_matching_step` finds this
             # row.
             "when": step.get("when"),
+            # Spec 2026-09-21 §4: the fields this step makes unreadable from
+            # here to the chain's end (`_step_captures`) — None for the
+            # ordinary step, checked by `_validate_poisons`.
+            "poisons": step.get("poisons"),
+            # §5: a step whose result is handed to a consumer that continues
+            # the walk — the same word a root may carry; None otherwise.
+            "continue_via": _validated_continuation(step, catalog),
         }
         for step in matches.get("steps", [])
     ]
     _validate_steps(steps, catalog)
     _validate_captures(roots, catalog, allow_when=False)
+    _validate_captures(bean_roots, catalog, allow_when=False)
     _validate_captures(steps, catalog, allow_when=True)
-    _validate_url_channel_exclusivity(roots, steps, catalog)
-    terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
+    _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
+    undeclared_owners, undeclared_poisons = _undeclared_steps(matches, catalog)
+    _validate_poisons([*roots, *bean_roots], steps, undeclared_poisons, catalog)
+    terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []), catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -230,11 +339,55 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     by_bare_caller: dict[str, list[dict[str, Any]]] = {}
     for caller_symbol, caller_sites in by_caller.items():
         by_bare_caller[bare_descriptor(caller_symbol)] = caller_sites
+    # The method symbols a `handler` capture joins a lambda's bare body name to
+    # (spec 2026-09-21 §3c) — `combinator`'s own `_handler_of` join, keyed the
+    # same way for the same reason (a call argument never repeats the module
+    # coordinates a symbol fact carries). Read only where a catalog declares
+    # the capture: every shipped request catalog declares none, and a read
+    # nothing consumes is a read per catalog for nothing (GUIDELINES §8.7).
+    #
+    # The bean fold's direct-call rung joins through the same map (spec §3a:
+    # `setOutputChannel(ordersChannel())` names the declaring method by the
+    # call's own owner+name+descriptor, which `method_descriptor` spells bare),
+    # so a catalog spelling any `bean_via` reads it too.
+    method_symbols: dict[str, str] = {}
+    resolves_beans = any(
+        _valid_bean_via(value)
+        for entry in (*roots, *bean_roots, *steps)
+        for value in entry["captures"].values()
+    )
+    if resolves_beans or any("handler" in entry["captures"] for entry in (*roots, *steps)):
+        for row in workspace.query("method_symbols"):
+            method_symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
+    # Spec 2026-09-21 §3a: the declared beans of the module, read only where a
+    # catalog spells a `bean_via` — `bean_table` refuses a catalog naming no
+    # model, by file, at load rather than at the first chain that reaches the
+    # capture. `known_channels` is the channel index's `read_by` end (the
+    # comment above `_READ_BY`).
+    beans: BeanTable | None = None
+    if resolves_beans:
+        known_channels = frozenset(
+            str(row["channel"])
+            for row in workspace.query("channel_bindings")
+            if row["role"] == _READ_BY and row["resolution"] == "resolved"
+        )
+        beans = bean_table(workspace, catalog, known_channels)
+    # §4's `method_annotation`: the constructing method's own annotations, read
+    # through the shared index only where a root declares the word.
+    annotations = (
+        annotation_index(workspace)
+        if any(root["method_annotation"] is not None for root in roots)
+        else {}
+    )
 
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
     referenced: list[str] = []
     rows: list[dict[str, Any]] = []
+    # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
+    # that captured a readable `channel_link` — accumulated across every
+    # caller and inserted once, the `rows`/`metadata` discipline.
+    bindings: list[dict[str, Any]] = []
     # Only a row whose identity is known dedups here, exactly as
     # single_call: two chains whose paths nobody could read carry nothing to
     # compare, so each stays its own row — the key is the identity columns,
@@ -278,6 +431,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             seen=seen,
             metadata=metadata,
             by_caller=by_bare_caller,
+            method_symbols=method_symbols,
+            bindings=bindings,
+            undeclared_owners=undeclared_owners,
+            undeclared_poisons=undeclared_poisons,
+            beans=beans,
+            bean_roots=bean_roots,
+            roots=roots,
+            all_parameters=caller_parameters,
+            annotations=annotations,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -289,13 +451,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # A root's own captures fold ON TOP of whatever the chain already
             # carried before reaching it — the root is later in the chain, so
             # last-wins holds exactly as it does forward of here.
-            captures = {
-                **_prefix_captures(site, context),
-                **_resolve_captures(root["captures"], site),
-            }
+            captures = {**_prefix_captures(site, context), **_root_captures(root, site, context)}
+            if root["continue_via"] is not None:
+                captures[_CONTINUE] = root["continue_via"]
+            _fold_bean_captures(captures, context)
             _walk(site, captures, reached_terminal=False, context=context)
 
     workspace.derive("call_endpoints", rows=rows)
+    if bindings:
+        workspace.derive("channel_bindings_insert", rows=bindings)
     # After the endpoints, never before: an entry names the endpoint it belongs to by that
     # row's own columns, so the row has to exist for the pair to mean anything to a reader
     # joining them. The RESET is the pipeline's, once per resolve, for the
@@ -303,6 +467,83 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # one of them would erase whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
+
+
+# The root words a `beans:` entry may not carry (fix round 1, Minor 2): a bean's
+# chain is walked for its captures alone (`_bean_chain_capture` takes one field
+# and nothing else), so a direction, a composition, an annotation capture or a
+# continuation on it would be read by nothing — silently, which is the one
+# thing a catalog key must never be.
+_ROOT_ONLY_WORDS = ("direction", "compose", "method_annotation", "via_argument_of", "continue")
+
+
+def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """One `roots` (or `beans` — `where`) entry as the walk reads it."""
+    if where == "beans":
+        carried = sorted(word for word in _ROOT_ONLY_WORDS if word in root)
+        if carried:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: a `beans` entry (`{root.get('method')}`) "
+                f"declares `{'`, `'.join(carried)}` — a bean's chain is walked for its "
+                f"captures alone, and nothing reads those there (spec 2026-09-21 §4)"
+            )
+    # `poisons:` is a step's word: a root starts the chain with nothing yet
+    # captured to poison, and this dict is rebuilt from named keys, so the
+    # word would load, read as valid, and do nothing (the `collects` lesson
+    # one function over).
+    if "poisons" in root:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
+            f"declares `poisons` — a poison is a step's own effect on the chain it sits "
+            f"in, and a root has no chain before it (spec 2026-09-21 §4)"
+        )
+    return {
+        # A LIST or a scalar (§3.1): one library reachable under its class name
+        # and under the interface a codebase more often declares its field as.
+        # `owners`, not `owner` — the plural name is what makes every consumer
+        # of the old singular key fail loudly rather than compare a call site's
+        # owner against a tuple and silently match nothing.
+        "owners": catalog_symbols(root.get("owner"), f"{catalog.source}: {where}[].owner"),
+        "method": _root_method(root, catalog, where),
+        # §5: an optional `descriptor` narrows the root to one overload — the ten
+        # `messageDrivenChannelAdapter` overloads carry their topics at different
+        # slots (CP-27 row 6), and one name matching all ten would read one slot
+        # for each; None for the root that matches by owner and name alone.
+        "descriptor": _validated_descriptor(root, catalog, where),
+        "captures": _merged_captures(root),
+        # Carried forward (never a root's own field, D02 §2's `fluent`
+        # style) purely so `_validate_captures` can see and refuse it,
+        # exactly as an unchecked value must not silently survive the file.
+        "when": root.get("when"),
+        # Spec 2026-09-21 §4: a root's own direction, overriding the
+        # catalog's for the chains it starts (the outbound handler bean
+        # declared in an inbound catalog); None keeps the catalog's.
+        "direction": _validated_direction(root, catalog),
+        # §4's `compose:` — one field joined from two captured halves at
+        # derive time; None for the root that declares none.
+        "compose": _validated_compose(root, catalog),
+        # §4's `method_annotation:` — a capture read off the constructing
+        # method's own annotation; None for the root that declares none.
+        "method_annotation": _validated_method_annotation(root, catalog),
+        # §5's `via_argument_of: {owner, method}, continue: true` — the
+        # consumer whose own chain continues this one; None for the root
+        # that ends where its chain ends.
+        "continue_via": _validated_continuation(root, catalog),
+    }
+
+
+def _root_method(root: dict[str, Any], catalog: Catalog, where: str) -> str:
+    """The method a root entry names, refused when missing: an entry without
+    one would match no site and derive nothing with nothing saying why — the
+    `beans:` list is where that first mattered, being reachable through no
+    chain a test could observe start."""
+    method = root.get("method")
+    if not isinstance(method, str) or not method:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry names no `method` — "
+            f"got {root!r} (D02 §2's `fluent` style)"
+        )
+    return method
 
 
 @dataclass(frozen=True)
@@ -318,6 +559,11 @@ class _JoinFilter:
 
     owners: tuple[str, ...]
     methods: tuple[str, ...]
+    # Spec 2026-09-21 §5's `continue: true`: the join does not END the chain, it
+    # hands the built value to the consumer, whose own result chain the walk
+    # then continues with the same captures (`_continue`). False is the
+    # execute-join as it always was — the consumer executes, the chain derives.
+    continues: bool = False
 
 
 @dataclass(frozen=True)
@@ -349,9 +595,44 @@ class _ChainContext:
     # within-method — the lambda body is walked as its own chain, not spliced into this
     # one — and only its captures come back.
     by_caller: dict[str, list[dict[str, Any]]]
+    # Spec 2026-09-21 §3c: the module's method symbols by bare descriptor, what a
+    # captured `handler` lambda's body name is joined to — empty for a catalog declaring
+    # no `handler` capture, which never reads it.
+    method_symbols: dict[str, str]
+    # §3b: the `fed_by` edges this run's chains wrote, one per chain that captured a
+    # readable `channel_link`; inserted once by `run`, the `rows` discipline.
+    bindings: list[dict[str, Any]]
+    # §5's rule for an unknown member of a flow definition: the owners
+    # `undeclared_steps` names (SCIP form), and the fields a call on one of them that
+    # matches no declared step poisons. Both empty for a catalog declaring none.
+    undeclared_owners: tuple[str, ...]
+    undeclared_poisons: tuple[str, ...]
+    # Spec 2026-09-21 §3a/§4: the module's declared beans under the catalog's
+    # model — None for a catalog spelling no `bean_via`, and None again in the
+    # collecting context that walks a referenced bean's own chain, which is
+    # how a `bean_via` met there is not followed (one hop).
+    beans: BeanTable | None
+    # §4's `beans:` — the roots a referenced bean's chain may start from.
+    bean_roots: list[dict[str, Any]]
+    # The catalog's roots, for the continuation's prefix (`_prefix_captures`):
+    # the flow's own source is a root the sink chain arrives at backward.
+    roots: list[dict[str, Any]]
+    # Every declared method's parameters (`declared_parameters_of`), so a
+    # referenced bean's own method gets its `CallFacts` exactly as the caller
+    # got its own; `facts.caller_parameters` is this caller's slice of it.
+    all_parameters: dict[str, tuple[dict[str, Any], ...]]
+    # §4's `method_annotation`: every annotation by target, or empty where no
+    # root declares the word.
+    annotations: dict[str, list[tuple[str, dict[str, Any]]]]
+    # Where a walk records each chain END's captures instead of deriving a row
+    # — the collecting context `_bean_chain_capture` builds. None on the
+    # deriving walk.
+    collect: list[dict[str, Any]] | None = None
 
 
-def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
+def _prefix_captures(
+    root_site: dict[str, Any], context: _ChainContext, roots: Sequence[dict[str, Any]] = ()
+) -> dict[str, Any]:
     """The captures the chain already carried BEFORE its root — the same
     `result → receiver` link `_walk` follows forward, followed backward from
     the root instead (Task 6 checkpoint: "a pre-root backward walk is
@@ -378,7 +659,14 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
     catalog at all". Forward of a root the walk is already chain-rooted, so an
     owner-free step there can only fold within a chain this catalog matched;
     BACKWARD, the prefix is exactly the part of the chain no root has vouched
-    for yet, so the owner is what vouches for it instead."""
+    for yet, so the owner is what vouches for it instead.
+
+    `roots` (spec 2026-09-21 §5, the continuation) lets a producer that IS one
+    of the catalog's roots fold its own captures backward too — `from("ch")`
+    before `handle(sinkSpec)`, where the flow's source is a root and the walk
+    arrives at `handle` from the sink chain, never from that root. A root is
+    owner-gated by construction, so the rule above holds for it. Empty on the
+    root walk itself, whose prefix is what it always was."""
     producers: list[dict[str, Any]] = []
     visited: set[Any] = set()
     current = root_site
@@ -405,9 +693,34 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
     # folds the outermost producer first — real chain order, which is what
     # makes last-wins mean the same thing on both sides of the root.
     for producer in reversed(producers):
+        root = _matching_root(producer, roots)
+        if root is not None:
+            captures.update(_root_captures(root, producer, context))
+            continue
         step = _matching_step(producer, owned)
         if step is not None:
             captures.update(_step_captures(step, producer))
+    return captures
+
+
+def _root_captures(
+    root: dict[str, Any], site: dict[str, Any], context: _ChainContext
+) -> dict[str, Any]:
+    """What one root contributes at its site: its captures (spec 2026-09-21
+    §4's `method_annotation` among them) and its direction and composition
+    under their reserved keys. Seeded by the root walk, and folded backward
+    where the continuation's prefix reaches a root (`_prefix_captures`) —
+    less `_CONTINUE`, which the root walk adds itself: it is the walk's own
+    instruction, not a capture, and a root reached backward is not handing
+    its value on."""
+    captures = {
+        **_resolve_captures(root["captures"], site),
+        **_method_annotation_capture(root, context),
+    }
+    if root["direction"] is not None:
+        captures[_DIRECTION] = root["direction"]
+    if root["compose"] is not None:
+        captures[_COMPOSE] = root["compose"]
     return captures
 
 
@@ -422,13 +735,36 @@ def _walk(
     is exactly a fork, and each continuation derives on its own. Derivation
     happens only at a walk's true end (no row's `receiver` matches this row's
     own chain key), never merely on reaching a terminal, because captures
-    still fold past it."""
-    name = str(site["name"])
-    if name in context.terminal_names or (
-        name in context.via_argument_names
-        and _has_execute_join(site, context.sites, context.via_argument_names[name])
-    ):
+    still fold past it.
+
+    **A void call on the value is a configuration of it, not a fork** (spec
+    2026-09-21 §4, the bean-wired registration). `new Adapter(ops, "q");
+    adapter.setOutputChannelName("c"); adapter.setTopic("t")` is three rows
+    sharing one receiver, and the two setters return nothing (D00 §5:
+    `result` null) — there is no value for a chain of their own to continue
+    from, and reading them as two forks derived two rows each seeing one
+    setter, so no chain could ever hold both halves of an address (§4's
+    `compose:`) or a link beside a destination. So a row whose own chain key
+    is None folds its captures into THIS chain, in ordinal order, and the walk
+    goes on to the next sibling; only a row whose result is a value forks. A
+    void row that is itself a terminal marks the chain executable as it did
+    when it was walked as a branch of its own, and a chain whose siblings
+    were all void derives once, at the end, with everything they folded —
+    which for a chain that had one void sibling is exactly the row it always
+    derived. `captures` is this branch's own dict (copied per fork by the
+    caller), so folding into it in place is folding into the branch."""
+    if _reaches_terminal(site, context):
         reached_terminal = True
+    # Spec 2026-09-21 §5: a value this row produced that a declared consumer
+    # takes as an argument hands the chain on — the walk continues from the
+    # consumer with these captures, and derivation belongs to the continued
+    # chain's end, never to this one's. Tested at every row the walk reaches,
+    # because the value handed on is whichever the consumer's argument names:
+    # the root's own (`from(Kafka.messageDrivenChannelAdapter(cf, "t"))`), a
+    # configuring call's result on it, or a `build()`.
+    consumers = _continuations(site, captures, context)
+    for consumer in consumers:
+        _continue(consumer, captures, context)
     chain_key = _chain_key(site)
     # A void ordinary call (`result` null, D00 §5) has nothing a following
     # row's `receiver` could ever really match — `None` is not a value id,
@@ -444,40 +780,221 @@ def _walk(
         # constructor row itself wherever its key is looked up; excluded
         # here so a `<init>` root never chains into itself.
         nexts = [s for s in context.by_receiver.get(chain_key, []) if s is not site]
-    if not nexts:
-        if reached_terminal:
-            _derive(captures, context)
-        return
+    forked = False
     for next_site in nexts:
+        if _chain_key(next_site) is None:
+            _fold_site(next_site, captures, context)
+            if _reaches_terminal(next_site, context):
+                reached_terminal = True
+            continue
+        forked = True
         next_captures = dict(captures)
-        step = _matching_step(next_site, context.steps)
-        if step is not None:
-            # Last wins (D02 §4): a repeated step overwrites its own earlier
-            # capture here, in visitation order, with no extra bookkeeping.
-            # `next_site`'s own arguments are what a `when` guard (D02 §2's
-            # `fluent` style) reads, so the guard is evaluated here, in
-            # `_resolve_captures`'s caller, rather than inside it.
-            next_captures.update(_step_captures(step, next_site))
-            # F5 §6.2 (W29): a `collects` step ACCUMULATES instead, because the thing it
-            # reads is repeatable — a request may carry any number of headers, and
-            # last-wins would keep only the final one and silently claim it was the only
-            # one. Appended to a tuple rather than a list so each branch of a fork gets
-            # its own value by copy, exactly as `dict(captures)` above gives each branch
-            # its own captures.
-            collected = _step_collects(step, next_site)
-            if collected:
-                previous = next_captures.get(_COLLECTED) or ()
-                next_captures[_COLLECTED] = (*previous, *collected)
-            # `OI-73`: a step whose captured argument IS a lambda takes its captures from
-            # the lambda's own body. `uri(b -> b.path("/x").queryParam("q", term).build())`
-            # is the idiomatic way to build a URL with query parameters, and the address
-            # is the row's identity — without this the row derives with `path` NULL and a
-            # real outbound call has no address at all.
-            _fold_lambda_captures(next_captures, context)
+        _fold_site(next_site, next_captures, context)
         _walk(next_site, next_captures, reached_terminal, context)
+    if forked or consumers:
+        return
+    # A collecting walk (spec 2026-09-21 §4's container hop) records every
+    # chain end, terminal or not: a referenced bean's chain is that bean's
+    # configuration, not a registration, and nothing marks it executable.
+    if context.collect is not None:
+        context.collect.append(captures)
+    elif reached_terminal:
+        _derive(captures, context)
+
+
+def _continuations(
+    site: dict[str, Any], captures: dict[str, Any], context: _ChainContext
+) -> list[dict[str, Any]]:
+    """The consumers that continue the chain from `site` (spec 2026-09-21 §5):
+    every row in this caller taking `site`'s own chain key as an argument
+    that matches a continuing join — the one the chain's root or a step
+    declared (`via_argument_of … continue: true`, riding in `captures`), or
+    the one a `terminal` entry of `site`'s own name declared (`build`'s
+    `terminal_via_argument … continue: true`). Empty for every chain of
+    every catalog that spells neither."""
+    filters: list[_JoinFilter] = []
+    declared = captures.get(_CONTINUE)
+    if isinstance(declared, _JoinFilter):
+        filters.append(declared)
+    terminal = context.via_argument_names.get(str(site["name"]))
+    if terminal is not None and terminal.continues:
+        filters.append(terminal)
+    found: list[dict[str, Any]] = []
+    for join_filter in filters:
+        for consumer in _consumers(site, context.sites, join_filter):
+            if all(consumer is not seen for seen in found):
+                found.append(consumer)
+    return found
+
+
+def _continue(consumer: dict[str, Any], captures: dict[str, Any], context: _ChainContext) -> None:
+    """Continues the walk from `consumer` (spec 2026-09-21 §5): its own
+    receiver ancestry first — `from("ch")` before `handle(sinkSpec)`, roots
+    included — then the handed-on chain's captures on top (a poison the
+    prefix set stays, `_fold`'s rule), then the consumer's own step, and on
+    along its result chain, executable from here: the consumer IS the
+    terminal, so a flow needs no `get()` declared to derive. The handed-on
+    chain's `_CONTINUE` does not travel — the continued chain ends where it
+    ends, unless the consumer's own step hands it on again."""
+    continued = _prefix_captures(consumer, context, context.roots)
+    _fold(continued, {field: value for field, value in captures.items() if field != _CONTINUE})
+    _fold_bean_captures(continued, context)
+    _fold_site(consumer, continued, context)
+    _walk(consumer, continued, reached_terminal=True, context=context)
+
+
+def _reaches_terminal(site: dict[str, Any], context: _ChainContext) -> bool:
+    """Whether `site` makes its chain executable: a plain terminal by name, or
+    a `terminal_via_argument` one whose built value some executing call in
+    this caller actually consumes."""
+    name = str(site["name"])
+    return name in context.terminal_names or (
+        name in context.via_argument_names
+        and _has_execute_join(site, context.sites, context.via_argument_names[name])
+    )
+
+
+def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainContext) -> None:
+    """Folds what one row the walk reached contributes into `captures`, in
+    place: the captures and collected entries of the step it matches, or —
+    where it matches none and its owner is one `undeclared_steps` names —
+    the catalog's poisons for an unknown member (spec 2026-09-21 §5: an
+    undeclared member of a flow definition is a `divert`). A terminal is a
+    declared word too, so a terminal-named row on a listed owner poisons
+    nothing. Every other unmatched row passes through uncaptured (D02
+    §4)."""
+    step = _matching_step(site, context.steps)
+    if step is None:
+        if site["owner"] in context.undeclared_owners and not _reaches_terminal(site, context):
+            _fold(captures, dict.fromkeys(context.undeclared_poisons, _POISONED))
+        return
+    # Last wins (D02 §4): a repeated step overwrites its own earlier
+    # capture here, in visitation order, with no extra bookkeeping.
+    # `site`'s own arguments are what a `when` guard (D02 §2's
+    # `fluent` style) reads, so the guard is evaluated here, in
+    # `_resolve_captures`'s caller, rather than inside it.
+    folded = _step_captures(step, site)
+    # Spec 2026-09-21 §5 and fix round 1 (finding 3): a link's meaning depends
+    # on where it sits. A handler captured AFTER a link the chain holds READS
+    # the linked channel (the DSL subscribes the next endpoint to it —
+    # `_READS_LINK` keeps the link's value, readable or not, because an
+    # unreadable link before the handler still means the handler reads
+    # SOMETHING other than the wire or the source); a link captured AFTER a
+    # handler is that handler's OUTPUT channel (`_LINK_SENDER` holds it) and
+    # leaves what the handler read untouched.
+    if "channel_link" in folded:
+        if "handler" in captures:
+            captures[_LINK_SENDER] = captures["handler"]
+        else:
+            captures.pop(_LINK_SENDER, None)
+    elif "handler" in folded and "channel_link" in captures:
+        captures[_READS_LINK] = captures["channel_link"]
+    _fold(captures, folded)
+    if step["continue_via"] is not None:
+        captures[_CONTINUE] = step["continue_via"]
+    # F5 §6.2 (W29): a `collects` step ACCUMULATES instead, because the thing it
+    # reads is repeatable — a request may carry any number of headers, and
+    # last-wins would keep only the final one and silently claim it was the only
+    # one. Appended to a tuple rather than a list so each branch of a fork gets
+    # its own value by copy, exactly as `dict(captures)` in `_walk` gives each
+    # branch its own captures.
+    collected = _step_collects(step, site)
+    if collected:
+        previous = captures.get(_COLLECTED) or ()
+        captures[_COLLECTED] = (*previous, *collected)
+    # `OI-73`: a step whose captured argument IS a lambda takes its captures from
+    # the lambda's own body. `uri(b -> b.path("/x").queryParam("q", term).build())`
+    # is the idiomatic way to build a URL with query parameters, and the address
+    # is the row's identity — without this the row derives with `path` NULL and a
+    # real outbound call has no address at all.
+    _fold_lambda_captures(captures, context)
+    # Spec 2026-09-21 §4: a step whose captured argument is a BEAN reference
+    # takes its value from the bean — its name, or the captures of its own
+    # chain — resolved here, where the step folded, so a later setter's
+    # literal overrides it exactly as it overrides any earlier capture.
+    _fold_bean_captures(captures, context)
+
+
+def _fold(captures: dict[str, Any], folded: dict[str, Any]) -> None:
+    """Last wins (D02 §4), except for a field a catalog poison already holds:
+    `_POISONED` stays to the chain's end, so the `handle` after a `divert`
+    never becomes the row's handler (spec 2026-09-21 §5, §0b A5). A guard's
+    own `_UNRESOLVED_ARGUMENT` is not a poison and is overwritten as it always
+    was."""
+    for field, value in folded.items():
+        if captures.get(field) is not _POISONED:
+            captures[field] = value
 
 
 def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
+    """One chain's row (or, for an inbound chain that linked a channel, its
+    `fed_by` edge instead — the join pass mints the row).
+
+    A registration chain's `handler` (spec 2026-09-21 §3c) is the consumer it
+    captured, written on an INBOUND row only: a `lambda` argument's body,
+    joined to its full method symbol; NULL for the literal `none` (a
+    `discard` step — the true answer), for a poisoned capture (a `divert`
+    before it — §5), for an argument of any other kind (a bean handler, the
+    bean fold's word), and for a chain that never reached a handler step.
+    **The handler never moves the row's resolution**: the row's identity is
+    the wire (`protocol`, `path`), which the chain read or did not, and a
+    known wire whose consumer is unread is a resolved row with `handler`
+    NULL — not an unresolved row, which would say the WIRE was unread.
+    `evidence` is a closed set, so the reason stays in the walk, not the
+    row."""
+    # Spec 2026-09-21 §4: the root's own direction where it declared one,
+    # the catalog's otherwise — read once, because every column and key
+    # below that names a direction names this one.
+    direction = captures.get(_DIRECTION, context.catalog.direction)
+    if _COMPOSE in captures:
+        composed_field, halves, join = captures[_COMPOSE]
+        captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
+    # The consumer the chain captured, whatever the direction (read on the row
+    # for an inbound one alone, below); and — fix round 1, finding 4 — a
+    # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
+    # what it captured: a WIRE (a sink's `topic`, a composed exchange/routing
+    # key) makes it the OUTBOUND row, `caller` the flow method, with an
+    # outbound `fed_by` for the source channel (§3b: the channel's wire end
+    # is known, so the question is not asked); a handler and no wire makes it
+    # the source channel's READER — `read_by`, no row (§5: "a channel-sourced
+    # flow with an inline handler is a channel consumer, not a wire"); neither
+    # says nothing about any wire (a bridge, `from("a").channel("b")` — the
+    # stated boundary). A source whose name could not be read consumes an
+    # unknown channel: its wire still derives (no edge to write), its handler
+    # reads nothing nameable. A handler folded AFTER a link the chain holds
+    # (`from("a").channel("b").handle(h)`, `_READS_LINK`) reads the LINKED
+    # channel, M4's rule under `channel_source` too: the framework subscribes
+    # `h` to `b`, and `a → b` is the bridge the boundary states — so the edge
+    # is `read_by(b, h)` and nothing is written for the source. A link before
+    # the handler that could not be read (`channel(<spec>)`, residual fix)
+    # is the same bridge to a channel nobody can name: nothing is written,
+    # and never `read_by(a, h)` in its place. A link AFTER the handler
+    # (`_LINK_SENDER`) is that handler's output, `sends_to`, the wire
+    # branch's own edge written here too.
+    last_handler = _handler_symbol(captures.get("handler"), context.method_symbols)
+    reads_link = _READS_LINK in captures
+    read = _string_value(captures[_READS_LINK]) if reads_link else None
+    sourced = "channel_source" in captures
+    source = _string_value(captures.get("channel_source")) if sourced else None
+    if sourced:
+        if "channel" in captures:
+            direction = "outbound"
+        else:
+            if not reads_link:
+                read = source
+            if read is not None and last_handler is not None:
+                context.bindings.append(
+                    _edge(_READ_BY, read, last_handler, context, "inbound", protocol=None)
+                )
+            sender = (
+                _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+                if _LINK_SENDER in captures
+                else None
+            )
+            sent = _string_value(captures.get("channel_link"))
+            if sent is not None and sender is not None:
+                context.bindings.append(_edge(_SENDS_TO, sent, sender, context, "inbound"))
+            return
     # A verb the catalog spelled as a literal is that literal; one it spelled
     # as `argN` (`A-C2`) is whatever the matched call's own argument reads as a
     # string, and None where nothing could read it — the honest gap, not the
@@ -515,14 +1032,19 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # collapses to the same one-tuple list `single_call`'s own non-ladder
     # case builds by hand.
     destinations: Sequence[tuple[str | None, str | None, str]]
+    # `channels_of`, not `channel_of` (spec 2026-09-21 §3c): a varargs
+    # destination — the container's `setQueueNames("q1", "q2")`, one `array`
+    # argument (9.15) — is one row per element; a slot that is not an array
+    # reads exactly as it always did, one tuple, so the ladder below still
+    # runs only where that one literal did not resolve.
     if "channel" in captures:
         channel_argument = _address_read(captures.get("channel"), context)
-        literal = channel_of(channel_argument)
+        literal = channels_of(channel_argument)
         channel_via_forms = captures.get("channel_via") or []
-        if literal[2] != "resolved" and channel_via_forms:
+        if literal[0][2] != "resolved" and channel_via_forms:
             destinations = linked_channels(channel_argument, context.facts, channel_via_forms)
         else:
-            destinations = [literal]
+            destinations = literal
     else:
         destinations = [_composed_address(captures, context)]
     # Computed once, outside the destinations loop — the same
@@ -534,6 +1056,33 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     response_shape = _response_descriptor(
         response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
+    # Spec 2026-09-21 §3c: the consumer, on an inbound row alone — an outbound
+    # registration hands its messages to nobody in this module. Where the
+    # chain's link sits AFTER a handler (finding 3), the row's handler is
+    # THAT handler — the wire's consumer — not whatever a later `handle`
+    # after the link captured, which reads the channel instead. A handler
+    # that followed a link (`_READS_LINK`) is that channel's reader and not
+    # the wire's consumer whether or not the link could be read (residual
+    # fix): an unreadable link before it leaves the row's handler NULL rather
+    # than crediting the wire with a consumer the framework subscribed
+    # elsewhere.
+    link_after_handler = _LINK_SENDER in captures
+    handler = (
+        (
+            _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+            if link_after_handler
+            else None
+            if reads_link
+            else last_handler
+        )
+        if direction == "inbound"
+        else None
+    )
+    # §3b: the channel this registration feeds, where the chain read its name.
+    # Poisoned, unresolved or a bean the fold could not name all read None: a
+    # channel we cannot name is not a channel we can bind, and the chain then
+    # keeps its own row with `handler` NULL.
+    link = _string_value(captures.get("channel_link"))
     for peer, path, url_resolution in destinations:
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
@@ -541,7 +1090,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         # today, all of which are outbound — R8's exclusion, stated here
         # rather than left implicit, because a future inbound fluent catalog
         # would need it and would otherwise have to rediscover it.
-        if path is not None and serves_urls(context.catalog.protocol, context.catalog.direction):
+        if path is not None and serves_urls(context.catalog.protocol, direction):
             path = canonical_http_path(path)
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
@@ -589,7 +1138,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             # peer are equal there.
             key = (
                 context.catalog.protocol,
-                context.catalog.direction,
+                direction,
                 verb or "",
                 path,
                 context.caller,
@@ -599,11 +1148,51 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 continue
             context.seen.add(key)
         for entry in captures.get(_COLLECTED) or ():
-            context.metadata.append(_metadata_row(entry, context, verb, path))
+            context.metadata.append(_metadata_row(entry, context, direction, verb, path))
+        if source is not None:
+            # Finding 4: the channel-sourced chain reached a wire — the source
+            # channel's wire end is this row, an outbound `fed_by`.
+            context.bindings.append(
+                _edge("fed_by", source, context.caller, context, direction, path, resolution)
+            )
+        # Spec 2026-09-21 §5, §0b A4: a handler folded AFTER the link —
+        # `.channel("x").handle(h)` — is a READER of the linked channel, the
+        # same edge a handler's own annotation writes; the join pass then
+        # mints the row naming the feeder and that reader, beside any other
+        # reader of the channel. The channel is the one the handler FOLLOWED
+        # (`_READS_LINK`), not the chain's last link, which a `.channel("y")`
+        # after the handler overwrote (`OI-115`'s shape). Only a handler the
+        # chain could name and a link it could read: an unread handler is no
+        # reader, and an unreadable link is a channel nobody can name.
+        if direction == "inbound" and read is not None and last_handler is not None:
+            context.bindings.append(
+                _edge(_READ_BY, read, last_handler, context, direction, protocol=None)
+            )
+        if link is not None and direction == "inbound" and link_after_handler:
+            # Finding 3: a link AFTER the handler is the handler's OUTPUT channel
+            # — `sends_to`, and the row derives with that handler: the wire's
+            # consumer is known, and what it hands on is a separate edge.
+            if handler is not None:
+                context.bindings.append(_edge(_SENDS_TO, link, handler, context, direction))
+        elif link is not None:
+            # Spec 2026-09-21 §3b: the `fed_by` edge — the wire this chain read,
+            # the constructing method, the registration's direction. An inbound
+            # chain writes the edge INSTEAD of its row (the plan's ruling: the
+            # join pass owns rows for linked registrations, so a linked adapter
+            # is never counted twice — and `call_endpoints`' guard would refuse
+            # the minted row, handler and all, behind a chain row with the same
+            # identity); an outbound one writes both, its edge existing so that
+            # `config_join.gaps` stops asking who feeds the channel. The row's
+            # own `resolution` travels with it: the edge stands in for the row.
+            context.bindings.append(
+                _edge("fed_by", link, context.caller, context, direction, path, resolution)
+            )
+            if direction == "inbound":
+                continue
         context.rows.append(
             {
                 "protocol": context.catalog.protocol,
-                "direction": context.catalog.direction,
+                "direction": direction,
                 # Not `str(verb)`: a verbless chain's `verb` is genuinely None
                 # (no root ever declared `http_method`), and `str(None)` would
                 # write the literal text "None" into a column NULL is supposed
@@ -611,7 +1200,7 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 # stringified) is the same answer for the same reason.
                 "method": verb,
                 "path": path,
-                "handler": None,
+                "handler": handler,
                 "caller": context.caller,
                 "peer": peer,
                 "handler_signature": None,
@@ -626,8 +1215,42 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         )
 
 
+def _edge(
+    role: str,
+    channel: str,
+    symbol: str,
+    context: _ChainContext,
+    direction: str,
+    destination: str | None = None,
+    resolution: str = "resolved",
+    *,
+    protocol: str | None = "",
+) -> dict[str, Any]:
+    """One `channel_bindings` row (spec 2026-09-21 §3b): `fed_by` carries the
+    wire (this catalog's protocol, the destination, the row's own resolution
+    — the edge stands in for the row); `read_by` carries the reader and
+    nothing about the wire (`protocol=None`, no destination — a reader knows
+    only the channel's name); `sends_to` the sender under this catalog's
+    protocol, the wire it hands on being the sender's own concern (no
+    destination)."""
+    return {
+        "channel": channel,
+        "role": role,
+        "symbol": symbol,
+        "protocol": context.catalog.protocol if protocol == "" else protocol,
+        "direction": direction,
+        "destination": destination,
+        "catalog_id": context.catalog.id,
+        "resolution": resolution,
+    }
+
+
 def _metadata_row(
-    entry: dict[str, Any], context: "_ChainContext", verb: str | None, path: str | None
+    entry: dict[str, Any],
+    context: "_ChainContext",
+    direction: str,
+    verb: str | None,
+    path: str | None,
 ) -> dict[str, Any]:
     """One `endpoint_metadata` row, keyed to the endpoint this chain just derived and
     **redacted here, where the value is read** (F5 §6.2, W29).
@@ -661,7 +1284,7 @@ def _metadata_row(
     literal = _string_value(entry["value"])
     return {
         "protocol": context.catalog.protocol,
-        "direction": context.catalog.direction,
+        "direction": direction,
         "method": verb,
         "path": path,
         "caller": context.caller,
@@ -691,8 +1314,26 @@ def _address_read(argument: dict[str, Any] | None, context: _ChainContext) -> di
     `field`-kind argument — or a getter's own result — that the field ladder
     can name a configuration expression for is replaced by that expression as
     a string literal BEFORE any existing resolution path sees it, so an
-    imperatively-fed address behaves downstream exactly as a written one."""
-    return address_argument(argument, context.field_sources, context.facts)
+    imperatively-fed address behaves downstream exactly as a written one. The
+    caller handed to the ladder's parameter rung is the one the argument
+    carries (`_own_parameter`) — the method whose signature the index is an
+    index into — never the chain's, which a lambda body's capture is not."""
+    if isinstance(argument, dict) and argument.get("kind") == "array":
+        # A varargs slot is one `array` argument (9.15), one destination per
+        # element (spec 2026-09-21 §3c) — and each element is an address in
+        # its own right, so each takes the ladder: `inboundAdapter(cf,
+        # this.valueQueue)` is a field-fed queue exactly as `uri(this.url)`
+        # is a field-fed address. The array itself names no expression, so
+        # before this every varargs registration fed from configuration read
+        # `unresolved` element by element.
+        return {
+            **argument,
+            "elements": [
+                _address_read(element, context) for element in argument.get("elements") or []
+            ],
+        }
+    caller = argument.get("caller") if isinstance(argument, dict) else None
+    return address_argument(argument, context.field_sources, context.facts, caller)
 
 
 def _composed_address(
@@ -781,17 +1422,64 @@ def _address_of(composed: str) -> tuple[str | None, str | None, str]:
     return peer, path, "resolved"
 
 
+def _composed_field(
+    halves: tuple[str, ...], join: str, captures: dict[str, Any], context: _ChainContext
+) -> Any:
+    """Spec 2026-09-21 §4's `compose:` — the field's value as ONE string
+    argument joined from its halves in declared order, each half read through
+    the field ladder exactly as an address capture is (a half held in a
+    `@Value` field is its `${…}` expression, and the composition carries it
+    whole). A half never captured, or captured and unreadable, leaves the
+    whole field unresolved (§0b A3: the framework fills an unset half from
+    defaults the walk does not read, so half an address is no address) —
+    `_composed_address`'s own rule for `base`+`url`, restated for a
+    destination.
+
+    An EMPTY first half is the composite's own degenerate spelling and the
+    field is then the tail alone — `single_call._paired_destination`'s rule,
+    restated here for the same wire (§8.1 rule 1: an exchange name of `""` is
+    AMQP's default exchange, and the routing key alone names the queue), so
+    the DSL sink and the template publish the same address for the same
+    call. As there, it holds while every protocol composing here reads an
+    empty first half as "the default routing"; one that does not needs its
+    own rule rather than this one widened."""
+    parts = [_string_value(_address_read(captures.get(half), context)) for half in halves]
+    if any(part is None for part in parts):
+        return _UNRESOLVED_ARGUMENT
+    if parts[0] == "":
+        parts = parts[1:]
+    return {"kind": "string", "value": join.join(str(part) for part in parts)}
+
+
 def _string_value(argument: dict[str, Any] | None) -> str | None:
     """A captured argument's own string literal, or None for anything else —
     `url_of`'s own test, needed on its own here because composition works on
-    the two halves' TEXT before either is read as an address."""
+    the two halves' TEXT before either is read as an address. "Anything
+    else" includes the catalog's own literal spellings (`none`, `{bean_via:
+    …}`) and both poisons, none of which is a `string` argument."""
     if (
-        argument is not None
+        isinstance(argument, dict)
         and argument.get("kind") == "string"
         and isinstance(argument.get("value"), str)
     ):
         return str(argument["value"])
     return None
+
+
+def _handler_symbol(argument: Any, method_symbols: dict[str, str]) -> str | None:
+    """The full method symbol a captured `handler` names (spec 2026-09-21
+    §3c), or None. Only a `lambda` argument is read here — a bound method
+    reference names the real method, an inline block the synthetic body the
+    compiler emitted for it (D00 §5a), and a class-compiled lambda already
+    arrives as one through `effective_call_sites` — and only where its bare
+    name joins to a symbol fact: a handler nothing else in the graph could
+    follow is no handler. `combinator._handler_of`, restated for a capture
+    rather than a position. Everything else reads None and moves nothing (the
+    `_derive` docstring)."""
+    if not isinstance(argument, dict) or argument.get("kind") != "lambda":
+        return None
+    symbol = argument.get("symbol")
+    return method_symbols.get(str(symbol)) if symbol is not None else None
 
 
 def _response_descriptor(
@@ -817,15 +1505,55 @@ def _response_descriptor(
     return json.dumps(wrapped, sort_keys=True, separators=(",", ":"))
 
 
-def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _matching_root(site: dict[str, Any], roots: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """The first declared root `site` is a call to: its owner, its name, and — where
+    the root declares a `descriptor` — its parameter types (`_same_overload`)."""
     return next(
         (
             root
             for root in roots
-            if site["owner"] in root["owners"] and site["name"] == root["method"]
+            if site["owner"] in root["owners"]
+            and site["name"] == root["method"]
+            and _same_overload(root, site)
         ),
         None,
     )
+
+
+def _same_overload(entry: dict[str, Any], site: dict[str, Any]) -> bool:
+    """Whether `site` is the overload `entry` declares — every overload where the
+    entry declares no `descriptor`, else the one whose PARAMETER TYPES are the
+    declared ones. The parameter portion alone, `single_call._matching_method`'s
+    own rule (F2 §4.1): a method is identified by its name and parameter types,
+    and a return type moves between framework releases without a caller's source
+    changing — ten `spring-kafka-template` rows once matched nothing in a 2.x
+    module for exactly that."""
+    declared = entry["descriptor"]
+    if declared is None:
+        return True
+    recorded = site.get("descriptor")
+    return recorded is not None and parameter_types(declared) == parameter_types(str(recorded))
+
+
+def _validated_descriptor(entry: dict[str, Any], catalog: Catalog, where: str) -> str | None:
+    """An entry's optional `descriptor`, refused unless it is spelled the way the
+    extractor records one — a string opening with `(` and closing its parameter
+    list — because a descriptor no call site can ever equal matches nothing, and
+    an overload declared that way silently derives nothing (the `single_call`
+    refusal, for its reason). The message names no language: `descriptor` is
+    whatever the module's own extractor records at `target.descriptor`."""
+    declared = entry.get("descriptor")
+    if declared is None:
+        return None
+    if not (isinstance(declared, str) and declared.startswith("(") and ")" in declared):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{where}` entry `{entry.get('method')}` "
+            f"declares `descriptor: {declared!r}`, which is not a method descriptor — its "
+            f"parameter portion is compared against a call site's own `target.descriptor`, "
+            f"so it must be spelled the way the extractor records one, opening with `(` "
+            f"(spec 2026-09-21 §5)"
+        )
+    return declared
 
 
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -845,6 +1573,7 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
             for step in steps
             if step["method"] == name
             and (step["owners"] is None or site["owner"] in step["owners"])
+            and _same_overload(step, site)
         ),
         None,
     )
@@ -855,9 +1584,11 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
     `owner` telling them apart — silent last-wins would hide exactly the bug
     it is meant to catch (`ports/catalogs.py`'s own discipline: an unchecked
     value does not stay in the file). Two entries are distinguishable only
-    when BOTH declare an `owner` and the owners differ; an owner-less entry
-    matches every owner, so it collides with any sibling regardless of what
-    that sibling declares."""
+    when BOTH declare an `owner` and the owners differ — or, sharing an
+    owner, when BOTH declare a `descriptor` and the parameter types differ
+    (spec 2026-09-21 §5); an owner-less entry matches every owner, and a
+    descriptor-less one every overload, so either collides with any sibling
+    regardless of what that sibling declares."""
     by_method: dict[str, list[dict[str, Any]]] = {}
     for step in steps:
         by_method.setdefault(step["method"], []).append(step)
@@ -869,18 +1600,35 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
         # several (§3.1): `[JmsTemplate, JmsOperations]` beside `[JmsOperations]`
         # is two entries that both match a `JmsOperations` receiver, which is the
         # same silent last-wins this refusal exists to prevent — a scalar pair
-        # could only collide by being equal.
-        owner_sets = [step["owners"] for step in group]
+        # could only collide by being equal. Two entries sharing an owner are
+        # still distinguishable when BOTH declare a `descriptor` and the
+        # descriptors differ (spec 2026-09-21 §5: the `handle` overloads on one
+        # definition type); one of them declaring none would match every
+        # overload, which is the same silent last-wins.
         overlapping = any(
-            first is None or second is None or set(first) & set(second)
-            for index, first in enumerate(owner_sets)
-            for second in owner_sets[index + 1 :]
+            _overlapping_owners(first["owners"], second["owners"])
+            and not _distinct_overloads(first, second)
+            for index, first in enumerate(group)
+            for second in group[index + 1 :]
         )
         if overlapping:
             raise CatalogError(
                 f"loading catalog {catalog.source}: steps named `{method}` need distinct "
-                f"`owner`s to tell them apart (D02 §4's fluent style)"
+                f"`owner`s or distinct `descriptor`s to tell them apart (D02 §4's fluent "
+                f"style)"
             )
+
+
+def _overlapping_owners(first: tuple[str, ...] | None, second: tuple[str, ...] | None) -> bool:
+    return first is None or second is None or bool(set(first) & set(second))
+
+
+def _distinct_overloads(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    return (
+        first["descriptor"] is not None
+        and second["descriptor"] is not None
+        and parameter_types(first["descriptor"]) != parameter_types(second["descriptor"])
+    )
 
 
 def _validate_captures(
@@ -916,11 +1664,35 @@ def _validate_captures(
     misplaced or malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
-            if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
+            # `{bean_via: argN}` is a position too (spec 2026-09-21 §4): the
+            # argument at it is read as a bean reference rather than as the
+            # value itself — the container hop, `channel: {bean_via: arg0}`.
+            if field in _ARGUMENT_FIELDS and not (
+                _ARG_REFERENCE.match(str(value)) or _valid_bean_via(value)
+            ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{entry['method']}` captures "
                     f"`{field}: {value}`, which is not a call-site position — an argument "
-                    f"capture reads `argN` (D02 §4's fluent style)"
+                    f"capture reads `argN` or `{{{_BEAN_VIA}: argN}}` (D02 §4's fluent style)"
+                )
+            # Spec 2026-09-21 §4: the two consumer captures, each `argN` or its
+            # one literal spelling — anything else is a typo that would
+            # silently capture nothing, the same reason the check above exists.
+            if field == "handler" and not (
+                _ARG_REFERENCE.match(str(value)) or value == _HANDLER_NONE
+            ):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                    f"`handler: {value}` — a handler reads `argN` or is the literal "
+                    f"`{_HANDLER_NONE}` (spec 2026-09-21 §5's `discard`)"
+                )
+            if field in _CHANNEL_NAME_FIELDS and not (
+                _ARG_REFERENCE.match(str(value)) or _valid_bean_via(value)
+            ):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                    f"`{field}: {value!r}` — a channel name reads `argN` or "
+                    f"`{{{_BEAN_VIA}: argN}}` (spec 2026-09-21 §4, §5)"
                 )
         when = entry.get("when")
         if when is None:
@@ -961,6 +1733,11 @@ def _validate_url_channel_exclusivity(
     fields: set[str] = set()
     for entry in (*roots, *steps):
         fields.update(entry["captures"])
+        # A composed field is written into the same running dict at derive
+        # time (spec 2026-09-21 §4's `compose:`), so it is a declared capture
+        # for this check exactly as a step's own would be.
+        if entry.get("compose") is not None:
+            fields.add(entry["compose"][0])
     address = sorted(field for field in _ADDRESS_FIELDS if field in fields)
     if address and "channel" in fields:
         raise CatalogError(
@@ -980,6 +1757,344 @@ def _valid_when(when: Any) -> bool:
         and isinstance(when.get("arg"), int)
         and isinstance(when.get("equals"), str)
     )
+
+
+def _valid_bean_via(value: Any) -> bool:
+    """Whether a capture value is exactly `{bean_via: argN}` (spec 2026-09-21
+    §4) — the shape `_resolve_captures` holds as a bean reference and
+    `_fold_bean_captures` resolves."""
+    return (
+        isinstance(value, dict)
+        and set(value) == {_BEAN_VIA}
+        and _ARG_REFERENCE.match(str(value[_BEAN_VIA])) is not None
+    )
+
+
+def _validated_direction(root: dict[str, Any], catalog: Catalog) -> str | None:
+    """A root's own `direction:` (spec 2026-09-21 §4), checked against D00's
+    closed set exactly as `single_call` checks a `methods` row's — or None for
+    the root that declares none and keeps the catalog's."""
+    direction = root.get("direction")
+    if direction is not None and direction not in _DIRECTIONS:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: root `{root['method']}` declares "
+            f"`direction: {direction}`, which is not one of {', '.join(_DIRECTIONS)} "
+            f"— D00's closed sets are closed (NFR-5)"
+        )
+    return None if direction is None else str(direction)
+
+
+def _validated_compose(
+    root: dict[str, Any], catalog: Catalog
+) -> tuple[str, tuple[str, ...], str] | None:
+    """A root's `compose:` as `(field, halves, join)` (spec 2026-09-21 §4):
+    exactly one field naming a non-empty list of halves, beside a `join`
+    string — or None for the root that declares none. Refused otherwise,
+    because a malformed composition would derive `path` NULL on every chain
+    from the root with nothing saying why."""
+    compose = root.get("compose")
+    if compose is None:
+        return None
+    fields = [key for key in compose if key != "join"] if isinstance(compose, dict) else []
+    halves = compose.get(fields[0]) if len(fields) == 1 else None
+    if (
+        halves is None
+        or not isinstance(compose.get("join"), str)
+        or not isinstance(halves, list)
+        or not halves
+        or not all(isinstance(half, str) for half in halves)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: root `{root['method']}` declares "
+            f"`compose: {compose!r}`, which must be `{{<field>: [half, …], join: str}}` "
+            f"exactly (spec 2026-09-21 §4)"
+        )
+    return str(fields[0]), tuple(str(half) for half in halves), str(compose["join"])
+
+
+def _validated_method_annotation(
+    root: dict[str, Any], catalog: Catalog
+) -> tuple[str, str, str] | None:
+    """A root's `method_annotation:` as `(annotation descriptor, arg, into)`
+    (spec 2026-09-21 §4): the constructing method's own annotation, the
+    attribute to read and the capture field it fills — exactly those three
+    strings, or None for the root that declares none. `annotation` is
+    converted to the SCIP form the annotation index is keyed in, once here."""
+    declared = root.get("method_annotation")
+    if declared is None:
+        return None
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != {"annotation", "arg", "into"}
+        or not all(isinstance(declared[key], str) and declared[key] for key in declared)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: root `{root.get('method')}` declares "
+            f"`method_annotation: {declared!r}`, which must be `{{annotation, arg, into}}` "
+            f"exactly (spec 2026-09-21 §4)"
+        )
+    return _catalog_symbol(declared["annotation"]), declared["arg"], declared["into"]
+
+
+def _method_annotation_capture(root: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
+    """The capture a root's `method_annotation` reads off the constructing
+    method (spec 2026-09-21 §4): `{into: <string argument>}` where the method
+    carries the annotation with that attribute as a string literal —
+    `@ServiceActivator(inputChannel = "orders")` on the factory method that
+    builds the outbound handler — and nothing at all otherwise. Absent is no
+    claim: the chain then derives exactly as it would without the word."""
+    if root["method_annotation"] is None:
+        return {}
+    annotation, arg, into = root["method_annotation"]
+    for used, args in context.annotations.get(context.caller, []):
+        if used == annotation and isinstance(args.get(arg), str):
+            return {into: {"kind": "string", "value": args[arg]}}
+    return {}
+
+
+def _fold_bean_captures(captures: dict[str, Any], context: _ChainContext) -> None:
+    """Replaces every captured value that is a bean REFERENCE (`_resolve_captures`'
+    `bean_via` marker) with what the bean answers, in place (spec 2026-09-21
+    §3a, §4): on `channel_link`, the bean's NAME as a string argument — the
+    channel it is registered under, which is what a `read_by` edge names too;
+    on any other field, the value the bean's own chain captured under that
+    field (`_bean_chain_capture` — the container hop). A reference nothing
+    resolves reads as the compiler's own `unresolved` kind, with the reason,
+    which every downstream reader already answers as a read failure — and NOT
+    as `_POISONED`: a bean the fold could not name is this setter's own
+    failure, and a later `setOutputChannelName("x")` is the setter the
+    framework honours, so it must be free to override it.
+
+    One hop only: in the collecting context (`beans` None) a reference is not
+    followed — the field is `_POISONED` there — and a container built in a
+    third bean is unresolved (§4)."""
+    for field, value in list(captures.items()):
+        if not isinstance(value, dict) or value.get("kind") != _BEAN_VIA:
+            continue
+        if context.beans is None:
+            # The second hop (§4): a statement about the chain, not a read
+            # failure a later setter lifts — the container's own destination
+            # lives in a third bean this walk does not reach.
+            captures[field] = _POISONED
+            continue
+        if value.get("caller") != context.caller:
+            captures[field] = _unresolved_bean("across_bodies")
+            continue
+        bean = _bean_reference(value.get("argument"), context)
+        if isinstance(bean, Unresolved):
+            captures[field] = _unresolved_bean(bean.reason)
+        elif field in _CHANNEL_NAME_FIELDS:
+            captures[field] = {"kind": "string", "value": bean.name}
+        else:
+            captures[field] = _bean_chain_capture(bean, field, context)
+
+
+def _unresolved_bean(reason: str) -> dict[str, Any]:
+    """The compiler's own `unresolved` shape (`_UNRESOLVED_ARGUMENT`), with the
+    bean fold's reason — a fresh mapping, so `_fold` overwrites it as it does
+    any read failure that is not a catalog poison."""
+    return {"kind": "unresolved", "reason": f"bean_{reason}"}
+
+
+def _bean_reference(
+    argument: dict[str, Any] | None, context: _ChainContext
+) -> BeanRef | Unresolved:
+    """The bean one argument names (spec 2026-09-21 §3a), by the two shapes a
+    reference takes in a factory method: the caller's own injected parameter —
+    `{kind: parameter, value: i}`, read off the declared signature for its
+    erased type, name and qualifier — or the RESULT of a direct call, in this
+    same caller, to a declaring method (`bean_called`; the call's target joined
+    to its symbol through `method_descriptor`, the same arithmetic every
+    caller-to-callee join uses). Anything else — a field, a literal, a call to
+    a method that declares no bean — is `none`. Only ever called with a bean
+    table in hand (`_fold_bean_captures` answers the collecting context's
+    case before reaching here); a context without one resolves nothing."""
+    if context.beans is None or argument is None:
+        return Unresolved("none")
+    if argument.get("kind") == "parameter" and isinstance(argument.get("value"), int):
+        index = int(argument["value"])
+        parameters = context.facts.caller_parameters
+        if index >= len(parameters):
+            return Unresolved("none")
+        declared = parameters[index]
+        erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
+        if not isinstance(erased, str):
+            return Unresolved("none")
+        name = declared.get("name")
+        return context.beans.bean_of(
+            Parameter(
+                method=context.caller,
+                index=index,
+                erased_type=erased,
+                name=str(name) if isinstance(name, str) else None,
+                qualifier=qualifier_of(
+                    list(declared.get("annotations") or []), context.catalog.bean_model
+                ),
+            )
+        )
+    source = argument.get("source")
+    if source is None:
+        return Unresolved("none")
+    producer = next((site for site in context.sites if _chain_key(site) == source), None)
+    if producer is None or producer.get("owner") is None or producer.get("descriptor") is None:
+        return Unresolved("none")
+    bare = method_descriptor(
+        str(producer["owner"]), str(producer["name"]), str(producer["descriptor"])
+    )
+    full = context.method_symbols.get(bare)
+    bean = context.beans.bean_called(full) if full is not None else None
+    return bean if bean is not None else Unresolved("none")
+
+
+def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> Any:
+    """What a referenced bean's own chain captured under `field` (spec
+    2026-09-21 §4's container hop): the bean's declaring method's sites,
+    walked from each `beans:` root they hold with a fresh capture dict and a
+    COLLECTING context — the same walk, the same steps and poisons, recording
+    each chain end's captures instead of deriving — and the value under
+    `field` where every end that captured one agrees. No declaring method, no
+    root in it, no end capturing the field, or two ends disagreeing, is the
+    `unresolved` kind with the reason: the adapter's destination is then unread
+    (`path` NULL), never guessed from one of several containers' queues."""
+    if bean.method is None:
+        return _unresolved_bean("no_method")
+    sites = context.by_caller.get(bare_descriptor(bean.method), [])
+    by_receiver: dict[Any, list[dict[str, Any]]] = {}
+    for site in sites:
+        by_receiver.setdefault(site["receiver"], []).append(site)
+    collected: list[dict[str, Any]] = []
+    collecting = replace(
+        context,
+        caller=bean.method,
+        sites=sites,
+        by_receiver=by_receiver,
+        facts=replace(
+            context.facts,
+            caller_call_sites=sites,
+            caller_parameters=context.all_parameters.get(bean.method, ()),
+        ),
+        beans=None,
+        collect=collected,
+    )
+    for site in sites:
+        root = _matching_root(site, context.bean_roots)
+        if root is None:
+            continue
+        captures = {
+            **_prefix_captures(site, collecting),
+            **_resolve_captures(root["captures"], site),
+        }
+        _fold_bean_captures(captures, collecting)
+        _walk(site, captures, reached_terminal=False, context=collecting)
+    values = [_literal_of(field, end, collecting) for end in collected if field in end]
+    if not values:
+        return _unresolved_bean("no_chain" if not collected else "field_uncaptured")
+    if any(value != values[0] for value in values[1:]):
+        return _unresolved_bean("chains_disagree")
+    return values[0]
+
+
+def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
+    """What one chain end of a referenced bean captured under `field`, READ IN
+    THAT BEAN'S OWN METHOD (fix round 1, finding 1) and handed back as a
+    literal-shaped argument carrying no value id: value ids are per method
+    (D00 §5), so a `source` the container's chain captured must never reach
+    the adapter's `_derive`, where the field ladder's getter join and the
+    `channel_via` ladder would search the ADAPTER method's sites for it — a
+    same-numbered value there is unrelated, and reading it fabricates.
+
+    So the read `_derive` would do runs here, against the collecting
+    context's own facts: the field ladder (`_address_read`), then for a
+    destination the array read and the end's own `channel_via` ladder,
+    exactly as `_derive` orders them. The answer is a `string`, an `array`
+    whose elements are strings (an unreadable element stays an `unresolved`
+    element, so the adapter's read degrades as `channels_of` always has), a
+    catalog poison as itself, or `unresolved`."""
+    value = end[field]
+    if value is _POISONED:
+        return _POISONED
+    argument = _address_read(value, context)
+    if field != "channel":
+        text = _string_value(argument)
+        return {"kind": "string", "value": text} if text is not None else _unresolved_bean("unread")
+    found = channels_of(argument)
+    forms = end.get("channel_via") or []
+    if found[0][2] != "resolved" and forms:
+        found = linked_channels(argument, context.facts, forms)
+    elements = [
+        {"kind": "string", "value": path}
+        if resolution == "resolved" and path is not None
+        else _unresolved_bean("unread")
+        for _, path, resolution in found
+    ]
+    return elements[0] if len(elements) == 1 else {"kind": "array", "elements": elements}
+
+
+def _undeclared_steps(
+    matches: dict[str, Any], catalog: Catalog
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`matches.undeclared_steps` as `(owners, poisons)` (spec 2026-09-21 §5:
+    an undeclared member of a flow definition is a `divert`), both empty for
+    a catalog declaring none. `owner` is one type or a list (§3.1), converted
+    to SCIP form once here; `poisons` a non-empty list of field names,
+    checked against the catalog's captures by `_validate_poisons`."""
+    declared = matches.get("undeclared_steps")
+    if declared is None:
+        return (), ()
+    poisons = declared.get("poisons") if isinstance(declared, dict) else None
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != {"owner", "poisons"}
+        or not isinstance(poisons, list)
+        or not poisons
+        or not all(isinstance(field, str) for field in poisons)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `undeclared_steps` must be "
+            f"`{{owner: <type|[types]>, poisons: [field, …]}}` exactly, got {declared!r} "
+            f"(spec 2026-09-21 §5)"
+        )
+    owners = catalog_symbols(declared["owner"], f"{catalog.source}: undeclared_steps.owner")
+    return owners, tuple(str(field) for field in poisons)
+
+
+def _validate_poisons(
+    roots: list[dict[str, Any]],
+    steps: list[dict[str, Any]],
+    undeclared_poisons: tuple[str, ...],
+    catalog: Catalog,
+) -> None:
+    """Refuses a poison naming a field no root, step or composition of this
+    catalog captures (spec 2026-09-21 §4's `poisons:`, on a step or under
+    `undeclared_steps`): a field nobody captures cannot be made unreadable,
+    so such a name is a typo the walk would carry silently as a key nothing
+    reads. The same check also keeps a poison off the ladder keys
+    (`channel_via`, `url_via`), whose readers iterate a list and cannot read
+    a poison — the case `_step_captures`' guard-poisoning already had to
+    step around."""
+    captured: set[str] = set()
+    for entry in (*roots, *steps):
+        captured.update(field for field in entry["captures"] if field not in _VIA_KEYS)
+        if entry.get("compose") is not None:
+            captured.add(entry["compose"][0])
+    declared: list[tuple[str, Any]] = [
+        (step["method"], step["poisons"]) for step in steps if step["poisons"] is not None
+    ]
+    if undeclared_poisons:
+        declared.append(("undeclared_steps", list(undeclared_poisons)))
+    for where, poisons in declared:
+        if not isinstance(poisons, list) or not all(isinstance(field, str) for field in poisons):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{where}` declares `poisons: "
+                f"{poisons!r}`, which must be a list of capture field names"
+            )
+        unknown = sorted(set(poisons) - captured)
+        if unknown:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{where}` declares `poisons` naming "
+                f"`{'`, `'.join(unknown)}`, which no root or step of this catalog captures "
+                f"(spec 2026-09-21 §4)"
+            )
 
 
 # The two linked-call ladders an entry may declare, each keyed to the capture
@@ -1033,12 +2148,17 @@ def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalo
                     # call's argument count, which tells a one-string constructor from the
                     # four-argument constructor once owner and method agree.
                     and valid_via_arity(form)
+                    # `descriptor` is optional too, and a string when declared: the
+                    # linked call's whole JVM descriptor (spec 2026-09-21 §5), which
+                    # tells `ContainerProperties(String...)` from `(Pattern)` where
+                    # arity cannot — both take one argument.
+                    and ("descriptor" not in form or isinstance(form["descriptor"], str))
                 )
                 if not valid:
                     raise CatalogError(
                         f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
                         f"a `{key}` entry that must be `{{owner, method, arg: {arg_forms}, "
-                        f"arity?: int}}`, "
+                        f"arity?: int, descriptor?: str}}`, "
                         f"got {form!r}"
                     )
             if key in entry and field not in entry.get("captures", {}):
@@ -1072,13 +2192,14 @@ def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[
             "method": form["method"],
             "arg": form["arg"],
             **({"arity": form["arity"]} if "arity" in form else {}),
+            **({"descriptor": form["descriptor"]} if "descriptor" in form else {}),
         }
         for form in _channel_via_entries(entry, key)
     ]
 
 
 def _terminal_index(
-    entries: list[Any],
+    entries: list[Any], catalog: Catalog
 ) -> tuple[set[str], dict[str, _JoinFilter | None]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
@@ -1107,15 +2228,57 @@ def _terminal_index(
         # receivers. Before this, two entries sharing a method name silently overwrote
         # each other in this dict and the FIRST one stopped deriving — which is how a
         # widening can remove coverage instead of adding it.
+        # Spec 2026-09-21 §5's `continue: true`: only with an `{owner, method}`
+        # marker — a bare `true` would continue the walk into ANY consumer of the
+        # built value, a log statement included, which is the fabrication the
+        # mapping form closes for the execute-join and would reopen here.
+        continues = bool(entry.get("continue"))
+        if continues and not isinstance(marker, dict):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: terminal `{entry['method']}` declares "
+                f"`continue: true` without an `{{owner, method}}` `terminal_via_argument` "
+                f"naming the consumer to continue into (spec 2026-09-21 §5)"
+            )
         via_argument[entry["method"]] = (
             _JoinFilter(
                 owners=catalog_symbols(marker["owner"], "terminal_via_argument.owner"),
                 methods=_method_names(marker["method"]),
+                continues=continues,
             )
             if isinstance(marker, dict)
             else None
         )
     return plain, via_argument
+
+
+def _validated_continuation(entry: dict[str, Any], catalog: Catalog) -> _JoinFilter | None:
+    """A root's or step's `via_argument_of: {owner, method}` with `continue:
+    true` (spec 2026-09-21 §5) as the continuing join, or None where the entry
+    declares neither. The two go together: `via_argument_of` without
+    `continue` would be an execute-join on a root, which `terminal_via_argument`
+    already is, and `continue` without a consumer names nothing to continue
+    into."""
+    via = entry.get("via_argument_of")
+    continues = entry.get("continue")
+    if via is None and continues is None:
+        return None
+    if (
+        continues is not True
+        or not isinstance(via, dict)
+        or set(via) != {"owner", "method"}
+        or not isinstance(via["method"], str | list)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+            f"`via_argument_of: {via!r}` with `continue: {continues!r}` — the pair is "
+            f"`via_argument_of: {{owner, method}}` with `continue: true` exactly "
+            f"(spec 2026-09-21 §5)"
+        )
+    return _JoinFilter(
+        owners=catalog_symbols(via["owner"], f"{catalog.source}: via_argument_of.owner"),
+        methods=_method_names(via["method"]),
+        continues=True,
+    )
 
 
 def _method_names(declared: Any) -> tuple[str, ...]:
@@ -1153,9 +2316,20 @@ def _has_execute_join(
     terminal (A2 Task 8 fix round 1; reading `result` here made every such
     chain derive nothing). `_walk` and `_linked_constructor` already key a
     constructor the same way."""
+    return bool(_consumers(site, sites, join_filter))
+
+
+def _consumers(
+    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: _JoinFilter | None
+) -> list[dict[str, Any]]:
+    """The rows `_has_execute_join` asks after, themselves: every row in
+    this caller carrying `site`'s chain key as an argument `source`, narrowed
+    to the filter's owner+method where one is declared — in ordinal order,
+    which is the walk's (NFR-1)."""
     result = _chain_key(site)
     if result is None:
-        return False
+        return []
+    found: list[dict[str, Any]] = []
     for candidate in sites:
         if join_filter is not None and (
             candidate["owner"] not in join_filter.owners
@@ -1163,8 +2337,8 @@ def _has_execute_join(
         ):
             continue
         if any(argument.get("source") == result for argument in candidate["arguments"]):
-            return True
-    return False
+            found.append(candidate)
+    return found
 
 
 def _chain_key(site: dict[str, Any]) -> Any:
@@ -1208,19 +2382,29 @@ def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]
     the `method` column unstringified. So a literal a guarded step declares
     is simply not folded in when the guard could not be read — the step
     contributed no readable evidence, and an earlier step's own literal is
-    left standing rather than replaced by a value nothing can interpret."""
+    left standing rather than replaced by a value nothing can interpret.
+
+    A step's `poisons:` (spec 2026-09-21 §4) come first, under whichever of
+    the three answers applies: the fields it names are unreadable from this
+    step on whatever its captures did, and a step that both poisons and
+    captures one field has the capture win, as an unguarded step's own
+    last-wins would."""
+    poisoned = dict.fromkeys(step.get("poisons") or (), _POISONED)
     when = step.get("when")
     if when is None:
-        return _resolve_captures(step["captures"], site)
+        return {**poisoned, **_resolve_captures(step["captures"], site)}
     guard = _arg_at(site["arguments"], when["arg"])
     if guard is not None and guard.get("kind") == "string" and isinstance(guard.get("value"), str):
         if guard["value"] == when["equals"]:
-            return _resolve_captures(step["captures"], site)
-        return {}
+            return {**poisoned, **_resolve_captures(step["captures"], site)}
+        return poisoned
     return {
-        field: _UNRESOLVED_ARGUMENT
-        for field, value in step["captures"].items()
-        if _reads_an_argument(field, value)
+        **poisoned,
+        **{
+            field: _UNRESOLVED_ARGUMENT
+            for field, value in step["captures"].items()
+            if _reads_an_argument(field, value)
+        },
     }
 
 
@@ -1368,11 +2552,47 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
     only the value itself says which."""
     resolved: dict[str, Any] = {}
     for field, value in declared.items():
-        if _reads_an_argument(field, value):
-            resolved[field] = _arg_at(site["arguments"], _arg_index(value))
+        if _valid_bean_via(value):
+            # Spec 2026-09-21 §4: the argument is a bean REFERENCE. Held with
+            # the site's own caller until `_fold_bean_captures` resolves it —
+            # a `parameter` argument is an index into THAT method's signature,
+            # and a marker folded up out of a lambda body would otherwise be
+            # read against the enclosing method's.
+            resolved[field] = {
+                "kind": _BEAN_VIA,
+                "argument": _arg_at(site["arguments"], _arg_index(value[_BEAN_VIA])),
+                "caller": site["caller"],
+            }
+        elif _reads_an_argument(field, value):
+            resolved[field] = _own_parameter(_arg_at(site["arguments"], _arg_index(value)), site)
         else:
             resolved[field] = value
     return resolved
+
+
+def _own_parameter(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
+    """A `parameter`-kind argument with the site's own caller beside it (spec
+    2026-09-21 §3c: a destination handed in as the constructing method's
+    `@Value` parameter reads its expression through the field ladder's rung
+    2a, which needs the declaration the index is an index INTO). The same
+    discipline as the `bean_via` marker above, for the same reason: captures
+    fold up out of lambda bodies, and a lambda's `parameter 1` is a captured
+    variable of ITS signature — read against the enclosing method's it would
+    fabricate that method's expression. Every other kind travels untouched."""
+    if argument is None:
+        return None
+    if argument.get("kind") == "array":
+        # Each element of a varargs slot is read on its own (`_address_read`),
+        # so each parameter among them carries the caller too.
+        return {
+            **argument,
+            "elements": [
+                _own_parameter(element, site) for element in argument.get("elements") or []
+            ],
+        }
+    if argument.get("kind") != "parameter":
+        return argument
+    return {**argument, "caller": site["caller"]}
 
 
 def _reads_an_argument(field: str, value: Any) -> bool:
@@ -1380,10 +2600,14 @@ def _reads_an_argument(field: str, value: Any) -> bool:
     stating a value. Spelled once because `_resolve_captures` and
     `_step_captures`'s guard-poisoning must agree exactly: a field poisoned in
     one and read as a literal in the other would write the poison mapping
-    itself into the `method` column."""
-    return field in _ARGUMENT_FIELDS or (
-        field in _LITERAL_OR_ARGUMENT_FIELDS and _ARG_REFERENCE.match(str(value)) is not None
-    )
+    itself into the `method` column.
+
+    An address field always does; any other field does exactly when its
+    value is spelled `argN` (the comment above `_HANDLER_NONE` has the
+    history) — no literal a catalog states on those fields is spelled that
+    way, and a list (`channel_via`'s forms) or a mapping (`{bean_via: …}`)
+    never matches the pattern."""
+    return field in _ARGUMENT_FIELDS or _ARG_REFERENCE.match(str(value)) is not None
 
 
 def _arg_index(value: Any) -> int | None:

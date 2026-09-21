@@ -14,6 +14,7 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
+from sextant.domain.symbols import parameter_types
 
 # The safe loader, compiled where the interpreter has the C library and pure
 # Python where it does not — the same YAML subset, the same Python objects
@@ -35,11 +36,13 @@ class YamlCatalogSource:
     def __init__(self, directory: Path) -> None:
         self._directory = directory
 
-    def _shape_models(self) -> dict[str, dict[str, Any]]:
-        """The shape models this source holds, by id (D02 §1b).
+    def _models(self, subdirectory: str) -> dict[str, dict[str, Any]]:
+        """The models one subdirectory holds, by id — `shape-models` (D02 §1b),
+        `bean-models` (D02 §1c) and `step-models` (spec 2026-09-21 §5), one read
+        for each.
 
         A SUBDIRECTORY rather than more files beside the catalogs, because a
-        shape model is not a catalog: it declares no `style`, no `matches` and
+        model is not a catalog: it declares no `style`, no `matches` and
         no boundary, and thirteen places in this repository glob
         `catalogs/*.yml` expecting every hit to be one. Keeping it out of that
         glob means none of them has to learn an exception, and the two that DO
@@ -49,14 +52,14 @@ class YamlCatalogSource:
 
         Absent directory is an empty mapping, not an error: a repository's own
         catalog set (D02 §6) may hold no model, and a catalog naming one it
-        cannot see fails in `_shape_model_of` with the file's name attached.
+        cannot see fails in `_named_model` with the file's name attached.
         """
-        directory = self._directory / "shape-models"
+        directory = self._directory / subdirectory
         models: dict[str, dict[str, Any]] = {}
         for path in sorted(directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
-                raise CatalogError(f"loading shape model {path}: not a YAML mapping")
+                raise CatalogError(f"loading model {path}: not a YAML mapping")
             models[str(_required(raw, "id", path))] = raw
         return models
 
@@ -67,13 +70,15 @@ class YamlCatalogSource:
         catalog omits a required field or declares a `protocol` or `direction`
         outside D00's closed sets.
         """
-        models = self._shape_models()
+        shape_models = self._models("shape-models")
+        bean_models = self._models("bean-models")
+        step_models = self._models("step-models")
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
-            shape = _shape_model_of(raw, models, path)
+            shape = _shape_model_of(raw, shape_models, path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -81,7 +86,13 @@ class YamlCatalogSource:
                     protocol=_closed_or_absent(raw, "protocol", Protocol, path),
                     direction=_closed_or_absent(raw, "direction", Direction, path),
                     requires=tuple(raw.get("requires", [])),
-                    matches=_required(raw, "matches", path),
+                    # Spec 2026-09-21 §5: the step model's `steps` and
+                    # `undeclared_steps` merged in beside the catalog's own, so
+                    # the engine reads one table; `matches` as written for a
+                    # catalog naming no `step_model`.
+                    matches=_with_step_model(
+                        _required(raw, "matches", path), raw, step_models, path
+                    ),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
                     detect_satisfied_by=_detect_satisfied_by(raw, path),
@@ -132,6 +143,9 @@ class YamlCatalogSource:
                     # closed set and the condition against the engine's own
                     # closed vocabulary.
                     resolves=raw.get("resolves", {}),
+                    # D02 §1c — the bean model's mapping, resolved above the
+                    # way `shape_model` is; `{}` for a catalog naming none.
+                    bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
                 )
             )
         return catalogs
@@ -156,27 +170,121 @@ def _shape_model_of(
     copies and absent from nine, and a catalog that cannot hold a copy cannot
     hold a copy that has drifted.
 
-    A `shape_model` naming no file in `shape-models/` is refused here for the
-    reason every other value in this file is: it reaches the derivation as a
-    bound parameter, and a typo would silently strip a catalog of the
-    serialisation, nullability and wire-type knowledge it believes it has —
-    which is `A-C3` again, arriving through a misspelling instead of an
-    omission.
+    A `shape_model` naming no file in `shape-models/` is refused in
+    `_named_model`, which both model keys share, for the reason every other
+    value in this file is: it reaches the derivation as a bound parameter, and
+    a typo would silently strip a catalog of the serialisation, nullability and
+    wire-type knowledge it believes it has — which is `A-C3` again, arriving
+    through a misspelling instead of an omission.
     """
-    named = raw.get("shape_model")
-    if named is None:
+    model = _named_model(raw, "shape_model", models, path)
+    if model is None:
         return raw
-    if not isinstance(named, str) or named not in models:
-        raise CatalogError(
-            f"loading catalog {path}: `shape_model: {named!r}` names no file in "
-            f"`shape-models/` — known models: {sorted(models) or 'none'} (D02 §1b)"
-        )
     declared = [block for block in _SHAPE_MODEL_BLOCKS if block in raw]
     if declared:
         raise CatalogError(
-            f"loading catalog {path}: names `shape_model: {named}` and also declares "
+            f"loading catalog {path}: names `shape_model: {raw['shape_model']}` and also declares "
             f"{', '.join(declared)} — a catalog takes the shared model or declares its own, "
             f"never both. Forty-two copies of these blocks is how `A-C3` shipped (D02 §1b)"
+        )
+    return model
+
+
+# The three keys a catalog names a model with, each to the subdirectory that holds
+# the files and the section that defines it — the refusal below names both.
+_MODEL_DIRECTORIES = {
+    "shape_model": ("shape-models", "D02 §1b"),
+    "bean_model": ("bean-models", "D02 §1c"),
+    "step_model": ("step-models", "spec 2026-09-21 §5"),
+}
+
+
+def _with_step_model(
+    matches: Any, raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> Any:
+    """`matches` with the named step model's `steps` and `undeclared_steps` merged in
+    (spec 2026-09-21 §5, §6) — the table of a flow definition's members is the core
+    library's, shared by every broker catalog that walks a flow, and declared once.
+
+    The UNION, not a replacement: a broker catalog declares the steps on its own
+    specs (`topic`, `exchangeName`) beside the shared table. A `(owner, method,
+    descriptor)` both sides declare is refused here, by file — the engine's own
+    same-name check would refuse it too, but after the union has hidden which side
+    wrote it. `undeclared_steps` is one block, taken from the model or written by
+    the catalog and never both, the `shape_model` rule for the same reason: two
+    blocks would be two claims about the same unknown member.
+    """
+    model = _named_model(raw, "step_model", models, path)
+    if model is None:
+        return matches
+    if not isinstance(matches, dict):
+        raise CatalogError(f"loading catalog {path}: `matches` must be a mapping")
+    own = list(matches.get("steps") or [])
+    shared = list(model.get("steps") or [])
+    seen = {_step_identity(step) for step in own}
+    twice = sorted(str(step.get("method")) for step in shared if _step_identity(step) in seen)
+    if twice:
+        raise CatalogError(
+            f"loading catalog {path}: names `step_model: {raw['step_model']}` and also "
+            f"declares its steps `{'`, `'.join(twice)}` — one owner, method and descriptor "
+            f"from both sides is two entries for one overload (spec 2026-09-21 §5)"
+        )
+    merged: dict[str, Any] = {**matches, "steps": [*own, *shared]}
+    if "undeclared_steps" in model:
+        if "undeclared_steps" in matches:
+            raise CatalogError(
+                f"loading catalog {path}: names `step_model: {raw['step_model']}` and also "
+                f"declares `undeclared_steps` — a catalog takes the model's block or writes "
+                f"its own, never both (spec 2026-09-21 §5)"
+            )
+        merged["undeclared_steps"] = model["undeclared_steps"]
+    return merged
+
+
+def _step_identity(step: Any) -> tuple[frozenset[str], str, str | None]:
+    """What makes one step entry the same overload as another, as the engine
+    matches it: its owners as a SET (`[A, B]` and `[B, A]` are one owner set),
+    its method, and its descriptor's PARAMETER portion (a return type is not
+    method identity — `fluent._same_overload`'s rule). A descriptor not spelled
+    as one is compared as written; the engine refuses it by file."""
+    if not isinstance(step, dict):
+        return (frozenset({repr(step)}), "", None)
+    owner = step.get("owner")
+    owners = (
+        frozenset(str(name) for name in owner)
+        if isinstance(owner, list)
+        else frozenset({str(owner)})
+    )
+    descriptor = step.get("descriptor")
+    parameters = (
+        parameter_types(descriptor)
+        if isinstance(descriptor, str) and ")" in descriptor
+        else (None if descriptor is None else str(descriptor))
+    )
+    return (owners, str(step.get("method")), parameters)
+
+
+def _named_model(
+    raw: dict[str, Any], key: str, models: dict[str, dict[str, Any]], path: Path
+) -> dict[str, Any] | None:
+    """The model `raw[key]` names, or None when the catalog names none.
+
+    A name matching no file is refused here for the reason every other value
+    in this file is: it reaches the derivation as a bound parameter, and a typo
+    would silently strip a catalog of the knowledge it believes it has — the
+    serialisation, nullability and wire-type blocks for a `shape_model` (`A-C3`
+    arriving through a misspelling), the whole dependency-injection vocabulary
+    for a `bean_model` (every `bean_via` capture unresolved, with nothing to say
+    why).
+    """
+    named = raw.get(key)
+    if named is None:
+        return None
+    subdirectory, section = _MODEL_DIRECTORIES[key]
+    if not isinstance(named, str) or named not in models:
+        raise CatalogError(
+            f"loading catalog {path}: `{key}: {named!r}` names no file in "
+            f"`{subdirectory}/` — known models: {sorted(models) or 'none'} ({section})"
         )
     return models[named]
 

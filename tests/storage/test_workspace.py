@@ -833,6 +833,46 @@ def test_route_requirements_is_a_temp_stash_outside_the_schema(tmp_path: Path):
     workspace.close()
 
 
+def test_channel_bindings_is_a_temp_stash_outside_the_schema(tmp_path: Path):
+    """Spec 2026-09-21 §3b: the channel edge is stashed for the one resolve that joins it,
+    re-created by the reset and read back in total order — ordered on EVERY column, since
+    one channel may be read by several handlers and fed by several adapters (NFR-1). A
+    TEMP table like `route_requirements`, and excluded from `schema_objects` the same way:
+    working state, never a bundle table."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("channel_bindings_reset")
+    reader = {
+        "channel": "orders",
+        "role": "read_by",
+        "symbol": "com/acme/orders/Handlers#handle(sig_00000001).",
+        "protocol": None,
+        "direction": "inbound",
+        "destination": None,
+        "catalog_id": "invented-channels",
+        "resolution": "resolved",
+    }
+    feeder = {
+        "channel": "orders",
+        "role": "fed_by",
+        "symbol": "com/acme/orders/Adapters#inbound(sig_00000002).",
+        "protocol": "amqp",
+        "direction": "inbound",
+        "destination": "orders.queue",
+        "catalog_id": "invented-adapters",
+        "resolution": "resolved",
+    }
+    workspace.derive("channel_bindings_insert", rows=[reader, feeder])
+    rows = workspace.query("channel_bindings")
+    assert [row["role"] for row in rows] == ["fed_by", "read_by"]
+    assert dict(rows[0]) == feeder
+    assert dict(rows[1]) == reader
+    assert "channel_bindings" not in workspace.schema_objects()
+    # The reset replaces the stash whole: a second resolve starts from nothing.
+    workspace.derive("channel_bindings_reset")
+    assert workspace.query("channel_bindings") == []
+    workspace.close()
+
+
 def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:

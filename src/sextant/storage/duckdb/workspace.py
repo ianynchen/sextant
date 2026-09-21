@@ -789,6 +789,15 @@ _NAMED_QUERIES = {
         ORDER BY caller, handler, method, path, catalog_id, kind, name, value, requirement,
                  resolution, evidence
     """,
+    # Spec 2026-09-21 §3b. The channel edge — `fed_by`/`read_by`/`sends_to` rows several
+    # engines write — read once per resolve by the join pass and once by `config_join.gaps`.
+    # Ordered on the whole row for the reason the two above are: one channel may be read
+    # by several handlers and fed by several adapters, so nothing shorter is total.
+    "channel_bindings": """
+        SELECT * FROM channel_bindings
+        ORDER BY channel, role, symbol, protocol, direction, destination, catalog_id,
+                 resolution
+    """,
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
     "call_edges": """
         SELECT caller, ordinal, invoke_kind, target, callee, result, resolution, evidence,
@@ -862,6 +871,11 @@ _ENDPOINT_CANDIDATES = "endpoint_candidates"
 # by the end of the resolve, and every row that does not named a route the
 # engine refused.
 _ROUTE_REQUIREMENTS = "route_requirements"
+# The third (spec 2026-09-21 §3b): the channel edge, written by every engine that learns
+# one end of a named channel and joined once per resolve by `resolve/channel_bindings.py`.
+# Temp for the same reason — every edge that reaches a wire is in `endpoints` by the end
+# of the resolve, and every one that does not is a `channel_destination` question.
+_CHANNEL_BINDINGS = "channel_bindings"
 
 # One query per table and view IN THE SCHEMA — all of them, with no exclusion
 # class. The ratchet runs the direction that catches the defect: an object in
@@ -1225,6 +1239,11 @@ _NAMED_DERIVATIONS = {
     # (beside `endpoints_reset`, ahead of every engine), the insert once per engine run.
     "route_requirements_reset": "reset_route_requirements.sql",
     "route_requirements_insert": "insert_route_requirements.sql",
+    # Spec 2026-09-21 §3b. The same pair, for the same reason: the reset runs once per
+    # resolve from `derive_endpoints` beside `route_requirements_reset`, the insert once
+    # per engine run that learned an end of a channel.
+    "channel_bindings_reset": "reset_channel_bindings.sql",
+    "channel_bindings_insert": "insert_channel_bindings.sql",
 }
 
 # The fact "tables" `schema.sql` defines as VIEWS over `raw_facts`, in dependency
@@ -1596,12 +1615,13 @@ class DuckDbWorkspace:
         Staged redaction tables are excluded by name — they are temp tables
         this class creates and drops inside one export, never part of the
         schema. So are the endpoint-candidates table the endpoints derivation
-        stages and the route-requirements stash the combinator writes, for the
-        same reason (`_ENDPOINT_CANDIDATES`, `_ROUTE_REQUIREMENTS`).
+        stages, the route-requirements stash the combinator writes and the channel
+        edge the engines write, for the same reason (`_ENDPOINT_CANDIDATES`,
+        `_ROUTE_REQUIREMENTS`, `_CHANNEL_BINDINGS`).
         """
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?, ?) "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1611,6 +1631,7 @@ class DuckDbWorkspace:
                 _REDACTED_PAYLOADS,
                 _ENDPOINT_CANDIDATES,
                 _ROUTE_REQUIREMENTS,
+                _CHANNEL_BINDINGS,
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:

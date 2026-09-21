@@ -415,6 +415,11 @@ def _module_commit_of(path: Path) -> str:
     return result.stdout.strip() or "unknown"
 
 
+# The model subdirectories beside the catalogs, each part of the knowledge a run
+# was produced with (`yaml_source.YamlCatalogSource._models` reads the same three).
+_MODEL_DIRECTORIES = ("shape-models", "bean-models", "step-models")
+
+
 def _catalog_hash(catalogs: Path) -> str:
     """The identity of the framework knowledge a run was produced with.
 
@@ -422,12 +427,18 @@ def _catalog_hash(catalogs: Path) -> str:
     Since F2, `serialization`, `nullability` and `known_types` live there and
     in no catalog at all — so a hash over `catalogs/*.yml` alone would say two
     runs used the same knowledge while one of them read a different wire-type
-    table, which is precisely the drift the hash exists to make visible. The
-    path is included, not just the filename, so a model and a catalog of the
-    same name cannot collide.
+    table, which is precisely the drift the hash exists to make visible.
+    `bean-models/` (D02 §1c) and `step-models/` (spec 2026-09-21 §5) are
+    walked for the same reason: the bean vocabulary and the flow definition's
+    step table live there and nowhere else. The path is included, not just the
+    filename, so a model and a catalog of the same name cannot collide.
     """
     digest = hashlib.sha256()
-    files = sorted(catalogs.glob("*.yml")) + sorted((catalogs / "shape-models").glob("*.yml"))
+    files = sorted(catalogs.glob("*.yml")) + [
+        path
+        for subdirectory in _MODEL_DIRECTORIES
+        for path in sorted((catalogs / subdirectory).glob("*.yml"))
+    ]
     for catalog in files:
         digest.update(str(catalog.relative_to(catalogs)).encode("utf-8"))
         digest.update(catalog.read_bytes())

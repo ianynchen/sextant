@@ -688,6 +688,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/ktflux/orders"),
         ("GET", "/ktflux/orders/{id}"),
         ("POST", "/ktflux/orders"),
+        # Spec 2026-09-21 §7a (`dsl-media-route`): the DSL's route declared under a media
+        # guard alone, one per stack — `KotlinMvcRoutes.kt`'s `accept(JSON) { h }` under
+        # `/ktmvc` (the unresolved gap row until now, path NULL) and `KotlinOrderRoutes.kt`'s
+        # at the top of `coRouter { }`. No verb, the served any-path pattern under the
+        # enclosing prefix, `produces: application/json`.
+        (None, "/ktmvc/**"),
+        (None, "/**"),
         # W45, `G-42`: the URLs a STOMP client opens. Verbless, like every other websocket
         # row — a handshake path declares no HTTP method — and three of them from TWO
         # calls, because `addEndpoint("/ws-alt", "/ws-legacy")` registers both.
@@ -1080,7 +1087,11 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 212 since spec 2026-09-19 §5c: `MappingConditionsController#versioned` (`GET
     # /v1/conditions/orders`) and `#legacy` (`GET /v1/conditions/legacy`), one row each —
     # their mapping expressions go to `endpoint_metadata`.
-    assert len(report.endpoints) == 212
+    # 213 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes#ktRoutes`'s
+    # `accept(JSON) { }` at the top of `coRouter { }`, `(None, /**)`, one row; the servlet
+    # twin's row (191 above) moves from `unresolved`/path NULL to `(None, /ktmvc/**)`
+    # resolved — a changed row, not a new one.
+    assert len(report.endpoints) == 213
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1107,11 +1118,18 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # ORDER is the engine ordering `derive_endpoints` sorts by, not the catalog
     # id: `spring-rsocket` is `annotation_driven` and runs before the two
     # dependency-gated styles, which is why it heads the list rather than
-    # trailing it alphabetically.
+    # trailing it alphabetically — and `spring-integration` heads even that
+    # since spec 2026-09-21 §3a: a catalog that only writes the channel edge's
+    # read end runs before every engine that reads it
+    # (`_WRITES_ONLY_THE_CHANNEL_EDGE`), skipped or not.
+    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the fourth: a
+    # `config_join` file gated by its style, on a fixture that declares no Gateway —
+    # sorted among the runs-last group by filename, ahead of `spring-data-rest`.
     assert [entry.catalog_id for entry in report.skipped_catalogs] == [
-        "spring-rsocket",
-        "spring-data-rest",
         "spring-integration",
+        "spring-rsocket",
+        "spring-cloud-gateway-properties",
+        "spring-data-rest",
     ]
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec
@@ -1233,7 +1251,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 23 since the A1 final review (I-1): `BuilderRoutes`' Supplier-form `GET /bld/sup/inner`.
     # 24 since spec 2026-09-19 §4a: `KotlinOrderRoutes#ktRoutes`'s `extra()` helper,
     # `GET /kt/extra`.
-    assert len(combinator_rows) == 24
+    # 25 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes#ktRoutes`'s
+    # `accept(JSON) { }` at the top of `coRouter { }`, `(None, /**)`.
+    assert len(combinator_rows) == 25
     # Java: a bound method reference resolves to the real handler; the inline
     # lambda resolves to its synthetic body — both module-prefixed, joined
     # against the scanned symbol facts, never fabricated (checkpoint (1a)).
@@ -1327,6 +1347,10 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # A1 Task 5: the non-coroutine DSL's `GET("/orders/{id}", accept(JSON)) { }` — the
     # three-argument form, its predicate at position 1 — folds the same way.
     assert media[("GET", "/ktflux/orders/{id}")] == (None, '["application/json"]')
+    # Spec 2026-09-21 §7a (`dsl-media-route`): `coRouter { accept(JSON) { } }` — the route
+    # declared under a media guard ALONE, no verb and no path, whose media is read off the
+    # verb rule's own `media_arg` rather than off a predicate argument.
+    assert media[(None, "/**")] == (None, '["application/json"]')
     # Every OTHER combinator row declares no media predicate at all, so its
     # columns stay NULL — the read fires where a declaration exists and
     # nowhere else.
@@ -1340,6 +1364,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
             ("GET", "/kt/rich"),
             ("GET", "/bld/orders/{id}"),
             ("GET", "/ktflux/orders/{id}"),
+            (None, "/**"),
         }
     } == {(None, None)}
 
@@ -1996,7 +2021,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # the two handlers carrying every parameter-annotation form the binder rule reads.
         # 118 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
         # the two handlers carrying every `params=`/`headers=` expression form.
-        "http": 118,
+        "http": 119,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -2007,6 +2032,9 @@ def test_nothing_but_the_two_sse_routes_moves(
         # path NULL and `unresolved` — an http row like the address-less `(None, None)`s.
         # 105 since the A1 final review (I-1): the Supplier form of `nest` on both stacks,
         # one prefixed row each and no bare twin.
+        # 119 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes.kt`'s
+        # `accept(JSON) { }` at the top of `coRouter { }`, `(None, /**)`; the 103 gap row
+        # is now `(None, /ktmvc/**)` resolved, the same count.
         "jms": 8,
         # three topics the module both publishes to and consumes — `order-events`,
         # `order-audit`, `order-returns` — each two rows since W27 rather than one merged `both`
@@ -2041,7 +2069,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 212
+    assert sum(counts.values()) == len(report.endpoints) == 213
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -3444,6 +3472,11 @@ def test_the_configured_serializer_stamps_media_on_every_matching_kafka_row(
         # three-argument `GET("/…/{id}", accept(JSON)) { }` form on both.
         ("http", "/ktmvc/invoices/{id}", None, json_media),
         ("http", "/ktflux/orders/{id}", None, json_media),
+        # Spec 2026-09-21 §7a (`dsl-media-route`): the route declared under a media guard
+        # ALONE on each stack — `accept(JSON) { h }` — whose media is the route's own
+        # constraint, read off the verb rule's `media_arg`.
+        ("http", "/ktmvc/**", None, json_media),
+        ("http", "/**", None, json_media),
         ("sse", "/events/stream", None, '["text/event-stream"]'),
         # 2O Task 13, and NOT a stamp: these three are the functional-routing
         # rows' own `accept`/`contentType` predicates, read off the vararg
@@ -3656,6 +3689,10 @@ def test_the_format_ladder_answers_every_live_row(
         # A1 Task 5: the two Kotlin DSL routes guarded by `accept(JSON)`, one per stack.
         ("http", "inbound", "GET", "/ktmvc/invoices/{id}"),
         ("http", "inbound", "GET", "/ktflux/orders/{id}"),
+        # Spec 2026-09-21 §7a (`dsl-media-route`): the verb-less `accept(JSON) { }` route
+        # on each stack, its media the route's own constraint.
+        ("http", "inbound", None, "/ktmvc/**"),
+        ("http", "inbound", None, "/**"),
     }
     # The three predicate-derived rows answer `json`, off `application/json`
     # and nothing else — the same table, the same rung, a different place the
@@ -3854,7 +3891,10 @@ def test_the_format_ladder_answers_every_live_row(
     # same honest answer the other seven Kotlin DSL routes get.
     # 69 since spec 2026-09-19 §5b: `GET /ktparams/search` returns a bare `String` and
     # declares no media, so the ladder has no payload type to answer off.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 69
+    # 68 since spec 2026-09-21 §7a (`dsl-media-route`): the servlet `accept(JSON) { h }`
+    # row, `unresolved` here while it was the address-less gap row, now carries the media
+    # its guard declares and answers `json`; its new reactive twin answers `json` too.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 68
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.

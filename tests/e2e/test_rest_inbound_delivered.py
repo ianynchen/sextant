@@ -251,21 +251,47 @@ def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(
     } <= rows, sorted(rows)
 
 
-def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved_row(http_rows):
-    """The tracked gap, NOT the destination (`dsl-media-route` on the register; A1 Task 5
-    review). `KotlinMvcRoutes.kt` writes `accept(MediaType.APPLICATION_JSON) { h }` — the
-    DSL's `accept(MediaType, Function1)V`, a route declared under a media guard alone —
-    and this grammar has no word for a media rule that also carries a handler. It derived
-    SILENCE; it derives one row, `unresolved`, path NULL, no handler, attributed to the
-    declaring method, until the word exists."""
-    gap = [
-        row
-        for row in http_rows
-        if row["catalog_id"] == "spring-mvc-router"
-        and _short_caller(row) == "KotlinMvcRoutes#ktMvcRoutes"
-        and row["resolution"] == "unresolved"
-    ]
-    assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
+def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row(
+    http_rows,
+):
+    """`dsl-media-route` (spec 2026-09-21 §7a; CP-29 row 10). `KotlinMvcRoutes.kt` writes
+    `accept(MediaType.APPLICATION_JSON) { h }` inside `"/ktmvc".nest { }` and
+    `KotlinOrderRoutes.kt` writes it at the top of `coRouter { }` — the DSLs'
+    `accept(MediaType, Function1/Function2)V`, a route declared under a media guard alone.
+    Each is one RESOLVED row: no verb (`method` NULL — the guard names none, and no
+    `all_methods` fan-out, §0b A1), the served any-path pattern under whatever prefix
+    encloses it (`/ktmvc/**` on the servlet stack, `/**` on the reactive one), the media
+    as `produces`, and the lambda as the handler. *This pinned one `unresolved` row with
+    path NULL and no handler on the servlet stack — the tracked gap — until the word
+    existed; the reactive fixture had no instance.* No other row on either catalog moves."""
+    routers = ("KotlinMvcRoutes#ktMvcRoutes", "KotlinOrderRoutes#ktRoutes")
+    own = [row for row in http_rows if row["caller"] and _short_caller(row) in routers]
+    rows = {
+        (row["catalog_id"], row["method"], row["path"], row["produces"], row["resolution"])
+        for row in own
+        if row["method"] is None
+    }
+    assert rows == {
+        ("spring-mvc-router", None, "/ktmvc/**", '["application/json"]', "resolved"),
+        ("spring-webflux-router", None, "/**", '["application/json"]', "resolved"),
+    }, sorted(rows, key=str)
+    handlers = {
+        row["catalog_id"]: bare_descriptor(str(row["handler"]))
+        for row in own
+        if row["method"] is None
+    }
+    assert handlers == {
+        # The servlet lambda compiles to an `invokedynamic` body on the declaring class; the
+        # coroutine one to a `SuspendLambda` class read through `lambda_body`.
+        "spring-mvc-router": (
+            "com/acme/orders/mvcroutes/KotlinMvcRoutes#"
+            "ktMvcRoutes$lambda$7$lambda$5$lambda$4(sig_8817f35e)."
+        ),
+        "spring-webflux-router": (
+            "com/acme/orders/routes/KotlinOrderRoutes$ktRoutes$1$2#invokeSuspend(sig_262c527a)."
+        ),
+    }, handlers
+    assert [row for row in own if row["resolution"] == "unresolved"] == []
 
 
 def test_a_dsl_receiver_helper_called_inside_the_kotlin_router_derives_its_route(http_rows):
@@ -1192,12 +1218,53 @@ def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tab
     `HeaderRoutePredicateFactory`/`QueryRoutePredicateFactory` each builds does not
     match the route without them. Against the row they guard, `/guarded/**`, whose
     `caller` is NULL: a gateway route has no handler, and an inbound metadata row's
-    `caller` is the handler (§4d). The fixture's other routes state nothing, so these two
-    rows are the table."""
+    `caller` is the handler (§4d). The fixture's other DSL routes state nothing.
+
+    *This pinned the table as exactly those two rows until `gateway-properties-routes`
+    (spec 2026-09-21 §7b): the PROPERTY route `cfg-orders` declares `Header=X-Api,v2`
+    beside `Method=GET,POST`, so the same requirement stands against each of its two
+    rows — through the same stash, joined by `None == None` on `caller` and `handler`
+    (`test_gateway_property_routes_derive_their_inbound_and_outbound_rows` below).*"""
     assert _requirements(gateway_tables["endpoint_metadata"]) == {
         (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
         (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
+        ("GET", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
+        ("POST", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
     }
+
+
+def test_gateway_property_routes_derive_their_inbound_and_outbound_rows(gateway_rows):
+    """`gateway-properties-routes` (spec 2026-09-21 §7b; CP-29), on
+    spring-cloud-gateway-server-webflux 5.0.0: the two routes `application.yml` declares
+    under `spring.cloud.gateway.server.webflux.routes` — `cfg-orders` in the shortcut
+    spelling (`Path=/cfg/orders/**`, `Method=GET,POST`, `Header=X-Api,v2`, `uri:
+    lb://orders`) and `cfg-items` in the map spelling (`name: Path`, `args.patterns:
+    /cfg/items/**`, `uri: http://items.internal:8080`) — read by
+    `spring-cloud-gateway-properties.yml` through `config_join`'s `indexed:` form.
+
+    Inbound: one row per verb for `cfg-orders`, one verb-less row for `cfg-items` (no
+    `Method=` → `method` NULL, resolved — §0b A7, the DSL's own rendering), the pattern
+    as the served path, no handler and no caller (a configured route dispatches to no
+    method), every row resolved. Outbound: one row per `uri`, the target VERBATIM as the
+    `path` with `peer` NULL — exactly the shape `spring-cloud-gateway-outbound.yml`
+    publishes for the DSL's `uri(…)` (`test_rest_outbound_delivered.py`): a routing
+    destination kept whole, never split into a peer and an empty path. The DSL pair's
+    own rows are untouched (their catalog ids are not this one's), and the `Header=`
+    requirement is asserted above."""
+    rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway-properties"]
+    identities = {(r["direction"], r["method"], r["path"], r["resolution"]) for r in rows}
+    assert identities == {
+        ("inbound", "GET", "/cfg/orders/**", "resolved"),
+        ("inbound", "POST", "/cfg/orders/**", "resolved"),
+        ("inbound", None, "/cfg/items/**", "resolved"),
+        ("outbound", None, "lb://orders", "resolved"),
+        ("outbound", None, "http://items.internal:8080", "resolved"),
+    }, sorted(identities, key=str)
+    assert len(rows) == 5, sorted(identities, key=str)
+    assert all(r["handler"] is None and r["caller"] is None and r["peer"] is None for r in rows)
+    assert all(r["protocol"] == "http" and r["evidence"] == "compiler" for r in rows)
+    dsl = {r["catalog_id"] for r in gateway_rows} - {"spring-cloud-gateway-properties"}
+    assert dsl == {"spring-cloud-gateway", "spring-cloud-gateway-outbound"}, dsl
 
 
 # --- §5b `request_params`: what each framework's binder enforces (CP-25 rows 2–12) ------

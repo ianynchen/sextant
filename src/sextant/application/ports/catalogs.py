@@ -234,6 +234,16 @@ class Catalog:
     # reads it refuses a malformed one, because which conditions an engine can
     # honour is knowledge of `application/resolve` rather than of this port.
     resolves: dict[str, Any] = field(default_factory=dict)
+    # D02 §1c: the dependency-injection model this catalog resolves bean
+    # references through (spec 2026-09-21 §3a) — the mapping of the
+    # `bean-models/<id>.yml` file the catalog named with `bean_model: <id>`,
+    # resolved by the loader the way `shape_model` is, and `{}` for a catalog
+    # naming none. Carried whole and unread here, like every block above: the
+    # keys are interpreted by the one fold that reads them (`resolve/beans.py`
+    # — the declaring annotation and its name attributes, the qualifier
+    # annotation, the channel types), so no container's spellings reach this
+    # port or the resolve layer as anything but data.
+    bean_model: dict[str, Any] = field(default_factory=dict)
 
 
 class CatalogError(ValueError):

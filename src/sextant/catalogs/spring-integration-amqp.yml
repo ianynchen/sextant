@@ -1,0 +1,276 @@
+id: spring-integration-amqp
+displayName: Spring Integration AMQP adapters and flows (spring-integration-amqp)
+style: fluent
+protocol: amqp
+direction: inbound
+
+# THE DESTINATION BEHIND A CHANNEL, AMQP (spec 2026-09-21 §4, §5; COVERAGE §5.12's
+# boundary, shipped). Two spellings of one registration, both walked here:
+#
+# THE BEAN-WIRED ADAPTER AND THE CONTAINER HOP (§4). `AmqpInboundChannelAdapter`
+# has ONE constructor, `(MessageListenerContainer)` (CP-27 row 11): the queues
+# are not on the adapter at all but on the CONTAINER bean handed to it, set by
+# `setQueueNames(String...)`/`addQueueNames`/`setQueues(Queue...)`/`addQueues`
+# in the container's own `@Bean` method (row 12). `channel: {bean_via: arg0}`
+# resolves that argument as a bean — its `@Qualifier`, else exactly one `@Bean`
+# of its erased type, else the bean whose name is the parameter's (Spring's own
+# order, row 15; `bean-models/spring.yml`) — and walks THE CONTAINER'S chain
+# from the matching `beans:` root, in the container method's own context, for
+# the `channel` it captured: one row per queue element (a varargs slot is one
+# array, 9.15). One hop: a container built in a third bean, or a bean reference
+# inside the container's chain, is `unresolved`. The adapter's channel is
+# `setOutputChannelName(String)`/`setOutputChannel(MessageChannel)`, inherited
+# from `MessageProducerSupport` (row 5) and reached on the adapter's own owner.
+#
+# `AmqpOutboundEndpoint(AmqpTemplate)` (row 10) is the outbound bean: its
+# address is TWO setters composed as `exchange/routingKey` — the form
+# `spring-rabbit-template.yml` already publishes — and it consumes the channel
+# its `@Bean` method's `@ServiceActivator(inputChannel)` names. A half never set
+# leaves `path` unresolved (§0b A3: the framework fills an unset half from the
+# `RabbitTemplate`'s own defaults, which this walk does not read); a half set
+# through a SpEL expression poisons it.
+#
+# THE DSL FLOW (§5). `Amqp.inboundAdapter(...)` (row 8) builds a SOURCE spec
+# whose chain has no terminal of its own: it is handed to `IntegrationFlow.from`
+# and the walk CONTINUES along the flow definition — `via_argument_of … from,
+# continue: true` — through the flow's members (the shared `step_model`), to
+# the `handle(lambda)` whose body is the row's `handler`, or to a
+# `.channel("x")` the flow feeds. The four overloads by descriptor: queue names
+# at slot 1; `Queue` objects at slot 1, read through the `Queue(String, …)`
+# constructors' first argument (row 13); a container bean at slot 0, through the
+# bean fold. `Amqp.outboundAdapter(AmqpTemplate)` is the SINK: its spec chain
+# (`exchangeName`/`routingKey`, declared on the abstract spec and reached on the
+# concrete owner — row 9) continues into the flow's `handle(spec)` and derives
+# the OUTBOUND row, `caller` the flow method.
+#
+# WHAT A CHAIN WRITES — the `fluent` engine's registration words (every one
+# optional; no request catalog spells them): an inbound chain that named the
+# channel it feeds writes a `channel_bindings` `fed_by` edge and no row of its
+# own — the join pass (`resolve/channel_bindings.py`) mints one row per
+# annotated reader of that channel, and `config_join` stops asking its
+# `channel_destination` question; an inbound chain with an inline handler
+# writes its own row, `handler` the lambda's body; an outbound chain writes its
+# row (and, for the bean, an outbound `fed_by` so the question is not asked).
+# A `divert` step (`route`, `gateway`, …) poisons `handler` for the rest of the
+# chain — the row stays, `handler` NULL, `resolution` untouched: the handler
+# never moves the wire's resolution. Destinations go through the field ladder
+# (`field_sources` below): a `@Value("${…}")` parameter or field or a
+# properties getter → the `${…}` expression, substituted per environment.
+#
+# `setQueueNames("a"); addQueueNames("b")` reads `b` (last wins — the walk has no
+# accumulating destination word): every queue it reports is one the container
+# listens to; the under-report is stated. A `Queue...` slot — `setQueues(new
+# Queue("a"), new Queue("b"))`, `Amqp.inboundAdapter(cf, new Queue("a"))` — is
+# one array whose elements each carry their own constructor: the `channel_via`
+# ladder walks the elements, one queue per element, and an element built by
+# anything but a `Queue` constructor is its own `unresolved` row.
+#
+# A FLOW SOURCED FROM A CHANNEL (`from("ch")`, `from(<channel bean>)`) is a root
+# here as in the other two broker catalogs: ending in this catalog's sink it is
+# the outbound row with an outbound `fed_by` for the source channel; ending in
+# an inline handler it is the channel's READER (`read_by`, the join pass minting
+# the row beside the channel's feeder — one row however many broker catalogs
+# wrote the reader).
+#
+# BOUNDARIES STATED (spec §4, §5, §8): `inboundGateway`, `outboundGateway`,
+# `asyncOutboundGateway`, `inboundPolledAdapter`, `channel`,
+# `publishSubscribeChannel`, `pollableChannel` (row 8 — request-reply and
+# channel-backed forms); `configureContainer(c -> c.addQueueNames(…))` inside a
+# source spec (fewer queues, never a wrong one); the LOCAL container — `new
+# SimpleMessageListenerContainer(cf)` built and configured in the SAME `@Bean`
+# method as the adapter that takes it — is no bean, so `bean_via` resolves it
+# to nothing and the adapter's row is `unresolved` (the queues are a value hop
+# away, not a bean hop; a miss, never a wrong queue); a registration built
+# outside a `@Bean` method; a link set in a different method than the
+# construction; XML beans.
+
+detect:
+  coordinates: ["org.springframework.integration:spring-integration-amqp"]
+
+measured:
+  - { artifact: org.springframework.integration:spring-integration-amqp, versions: ["6.2.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+  - { artifact: org.springframework.integration:spring-integration-core, versions: ["6.2.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+  - { artifact: org.springframework.amqp:spring-amqp, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# The dependency-injection vocabulary `bean_via` resolves through (D02 §1c) and
+# the flow definition's step table (spec §5), each declared once beside the
+# catalogs and named here; the loader merges the model's steps into `matches`.
+bean_model: spring
+step_model: spring-integration
+
+matches:
+  roots:
+    # --- the bean-wired registration (§4) -------------------------------------
+    - { owner: org.springframework.integration.amqp.inbound.AmqpInboundChannelAdapter,
+        method: <init>,
+        descriptor: "(Lorg/springframework/amqp/rabbit/listener/MessageListenerContainer;)V",
+        captures: { channel: { bean_via: arg0 } } }
+    - { owner: org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+        method: <init>,
+        descriptor: "(Lorg/springframework/amqp/core/AmqpTemplate;)V",
+        captures: {}, direction: outbound,
+        compose: { channel: [exchange, routing_key], join: "/" },
+        method_annotation: { annotation: org.springframework.integration.annotation.ServiceActivator,
+                             arg: inputChannel, into: channel_link } }
+    # --- the DSL source specs (§5), every overload (CP-27 row 8) --------------
+    - { owner: org.springframework.integration.amqp.dsl.Amqp, method: inboundAdapter,
+        descriptor: "(Lorg/springframework/amqp/rabbit/connection/ConnectionFactory;[Ljava/lang/String;)Lorg/springframework/integration/amqp/dsl/AmqpInboundChannelAdapterSMLCSpec;",
+        captures: { channel: arg1 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.amqp.dsl.Amqp, method: inboundAdapter,
+        descriptor: "(Lorg/springframework/amqp/rabbit/connection/ConnectionFactory;[Lorg/springframework/amqp/core/Queue;)Lorg/springframework/integration/amqp/dsl/AmqpInboundChannelAdapterSMLCSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.amqp.core.Queue, method: <init>, arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.amqp.dsl.Amqp, method: inboundAdapter,
+        descriptor: "(Lorg/springframework/amqp/rabbit/listener/SimpleMessageListenerContainer;)Lorg/springframework/integration/amqp/dsl/AmqpInboundChannelAdapterSMLCSpec;",
+        captures: { channel: { bean_via: arg0 } },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.amqp.dsl.Amqp, method: inboundAdapter,
+        descriptor: "(Lorg/springframework/amqp/rabbit/listener/DirectMessageListenerContainer;)Lorg/springframework/integration/amqp/dsl/AmqpInboundChannelAdapterDMLCSpec;",
+        captures: { channel: { bean_via: arg0 } },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # --- a flow sourced from a CHANNEL (CP-27 row 1): `channel_source`, and what
+    # the chain then captures decides the row — a sink's wire makes it the
+    # outbound row with an outbound `fed_by` for the source; an inline handler
+    # makes the flow the channel's READER (`read_by`, no row — the join pass
+    # dedupes the reader every broker catalog writes); neither, nothing (a bridge).
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: arg0 } }
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: { bean_via: arg0 } } }
+    # --- the DSL sink (§5): its chain continues into the flow's `handle(spec)` --
+    - { owner: org.springframework.integration.amqp.dsl.Amqp, method: outboundAdapter,
+        descriptor: "(Lorg/springframework/amqp/core/AmqpTemplate;)Lorg/springframework/integration/amqp/dsl/AmqpOutboundChannelAdapterSpec;",
+        captures: {}, direction: outbound,
+        compose: { channel: [exchange, routing_key], join: "/" },
+        via_argument_of: { owner: [org.springframework.integration.dsl.IntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.BaseIntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.IntegrationFlowBuilder],
+                           method: handle },
+        continue: true }
+  # The chains `bean_via` folds a CONTAINER's queues from — rooted at the
+  # containers' constructors (both forms, row 12), in the container's own
+  # `@Bean` method; never a chain of this catalog's own.
+  beans:
+    - { owner: org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
+        method: <init>, captures: {} }
+    - { owner: org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
+        method: <init>, captures: {} }
+  steps:
+    # The container's queue setters (row 12), reached on the concrete container
+    # (javac names the receiver's static type) or on the abstract owner.
+    - { method: setQueueNames,
+        owner: [org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer],
+        captures: { channel: arg0 } }
+    - { method: addQueueNames,
+        owner: [org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer],
+        captures: { channel: arg0 } }
+    - { method: setQueues,
+        owner: [org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer],
+        captures: { channel: arg0 },
+        channel_via: [{ owner: org.springframework.amqp.core.Queue, method: <init>, arg: 0 }] }
+    - { method: addQueues,
+        owner: [org.springframework.amqp.rabbit.listener.SimpleMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.DirectMessageListenerContainer,
+                org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer],
+        captures: { channel: arg0 },
+        channel_via: [{ owner: org.springframework.amqp.core.Queue, method: <init>, arg: 0 }] }
+    # The adapter's channel (row 5, inherited; reached on the adapter's owner).
+    - { method: setOutputChannelName,
+        owner: org.springframework.integration.amqp.inbound.AmqpInboundChannelAdapter,
+        captures: { channel_link: arg0 } }
+    - { method: setOutputChannel,
+        owner: org.springframework.integration.amqp.inbound.AmqpInboundChannelAdapter,
+        captures: { channel_link: { bean_via: arg0 } } }
+    # The outbound bean's two address halves (row 10), declared on the abstract
+    # endpoint and reached on the concrete owner.
+    - { method: setExchangeName,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        captures: { exchange: arg0 } }
+    - { method: setRoutingKey,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        captures: { routing_key: arg0 } }
+    - { method: setExchangeNameExpression,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        poisons: [exchange] }
+    - { method: setExchangeNameExpressionString,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        poisons: [exchange] }
+    - { method: setRoutingKeyExpression,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        poisons: [routing_key] }
+    - { method: setRoutingKeyExpressionString,
+        owner: [org.springframework.integration.amqp.outbound.AmqpOutboundEndpoint,
+                org.springframework.integration.amqp.outbound.AbstractAmqpOutboundEndpoint],
+        poisons: [routing_key] }
+    # The DSL sink's two halves (row 9): declared on `AmqpBaseOutboundEndpointSpec`,
+    # reached on the concrete spec the factory returned.
+    - { method: exchangeName,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        captures: { exchange: arg0 } }
+    - { method: routingKey,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        captures: { routing_key: arg0 } }
+    - { method: exchangeNameExpression,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        poisons: [exchange] }
+    - { method: exchangeNameFunction,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        poisons: [exchange] }
+    - { method: routingKeyExpression,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        poisons: [routing_key] }
+    - { method: routingKeyFunction,
+        owner: [org.springframework.integration.amqp.dsl.AmqpOutboundChannelAdapterSpec,
+                org.springframework.integration.amqp.dsl.AmqpBaseOutboundEndpointSpec],
+        poisons: [routing_key] }
+  # A constructor root is its own terminal; `get()` ends a flow — and is a
+  # declared word, so the builder's own `get` poisons nothing under the step
+  # model's `undeclared_steps`. A continued chain is executable from its
+  # consumer on (spec §5: the consumer IS the terminal). `handleReactive`
+  # returns the finished flow with no `get()` after it, so a channel-sourced
+  # flow ending there needs it declared a terminal too (`spring-integration-kafka.yml`
+  # says why `nullChannel()` and `to(...)` are not).
+  terminal: ["<init>", get, handleReactive]
+  # The field ladder's own vocabulary (2F design §4); copied from
+  # `spring-resttemplate.yml`.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`;
+# no shape is read here (spec §3c), the model is the harvest-compatibility
+# every fluent catalog keeps.
+shape_model: json

@@ -324,7 +324,13 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # constructors' `Object.<init>`. `RequestParamsController#search` calls nothing. Still 29%.
     # 527 of 1797 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's
     # `Object.<init>` — its two handlers return null and call nothing. Still 29%.
-    assert "Calls whose callee body this workspace read: 527 of 1797 (29%)" in document
+    # 533 of 1812 since spec 2026-09-21 §7a (`dsl-media-route`): `KotlinOrderRoutes.kt`'s
+    # `accept(JSON) { listOrders(it) }` — fifteen edges (the `coRouter` body's `accept`
+    # and the suspend lambda class `KotlinOrderRoutes$ktRoutes$1$2`'s fourteen across
+    # `<init>`, `create`, both `invoke`s and `invokeSuspend`), six of them into this module
+    # (the handler class's own constructor/`create`/`invoke`/`invokeSuspend` chain and its
+    # call to `listOrders`). Still 29%.
+    assert "Calls whose callee body this workspace read: 533 of 1812 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -367,14 +373,20 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 1795 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's one
     # `Object.<init>`, `resolved`; no new distinct method identity, so `declared_here` and
     # `owner_not_scanned` below are unchanged.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1795." in document
+    # 1810 since spec 2026-09-21 §7a (`dsl-media-route`): the `accept(JSON) { }` line's
+    # fifteen edges (comment above), all `resolved`.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1810." in document
     # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
     # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
     # string template's `StringBuilder.append(int)` is a platform method nothing in the
     # fixture looked up before.
+    # `declared_here` 204 and `owner_not_scanned` 424 since spec 2026-09-21 §7a: the suspend
+    # lambda class's four own methods land here; the DSL's handler-taking `accept`
+    # overload and the coroutine machinery it extends are two lookups on types this
+    # module does not scan.
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 200, "
-        "inherited 2, owner_not_scanned 422."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 204, "
+        "inherited 2, owner_not_scanned 424."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -682,7 +694,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # the parameter-annotation handlers — moving with `tests/cli/test_app.py`'s count.
         # 96 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
         # the mapping-expression handlers — moving with `tests/cli/test_app.py`'s count.
-        "http": 96,
+        # 97 since spec 2026-09-21 §7a (`dsl-media-route`): `(None, /**)`, `coRouter { }`'s
+        # `accept(JSON) { }` — moving with `tests/cli/test_app.py`'s count; the 88 gap row
+        # is now `(None, /ktmvc/**)` resolved.
+        "http": 97,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -924,7 +939,10 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # /ktparams/search`, the parameter-annotation handlers.
             # 163 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `GET
             # /v1/conditions/legacy`, the mapping-expression handlers.
-            ("inbound", 163),
+            # 164 since spec 2026-09-21 §7a (`dsl-media-route`): `coRouter { }`'s
+            # `accept(JSON) { }`, `(None, /**)`; the 149 gap row is now `(None, /ktmvc/**)`
+            # resolved, the same count.
+            ("inbound", 164),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),
@@ -1387,10 +1405,17 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # Before W16 neither was gated on anything that could tell them apart — the
     # annotation belongs to both frameworks, and Spring's own handlers scan for
     # it with the same predicate — so these rows were `websocket` on no evidence.
+    #
+    # The order is the engine ordering, and `spring-integration` leads since
+    # spec 2026-09-21 §3a: a catalog that only writes the channel edge's read
+    # end runs before every engine that reads it (`resolve/endpoints.py`).
     metadata = json.loads((full_run / "metadata.json").read_text())
+    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the third: a
+    # `config_join` file gated by its style, on a fixture that declares no Gateway.
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
-        "spring-rsocket",
         "spring-integration",
+        "spring-rsocket",
+        "spring-cloud-gateway-properties",
     ]
 
     workspace = DuckDbWorkspace(full_run / "workspace.duckdb")
@@ -1735,7 +1760,9 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # 151: + `RequestParamsController` and `mvcroutes/KotlinParamController`, the
     # parameter-annotation fixtures (spec 2026-09-19 §5b).
     # 152: + `MappingConditionsController`, the mapping-expression fixture (spec 2026-09-19 §5c).
-    assert (None, 152) in origins
+    # 153: + `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend lambda class of
+    # `coRouter { accept(JSON) { } }` (spec 2026-09-21 §7a).
+    assert (None, 153) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

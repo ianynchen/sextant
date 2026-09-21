@@ -2053,21 +2053,253 @@ _MVC_DSL_FACADE = "org/springframework/web/servlet/function/RouterFunctionDslKt#
 
 @pytest.mark.pins("combinator.media-with-a-handler-is-a-row")
 def test_a_media_predicate_that_carries_a_handler_derives_one_unresolved_row(tmp_path: Path):
-    """`router { accept(JSON) { h } }` — the Kotlin DSL's `accept(MediaType, Function1)V`
-    (and `contentType`'s twin), measured on every DSL owner at spring-webmvc and
-    spring-webflux 6.1.6 and 7.0.2: a route DECLARED under one media guard, handler and
-    all. The media vocabulary names `accept`, so the call is claimed into the tree — and
-    a media rule contributes constraints, never routes, so the declaration derived
-    NOTHING (A1 Task 5 review). That is spec §3's forbidden outcome: a declared route
-    absent with nothing saying so. One unresolved row, no handler (the handler position
-    is not something a media rule declares), until the grammar has a word for it —
-    `dsl-media-route` on the register.
+    """`router { accept(JSON) { h } }` on a media name NO verb rule reads: the call is
+    claimed into the tree (its name is in the media vocabulary) and a media rule
+    contributes constraints, never routes, so the declaration would derive NOTHING
+    (A1 Task 5 review) — spec §3's forbidden outcome, a declared route absent with
+    nothing saying so. One unresolved row, no handler (the handler position is not
+    something a media rule declares).
 
-    The shipped servlet catalog and its real DSL owner, so the row is the one
-    `KotlinMvcRoutes.kt` derives live for the same line. The other half — a media
-    call WITHOUT a handler, consumed by a route, still folds as media and nothing
-    else — is `test_a_vararg_media_arrays_elements_fill_the_media_column` above,
-    unchanged by this."""
+    Since `dsl-media-route` (spec 2026-09-21 §7a) the shipped router catalogs declare the
+    handler-taking overload as a VERB rule and this arm no longer fires for them —
+    `test_a_route_declared_under_a_media_guard_alone_derives_its_any_path_row_with_its_media`
+    below is that reading. The guard stays for every media name a catalog declares no
+    such rule for, and this test pins it on exactly that shape: the invented catalog's
+    `RouterDsl.accept` is a media rule alone. The other half — a media call WITHOUT a
+    handler, consumed by a route, still folds as media and nothing else — is
+    `test_a_vararg_media_arrays_elements_fill_the_media_column` above, unchanged by this."""
+    facts = [
+        _site(
+            DSL_ROUTES,
+            0,
+            DSL_FACADE,
+            "router",
+            result=4,
+            arguments=[CallArgument(kind="lambda", source=3, symbol=DSL_BODY)],
+        ),
+        _site(
+            DSL_BODY,
+            0,
+            DSL,
+            "accept",
+            invoke_kind="virtual",
+            descriptor="(Lcom/example/web/MediaType;Lkotlin/jvm/functions/Function1;)V",
+            arguments=[
+                CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON."),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS, source=0),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["method"], row["path"], row["handler"], row["resolution"]) for row in rows] == [
+        (None, None, None, "unresolved")
+    ]
+
+
+def _media_route_matches() -> dict[str, object]:
+    """The invented DSL with `dsl-media-route`'s two verb rules (spec 2026-09-21 §7a): the
+    handler-taking `accept`/`contentType` overloads, arity 2, media at 0, handler at 1,
+    no verb of their own — beside the media rules of the same names, which keep reading
+    the arity-1 vararg factories."""
+    matches = _matches()
+    vocabulary = dict(matches["vocabulary"])  # type: ignore[arg-type]
+    vocabulary["verbs"] = list(vocabulary["verbs"]) + [  # type: ignore[arg-type]
+        {
+            "owner": "com.example.web.RouterDsl",
+            "method": "accept",
+            "arity": 2,
+            "media_arg": 0,
+            "fills": "produces",
+            "handler_arg": 1,
+            "verb": None,
+        },
+        {
+            "owner": "com.example.web.RouterDsl",
+            "method": "contentType",
+            "arity": 2,
+            "media_arg": 0,
+            "fills": "consumes",
+            "handler_arg": 1,
+            "verb": None,
+        },
+    ]
+    vocabulary["media"] = list(vocabulary["media"]) + [  # type: ignore[arg-type]
+        {"owner": "com.example.web.RouterDsl", "method": "contentType", "fills": "consumes"},
+    ]
+    return {**matches, "vocabulary": vocabulary}
+
+
+def _media_guarded_body(name: str, media: str, handler: str) -> list:
+    return [
+        _site(
+            DSL_ROUTES,
+            0,
+            DSL_FACADE,
+            "router",
+            result=4,
+            arguments=[CallArgument(kind="lambda", source=3, symbol=DSL_BODY)],
+        ),
+        _site(
+            DSL_BODY,
+            0,
+            DSL,
+            name,
+            invoke_kind="virtual",
+            descriptor="(Lcom/example/web/MediaType;Lkotlin/jvm/functions/Function1;)V",
+            arguments=[
+                CallArgument(kind="enum", symbol=MEDIA_TYPE + media + "."),
+                CallArgument(kind="lambda", symbol=handler, source=0),
+            ],
+        ),
+        *_handler_symbols(),
+    ]
+
+
+def test_a_route_declared_under_a_media_guard_alone_derives_its_any_path_row_with_its_media(
+    tmp_path: Path,
+):
+    """`dsl-media-route` (spec 2026-09-21 §7a): `router { accept(JSON) { h } }` is a
+    route declared under a media guard and nothing else — no verb, no path. A verb rule
+    on the handler-taking overload reads the media at `media_arg` into the column
+    `fills` names, the handler at `handler_arg`, and no verb (`verb: null`, as
+    `route(predicate, handler)` reads): one row, `method` NULL, path `/**` (the served
+    any-path pattern, `_served`), RESOLVED — nothing was poisoned, the author wrote the
+    route open. The `contentType` twin fills `consumes`. No `all_methods` fan-out
+    (§0b A1): a verb-less route is one row, exactly as it renders everywhere else."""
+    catalog = _catalog(_media_route_matches())
+    workspace = _resolve(
+        tmp_path, _media_guarded_body("accept", "APPLICATION_JSON", LIST_ORDERS), catalog
+    )
+    rows = _rows(workspace)
+    workspace.close()
+    assert _identities(rows) == [(None, "/**", _MODULE + LIST_ORDERS, "resolved")]
+    assert (rows[0]["produces"], rows[0]["consumes"]) == (f'["{JSON}"]', None)
+    assert rows[0]["caller"] == DSL_ROUTES
+
+    workspace = _resolve(
+        tmp_path / "consumes",
+        _media_guarded_body("contentType", "APPLICATION_XML", CREATE_ORDER),
+        catalog,
+    )
+    rows = _rows(workspace)
+    workspace.close()
+    assert _identities(rows) == [(None, "/**", _MODULE + CREATE_ORDER, "resolved")]
+    assert (rows[0]["produces"], rows[0]["consumes"]) == (None, f'["{XML}"]')
+
+
+def test_the_vararg_media_factory_still_reads_as_media_beside_its_verb_rule_twin(
+    tmp_path: Path,
+):
+    """The other overload of the same name, and the reason the verb rule declares an
+    `arity`: `accept(MediaType...)` is a predicate FACTORY, arity 1 (one array slot), and
+    a verb rule on `accept` must not swallow it. A call the verb rules do not accept
+    falls through to the media rule of the same name rather than to the G-13 poison —
+    so `accept(JSON).nest { GET("/rich") { } }` reads its prefix's media exactly as it
+    did before the verb rule existed, and an UNREADABLE vararg still contributes nothing
+    (`_body_linked_facts`' own arm, unchanged)."""
+    catalog = _catalog(_media_route_matches())
+    facts = _body_linked_facts()
+    workspace = _resolve(tmp_path, facts, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+    assert _identities(rows) == [
+        ("GET", "/kt/orders", None, "resolved"),
+        ("GET", "/kt/rich", _MODULE + INLINE_BODY, "resolved"),
+    ]
+    assert [row["produces"] for row in rows] == [None, None]
+
+    readable = [
+        fact.model_copy(
+            update={
+                "arguments": [
+                    CallArgument(
+                        kind="array",
+                        elements=[
+                            CallArgument(kind="enum", symbol=MEDIA_TYPE + "APPLICATION_JSON.")
+                        ],
+                    )
+                ]
+            }
+        )
+        if isinstance(fact, CallSiteFact) and fact.target.name == "accept"
+        else fact
+        for fact in facts
+    ]
+    workspace = _resolve(tmp_path / "readable", readable, catalog)
+    rows = _rows(workspace)
+    workspace.close()
+    assert [(row["path"], row["produces"]) for row in rows] == [
+        ("/kt/orders", None),
+        ("/kt/rich", f'["{JSON}"]'),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("rule", "message"),
+    [
+        (
+            {"method": "accept", "arity": 2, "fills": "produces", "handler_arg": 1, "verb": None},
+            r"accept.*media_arg",
+        ),
+        (
+            {"method": "accept", "arity": 2, "media_arg": 0, "handler_arg": 1, "verb": None},
+            r"accept.*fills",
+        ),
+        (
+            {
+                "method": "accept",
+                "arity": 2,
+                "media_arg": 5,
+                "fills": "produces",
+                "handler_arg": 1,
+                "verb": None,
+            },
+            r"accept.*media_arg",
+        ),
+        (
+            {
+                "method": "accept",
+                "media_arg": 0,
+                "fills": "produces",
+                "handler_arg": 1,
+                "verb": None,
+            },
+            r"accept.*arity",
+        ),
+    ],
+    ids=[
+        "fills-without-media_arg",
+        "media_arg-without-fills",
+        "media_arg-outside-arity",
+        "no-arity-on-a-media-name",
+    ],
+)
+def test_a_verb_rule_with_half_a_media_position_or_no_arity_on_a_media_name_is_refused(
+    tmp_path: Path, rule: dict, message: str
+):
+    """`media_arg` and `fills` come together on a verb as on a prefix — one names where,
+    the other which column — and the position lies inside the rule's arity. And a verb
+    rule on a name a `media` rule also reads MUST declare an `arity`: without one it
+    accepts every call of that name, and the vararg factory the media rule exists to
+    read would never be reached — silently, the media column NULL on every route under
+    that guard."""
+    matches = _matches()
+    vocabulary = dict(matches["vocabulary"])  # type: ignore[arg-type]
+    vocabulary["verbs"] = list(vocabulary["verbs"]) + [  # type: ignore[arg-type]
+        {"owner": "com.example.web.RouterDsl", **rule}
+    ]
+    with pytest.raises(CatalogError, match=message):
+        _resolve(tmp_path, [], _catalog({**matches, "vocabulary": vocabulary}))
+
+
+def test_the_shipped_servlet_dsl_reads_its_media_guarded_route(tmp_path: Path):
+    """The shipped servlet catalog on the real DSL owner — the line `KotlinMvcRoutes.kt`
+    writes, `accept(MediaType.APPLICATION_JSON) { h }`: a resolved row with its handler
+    and `produces`, where it derived the unresolved gap row before `dsl-media-route`."""
     from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
     from sextant.resources import catalogs_dir
 
@@ -2104,9 +2336,10 @@ def test_a_media_predicate_that_carries_a_handler_derives_one_unresolved_row(tmp
     rows = _rows(workspace)
     workspace.close()
 
-    assert [(row["method"], row["path"], row["handler"], row["resolution"]) for row in rows] == [
-        (None, None, None, "unresolved")
-    ]
+    assert [
+        (row["method"], row["path"], row["handler"], row["resolution"], row["produces"])
+        for row in rows
+    ] == [(None, "/**", _MODULE + LIST_ORDERS, "resolved", f'["{JSON}"]')]
 
 
 def test_two_rules_that_could_accept_one_call_are_refused_at_load(tmp_path: Path):
@@ -6041,8 +6274,9 @@ def test_requirement_selectors_are_scopes_whose_routes_derive_beneath_them(tmp_p
 
 
 def test_selector_words_of_the_wrong_shape_are_refused(tmp_path: Path):
-    """Each new prefix word is validated at load: `media_arg` without `fills` (or on a verb
-    rule), a `request_requirement` whose `kind` is not one of the four, or whose
+    """Each new prefix word is validated at load: `media_arg` without `fills` (or on an
+    entry — a verb may carry it since spec 2026-09-21 §7a, a linking entry never), a
+    `request_requirement` whose `kind` is not one of the four, or whose
     `name_arg` lies outside the arity, a `verb_values` block holding anything but
     `getters`, and a getter key without its `#` — every one a broken file, not a degraded
     run."""
@@ -6062,8 +6296,8 @@ def test_selector_words_of_the_wrong_shape_are_refused(tmp_path: Path):
         with pytest.raises(CatalogError):
             _resolve(tmp_path, [], _catalog(matches))
     matches = copy.deepcopy(_matches())
-    matches["vocabulary"]["verbs"][0]["media_arg"] = 0  # type: ignore[index]
-    matches["vocabulary"]["verbs"][0]["fills"] = "produces"  # type: ignore[index]
+    matches["entries"][1]["media_arg"] = 0  # type: ignore[index]
+    matches["entries"][1]["fills"] = "produces"  # type: ignore[index]
     with pytest.raises(CatalogError, match="media_arg"):
         _resolve(tmp_path, [], _catalog(matches))
     matches = copy.deepcopy(_matches())
