@@ -29,6 +29,8 @@ from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
     CallArgument,
+    CallSiteFact,
+    CallTarget,
     ModuleFact,
     Signature,
     SymbolFact,
@@ -386,8 +388,10 @@ def test_an_unreadable_channel_link_keeps_the_row_and_writes_no_binding(tmp_path
 
 
 def test_a_bean_via_channel_link_is_accepted_and_reads_as_unresolved_for_now(tmp_path: Path):
-    """The `{bean_via: argN}` spelling loads — the next task fills its behaviour — and
-    until then a link declared that way is the unreadable case above: row, no binding."""
+    """A `{bean_via: argN}` link whose argument names a parameter the constructing
+    method does not declare (no declaration fact at all) is a bean reference nothing
+    resolves — the unreadable case above: row, no binding. (Written before the bean fold
+    landed, when every such link read this way; kept as its near-miss.)"""
     facts = _adapter(("linkToBean", [CallArgument(kind="parameter", value=1)]))
     workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
     [row] = _rows(workspace)
@@ -1163,3 +1167,486 @@ def test_a_malformed_method_annotation_is_refused(tmp_path: Path):
         "roots": [{**_ADAPTER_MATCHES["roots"][0], "method_annotation": {"annotation": ACTIVATOR}}],
     }
     _refused(tmp_path, matches, "invented-adapters.*method_annotation")
+
+
+# --- the flow: a spec chain handed to a consumer that continues the walk (spec §5) -----
+
+# An invented flow vocabulary, for the reason every block above invents its own: a
+# SOURCE spec (`Sources.listenerSpec(cf, "t")`) handed straight to the flow factory
+# (`Flow.from(spec)`), whose own result chain is the flow definition — pass-through
+# steps, a `channel(String)` link, a `handle(...)` consumer, a `route(...)` divert — and
+# a SINK spec (`Sinks.senderSpec(t).topic("out")`) handed to `handle`. The spec chain
+# has no terminal of its own: the consumer IS the terminal, and the walk continues along
+# the consumer's chain with the spec's captures (`continue: true`).
+SOURCES = "com/acme/flows/Sources#"
+SOURCES_TYPE = "com.acme.flows.Sources"
+SOURCE_SPEC = "com/acme/flows/SourceSpec#"
+SINKS = "com/acme/flows/Sinks#"
+SINKS_TYPE = "com.acme.flows.Sinks"
+SINK_SPEC = "com/acme/flows/SinkSpec#"
+SINK_SPEC_TYPE = "com.acme.flows.SinkSpec"
+FLOW = "com/acme/flows/Flow#"
+FLOW_TYPE = "com.acme.flows.Flow"
+FLOW_DEF = "com/acme/flows/FlowDefinition#"
+FLOW_DEF_TYPE = "com.acme.flows.FlowDefinition"
+PROPS = "com/acme/flows/Props#"
+PROPS_TYPE = "com.acme.flows.Props"
+TOPIC = "orders.topic"
+
+_FLOW_MATCHES = {
+    "roots": [
+        {
+            "owner": SOURCES_TYPE,
+            "method": "listenerSpec",
+            "captures": {"channel": "arg1"},
+            "via_argument_of": {"owner": FLOW_TYPE, "method": "from"},
+            "continue": True,
+        },
+        # An OUTBOUND flow reads a channel (§5): `from("ch")`, the link is its source.
+        {
+            "owner": FLOW_TYPE,
+            "method": "from",
+            "captures": {"channel_link": "arg0"},
+            "direction": "outbound",
+        },
+        # No `sinks:` word: a sink is a root whose continuation is the flow.
+        {
+            "owner": SINKS_TYPE,
+            "method": "senderSpec",
+            "captures": {},
+            "via_argument_of": {"owner": FLOW_DEF_TYPE, "method": "handle"},
+            "continue": True,
+        },
+    ],
+    "steps": [
+        {"method": "handle", "captures": {"handler": "arg0"}},
+        {"method": "route", "poisons": ["handler"]},
+        {"method": "channel", "captures": {"channel_link": "arg0"}},
+        {"method": "topic", "owner": SINK_SPEC_TYPE, "captures": {"channel": "arg0"}},
+    ],
+    # The `build()` form: a spec that ends in its builder call, handed to `from`.
+    "terminal": [
+        {
+            "method": "build",
+            "terminal_via_argument": {"owner": FLOW_TYPE, "method": "from"},
+            "continue": True,
+        }
+    ],
+}
+
+
+def _source_spec(ordinal: int = 0, *, topic: CallArgument | None = None) -> CallSiteFact:
+    """`Sources.listenerSpec(cf, "orders.topic")` — a static factory, result 10."""
+    return _call(
+        CALLER,
+        SOURCES,
+        "listenerSpec",
+        ordinal,
+        receiver=None,
+        result=10,
+        arguments=[
+            CallArgument(kind="instance", source=2, symbol="com/acme/flows/Factory#"),
+            topic or CallArgument(kind="string", value=TOPIC),
+        ],
+        invoke_kind="static",
+    )
+
+
+def _from(ordinal: int, source: int, result: int) -> CallSiteFact:
+    """`Flow.from(<the value `source` names>)` — the consumer of a spec."""
+    return _call(
+        CALLER,
+        FLOW,
+        "from",
+        ordinal,
+        receiver=None,
+        result=result,
+        arguments=[CallArgument(kind="unresolved", source=source)],
+        invoke_kind="static",
+    )
+
+
+def _flow_steps(*steps: tuple[str, list[CallArgument]], start: int, receiver: int) -> list:
+    """The flow definition's own chain: each step on the previous step's result, from
+    `receiver`, then `get()` closing it."""
+    facts = []
+    for ordinal, (name, arguments) in enumerate(steps, start=start):
+        facts.append(
+            _call(
+                CALLER,
+                FLOW_DEF,
+                name,
+                ordinal,
+                receiver=receiver,
+                result=receiver + 1,
+                arguments=arguments,
+            )
+        )
+        receiver += 1
+    facts.append(
+        _call(CALLER, FLOW_DEF, "get", start + len(steps), receiver=receiver, result=receiver + 1)
+    )
+    return facts
+
+
+def test_a_source_spec_handed_to_the_flow_continues_the_walk_to_the_flows_handler(
+    tmp_path: Path,
+):
+    """Spec §5's inbound flow: the spec chain ends WITHOUT a terminal of its own — it is
+    consumed as `from(spec)`'s argument, and `continue: true` carries its captures on
+    along `from`'s own result chain: a pass-through step, then `handle(lambda)`, whose
+    body is the row's handler. ONE row, derived at the continued chain's end, never at
+    the spec's."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("transform", [CallArgument(kind="unresolved")]),
+            ("handle", [_lambda()]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    assert _bindings(workspace) == []
+    workspace.close()
+
+    assert (row["direction"], row["path"], row["handler"], row["caller"], row["resolution"]) == (
+        "inbound",
+        TOPIC,
+        _MODULE + BODY,
+        CALLER,
+        "resolved",
+    )
+
+
+def test_a_spec_nothing_consumes_derives_nothing(tmp_path: Path):
+    """The near-miss: the same spec, built and never handed to `from` — no consumer, no
+    continuation, and a spec chain has no terminal of its own (§5: the consumer is the
+    terminal)."""
+    workspace = _run(tmp_path, [_source_spec()], _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_divert_before_the_handler_leaves_it_null(tmp_path: Path):
+    """§5's `divert` on the continued chain: `route(...)` poisons `handler`, and the
+    `handle` after it is not certainly what receives the message (§0b A5)."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("route", [CallArgument(kind="unresolved")]),
+            ("handle", [_lambda()]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (TOPIC, None, "resolved")
+
+
+def test_a_channel_step_links_the_channel_and_the_walk_continues_to_the_handler(
+    tmp_path: Path,
+):
+    """§0b A4: `.channel("x")` records the link and the walk continues — the `handle`
+    after it is a consumer too. The link makes the chain write its `fed_by` edge (and
+    no row of its own, the plan's ruling); the handler folded AFTER the link is a READER
+    of that channel — the DSL subscribes the next endpoint to the named channel — so the
+    chain writes the `read_by` edge for it as well (§5: a channel-sourced consumer
+    writes `read_by`), and the join pass mints the row naming both."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("channel", [CallArgument(kind="string", value="x")]),
+            ("handle", [_lambda()]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [(b["role"], b["channel"], b["symbol"], b["destination"]) for b in bindings] == [
+        ("fed_by", "x", CALLER, TOPIC),
+        ("read_by", "x", _MODULE + BODY, None),
+    ]
+
+
+def test_the_join_pass_mints_the_row_for_a_flow_that_links_a_channel_and_handles_it(
+    tmp_path: Path,
+):
+    """Through the pipeline: the `fed_by` and `read_by` the chain wrote become one row —
+    the wire from the spec, the handler the lambda's body, `caller` the flow method."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("channel", [CallArgument(kind="string", value="x")]),
+            ("handle", [_lambda()]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, [_catalog(_FLOW_MATCHES)], capabilities=CAPABILITIES) == []
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["caller"]) == (TOPIC, _MODULE + BODY, CALLER)
+
+
+def test_a_handler_before_the_link_is_the_wires_consumer_not_the_channels_reader(
+    tmp_path: Path,
+):
+    """The near-miss that keeps the reader honest: `handle(h)` BEFORE `.channel("x")` —
+    h consumes what the spec delivers and its OUTPUT feeds x, so h reads nothing from x.
+    The link is still recorded (the flow feeds x with what came off the wire); no
+    `read_by` is written for h."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("handle", [_lambda()]),
+            ("channel", [CallArgument(kind="string", value="x")]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert [(b["role"], b["channel"]) for b in bindings] == [("fed_by", "x")]
+
+
+def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
+    """§5's outbound flow: `from("ch")` is a root (`channel_link`, `direction:
+    outbound`) and `.handle(sinkSpec)` consumes the sink chain — a root whose
+    continuation is the flow. Its captures (`channel: "out"` from `.topic("out")`)
+    merge with the consumer's prefix (`from("ch")` before `handle`): ONE outbound row
+    `path=out`, `caller` the flow method, and one outbound `fed_by` on `ch`."""
+    facts = [
+        _call(
+            CALLER,
+            FLOW,
+            "from",
+            0,
+            receiver=None,
+            result=20,
+            arguments=[CallArgument(kind="string", value="ch")],
+            invoke_kind="static",
+        ),
+        _call(
+            CALLER,
+            SINKS,
+            "senderSpec",
+            1,
+            receiver=None,
+            result=29,
+            arguments=[CallArgument(kind="instance", source=3, symbol="com/acme/flows/Template#")],
+            invoke_kind="static",
+        ),
+        _call(
+            CALLER,
+            SINK_SPEC,
+            "topic",
+            2,
+            receiver=29,
+            result=30,
+            arguments=[CallArgument(kind="string", value="out")],
+        ),
+        _call(
+            CALLER,
+            FLOW_DEF,
+            "handle",
+            3,
+            receiver=20,
+            result=21,
+            arguments=[CallArgument(kind="unresolved", source=30)],
+        ),
+        _call(CALLER, FLOW_DEF, "get", 4, receiver=21, result=22),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert (row["direction"], row["path"], row["handler"], row["caller"], row["resolution"]) == (
+        "outbound",
+        "out",
+        None,
+        CALLER,
+        "resolved",
+    )
+    assert (binding["channel"], binding["role"], binding["direction"], binding["destination"]) == (
+        "ch",
+        "fed_by",
+        "outbound",
+        "out",
+    )
+
+
+def test_a_build_terminated_spec_continues_exactly_as_a_bare_one(tmp_path: Path):
+    """The other form: the spec ends in `build()`, a terminal whose execute-join names
+    `from` and carries `continue: true` — `from` consumes the BUILT value, and the walk
+    continues from there as it does from the spec itself."""
+    facts = [
+        _source_spec(),
+        _call(CALLER, SOURCE_SPEC, "build", 1, receiver=10, result=11),
+        _from(2, source=11, result=12),
+        *_flow_steps(("handle", [_lambda()]), start=3, receiver=12),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["caller"]) == (TOPIC, _MODULE + BODY, CALLER)
+
+
+# --- channel_via on a constructor, by descriptor ---------------------------------------
+
+
+def _typed_call(
+    owner: str,
+    name: str,
+    ordinal: int,
+    *,
+    descriptor: str,
+    receiver: int | None,
+    result: int | None,
+    arguments: list,
+    invoke_kind: str = "virtual",
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=CALLER,
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind=invoke_kind,
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=arguments,
+    )
+
+
+_PROPS_VIA = {
+    "owner": PROPS_TYPE,
+    "method": "<init>",
+    "descriptor": "([Ljava/lang/String;)V",
+    "arg": 0,
+}
+_PROPS_MATCHES = {
+    **_FLOW_MATCHES,
+    "roots": [
+        {**_FLOW_MATCHES["roots"][0], "channel_via": [_PROPS_VIA]},
+        *_FLOW_MATCHES["roots"][1:],
+    ],
+}
+
+
+def _props_flow(constructor: CallSiteFact) -> list:
+    """`listenerSpec(cf, <the constructed props>)` → `from(spec)` → `handle(lambda)`."""
+    return [
+        constructor,
+        _source_spec(1, topic=CallArgument(kind="unresolved", source=40)),
+        _from(2, source=10, result=11),
+        *_flow_steps(("handle", [_lambda()]), start=3, receiver=11),
+        _body_symbol(),
+    ]
+
+
+def test_a_destination_on_a_constructors_varargs_reaches_the_row_through_its_descriptor(
+    tmp_path: Path,
+):
+    """Spec §5: `messageDrivenChannelAdapter(cf, new ContainerProperties("t"))` — the
+    topic lives on the constructor's own `String...` argument, one producing-site hop
+    (`channel_via` with `method: <init>`), and the DESCRIPTOR tells that constructor
+    from its siblings. The varargs slot is one array (9.15): one row per element."""
+    constructor = _typed_call(
+        PROPS,
+        "<init>",
+        0,
+        descriptor="([Ljava/lang/String;)V",
+        receiver=40,
+        result=None,
+        arguments=[_queue_names("t1", "t2")],
+        invoke_kind="special",
+    )
+    workspace = _run(tmp_path, _props_flow(constructor), _catalog(_PROPS_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"], row["resolution"]) for row in rows] == [
+        ("t1", _MODULE + BODY, "resolved"),
+        ("t2", _MODULE + BODY, "resolved"),
+    ]
+
+
+def test_a_sibling_constructor_with_a_string_at_the_same_position_is_not_the_topic(
+    tmp_path: Path,
+):
+    """The near-miss the descriptor exists for: an overload whose argument 0 is a string
+    that is NOT a topic (a `Pattern`'s text, a group id) matches the form's owner, name
+    and position — and not its descriptor, so the destination stays unread rather than
+    fabricated from it."""
+    constructor = _typed_call(
+        PROPS,
+        "<init>",
+        0,
+        descriptor="(Ljava/lang/String;I)V",
+        receiver=40,
+        result=None,
+        arguments=[CallArgument(kind="string", value="group"), CallArgument(kind="int", value=3)],
+        invoke_kind="special",
+    )
+    workspace = _run(tmp_path, _props_flow(constructor), _catalog(_PROPS_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+# --- validation of the flow words --------------------------------------------------------
+
+
+def test_via_argument_of_without_continue_is_refused(tmp_path: Path):
+    matches = {
+        **_FLOW_MATCHES,
+        "roots": [{k: v for k, v in _FLOW_MATCHES["roots"][0].items() if k != "continue"}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*via_argument_of")
+
+
+def test_a_continuing_terminal_with_a_bare_join_is_refused(tmp_path: Path):
+    matches = {
+        **_FLOW_MATCHES,
+        "terminal": [{"method": "build", "terminal_via_argument": True, "continue": True}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*continue")
+
+
+def test_a_channel_via_descriptor_that_is_not_a_string_is_refused(tmp_path: Path):
+    matches = {
+        **_FLOW_MATCHES,
+        "roots": [{**_FLOW_MATCHES["roots"][0], "channel_via": [{**_PROPS_VIA, "descriptor": 3}]}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*descriptor")

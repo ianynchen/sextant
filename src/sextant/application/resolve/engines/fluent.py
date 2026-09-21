@@ -147,6 +147,14 @@ _POISONED = MappingProxyType({"kind": "unresolved", "reason": "poisoned"})
 # walk already copies `captures` per branch.
 _DIRECTION = "\x00direction"
 _COMPOSE = "\x00compose"
+# Two more (spec 2026-09-21 §5): the consumer a root's `via_argument_of …
+# continue: true` names, riding with the chain so its end — wherever the
+# value is handed on — can find that consumer (`_continuations`); and
+# whether the chain's `handler` was captured AFTER its `channel_link`, which
+# is what makes that handler a READER of the linked channel rather than the
+# wire's own consumer (`_derive`'s `read_by` edge).
+_CONTINUE = "\x00continue"
+_READS_LINK = "\x00reads_link"
 
 # F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
 # A reserved key inside `captures` rather than a second parameter threaded through
@@ -254,6 +262,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # here to the chain's end (`_step_captures`) — None for the
             # ordinary step, checked by `_validate_poisons`.
             "poisons": step.get("poisons"),
+            # §5: a step whose result is handed to a consumer that continues
+            # the walk — the same word a root may carry; None otherwise.
+            "continue_via": _validated_continuation(step, catalog),
         }
         for step in matches.get("steps", [])
     ]
@@ -264,7 +275,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
     undeclared_owners, undeclared_poisons = _undeclared_steps(matches, catalog)
     _validate_poisons([*roots, *bean_roots], steps, undeclared_poisons, catalog)
-    terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
+    terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []), catalog)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -389,6 +400,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             undeclared_poisons=undeclared_poisons,
             beans=beans,
             bean_roots=bean_roots,
+            roots=roots,
             all_parameters=caller_parameters,
             annotations=annotations,
         )
@@ -402,15 +414,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # A root's own captures fold ON TOP of whatever the chain already
             # carried before reaching it — the root is later in the chain, so
             # last-wins holds exactly as it does forward of here.
-            captures = {
-                **_prefix_captures(site, context),
-                **_resolve_captures(root["captures"], site),
-                **_method_annotation_capture(root, context),
-            }
-            if root["direction"] is not None:
-                captures[_DIRECTION] = root["direction"]
-            if root["compose"] is not None:
-                captures[_COMPOSE] = root["compose"]
+            captures = {**_prefix_captures(site, context), **_root_captures(root, site, context)}
+            if root["continue_via"] is not None:
+                captures[_CONTINUE] = root["continue_via"]
             _fold_bean_captures(captures, context)
             _walk(site, captures, reached_terminal=False, context=context)
 
@@ -451,6 +457,10 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
         # §4's `method_annotation:` — a capture read off the constructing
         # method's own annotation; None for the root that declares none.
         "method_annotation": _validated_method_annotation(root, catalog),
+        # §5's `via_argument_of: {owner, method}, continue: true` — the
+        # consumer whose own chain continues this one; None for the root
+        # that ends where its chain ends.
+        "continue_via": _validated_continuation(root, catalog),
     }
 
 
@@ -481,6 +491,11 @@ class _JoinFilter:
 
     owners: tuple[str, ...]
     methods: tuple[str, ...]
+    # Spec 2026-09-21 §5's `continue: true`: the join does not END the chain, it
+    # hands the built value to the consumer, whose own result chain the walk
+    # then continues with the same captures (`_continue`). False is the
+    # execute-join as it always was — the consumer executes, the chain derives.
+    continues: bool = False
 
 
 @dataclass(frozen=True)
@@ -531,6 +546,9 @@ class _ChainContext:
     beans: BeanTable | None
     # §4's `beans:` — the roots a referenced bean's chain may start from.
     bean_roots: list[dict[str, Any]]
+    # The catalog's roots, for the continuation's prefix (`_prefix_captures`):
+    # the flow's own source is a root the sink chain arrives at backward.
+    roots: list[dict[str, Any]]
     # Every declared method's parameters (`declared_parameters_of`), so a
     # referenced bean's own method gets its `CallFacts` exactly as the caller
     # got its own; `facts.caller_parameters` is this caller's slice of it.
@@ -544,7 +562,9 @@ class _ChainContext:
     collect: list[dict[str, Any]] | None = None
 
 
-def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
+def _prefix_captures(
+    root_site: dict[str, Any], context: _ChainContext, roots: Sequence[dict[str, Any]] = ()
+) -> dict[str, Any]:
     """The captures the chain already carried BEFORE its root — the same
     `result → receiver` link `_walk` follows forward, followed backward from
     the root instead (Task 6 checkpoint: "a pre-root backward walk is
@@ -571,7 +591,14 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
     catalog at all". Forward of a root the walk is already chain-rooted, so an
     owner-free step there can only fold within a chain this catalog matched;
     BACKWARD, the prefix is exactly the part of the chain no root has vouched
-    for yet, so the owner is what vouches for it instead."""
+    for yet, so the owner is what vouches for it instead.
+
+    `roots` (spec 2026-09-21 §5, the continuation) lets a producer that IS one
+    of the catalog's roots fold its own captures backward too — `from("ch")`
+    before `handle(sinkSpec)`, where the flow's source is a root and the walk
+    arrives at `handle` from the sink chain, never from that root. A root is
+    owner-gated by construction, so the rule above holds for it. Empty on the
+    root walk itself, whose prefix is what it always was."""
     producers: list[dict[str, Any]] = []
     visited: set[Any] = set()
     current = root_site
@@ -598,9 +625,34 @@ def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[
     # folds the outermost producer first — real chain order, which is what
     # makes last-wins mean the same thing on both sides of the root.
     for producer in reversed(producers):
+        root = _matching_root(producer, roots)
+        if root is not None:
+            captures.update(_root_captures(root, producer, context))
+            continue
         step = _matching_step(producer, owned)
         if step is not None:
             captures.update(_step_captures(step, producer))
+    return captures
+
+
+def _root_captures(
+    root: dict[str, Any], site: dict[str, Any], context: _ChainContext
+) -> dict[str, Any]:
+    """What one root contributes at its site: its captures (spec 2026-09-21
+    §4's `method_annotation` among them) and its direction and composition
+    under their reserved keys. Seeded by the root walk, and folded backward
+    where the continuation's prefix reaches a root (`_prefix_captures`) —
+    less `_CONTINUE`, which the root walk adds itself: it is the walk's own
+    instruction, not a capture, and a root reached backward is not handing
+    its value on."""
+    captures = {
+        **_resolve_captures(root["captures"], site),
+        **_method_annotation_capture(root, context),
+    }
+    if root["direction"] is not None:
+        captures[_DIRECTION] = root["direction"]
+    if root["compose"] is not None:
+        captures[_COMPOSE] = root["compose"]
     return captures
 
 
@@ -635,6 +687,16 @@ def _walk(
     caller), so folding into it in place is folding into the branch."""
     if _reaches_terminal(site, context):
         reached_terminal = True
+    # Spec 2026-09-21 §5: a value this row produced that a declared consumer
+    # takes as an argument hands the chain on — the walk continues from the
+    # consumer with these captures, and derivation belongs to the continued
+    # chain's end, never to this one's. Tested at every row the walk reaches,
+    # because the value handed on is whichever the consumer's argument names:
+    # the root's own (`from(Kafka.messageDrivenChannelAdapter(cf, "t"))`), a
+    # configuring call's result on it, or a `build()`.
+    consumers = _continuations(site, captures, context)
+    for consumer in consumers:
+        _continue(consumer, captures, context)
     chain_key = _chain_key(site)
     # A void ordinary call (`result` null, D00 §5) has nothing a following
     # row's `receiver` could ever really match — `None` is not a value id,
@@ -661,7 +723,7 @@ def _walk(
         next_captures = dict(captures)
         _fold_site(next_site, next_captures, context)
         _walk(next_site, next_captures, reached_terminal, context)
-    if forked:
+    if forked or consumers:
         return
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
     # chain end, terminal or not: a referenced bean's chain is that bean's
@@ -670,6 +732,47 @@ def _walk(
         context.collect.append(captures)
     elif reached_terminal:
         _derive(captures, context)
+
+
+def _continuations(
+    site: dict[str, Any], captures: dict[str, Any], context: _ChainContext
+) -> list[dict[str, Any]]:
+    """The consumers that continue the chain from `site` (spec 2026-09-21 §5):
+    every row in this caller taking `site`'s own chain key as an argument
+    that matches a continuing join — the one the chain's root or a step
+    declared (`via_argument_of … continue: true`, riding in `captures`), or
+    the one a `terminal` entry of `site`'s own name declared (`build`'s
+    `terminal_via_argument … continue: true`). Empty for every chain of
+    every catalog that spells neither."""
+    filters: list[_JoinFilter] = []
+    declared = captures.get(_CONTINUE)
+    if isinstance(declared, _JoinFilter):
+        filters.append(declared)
+    terminal = context.via_argument_names.get(str(site["name"]))
+    if terminal is not None and terminal.continues:
+        filters.append(terminal)
+    found: list[dict[str, Any]] = []
+    for join_filter in filters:
+        for consumer in _consumers(site, context.sites, join_filter):
+            if all(consumer is not seen for seen in found):
+                found.append(consumer)
+    return found
+
+
+def _continue(consumer: dict[str, Any], captures: dict[str, Any], context: _ChainContext) -> None:
+    """Continues the walk from `consumer` (spec 2026-09-21 §5): its own
+    receiver ancestry first — `from("ch")` before `handle(sinkSpec)`, roots
+    included — then the handed-on chain's captures on top (a poison the
+    prefix set stays, `_fold`'s rule), then the consumer's own step, and on
+    along its result chain, executable from here: the consumer IS the
+    terminal, so a flow needs no `get()` declared to derive. The handed-on
+    chain's `_CONTINUE` does not travel — the continued chain ends where it
+    ends, unless the consumer's own step hands it on again."""
+    continued = _prefix_captures(consumer, context, context.roots)
+    _fold(continued, {field: value for field, value in captures.items() if field != _CONTINUE})
+    _fold_bean_captures(continued, context)
+    _fold_site(consumer, continued, context)
+    _walk(consumer, continued, reached_terminal=True, context=context)
 
 
 def _reaches_terminal(site: dict[str, Any], context: _ChainContext) -> bool:
@@ -702,7 +805,19 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
     # `site`'s own arguments are what a `when` guard (D02 §2's
     # `fluent` style) reads, so the guard is evaluated here, in
     # `_resolve_captures`'s caller, rather than inside it.
-    _fold(captures, _step_captures(step, site))
+    folded = _step_captures(step, site)
+    # Spec 2026-09-21 §5: whether the handler this step captures arrives
+    # AFTER a link the chain already holds — then it reads the linked
+    # channel (the DSL subscribes the next endpoint to it) — and a new link
+    # after a handler starts that question over: the handler before it was
+    # the wire's own consumer, and its output is what feeds the channel.
+    if "channel_link" in folded:
+        captures[_READS_LINK] = False
+    elif "handler" in folded and _string_value(captures.get("channel_link")) is not None:
+        captures[_READS_LINK] = True
+    _fold(captures, folded)
+    if step["continue_via"] is not None:
+        captures[_CONTINUE] = step["continue_via"]
     # F5 §6.2 (W29): a `collects` step ACCUMULATES instead, because the thing it
     # reads is repeatable — a request may carry any number of headers, and
     # last-wins would keep only the final one and silently claim it was the only
@@ -922,6 +1037,25 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 }
             )
             if direction == "inbound":
+                # Spec 2026-09-21 §5, §0b A4: a handler folded AFTER the link
+                # — `.channel("x").handle(h)` — is a READER of the linked
+                # channel, the same edge a handler's own annotation writes;
+                # the join pass then mints the row naming this feeder and
+                # that reader, beside any other reader of the channel. Only
+                # a handler the chain could name: an unread one is no reader.
+                if handler is not None and captures.get(_READS_LINK):
+                    context.bindings.append(
+                        {
+                            "channel": link,
+                            "role": _READ_BY,
+                            "symbol": handler,
+                            "protocol": None,
+                            "direction": direction,
+                            "destination": None,
+                            "catalog_id": context.catalog.id,
+                            "resolution": "resolved",
+                        }
+                    )
                 continue
         context.rows.append(
             {
@@ -1180,7 +1314,7 @@ def _response_descriptor(
     return json.dumps(wrapped, sort_keys=True, separators=(",", ":"))
 
 
-def _matching_root(site: dict[str, Any], roots: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _matching_root(site: dict[str, Any], roots: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     return next(
         (
             root
@@ -1723,12 +1857,17 @@ def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalo
                     # call's argument count, which tells a one-string constructor from the
                     # four-argument constructor once owner and method agree.
                     and valid_via_arity(form)
+                    # `descriptor` is optional too, and a string when declared: the
+                    # linked call's whole JVM descriptor (spec 2026-09-21 §5), which
+                    # tells `ContainerProperties(String...)` from `(Pattern)` where
+                    # arity cannot — both take one argument.
+                    and ("descriptor" not in form or isinstance(form["descriptor"], str))
                 )
                 if not valid:
                     raise CatalogError(
                         f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
                         f"a `{key}` entry that must be `{{owner, method, arg: {arg_forms}, "
-                        f"arity?: int}}`, "
+                        f"arity?: int, descriptor?: str}}`, "
                         f"got {form!r}"
                     )
             if key in entry and field not in entry.get("captures", {}):
@@ -1762,13 +1901,14 @@ def _channel_via_forms(entry: dict[str, Any], key: str = "channel_via") -> list[
             "method": form["method"],
             "arg": form["arg"],
             **({"arity": form["arity"]} if "arity" in form else {}),
+            **({"descriptor": form["descriptor"]} if "descriptor" in form else {}),
         }
         for form in _channel_via_entries(entry, key)
     ]
 
 
 def _terminal_index(
-    entries: list[Any],
+    entries: list[Any], catalog: Catalog
 ) -> tuple[set[str], dict[str, _JoinFilter | None]]:
     """Splits `matches.terminal` into method names that end a chain on their
     own, and ones that only do so through the execute-join (checkpoint
@@ -1797,15 +1937,57 @@ def _terminal_index(
         # receivers. Before this, two entries sharing a method name silently overwrote
         # each other in this dict and the FIRST one stopped deriving — which is how a
         # widening can remove coverage instead of adding it.
+        # Spec 2026-09-21 §5's `continue: true`: only with an `{owner, method}`
+        # marker — a bare `true` would continue the walk into ANY consumer of the
+        # built value, a log statement included, which is the fabrication the
+        # mapping form closes for the execute-join and would reopen here.
+        continues = bool(entry.get("continue"))
+        if continues and not isinstance(marker, dict):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: terminal `{entry['method']}` declares "
+                f"`continue: true` without an `{{owner, method}}` `terminal_via_argument` "
+                f"naming the consumer to continue into (spec 2026-09-21 §5)"
+            )
         via_argument[entry["method"]] = (
             _JoinFilter(
                 owners=catalog_symbols(marker["owner"], "terminal_via_argument.owner"),
                 methods=_method_names(marker["method"]),
+                continues=continues,
             )
             if isinstance(marker, dict)
             else None
         )
     return plain, via_argument
+
+
+def _validated_continuation(entry: dict[str, Any], catalog: Catalog) -> _JoinFilter | None:
+    """A root's or step's `via_argument_of: {owner, method}` with `continue:
+    true` (spec 2026-09-21 §5) as the continuing join, or None where the entry
+    declares neither. The two go together: `via_argument_of` without
+    `continue` would be an execute-join on a root, which `terminal_via_argument`
+    already is, and `continue` without a consumer names nothing to continue
+    into."""
+    via = entry.get("via_argument_of")
+    continues = entry.get("continue")
+    if via is None and continues is None:
+        return None
+    if (
+        continues is not True
+        or not isinstance(via, dict)
+        or set(via) != {"owner", "method"}
+        or not isinstance(via["method"], str | list)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{entry.get('method')}` declares "
+            f"`via_argument_of: {via!r}` with `continue: {continues!r}` — the pair is "
+            f"`via_argument_of: {{owner, method}}` with `continue: true` exactly "
+            f"(spec 2026-09-21 §5)"
+        )
+    return _JoinFilter(
+        owners=catalog_symbols(via["owner"], f"{catalog.source}: via_argument_of.owner"),
+        methods=_method_names(via["method"]),
+        continues=True,
+    )
 
 
 def _method_names(declared: Any) -> tuple[str, ...]:
@@ -1843,9 +2025,20 @@ def _has_execute_join(
     terminal (A2 Task 8 fix round 1; reading `result` here made every such
     chain derive nothing). `_walk` and `_linked_constructor` already key a
     constructor the same way."""
+    return bool(_consumers(site, sites, join_filter))
+
+
+def _consumers(
+    site: dict[str, Any], sites: list[dict[str, Any]], join_filter: _JoinFilter | None
+) -> list[dict[str, Any]]:
+    """The rows `_has_execute_join` asks after, themselves: every row in
+    this caller carrying `site`'s chain key as an argument `source`, narrowed
+    to the filter's owner+method where one is declared — in ordinal order,
+    which is the walk's (NFR-1)."""
     result = _chain_key(site)
     if result is None:
-        return False
+        return []
+    found: list[dict[str, Any]] = []
     for candidate in sites:
         if join_filter is not None and (
             candidate["owner"] not in join_filter.owners
@@ -1853,8 +2046,8 @@ def _has_execute_join(
         ):
             continue
         if any(argument.get("source") == result for argument in candidate["arguments"]):
-            return True
-    return False
+            found.append(candidate)
+    return found
 
 
 def _chain_key(site: dict[str, Any]) -> Any:

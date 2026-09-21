@@ -874,7 +874,12 @@ def linked_channels(
         return [(None, None, "unresolved")]
     for form in forms:
         site = _linked_constructor(
-            form["owner"], source, facts, form["method"], arity=form.get("arity")
+            form["owner"],
+            source,
+            facts,
+            form["method"],
+            arity=form.get("arity"),
+            descriptor=form.get("descriptor"),
         )
         if site is not None:
             return _read_channels(site, form["arg"])
@@ -897,7 +902,11 @@ def _read_channels(site: dict[str, Any], arg: int | str) -> list[tuple[None, str
     or every string-kind positional argument at once (`"all_strings"`)."""
     site_arguments = site.get("arguments") or []
     if isinstance(arg, int):
-        return [channel_of(_arg_at(site_arguments, arg))]
+        # `channels_of`, not `channel_of`: the declared position may be a
+        # VARARGS slot — `ContainerProperties(String... topics)`, one `array`
+        # argument (9.15), one destination per element (spec 2026-09-21 §3c) —
+        # and a slot that is not an array reads exactly as it always did.
+        return channels_of(_arg_at(site_arguments, arg))
     return _all_string_channels(site_arguments)
 
 
@@ -1188,6 +1197,7 @@ def _linked_constructor(
     workspace_types: CallFacts,
     name: str = "<init>",
     arity: int | None = None,
+    descriptor: str | None = None,
 ) -> dict[str, Any] | None:
     """D02 §2h's join: the call site — an `<init>` by default, or (Task 7's
     `channel_via`) any other named method — within this same caller, whose
@@ -1198,7 +1208,10 @@ def _linked_constructor(
     Never a search by proximity: the id is what keeps two calls in one
     method apart. `arity`, when the form names one, is the linked call's
     argument count — the one thing that tells a one-string constructor from
-    its four-string overload once owner and name agree."""
+    its four-string overload once owner and name agree. `descriptor`, when
+    the form names one, is the linked call's whole JVM descriptor (spec
+    2026-09-21 §5): what tells `ContainerProperties(String...)` from
+    `(Pattern)`, two one-argument constructors arity cannot separate."""
     if source is None:
         return None
     key = "receiver" if name == "<init>" else "result"
@@ -1210,6 +1223,7 @@ def _linked_constructor(
             and site.get("owner") == owner_symbol
             and site.get(key) == source
             and (arity is None or len(site.get("arguments") or []) == arity)
+            and (descriptor is None or site.get("descriptor") == descriptor)
         ),
         None,
     )
