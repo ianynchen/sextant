@@ -1,6 +1,10 @@
 // The Kotlin coRouter surface -- the fixture's first non-contract Kotlin.
 // Mirrors the core shapes proven in OrderRoutes: one nest prefix, two verbs,
-// one media predicate, a suspend handler reference and a suspend lambda.
+// one media predicate, a suspend handler reference and a suspend lambda -- and, at the
+// top level, `accept(MediaType.APPLICATION_JSON) { … }`: the DSL's route-declaring media
+// overload (`accept(MediaType, Function2)V`, CP-29 row 10), a route under a media guard
+// alone, which derives `method` NULL, path `/**`, `produces: application/json` with its
+// suspend lambda as the handler (`dsl-media-route`).
 package com.acme.orders.routes
 
 import org.springframework.context.annotation.Bean
@@ -32,6 +36,7 @@ class KotlinOrderRoutes {
             }
         }
         extra()
+        accept(MediaType.APPLICATION_JSON) { listOrders(it) }
     }
 }
 

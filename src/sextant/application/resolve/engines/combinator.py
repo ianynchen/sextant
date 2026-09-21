@@ -921,7 +921,7 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         if prefix is None:
             return [_Route(poisons=_IDENTITY_POISON)]
         return _nested_routes(site, prefix, scope)
-    if key in context.verb_names:
+    if key in context.verb_names and not _falls_to_media(site, context):
         verb = _matching_rule(site, context.verbs)
         if verb is None:
             # Spec §3, the G-13 guard: the vocabulary names this call and no overload
@@ -943,10 +943,11 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
         # route-declaring overload of that name (a builder DSL's `accept(MediaType,
         # Function1)`, measured on both routing stacks), and a declared route absent
         # with nothing saying so is spec §3's forbidden outcome. One unresolved row, no
-        # handler — the handler position is not one this rule declares. Reading it
-        # properly (the media value as the route's own constraint, plus its handler) is
-        # a catalog word this grammar does not have yet; tracked on the register as
-        # `dsl-media-route`.
+        # handler — the handler position is not one this rule declares. A catalog that
+        # DOES declare it — a verb rule on that overload, `media_arg` beside
+        # `handler_arg` (spec 2026-09-21 §7a, `dsl-media-route`) — never reaches this
+        # arm: the verb branch above accepted the call. The arm stays for every media
+        # name no such rule reads.
         if _carries_a_handler(site):
             return [_Route(poisons=_IDENTITY_POISON)]
         return []
@@ -988,6 +989,19 @@ def _routes_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     return []
 
 
+def _falls_to_media(site: dict[str, Any], context: _TreeContext) -> bool:
+    """Whether a call on a name BOTH a verb rule and a media rule read is the media
+    rule's to fold (spec 2026-09-21 §7a): the verb rules accept none of its overloads.
+    `accept(MediaType, Function1)` declares a route and is a verb rule at arity 2;
+    `accept(MediaType...)` is the predicate factory the media rule reads, arity 1 —
+    and without this the factory would meet the G-13 poison instead of the media
+    rule, on every route it guards. Only a name the media vocabulary reads falls
+    through; on any other name an unaccepted overload is still the one unresolved
+    row spec §3 demands."""
+    key = (str(site["owner"]), str(site["name"]))
+    return key in context.media and _matching_rule(site, context.verbs) is None
+
+
 def _carries_a_handler(site: dict[str, Any]) -> bool:
     """Whether any argument of this call is a `lambda`-kind one — a handler, on a call
     whose rule has no handler position to read it at."""
@@ -1020,7 +1034,7 @@ def _constraints_of(site: dict[str, Any], scope: _Scope) -> list[_Route]:
     it — one branch normally, several where an `or` fans the route out."""
     context = scope.context
     key = (str(site["owner"]), str(site["name"]))
-    if key in context.verb_names:
+    if key in context.verb_names and not _falls_to_media(site, context):
         verb = _matching_rule(site, context.verbs)
         return _verb_constraints(site, verb, scope) if verb else [_Route(poisons=_IDENTITY_POISON)]
     if key in context.prefix_names:
@@ -1689,6 +1703,13 @@ def _verb_constraints(site: dict[str, Any], rule: dict[str, Any], scope: _Scope)
             _arg_at(arguments, rule["predicate_arg"]), scope, (_PATH,)
         )
         branches = [_merged(branch, predicate) for branch in branches for predicate in predicates]
+    if "media_arg" in rule:
+        # Spec 2026-09-21 §7a: a verb rule may read a media constraint off one of its
+        # own positions, as a prefix does (`_prefix_constraints`) — the route declared
+        # under a media guard alone, `accept(MediaType, handler)`, whose media IS the
+        # route's own constraint and whose path is the served any-path pattern.
+        media = _media_constraints(site, rule, scope)
+        branches = [_merged(branch, media) for branch in branches]
     return branches
 
 
@@ -2280,18 +2301,20 @@ def _validate_matches(catalog: Catalog) -> None:
                 f"{rule.get('arity')}, on a verb rule declaring no `verb` of its own or on "
                 f"a prefix (D02 §2's `combinator` style)"
             )
-        # Spec 2026-09-19 §4b: a prefix may set a media column from one of its positions.
-        # `media_arg` and `fills` come together — one names where, the other which column —
-        # and only on a prefix; a `media` rule reads every argument and names no position.
-        if ("media_arg" in rule or (role == "prefixes" and "fills" in rule)) and (
-            role != "prefixes"
+        # Spec 2026-09-19 §4b: a prefix may set a media column from one of its positions;
+        # spec 2026-09-21 §7a: so may a verb — the route declared under a media guard
+        # alone. `media_arg` and `fills` come together — one names where, the other which
+        # column — and only on those two; a `media` rule reads every argument and names
+        # no position.
+        if ("media_arg" in rule or (role in ("verbs", "prefixes") and "fills" in rule)) and (
+            role not in ("verbs", "prefixes")
             or not _position_inside(rule.get("media_arg"), rule)
             or rule.get("fills") not in _MEDIA_FIELDS
         ):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{name}` declares "
                 f"`media_arg: {rule.get('media_arg')!r}` / `fills: {rule.get('fills')!r}` — "
-                f"together, on a prefix, a position from 0 below the rule's arity "
+                f"together, on a verb or a prefix, a position from 0 below the rule's arity "
                 f"{rule.get('arity')} filling `consumes` or `produces` (D02 §2's "
                 f"`combinator` style)"
             )
@@ -2357,7 +2380,26 @@ def _validate_matches(catalog: Catalog) -> None:
                     f"— two readings of one call (D02 §2's `combinator` style)"
                 )
             named[key] = role
+    media_names = {
+        (_catalog_symbol(rule["owner"]), rule["method"]) for rule in vocabulary.get("media", [])
+    }
     for rule in vocabulary.get("verbs", []):
+        # Spec 2026-09-21 §7a: a verb rule on a name a `media` rule also reads is one
+        # OVERLOAD of that name (the handler-taking form), and the media rule reads the
+        # others; a call falls to the media rule only when no verb rule accepts it
+        # (`_falls_to_media`). A verb rule with no `arity` accepts every call of the name,
+        # so the media rule would never be reached — every route under that guard reading
+        # its media column NULL, silently. Refused so the split is stated.
+        if (_catalog_symbol(rule["owner"]), rule["method"]) in media_names and rule.get(
+            "arity"
+        ) is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{rule.get('method')}` on "
+                f"`{rule['owner']}` is a verb rule and a `media` rule, and the verb rule "
+                f"declares no `arity` — the verb rule reads one overload, the media rule "
+                f"the rest, and only an arity tells them apart (D02 §2's `combinator` "
+                f"style)"
+            )
         # A verb rule answers for its verb — `verb` (null included: the predicate
         # supplies one), or `verb_arg` — unless it is a TERMINAL (spec 2026-09-19 §4c):
         # a verb-less terminal takes the scope's verb, or fans out through

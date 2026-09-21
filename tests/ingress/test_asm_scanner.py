@@ -92,6 +92,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
+        # Spec 2026-09-21 §7a (`dsl-media-route`): the suspend lambda of `coRouter { }`'s
+        # top-level `accept(JSON) { }` route — one class file.
+        "KotlinOrderRoutes$ktRoutes$1$2.jsonl",
         "KotlinOrderRoutes.jsonl",
         # Spec 2026-09-19 §4a: the top-level `fun CoRouterFunctionDsl.extra()` helper
         # compiles into the file facade `KotlinOrderRoutesKt`, and its suspend handler into
@@ -269,7 +272,9 @@ def test_scan_writes_one_fact_file_per_class_file_when_run_on_the_fixture(tmp_pa
     # `mvcroutes/KotlinParamController`, the parameter-annotation fixtures — one class
     # file each (the Kotlin `$default` bridge is a method of the same class, not a file).
     # 140 since spec 2026-09-19 §5c: `MappingConditionsController`, one class file.
-    assert report.documents == 140
+    # 141 since spec 2026-09-21 §7a: `routes/KotlinOrderRoutes$ktRoutes$1$2`, the suspend
+    # lambda class of `coRouter { accept(JSON) { } }`.
+    assert report.documents == 141
 
 
 def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java(
@@ -338,6 +343,9 @@ def test_fact_files_land_beside_their_sources_when_the_output_path_contains_java
         "KotlinOrderRoutes$ktRoutes$1$1$1.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$2.jsonl",
         "KotlinOrderRoutes$ktRoutes$1$1$3$1.jsonl",
+        # Spec 2026-09-21 §7a (`dsl-media-route`): the suspend lambda of `coRouter { }`'s
+        # top-level `accept(JSON) { }` route — one class file.
+        "KotlinOrderRoutes$ktRoutes$1$2.jsonl",
         "KotlinOrderRoutes.jsonl",
         # Spec 2026-09-19 §4a: the top-level `fun CoRouterFunctionDsl.extra()` helper
         # compiles into the file facade `KotlinOrderRoutesKt`, and its suspend handler into

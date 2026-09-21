@@ -790,6 +790,50 @@ matches:
         arity: 3
         predicate_arg: 0
         handler: none
+      # `dsl-media-route` (spec 2026-09-21 §7a; CP-29 row 10): the handler-taking media
+      # overloads — a route declared under a media guard ALONE, no verb and no path.
+      # MEASURED (`javap -p -s`, spring-webflux 6.1.6): each DSL declares `accept` and
+      # `contentType` exactly twice — the vararg factory `(MediaType[])RequestPredicate`
+      # the `media:` block below reads, and `(MediaType, Function2 / Function1)V`, which DECLARES the
+      # route. A verb rule on the second: `arity: 2` is what tells it from the factory
+      # (arity 1 — a vararg is one array slot; the engine falls through to the media rule
+      # for a call no verb overload accepts, and refuses a verb rule on a media name that
+      # declares no arity), the media at 0 fills the column `fills` names, the handler at
+      # 1, and no verb of its own (`verb: null`, as `route(predicate, handler)` reads):
+      # one row, `method` NULL, path `/**` (the served any-path pattern), media set,
+      # resolved. NO `all_methods` on this catalog (§0b A1): `resources(…)` routes are
+      # verb-less rows too and serve GET/HEAD/OPTIONS only, so a fan-out would publish
+      # wrong rows on every static-resource route. *Before this these two spellings
+      # derived one unresolved row each (the engine's media-with-a-handler guard, which
+      # stays for any media name no verb rule reads).*
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: accept
+        verb: null
+        arity: 2
+        media_arg: 0
+        fills: produces
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.CoRouterFunctionDsl
+        method: contentType
+        verb: null
+        arity: 2
+        media_arg: 0
+        fills: consumes
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: accept
+        verb: null
+        arity: 2
+        media_arg: 0
+        fills: produces
+        handler_arg: 1
+      - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
+        method: contentType
+        verb: null
+        arity: 2
+        media_arg: 0
+        fills: consumes
+        handler_arg: 1
 
     prefixes:
       # Java: `RequestPredicates.path("/api")` — a predicate contributing
@@ -924,11 +968,9 @@ matches:
       # spring-webflux 6.1.6 and 7.0.2): `accept(MediaType...)RequestPredicate` and
       # `contentType(MediaType...)RequestPredicate`, the vararg factories these rows
       # read. Each name ALSO has a `(MediaType, Function1)V` overload that declares a
-      # verb-less route under one media guard; a media rule reads its arguments as
-      # constants and never as a route, so that spelling derives one unresolved row
-      # (the engine's media-with-a-handler guard, A1 Task 5 review) — not silence, and
-      # not the route: reading it is `dsl-media-route` on the register, the same gap
-      # the `CoRouterFunctionDsl` pair above and the servlet twin carry.
+      # verb-less route under one media guard; that overload is a VERB rule above
+      # (`dsl-media-route`, spec 2026-09-21 §7a), split from this one by `arity`, on this
+      # DSL and on the `CoRouterFunctionDsl` pair above alike.
       - owner: org.springframework.web.reactive.function.server.RouterFunctionDsl
         method: accept
         fills: produces

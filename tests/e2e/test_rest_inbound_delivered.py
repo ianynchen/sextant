@@ -251,21 +251,47 @@ def test_every_kotlin_dsl_verb_overload_derives_what_it_declares_on_both_stacks(
     } <= rows, sorted(rows)
 
 
-def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved_row(http_rows):
-    """The tracked gap, NOT the destination (`dsl-media-route` on the register; A1 Task 5
-    review). `KotlinMvcRoutes.kt` writes `accept(MediaType.APPLICATION_JSON) { h }` — the
-    DSL's `accept(MediaType, Function1)V`, a route declared under a media guard alone —
-    and this grammar has no word for a media rule that also carries a handler. It derived
-    SILENCE; it derives one row, `unresolved`, path NULL, no handler, attributed to the
-    declaring method, until the word exists."""
-    gap = [
-        row
-        for row in http_rows
-        if row["catalog_id"] == "spring-mvc-router"
-        and _short_caller(row) == "KotlinMvcRoutes#ktMvcRoutes"
-        and row["resolution"] == "unresolved"
-    ]
-    assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
+def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row(
+    http_rows,
+):
+    """`dsl-media-route` (spec 2026-09-21 §7a; CP-29 row 10). `KotlinMvcRoutes.kt` writes
+    `accept(MediaType.APPLICATION_JSON) { h }` inside `"/ktmvc".nest { }` and
+    `KotlinOrderRoutes.kt` writes it at the top of `coRouter { }` — the DSLs'
+    `accept(MediaType, Function1/Function2)V`, a route declared under a media guard alone.
+    Each is one RESOLVED row: no verb (`method` NULL — the guard names none, and no
+    `all_methods` fan-out, §0b A1), the served any-path pattern under whatever prefix
+    encloses it (`/ktmvc/**` on the servlet stack, `/**` on the reactive one), the media
+    as `produces`, and the lambda as the handler. *This pinned one `unresolved` row with
+    path NULL and no handler on the servlet stack — the tracked gap — until the word
+    existed; the reactive fixture had no instance.* No other row on either catalog moves."""
+    routers = ("KotlinMvcRoutes#ktMvcRoutes", "KotlinOrderRoutes#ktRoutes")
+    own = [row for row in http_rows if row["caller"] and _short_caller(row) in routers]
+    rows = {
+        (row["catalog_id"], row["method"], row["path"], row["produces"], row["resolution"])
+        for row in own
+        if row["method"] is None
+    }
+    assert rows == {
+        ("spring-mvc-router", None, "/ktmvc/**", '["application/json"]', "resolved"),
+        ("spring-webflux-router", None, "/**", '["application/json"]', "resolved"),
+    }, sorted(rows, key=str)
+    handlers = {
+        row["catalog_id"]: bare_descriptor(str(row["handler"]))
+        for row in own
+        if row["method"] is None
+    }
+    assert handlers == {
+        # The servlet lambda compiles to an `invokedynamic` body on the declaring class; the
+        # coroutine one to a `SuspendLambda` class read through `lambda_body`.
+        "spring-mvc-router": (
+            "com/acme/orders/mvcroutes/KotlinMvcRoutes#"
+            "ktMvcRoutes$lambda$7$lambda$5$lambda$4(sig_8817f35e)."
+        ),
+        "spring-webflux-router": (
+            "com/acme/orders/routes/KotlinOrderRoutes$ktRoutes$1$2#invokeSuspend(sig_262c527a)."
+        ),
+    }, handlers
+    assert [row for row in own if row["resolution"] == "unresolved"] == []
 
 
 def test_a_dsl_receiver_helper_called_inside_the_kotlin_router_derives_its_route(http_rows):
