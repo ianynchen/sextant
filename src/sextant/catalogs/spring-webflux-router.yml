@@ -967,6 +967,41 @@ matches:
     # `MediaType.APPLICATION_XML` here therefore reads NULL — an under-report
     # this table closes one measured member at a time, never by guessing that
     # a constant's name is its wire value.
+    # `RequestPredicates.queryParam` (spec 2026-09-19 §5c; `inbound-request-requirements`;
+    # CP-26 row 1 for the overloads): a predicate that constrains WHO is served and nothing
+    # about the address — a REQUIREMENT contributor, folded where a predicate argument or an
+    # `and(...)` reaches it, as `media` is. `queryParam(String, String)` requires the
+    # parameter present and equal to the value; `queryParam(String, Predicate)` present and
+    # satisfying a predicate the walk cannot read — no `value_arg`, value NULL: "name
+    # required, value unread", `resolved` (a variable in the String overload's value
+    # position is recorded the same way). Both
+    # `required`: `QueryParamPredicate.test` is `ServerRequest.queryParam(name).filter(p).
+    # isPresent()`, false without the parameter, and the route does not match. `query`,
+    # because the reactive `ServerRequest.queryParam` reads the query string alone (the
+    # servlet twin's `param` reads the servlet parameter map and is kind `param` — CP-26
+    # row 2b). The two share a name and an arity, so `arg_types` tells them apart (spec
+    # §3c). `headers(Predicate<Headers>)` is an arbitrary function over the whole header
+    # map and is NOT read — stated here, no rule, so a route guarded by it derives as
+    # before with nothing said about its headers. (The Kotlin DSL's `queryParam(name,
+    # predicate, f)` is the route-declaring overload already in `slice.outside`;
+    # unchanged.)
+    request_requirement:
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: queryParam
+        arity: 2
+        arg_types: { 1: java.lang.String }
+        kind: query
+        name_arg: 0
+        value_arg: 1
+        requirement: required
+      - owner: org.springframework.web.reactive.function.server.RequestPredicates
+        method: queryParam
+        arity: 2
+        arg_types: { 1: java.util.function.Predicate }
+        kind: query
+        name_arg: 0
+        requirement: required
+
     media_values:
       owner: org.springframework.http.MediaType
       values:

@@ -3719,6 +3719,32 @@ def test_a_credential_named_entry_is_masked_where_it_is_read(tmp_path: Path):
     assert entries["X-Tenant"] == "acme"
 
 
+def test_an_outbound_entry_carries_no_requirement(tmp_path: Path):
+    """Spec 2026-09-19 §5a: `requirement` states what a framework ENFORCES about an
+    inbound entry, and an entry a call sends has no requirement — so every row this
+    engine writes carries NULL there, stated on the row rather than left to the
+    statement's default (a row missing a declared struct key takes the per-value retry
+    `test_pipeline.py` asserts nobody takes)."""
+    caller = "com/acme/http/Client#tagged()."
+    facts = _headed_chain(
+        caller,
+        [
+            ("X-Tenant", [CallArgument(kind="string", value="acme")]),
+            ("X-Trace", [CallArgument(kind="parameter", value=0)]),
+        ],
+    )
+    workspace = _resolve_fluent(tmp_path, facts, _fluent_catalog(_COLLECTING_MATCHES))
+    entries = _entries(workspace)
+    retries = list(workspace._per_value_retries)
+    workspace.close()
+
+    assert [(e["name"], e["requirement"]) for e in entries] == [
+        ("X-Tenant", None),
+        ("X-Trace", None),
+    ]
+    assert retries == []
+
+
 _LAMBDA_MATCHES = {
     **_COLLECTING_MATCHES,
     "steps": [

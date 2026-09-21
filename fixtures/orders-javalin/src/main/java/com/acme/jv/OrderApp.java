@@ -39,8 +39,41 @@ public class OrderApp {
                 ApiBuilder.path("plain", () -> {                             // slashless: Javalin joins it as /plain
                     ApiBuilder.get("x", ctx -> ctx.result("plain"));
                 });
+                // HANDLER-BODY READS (`request_reads`, spec 2026-09-19 §5d; CP-25 rows 14–15).
+                // `queryParam("q")` and `header("X-Api")` are one-argument READS: query and
+                // header rows, `requirement` NULL — Javalin hands a null through and the
+                // handler decides (A3). `queryParamAsClass("n", Integer.class).get()` is the
+                // one read Javalin itself refuses a request over: `Validator.get()` throws
+                // `ValidationException` on an absent value → `required`, through the
+                // catalog's `then: { method: get }`; the same chain ended in `getOrDefault`
+                // (`X-Page`) stays NULL. `header("X-Set", "1")` is the two-argument SET on
+                // the response (F7) — no entry at that arity, no row. This handler is an
+                // `ApiBuilder` one on purpose: a `combinator` row's `handler` is the lambda
+                // body itself, where a flat `app.get(...)` row's `handler` is the registering
+                // method and the lambda's reads are out of its body (stated in COVERAGE).
+                ApiBuilder.get("/reads", ctx -> {
+                    String q = ctx.queryParam("q");
+                    int n = ctx.queryParamAsClass("n", Integer.class).get();
+                    int page = ctx.headerAsClass("X-Page", Integer.class).getOrDefault(1);
+                    String api = ctx.header("X-Api");
+                    ctx.header("X-Set", "1");
+                    ctx.result(q + n + page + api);
+                });
             });
+            ApiBuilder.path("/jv/helped", () -> helped());                       // a static helper CALLED from the block
         }));
+    }
+
+    /** A static helper called from inside an `EndpointGroup` block (spec 2026-09-19 §4a,
+     *  `follow_calls: all` on `javalin-apibuilder`): `ApiBuilder`'s verbs register on a
+     *  thread-local instance that `staticInstance()` refuses outside a block
+     *  (`IllegalStateException`, measured on the 6.4.0 jar), so a helper reaching `get` can
+     *  only have been called from inside one, and the walk follows the CALL with no origin to
+     *  check — `GET /jv/helped/h`, under the prefix that reached the call. A method REFERENCE
+     *  (`path("/x", OrderApp::helped)`) would be a linked body already; the call is the shape
+     *  the word exists for. */
+    static void helped() {
+        ApiBuilder.get("/h", ctx -> ctx.result("h"));
     }
 
     /** The SECOND flat form — `RouterConfig.mount`, the same descriptors as {@link #flat()}

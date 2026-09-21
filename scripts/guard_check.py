@@ -400,6 +400,37 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "combinator.helper-follows-the-origin-only": Guard(
+        what="inside a body with an origin, a module-local helper call is followed only when "
+        "the origin flows into it as an argument, and that argument's position is the "
+        "callee's origin",
+        why="without the check every module-local call in a routing body is followed with "
+        "no origin at all, and a verb inside the callee on a builder this body never "
+        "touched — a field's, another parameter's — is published under this body's prefix "
+        "or as an unresolved row where spec 2026-09-19 §4a says silence",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="        if origin is None:\n            return []\n    elif not scope.follow_all:",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            return []\n    elif not scope.follow_all:",
+            ),
+        ),
+    ),
+    "combinator.origin-less-following-is-opt-in": Guard(
+        what="a body with no origin follows module-local calls only where its linking rule "
+        "declared `follow_calls: all`",
+        why="without the opt-in every origin-less body follows every helper it calls — a "
+        "`Supplier<RouterFunction>` body's helper may build routers nobody returns, and "
+        "following it attaches routes the framework never registered (spec 2026-09-19 "
+        "§0b A1)",
+        edits=(
+            Edit(
+                path=_COMBINATOR,
+                find="    elif not scope.follow_all:\n        return []",
+                replace="    elif False:  # guard disabled by scripts/guard_check.py\n        return []",
+            ),
+        ),
+    ),
     "combinator.negator-poisons": Guard(
         what="a negator anywhere in the receiver chain a terminal folds poisons every "
         "branch of the route",
@@ -1523,7 +1554,8 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/catalogs/javax-servlet.yml",
                 find="javax.servlet",
                 replace="jakarta.servlet",
-                occurrences=22,
+                # 24 since spec 2026-09-19 §5d: the two `request_reads` owners.
+                occurrences=24,
             ),
         ),
     ),
@@ -1646,7 +1678,8 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/catalogs/jakarta-servlet.yml",
                 find="jakarta.servlet",
                 replace="javax.servlet",
-                occurrences=23,
+                # 25 since spec 2026-09-19 §5d: the two `request_reads` owners.
+                occurrences=25,
             ),
         ),
     ),

@@ -22,6 +22,46 @@ matches:
   # `@Controller` on the server, `@Client` on the client; either gates the type.
   type_annotation: io.micronaut.http.annotation.Controller
   request_body: { annotation: io.micronaut.http.annotation.Body, fallback: none }
+  # Spec 2026-09-19 §5b, mechanism 1. `requirement: binder` with NO `required_attr`:
+  # `@QueryValue`/`@CookieValue` declare `value` + `defaultValue`, `@Header` declares
+  # `value`, `name`, `defaultValue`, none declares `required` (CP-25 row 6). An
+  # unsatisfied binding reaches `AbstractRouteMatch.setBindingResultOfFail`
+  # (micronaut-router 4.7.6, CP-25 row 7): null when `Argument.isNullable()` — the
+  # `jakarta.annotation.Nullable` stereotype, which the processor maps ten further
+  # spellings onto including `io.micronaut.core.annotation.Nullable` and kotlinc's
+  # `org.jetbrains.annotations.Nullable` (row 8; all in the shape model's
+  # `nullability.nullable` list) — `Optional.empty()` when the type is
+  # `java.util.Optional` (`optional_types`, named here because the pass names no
+  # language's types), else `UnsatisfiedRouteException` (a 400). A WRITTEN
+  # `defaultValue` is present in the annotation's `args` (CP-25 row 5's rule holds for
+  # any annotation: an unwritten attribute never reaches the class file). SKIPPED,
+  # deliberately: Micronaut's UNANNOTATED by-name binding of a plain parameter to a
+  # query value of the same name — no annotation, no entry, no row; `byId(String id)`
+  # below is bound by the path variable and stays silent here.
+  #
+  # THE NAME HAS TWO SPELLINGS WHEN IT IS NOT WRITTEN (CP-25 row 18). Each binder takes
+  # `value` (`@Header`: `value`, then `name`), else the parameter's own name, and hands
+  # it to `AbstractArgumentBinder.doBind` (micronaut-core 4.7.6); `doResolve` reads
+  # that name and, finding nothing, RETRIES with `getFallbackFormat(argument)` — the
+  # parameter's own name respelled by `NameUtils.hyphenate`: `hyphenate(name)` for
+  # `@QueryValue`/`@CookieValue` (`pageSize` → `page-size`, word boundaries on a case
+  # change, lower-cased), and the header binder's override
+  # `hyphenate(capitalize(name), false)` (`xTenant` → `x-Tenant`, `contentType` →
+  # `Content-Type`; case kept, header names comparing case-insensitively in the
+  # framework's own `CaseInsensitiveMutableHttpHeaders`). So `@QueryValue String
+  # pageSize` is served by `?page-size=` alone, and `query pageSize required` would
+  # demand a name the framework does not require by itself. `fallback_spelling` names
+  # each binder's second spelling; where it differs from the declared name the row is
+  # written with `name` NULL, `resolution: unresolved` — a requirement on a name with
+  # two accepted spellings, stating neither — and where the two coincide (`tenant`) the
+  # name stands. A WRITTEN name is kept as written: `doResolve` retries the
+  # parameter's hyphenated name after a written one too (`@Header("X-Tenant") String
+  # tenantHeader` also accepts `Tenant-Header`), stated in `docs/open-issues.md`
+  # OI-104, not built.
+  request_params:
+    - { annotation: io.micronaut.http.annotation.QueryValue,  kind: query,  name_attrs: [value],       requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional], fallback_spelling: hyphenated }
+    - { annotation: io.micronaut.http.annotation.Header,      kind: header, name_attrs: [name, value], requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional], fallback_spelling: hyphenated-capitalized }
+    - { annotation: io.micronaut.http.annotation.CookieValue, kind: cookie, name_attrs: [value],       requirement: binder, default_attr: defaultValue, optional_types: [java.util.Optional], fallback_spelling: hyphenated }
   mapping:
     # MEASURED at 4.7.6 (`javap`): every verb annotation declares `value`, `uri` AND
     # `uris` — `value` is the alias of `uri`, `uris` the multi-address form; `@Controller`

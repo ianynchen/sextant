@@ -309,7 +309,22 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # each constructor, plus a `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` null
     # check in each (KtOrder's own `sku` parameter, `create`'s `order` parameter). The
     # numerator is unmoved: no new edge's callee body is in this module. Still 29%.
-    assert "Calls whose callee body this workspace read: 520 of 1769 (29%)" in document
+    # 526 of 1786 since spec 2026-09-19 §4a: `KotlinOrderRoutes.kt`'s `extra()` helper —
+    # seventeen edges (the `coRouter` body's call to `extra`, `extra`'s three, and the
+    # suspend handler class `KotlinOrderRoutesKt$extra$1`'s thirteen across `<init>`,
+    # `create`, both `invoke`s and `invokeSuspend`), six of them into this module (the
+    # call to `extra`, and the handler class's own constructor/`create`/`invoke`/
+    # `invokeSuspend` chain). Still 29%.
+    # 526 of 1788 since spec 2026-09-19 §5c: `OrderRoutes.java`'s `.and(RequestPredicates.
+    # queryParam("v", "2"))` — two edges, both to the platform (`queryParam` and the
+    # `RequestPredicate.and` that composes it). The numerator is unmoved. Still 29%.
+    # 527 of 1796 since spec 2026-09-19 §5b: `KotlinParamController` — its `search$default`
+    # bridge's one call into `search` (the numerator's +1, the only edge into this module),
+    # `search`'s five string-template calls to the platform, and the two controllers'
+    # constructors' `Object.<init>`. `RequestParamsController#search` calls nothing. Still 29%.
+    # 527 of 1797 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's
+    # `Object.<init>` — its two handlers return null and call nothing. Still 29%.
+    assert "Calls whose callee body this workspace read: 527 of 1797 (29%)" in document
     # 1599 resolved edges since `G-37`: every one of the 76 new edges is `resolved` —
     # the compiler names each builder call, handler reference and lambda body exactly.
     # `owner_not_scanned` 372 since `G-37`: 27 of the new lookups land on the framework's
@@ -335,10 +350,31 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # `kotlin.jvm.internal.Intrinsics.checkNotNullParameter` are methods every other
     # class and every other Kotlin file here already looks up, so no new DISTINCT
     # method identity enters either bucket — only the per-call-site edge count moves.
-    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1767." in document
+    # 1784 since spec 2026-09-19 §4a: the `extra()` helper's seventeen edges (comment above),
+    # all `resolved`. `declared_here` gains five (199): `KotlinOrderRoutesKt.extra` itself and
+    # the handler class's `<init>`, `create`, typed `invoke` and `invokeSuspend` — the
+    # distinct module-declared methods those edges look up. `owner_not_scanned` is UNCHANGED:
+    # the DSL's `GET`, `ServerResponse.ok()` and the coroutine plumbing are methods
+    # `ktRoutes`'s own handlers already look up.
+    # 1786 since spec 2026-09-19 §5c: `queryParam` and its `and` (comment above), both
+    # `resolved` — the compiler names each static factory and interface default exactly.
+    # `owner_not_scanned` gains one (421): `RequestPredicates.queryParam(String, String)` is
+    # a method of the unscanned framework nothing in the fixture looked up before;
+    # `RequestPredicate.and` was already looked up by the `accept` composition beside it.
+    # 1794 since spec 2026-09-19 §5b: the eight edges the coverage line above counts, every
+    # one `resolved` — a `$default` bridge's call into its own function, the string
+    # template's platform calls and two constructors' `Object.<init>`.
+    # 1795 since spec 2026-09-19 §5c: `MappingConditionsController`'s constructor's one
+    # `Object.<init>`, `resolved`; no new distinct method identity, so `declared_here` and
+    # `owner_not_scanned` below are unchanged.
+    assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1795." in document
+    # `declared_here` 200 and `owner_not_scanned` 422 since spec 2026-09-19 §5b: the
+    # `$default` bridge's lookup of `KotlinParamController#search` lands here, and the
+    # string template's `StringBuilder.append(int)` is a platform method nothing in the
+    # fixture looked up before.
     assert (
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 194, "
-        "inherited 2, owner_not_scanned 420."
+        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 200, "
+        "inherited 2, owner_not_scanned 422."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -640,7 +676,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
         # 91 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
         # `POST /kt/orders` — the bundle answers what the workspace answers, so this
         # moves with `tests/cli/test_app.py`'s own count.
-        "http": 91,
+        # 92 since spec 2026-09-19 §4a: `GET /kt/extra`, the `coRouter { extra() }`
+        # helper's route, followed into the DSL-receiver extension.
+        # 94 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET /ktparams/search`,
+        # the parameter-annotation handlers — moving with `tests/cli/test_app.py`'s count.
+        # 96 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
+        # the mapping-expression handlers — moving with `tests/cli/test_app.py`'s count.
+        "http": 96,
         "jms": 5,
         # 17 since Groups B and C Task 1: `onRecords`/`onRecordsUpper`, the two
         # `batch = "true"`/`"TRUE"` listeners — derived today by the same unconditional
@@ -876,7 +918,13 @@ def test_the_bundle_answers_what_the_workspace_answered(tmp_path: Path):
             # 158 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
             # `POST /kt/orders` — one more http inbound row, at the address
             # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
-            ("inbound", 158),
+            # 159 since spec 2026-09-19 §4a: `GET /kt/extra`, the `coRouter { extra() }`
+            # helper's route.
+            # 161 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET
+            # /ktparams/search`, the parameter-annotation handlers.
+            # 163 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `GET
+            # /v1/conditions/legacy`, the mapping-expression handlers.
+            ("inbound", 163),
             # 68 outbound since A2 Task 8: the JDK client's four chains and the Apache
             # client's three (`jdk-httpclient`, `apache-httpclient`).
             ("outbound", 68),
@@ -1580,12 +1628,16 @@ def test_format_field_number_and_open_questions_reach_the_rendered_document(full
     # Two `payload_binding` questions and, since W27 (F5 §6.1), six `self_exchange` ones
     # — the identities this module both serves and calls, which used to be merged into a
     # single row that asked nothing. Seven since A2 Task 8: `ApacheOrdersClient#list`
-    # calls `GET /v1/orders`, which `OrderController` serves.
+    # calls `GET /v1/orders`, which `OrderController` serves. One `registration_activation`
+    # since spec 2026-09-19 §4a moved `reset_open_questions` ABOVE `derive_endpoints`: the
+    # `OI-64` question `interface_implementation` files for `RawPubSubSubscribers#
+    # withNamedReceiver` (a `Subscriber` built and returned, never `startAsync()`ed) had been
+    # written inside the engines and erased by the reset that followed them, every run.
     rows = duckdb.sql(
         "SELECT question, count(*) FROM read_parquet("
         f"'{bundle / 'graph' / 'open_questions.parquet'}') GROUP BY 1 ORDER BY 1"
     ).fetchall()
-    assert rows == [("payload_binding", 2), ("self_exchange", 7)]
+    assert rows == [("payload_binding", 2), ("registration_activation", 1), ("self_exchange", 7)]
 
 
 def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp_path: Path):
@@ -1677,7 +1729,13 @@ def test_a_library_operation_reaches_the_document_and_leaves_with_the_config(tmp
     # (`jdk-httpclient`, `apache-httpclient`, A2 Task 8).
     # 147: + `jaxrs/KotlinOrderResource` and its nested `KotlinOrderResource$KtOrder`
     # (Groups B and C Task 1).
-    assert (None, 147) in origins
+    # 149: + `routes/KotlinOrderRoutesKt` (the file facade the top-level `extra()` helper
+    # compiles into) and its suspend handler class `KotlinOrderRoutesKt$extra$1` (spec
+    # 2026-09-19 §4a).
+    # 151: + `RequestParamsController` and `mvcroutes/KotlinParamController`, the
+    # parameter-annotation fixtures (spec 2026-09-19 §5b).
+    # 152: + `MappingConditionsController`, the mapping-expression fixture (spec 2026-09-19 §5c).
+    assert (None, 152) in origins
 
     # This test needs the fixture WITHOUT its `.sextant.yml`, so it runs on a COPY. It used
     # to move the file aside and rename it back in `finally` — correct on one worker and a

@@ -26,6 +26,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
@@ -81,7 +82,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
 
     # `arguments` arrives decoded, once per load, from the workspace
     # (`_DECODED_COLUMNS`) — every engine used to decode it again for itself.
-    call_sites: list[dict[str, Any]] = workspace.query("call_sites")
+    call_sites: list[dict[str, Any]] = effective_call_sites(workspace)
     by_caller: dict[str, list[dict[str, Any]]] = {}
     for site in call_sites:
         by_caller.setdefault(str(site["caller"]), []).append(site)

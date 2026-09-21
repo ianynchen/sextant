@@ -706,6 +706,133 @@ def test_media_columns_round_trip_and_never_join_into_dedup_identity(tmp_path: P
     assert [(r["consumes"], r["produces"]) for r in rows] == [('["application/json"]', None)]
 
 
+def _metadata_row(requirement: str | None, **overrides: object) -> dict[str, object]:
+    """One inbound `endpoint_metadata` row, the shape spec 2026-09-19 §5a writes: `caller`
+    is the handler, and `requirement` is what the framework enforces."""
+    return {
+        "protocol": "http",
+        "direction": "inbound",
+        "method": "GET",
+        "path": "/orders",
+        "caller": "com/acme/orders/OrderController#list(sig_1a2b3c4d).",
+        "kind": "header",
+        "name": "X-Api-Version",
+        "value": None,
+        "resolution": "resolved",
+        "evidence": "compiler",
+        "requirement": requirement,
+        **overrides,
+    }
+
+
+def test_endpoint_metadata_carries_requirement_last_in_the_query_and_the_bundle(tmp_path: Path):
+    """Spec 2026-09-19 §5a: the column exists, orders LAST in the named query — the
+    query's ORDER BY is the whole row, and a new column joins its tail so every existing
+    ordering is undisturbed — and travels with the table into the bundle, whose
+    `endpoint_metadata.parquet` is the one place the new column changes an exported
+    shape."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row("required")])
+    rows = workspace.query("endpoint_metadata")
+    workspace.export_tables(tmp_path / "bundle", Redactor.from_rules())
+    workspace.close()
+
+    assert [row["requirement"] for row in rows] == ["required"]
+    assert list(rows[0]) == [
+        "protocol",
+        "direction",
+        "method",
+        "path",
+        "caller",
+        "kind",
+        "name",
+        "value",
+        "resolution",
+        "evidence",
+        "requirement",
+    ]
+    exported = duckdb.sql(
+        f"SELECT * FROM read_parquet('{tmp_path / 'bundle' / 'graph' / 'endpoint_metadata.parquet'}')"
+    )
+    assert exported.columns == list(rows[0])
+    assert exported.fetchall() == [tuple(rows[0].values())]
+
+
+def test_endpoint_metadata_insert_is_insert_if_absent_on_the_full_row(tmp_path: Path):
+    """Spec 2026-09-19 §5a (A8): two catalogs can describe one handler, and the identical
+    entry each derives is one row. The guard compares EVERY column NULL-safely — a
+    `value` of NULL equals a `value` of NULL — and a row differing in any one column,
+    `requirement` included, is a different entry and inserts.
+
+    Separate `derive` calls here, one row each: this is the ACROSS-batches half of the
+    guard, the `NOT EXISTS` against rows an earlier statement wrote. The within-batch half
+    is the test below."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row("required")])
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row("required")])
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row("optional")])
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row(None)])
+    workspace.derive("endpoint_metadata_insert", rows=[_metadata_row(None)])
+    rows = workspace.query("endpoint_metadata")
+    workspace.close()
+
+    assert [row["requirement"] for row in rows] == ["optional", "required", None]
+
+
+def test_endpoint_metadata_insert_collapses_duplicates_within_one_batch(tmp_path: Path):
+    """The WITHIN-batch half of A8 (Task 7 fix round 1). The requirements writer gathers
+    every mechanism's and every catalog's rows into ONE `$rows` list and derives once, so
+    the two catalogs that describe one handler put their identical entry into the same
+    batch — where `NOT EXISTS`, reading the table as it stood before the statement, sees
+    neither. `SELECT DISTINCT` over the unnested rows is what collapses them, and it treats
+    NULLs as equal exactly as the guard's `IS NOT DISTINCT FROM` does: the same row twice
+    (NULL `value`, NULL `requirement`) plus a distinct one land as two rows."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("endpoint_metadata_reset")
+    workspace.derive(
+        "endpoint_metadata_insert",
+        rows=[_metadata_row(None), _metadata_row(None), _metadata_row("required")],
+    )
+    rows = workspace.query("endpoint_metadata")
+    workspace.close()
+
+    assert [row["requirement"] for row in rows] == ["required", None]
+
+
+def test_route_requirements_is_a_temp_stash_outside_the_schema(tmp_path: Path):
+    """Spec 2026-09-19 §4d/§5a: the combinator's per-route requirements are stashed for
+    the one resolve that reads them, re-created by the reset and read back in total order.
+    A TEMP table like `endpoint_candidates`, and excluded from `schema_objects` the same
+    way: it is working state, never a bundle table, so the export ratchet must not ask
+    for a query it has no business having."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.derive("route_requirements_reset")
+    stashed = {
+        "caller": "com/acme/orders/OrderRoutes#routes(sig_00000001).",
+        "handler": "com/acme/orders/OrderRoutes#routes$lambda$1(sig_00000002).",
+        "method": "GET",
+        "path": "/orders",
+        "catalog_id": "invented-dsl",
+        "kind": "header",
+        "name": "X-Api-Version",
+        "value": "2",
+        "requirement": "required",
+        "resolution": "resolved",
+        "evidence": "compiler",
+    }
+    workspace.derive("route_requirements_insert", rows=[{**stashed, "name": "X-Later"}, stashed])
+    rows = workspace.query("route_requirements")
+    assert [row["name"] for row in rows] == ["X-Api-Version", "X-Later"]
+    assert dict(rows[0]) == stashed
+    assert "route_requirements" not in workspace.schema_objects()
+    # The reset replaces the stash whole: a second resolve starts from nothing.
+    workspace.derive("route_requirements_reset")
+    assert workspace.query("route_requirements") == []
+    workspace.close()
+
+
 def test_query_rejects_a_name_that_is_not_a_named_query(tmp_path: Path):
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:

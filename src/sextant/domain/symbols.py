@@ -296,6 +296,35 @@ def descriptor_parameter_types(descriptor: str) -> tuple[str, ...]:
     return tuple(types)
 
 
+def descriptor_slots(descriptor: str) -> tuple[tuple[str, ...], str]:
+    """A JVM method descriptor split into its parameter slots and its return, each in
+    the JVM's OWN spelling (`Ljava/lang/String;`, `I`, `[B`) — the form a caller needs
+    to compose another descriptor from some of the slots, which is what re-targeting a
+    compiler-emitted default-argument bridge to the function it stands for does
+    (`resolve/effective_calls.py`, spec 2026-09-19 §3a): the sibling's descriptor is the
+    bridge's minus its receiver, mask and marker slots, and only the slots as written can
+    be joined back into one.
+
+    Reads the parameter list exactly as `descriptor_parameter_types` does and keeps the
+    text rather than translating it; the return is kept too, because the sibling shares
+    it. Lives here because it is symbol-grammar parsing, which happens in this module and
+    nowhere else (`test_symbol_grammar_confinement`).
+    """
+    inside = parameter_types(descriptor)[1:-1]
+    slots: list[str] = []
+    position = 0
+    while position < len(inside):
+        start = position
+        while inside[position] == "[":
+            position += 1
+        if inside[position] == "L":
+            position = inside.index(";", position) + 1
+        else:
+            position += 1
+        slots.append(inside[start:position])
+    return tuple(slots), descriptor[descriptor.index(_DESCRIPTOR_ARGUMENTS_CLOSE) + 1 :]
+
+
 def returned_type(descriptor: str) -> str | None:
     """The SCIP type descriptor a JVM method descriptor RETURNS, or `None` when it
     returns a primitive, `void` or an array.

@@ -802,6 +802,42 @@ def test_a_registration_activation_question_names_the_method_that_returns_it():
     ) in text
 
 
+def test_a_routing_depth_question_names_the_entry_caller_and_the_unread_callee():
+    """Spec 2026-09-19 §4a's arm, for the reason every arm here has a test: an arm
+    reached by nothing is an arm nobody has run, and the fixture files no `routing_depth`
+    question (no fixture chain is seventeen helpers deep). Candidate shape (`callee`,
+    `caller`, `depth`) matches what `combinator._routing_depth_rows` writes — the bound
+    is the engine's, carried on the candidate, so this arm repeats no constant. Both identity halves
+    are NULL and render `(unresolved)` twice, honestly: the walk stopped before it read
+    either, and the sentence is where the reader learns which file to open."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": None,
+            "question": "routing_depth",
+            "candidates": json.dumps(
+                [
+                    {
+                        "callee": "com/acme/RoutesKt#h17(sig_11).",
+                        "caller": "com/acme/RoutesKt#orders(sig_o0).",
+                        "depth": 16,
+                    }
+                ]
+            ),
+            "evidence": "com/acme/RoutesKt#orders(sig_o0).",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert "## Open questions" in text
+    assert (
+        "- `(unresolved) (unresolved)` — routing_depth: a routing helper chain deeper than "
+        "16 calls from com/acme/RoutesKt#orders(sig_o0). was not followed; its first unread "
+        "callee is com/acme/RoutesKt#h17(sig_11)."
+    ) in text
+
+
 def test_a_routing_conflict_question_renders_both_handlers():
     """W28's arm, for the reason `test_a_service_identity_question_renders_the_flagged_
     class_and_reason` exists: a missing `_candidate_line` arm was a live render-time

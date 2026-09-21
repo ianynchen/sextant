@@ -195,6 +195,34 @@ _NAMED_QUERIES = {
           AND m.document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Spec 2026-09-19 §3a. Every method fact carrying `bridge_of` — module and library
+    # documents alike — with the name of the function it stands for, which is what
+    # `resolve/effective_calls.py` needs to re-target a call to a compiler-emitted
+    # default-argument bridge: the site's own target names the bridge, this says which
+    # function, and `method_declarations` says whether the sibling exists and is static.
+    # `symbols` does not project `bridge_of`, so this reads `raw_facts` as `default_bodies`
+    # does. Ordered on the symbol (NFR-1).
+    "bridge_declarations": """
+        SELECT m.payload ->> 'symbol'    AS symbol,
+               m.payload ->> 'bridge_of' AS bridge_of
+        FROM raw_facts m
+        WHERE m.kind = 'symbol' AND (m.payload ->> 'bridge_of') IS NOT NULL
+          AND m.document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
+    # Spec 2026-09-19 §3b (R2). Every type fact carrying `lambda_body` — the extractor's
+    # statement that this class is a compiled lambda and which method holds its body —
+    # which is what `resolve/effective_calls.py` needs to hand an `instance` argument of
+    # that class to the engines as the `lambda` it is. Read from `raw_facts` as
+    # `bridge_declarations` is, for the same reason: `symbols` does not project the key.
+    # Ordered on the symbol (NFR-1).
+    "lambda_bodies": """
+        SELECT payload ->> 'symbol' AS symbol, payload ->> 'lambda_body' AS body
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload ->> 'lambda_body') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # Every declared method's own enclosing type and visibility (2O design
     # §1b, Task 5): `method_declarations` above carries `signature` instead,
     # which this join has no use for, and `method_symbols` carries neither
@@ -747,9 +775,18 @@ _NAMED_QUERIES = {
     # name, which is legal HTTP. A tie is an order that can change between runs (NFR-1).
     "endpoint_metadata": """
         SELECT protocol, direction, method, path, caller, kind, name, value,
-               resolution, evidence
+               resolution, evidence, requirement
         FROM endpoint_metadata
         ORDER BY protocol, direction, method, path, caller, kind, name, value,
+                 resolution, evidence, requirement
+    """,
+    # Spec 2026-09-19 §4d/§5a. The combinator's stash of per-route requirements, read once
+    # per resolve by the requirements pass. Ordered on the whole row for the reason the
+    # query above is: two selectors under one route are two rows that tie on every
+    # route column.
+    "route_requirements": """
+        SELECT * FROM route_requirements
+        ORDER BY caller, handler, method, path, catalog_id, kind, name, value, requirement,
                  resolution, evidence
     """,
     "method_resolution": ("SELECT * FROM method_resolution ORDER BY class, name, descriptor"),
@@ -810,7 +847,7 @@ _REDACTED_PAYLOADS = "redacted_payloads"
 # spellings: a raw entry's `key_path` and a resolved row's `key` are not
 # always the same string, and a join across them would silently miss.
 _REDACTED_ENTRY_VALUES = "redacted_entry_values"
-# The one temp table a DERIVATION stages (P-4): every annotation-driven
+# The first of two temp tables a DERIVATION stages (P-4): every annotation-driven
 # catalog's candidate endpoint rows, written by `derive_endpoints.sql` once per
 # resolve and read by `insert_endpoints.sql` once per catalog. Temp for the
 # reason the redaction maps are: it is working state of one resolve, never
@@ -818,6 +855,13 @@ _REDACTED_ENTRY_VALUES = "redacted_entry_values"
 # its catalog's turn is in `endpoints`, and every row that does not was
 # refused by the earlier-catalog-wins rule.
 _ENDPOINT_CANDIDATES = "endpoint_candidates"
+# The second (spec 2026-09-19 §4d/§5a): the combinator's per-route requirements,
+# written by `route_requirements_insert` per engine run and read once by the
+# requirements pass after every row's protocol is final. Temp for the same
+# reason — every row it holds that names a live route is in `endpoint_metadata`
+# by the end of the resolve, and every row that does not named a route the
+# engine refused.
+_ROUTE_REQUIREMENTS = "route_requirements"
 
 # One query per table and view IN THE SCHEMA — all of them, with no exclusion
 # class. The ratchet runs the direction that catches the defect: an object in
@@ -1059,6 +1103,12 @@ _FACT_ONLY = frozenset(
         # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
         # every other declaration (the merge of the delivery branch added the query).
         "default_bodies",
+        # A default-argument bridge's own fact, read once per resolve by the call-site
+        # projection (spec 2026-09-19 §3a).
+        "bridge_declarations",
+        # A class-compiled lambda's type fact, read once per resolve by the same
+        # projection (spec 2026-09-19 §3b).
+        "lambda_bodies",
         "fields",
         "enum_types",
         "annotations_of",
@@ -1170,6 +1220,11 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
+    # Spec 2026-09-19 §4d/§5a. A reset/insert pair like `endpoint_metadata`'s and
+    # for the same reason: the reset runs once per resolve from `derive_endpoints`
+    # (beside `endpoints_reset`, ahead of every engine), the insert once per engine run.
+    "route_requirements_reset": "reset_route_requirements.sql",
+    "route_requirements_insert": "insert_route_requirements.sql",
 }
 
 # The fact "tables" `schema.sql` defines as VIEWS over `raw_facts`, in dependency
@@ -1540,12 +1595,13 @@ class DuckDbWorkspace:
 
         Staged redaction tables are excluded by name — they are temp tables
         this class creates and drops inside one export, never part of the
-        schema. So is the endpoint-candidates table the endpoints derivation
-        stages, for the same reason (`_ENDPOINT_CANDIDATES`).
+        schema. So are the endpoint-candidates table the endpoints derivation
+        stages and the route-requirements stash the combinator writes, for the
+        same reason (`_ENDPOINT_CANDIDATES`, `_ROUTE_REQUIREMENTS`).
         """
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?) "
+            "WHERE table_schema = 'main' AND table_name NOT IN (?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -1554,6 +1610,7 @@ class DuckDbWorkspace:
                 _REDACTED_ENTRY_VALUES,
                 _REDACTED_PAYLOADS,
                 _ENDPOINT_CANDIDATES,
+                _ROUTE_REQUIREMENTS,
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:

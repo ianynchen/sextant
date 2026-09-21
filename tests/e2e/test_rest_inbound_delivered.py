@@ -13,6 +13,7 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
+from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 FIXTURE = FIXTURES / "orders-service"
@@ -109,6 +110,46 @@ def test_the_builder_form_derives_every_route_on_both_stacks(http_routes):
     }
     missing = expected - http_routes
     assert missing == set(), f"builder routes missing: {sorted(missing)}"
+
+
+@pytest.fixture(scope="module")
+def http_requirements(analyzed_orders_service: Path) -> set[tuple]:
+    """Every inbound `endpoint_metadata` row of the session's one `orders-service` analysis
+    (spec 2026-09-19 §5), as `_requirements` spells them."""
+    workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
+    try:
+        return _requirements(
+            [
+                dict(row)
+                for row in workspace.query("endpoint_metadata")
+                if row["direction"] == "inbound"
+            ]
+        )
+    finally:
+        workspace.close()
+
+
+def test_a_query_param_predicate_reaches_endpoint_metadata_on_the_functional_router(
+    http_requirements, http_rows
+):
+    """`inbound-request-requirements` on the Spring functional side (spec 2026-09-19 §5c;
+    CP-26 row 1). `OrderRoutes.routes` guards `GET /fn/orders` with `.and(RequestPredicates.
+    queryParam("v", "2"))`: the predicate constrains no path and no verb — the row is
+    `GET /fn/orders`, `produces` JSON, exactly as before — and it demands `?v=2`, which
+    reaches `endpoint_metadata` as query `v`, value `2`, `required` (`QueryParamPredicate.
+    test` returns false without it), `caller` the row's handler `RouteHandlers#listOrders`.
+    The only `queryParam` on the fixture, so the only query row the router writes;
+    `headers(Predicate)` is stated unread on the catalog and no row claims otherwise."""
+    handler = next(
+        str(r["handler"]) for r in http_rows if r["path"] == "/fn/orders" and r["method"] == "GET"
+    )
+    assert handler.endswith("com/acme/orders/routes/RouteHandlers#listOrders(sig_a2451eb8).")
+    assert {r for r in http_requirements if r[1] == "/fn/orders"} == {
+        ("GET", "/fn/orders", handler, "query", "v", "2", "required", "resolved"),
+    }
+    assert not any(r[3] == "query" and r[1] != "/fn/orders" for r in http_requirements), (
+        "a query requirement appeared on a row nothing guards"
+    )
 
 
 def test_a_supplier_body_derives_its_route_once_under_the_prefix_and_never_bare(http_rows):
@@ -225,6 +266,34 @@ def test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_is_one_unresolved
         and row["resolution"] == "unresolved"
     ]
     assert [(row["method"], row["path"], row["handler"]) for row in gap] == [(None, None, None)]
+
+
+def test_a_dsl_receiver_helper_called_inside_the_kotlin_router_derives_its_route(http_rows):
+    """`ktor-route-extensions` on the Spring functional side (spec 2026-09-19 §4a).
+    `KotlinOrderRoutes.kt` calls `extra()` inside `coRouter { }`, and `fun
+    CoRouterFunctionDsl.extra() { GET("/kt/extra") { } }` is a top-level extension: a
+    STATIC `extra(CoRouterFunctionDsl)` whose one argument is the block's own parameter —
+    the origin `coRouter`'s entry names — so the walk follows the call, the member `GET`
+    inside sits on the callee's parameter 0 and derives resolved, and the row's caller is
+    `ktRoutes`, the tree's root, never `extra`. The handler is the helper's own suspend
+    lambda class (`KotlinOrderRoutesKt$extra$1`, the file facade's), read through
+    `lambda_body` as every Kotlin handler is."""
+    rows = [
+        (row["catalog_id"], row["resolution"], _short_caller(row), row["handler"])
+        for row in http_rows
+        if row["path"] == "/kt/extra"
+    ]
+    assert rows == [
+        (
+            "spring-webflux-router",
+            "resolved",
+            "KotlinOrderRoutes#ktRoutes",
+            (
+                "sextant-jvm maven com.acme/orders-service 1.0.0 "
+                "com/acme/orders/routes/KotlinOrderRoutesKt$extra$1#invokeSuspend(sig_262c527a)."
+            ),
+        )
+    ], rows
 
 
 def _short_caller(row: dict) -> str:
@@ -565,23 +634,20 @@ JAVALIN = FIXTURES / "orders-javalin"
 
 
 @pytest.fixture(scope="module")
-def javalin_routes(tmp_path_factory: pytest.TempPathFactory) -> set[tuple[str, str, str]]:
+def javalin_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    """One `module analyze` of the Javalin fixture — the routes below and the handler-read
+    rows (§5d) both read it, so it runs once per file rather than once per fixture."""
+    return _analyzed_tables(JAVALIN, tmp_path_factory.mktemp("javalin"))
+
+
+@pytest.fixture(scope="module")
+def javalin_routes(javalin_tables: dict[str, list[dict]]) -> set[tuple[str, str, str]]:
     """`(direction, method, path)` for every inbound HTTP row the Javalin fixture derives."""
-    workspace_dir = tmp_path_factory.mktemp("javalin")
-    compile_fixture(JAVALIN)
-    result = CliRunner().invoke(
-        cli, ["module", "analyze", str(JAVALIN), "--workspace", str(workspace_dir)]
-    )
-    assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
-    try:
-        return {
-            (str(row["direction"]), str(row["method"]), str(row["path"]))
-            for row in workspace.query("endpoints")
-            if str(row["protocol"]) == "http"
-        }
-    finally:
-        workspace.close()
+    return {
+        (str(row["direction"]), str(row["method"]), str(row["path"]))
+        for row in javalin_tables["endpoints"]
+        if str(row["protocol"]) == "http"
+    }
 
 
 def test_javalin_flat_registrations_derive_every_route(javalin_routes):
@@ -615,13 +681,21 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
     `config -> …` lambda `Javalin.create` was handed. The slashless `path("plain", () ->
     get("x", …))` reads `/jv/nested/plain/x` — the catalog's `path_join: leading_slash`
     is Javalin's own `prefixPath` rule, and the glued `/jv/nestedplainx` is the resolved
-    wrong row it prevents (Task 3 fix round 1)."""
+    wrong row it prevents (Task 3 fix round 1). A static helper CALLED from a block derives
+    under the prefix that reached the call (`ktor-route-extensions` on the Javalin side)."""
     expected = {
         ("inbound", "GET", "/jv/nested/{id}"),
         ("inbound", "POST", "/jv/nested"),
         ("inbound", "GET", "/jv/nested/{id}/items"),
         ("inbound", "DELETE", "/jv/nested/{id}/items/{itemId}"),
         ("inbound", "GET", "/jv/nested/plain/x"),
+        # `path("/jv/helped", () -> helped())` with `static void helped() { get("/h", h); }`:
+        # the helper is CALLED from the block, not linked as its body, and the catalog's
+        # `follow_calls: all` is what follows it — `ApiBuilder.staticInstance()` throws
+        # outside a block (6.4.0 jar), so the call can only ever run inside one (spec
+        # 2026-09-19 §4a).
+        ("inbound", "GET", "/jv/helped/h"),
+        ("inbound", "GET", "/jv/nested/reads"),  # the handler-read fixture (§5d), below
     }
     assert expected <= javalin_routes, sorted(javalin_routes)
     assert ("inbound", "GET", "/{id}") not in javalin_routes
@@ -632,22 +706,68 @@ def test_javalin_api_builder_derives_the_composed_path(javalin_routes):
 KTOR = FIXTURES / "orders-ktor"
 
 
-@pytest.fixture(scope="module")
-def ktor_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
-    handler and the caller beside the identity, which the Javalin fixture's triples
-    do not carry."""
-    workspace_dir = tmp_path_factory.mktemp("ktor")
-    compile_fixture(KTOR)
+def _analyzed_tables(fixture: Path, workspace_dir: Path) -> dict[str, list[dict]]:
+    """One `module analyze` of `fixture`, and the two tables the tests below read —
+    `endpoints` whole, and the inbound `endpoint_metadata` rows the requirements pass
+    wrote against them (spec 2026-09-19 §5)."""
+    compile_fixture(fixture)
     result = CliRunner().invoke(
-        cli, ["module", "analyze", str(KTOR), "--workspace", str(workspace_dir)]
+        cli, ["module", "analyze", str(fixture), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        return [dict(row) for row in workspace.query("endpoints")]
+        return {
+            "endpoints": [dict(row) for row in workspace.query("endpoints")],
+            "endpoint_metadata": [
+                dict(row)
+                for row in workspace.query("endpoint_metadata")
+                if row["direction"] == "inbound"
+            ],
+        }
     finally:
         workspace.close()
+
+
+def _requirements(metadata: list[dict]) -> set[tuple]:
+    """`(method, path, caller, kind, name, value, requirement, resolution)` per inbound
+    metadata row — what a route's tree demands, keyed by the row it demands it of."""
+    return {
+        (
+            r["method"],
+            r["path"],
+            r["caller"],
+            r["kind"],
+            r["name"],
+            r["value"],
+            r["requirement"],
+            r["resolution"],
+        )
+        for r in metadata
+    }
+
+
+@pytest.fixture(scope="module")
+def ktor_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(KTOR, tmp_path_factory.mktemp("ktor"))
+
+
+@pytest.fixture(scope="module")
+def ktor_rows(ktor_tables: dict[str, list[dict]]) -> list[dict]:
+    """Every endpoint row the Ktor fixture derives, whole — the Ktor test reads the
+    handler and the caller beside the identity, which the Javalin fixture's triples
+    do not carry."""
+    return ktor_tables["endpoints"]
+
+
+def _suspend_body(handler_class: str) -> str:
+    """The module-prefixed symbol of a `KtorRoutesKt` suspend handler's `invokeSuspend` —
+    the one body shape every suspend lambda class has, so one disambiguator serves all."""
+    return (
+        "sextant-jvm maven com.acme/orders-ktor 1.0.0 com/acme/kt/KtorRoutesKt$"
+        + handler_class
+        + "#invokeSuspend(sig_262c527a)."
+    )
 
 
 def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
@@ -660,59 +780,241 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     `/api/legacy/orders`: `RoutingPath.parse` splits on `/` and drops the empty parts,
     which is the catalog's `path_join: leading_slash`.
 
-    Handler NULL on every row — a suspend lambda is a class, not a linked body — asserted
-    here so `kotlin-null-handler` moves a pinned value (spec §13 case 8).
+    Every row names its handler: a suspend lambda compiles to a class (kotlinc 2.2.0,
+    CP-23), the extractor marks that class's type fact with the `invokeSuspend` holding
+    its body, and `effective_call_sites` hands every engine the `instance` as that
+    `lambda` (spec 2026-09-19 §3b) — so the handler column that spec §13 case 8 had
+    pinned NULL is the body's own symbol. `kotlin-null-handler` closes here, on the Ktor
+    rows; the class counters (`$orders$1$1$3$2`) are kotlinc's own, by nesting position.
+
+    The helpers (spec 2026-09-19 §4a, `ktor-route-extensions`): `fun Route.api() {
+    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
+    to split a routing tree — compiles to `invokestatic api(Route)` with the block's own
+    parameter as its argument, the origin, so the walk follows the call into `api`'s body
+    with ITS parameter 0 as the origin and `GET /helper` derives, resolved, on `orders()`
+    (one router, one declarer — never `api` as the caller). `route("/api") { v2() }` with
+    `fun Route.v2() { orders2() }` and `fun Route.orders2() { get("/deep") { } }` is two
+    helper calls deep and derives `GET /api/deep`: the prefix that reached the first call
+    carries all the way down. Both pins were silence until this walk existed.
 
     Two outcomes are degraded by design, and both are stated rather than hidden. The
     wrong-receiver case: `other.get("/stray") { }` inside `route("/api") { }` registers
     on ANOTHER route, so it is not under `/api`, and `receiver_arg`'s refusal is one
-    unresolved row that never carries the prefix. And the helper: `fun Route.api() {
-    get("/helper") { } }` called from `routing { api() }` — Ktor's own recommended way
-    to split a routing tree — derives NOTHING, not even an unresolved row. Task 4's log
-    predicted one unresolved row (`receiver_arg` with no origin to check against), but
-    the walk never reaches that verb: `api` is an ordinary method no linking call names
-    as its body, and a static, receiver-less verb inside it is no root of its own — the
-    boundary spec §7 case 4 states for a builder received as a PARAMETER. Pinned as
-    silence, so a walk that one day follows `api()` moves a pinned value."""
+    unresolved row that never carries the prefix. And `defaults()`: its two `mount(…) {
+    get(…) { } }` calls name a module-local DSL function the shipped catalog has no rule
+    for, so each is a helper call the walk follows — and inside `mount`, `route(path,
+    build)` sits on the origin with `path` as `mount`'s own PARAMETER, which this body
+    cannot read. One unresolved row per call, path NULL, attributed to `defaults()`: the
+    honest statement that a route is declared there at an address the walk did not read.
+    (Under a catalog that names `mount` as a prefix rule the same calls derive `/d/x` and
+    `/e/y` resolved — `tests/application/test_ktor_defaults_fixture.py`.)
+
+    The SELECTOR blocks of `selectors()` (spec 2026-09-19 §4b, `ktor-selector-blocks`,
+    `ktor-route-with-verb`; every signature CP-24 row 1a): `accept(ContentType.Application.
+    Json) { get("/j") { } }` derives `GET /j` with `produces` read through the getter
+    `ContentType$Application.getJson()` (CP-24 row 4, `media_values.getters`), and
+    `contentType(…) { post("/c") { } }` fills `consumes`; `header("X-Api-Version", "2")`,
+    `param("debug")`, `param("mode", "fast")` and `optionalParam("page")` are scopes whose
+    routes derive beneath them (`GET /orders`, `/dbg`, `/fast`, `/paged`), each carrying
+    the requirement its block states (asserted on `endpoint_metadata` below). The verb
+    CONFLICT `method(HttpMethod.Post) { get("/never") { } }` is a node Ktor never
+    dispatches (`HttpMethodRouteSelector.evaluate` returns the failure constant on a
+    mismatch, CP-24 row 7) and publishes NOTHING — `/never` is absent, not unresolved (A2).
+    Every one of these blocks derived nothing before the rules, and `route("/legacy2",
+    HttpMethod.Put)` was one unresolved row.
+
+    `handle { }` is the VERB-LESS TERMINAL (spec §4c; a member of the `Route` interface,
+    CP-24 row 1b): under `method(HttpMethod.Get)` it takes the scope's verb and serves
+    the receiver node itself — the routing root, `GET /` (`RoutingPath.parse("")` has no
+    parts; the empty literal canonicalises to `/`), never `/**`; under `route("/legacy2",
+    HttpMethod.Put)` it is `PUT /legacy2`; under a bare `route("/health2")` no verb is in
+    scope and it expands through `all_methods` — `HttpMethod.DefaultMethods`' seven
+    members (CP-24 row 2) — one row each, all on the one handler."""
     rows = {
         (r["method"], r["path"], r["resolution"], r["handler"])
         for r in ktor_rows
         if r["catalog_id"] == "ktor-routing"
     }
     assert {
-        ("GET", "/api/orders", "resolved", None),
-        ("POST", "/api/orders", "resolved", None),
-        ("GET", "/api/v2/orders", "resolved", None),
-        ("DELETE", "/api/v2/orders/{id}", "resolved", None),
-        ("GET", "/api/legacy/orders", "resolved", None),
-        ("GET", "/api", "resolved", None),  # get { } on the prefix: Ktor serves the prefix itself
-        ("GET", "/health", "resolved", None),
+        ("GET", "/api/orders", "resolved", _suspend_body("orders$1$1$1")),
+        ("POST", "/api/orders", "resolved", _suspend_body("orders$1$1$2")),
+        ("GET", "/api/v2/orders", "resolved", _suspend_body("orders$1$1$3$1")),
+        ("DELETE", "/api/v2/orders/{id}", "resolved", _suspend_body("orders$1$1$3$2")),
+        ("GET", "/api/legacy/orders", "resolved", _suspend_body("orders$1$1$4$1")),
+        # get { } on the prefix: Ktor serves the prefix itself
+        ("GET", "/api", "resolved", _suspend_body("orders$1$1$5")),
+        ("GET", "/health", "resolved", _suspend_body("orders$1$2")),
+        # the helpers: the handler class is the HELPER's own (`api$1`, `orders2$1`), the
+        # caller `orders()` — asserted below
+        ("GET", "/helper", "resolved", _suspend_body("api$1")),
+        ("GET", "/api/deep", "resolved", _suspend_body("orders2$1")),
+        # the selector blocks, on `selectors()`
+        ("GET", "/j", "resolved", _suspend_body("selectors$1$3$1")),
+        ("POST", "/c", "resolved", _suspend_body("selectors$1$4$1")),
+        ("GET", "/orders", "resolved", _suspend_body("selectors$1$5$1")),
+        ("GET", "/dbg", "resolved", _suspend_body("selectors$1$6$1")),
+        ("GET", "/fast", "resolved", _suspend_body("selectors$1$7$1")),
+        ("GET", "/paged", "resolved", _suspend_body("selectors$1$8$1")),
+        # the verb-less terminal
+        ("GET", "/", "resolved", _suspend_body("selectors$1$1$1")),
+        ("PUT", "/legacy2", "resolved", _suspend_body("selectors$1$9$1")),
+        *(
+            (verb, "/health2", "resolved", _suspend_body("selectors$1$2$1"))
+            for verb in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+        ),
     } <= rows, sorted(rows, key=str)
+    assert not any(str(r["path"]) in ("/**", "/health2/**") for r in ktor_rows)
     assert not any(str(r["path"]) in ("/api/**", "/apilegacyorders") for r in ktor_rows)
-    # Exactly eight rows — the seven above and the stray — so an extra row (a helper route
-    # read one day, a selector block's nested route, a duplicate) cannot pass silently.
-    assert len(ktor_rows) == 8, sorted(rows, key=str)
+    assert not any(str(r["path"]) == "/never" for r in ktor_rows), "a verb conflict published"
+    media = {
+        (r["path"], r["consumes"], r["produces"]) for r in ktor_rows if r["path"] in ("/j", "/c")
+    }
+    assert media == {("/j", None, '["application/json"]'), ("/c", '["application/json"]', None)}
+    # Exactly twenty-eight rows — the twenty-four above, the stray, the two `mount` rows
+    # and `reads()`'s `GET /reads/orders/{id}` (the handler-read fixture, §5d, asserted on
+    # `endpoint_metadata` below) — so an extra row (a conflict's route, a duplicate) cannot
+    # pass silently.
+    assert len(ktor_rows) == 28, sorted(rows, key=str)
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
-    assert all("#orders(" in str(r["caller"]) for r in ktor_rows if r["resolution"] == "resolved")
-    assert not any("#api(" in str(r["caller"]) or r["path"] == "/helper" for r in ktor_rows), (
-        "the Route-extension helper's route was derived — a walk now follows `api()`; "
-        "move this pin and the catalog's stated boundary together"
+    assert all(
+        "#orders(" in str(r["caller"])
+        or "#selectors(" in str(r["caller"])
+        or "#reads(" in str(r["caller"])
+        for r in ktor_rows
+        if r["resolution"] == "resolved"
     )
+    assert not any(
+        "#api(" in str(r["caller"]) or "#v2(" in str(r["caller"]) or "#orders2(" in str(r["caller"])
+        for r in ktor_rows
+    ), "a helper's route was attributed to the helper — the caller is the tree's root"
+    mounted = [r for r in ktor_rows if "#defaults(" in str(r["caller"])]
+    assert [(r["method"], r["path"], r["resolution"], r["handler"]) for r in mounted] == [
+        (None, None, "unresolved", None),
+        (None, None, "unresolved", None),
+    ], mounted
 
 
-GATEWAY = FIXTURES / "orders-gateway"
+def test_ktor_handler_reads_reach_endpoint_metadata(ktor_tables):
+    """`inbound-request-requirements`, mechanism 3 on Ktor (spec 2026-09-19 §5d; CP-24
+    rows 5–6), on real bytecode. `reads()`'s one handler reads five values and the table
+    carries four: `call.request.headers["X-Trace"]` → header, `call.request.
+    queryParameters["q"]` → query, `call.parameters["page"]` → query — each `requirement`
+    NULL, a bare read stating that the handler reads the value and nothing about what
+    Ktor does without it (A3) — and `call.parameters["id"]` NOTHING, because `id` is the
+    route's own `{id}` and `call.parameters` merges path and query (`skip_path_variables`,
+    A6). The three `get`s are one method on one `StringValues` supertype, told apart by
+    the getter that produced the receiver (`via`): `RoutingRequest.getHeaders`,
+    `RoutingRequest.getQueryParameters`, `RoutingCall.getParameters` — the CLASS overrides
+    a 3.0.3 handler body's `call` (a `RoutingCall`) compiles to, measured on this very
+    class and declared as such on the catalog.
+
+    `call.parameters.getOrFail("cursor")` → query `cursor`, `required`, and NOT through a
+    call site named `getOrFail`: the function is `inline`, so this body carries its BODY
+    — `Parameters.get("cursor") ; ifnonnull ; new MissingRequestParameterException("cursor")
+    ; athrow` — and the read reaches the pass as a plain `get` on `getParameters`. The
+    catalog's `required_when_thrown` reads what the inlining left behind: the body
+    constructs the framework's own exception with THIS read's name as its first argument
+    (the extractor hands the `<init>` site the literal, measured), and Ktor does refuse
+    the request (CP-24 row 5). `page` beside it, read the same way, stays NULL — the body
+    throws for `cursor`, not for `page` (fix round 1; this pin moved from NULL)."""
+    requirements = _requirements(ktor_tables["endpoint_metadata"])
+    reads = {r for r in requirements if "reads$" in r[2]}
+    handler = _suspend_body("reads$1$1")
+    assert reads == {
+        ("GET", "/reads/orders/{id}", handler, "header", "X-Trace", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "q", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "page", None, None, "resolved"),
+        ("GET", "/reads/orders/{id}", handler, "query", "cursor", None, "required", "resolved"),
+    }
+    assert not any(r[4] == "id" for r in requirements), "the path variable was written as a query"
+    # The selector rows and the read rows are the whole table: eight rows, nothing else.
+    assert len(requirements) == 8, sorted(requirements, key=str)
+
+
+def test_javalin_handler_reads_reach_endpoint_metadata(javalin_tables):
+    """`inbound-request-requirements`, mechanism 3 on Javalin (spec 2026-09-19 §5d; CP-25
+    rows 14–15), on real bytecode. The `ApiBuilder` handler under `/jv/nested/reads`:
+    `ctx.queryParam("q")` → query and `ctx.header("X-Api")` → header, `requirement` NULL
+    (A3: Javalin hands a null through); `ctx.queryParamAsClass("n", Integer.class).get()`
+    → query `n`, `required` — `Validator.get()` throws `ValidationException` on an absent
+    value, the framework's own refusal, reached through the catalog's `then: { method:
+    get }` one result-to-receiver step; the same chain on `headerAsClass("X-Page", …)`
+    ending in `getOrDefault(1)` stays NULL. `ctx.header("X-Set", "1")` — the two-argument
+    SET on the response (F7) — writes nothing: the entries carry the read's arity and no
+    other. The list is declared on `javalin.yml` and reaches this `javalin-apibuilder` row
+    because reads are applied by HANDLER, not by catalog (§5d).
+
+    The rows of `flat()` and `mounted()` carry NO reads, and could not: a `single_call`
+    row's `handler` is the registering method, not the `Handler` lambda, so the lambda's
+    body is outside what this pass scans — a stated boundary, not a claim (COVERAGE)."""
+    rows = javalin_tables["endpoints"]
+    handler = _handler_of(rows, "GET", "/jv/nested/reads")
+    assert "OrderApp#lambda$nested$" in handler
+    requirements = _requirements(javalin_tables["endpoint_metadata"])
+    assert requirements == {
+        ("GET", "/jv/nested/reads", handler, "query", "q", None, None, "resolved"),
+        ("GET", "/jv/nested/reads", handler, "query", "n", None, "required", "resolved"),
+        ("GET", "/jv/nested/reads", handler, "header", "X-Api", None, None, "resolved"),
+        ("GET", "/jv/nested/reads", handler, "header", "X-Page", None, None, "resolved"),
+    }
+
+
+SERVLET = FIXTURES / "orders-servlet"
 
 
 @pytest.fixture(scope="module")
-def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
-    """Every endpoint row the Spring Cloud Gateway fixture derives, whole — the test reads
-    the handler and the caller beside the identity."""
-    workspace_dir = tmp_path_factory.mktemp("gateway")
-    compile_fixture(GATEWAY)
+def servlet_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(SERVLET, tmp_path_factory.mktemp("servlet"))
+
+
+def test_servlet_handler_reads_reach_endpoint_metadata(servlet_tables):
+    """`inbound-request-requirements`, mechanism 3 on the Servlet API (spec 2026-09-19
+    §5d; CP-25 row 16), on real bytecode — the first servlet fixture, a `@WebServlet` on
+    an `HttpServlet` subclass compiled against the API `tomcat-embed-core` bundles.
+    `jakarta-servlet.yml` derives `GET /sv/orders` with `doGet` as its handler
+    (`supertype_dispatch`), and `doGet`'s body reads two values: `req.getParameter("q")`
+    → `param` (one method for the query string and a form body, §5a) and
+    `req.getHeader("X-Api")` → header, both `requirement` NULL — abstract on the API,
+    null-on-absent in the container, nothing refuses (A3). Both call sites name
+    `HttpServletRequest`, the parameter's declared type, even for the
+    `ServletRequest`-declared `getParameter` — which is the owner the entry names.
+    `resp.setHeader(...)` is on the response type and writes nothing."""
+    rows = servlet_tables["endpoints"]
+    assert [(r["catalog_id"], r["method"], r["path"], r["resolution"]) for r in rows] == [
+        ("jakarta-servlet", "GET", "/sv/orders", "resolved")
+    ]
+    handler = _handler_of(rows, "GET", "/sv/orders")
+    assert handler.endswith("com/acme/sv/OrderServlet#doGet(sig_55584cc2).")
+    assert _requirements(servlet_tables["endpoint_metadata"]) == {
+        ("GET", "/sv/orders", handler, "param", "q", None, None, "resolved"),
+        ("GET", "/sv/orders", handler, "header", "X-Api", None, None, "resolved"),
+    }
+
+
+KTOR_CLASSLAMBDAS = FIXTURES / "orders-ktor-classlambdas"
+
+
+def test_the_class_lambda_twin_is_built_from_the_very_same_source():
+    """`orders-ktor-classlambdas` compiles a COPY of `KtorRoutes.kt` — a symlink is not
+    allowed in the fixture tree — so the two files can drift apart silently, and then the
+    "identical rows" test below would compare two different programs. Byte-identical, or
+    this says which one moved."""
+    original = KTOR / "src" / "main" / "kotlin" / "com" / "acme" / "kt" / "KtorRoutes.kt"
+    twin = KTOR_CLASSLAMBDAS / "src" / "main" / "kotlin" / "com" / "acme" / "kt" / "KtorRoutes.kt"
+    assert original.read_bytes() == twin.read_bytes(), (
+        f"{twin} drifted from {original}: copy the original over it"
+    )
+
+
+@pytest.fixture(scope="module")
+def ktor_classlambda_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
+    """Every endpoint row the `-Xlambdas=class` twin derives, whole, from its own analysis."""
+    workspace_dir = tmp_path_factory.mktemp("ktor-classlambdas")
+    compile_fixture(KTOR_CLASSLAMBDAS)
     result = CliRunner().invoke(
-        cli, ["module", "analyze", str(GATEWAY), "--workspace", str(workspace_dir)]
+        cli, ["module", "analyze", str(KTOR_CLASSLAMBDAS), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
@@ -720,6 +1022,112 @@ def gateway_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
         return [dict(row) for row in workspace.query("endpoints")]
     finally:
         workspace.close()
+
+
+def _rows_modulo_module(rows: list[dict]) -> set[tuple]:
+    """`(method, path, resolution, handler)` with the handler's module-coordinates prefix
+    dropped — the one thing that differs by construction between the two builds, whose
+    `artifactId`s differ. Class names do not: the same source compiles to the same
+    `KtorRoutesKt$orders$1$1$1` counters under both profiles."""
+    return {
+        (
+            r["method"],
+            r["path"],
+            r["resolution"],
+            None if r["handler"] is None else bare_descriptor(str(r["handler"])),
+        )
+        for r in rows
+    }
+
+
+def test_the_class_lambda_twin_derives_identical_rows(ktor_rows, ktor_classlambda_rows):
+    """`kotlin-class-lambdas`, spec 2026-09-19 §3b and §9, on real bytecode: the same
+    `KtorRoutes.kt` compiled with `-Xlambdas=class` — every `Function1` block a `Lambda`
+    CLASS `new`ed (or a shared `INSTANCE` read) at the call site where the default profile
+    emits an `invokedynamic` — derives the SAME endpoint rows, handler included. The
+    extractor marks each lambda class's type fact with the method holding its body
+    (`lambda_body`, commit e6497f0's family), and `effective_call_sites` hands every
+    engine the `instance` argument as that `lambda`, so the routing walk enters the block
+    exactly as it enters an `invokedynamic` one. The handlers are `invokeSuspend` bodies
+    under BOTH profiles — a suspend lambda is a class either way — so even the handler
+    column agrees once the module prefix is dropped. A difference here is a shape one
+    profile reads and the other does not, and it is reported, not tolerated."""
+    default, classes = _rows_modulo_module(ktor_rows), _rows_modulo_module(ktor_classlambda_rows)
+    assert default == classes, {
+        "only under the default profile": sorted(default - classes, key=str),
+        "only under -Xlambdas=class": sorted(classes - default, key=str),
+    }
+    assert len(ktor_classlambda_rows) == len(ktor_rows) == 28
+
+
+def test_ktor_selector_requirements_reach_endpoint_metadata(ktor_tables):
+    """`inbound-request-requirements` on the Ktor side (spec 2026-09-19 §4b, §4d, §5c).
+    What `selectors()`'s tree DEMANDS of a request reaches `endpoint_metadata` against
+    the row it demands it of, `caller` = that row's handler (§4d): `header("X-Api-Version",
+    "2")` → header, value `2`, `required` — the selector refuses a request without it;
+    `param("debug")` → query, no value, `required`; `param("mode", "fast")` → query,
+    value `fast`, `required`; `optionalParam("page")` → query, `optional` — the route is
+    registered whether or not the parameter is present. These four rows are everything
+    `selectors()`'s tree states; the rest of the table is `reads()`'s handler-body reads,
+    asserted below, and the two together are the whole table."""
+    selectors = {r for r in _requirements(ktor_tables["endpoint_metadata"]) if "selectors$" in r[2]}
+    assert selectors == {
+        (
+            "GET",
+            "/orders",
+            _suspend_body("selectors$1$5$1"),
+            "header",
+            "X-Api-Version",
+            "2",
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/dbg",
+            _suspend_body("selectors$1$6$1"),
+            "query",
+            "debug",
+            None,
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/fast",
+            _suspend_body("selectors$1$7$1"),
+            "query",
+            "mode",
+            "fast",
+            "required",
+            "resolved",
+        ),
+        (
+            "GET",
+            "/paged",
+            _suspend_body("selectors$1$8$1"),
+            "query",
+            "page",
+            None,
+            "optional",
+            "resolved",
+        ),
+    }
+
+
+GATEWAY = FIXTURES / "orders-gateway"
+
+
+@pytest.fixture(scope="module")
+def gateway_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(GATEWAY, tmp_path_factory.mktemp("gateway"))
+
+
+@pytest.fixture(scope="module")
+def gateway_rows(gateway_tables: dict[str, list[dict]]) -> list[dict]:
+    """Every endpoint row the Spring Cloud Gateway fixture derives, whole — the test reads
+    the handler and the caller beside the identity."""
+    return gateway_tables["endpoints"]
 
 
 def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
@@ -746,10 +1154,13 @@ def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
     than silence. `not(p -> p.path("/admin/**"))` is the other unresolved row: a negated
     predicate serves something the negation does not say.
 
-    Both `route` overloads derive — the named six and the unnamed host-only one — because a
-    body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched on
-    owner and name alone, the first entry claimed both and the host-only route was one
-    unresolved row. Exactly nine rows from this catalog — the seven resolved and the two
+    Both `route` overloads derive — the named seven and the unnamed host-only one — because
+    a body-linked entry is told apart by `arity` like every other rule (A2 Task 7); matched
+    on owner and name alone, the first entry claimed both and the host-only route was one
+    unresolved row. `guarded` — `path("/guarded/**").and().header("X-Api", "v2").and().
+    query("debug")` — serves its path exactly as `orders` does: the two predicates narrow
+    WHO is served and are the row's requirements (asserted on `endpoint_metadata` below),
+    never its address. Exactly ten rows from this catalog — the eight resolved and the two
     unresolved — so an extra row (a negator's lambda body scanned as a tree of its own, a
     pass-through reached unconsumed, a duplicate) cannot pass silently."""
     rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway"]
@@ -762,10 +1173,240 @@ def test_gateway_routes_derive_their_inbound_surface(gateway_rows):
         (None, "/b/**", "resolved"),
         (None, "/billing/**", "resolved"),  # captured `this`: the spec is parameter 0
         (None, "/**", "resolved"),  # host only, the `route(Function)` overload
+        (None, "/guarded/**", "resolved"),  # header + query predicates: requirements, not address
         (None, None, "unresolved"),  # not-admin, and legacy (captured local, concat path)
     } == identities, sorted(identities, key=str)
     unresolved = [r for r in rows if r["resolution"] == "unresolved"]
     assert len(unresolved) == 2 and all(r["method"] is None for r in unresolved), unresolved
-    assert len(rows) == 9, sorted(identities, key=str)
+    assert len(rows) == 10, sorted(identities, key=str)
     assert all(r["handler"] is None for r in rows), [r["handler"] for r in rows]
     assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
+
+
+def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tables):
+    """`inbound-request-requirements` on the Gateway side (spec 2026-09-19 §5c; CP-26 rows
+    3–4). `guarded`'s `header("X-Api", "v2")` and `query("debug")` were pass-throughs that
+    read nothing; they still carry the chain on, and now also state what the route
+    demands: header `X-Api` matching `v2` (the regex as written, the value column),
+    query `debug` present (the one-argument overload, no value), both `required` — the
+    `HeaderRoutePredicateFactory`/`QueryRoutePredicateFactory` each builds does not
+    match the route without them. Against the row they guard, `/guarded/**`, whose
+    `caller` is NULL: a gateway route has no handler, and an inbound metadata row's
+    `caller` is the handler (§4d). The fixture's other routes state nothing, so these two
+    rows are the table."""
+    assert _requirements(gateway_tables["endpoint_metadata"]) == {
+        (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
+        (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
+    }
+
+
+# --- §5b `request_params`: what each framework's binder enforces (CP-25 rows 2–12) ------
+
+
+def _handler_of(rows: list[dict], method: str, path: str) -> str:
+    return next(str(r["handler"]) for r in rows if r["path"] == path and r["method"] == method)
+
+
+def _at(requirements: set[tuple], path: str) -> set[tuple]:
+    """The rows against one path, the caller shortened to its bare descriptor."""
+    return {(r[0], bare_descriptor(str(r[2])), *r[3:]) for r in requirements if r[1] == path}
+
+
+def test_spring_request_params_record_what_the_binder_enforces(http_requirements, http_rows):
+    """`inbound-request-requirements`, mechanism 1 on Spring MVC (spec 2026-09-19 §5b;
+    CP-25 rows 2, 3 and 5). `RequestParamsController#search` carries every form the rule
+    reads: `q` — a plain `String`, no attribute — is `required`, and it is the row that
+    proves the binder predicate reads the DECLARATION and not the type reference, which
+    is `nullable: true` for every Java reference type (D00 §5); `tag` is `optional` by
+    `required = false`; `page` by a WRITTEN `defaultValue` (row 5: an unwritten one never
+    reaches the class file); `sort` by its `Optional` type, and named `sort` by the
+    `name` attribute; the `Map` binding `all` is SKIPPED (a row would name the map
+    variable as a request parameter); `X-Tenant` a `required` header; `session` an
+    `optional` cookie. `kind: param` on `@RequestParam` because Spring cannot tell query
+    from form through it (§5a); `value` NULL — an annotation names, it never demands a
+    value; `caller` the handler. One row each although two catalogs (`spring-web`,
+    `spring-mvc`) can own the class: identical rows meet insert-if-absent (A8)."""
+    handler = bare_descriptor(_handler_of(http_rows, "GET", "/v1/params/search"))
+    assert handler.endswith("RequestParamsController#search(sig_089e06fc).")
+    assert _at(http_requirements, "/v1/params/search") == {
+        ("GET", handler, "param", "q", None, "required", "resolved"),
+        ("GET", handler, "param", "tag", None, "optional", "resolved"),
+        ("GET", handler, "param", "page", None, "optional", "resolved"),
+        ("GET", handler, "param", "sort", None, "optional", "resolved"),
+        ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
+        ("GET", handler, "cookie", "session", None, "optional", "resolved"),
+    }
+
+
+def test_a_kotlin_defaulted_or_nullable_parameter_is_optional_to_the_binder(
+    http_requirements, http_rows
+):
+    """R1, the false positive the spec's self-review found and ruled on: `@RequestParam
+    page: Int = 0` is optional to Spring — `MethodParameter.isOptional()` reaches
+    `KotlinDelegate.isOptional`, `KParameter.isOptional()` (CP-25 row 3) — but compiles
+    to an `int` slot that no attribute and no nullability marks; the extractor's
+    `declares_default: true` (D00 §5a) is what the rule reads. `tag: String?` is optional
+    through the `@org.jetbrains.annotations.Nullable` kotlinc emits on the parameter, one
+    of the shape model's `nullability.nullable` spellings — the same read as a Java
+    `@Nullable`, no language named. The handler is `search` itself, not its `$default`
+    bridge."""
+    handler = bare_descriptor(_handler_of(http_rows, "GET", "/ktparams/search"))
+    assert handler.endswith("KotlinParamController#search(sig_8a91df81).")
+    assert _at(http_requirements, "/ktparams/search") == {
+        ("GET", handler, "param", "page", None, "optional", "resolved"),
+        ("GET", handler, "param", "tag", None, "optional", "resolved"),
+    }
+
+
+# --- §5c `mapping.request_requirement_attrs`: what the mapping's own expressions demand ---
+
+
+def test_spring_mapping_params_and_headers_expressions_are_requirements(
+    http_requirements, http_rows
+):
+    """`inbound-request-requirements`, mechanism 2 on Spring MVC (spec 2026-09-19 §5c;
+    CP-25 rows 4 and 13). `MappingConditionsController` carries every expression form
+    on real bytecode: the class's `params = "tenant"` reaches BOTH handlers, `required`
+    — `ParamsRequestCondition.combine` unions the class's set with the method's; on
+    `versioned`, `v=1` is `required` with the value `1` and `!X-Legacy` is `absent`,
+    the request must not carry the header; on `legacy`, `v!=1` is `optional` (served
+    whenever `v` is not `1`, an absent `v` included — the excluded value has no column),
+    `X-Api` is `required`, and `Accept=application/json` writes NOTHING:
+    `HeadersRequestCondition.parseExpressions` drops `Accept`/`Content-Type` and Spring
+    reads them as produces/consumes (A4). `kind: param` for `params=`, the same word
+    `@RequestParam` carries and for the same reason; `caller` the handler; one row each
+    although `spring-web` and `spring-mvc` both read the class (A8)."""
+    versioned = bare_descriptor(_handler_of(http_rows, "GET", "/v1/conditions/orders"))
+    legacy = bare_descriptor(_handler_of(http_rows, "GET", "/v1/conditions/legacy"))
+    assert versioned.endswith("MappingConditionsController#versioned(sig_26be7569).")
+    assert _at(http_requirements, "/v1/conditions/orders") == {
+        ("GET", versioned, "param", "tenant", None, "required", "resolved"),
+        ("GET", versioned, "param", "v", "1", "required", "resolved"),
+        ("GET", versioned, "header", "X-Legacy", None, "absent", "resolved"),
+    }
+    assert _at(http_requirements, "/v1/conditions/legacy") == {
+        ("GET", legacy, "param", "tenant", None, "required", "resolved"),
+        ("GET", legacy, "param", "v", None, "optional", "resolved"),
+        ("GET", legacy, "header", "X-Api", None, "required", "resolved"),
+    }
+    assert not any(str(r[4]).lower() == "accept" for r in http_requirements), (
+        "an Accept header expression was written as a requirement"
+    )
+
+
+def test_the_conflict_detectors_discriminators_are_the_same_requirements(
+    http_requirements, http_rows
+):
+    """W28's `RoutingConditionsController` — three handlers on `GET /v1/routing/orders`
+    that Spring registers because `params`/`headers` separate them — now states WHAT
+    separates them on each row: `view=summary`, `view=full`, `X-Orders-Api=2`, each
+    `required` with its value against its own handler. The same attributes, read the
+    same way (the effective annotation set), serving the conflict check and this table
+    alike."""
+    rows = {
+        (bare_descriptor(str(r[2])).rsplit("#", 1)[1].split("(")[0], r[3], r[4], r[5], r[6])
+        for r in http_requirements
+        if r[1] == "/v1/routing/orders"
+    }
+    assert rows == {
+        ("summary", "param", "view", "summary", "required"),
+        ("full", "param", "view", "full", "required"),
+        ("versioned", "header", "X-Orders-Api", "2", "required"),
+    }
+
+
+@pytest.fixture(scope="module")
+def spring7_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(SPRING7, tmp_path_factory.mktemp("spring7-requirements"))
+
+
+def test_jaxrs_named_parameters_are_optional_in_both_spellings(spring7_tables):
+    """§5b on JAX-RS (CP-25 rows 9–10): `@QueryParam`/`@HeaderParam` declare `value` only,
+    and an absent value is null — or the SEPARATE `@DefaultValue`, informational — never a
+    400, so every row is `optional` whatever the parameter's type: `q` carries a default
+    and `X-Tenant` none, and they read the same. The `javax` spelling derives the same
+    row through `javax-jaxrs.yml`. Nothing else on the fixture carries an entry's
+    annotation, so these three rows are the whole inbound table."""
+    rows = spring7_tables["endpoints"]
+    jakarta = bare_descriptor(_handler_of(rows, "GET", "/jaxrs/orders/search"))
+    javax = bare_descriptor(_handler_of(rows, "GET", "/legacy/orders/search"))
+    requirements = _requirements(spring7_tables["endpoint_metadata"])
+    assert _at(requirements, "/jaxrs/orders/search") == {
+        ("GET", jakarta, "query", "q", None, "optional", "resolved"),
+        ("GET", jakarta, "header", "X-Tenant", None, "optional", "resolved"),
+    }
+    assert _at(requirements, "/legacy/orders/search") == {
+        ("GET", javax, "query", "q", None, "optional", "resolved"),
+    }
+    assert len(requirements) == 3, sorted(requirements, key=str)
+
+
+@pytest.fixture(scope="module")
+def micronaut_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(MICRONAUT, tmp_path_factory.mktemp("micronaut-requirements"))
+
+
+def test_micronaut_binds_required_unless_the_argument_is_nullable(micronaut_tables):
+    """§5b on Micronaut (CP-25 rows 6–8): no `required` attribute exists, so a
+    `@QueryValue String tenant` and a `@Header("X-Tenant")` are `required` — an
+    unsatisfied binding throws `UnsatisfiedRouteException` — and `@QueryValue @Nullable
+    String q` is `optional`, through Micronaut's OWN `io.micronaut.core.annotation.Nullable`,
+    which its processor maps onto the stereotype `Argument.isNullable()` asks for and
+    which the shape model lists for that reason. `byId(String id)`, the unannotated
+    by-name binding, writes nothing: skipped and stated on the catalog.
+
+    `@QueryValue String pageSize` is `required` too, and names NOTHING (CP-25 row 18):
+    the binder reads `pageSize` and, finding no such parameter, retries `page-size` —
+    `NameUtils.hyphenate` of the parameter's own name — so a request carrying either
+    spelling is served, and `query pageSize required` would state a name the framework
+    does not require by itself. `tenant` hyphenates to itself and keeps its name; the
+    WRITTEN `X-Tenant` is never respelled."""
+    rows = micronaut_tables["endpoints"]
+    handler = bare_descriptor(_handler_of(rows, "GET", "/mn/orders/search"))
+    requirements = _requirements(micronaut_tables["endpoint_metadata"])
+    assert _at(requirements, "/mn/orders/search") == {
+        ("GET", handler, "query", "q", None, "optional", "resolved"),
+        ("GET", handler, "query", "tenant", None, "required", "resolved"),
+        ("GET", handler, "query", None, None, "required", "unresolved"),
+        ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
+    }
+    assert len(requirements) == 4, sorted(requirements, key=str)
+
+
+@pytest.fixture(scope="module")
+def quarkus_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dict]]:
+    return _analyzed_tables(QUARKUS, tmp_path_factory.mktemp("quarkus-requirements"))
+
+
+def test_quarkus_rest_and_reactive_routes_parameters_are_optional(quarkus_tables):
+    """§5b on Quarkus, both stacks. Quarkus REST binds its own `@RestQuery` — `value`
+    only, the name defaulting to the parameter's (A9, CP-25 row 9) — beside `@QueryParam`
+    through the same extractors that hand an absent value through as null (row 10): both
+    `optional`. Reactive routes' `@Param`/`@Header` compile to a plain
+    `HttpServerRequest.getParam`/`getHeader` read whose return Vert.x declares
+    `@Nullable` (rows 11–12): `optional`, as §5b's table asked CP-25 to confirm.
+
+    The fixture's older handlers carry `@Param String id` under `/:id` — the guide's
+    idiom for a PATH segment, which Vert.x serves through the same `getParam` — and the
+    entry's `skip_path_variables` (ruled 2026-09-20, fix round 1) gives them NO row: `id`
+    is the path parameter, and `query id` would be a false statement about what the
+    handler binds. `find(@Param id, @Param verbose)` on `/:id` is the pair: one row,
+    `verbose`, and none for `id`."""
+    rows = quarkus_tables["endpoints"]
+    rest = bare_descriptor(_handler_of(rows, "GET", "/q/orders/search"))
+    routes = bare_descriptor(_handler_of(rows, "GET", "/qk/orders/search"))
+    requirements = _requirements(quarkus_tables["endpoint_metadata"])
+    assert _at(requirements, "/q/orders/search") == {
+        ("GET", rest, "query", "q", None, "optional", "resolved"),
+        ("GET", rest, "query", "tenant", None, "optional", "resolved"),
+    }
+    assert _at(requirements, "/qk/orders/search") == {
+        ("GET", routes, "query", "q", None, "optional", "resolved"),
+        ("GET", routes, "header", "X-Tenant", None, "optional", "resolved"),
+    }
+    find = bare_descriptor(_handler_of(rows, "GET", "/qk/orders/:id"))
+    assert _at(requirements, "/qk/orders/:id") == {
+        ("GET", find, "query", "verbose", None, "optional", "resolved"),
+    }
+    assert not any(r[4] == "id" for r in requirements), sorted(requirements, key=str)
+    assert len(requirements) == 5, sorted(requirements, key=str)

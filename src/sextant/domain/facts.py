@@ -262,6 +262,13 @@ class SymbolFact(BaseModel):
     # which makes such a body the candidate for an interface method that
     # declares no body of its own.
     implements_default_of: str | None = None
+    # The method holding a class-compiled lambda's body, on that lambda's TYPE
+    # fact alone (D00 §5, spec 2026-09-19 §3b): spelled as a `lambda`
+    # argument's `symbol` is — the bare descriptor, no module coordinates — so
+    # it joins to the body's own method fact by descriptor suffix. Absent on
+    # every other fact. Read by `resolve/effective_calls.py`, which hands every
+    # engine an `instance` of such a class as the `lambda` it stands for.
+    lambda_body: str | None = None
     # JVMS 4.7.22 `AnnotationDefault` (W4): the value an ANNOTATION TYPE's
     # element takes when a use omits it. Present only on such an element and
     # only where it has a default; absent everywhere else.

@@ -32,15 +32,20 @@ not read END TO END degrades to (9.15's five rejection rules), and that case is
 pinned beside the readable one.
 """
 
+import copy
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.symbols import method_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 # `array_arguments` (capability 9.15) is granted because the real scanner declares it and
@@ -135,6 +140,18 @@ def _method_symbol(bare: str) -> SymbolFact:
     being concatenated into existence."""
     return SymbolFact(
         document_id="doc_1", symbol=_MODULE + bare, construct_kind=ConstructKind.METHOD
+    )
+
+
+def _type_symbol(bare: str, *, lambda_body: str) -> SymbolFact:
+    """A class-compiled lambda's own TYPE fact, carrying the body method it stands for
+    (D00 §5 `lambda_body`) — what `effective_call_sites` reads to hand the engine an
+    `instance` of that class as the `lambda` it is (spec 2026-09-19 §3b)."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.CLASS,
+        lambda_body=lambda_body,
     )
 
 
@@ -4550,7 +4567,19 @@ _VERB_DESC = f"({_ROUTE}Ljava/lang/String;Lkotlin/jvm/functions/Function2;){_ROU
 _PATHLESS_VERB_DESC = f"({_ROUTE}Lkotlin/jvm/functions/Function2;){_ROUTE}"
 _ROUTING_BODY = DECLARER + "orders$lambda$1(sig_k0)."
 _API_BODY = DECLARER + "orders$lambda$1$lambda$0(sig_k1)."
+_HELPER_DESC = f"({_ROUTE})V"
+# A module-local `Route`-extension helper — `fun Route.api() { get("/helper") { } }` — is a
+# STATIC method taking the receiver as argument 0, and its symbol is what `method_descriptor`
+# composes from the call's own owner, name and JVM descriptor (D00 §5a): spelled through
+# that function here so the helper the routing body CALLS is the method whose body the
+# facts carry.
+_API_HELPER = method_descriptor(DECLARER, "api", _HELPER_DESC)
 _SUSPEND_HANDLER = DECLARER + "Routes$orders$1$1$1#"
+# The body a suspend handler class compiles into (CP-23: `invokeSuspend(Object)`), spelled
+# as the extractor spells `lambda_body` — bare, with the hashed disambiguator.
+_SUSPEND_BODY = method_descriptor(
+    _SUSPEND_HANDLER, "invokeSuspend", "(Ljava/lang/Object;)Ljava/lang/Object;"
+)
 
 
 def _shipped_ktor_catalog() -> Catalog:
@@ -4565,11 +4594,20 @@ def _ktor_facts(entry_owner: str) -> list:
     `fixtures/orders-ktor/.../KtorRoutes.kt`'s `orders()` compiles to (its fact file, read
     2026-09-13): every DSL call `invokestatic` with the block's own parameter as argument
     0, each `Function1` block an `invokedynamic` body linked as a `lambda` argument with
-    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class.
+    `captures: 0`, and each `suspend` handler an `instance` of a `SuspendLambda` class —
+    whose type fact carries `lambda_body` naming its `invokeSuspend`, and whose body has
+    a method fact of its own (the class is scanned), so the handler join lands. Plus the
+    fixture's `api()` helper (spec 2026-09-19 §4a, `ktor-route-extensions`): `routing {
+    api() }` is `invokestatic KtorRoutesKt.api(Route)` with the block's own parameter as
+    its one argument, and `fun Route.api() { get("/helper") { } }` is a method of its own
+    whose verb sits on ITS parameter 0 — the origin, once the walk carries it in.
     `entry_owner` is the one cell the near-miss below varies."""
     return [
         _method_symbol(_ROUTING_BODY),
         _method_symbol(_API_BODY),
+        _method_symbol(_API_HELPER),
+        _type_symbol(_SUSPEND_HANDLER, lambda_body=_SUSPEND_BODY),
+        _method_symbol(_SUSPEND_BODY),
         _site(
             DECLARER + "orders(sig_o0).",
             0,
@@ -4620,6 +4658,27 @@ def _ktor_facts(entry_owner: str) -> list:
                 CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=4),
             ],
         ),
+        _site(
+            _ROUTING_BODY,
+            1,
+            DECLARER,
+            "api",
+            descriptor=_HELPER_DESC,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            _API_HELPER,
+            0,
+            _ROUTING_BUILDER,
+            "get",
+            result=13,
+            descriptor=_VERB_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/helper"),
+                CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=8),
+            ],
+        ),
     ]
 
 
@@ -4627,16 +4686,28 @@ def test_the_ktor_catalog_derives_the_nested_tree_from_the_real_entry(tmp_path: 
     """The paired positive (GUIDELINES §10): the shipped rules fire on the real entry
     owner. `get("/orders") { }` under `route("/api") { }` is `GET /api/orders`; the
     path-less `get { }` is `GET /api` — the prefix alone, Ktor's `method(Get)` child of
-    the receiver itself (`path: ""`). Both handlers NULL: a suspend lambda arrives as an
-    `instance`, which is a class and not a method symbol (spec §13 case 8)."""
+    the receiver itself (`path: ""`). Both handlers are the suspend lambda's own
+    `invokeSuspend`: the handler arrives as an `instance` of a class, and the projection
+    every engine reads through (`effective_call_sites`, spec 2026-09-19 §3b) hands it
+    over as the `lambda` its type fact's `lambda_body` names — `kotlin-null-handler`
+    closes here, where spec §13 case 8 had pinned NULL.
+
+    And the helper: `api()` inside the routing body hands the block's parameter — the
+    origin — to a module-local method as its argument 0, so the walk follows the call
+    into `api`'s body with parameter 0 as the new origin (spec 2026-09-19 §4a), and the
+    `get("/helper")` written there is `GET /helper`, resolved, on the entry's caller —
+    `ktor-route-extensions` closes here, where the catalog had pinned silence."""
     workspace = _resolve(tmp_path, _ktor_facts(_ROUTING_ROOT), _shipped_ktor_catalog())
-    identities = _identities(_rows(workspace))
+    rows = _rows(workspace)
     workspace.close()
 
-    assert identities == [
-        ("GET", "/api", None, "resolved"),
-        ("GET", "/api/orders", None, "resolved"),
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/api", handler, "resolved"),
+        ("GET", "/api/orders", handler, "resolved"),
+        ("GET", "/helper", handler, "resolved"),
     ]
+    assert {row["caller"] for row in rows} == {DECLARER + "orders(sig_o0)."}
 
 
 @pytest.mark.declines("ktor-routing")
@@ -4658,6 +4729,348 @@ def test_the_ktor_catalog_declines_a_routing_call_on_another_owner(tmp_path: Pat
     workspace.close()
 
     assert identities == []
+
+
+# --- helper following: the origin as an argument, the visited set, the depth bound, `follow_calls` (spec 2026-09-19 §4a) ---
+
+
+def _helper(name: str) -> str:
+    return method_descriptor(DECLARER, name, _HELPER_DESC)
+
+
+def _helper_call(caller: str, ordinal: int, name: str, *, argument: CallArgument) -> CallSiteFact:
+    """`invokestatic <DECLARER>.<name>(Route)` — a module-local helper handed one value,
+    normally the calling body's own parameter."""
+    return _site(caller, ordinal, DECLARER, name, descriptor=_HELPER_DESC, arguments=[argument])
+
+
+def _deep_verb(caller: str, ordinal: int, path: str) -> CallSiteFact:
+    return _site(
+        caller,
+        ordinal,
+        _ROUTING_BUILDER,
+        "get",
+        result=ordinal + 100,
+        descriptor=_VERB_DESC,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            CallArgument(kind="string", value=path),
+            CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50),
+        ],
+    )
+
+
+def _routing_entry() -> list:
+    """`routing { … }` on the real entry owner, its body `_ROUTING_BODY` with `captures:
+    0`, plus the suspend handler's type and body facts — the frame every chain below
+    hangs off."""
+    return [
+        _method_symbol(_ROUTING_BODY),
+        _type_symbol(_SUSPEND_HANDLER, lambda_body=_SUSPEND_BODY),
+        _method_symbol(_SUSPEND_BODY),
+        _site(
+            DECLARER + "orders(sig_o0).",
+            0,
+            _ROUTING_ROOT,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=_ROUTING_BODY, source=0, captures=0),
+            ],
+        ),
+    ]
+
+
+def _helper_chain(length: int) -> list:
+    """`routing { h1() }`, `fun Route.h1() { h2() }`, … `fun Route.h<length>() {
+    get("/deep") { } }` — every hop hands its own parameter 0 on as argument 0."""
+    facts = _routing_entry()
+    names = [f"h{i}" for i in range(1, length + 1)]
+    facts.append(
+        _helper_call(_ROUTING_BODY, 0, names[0], argument=CallArgument(kind="parameter", value=0))
+    )
+    for i, name in enumerate(names):
+        body = _helper(name)
+        facts.append(_method_symbol(body))
+        if i + 1 < len(names):
+            facts.append(
+                _helper_call(
+                    body, 0, names[i + 1], argument=CallArgument(kind="parameter", value=0)
+                )
+            )
+        else:
+            facts.append(_deep_verb(body, 0, "/deep"))
+    return facts
+
+
+def _questions(workspace: DuckDbWorkspace) -> list[dict]:
+    return [dict(row) for row in workspace.query("open_questions")]
+
+
+def test_a_helper_chain_within_the_bound_derives_its_route_on_the_entrys_caller(tmp_path: Path):
+    """Spec 2026-09-19 §4a's guard is a BOUND, not a budget: sixteen helper calls deep — the
+    bound itself — every hop still carries the origin as argument 0, and the verb at the
+    end derives `GET /deep`, resolved, attributed to the entry's caller (one router, one
+    declarer), with nothing filed in the ledger. Ktor's own documented structures nest
+    three or four deep; the bound is where a walk that never returns is stopped, and a
+    chain that stays inside it is ordinary routing."""
+    workspace = _resolve(tmp_path, _helper_chain(16), _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/deep", _MODULE + _SUSPEND_BODY, "resolved")]
+    assert rows[0]["caller"] == DECLARER + "orders(sig_o0)."
+    assert questions == []
+
+
+def test_a_helper_chain_deeper_than_the_bound_files_one_question_and_no_row(tmp_path: Path):
+    """The seventeenth hop is not followed. What is published is ONE `open_questions` row of
+    kind `routing_depth` — the entry's caller as its evidence, the first unread callee as
+    its candidate — and NO endpoint row: an unresolved row there would claim an address
+    nobody read, where the verb may be on any route or on none (spec 2026-09-19 §0b A2).
+    The question's own identity columns are NULL because both halves genuinely are unread.
+    The same catalog, the same frame, the same hops as the test above; only the length
+    differs by one, so this is the bound and nothing else."""
+    workspace = _resolve(tmp_path, _helper_chain(17), _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert [
+        (
+            q["protocol"],
+            q["method"],
+            q["path"],
+            q["question"],
+            json.loads(str(q["candidates"])),
+            q["evidence"],
+        )
+        for q in questions
+    ] == [
+        (
+            "http",
+            None,
+            None,
+            "routing_depth",
+            [
+                {
+                    "callee": _MODULE + _helper("h17"),
+                    "caller": DECLARER + "orders(sig_o0).",
+                    "depth": 16,
+                }
+            ],
+            DECLARER + "orders(sig_o0).",
+        )
+    ]
+
+
+def test_two_deep_chains_in_one_run_are_one_question_with_two_candidates(tmp_path: Path):
+    """An `open_questions` row is identified by `(protocol, method, path, question)`
+    (`open_question_identity`), and a `routing_depth` row's method and path are NULL on
+    purpose — so every deep chain in one run shares ONE identity. Two rows would render
+    as two lines a `beside-open-question` verdict cannot tell apart, and the verdict
+    would anchor under the first and leave the second unanswered forever: the defect
+    `service_identity._merged` was written for. So two entry callers each exhausting the
+    bound — `orders()` through `h1…h17` and `more()` through `m1…m17` — file ONE row, its
+    candidates one per chain (sorted, NFR-1) and its evidence naming both callers."""
+    facts = _helper_chain(17)
+    more_body = DECLARER + "more$lambda$1(sig_m0)."
+    facts += [
+        _method_symbol(more_body),
+        _site(
+            DECLARER + "more(sig_m1).",
+            0,
+            _ROUTING_ROOT,
+            "routing",
+            result=1,
+            descriptor=_ROUTING_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="lambda", symbol=more_body, source=0, captures=0),
+            ],
+        ),
+        _helper_call(more_body, 0, "m1", argument=CallArgument(kind="parameter", value=0)),
+    ]
+    names = [f"m{i}" for i in range(1, 18)]
+    for i, name in enumerate(names):
+        body = _helper(name)
+        facts.append(_method_symbol(body))
+        if i + 1 < len(names):
+            facts.append(
+                _helper_call(
+                    body, 0, names[i + 1], argument=CallArgument(kind="parameter", value=0)
+                )
+            )
+        else:
+            facts.append(_deep_verb(body, 0, "/deeper"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert len(questions) == 1
+    assert json.loads(str(questions[0]["candidates"])) == [
+        {"callee": _MODULE + _helper("h17"), "caller": DECLARER + "orders(sig_o0).", "depth": 16},
+        {"callee": _MODULE + _helper("m17"), "caller": DECLARER + "more(sig_m1).", "depth": 16},
+    ]
+    assert questions[0]["evidence"] == (
+        DECLARER + "more(sig_m1)." + "; and " + DECLARER + "orders(sig_o0)."
+    )
+
+
+def test_a_helper_calling_itself_is_followed_once(tmp_path: Path):
+    """The visited set, keyed `(callee, origin index)`: `fun Route.loop() { loop();
+    get("/loop") { } }` calls itself with the same origin, and the second entry is
+    refused where the first was taken — so the verb derives exactly once and the walk
+    terminates on its own, well inside the depth bound, with nothing to file. Without
+    the set the same body would be re-entered until the bound stopped it and a
+    `routing_depth` question would be asked of a chain that is not deep at all."""
+    loop = _helper("loop")
+    facts = [
+        *_routing_entry(),
+        _method_symbol(loop),
+        _helper_call(_ROUTING_BODY, 0, "loop", argument=CallArgument(kind="parameter", value=0)),
+        _helper_call(loop, 0, "loop", argument=CallArgument(kind="parameter", value=0)),
+        _deep_verb(loop, 1, "/loop"),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/loop", _MODULE + _SUSPEND_BODY, "resolved")]
+    assert questions == []
+
+
+@pytest.mark.pins("combinator.helper-follows-the-origin-only")
+def test_a_module_local_call_the_origin_does_not_reach_is_not_followed(tmp_path: Path):
+    """§10 near-miss on the origin conjunct, paired with the `/helper` positive on
+    `_ktor_facts`. Every cell is that positive — a module-local method with a body, called
+    from a body whose rule named its origin, a verb on the callee's parameter 0 — except
+    the ARGUMENT handed over: a field value the extractor could not follow, and the body's
+    OTHER parameter. Neither is the origin, so neither call is followed and the verb inside
+    derives nothing, not even an unresolved row: a route on a builder this body never
+    touched is not this tree's, and a row would say it was (spec §4a: "a verb on any other
+    `Route` inside the callee is silence, as today"). A callee with NO body — an interface
+    or abstract method, whose call sites the facts cannot carry — is the third cell: not
+    followed either (A10), and nothing is fabricated for it."""
+    stray = _helper("stray")
+    facts = [
+        *_routing_entry(),
+        _method_symbol(stray),
+        _method_symbol(_helper("abstractly")),
+        _helper_call(_ROUTING_BODY, 0, "stray", argument=CallArgument(kind="unresolved")),
+        _helper_call(_ROUTING_BODY, 1, "stray", argument=CallArgument(kind="parameter", value=1)),
+        _helper_call(
+            _ROUTING_BODY, 2, "abstractly", argument=CallArgument(kind="parameter", value=0)
+        ),
+        _deep_verb(stray, 0, "/stray"),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert questions == []
+
+
+_HELPED = method_descriptor(DECLARER, "helped", "()V")
+
+
+def _apibuilder_with_a_helper_call() -> list:
+    """`_apibuilder_facts` plus a static, argument-less `helped()` CALL inside the inner
+    group and `static void helped() { get("/h", h); }` as a method of its own — the thread-
+    local builder's helper shape: no origin flows anywhere, because `ApiBuilder` keeps the
+    current prefix in a `ThreadLocal` and every verb is static."""
+    return [
+        *_apibuilder_facts(_ROUTER_CONFIG),
+        _method_symbol(_HELPED),
+        _site(_GROUP_INNER, 2, DECLARER, "helped", descriptor="()V", arguments=[]),
+        _site(
+            _HELPED,
+            0,
+            _API_BUILDER,
+            "get",
+            descriptor=f"(Ljava/lang/String;{_HANDLER_DESC})V",
+            arguments=[
+                CallArgument(kind="string", value="/h"),
+                CallArgument(kind="lambda", symbol=HEALTH, source=0),
+            ],
+        ),
+    ]
+
+
+def _without_follow_calls(catalog: Catalog) -> Catalog:
+    """The shipped catalog with `follow_calls` struck from every rule that declares it —
+    the default, which follows origin-carrying calls only."""
+    matches = copy.deepcopy(catalog.matches)
+    for rule in (*matches["entries"], *matches["vocabulary"]["prefixes"]):
+        rule.pop("follow_calls", None)
+    return replace(catalog, matches=matches)
+
+
+def test_an_origin_less_body_follows_a_module_local_call_under_follow_calls_all(tmp_path: Path):
+    """The paired positive: the shipped `javalin-apibuilder` rules declare `follow_calls:
+    all` on the entry and on `path`, because `ApiBuilder.staticInstance()` throws
+    `IllegalStateException` outside the block (measured on the 6.4.0 jar) — a helper that
+    reaches a verb can only ever have been called from inside one. So `helped()` inside
+    `path("/orders", …)` is followed with no origin at all, and its `get("/h", h)` folds
+    under the prefix: `GET /orders/h`, on the entry's caller."""
+    workspace = _resolve(tmp_path, _apibuilder_with_a_helper_call(), _shipped_apibuilder_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/h", _MODULE + HEALTH, "resolved"),
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert {row["caller"] for row in rows} == {_CONFIG_LAMBDA}
+
+
+@pytest.mark.pins("combinator.origin-less-following-is-opt-in")
+def test_an_origin_less_body_does_not_follow_a_module_local_call_by_default(tmp_path: Path):
+    """§10 near-miss on the `follow_calls` conjunct: the same facts, the same catalog with
+    the word struck. An origin-less body — a `Supplier<RouterFunction>` body is one too —
+    may call a helper that builds routers nobody returns, and following it would attach
+    routes the framework never registered (spec 2026-09-19 §0b A1). Nothing is derived
+    for `helped()`; the two routes written in the body itself derive exactly as before,
+    and nothing is filed: not following is the default, not a failure."""
+    catalog = _without_follow_calls(_shipped_apibuilder_catalog())
+    workspace = _resolve(tmp_path, _apibuilder_with_a_helper_call(), catalog)
+    rows, questions = _rows(workspace), _questions(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders/{id}", _MODULE + LIST_ORDERS, "resolved"),
+        ("POST", "/orders", _MODULE + CREATE_ORDER, "resolved"),
+    ]
+    assert questions == []
+
+
+def test_follow_calls_away_from_a_body_link_or_with_another_value_is_refused(tmp_path: Path):
+    """`follow_calls` is a word for a rule that LINKS a body — a body-linked entry or a
+    prefix with `body_arg` — and its one value is `all`. On a verb it names nothing the
+    engine could follow from; misspelt (`always`) it would be read as absent and the
+    thread-local builder's helpers would go silently unfollowed, which is the outcome the
+    word exists to prevent."""
+    matches = _matches()
+    matches["vocabulary"]["verbs"][0]["follow_calls"] = "all"
+    with pytest.raises(CatalogError, match="follow_calls"):
+        _resolve(tmp_path / "a", [], _catalog(matches))
+
+    matches = _matches()
+    matches["entries"].append(
+        {
+            "owner": "com.example.web.RouterDslFacade",
+            "method": "dsl",
+            "body_arg": 0,
+            "follow_calls": "always",
+        }
+    )
+    with pytest.raises(CatalogError, match="follow_calls"):
+        _resolve(tmp_path / "b", [], _catalog(matches))
 
 
 # --- chain-form composers, negators, a terminal, `verb_arg`, array paths (A2 Task 6, spec §12 words 3–5) ---
@@ -5386,3 +5799,921 @@ def test_the_gateway_catalog_declines_a_route_call_on_another_owner(tmp_path: Pa
     workspace.close()
 
     assert identities == []
+
+
+# --- selector prefixes and getter-valued constants (spec 2026-09-19 §4b) ---------------
+
+_HTTP_METHOD_COMPANION = "io/ktor/http/HttpMethod$Companion#"
+_CONTENT_TYPE_APPLICATION = "io/ktor/http/ContentType$Application#"
+_HTTP_METHOD = "Lio/ktor/http/HttpMethod;"
+_CONTENT_TYPE = "Lio/ktor/http/ContentType;"
+_FN1 = "Lkotlin/jvm/functions/Function1;"
+_SELECTOR_DESCS = {
+    "method": f"({_ROUTE}{_HTTP_METHOD}{_FN1}){_ROUTE}",
+    "route": f"({_ROUTE}Ljava/lang/String;{_HTTP_METHOD}{_FN1}){_ROUTE}",
+    "accept": f"({_ROUTE}[{_CONTENT_TYPE}{_FN1}){_ROUTE}",
+    "contentType": f"({_ROUTE}{_CONTENT_TYPE}{_FN1}){_ROUTE}",
+    "header": f"({_ROUTE}Ljava/lang/String;Ljava/lang/String;{_FN1}){_ROUTE}",
+    "param": f"({_ROUTE}Ljava/lang/String;{_FN1}){_ROUTE}",
+    "param2": f"({_ROUTE}Ljava/lang/String;Ljava/lang/String;{_FN1}){_ROUTE}",
+    "optionalParam": f"({_ROUTE}Ljava/lang/String;{_FN1}){_ROUTE}",
+}
+# A getter this catalog's tables never name — `_getter_value`'s unknown case.
+_UNKNOWN_GETTERS = "com/example/Constants#"
+
+
+def _selector_body(index: int) -> str:
+    return DECLARER + f"orders$lambda$1$lambda${index}(sig_s{index})."
+
+
+def _getter(ordinal: int, owner: str, name: str, *, result: int) -> CallSiteFact:
+    """`getstatic Owner.Companion|INSTANCE ; invokevirtual Owner.getX()` — the getter call
+    a Kotlin `HttpMethod.Get` or `ContentType.Application.Json` compiles to (CP-24 rows 3
+    and 4): a `virtual` call on the object read one value id earlier, whose RESULT is what
+    the selector is handed as `{kind: unresolved, source: <result>}`."""
+    return _site(
+        _ROUTING_BODY,
+        ordinal,
+        owner,
+        name,
+        receiver=result - 1,
+        result=result,
+        invoke_kind="virtual",
+        descriptor="()Ljava/lang/Object;",
+    )
+
+
+def _selector(
+    ordinal: int, name: str, between: list[CallArgument], *, body: str, descriptor: str
+) -> CallSiteFact:
+    """One selector block in the routing body — `invokestatic RoutingBuilderKt.<name>(this,
+    …, block)`: the body's parameter 0 first, the block last with `captures: 0`, exactly
+    as `route` is written (the fixture's `selectors()`, read 2026-09-20)."""
+    return _site(
+        _ROUTING_BODY,
+        ordinal,
+        _ROUTING_BUILDER,
+        name,
+        result=ordinal + 300,
+        descriptor=descriptor,
+        arguments=[
+            CallArgument(kind="parameter", value=0),
+            *between,
+            CallArgument(kind="lambda", symbol=body, source=ordinal + 200, captures=0),
+        ],
+    )
+
+
+def _verb_in(body: str, ordinal: int, name: str, path: str | None) -> CallSiteFact:
+    """A verb inside a selector block, on the block's own parameter — with a path, or the
+    path-less overload that serves the prefix itself."""
+    arguments = [CallArgument(kind="parameter", value=0)]
+    if path is not None:
+        arguments.append(CallArgument(kind="string", value=path))
+    arguments.append(CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50))
+    return _site(
+        body,
+        ordinal,
+        _ROUTING_BUILDER,
+        name,
+        result=ordinal + 100,
+        descriptor=_VERB_DESC if path is not None else _PATHLESS_VERB_DESC,
+        arguments=arguments,
+    )
+
+
+def _selector_tree(*blocks: tuple[str, list[CallArgument], list[tuple[str, str | None]]]) -> list:
+    """`routing { <selector>(…) { <verbs> } … }`: one block per tuple — the selector's
+    name (`param2` is the two-argument `param`), the arguments between the receiver and
+    the block, and the verbs written inside it as `(name, path)`."""
+    facts = _routing_entry()
+    for index, (name, between, verbs) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        facts.append(
+            _selector(
+                10 + index,
+                "param" if name == "param2" else name,
+                between,
+                body=body,
+                descriptor=_SELECTOR_DESCS[name],
+            )
+        )
+        for ordinal, (verb, path) in enumerate(verbs):
+            facts.append(_verb_in(body, ordinal, verb, path))
+    return facts
+
+
+def _by_source(result: int) -> CallArgument:
+    return CallArgument(kind="unresolved", source=result)
+
+
+def _literal(value: str) -> CallArgument:
+    return CallArgument(kind="string", value=value)
+
+
+def test_a_verb_selector_sets_the_verb_beneath_it_and_a_disagreeing_route_is_silence(
+    tmp_path: Path,
+):
+    """Spec 2026-09-19 §4b. `method(HttpMethod.Get) { get("/x") { }; get { }; post("/y") { } }`
+    on the shipped catalog: `HttpMethod.Get` is `HttpMethod$Companion.getGet()`, a getter
+    whose RESULT the selector is handed, so the verb is read through
+    `verb_values.getters` (CP-24 row 3) and the scope it opens is `GET`. `get("/x")`
+    agrees and derives `GET /x`; the path-less `get { }` serves the prefix itself — here
+    the routing root, `/`. `post("/y")` DISAGREES, and that subtree is a node the framework
+    registers and can never dispatch (`HttpMethodRouteSelector.evaluate` returns the
+    failure constant on a mismatch, CP-24 row 7): NOT a row of either verb, not an
+    unresolved row, nothing — the A2 ruling, dropped before `_merged` could poison it."""
+    facts = _selector_tree(
+        ("method", [_by_source(9)], [("get", "/x"), ("get", None), ("post", "/y")]),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/", handler, "resolved"),
+        ("GET", "/x", handler, "resolved"),
+    ]
+
+
+def test_a_route_prefix_carrying_a_verb_sets_both_the_path_and_the_verb(tmp_path: Path):
+    """`ktor-route-with-verb`: the four-argument `route("/v", HttpMethod.Put) { put("/x") {
+    }; get("/never") { } }` (CP-24 row 1a) is a prefix that sets the path AND the verb —
+    `path_arg: 1, verb_arg: 2` on one rule — so `put("/x")` is `PUT /v/x`, and the
+    disagreeing `get` is the same silence as under `method`. Before the rule this arity
+    was one unresolved row (spec §7 case 1's G-13 guard) and every route inside it lost."""
+    facts = _selector_tree(
+        (
+            "route",
+            [CallArgument(kind="string", value="/v"), _by_source(9)],
+            [("put", "/x"), ("get", "/never")],
+        ),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getPut", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("PUT", "/v/x", _MODULE + _SUSPEND_BODY, "resolved")]
+
+
+def test_an_unknown_verb_getter_poisons_the_method_alone(tmp_path: Path):
+    """A verb read through a getter the `verb_values.getters` table does not name —
+    `method(Constants.weird) { get("/x") { } }` — poisons `method` and nothing else: the
+    verb WAS written and is unreadable, so the row is unresolved with its path intact,
+    exactly as an undeclared enum member reads. Not a phantom — a route is declared at
+    `/x` — and not `GET`: with the selector's verb unknown, whether the inner `get` agrees
+    with it is unknown too, and picking either would be a guess presented as fact."""
+    facts = _selector_tree(("method", [_by_source(9)], [("get", "/x")]))
+    facts.append(_getter(0, _UNKNOWN_GETTERS, "getWeird", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/x", _MODULE + _SUSPEND_BODY, "unresolved")]
+
+
+def test_media_selectors_read_their_getter_valued_constants_and_an_unknown_one_reads_nothing(
+    tmp_path: Path,
+):
+    """`accept(ContentType.Application.Json) { get("/j") { } }` fills `produces` and
+    `contentType(ContentType.Application.Json) { post("/c") { } }` fills `consumes`
+    (`media_arg` + `fills`). `ContentType.Application.Json` is `ContentType$Application.
+    getJson()`, a getter on the nested object (CP-24 row 4), read through
+    `media_values.getters`; `accept` is a VARARG, so its constant arrives inside one
+    `array` slot whose element carries the getter's `source` (the fixture's compiled
+    shape), and the existing vararg reader walks it. A getter the table does not name —
+    `accept(Constants.weird) { get("/w") { } }` — contributes nothing: `produces` NULL and
+    the row RESOLVED, the media rule's own honesty (the verb and path are the identity,
+    both known)."""
+    facts = _selector_tree(
+        ("accept", [CallArgument(kind="array", elements=[_by_source(9)])], [("get", "/j")]),
+        ("contentType", [_by_source(19)], [("post", "/c")]),
+        ("accept", [CallArgument(kind="array", elements=[_by_source(29)])], [("get", "/w")]),
+    )
+    facts.append(_getter(0, _CONTENT_TYPE_APPLICATION, "getJson", result=9))
+    facts.append(_getter(1, _CONTENT_TYPE_APPLICATION, "getJson", result=19))
+    facts.append(_getter(2, _UNKNOWN_GETTERS, "getWeird", result=29))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert [
+        (row["method"], row["path"], row["resolution"], row["consumes"], row["produces"])
+        for row in rows
+    ] == [
+        ("GET", "/j", "resolved", None, json.dumps([JSON])),
+        ("GET", "/w", "resolved", None, None),
+        ("POST", "/c", "resolved", json.dumps([JSON]), None),
+    ]
+    assert {row["handler"] for row in rows} == {handler}
+
+
+def test_requirement_selectors_are_scopes_whose_routes_derive_beneath_them(tmp_path: Path):
+    """`header("X-Api-Version", "2") { get("/orders") { } }`, `param("debug") { … }`,
+    `param("mode", "fast") { … }` and `optionalParam("page") { … }` set no path, no verb
+    and no media — each is a pure scope carrying a requirement — so the route beneath
+    each derives as written, resolved. Before the rules every one of these blocks derived
+    NOTHING and the routes inside them were lost (the `ktor-selector-blocks` gap). What
+    each block demands of the request is the route's `requirements`, written to the
+    stash and asserted where it is joined to its row (`_from_stash`)."""
+    facts = _selector_tree(
+        ("header", [_literal("X-Api-Version"), _literal("2")], [("get", "/orders")]),
+        ("param", [_literal("debug")], [("get", "/dbg")]),
+        ("param2", [_literal("mode"), _literal("fast")], [("get", "/fast")]),
+        ("optionalParam", [_literal("page")], [("get", "/paged")]),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("GET", "/dbg", handler, "resolved"),
+        ("GET", "/fast", handler, "resolved"),
+        ("GET", "/orders", handler, "resolved"),
+        ("GET", "/paged", handler, "resolved"),
+    ]
+
+
+def test_selector_words_of_the_wrong_shape_are_refused(tmp_path: Path):
+    """Each new prefix word is validated at load: `media_arg` without `fills` (or on a verb
+    rule), a `request_requirement` whose `kind` is not one of the four, or whose
+    `name_arg` lies outside the arity, a `verb_values` block holding anything but
+    `getters`, and a getter key without its `#` — every one a broken file, not a degraded
+    run."""
+    base = {"owner": "com.example.web.RouterDsl", "method": "path", "arity": 3, "body_arg": 2}
+    for broken in (
+        {**base, "media_arg": 1},
+        {**base, "media_arg": 1, "fills": "accepts"},
+        {**base, "request_requirement": {"kind": "form", "name_arg": 1, "requirement": "required"}},
+        {
+            **base,
+            "request_requirement": {"kind": "query", "name_arg": 3, "requirement": "required"},
+        },
+        {**base, "request_requirement": {"kind": "query", "name_arg": 1, "requirement": "maybe"}},
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["prefixes"] = [broken]  # type: ignore[index]
+        with pytest.raises(CatalogError):
+            _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verbs"][0]["media_arg"] = 0  # type: ignore[index]
+    matches["vocabulary"]["verbs"][0]["fills"] = "produces"  # type: ignore[index]
+    with pytest.raises(CatalogError, match="media_arg"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["verb_values"] = {"owner": "com.example.Verbs"}  # type: ignore[index]
+    with pytest.raises(CatalogError, match="verb_values"):
+        _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    matches["vocabulary"]["media_values"]["getters"] = {"com.example.Media.getJson": JSON}  # type: ignore[index]
+    with pytest.raises(CatalogError, match="getters"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- the verb-less terminal and `all_methods` (spec 2026-09-19 §4c) --------------------
+
+_KTOR_ROUTE_TYPE = "io/ktor/server/routing/Route#"
+_HANDLE_DESC = "(Lkotlin/jvm/functions/Function2;)V"
+
+
+def _handle_in(body: str, ordinal: int) -> CallSiteFact:
+    """`handle { }` inside a block: `invokeinterface Route.handle` on the block's own
+    parameter — `receiver_parameter: 0`, no `receiver` id, no result (the fixture's
+    compiled shape, read 2026-09-20; CP-24 row 1b)."""
+    return _site(
+        body,
+        ordinal,
+        _KTOR_ROUTE_TYPE,
+        "handle",
+        receiver_parameter=0,
+        invoke_kind="interface",
+        descriptor=_HANDLE_DESC,
+        arguments=[CallArgument(kind="instance", symbol=_SUSPEND_HANDLER, source=ordinal + 50)],
+    )
+
+
+def _handle_under(*blocks: tuple[str, list[CallArgument]]) -> list:
+    """`routing { <selector>(…) { handle { } } … }` — one `handle` per block."""
+    facts = _routing_entry()
+    for index, (name, between) in enumerate(blocks):
+        body = _selector_body(index)
+        facts.append(_method_symbol(body))
+        descriptor = _ROUTE_DESC if name == "route3" else _SELECTOR_DESCS[name]
+        facts.append(
+            _selector(
+                10 + index,
+                "route" if name == "route3" else name,
+                between,
+                body=body,
+                descriptor=descriptor,
+            )
+        )
+        facts.append(_handle_in(body, 0))
+    return facts
+
+
+def test_a_verb_less_terminal_takes_the_scopes_verb_or_expands_through_all_methods(
+    tmp_path: Path,
+):
+    """Spec 2026-09-19 §4c on the shipped catalog. `handle { }` is a MEMBER of the `Route`
+    interface (CP-24 row 1b) declared as a terminal with no `verb`: under `method(Get)`
+    it takes the scope's verb — `GET /`, the routing root itself, since `handle`
+    registers on the receiver node and `path: ""` at the root canonicalises to `/`;
+    under `route("/legacy2", HttpMethod.Put)` it is `PUT /legacy2`; under a bare
+    `route("/health2")` no verb is in scope, the route is RESOLVED with no verb, and it
+    fans out through `all_methods` — `HttpMethod.DefaultMethods`' seven members (CP-24 row
+    2), one row each, never `/health2/**` and never a NULL verb. Three blocks, nine rows."""
+    facts = _handle_under(
+        ("method", [_by_source(9)]),
+        ("route3", [CallArgument(kind="string", value="/health2")]),
+        ("route", [CallArgument(kind="string", value="/legacy2"), _by_source(19)]),
+    )
+    facts.append(_getter(0, _HTTP_METHOD_COMPANION, "getGet", result=9))
+    facts.append(_getter(1, _HTTP_METHOD_COMPANION, "getPut", result=19))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [
+        ("DELETE", "/health2", handler, "resolved"),
+        ("GET", "/", handler, "resolved"),
+        ("GET", "/health2", handler, "resolved"),
+        ("HEAD", "/health2", handler, "resolved"),
+        ("OPTIONS", "/health2", handler, "resolved"),
+        ("PATCH", "/health2", handler, "resolved"),
+        ("POST", "/health2", handler, "resolved"),
+        ("PUT", "/health2", handler, "resolved"),
+        ("PUT", "/legacy2", handler, "resolved"),
+    ]
+
+
+def test_a_poisoned_verb_is_not_fanned_out(tmp_path: Path):
+    """`method(Constants.weird) { handle { } }`: the selector's verb was written and could
+    not be read, so the route is unresolved with `method` NULL — ONE row, not seven. The
+    fan-out is for a route that read no verb at all, never for one whose verb read
+    failed; seven resolved rows there would present the poison as seven facts."""
+    facts = _handle_under(("method", [_by_source(9)]))
+    facts.append(_getter(0, _UNKNOWN_GETTERS, "getWeird", result=9))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/", _MODULE + _SUSPEND_BODY, "unresolved")]
+
+
+def test_a_catalog_without_all_methods_keeps_a_verb_less_route_null_and_resolved(
+    tmp_path: Path,
+):
+    """The precedent that must not move: the builder's `route(predicate, handler)` —
+    `verb: null` on the shipped reactive router catalog — with a media-only predicate
+    is ONE row, `method` NULL, resolved, at `/**`. That catalog declares no
+    `all_methods`, and a verb-less route there means exactly what it always has: the
+    predicate supplied no verb. `route().route(accept(JSON), h).build()`, descriptors
+    the jar's own."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _site(
+            ROUTES,
+            0,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=200,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;",
+        ),
+        _site(
+            ROUTES,
+            1,
+            _REQUEST_PREDICATES,
+            "accept",
+            result=150,
+            arguments=[CallArgument(kind="array", elements=[_enum_member("APPLICATION_JSON")])],
+            descriptor=(
+                "([Lorg/springframework/http/MediaType;)"
+                "Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+            ),
+        ),
+        _site(
+            ROUTES,
+            2,
+            _BUILDER,
+            "route",
+            receiver=200,
+            result=201,
+            invoke_kind="interface",
+            descriptor=(
+                "(Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+                "Lorg/springframework/web/reactive/function/server/HandlerFunction;)"
+                "Lorg/springframework/web/reactive/function/server/RouterFunctions$Builder;"
+            ),
+            arguments=[
+                CallArgument(kind="unresolved", source=150),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        _site(
+            ROUTES,
+            3,
+            _BUILDER,
+            "build",
+            receiver=201,
+            result=202,
+            arguments=[],
+            descriptor="()Lorg/springframework/web/reactive/function/server/RouterFunction;",
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/**", _MODULE + LIST_ORDERS, "resolved")]
+    assert [row["produces"] for row in rows] == [json.dumps([JSON])]
+
+
+def _enum_member(name: str) -> CallArgument:
+    return CallArgument(kind="enum", symbol=f"org/springframework/http/MediaType#{name}.")
+
+
+def test_all_methods_and_a_verb_less_non_terminal_are_validated(tmp_path: Path):
+    """`all_methods` is a non-empty list of upper-case tokens — a lower-case one would
+    publish a verb the framework never matches, an empty one would fan a route out to
+    nothing. And a verb rule that is NOT a terminal must still answer for its verb
+    (`verb`, null included, or `verb_arg`): only a terminal may leave it to the scope."""
+    for broken in ([], ["get"], "GET", [7]):
+        matches = copy.deepcopy(_matches())
+        matches["all_methods"] = broken
+        with pytest.raises(CatalogError, match="all_methods"):
+            _resolve(tmp_path, [], _catalog(matches))
+    matches = copy.deepcopy(_matches())
+    del matches["vocabulary"]["verbs"][0]["verb"]  # type: ignore[index]
+    with pytest.raises(CatalogError, match="neither `verb` nor `verb_arg`"):
+        _resolve(tmp_path, [], _catalog(matches))
+
+
+# --- `_Route.requirements` → the stash → `endpoint_metadata` (spec 2026-09-19 §4d, §5c) ---
+
+
+def _stash(workspace: DuckDbWorkspace) -> list[tuple]:
+    """The `route_requirements` rows the engine wrote, as `(method, path, handler, kind,
+    name, value, requirement, resolution)`, in the query's own total order."""
+    return [
+        (
+            row["method"],
+            row["path"],
+            row["handler"],
+            row["kind"],
+            row["name"],
+            row["value"],
+            row["requirement"],
+            row["resolution"],
+        )
+        for row in workspace.query("route_requirements")
+    ]
+
+
+def _metadata(workspace: DuckDbWorkspace) -> list[tuple]:
+    return [
+        (
+            row["method"],
+            row["path"],
+            row["caller"],
+            row["kind"],
+            row["name"],
+            row["value"],
+            row["requirement"],
+            row["resolution"],
+        )
+        for row in workspace.query("endpoint_metadata")
+    ]
+
+
+def test_selector_requirements_reach_the_stash_and_the_stash_reaches_endpoint_metadata(
+    tmp_path: Path,
+):
+    """The end-to-end of the stash on synthetic facts. `header("X-Api-Version", "2") {
+    get("/orders") { } }`, `param("debug") { … }`, `param("mode", "fast") { … }` and
+    `optionalParam("page") { … }` each put ONE requirement on the route beneath them,
+    and `run` writes it to `route_requirements` under the SAME `caller`, `handler`,
+    `method`, `path` and `catalog_id` the endpoint row was inserted with — post
+    `_path_of`, post fan-out. Then the requirements pass, run as the pipeline runs it
+    after the engines, joins the stash to its rows and writes `endpoint_metadata`:
+    `caller` = the handler (§4d), `required` for the three the tree refuses a request
+    without, `optional` for `optionalParam`, `value` the literal where one was given.
+    A join that missed — a `method` or `path` spelled differently in the stash than in
+    the row — would leave this table empty, which is what this test refuses."""
+    facts = _selector_tree(
+        ("header", [_literal("X-Api-Version"), _literal("2")], [("get", "/orders")]),
+        ("param", [_literal("debug")], [("get", "/dbg")]),
+        ("param2", [_literal("mode"), _literal("fast")], [("get", "/fast")]),
+        ("optionalParam", [_literal("page")], [("get", "/paged")]),
+    )
+    catalog = _shipped_ktor_catalog()
+    workspace = _resolve(tmp_path, facts, catalog)
+    stash = _stash(workspace)
+    workspace.derive("endpoint_metadata_reset")
+    record_request_requirements(workspace, [catalog])
+    metadata = _metadata(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    expected = [
+        ("GET", "/dbg", handler, "query", "debug", None, "required", "resolved"),
+        ("GET", "/fast", handler, "query", "mode", "fast", "required", "resolved"),
+        ("GET", "/orders", handler, "header", "X-Api-Version", "2", "required", "resolved"),
+        ("GET", "/paged", handler, "query", "page", None, "optional", "resolved"),
+    ]
+    assert stash == expected
+    assert metadata == expected
+
+
+def test_a_fanned_out_route_carries_its_requirements_to_every_row_and_collapsing_alternatives_intersect(
+    tmp_path: Path,
+):
+    """Two shapes of one rule, and they differ. `param("debug") { route("/h") { handle { } } }`
+    fans out through `all_methods`: ONE route seven times, and every one of the seven rows
+    carries the `debug` requirement — the stash is per (row × requirement), keyed by the
+    row's own verb. But two routes that COLLAPSE to one row — `header("A", "1") { get("/x")
+    { } }` beside `header("B", "2") { get("/x") { } }`, one address, one handler — are two
+    ALTERNATIVES for that address: a request carrying only `A=1` is served, so `B=2` is
+    not a demand the tree makes at `/x`. The kept row keeps only what every alternative
+    demands — here nothing (fix round 1, spec §4d): the stash holds no row for `/x`, and
+    the two demands are a stated miss, never a union the framework does not enforce."""
+    facts = _selector_tree(
+        ("param", [_literal("debug")], []),
+        ("header", [_literal("A"), _literal("1")], [("get", "/x")]),
+        ("header", [_literal("B"), _literal("2")], [("get", "/x")]),
+    )
+    # `route("/h") { handle { } }` inside the `param` block (`_selector_body(0)`).
+    inner = DECLARER + "orders$lambda$1$lambda$0$lambda$0(sig_i0)."
+    facts.append(_method_symbol(inner))
+    facts.append(
+        _site(
+            _selector_body(0),
+            0,
+            _ROUTING_BUILDER,
+            "route",
+            result=900,
+            descriptor=_ROUTE_DESC,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="string", value="/h"),
+                CallArgument(kind="lambda", symbol=inner, source=899, captures=0),
+            ],
+        )
+    )
+    facts.append(_handle_in(inner, 0))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    verbs = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+    assert _identities(rows) == sorted(
+        [*((verb, "/h", handler, "resolved") for verb in verbs), ("GET", "/x", handler, "resolved")]
+    )
+    assert sorted(stash, key=str) == sorted(
+        [(verb, "/h", handler, "query", "debug", None, "required", "resolved") for verb in verbs],
+        key=str,
+    )
+
+
+def test_collapsing_alternatives_keep_the_requirements_they_share(tmp_path: Path):
+    """The positive half of the intersection: three `header` blocks over one `get("/x")`,
+    every one also under `param("v", "2")` — `param("v", "2") { header("A", "1") { get } ;
+    header("A", "1") { get } ; header("C", "3") { get } }`. The three alternatives collapse
+    to one row; `v=2` is demanded by all of them and is kept, `A=1` by two of three and is
+    dropped with `C=3`. The gateway's header-versioning idiom is this shape: two
+    `route()`s on `/api/**` differing only in `header("X-Version", …)` publish `/api/**`
+    demanding neither version, not both."""
+    outer = _selector_body(0)
+    facts = _selector_tree(("param2", [_literal("v"), _literal("2")], []))
+    for index, (name, value) in enumerate((("A", "1"), ("A", "1"), ("C", "3"))):
+        body = DECLARER + f"orders$lambda$1$lambda$0$lambda${index}(sig_h{index})."
+        facts.append(_method_symbol(body))
+        facts.append(
+            _site(
+                outer,
+                index,
+                _ROUTING_BUILDER,
+                "header",
+                result=700 + index,
+                descriptor=_SELECTOR_DESCS["header"],
+                arguments=[
+                    CallArgument(kind="parameter", value=0),
+                    _literal(name),
+                    _literal(value),
+                    CallArgument(kind="lambda", symbol=body, source=600 + index, captures=0),
+                ],
+            )
+        )
+        facts.append(_verb_in(body, 0, "get", "/x"))
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [("GET", "/x", handler, "resolved")]
+    assert stash == [("GET", "/x", handler, "query", "v", "2", "required", "resolved")]
+
+
+def test_a_requirement_whose_name_is_not_a_literal_is_recorded_unresolved(tmp_path: Path):
+    """`header(name, "2") { get("/x") { } }` with `name` a variable: the requirement EXISTS
+    — the tree demands a header — and its name could not be read, so the stash row
+    carries `name` NULL and `resolution: unresolved` (§5a: "demands a header it does not
+    name" is a different statement from "demands none"). The route itself is untouched:
+    resolved, `GET /x`."""
+    facts = _selector_tree(
+        ("header", [CallArgument(kind="unresolved"), _literal("2")], [("get", "/x")]),
+    )
+    workspace = _resolve(tmp_path, facts, _shipped_ktor_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    handler = _MODULE + _SUSPEND_BODY
+    assert _identities(rows) == [("GET", "/x", handler, "resolved")]
+    assert stash == [("GET", "/x", handler, "header", None, "2", "required", "unresolved")]
+
+
+def _gateway_requirement_matches() -> dict[str, object]:
+    """The invented gateway with `header`/`query`/`cookie` as REQUIREMENT continuations —
+    pass-throughs that also state what the route demands (spec §5c)."""
+    matches = copy.deepcopy(_gateway_matches())
+    continuations: list = matches["continuations"]  # type: ignore[assignment]
+    for name, kind in (("header", "header"), ("query", "query"), ("cookie", "cookie")):
+        continuations.append(
+            {
+                "name": name,
+                "owner": "com.example.gw.BooleanSpec",
+                "pass_through": True,
+                "request_requirement": {
+                    "kind": kind,
+                    "name_arg": 0,
+                    "value_arg": 1,
+                    "requirement": "required",
+                },
+            }
+        )
+    return matches
+
+
+def test_requirement_continuations_carry_their_demand_onto_every_branch_of_the_chain(
+    tmp_path: Path,
+):
+    """`path("/a").or().path("/b").and().header("X-Api", "v2").and().query("debug").and().
+    cookie("session", ".*").uri(x)`: the three requirement pass-throughs contribute no
+    path and no verb — the chain still folds to `/a` and `/b` — and each puts its demand
+    on BOTH branches (an `and()` binds to everything to its left). `header(String,
+    String)` and `cookie(String, String)` carry the regex as their value; `query(String)`
+    — the one-argument overload of a name one continuation rule covers — has no value to
+    read and stays resolved with `value` NULL. Handler-less routes stash `handler` NULL,
+    which is the identity the gateway's rows carry."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (SPEC, "path", [CallArgument(kind="string", value="/b")]),
+        (BOOL, "and", []),
+        (BOOL, "header", [_literal("X-Api"), _literal("v2")]),
+        (BOOL, "and", []),
+        (BOOL, "query", [_literal("debug")]),
+        (BOOL, "and", []),
+        (BOOL, "cookie", [_literal("session"), _literal(".*")]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_requirement_matches()))
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/a", None, "resolved"), (None, "/b", None, "resolved")]
+    assert stash == [
+        (None, path, None, kind, name, value, "required", "resolved")
+        for path in ("/a", "/b")
+        for kind, name, value in (
+            ("cookie", "session", ".*"),
+            ("header", "X-Api", "v2"),
+            ("query", "debug", None),
+        )
+    ]
+
+
+def test_a_requirement_whose_value_is_a_predicate_is_name_only_and_an_or_onto_one_is_a_branch(
+    tmp_path: Path,
+):
+    """Two edges of the chain fold. `query("debug", p)` — the `Predicate` overload — carries a
+    second argument that is not a literal: the demand is recorded by its NAME, `value`
+    NULL, and the row is RESOLVED — "debug required, value unread", the same statement the
+    router's `queryParam(name, predicate)` makes (fix round 1). And `path("/a").or().
+    header("X")`: the alternative an `or()` opened IS the requirement pass-through, so it
+    is a branch of its own — every path, header `X` required — beside `/a`, which demands
+    nothing."""
+    chain = [
+        (SPEC, "path", [CallArgument(kind="string", value="/a")]),
+        (BOOL, "or", []),
+        (BOOL, "header", [_literal("X")]),
+        (BOOL, "and", []),
+        (BOOL, "query", [_literal("debug"), CallArgument(kind="lambda", symbol=HEALTH)]),
+        _uri(),
+    ]
+    workspace = _resolve(tmp_path, _gateway_body(chain), _catalog(_gateway_requirement_matches()))
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [(None, "/**", None, "resolved"), (None, "/a", None, "resolved")]
+    assert stash == [
+        (None, "/**", None, "header", "X", None, "required", "resolved"),
+        (None, "/**", None, "query", "debug", None, "required", "resolved"),
+        (None, "/a", None, "query", "debug", None, "required", "resolved"),
+    ]
+
+
+def _query_param(ordinal: int, *, result: int, value: CallArgument) -> CallSiteFact:
+    """`RequestPredicates.queryParam(String, String | Predicate)` — the two overloads share a
+    name and an arity and differ at position 1's type (spring-webflux 6.1.6, CP-26 row 1)."""
+    typed = "Ljava/lang/String;" if value.kind == "string" else "Ljava/util/function/Predicate;"
+    return _site(
+        ROUTES,
+        ordinal,
+        _REQUEST_PREDICATES,
+        "queryParam",
+        result=result,
+        descriptor=(
+            f"(Ljava/lang/String;{typed})"
+            "Lorg/springframework/web/reactive/function/server/RequestPredicate;"
+        ),
+        arguments=[_literal("v"), value],
+    )
+
+
+def test_query_param_predicates_fold_their_requirement_through_and_on_the_shipped_router(
+    tmp_path: Path,
+):
+    """Spec §5c on the shipped reactive router catalog. `RouterFunctions.route(GET("/orders").
+    and(queryParam("v", "2")), h)` is `GET /orders` — the `queryParam` constrains no path
+    and no verb — with ONE stashed requirement: `query v = 2, required`. The `Predicate`
+    overload, `GET("/x").and(queryParam("v", p))`, is told apart by `arg_types` and has
+    no `value_arg`: `v` required, value NULL, resolved. Both rules ride the `and`
+    composer exactly as a media predicate does."""
+    facts: list = [
+        _method_symbol(LIST_ORDERS),
+        _method_symbol(HEALTH),
+        *_java_route(0, "GET", "/orders", LIST_ORDERS)[:1],
+        _query_param(2, result=300, value=_literal("2")),
+        _site(
+            ROUTES,
+            3,
+            "org/springframework/web/reactive/function/server/RequestPredicate#",
+            "and",
+            receiver=100,
+            result=301,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=300)],
+        ),
+        _site(
+            ROUTES,
+            4,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=302,
+            arguments=[
+                CallArgument(kind="unresolved", source=301),
+                CallArgument(kind="lambda", symbol=LIST_ORDERS),
+            ],
+        ),
+        *_java_route(5, "GET", "/x", HEALTH)[:1],
+        _query_param(12, result=400, value=CallArgument(kind="lambda", symbol=HEALTH)),
+        _site(
+            ROUTES,
+            13,
+            "org/springframework/web/reactive/function/server/RequestPredicate#",
+            "and",
+            receiver=150,
+            result=401,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=400)],
+        ),
+        _site(
+            ROUTES,
+            14,
+            _ROUTER_FUNCTIONS,
+            "route",
+            result=402,
+            arguments=[
+                CallArgument(kind="unresolved", source=401),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_router_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "resolved"),
+        ("GET", "/x", _MODULE + HEALTH, "resolved"),
+    ]
+    # The stash query orders on `handler` first: `health` before `listOrders`.
+    assert stash == [
+        ("GET", "/x", _MODULE + HEALTH, "query", "v", None, "required", "resolved"),
+        ("GET", "/orders", _MODULE + LIST_ORDERS, "query", "v", "2", "required", "resolved"),
+    ]
+
+
+def test_the_servlet_twin_reads_param_as_kind_param(tmp_path: Path):
+    """CP-26 rows 2 and 2b: the servlet `RequestPredicates` has NO `queryParam` — its
+    predicate is `param(String, String)`, and `ServerRequest.param` reads the servlet
+    parameter map, query string and form body alike — so `spring-mvc-router.yml` declares
+    `param` with `kind: param`, the §5a kind for the one API that cannot tell the two
+    apart. `route(GET("/x").and(param("v", "2")), h)` on servlet owners: `GET /x`, one
+    requirement, kind `param`. A catalog copied from the reactive twin would match
+    nothing here, silently."""
+    facts: list = [
+        _method_symbol(HEALTH),
+        *_mvc_java_route(0, "GET", "/x", HEALTH)[:1],
+        _site(
+            ROUTES,
+            2,
+            _MVC_REQUEST_PREDICATES,
+            "param",
+            result=300,
+            descriptor=(
+                "(Ljava/lang/String;Ljava/lang/String;)"
+                "Lorg/springframework/web/servlet/function/RequestPredicate;"
+            ),
+            arguments=[_literal("v"), _literal("2")],
+        ),
+        _site(
+            ROUTES,
+            3,
+            "org/springframework/web/servlet/function/RequestPredicate#",
+            "and",
+            receiver=100,
+            result=301,
+            invoke_kind="interface",
+            arguments=[CallArgument(kind="unresolved", source=300)],
+        ),
+        _site(
+            ROUTES,
+            4,
+            _MVC_ROUTER_FUNCTIONS,
+            "route",
+            result=302,
+            arguments=[
+                CallArgument(kind="unresolved", source=301),
+                CallArgument(kind="lambda", symbol=HEALTH),
+            ],
+        ),
+    ]
+    workspace = _resolve(tmp_path, facts, _shipped_mvc_router_catalog())
+    rows = _rows(workspace)
+    stash = _stash(workspace)
+    workspace.close()
+
+    assert _identities(rows) == [("GET", "/x", _MODULE + HEALTH, "resolved")]
+    assert stash == [("GET", "/x", _MODULE + HEALTH, "param", "v", "2", "required", "resolved")]
+
+
+def test_requirement_words_of_the_wrong_shape_are_refused(tmp_path: Path):
+    """`request_requirement` on a continuation that is not a `pass_through` is two readings of
+    one call (it would read an argument a plain continuation treats as a handler slot); a
+    vocabulary `request_requirement` rule missing its owner, or naming a kind outside the
+    four, is a broken file; and two such rules that could both accept one call are refused
+    as two verbs would be (spec §3c)."""
+    matches = copy.deepcopy(_gateway_matches())
+    matches["continuations"].append(  # type: ignore[attr-defined]
+        {
+            "name": "header",
+            "owner": "com.example.gw.BooleanSpec",
+            "request_requirement": {"kind": "header", "name_arg": 0, "requirement": "required"},
+        }
+    )
+    with pytest.raises(CatalogError, match="request_requirement"):
+        _resolve(tmp_path, [], _catalog(matches))
+    rule = {
+        "owner": "com.example.web.Predicates",
+        "method": "queryParam",
+        "arity": 2,
+        "kind": "query",
+        "name_arg": 0,
+        "requirement": "required",
+    }
+    for broken in (
+        [{**rule, "kind": "form"}],
+        [{k: v for k, v in rule.items() if k != "owner"}],
+        [rule, {**rule, "value_arg": 1}],
+    ):
+        matches = copy.deepcopy(_matches())
+        matches["vocabulary"]["request_requirement"] = broken  # type: ignore[index]
+        with pytest.raises(CatalogError):
+            _resolve(tmp_path, [], _catalog(matches))

@@ -6,6 +6,7 @@ from sextant.domain.symbols import (
     Symbol,
     bare_descriptor,
     descriptor_parameter_types,
+    descriptor_slots,
     disambiguator_of,
     member_name,
     method_descriptor,
@@ -189,6 +190,21 @@ def test_descriptor_parameter_types_splits_a_descriptor_into_dotted_names():
     )
     assert descriptor_parameter_types("(Lkotlin/jvm/functions/Function1;)V") == (
         "kotlin.jvm.functions.Function1",
+    )
+
+
+def test_descriptor_slots_keeps_the_jvm_spelling_and_the_return():
+    """The slots as written, so a caller can join some of them back into a descriptor —
+    a compiler-emitted default-argument bridge's sibling is its own minus the receiver,
+    mask and marker slots (spec 2026-09-19 §3a)."""
+    assert descriptor_slots("()V") == ((), "V")
+    slots, returned = descriptor_slots(
+        "(Lcom/x/Api;Ljava/lang/String;[[IZILjava/lang/Object;)Ljava/lang/String;"
+    )
+    assert slots == ("Lcom/x/Api;", "Ljava/lang/String;", "[[I", "Z", "I", "Ljava/lang/Object;")
+    assert returned == "Ljava/lang/String;"
+    assert (
+        "(" + "".join(slots[1:4]) + ")" + returned == "(Ljava/lang/String;[[IZ)Ljava/lang/String;"
     )
 
 

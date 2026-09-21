@@ -114,6 +114,21 @@ matches:
                io.vertx.core.http.HttpServerRequest, io.vertx.core.http.HttpServerResponse,
                io.vertx.ext.web.RoutingContext]
     implicit_bindings: [path_variable, container]
+  # Spec 2026-09-19 §5b, mechanism 1. JAX-RS's rule is `requirement: optional` for every
+  # entry: `@QueryParam`/`@HeaderParam`/`@CookieParam` declare `value` only (CP-25 row 9)
+  # and an absent value is null — or `@DefaultValue`, a SEPARATE annotation carried on
+  # `default_annotation` as information, never a 400 (RESTEasy Reactive's extractors and
+  # `ParameterHandler.handleResult`, CP-25 row 10, THIS catalog's own implementation). The `value` alias defaults to the parameter's own name.
+  # Quarkus REST also binds its own `@RestQuery`/`@RestHeader`/`@RestCookie` beside the
+  # JAX-RS names (A9; already in `bound_by` above) — `value` only, defaulting to the
+  # parameter's name (CP-25 row 9) — through the same extractors (row 10).
+  request_params:
+    - { annotation: jakarta.ws.rs.QueryParam,  kind: query,  name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+    - { annotation: jakarta.ws.rs.HeaderParam, kind: header, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+    - { annotation: jakarta.ws.rs.CookieParam, kind: cookie, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+    - { annotation: org.jboss.resteasy.reactive.RestQuery,  kind: query,  name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+    - { annotation: org.jboss.resteasy.reactive.RestHeader, kind: header, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
+    - { annotation: org.jboss.resteasy.reactive.RestCookie, kind: cookie, name_attrs: [value], requirement: optional, default_annotation: jakarta.ws.rs.DefaultValue }
   mapping:
     prefix_annotation: jakarta.ws.rs.Path
     prefix_from: [value]

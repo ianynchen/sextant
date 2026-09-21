@@ -70,6 +70,25 @@ matches:
   # The one word this style's `members` vocabulary carries (2O design §3b).
   members: overridden_dispatch_methods
 
+  # HANDLER-BODY READS (spec 2026-09-19 §5d, mechanism 3; CP-25 row 16). What a `doXxx`
+  # reads off its request is one `endpoint_metadata` row per read: `getParameter(String)`
+  # → `param` — the API reads the query string and a form body through one method and
+  # cannot tell them apart (§5a) — and `getHeader(String)` → `header`. Both are `public
+  # abstract` on the API (`getParameter` on `ServletRequest`, `getHeader` on
+  # `HttpServletRequest`), so the API states nothing about an absent name, and the
+  # container that implements them returns null — Tomcat's `Parameters.getParameter` and
+  # `MimeHeaders.getHeader` both end `ifnull … aconst_null ; areturn` (row 16) — so
+  # `requirement` is NULL on both (A3): the handler reads, nothing refuses. The owner is
+  # `HttpServletRequest`, the declared type of every `doXxx`'s first parameter, which is
+  # what a call site NAMES even for the `ServletRequest`-declared `getParameter` (measured
+  # on `fixtures/orders-servlet`'s `OrderServlet.doGet`, `javap -c -p`, 2026-09-20:
+  # `invokeinterface HttpServletRequest.getParameter`). `resp.setHeader(...)` is a call on
+  # the RESPONSE type — a different owner, no entry, no row. The handler body only: a
+  # request handed to a helper or a `service()` override that delegates is not followed.
+  request_reads:
+    - { owner: jakarta.servlet.http.HttpServletRequest, method: getParameter, arity: 1, name_arg: 0, kind: param }
+    - { owner: jakarta.servlet.http.HttpServletRequest, method: getHeader,    arity: 1, name_arg: 0, kind: header }
+
   # THE VERB IS THE OVERRIDDEN METHOD, one each, and the framework serves no
   # verb it was given no override for (CP-9 rows 4-6: `PUT /verbs` is a 405
   # where the class declares `doGet` and `doPost`).

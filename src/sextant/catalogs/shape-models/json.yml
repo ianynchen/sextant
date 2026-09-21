@@ -72,9 +72,33 @@ serialization:
 # null applies to a package or class, so a field with no annotation inside one
 # is `not_null`, and only a declared scope rule recovers that absence.
 nullability:
+  # Also the list the inbound binder rule reads (spec 2026-09-19 §5b, `requirement:
+  # binder` in `request_params`): Spring's `MethodParameter.hasNullableAnnotation()`
+  # accepts ANY declaration annotation whose simple name is `Nullable` (CP-25 row 3),
+  # and Micronaut's processor maps its own and ten other spellings onto the
+  # `jakarta.annotation.Nullable` stereotype `Argument.isNullable()` asks for (CP-25
+  # rows 7–8). So the list carries every one of Micronaut's ten mapped spellings plus the
+  # stereotype itself (row 8, verbatim), and the two further spellings the simple-name
+  # rule accepts that appear in real code (Spring's own, the Checker Framework's) — a
+  # spelling MISSING from this list reads as `required` on a parameter the framework
+  # would in fact serve without, which is the false claim the rule exists to avoid.
+  # `io.micronaut.core.annotation.Nullable` is Micronaut's own idiomatic spelling and
+  # its binder honours it (rows 7–8). Two are TYPE_USE-declared — the Checker
+  # Framework's, and Eclipse JDT's in its 2.x line — so javac files them under a
+  # parameter's `type_annotations` where the 6.1.6 binder never looks (CP-25's stated
+  # boundary); listed because the simple-name rule accepts them wherever a compiler
+  # places them as declaration annotations, and because a field carrying one IS nullable.
   nullable: [org.jspecify.annotations.Nullable, org.springframework.lang.Nullable,
              javax.annotation.Nullable, jakarta.annotation.Nullable,
-             org.jetbrains.annotations.Nullable]
+             org.jetbrains.annotations.Nullable,
+             edu.umd.cs.findbugs.annotations.Nullable,
+             androidx.annotation.Nullable,
+             org.checkerframework.checker.nullness.qual.Nullable,
+             org.eclipse.jdt.annotation.Nullable,
+             reactor.util.annotation.Nullable,
+             io.reactivex.annotations.Nullable,
+             io.reactivex.rxjava3.annotations.Nullable,
+             io.micronaut.core.annotation.Nullable]
   not_null: [org.jspecify.annotations.NonNull, org.springframework.lang.NonNull,
              org.jetbrains.annotations.NotNull]
   scope:

@@ -21,6 +21,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
@@ -959,7 +960,7 @@ def call_site_index(workspace: Workspace) -> CallSiteIndex:
     by_caller: dict[str, list[dict[str, Any]]] = {}
     bare_callers: dict[str, set[str]] = {}
     positions_by_owner: dict[str, list[int]] = {}
-    for position, site in enumerate(workspace.query("call_sites")):
+    for position, site in enumerate(effective_call_sites(workspace)):
         caller = str(site["caller"])
         by_caller.setdefault(caller, []).append(site)
         bare_callers.setdefault(bare_descriptor(caller), set()).add(caller)

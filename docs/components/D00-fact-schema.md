@@ -433,6 +433,32 @@ the declared value parameters laid from the slot after it; absent means false, a
 `bridge_of` is absent rather than null, and the receiver slot's own type keeps Java's rule
 (`kotlin-extension-functions`).
 
+**A Kotlin lambda class carries `lambda_body: "<body method's bare symbol>"` on its type
+fact** (spec 2026-09-19 §3b): a class whose superclass is `kotlin/jvm/internal/Lambda`,
+`kotlin/coroutines/jvm/internal/SuspendLambda`, `kotlin/jvm/internal/FunctionReferenceImpl` or
+`kotlin/jvm/internal/AdaptedFunctionReference` names the method the author's statements
+compiled into — `invokeSuspend(Object)` for a suspend lambda (its `invoke` only builds the
+continuation), else the one non-synthetic `invoke` (the erased `invoke(Object)` is the
+compiler's bridge). A function reference (`GET("/orders", ::listOrders)`) compiles to a
+`FunctionReferenceImpl` subclass in both lambda modes, with no `invokeSuspend` even when the
+referenced function suspends: its typed `invoke` is the body, and that body's own call to the
+referenced function is the trace layer's to follow — the fact states the object the framework
+invokes, never the method it delegates to. The value is spelled as a `lambda` argument's `symbol` is (§5a's bare
+descriptor path, `owner#name(sig_…).`, no module coordinates), so it joins to
+`call_sites.arguments[].symbol` and to the body's own symbol fact by descriptor suffix.
+Measured on kotlinc 2.2.0 (`scripts/probes/cp23_kotlin_call_shapes.md`): plain lambdas
+compile to `invokedynamic` by default and to classes under `-Xlambdas=class`; **suspend
+lambdas compile to classes in both modes**. Absent on every other type. Like `bridge_of`, it
+is the extractor stating its own compiler's mechanism on the declaration it scans; the
+resolve layer joins on the key and names no language. **The type-fact KEY `lambda_body` and
+the scanner CAPABILITY named `lambda_body` (9.17, `Capabilities.java`) are two things that
+share a spelling:** the capability is the `implementation` a `dynamic` call site carries — an
+`invokedynamic` lambda's body — while this key sits on a CLASS the compiler emitted in place
+of an `invokedynamic`; a module scanned with the capability and no such classes has the
+string in its manifest and the key on no fact. A non-capturing class-compiled lambda is a
+singleton the call site reads as `GETSTATIC …$1.INSTANCE`, an `enum`-kind argument (§5)
+naming the same class, and `resolve/effective_calls.py` projects that form the same way.
+
 **A type-use annotation attaches to the type reference it annotates, not to a flat fact.**
 A method has more than one type reference — the return type, and each parameter — so the
 annotation alone does not say which one it belongs to the way a field's single reference
@@ -634,6 +660,14 @@ type reference, so `List<String?>` and `List<String>?` carry different `nullable
 different levels where the descriptor and the `Signature` attribute spell them the same.
 Where the declared type and the signature disagree on shape, the reference keeps Java's rule
 at that level and below: less specific, never wrong.
+
+**A parameter that declares a default value carries `declares_default: true`** (absent means
+false, as `receiver` is), read off `@kotlin.Metadata`'s `declaresDefaultValue` flag and aligned
+exactly as the nullability projection is — never on a partial alignment. It is a shared field,
+not `ext.kotlin`, because a binding rule compares it across languages: Spring's binder treats a
+defaulted Kotlin parameter as optional (`MethodParameter.isOptional` → `KotlinDelegate.isOptional`,
+spring-core 6.1.6), and a .NET extractor sets the same key from a parameter's `HasDefault` (R1,
+2026-09-19).
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
@@ -979,7 +1013,7 @@ recovered later. Kinds:
 | `enum` | GETSTATIC of a **named constant of its own type** | symbol reference — `HttpMethod.POST`. Structural, not `ACC_ENUM`: an enum-like — a closed set of static final constants typed as their own owner — reads as `enum` here too, deliberately, because libraries move between the two spellings without changing what a constant means. A Kotlin `object`'s `INSTANCE` and constants such as `BigDecimal.ZERO` match the same shape; the referenced type's own `construct_kind` settles true enum-ness (§5b), so the distinction is a join away rather than a guess made where the answer is not available |
 | `class` | LDC of a class constant | symbol reference — the shape root |
 | `lambda` | invokedynamic via `LambdaMetafactory` | symbol reference to the lambda's synthetic body method — method references resolve the same way. Also carries `captures`, the number of captured values that lead the body's parameters (below) |
-| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor |
+| `instance` | NEW/constructor result | the concrete type's symbol — feeds PTR (§5a) and the one-hop body follow ([D02](D02-catalog-schema.md) §2h). Always carries `source`: the constructed value's id, which is also the `receiver` of that object's own `<init>` call site, so the follow is a join on one number rather than a search for a nearby constructor. A Kotlin lambda compiled as a class arrives this way; its class's type fact carries **`lambda_body`** (above, beside `bridge_of`), and `resolve/effective_calls.py` reads the pair as a `lambda` argument (R2, 2026-09-19); its non-capturing twin arrives as `enum` (`GETSTATIC …$1.INSTANCE`) and is read the same way |
 | `field` | GETFIELD/GETSTATIC that is not the enum-constant shape | symbol reference — the field's own bare descriptor |
 | `parameter` | a load of the caller's own parameter | `value` is the parameter's **index**, never the local slot holding it |
 | `array` | an array construction reaching the slot (JVM: `ANEWARRAY`/`NEWARRAY` plus its `xASTORE`s) | `elements` carries one entry per element, each an argument of this same grammar. **One slot, not N** — a varargs call passes one array |

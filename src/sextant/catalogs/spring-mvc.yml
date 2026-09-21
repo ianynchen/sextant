@@ -42,6 +42,54 @@ requires: [annotation_args, type_annotations]
 matches:
   type_annotation: org.springframework.stereotype.Controller
   request_body: { annotation: org.springframework.web.bind.annotation.RequestBody, fallback: none }
+  # Spec 2026-09-19 §5b, mechanism 1: what the BINDER enforces on each annotated
+  # parameter, one `endpoint_metadata` row per parameter with `requirement` set.
+  # `requirement: binder` is `AbstractNamedValueMethodArgumentResolver.resolveArgument`
+  # read off spring-web 6.1.6 (CP-25 row 2): a missing value takes `defaultValue` when
+  # one is WRITTEN — an unwritten one never reaches the class file, CP-25 row 5 — else
+  # the request is rejected when `required` (default true) and not
+  # `MethodParameter.isOptional()`: `java.util.Optional`, a declaration annotation whose
+  # simple name is `Nullable` (read here as the shape model's `nullability.nullable`
+  # spellings — NOT the type reference's own `nullable`, which every Java reference
+  # type carries by language rule), or a Kotlin nullable/defaulted parameter, which
+  # arrives as kotlinc's `@Nullable` and the extractor's `declares_default` (CP-25 row
+  # 3) — the Kotlin branch of `isOptional()` runs only behind
+  # `KotlinDetector.isKotlinReflectPresent()` (row 3), so `optional` for a Kotlin
+  # DEFAULT assumes `kotlin-reflect` on the runtime classpath; without it
+  # `@RequestParam page: Int = 0` is `required` (a `String?` stays `optional` through
+  # kotlinc's `@Nullable` annotation, read without reflection). Nearly always present
+  # (Initializr, `jackson-module-kotlin`), not checked here: `docs/open-issues.md` OI-105.
+  # `kind: param` on `@RequestParam` because Spring reads query string and form
+  # body through one API and the annotation cannot tell them apart (§5a). The type
+  # names live HERE because the pass names no language's types: `optional_types` is
+  # `isOptional()`'s first disjunct; `skip_types` are the whole-map bindings — a
+  # `Map`/`MultiValueMap` under `@RequestParam` or `@RequestHeader`, `HttpHeaders` under
+  # `@RequestHeader` — which bind everything and name nothing, so there is no row to
+  # write for them (`@CookieValue` has no map form).
+  request_params:
+    - annotation: org.springframework.web.bind.annotation.RequestParam
+      kind: param
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
+      skip_types: [java.util.Map, org.springframework.util.MultiValueMap]
+    - annotation: org.springframework.web.bind.annotation.RequestHeader
+      kind: header
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
+      skip_types: [java.util.Map, org.springframework.util.MultiValueMap, org.springframework.http.HttpHeaders]
+    - annotation: org.springframework.web.bind.annotation.CookieValue
+      kind: cookie
+      name_attrs: [name, value]
+      requirement: binder
+      required_attr: required
+      default_attr: defaultValue
+      optional_types: [java.util.Optional]
   mapping:
     # `value` and `path` are @AliasFor each other, so only the one the author
     # typed reaches the bytecode. First present wins, in this order.
@@ -74,6 +122,22 @@ matches:
     # methods inside one `@RequestMapping(params = "v=1")` class still conflict with each
     # other and not with a method outside it.
     discriminators: [params, headers]
+    # Spec 2026-09-19 §5c, mechanism 2: the SAME two attributes read as REQUIREMENTS —
+    # one `endpoint_metadata` row per expression, attribute → `kind` (`params` → `param`,
+    # because the parameter condition reads the query string and a form body through one
+    # API; `headers` → `header`). Parsed as `AbstractNameValueExpression(String)` parses
+    # them (CP-25 row 13): `name` → `required`; `name=v` → `required`, value `v`; `!name` →
+    # `absent` — the request must NOT carry it; `name!=v` → `optional` — served whenever the
+    # value is not `v`, an absent name included, and the EXCLUDED VALUE IS LOST (no column
+    # says "not v"; stated here and in COVERAGE). Class-level and method-level expressions
+    # UNION (`ParamsRequestCondition.combine`), read off the effective annotation set
+    # exactly as `discriminators` above is. A `headers` expression naming `Accept` or
+    # `Content-Type` (case-insensitive) writes NO row: `HeadersRequestCondition.
+    # parseExpressions` drops both and Spring reads them as produces/consumes instead (A4,
+    # CP-25 row 4) — and this catalog's `consumes_from`/`produces_from` read the
+    # attributes of that name only, so a media type spelled through `headers=` reaches
+    # neither column (a stated boundary, rare in real code).
+    request_requirement_attrs: { params: param, headers: header }
     # The seventh condition, and the one no class file states: a custom `RequestCondition`
     # arrives through a subclass of this type overriding `getCustomMethodCondition`. A
     # module declaring one is left alone entirely rather than told about a conflict it

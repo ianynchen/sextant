@@ -1519,6 +1519,236 @@ version bound (`jakarta.ws.rs:jakarta.ws.rs-api:>=3.0` on the `jakarta` file, `<
 `javax` one) and the EE 8 artifact's packaging is measured on the artifact itself, or when
 the activation gate is designed to fall back to the annotation fqn for this family.
 
+### OI-96 — `apply_protocol_hints` can reclassify an OUTBOUND row after `fluent` wrote its metadata
+**Minor · logged 2026-09-20, found at the Kotlin/Ktor spec's Task 7 review (W29 order, unchanged
+there) · `src/sextant/application/resolve/pipeline.py`, `engines/fluent.py`**
+
+The fluent engine writes an outbound row's `endpoint_metadata` entries (W29) inside
+`derive_endpoints`, keyed by the row's identity columns, `protocol` among them.
+`apply_protocol_hints` runs BELOW `derive_endpoints` and reclassifies `protocol` on rows the
+engines minted. A `fluent` row a hint reclassified would leave its metadata entries naming a
+`protocol` the row no longer carries — entries nobody can join back. The inbound writer
+(`record_request_requirements`, spec 2026-09-19 §5a) was placed below the hint pass for exactly
+this reason; the outbound writer was not moved because W29's order is pinned and no shipped
+hint reaches a `fluent` row.
+
+**What happens today:** nothing wrong. `protocol_hint` catalogs (`hint_when`,
+`hint_annotations`) target annotation-derived rows — `@JMSListener`/`@JMSProducer` over SQS,
+the SSE markers; no `fluent` catalog's rows are reclassified by any shipped hint.
+
+**Real triggering input:** none today; a future hint over a `fluent` client (a WebClient call
+reclassified as SSE by its `Accept: text/event-stream` header, say) would produce orphaned
+metadata rows.
+
+**Verify:** `grep -n "endpoint_metadata_insert" src/sextant/application/resolve/engines/fluent.py
+src/sextant/application/resolve/request_requirements.py` — the outbound insert inside the
+engine (`fluent.py:~305`, called from `derive_endpoints`), the inbound one in
+`request_requirements.py:~55`, whose caller `pipeline.py` places below `apply_protocol_hints`. **Closes** when the outbound entries are written through the
+same post-hint writer, or when a hint pass rewrites the side table's `protocol` with the row's.
+
+### OI-97 — two `combinator` catalogs exhausting the helper depth in one resolve file two `routing_depth` rows under one identity
+**Minor · logged 2026-09-20, found at the Kotlin/Ktor spec's Task 8 review ·
+`src/sextant/application/resolve/engines/combinator.py::_routing_depth_rows`,
+`storage/duckdb/insert_open_questions.sql`**
+
+A `routing_depth` question's identity is `(protocol, NULL, NULL, routing_depth)` on purpose
+— every deep chain of a run is one candidate of ONE row (spec 2026-09-19 §4a, M3). But the row
+is built per catalog: two `http` combinator catalogs (`ktor-routing.yml` and
+`spring-webflux-router.yml`, say) each exhausting the bound in one module would each file a
+row, and `insert_open_questions.sql` appends, so the ledger would hold two rows with one
+identity. The rendered document would then show two `routing_depth` lines for one module
+with nothing to say which catalog each came from — the same problem `service_identity._merged`
+solved by merging one kind's rows into one, only here across two catalogs.
+
+**What happens today:** nothing wrong. No fixture and no real module analysed so far nests
+routing helpers sixteen deep in any catalog, let alone two.
+
+**Real triggering input:** a module using two combinator-style routers of one protocol, each
+with a helper chain deeper than sixteen calls.
+
+**Verify:** `grep -n "_routing_depth_rows\|record_open_questions" src/sextant/application/resolve/engines/combinator.py`
+— one call per `run`, i.e. per catalog. **Closes** by merging the question across catalogs
+before the insert (a per-resolve accumulator, as the stash is), or by putting the catalog id
+into the identity.
+
+### OI-98 — the whole-map skip in `request_params` is by EXACT erased type, where Spring's is `isAssignableFrom`
+**Minor · logged 2026-09-20, found at the Kotlin/Ktor spec's Task 12 review ·
+`src/sextant/application/resolve/request_requirements.py::_from_parameters`,
+`src/sextant/catalogs/spring-mvc.yml`, `spring-web.yml`**
+
+`skip_types: [java.util.Map, org.springframework.util.MultiValueMap]` on `@RequestParam`
+skips a parameter whose erased type IS one of those names. Spring's
+`RequestParamMapMethodArgumentResolver.supportsParameter` uses
+`Map.class.isAssignableFrom(parameter.getParameterType())` (spring-web 6.1.6 source, read; not a
+CP-25 row — one would settle it), so a `@RequestParam HashMap<…>`
+or `LinkedMultiValueMap` is a whole-map binding to Spring and not to this pass, which would
+write one `param` row named after the parameter — a requirement Spring never enforces.
+
+**What happens today:** the fixtures spell `Map`/`MultiValueMap`/`HttpHeaders`, the idiomatic
+declared types; nothing wrong on them.
+
+**Real triggering input:** `@RequestParam HashMap<String, String> all` — legal, unidiomatic.
+
+**Verify:** `grep -n "skip_types" src/sextant/application/resolve/request_requirements.py` — a
+set membership on the erased symbol. **Closes** when the skip walks the parameter type's
+supertype chain (the facts carry `superclass`/`interfaces` for module types; a JDK type's
+hierarchy would need the extractor's knowledge of the platform) or the catalog lists the
+concrete spellings a codebase uses.
+
+### OI-99 — a helper reached as a member call ON the routing origin is not followed
+**Minor · logged 2026-09-20, a stated boundary of spec 2026-09-19 §4a (M3) ·
+`src/sextant/application/resolve/engines/combinator.py::_helper_routes`**
+
+Helper following requires the origin to flow into the callee as an ARGUMENT
+(`{kind: parameter, value: origin}`), which is what a Kotlin extension function and a static
+helper compile to. A helper written as a MEMBER of the routing type — `class MyRoutes :
+Route { fun api() { get("/x") { } } }` called as `this.api()` inside a block — puts the origin
+in the callee's `this`, which no parameter index names; the walk does not guess a
+receiver-to-`this` mapping and the helper's routes are silence, as every helper's were before.
+
+**Real triggering input:** a module subclassing the framework's route type and declaring
+routing methods on it. Ktor's `Route` is an interface with a private implementation, so this
+is rare there; a Javalin or Spring DSL module could write it.
+
+**Verify:** `grep -n "member call ON the origin" src/sextant/application/resolve/engines/combinator.py`.
+**Closes** with a `this`-origin rule: a member call whose receiver is the origin makes the
+callee's `this` the origin, at the cost of a second origin form every head check must know.
+
+### OI-100 — the Spring router's `Supplier<RouterFunction>` bodies do not follow helpers
+**Minor · logged 2026-09-20, a stated boundary of spec 2026-09-19 §4a (A1) ·
+`src/sextant/catalogs/spring-webflux-router.yml`, `spring-mvc-router.yml`**
+
+A `Supplier` body is origin-less — it returns a router rather than mutating one — and
+follows module-local calls only where its rule declares `follow_calls: all`, which the
+Spring router catalogs do not: a callee there may build routers that are never returned, and
+following it would attach routes the framework never registered. So `route().nest(path("/api"),
+() -> helper())` with `static RouterFunction helper() { return route(GET("/x"), h); }` derives
+the nest and not `/api/x`.
+
+**Real triggering input:** a Java functional-routing module factoring its routers into static
+helpers called from `Supplier` bodies — a common Java style.
+
+**Verify:** `grep -n "follow_calls" src/sextant/catalogs/spring-*router.yml` — none.
+**Closes** by following a `Supplier` callee whose RETURN VALUE reaches the body's own return
+(the return-flow facts exist), which is the honest version of "the router it builds is the one
+the supplier hands back".
+
+### OI-101 — Ktor 2.x handler bodies name the interface receivers, which are not `via` owners
+**Minor · logged 2026-09-20, found at Task 14 when the `via` owners were measured ·
+`src/sextant/catalogs/ktor-routing.yml` (`request_reads`)**
+
+The `via` owners are the 3.0.3 CLASS overrides a handler body's bytecode names:
+`RoutingContext.getCall()` is a `RoutingCall`, so `call.parameters` is `invokevirtual
+RoutingCall.getParameters` and `call.request.headers` reaches `RoutingRequest.getHeaders`. In
+Ktor 2.x a handler is `PipelineContext<Unit, ApplicationCall>.() -> Unit`, `call` is typed
+`ApplicationCall`, and the same source compiles to `invokeinterface
+ApplicationCall.getParameters`/`ApplicationRequest.getHeaders` — owners no entry names, so a 2.x
+handler's reads write nothing. The catalog's `measured:` block is 3.0.3 alone (§5.4).
+
+**Real triggering input:** any Ktor 2.x module, a large share of Ktor estates.
+
+**Verify:** `grep -n "via:" src/sextant/catalogs/ktor-routing.yml` — `RoutingCall`,
+`RoutingRequest` only. **Closes** when a 2.x jar is measured (the w19-style probe over
+`ktor-server-core-jvm:2.3.x`) and the interface owners are added as further `via` entries —
+each one measured, never mirrored from 3.0.3.
+
+### OI-102 — a Javalin FLAT row's `Handler` lambda reads are invisible
+**Minor · logged 2026-09-20, a stated boundary of spec 2026-09-19 §5d (M9) ·
+`src/sextant/catalogs/javalin.yml`**
+
+`request_reads` scans the HANDLER BODY of every inbound row. A `single_call` row's `handler`
+is the registering method — `app.get("/x", ctx -> ctx.queryParam("q"))` derives with
+`handler = OrderApp#flat`, not the lambda — so the lambda's `queryParam`/`header`/`cookie`
+calls are in a body this pass never opens, and the flat forms write no requirement rows. The
+`ApiBuilder` rows (`javalin-apibuilder.yml`, a `combinator` catalog) carry the lambda body as
+`handler` and read fully.
+
+**Real triggering input:** every Javalin module written in the flat style, which is the
+framework's own first example.
+
+**Verify:** `tests/e2e/test_rest_inbound_delivered.py::test_javalin_handler_reads_reach_endpoint_metadata`
+asserts reads on `/jv/nested/reads` (`ApiBuilder`) and none on the flat rows. **Closes** when
+`single_call` rows carry the handler lambda in a column of their own (the `handler_arg` word
+the combinator has), or when the reads pass follows a row's `handler_arg`-shaped argument.
+
+### OI-103 — `AdaptedFunctionReference` is recognised by name and unmeasured
+**Minor · logged 2026-09-20, found at CP-23 Q9 (`e6497f0`) ·
+`extractor-jvm/…/ClassScanner.java` (the `lambda_body` superclass set), `scripts/probes/cp23_kotlin_call_shapes.md`**
+
+The extractor marks a class with `lambda_body` when its superclass is `Lambda`,
+`SuspendLambda`, `FunctionReferenceImpl` or `AdaptedFunctionReference`. The first three are
+measured on kotlinc 2.2.0 output in CP-23; the fourth — the class kotlinc emits for an ADAPTED
+function reference (a reference whose signature needs coercion: a defaulted parameter left
+out, a vararg spread, a `Unit` return adapted) — is present in kotlin-stdlib 2.2.0 by `javap`
+(CP-23 Q9) and no fixture produces a subclass of it: its emission is unobserved, and its
+body-method rule (the one non-synthetic `invoke`) is assumed, not read off a class file (§5.4).
+
+**Real triggering input:** `GET("/x", ::handlerWithDefaults)` where the referenced function
+declares a default the reference omits, under `-Xlambdas=class` or as a suspend reference.
+
+**Verify:** `grep -n "AdaptedFunctionReference" extractor-jvm/src/main/java -r`;
+`grep -n AdaptedFunctionReference scripts/probes/cp23_kotlin_call_shapes.md` — named as "not exercised by this source", no measured row.
+**Closes** when CP-23 gains a Q compiling an adapted reference and the marked body is asserted
+in `KotlinLambdaBodyTest`.
+
+### OI-104 — a WRITTEN Micronaut name also accepts the parameter's hyphenated name, and the row states the written one alone
+**Minor · logged 2026-09-20, found at the whole-branch review (item 1, CP-25 row 18) ·
+`src/sextant/catalogs/micronaut-http.yml` (`request_params`),
+`src/sextant/application/resolve/request_requirements.py::_name`**
+
+`AbstractArgumentBinder.doResolve` (micronaut-core 4.7.6) reads the name the binder resolved
+— the written `value`/`name`, else the parameter's own — and, finding nothing, retries with
+`getFallbackFormat(argument)`, which is ALWAYS the hyphenated form of the PARAMETER'S name
+(`NameUtils.hyphenate`; the header binder capitalizes first), whether or not a name was
+written. So `@Header("X-Tenant") String tenantHeader` is served by `X-Tenant` OR
+`Tenant-Header`, and `@QueryValue("q") String query` by `?q=` or `?query=`. The row states the
+written name alone. Where NO name is written the branch already refuses the parameter's own
+name when the fallback respells it (`fallback_spelling`); the written case was ruled stated,
+not built: the written name is the one every client of the API is told to send, and a second
+accepted spelling is a leniency, not a requirement on it.
+
+**What happens today:** `header X-Tenant required` on the fixture's `search` — true of a
+client that sends `X-Tenant`; a client sending `Tenant-Header` is also served and the row
+does not say so.
+
+**Real triggering input:** any annotated Micronaut parameter with a written name whose
+declared name hyphenates to something a client actually sends — rare by construction, since
+the written name is the documented one.
+
+**Verify:** `grep -n "fallback_spelling" src/sextant/application/resolve/request_requirements.py`
+— read only where no name attribute was written. **Closes** when the writer records the
+fallback as a second accepted spelling (a second row, or a column for it) — a schema question,
+D01 §3.
+
+### OI-105 — `optional` for a Kotlin default or nullable parameter assumes `kotlin-reflect` at runtime
+**Minor · logged 2026-09-20, found at the whole-branch review (item 2, CP-25 row 3) ·
+`src/sextant/catalogs/spring-mvc.yml`, `spring-web.yml` (`request_params`),
+`src/sextant/application/resolve/request_requirements.py::_requirement`**
+
+`MethodParameter.isOptional()` (spring-core 6.1.6) reaches its Kotlin branch —
+`KotlinDelegate.isOptional`, which reads `KType.isMarkedNullable()` and
+`KParameter.isOptional()` — only behind `KotlinDetector.isKotlinReflectPresent()`, and
+`resolveArgument`'s default-value read is gated the same way. Without `kotlin-reflect` on the
+RUNTIME classpath, `@RequestParam page: Int = 0` is `required` to Spring (a `@RequestParam
+tag: String?` stays `optional`: kotlinc's `@Nullable` declaration annotation is read by
+`hasNullableAnnotation()` without reflection; the declared default has no such second path).
+The binder rule writes `optional` for `declares_default: true` unconditionally.
+
+**What happens today:** every Kotlin Spring module this repository has seen carries
+`kotlin-reflect` — Initializr adds it, `jackson-module-kotlin` depends on it — so the row is
+right on all of them; nothing checks.
+
+**Real triggering input:** a Kotlin Spring module that excludes `kotlin-reflect` (a
+size-trimmed image) and declares a defaulted `@RequestParam`.
+
+**Verify:** `grep -n "declares_default" src/sextant/application/resolve/request_requirements.py`
+— no dependency gate around it. **Closes** when the pass can gate the `declares_default`
+disjunct on `org.jetbrains.kotlin:kotlin-reflect` being on the module's RESOLVED runtime
+classpath — which needs transitive dependency resolution: the Gradle detector reports the
+resolved compile classpath, the Maven one declared-plus-inherited coordinates and no
+transitives (`resolve/dependencies.py`, F1), and `kotlin-reflect` most often arrives
+transitively through `jackson-module-kotlin`, exactly where a Maven-side gate would be blind.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

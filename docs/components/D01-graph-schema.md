@@ -208,7 +208,7 @@ needs it.
 | `endpoints` | Direction, protocol, wire identity, handler and/or caller, peer, request and response payload descriptors, declared media types, **wire format and its resolution**, trust fields |
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
-| `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence |
+| `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
 
 **`both` is reserved for the linking tier, and no pass here produces it** (F5 §6.1, W27).
 A wire identity a module both exposes and calls stays TWO rows; the shape of a `both` row is
@@ -256,6 +256,28 @@ table over. It is a side table rather than columns because the count is unbounde
 entry needs its own trust pair: a header whose value could not be read is visibly
 unresolved, and *sends a header we could not read* is a different claim from *sends no
 header*.
+
+**The same table holds what an inbound endpoint's framework DEMANDS of a request** (spec
+2026-09-19 §5a). An inbound row's entries are the headers, query parameters and cookies the
+framework's binder or routing tree enforces — `direction = inbound`, `caller` the handler
+symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs that cannot
+tell query from form) — and **`requirement`** states what is enforced: `required` (the
+framework rejects a request without it), `optional` (it serves one without it), `absent`
+(it requires it to be missing). The column states what the FRAMEWORK enforces, never what
+the handler body does with the value. An inbound row's `value` is the framework's OWN
+spelling of the demanded value, or NULL: a literal for Ktor's `header(name, value)` and
+Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's
+`header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex
+(`Pattern.asMatchPredicate` for `header`, `String.matches` for `query`/`cookie`,
+spring-cloud-gateway-server-webflux 5.0.0) — so a
+consumer compares two values for equality only where the spelling is a literal
+([M06](M06-stitcher.md)). NULL on an inbound row means the code states nothing
+— a bare read in a handler body says only that the handler reads the value — and NULL on
+every outbound row is the existing meaning: an entry sent has no requirement. The insert is
+insert-if-absent on the full row, because two catalogs can describe one handler and their
+identical entries are one entry. Written after `apply_protocol_hints`, for the reason every
+pass below that line gives: an entry names its row by the row's identity columns, and
+`protocol` is final only there.
 
 **Its `value` is redacted at the ORIGIN, alone among value columns.** Every other one is
 masked at export, because analysis reads it — substituting `REDACTED` into an address would
@@ -702,9 +724,10 @@ programmatic pass could not answer and refused to guess at. Columns: `protocol`,
 and the enrichment tier read, and a foreign key into a table rebuilt every resolve would
 name nothing outside this run); `question`; `candidates`, a JSON array; and `evidence`.
 
-`question` is a **closed NINE-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed TWELVE-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
-`unselected_binding`, `handler_protocol` and `registration_activation`** — checked by the single owning module before any row is inserted,
+`unselected_binding`, `handler_protocol`, `registration_activation`, `self_exchange`,
+`routing_conflict` and `routing_depth`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -715,7 +738,10 @@ added `handler_protocol` without touching this file — the third time this coun
 which is why §3.6's review made the drift itself the finding rather than the number.*
 *`registration_activation` (`OI-64`) is the ninth, and it was added to this sentence in the
 same change that added it to the module — the drift above is why that is now the habit
-rather than an afterthought.* *This paragraph said "two-value set" and named the first two
+rather than an afterthought.* *And then it said NINE while the module enforced twelve:
+`self_exchange` (F5 §6.1, W27) and `routing_conflict` (W28) were added to the module without
+this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
+in the change that closed that spec's register items, the fourth drift of this one count.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -729,7 +755,11 @@ and `values`; a `registration_activation` candidate holds `registration`, `enclo
 — the construction call, the method that returns it without starting it, and the chain
 the framework requires before anything is delivered; a `handler_protocol` candidate holds `class`, `annotation` and `protocol` —
 the wire ONE framework would publish that class on, one candidate per framework in play,
-because the question is which of them serves it. Each array is sorted by the pass that writes it, so two runs produce the
+because the question is which of them serves it; a `routing_depth` candidate holds `callee`,
+`caller` and `depth` — the first helper the combinator's walk did not follow, the routing
+entry's own caller (where a reader opens the file) and the bound that stopped it — and ONE
+row per run carries every such chain, its `method` and `path` NULL because both genuinely are
+unread (spec 2026-09-19 §4a). Each array is sorted by the pass that writes it, so two runs produce the
 same bytes.
 
 `evidence` here is **deliberately not one of [D00](D00-fact-schema.md) §4's evidence

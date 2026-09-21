@@ -29,6 +29,7 @@ that merely names it.
 from typing import Any
 
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.domain.symbols import bare_descriptor, outer_type_of, owner_of
 
@@ -109,7 +110,7 @@ def parsed_call_sites(workspace: Workspace) -> list[dict[str, Any]]:
     """`call_sites`, with `arguments` decoded — which the workspace now does once
     per load (`_DECODED_COLUMNS`); this used to decode it here for the two styles
     that read a marker call, and keeps its name so both still read one list."""
-    return workspace.query("call_sites")
+    return effective_call_sites(workspace)
 
 
 def calling_classes(call_sites: list[dict[str, Any]], owner: str, name: str) -> set[str]:

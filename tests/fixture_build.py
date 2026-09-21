@@ -62,7 +62,9 @@ PRIMED_FIXTURES = (
     "orders-javalin",
     "orders-pekko",
     "orders-ktor",
+    "orders-ktor-classlambdas",
     "orders-gateway",
+    "orders-servlet",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

@@ -65,6 +65,44 @@ matches:
         descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;)Lio/javalin/router/RoutingApi;" }
     - { name: options, arity: 3, http_method: OPTIONS, url_arg: 0,
         descriptor: "(Ljava/lang/String;Lio/javalin/http/Handler;[Lio/javalin/security/RouteRole;)Lio/javalin/router/RoutingApi;" }
+  # HANDLER-BODY READS (spec 2026-09-19 §5d, mechanism 3; CP-25 rows 14–15). What a
+  # handler reads off `Context` is one `endpoint_metadata` row per read, matched against
+  # the handler body's own call sites — declared ONCE here and applied by HANDLER, so the
+  # rows `javalin-apibuilder.yml` derives get the same reads without a second copy (§5d).
+  # `Context` is an interface and the reads are its default methods, so a call site is
+  # `invokeinterface io/javalin/http/Context.<name>` on the handler's `ctx` (measured on
+  # `fixtures/orders-javalin`'s `OrderApp.lambda$nested$10`, `javap -c -p`, 2026-09-20).
+  #
+  # ARITY IS THE WHOLE DISTINCTION (F7, row 14): `header(String)` READS the request
+  # (`req().getHeader`), `header(String, String)` SETS a response header
+  # (`res().setHeader`); `cookie(String)` reads, `cookie(String, String[, int])` and
+  # `cookie(Cookie)` set. An entry naming the method alone would record every response
+  # header the handler sets as a request requirement, so every entry here carries the
+  # arity of the read and no other. `queryParam(String)` is `queryParams(key).firstOrNull()`.
+  # All three hand a null through: `requirement` NULL (A3) — the handler reads the value,
+  # Javalin decides nothing.
+  #
+  # `queryParamAsClass(String, Class)`/`headerAsClass(String, Class)` read through the same
+  # one-argument read and hand back a `Validator`; `Validator.get()` (row 15) is
+  # `getOrThrow(...)` over an error map that carries `NULLCHECK_FAILED` when the value is
+  # absent and the validator is not a `NullableValidator` — a `ValidationException`, the
+  # FRAMEWORK refusing the request. So the read is `required` exactly when its result is
+  # the receiver of a `get` (`then`, one result-to-receiver step), and NULL when the chain
+  # ends in `getOrDefault`, `allowNullable()`, `check(...)` alone or nothing.
+  #
+  # STATED BOUNDARY: a `single_call` row's `handler` is the REGISTERING method
+  # (`OrderApp#flat`), not the `Handler` lambda it passes, so the lambda's reads are not
+  # in the body this pass scans and a flat `app.get("/x", ctx -> ctx.queryParam("q"))`
+  # writes nothing; the `ApiBuilder` rows carry the lambda body as `handler` and read
+  # fully (COVERAGE). Also the handler body only: a `ctx` handed to a helper is not followed.
+  request_reads:
+    - { owner: io.javalin.http.Context, method: queryParam, arity: 1, name_arg: 0, kind: query }
+    - { owner: io.javalin.http.Context, method: header,     arity: 1, name_arg: 0, kind: header }
+    - { owner: io.javalin.http.Context, method: cookie,     arity: 1, name_arg: 0, kind: cookie }
+    - { owner: io.javalin.http.Context, method: queryParamAsClass, arity: 2, name_arg: 0, kind: query,
+        then: { method: get, requirement: required } }
+    - { owner: io.javalin.http.Context, method: headerAsClass,     arity: 2, name_arg: 0, kind: header,
+        then: { method: get, requirement: required } }
 
 # Every candidate below is measured against `scripts/probes/w19_catalog_surface.md`
 # (regenerated for this catalog) — a method the enumeration lists as unread AND

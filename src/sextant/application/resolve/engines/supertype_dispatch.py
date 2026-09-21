@@ -75,6 +75,7 @@ from typing import Any, cast
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import ancestry_of
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.symbols import bare_descriptor, method_name, type_descriptor
 
@@ -398,7 +399,7 @@ def _delegating_members(workspace: Workspace, supertypes: tuple[str, ...]) -> fr
     scans, so only the call site is ours.
     """
     delegating: set[str] = set()
-    for row in workspace.query("call_sites"):
+    for row in effective_call_sites(workspace):
         if str(row["invoke_kind"]) != "special":
             continue
         caller = str(row["caller"])

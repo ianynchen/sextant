@@ -56,12 +56,27 @@ requires: [call_site, string_constants, chain_reconstruction]
 # registers the empty string, and this catalog was not measured for what Javalin serves
 # that at (the fixture does not write it; the engine would publish `/`). Holds as long as
 # `prefixPath` keeps the shape measured above.
+#
+# `follow_calls: all` on the entry and on `path` (spec 2026-09-19 §4a): a helper method
+# CALLED from inside a block — `apiBuilder(() -> { orders(); })`, `static void orders()
+# { get("/x", h); }` — is followed and its verbs fold under the prefix that reached the
+# call, with no origin to check, because there is none to check: every `ApiBuilder` verb
+# is static and registers on the thread-local instance. MEASURED, `scripts/probes/
+# cp25_binder_rules.md` row 1 (`javap -c -p` on the 6.4.0 jar, identity read off its
+# manifest): `staticInstance()` is `getstatic staticJavalin:ThreadLocal ; invokevirtual
+# ThreadLocal.get ; ifnonnull … ; new IllegalStateException ; ldc "The static API can
+# only be used within a routes() call." ; athrow`, and every verb's first instruction is
+# `invokestatic staticInstance`. So a helper that reaches a verb can only ever have been
+# called from inside a block, and following it invents nothing. (A body-linked helper
+# handed as a METHOD REFERENCE — `path("/x", App::group)` — is a linked body already,
+# read as any `EndpointGroup` lambda is; the word is for the call form.)
 matches:
   path_join: leading_slash
   entries:
     - owner: io.javalin.config.RouterConfig
       method: apiBuilder
       body_arg: 0
+      follow_calls: all
   vocabulary:
     verbs:
       # Four overloads per verb, told apart by `arity` and the type at position 0 (the
@@ -95,7 +110,8 @@ matches:
     prefixes:
       # `path(String, EndpointGroup)`: the prefix pushed onto every route the linked body
       # declares, recursing through nested `path` calls the same way.
-      - { owner: io.javalin.apibuilder.ApiBuilder, method: path, arity: 2, path_arg: 0, body_arg: 1 }
+      - { owner: io.javalin.apibuilder.ApiBuilder, method: path, arity: 2, path_arg: 0, body_arg: 1,
+          follow_calls: all }
 
 # Measured against `scripts/probes/w19_catalog_surface.md` (regenerated for this
 # catalog): `ApiBuilder` declares eighteen names, this file reads seven (six verbs and

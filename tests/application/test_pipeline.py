@@ -212,6 +212,14 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         # them. Six repositories contained zero uses of either attribute, so nothing
         # else here exercises the discriminators it reads.
         ("GET", "/v1/routing/orders"),
+        # Spec 2026-09-19 §5b: the two parameter-annotation handlers, one row each; what
+        # their binders enforce is in `endpoint_metadata`, not in this set.
+        ("GET", "/v1/params/search"),
+        ("GET", "/ktparams/search"),
+        # Spec 2026-09-19 §5c: the two handlers whose mapping annotations carry every
+        # `params=`/`headers=` expression form; the expressions are `endpoint_metadata` rows.
+        ("GET", "/v1/conditions/orders"),
+        ("GET", "/v1/conditions/legacy"),
         # W29: the header-carrying WebClient chain. Its three headers are the
         # `endpoint_metadata` rows; the route itself is an ordinary outbound row.
         ("GET", "/v2/inventory/tagged"),
@@ -269,13 +277,20 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
         ("GET", "/extra"),
         ("GET", "/other"),
         # `KotlinOrderRoutes#ktRoutes`'s `coRouter { }` DSL, nested under
-        # `/kt`: `GET`+`POST /kt/orders` and `GET /kt/rich`, handler NULL on
-        # all three (checkpoint (1b) Tier-0: the Kotlin compiler hands every
-        # handler here as an `instance` of a generated class, never a method
-        # reference — never fabricated into one).
+        # `/kt`: `GET`+`POST /kt/orders` and `GET /kt/rich`. The two suspend
+        # lambdas name their `invokeSuspend` as handler (spec 2026-09-19 §3b);
+        # the `::listOrders` function reference stays NULL (checkpoint (1b)
+        # Tier-0: an `instance` of a generated class, never fabricated into a
+        # method) — both pinned below.
         ("GET", "/kt/orders"),
         ("POST", "/kt/orders"),
         ("GET", "/kt/rich"),
+        # `fun CoRouterFunctionDsl.extra() { GET("/kt/extra") { } }` called from inside
+        # `coRouter { }` (spec 2026-09-19 §4a): a static extension whose one argument is
+        # the block's own parameter, the origin, so the walk follows the call and the
+        # member `GET` inside derives on `ktRoutes` — `ktor-route-extensions` on the
+        # Spring functional side.
+        ("GET", "/kt/extra"),
         # Outbound (Phase 2B): the client interfaces' declared calls.
         ("POST", "/billing/invoices"),
         ("GET", "/billing/invoices"),
@@ -869,7 +884,7 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # reference — sharing the existing `(None, None)` tuple above, so the
     # SET gains no new entry for it even though this count does), and 3 off
     # `KotlinOrderRoutes#ktRoutes`'s `coRouter` DSL (`GET`+`POST /kt/orders`,
-    # `GET /kt/rich`, handler NULL on all three). 72 + 10 = 82 — exactly the
+    # `GET /kt/rich`; handlers as pinned below). 72 + 10 = 82 — exactly the
     # checkpoint's own frozen target (checkpoint item (5)). Verified live
     # against real bytecode, not computed from the brief alone.
     #
@@ -1057,7 +1072,15 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # functional-routing row already carries (a coincidental address reuse between two
     # unrelated fixtures), so the SET of routes above is unchanged and only the ROW COUNT
     # moves.
-    assert len(report.endpoints) == 207
+    # 208 since spec 2026-09-19 §4a (helper following): `KotlinOrderRoutes#ktRoutes`'s
+    # `extra()` helper, `GET /kt/extra`, one row.
+    # 210 since spec 2026-09-19 §5b: `RequestParamsController#search` (`GET
+    # /v1/params/search`) and `KotlinParamController#search` (`GET /ktparams/search`), one
+    # row each — their parameters' requirements go to `endpoint_metadata`.
+    # 212 since spec 2026-09-19 §5c: `MappingConditionsController#versioned` (`GET
+    # /v1/conditions/orders`) and `#legacy` (`GET /v1/conditions/legacy`), one row each —
+    # their mapping expressions go to `endpoint_metadata`.
+    assert len(report.endpoints) == 212
     # 2O Task 6: `spring-data-rest.yml` is the first gated catalog, and this
     # fixture is exactly the module the gate exists for — a Spring module with
     # a repository-shaped interface (`OrderRepository extends
@@ -1208,7 +1231,9 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # 22 since A1 Task 5 (`GAP-1b`): `KotlinWebFluxRoutes`' three routes under `/ktflux`;
     # its own `GET /**` catch-all is a fourth row that shares the builder's key here.
     # 23 since the A1 final review (I-1): `BuilderRoutes`' Supplier-form `GET /bld/sup/inner`.
-    assert len(combinator_rows) == 23
+    # 24 since spec 2026-09-19 §4a: `KotlinOrderRoutes#ktRoutes`'s `extra()` helper,
+    # `GET /kt/extra`.
+    assert len(combinator_rows) == 24
     # Java: a bound method reference resolves to the real handler; the inline
     # lambda resolves to its synthetic body — both module-prefixed, joined
     # against the scanned symbol facts, never fabricated (checkpoint (1a)).
@@ -1247,16 +1272,44 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     composite_unresolved = combinator_rows[(None, None)]
     assert composite_unresolved["resolution"] == "unresolved"
     assert composite_unresolved["caller"].endswith("OrderRoutes#composite(sig_30e7fc92).")
-    # Kotlin: `coRouter`'s own handlers arrive as `instance` of a generated
-    # class, never a method reference — Tier-0, honestly NULL rather than
-    # fabricated (checkpoint (1b)).
+    # Kotlin: `coRouter`'s handlers arrive as `instance` of a generated class. Where
+    # that class is a suspend LAMBDA (`POST("/orders") { }`, `GET("/rich") { }`) the
+    # extractor marks its type fact with `lambda_body` and `effective_call_sites`
+    # hands the engine the `invokeSuspend` it stands for (spec 2026-09-19 §3b) — the
+    # `kotlin-null-handler` closure on this fixture, pinned. `GET("/orders",
+    # ::listOrders)` is a suspend FUNCTION REFERENCE — a `FunctionReferenceImpl`
+    # subclass (CP-23 Q9) with no `invokeSuspend`, whose typed
+    # `invoke(ServerRequest, Continuation)` calls `listOrders` — so its handler is that
+    # `invoke`: the object the framework dispatches to, not the method it delegates to,
+    # which is the trace layer's read. This row was pinned NULL until the extractor
+    # recognised the reference base class (Task 2 fix round 1, 2026-09-20).
+    kt_prefix = "sextant-jvm maven com.acme/orders-service 1.0.0 com/acme/orders/routes/"
     kt_rows = [row for (m, p), row in combinator_rows.items() if p and p.startswith("/kt/")]
-    assert {(row["method"], row["path"]) for row in kt_rows} == {
-        ("GET", "/kt/orders"),
-        ("POST", "/kt/orders"),
-        ("GET", "/kt/rich"),
+    assert {(row["method"], row["path"], row["handler"]) for row in kt_rows} == {
+        (
+            "GET",
+            "/kt/orders",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$1#invoke(sig_b7786253).",
+        ),
+        (
+            "POST",
+            "/kt/orders",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$2#invokeSuspend(sig_262c527a).",
+        ),
+        (
+            "GET",
+            "/kt/rich",
+            kt_prefix + "KotlinOrderRoutes$ktRoutes$1$1$3$1#invokeSuspend(sig_262c527a).",
+        ),
+        # The helper's route (spec 2026-09-19 §4a): `fun CoRouterFunctionDsl.extra()` is a
+        # top-level function, so its suspend handler class is `KotlinOrderRoutesKt$extra$1`
+        # — the file facade's, not the class's — and the row's caller is still `ktRoutes`.
+        (
+            "GET",
+            "/kt/extra",
+            kt_prefix + "KotlinOrderRoutesKt$extra$1#invokeSuspend(sig_262c527a).",
+        ),
     }
-    assert all(row["handler"] is None for row in kt_rows)
     # F1, and the boundary it named is CLOSED (2O Task 13). This assertion
     # read "every predicate-derived media column on every combinator row is
     # NULL — the vararg `accept`/`contentType` constants are unreadable
@@ -1937,7 +1990,13 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 113 since B/C Task 10 (`jakarta-jaxrs.yml`): `KotlinOrderResource#create`,
         # `POST /kt/orders` — a genuinely new row, at the same address
         # `KotlinOrderRoutes#ktRoutes`'s own functional-routing row already serves.
-        "http": 113,
+        # 114 since spec 2026-09-19 §4a: `GET /kt/extra`, the DSL-receiver helper
+        # `coRouter { extra() }` now follows.
+        # 116 since spec 2026-09-19 §5b: `GET /v1/params/search` and `GET /ktparams/search`,
+        # the two handlers carrying every parameter-annotation form the binder rule reads.
+        # 118 since spec 2026-09-19 §5c: `GET /v1/conditions/orders` and `/v1/conditions/legacy`,
+        # the two handlers carrying every `params=`/`headers=` expression form.
+        "http": 118,
         # 75 since W44: the three `/mvcfn` servlet functional routes (`G-29`), which
         # ride `protocol_hint` exactly as every other http row does.
         # 93 since `G-37` (A1 Task 4): the eighteen builder-form routes on both stacks,
@@ -1982,7 +2041,7 @@ def test_nothing_but_the_two_sse_routes_moves(
         # 13 since W46: the three this module OPENS — `G-32`'s absent direction.
         "websocket": 14,
     }
-    assert sum(counts.values()) == len(report.endpoints) == 207
+    assert sum(counts.values()) == len(report.endpoints) == 212
     assert {e["path"] for e in report.endpoints if e["protocol"] == "sse"} == {
         "/events/emitter",
         "/events/stream",
@@ -2227,13 +2286,14 @@ def test_a_kotlin_jaxrs_body_under_kotlincs_notnull_keeps_its_contract(resolved_
     # `/kt/orders` is ALSO `KotlinOrderRoutes#ktRoutes`'s own address (the pre-existing
     # functional-routing DSL fixture, `test_pipeline.py:1250-1251`) — a coincidental
     # address collision between two unrelated fixtures, not a wire-identity conflict:
-    # that row is call-site-shaped (`caller` set, `handler` NULL); this one is an
-    # annotation-driven JAX-RS handler row. Filtering on `handler` picks this one out
-    # uniquely rather than assuming `/kt/orders POST` names exactly one row.
+    # that row is call-site-shaped (`caller` set); this one is an annotation-driven
+    # JAX-RS handler row, which has no caller. Filtering on `caller` picks this one out
+    # uniquely rather than assuming `/kt/orders POST` names exactly one row. (It filtered
+    # on `handler` until the DSL row gained one, spec 2026-09-19 §3b.)
     [row] = [
         r
         for r in report.endpoints
-        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["handler"] is not None
+        if r["path"] == "/kt/orders" and r["method"] == "POST" and r["caller"] is None
     ]
     assert json.loads(row["request_shape"])["shape_id"].endswith("KotlinOrderResource$KtOrder#")
 
@@ -3724,7 +3784,12 @@ def test_the_format_ladder_answers_every_live_row(
     # + 1 (B/C Task 10, `jakarta-jaxrs.yml`): `POST /kt/orders` — `KotlinOrderResource#create`
     # declares no `@Produces`/`@Consumes` at all, so it is a json-bodied http row reaching the
     # same rung 5 default every other undeclared json body does.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 77
+    # + 1 (spec 2026-09-19 §5b): `GET /v1/params/search` returns `OrderView` with no media
+    # declared — a json-bodied http row reaching the same rung 5 default. `GET
+    # /ktparams/search` returns a `String`, which the ladder answers differently.
+    # + 2 (spec 2026-09-19 §5c): `GET /v1/conditions/orders` and `/v1/conditions/legacy`, both
+    # returning `OrderView` with no media declared — the same rung 5 default.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "narrowed"]) == 80
     # 28 + 2: the two rows the binding REFUSED keep their byte-array payload,
     # so nothing described them and rung 6 is still the honest answer.
     # + 1 with 2H Task 5: `/live` — a raw WebSocket frame is untyped by
@@ -3784,7 +3849,12 @@ def test_the_format_ladder_answers_every_live_row(
     # 67 since A2 Task 8: the seven JDK/Apache client rows. A JDK `body` capture reads a
     # `BodyPublisher`, never a payload type, and the Apache forms capture no body at all,
     # so none of the seven carries a declared payload the ladder could answer off.
-    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 67
+    # 68 since spec 2026-09-19 §4a: `GET /kt/extra`, the helper-declared Kotlin DSL route,
+    # declares no media predicate and its handler returns a bare `ServerResponse` — the
+    # same honest answer the other seven Kotlin DSL routes get.
+    # 69 since spec 2026-09-19 §5b: `GET /ktparams/search` returns a bare `String` and
+    # declares no media, so the ladder has no payload type to answer off.
+    assert len([e for e in report.endpoints if e["format_resolution"] == "unresolved"]) == 69
 
     # No rung saw two answers for ONE ROW anywhere in this fixture, so the ledger holds
     # no `format_conflict` at all.
@@ -3795,8 +3865,16 @@ def test_the_format_ladder_answers_every_live_row(
     # consumer is configured for protobuf, so the question a reader now gets ("are these
     # the same endpoint?") sits beside two rows that visibly disagree about the wire.
     # The merged row had one format and no question.
+    #
+    # `registration_activation` joins them with spec 2026-09-19 §4a's pipeline fix, and it
+    # is a RECOVERY, not a new question: `RawPubSubSubscribers#withNamedReceiver` builds a
+    # `Subscriber` it returns without `startAsync()`, and `interface_implementation` has
+    # filed that question (`OI-64`) since commit 6fdb30f — inside `derive_endpoints`, which
+    # ran BEFORE `reset_open_questions`, so the reset erased the row every run and this
+    # set never saw it. The reset now runs above the engines.
     assert {str(row["question"]) for row in workspace.query("open_questions")} == {
         "payload_binding",
+        "registration_activation",
         "self_exchange",
     }
 
@@ -4488,6 +4566,7 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_service_identity_gaps",
         "record_environment_divergence",
         "apply_protocol_hints",
+        "record_request_requirements",
         "record_self_exchange",
         "record_routing_conflicts",
         "record_roots",

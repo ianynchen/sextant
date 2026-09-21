@@ -15,6 +15,7 @@ from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.reachability import record_reachability
+from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
@@ -165,6 +166,21 @@ def resolve(
     # resolve whose calls carry no metadata leaves an empty table rather than the previous
     # run's rows.
     workspace.derive("endpoint_metadata_reset")
+    # Its feeder, the combinator's `route_requirements` stash (spec 2026-09-19 §4d/§5a),
+    # is re-created by `derive_endpoints` beside `endpoints_reset` — the engines write it
+    # there, and `record_request_requirements` below joins it to `endpoints` once every
+    # row's protocol is final.
+    # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
+    # every pass that writes to it rather than inside one of them — the
+    # `resolved_config` reset discipline, lifted out of the writing pass
+    # because more than one pass writes these rows. A resolve whose passes
+    # had nothing to ask still leaves an empty table rather than the previous
+    # run's rows. ABOVE `derive_endpoints`, not below it (spec 2026-09-19 §4a): two
+    # engines file questions as they derive — `interface_implementation`'s
+    # `registration_activation` and the combinator's `routing_depth` — and a reset
+    # that ran after them erased both before any later pass read the table. Every
+    # other writer runs below `derive_endpoints` either way, so nothing else moves.
+    reset_open_questions(workspace)
     with _timed("derive_endpoints"):
         skipped = derive_endpoints(workspace, declared, capabilities)
     # After the endpoints, never beside them: an endpoint's payload types come
@@ -172,13 +188,6 @@ def resolve(
     # just wrote.
     with _timed("derive_endpoint_shapes"):
         expanded = derive_endpoint_shapes(workspace, declared, capabilities)
-    # The 2K hand-off ledger (2G design §6) is emptied once, here, ahead of
-    # every pass that writes to it rather than inside one of them — the
-    # `resolved_config` reset discipline, lifted out of the writing pass
-    # because more than one pass writes these rows. A resolve whose passes
-    # had nothing to ask still leaves an empty table rather than the previous
-    # run's rows.
-    reset_open_questions(workspace)
     # Above the ladder and below the reset, which is exactly where the
     # comment on that line asks a payload-binding pass to go (2G design §6):
     # it WRITES `open_questions` rows, so it must run after the reset, and
@@ -211,6 +220,14 @@ def resolve(
     # now instead, and each says why on its own call.)
     with _timed("apply_protocol_hints"):
         apply_protocol_hints(workspace, declared)
+    # Spec 2026-09-19 §5a, and BELOW `apply_protocol_hints` for the reason the two passes
+    # under it give: an `endpoint_metadata` entry names its row by the row's identity
+    # columns, `protocol` among them, and that pass reclassifies `protocol` on rows the
+    # engines minted. Written above this line, an inbound entry would name a wire its
+    # endpoint no longer speaks. (The fluent engine's OUTBOUND entries are written inside
+    # `derive_endpoints`, above the hint pass — W29's order, unchanged here.)
+    with _timed("record_request_requirements"):
+        record_request_requirements(workspace, declared)
     # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
     # question-filing passes: `protocol` is part of the identity this question names,
     # and that pass reclassifies it on rows other engines minted. Filed above this line,

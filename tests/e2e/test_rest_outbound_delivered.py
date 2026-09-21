@@ -87,7 +87,9 @@ def test_gateway_targets_derive_outbound(gateway_rows):
     would arrive as a `field` read and the row would be `unresolved`; this pin moves the
     day the fixture's field stops being one.
 
-    Exactly seven rows: one per `route(…)` call, both overloads."""
+    Exactly eight rows: one per `route(…)` call, both overloads — the eighth is `guarded`'s
+    `uri("http://guarded-service")`, a route added for its inbound header/query
+    requirements (spec 2026-09-19 §5c) whose target derives here like any other."""
     rows = [
         r
         for r in gateway_rows
@@ -102,8 +104,9 @@ def test_gateway_targets_derive_outbound(gateway_rows):
         ("http://legacy-service", "resolved"),
         ("http://billing-service", "resolved"),
         ("http://host-service", "resolved"),
+        ("http://guarded-service", "resolved"),
     }, sorted(targets, key=str)
-    assert len(rows) == 7, sorted(targets, key=str)
+    assert len(rows) == 8, sorted(targets, key=str)
     assert all(r["peer"] is None and r["method"] is None for r in rows), rows
     assert all("#routes(" in str(r["caller"]) for r in rows), sorted({r["caller"] for r in rows})
 
