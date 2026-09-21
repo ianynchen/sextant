@@ -3095,6 +3095,41 @@ def test_the_tail_flag_is_found_by_value_and_two_or_a_misplaced_one_are_unread(
     )
 
 
+def test_a_path_predicate_left_with_no_pattern_after_its_flag_is_unread(tmp_path: Path):
+    """Fix round 3. `Path=true` — or the map form `{matchTrailingSlash: true}` with no
+    pattern — gathers nothing once the flag is taken, and the framework's factory over
+    an empty pattern list matches nothing: the route is unreachable. That is NOT "no
+    Path predicate at all", which serves every path (`/**`, resolved, unchanged here):
+    a declared gather with an empty value list is unread — the inbound row `unresolved`
+    with `path` NULL, the target row untouched."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(0, ("predicates[0]", "Path=true"), ("uri", "lb://flag"))
+        + _route(
+            1,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args.matchTrailingSlash", "true"),
+            ("uri", "lb://map"),
+        )
+        + _route(2, ("predicates[0]", "Host=**.acme.com"), ("uri", "lb://host")),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("inbound", None, None, None, None, None, "unresolved"),
+            ("inbound", None, None, None, None, None, "unresolved"),
+            ("inbound", None, "/**", None, None, None, "resolved"),
+            ("outbound", None, "lb://flag", None, None, None, "resolved"),
+            ("outbound", None, "lb://map", None, None, None, "resolved"),
+            ("outbound", None, "lb://host", None, None, None, "resolved"),
+        ],
+        key=str,
+    )
+
+
 def test_a_row_with_no_address_carries_no_requirement(tmp_path: Path):
     """Fix round 2. A requirement on an address nobody read states nothing useful — and
     the requirements pass keys the stash on `path`, so two NULL-path items both carrying

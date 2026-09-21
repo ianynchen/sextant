@@ -919,7 +919,10 @@ def _fields_of(
     `true`/`false` (case-insensitive, as `Boolean.parseBoolean` reads it) is the flag
     (field 1) wherever it sits, and the rest are the list. Two or more boolean
     literals, or a boolean literal in a gather that has no tail flag, is a binding
-    this engine cannot settle — None, never a choice. Without `gather` (`DEFAULT`)
+    this engine cannot settle — None, never a choice; so is a gather left with NO value
+    once the flag is taken (`Path=true`): the factory over an empty list matches
+    nothing, and the route is unreachable rather than served everywhere. Without
+    `gather` (`DEFAULT`)
     positional K is field K and a named key binds to its own field."""
     order = [str(name) for name in rule["args"]]
     gather = rule.get("gather")
@@ -945,8 +948,13 @@ def _fields_of(
         if flags:
             fields[order[1]] = flags
             values = [value for value in values if value.lower() not in ("true", "false")]
-        if values:
-            fields[order[0]] = values
+        if not values:
+            # The predicate was declared and gathers nothing (`Path=true`, a flag and no
+            # pattern; fix round 3): the framework's factory over an empty list matches
+            # nothing, so the route is unreachable — unread, never the any-path row a
+            # route with NO such predicate serves.
+            return None
+        fields[order[0]] = values
         return fields
     for n, value in enumerate(values):
         if n < len(order):
