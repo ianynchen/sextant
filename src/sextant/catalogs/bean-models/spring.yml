@@ -26,14 +26,32 @@ name_attrs: [name, value]
 
 # `@Qualifier` declares `value()` (spring-beans 6.1.6 — F8; CP-27 row (bean
 # attributes)). On an injected parameter it names the bean outright and is the
-# first rung for every reference kind.
+# first rung for every reference kind. The rungs after it, for a reference that
+# is not a channel, are the container's own candidate order — a qualifier, else
+# exactly one bean of the type, else the bean whose name is the parameter's
+# (`DefaultListableBeanFactory.determineAutowireCandidate`, spring-beans 6.1.6;
+# CP-27 row (bean attributes)). `resolve/beans.py` implements that order and
+# cites it here rather than spelling the class itself.
 qualifier_annotation: org.springframework.beans.factory.annotation.Qualifier
 
 # A parameter of one of these erased types is a CHANNEL reference and is never
 # resolved by type (spec §0b A2): Spring Integration auto-registers
-# `errorChannel` and `nullChannel`, both `MessageChannel`s, so the module's
-# single `@Bean MessageChannel` is never Spring's unique candidate — Spring
-# falls back to the parameter NAME, and so does the fold. Exact erased types,
-# not subtypes: the parameter's declared type is what the container matches
-# on, and every fixture and probe (CP-25, CP-27) declares the interface.
-channel_types: [org.springframework.messaging.MessageChannel]
+# `errorChannel` (a `PublishSubscribeChannel`) and `nullChannel` (a
+# `NullChannel`), so the module's single `@Bean` of a channel INTERFACE is never
+# Spring's unique candidate for a parameter declared by that interface — Spring
+# falls back to the parameter NAME, and so does the fold.
+#
+# The list is the INTERFACES the framework's own channel beans implement, not
+# the channel CLASSES, and membership is exact (Task 1 fix round 1): a
+# parameter declared as `MessageChannel`, `SubscribableChannel` (errorChannel
+# implements it) or `PollableChannel` (nullChannel implements both) has the
+# framework's beans among its candidates and must resolve by name; a parameter
+# declared as a concrete class (`DirectChannel`, `QueueChannel`) has no
+# framework bean of that class beside the module's own, so the module's single
+# `@Bean DirectChannel` IS the unique candidate and the type rung is right for
+# it. A framework release that registers a channel of a new interface adds that
+# interface here — data, not code.
+channel_types:
+  - org.springframework.messaging.MessageChannel
+  - org.springframework.messaging.SubscribableChannel
+  - org.springframework.messaging.PollableChannel

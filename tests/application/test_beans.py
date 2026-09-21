@@ -176,6 +176,24 @@ def test_a_qualifier_names_the_bean(tmp_path: Path):
     )
 
 
+def test_a_qualifier_on_a_non_channel_parameter_never_becomes_a_known_channel(tmp_path: Path):
+    """Fix round 1. The container auto-creates a CHANNEL under a referenced name
+    and nothing else, so a qualifier on a container-typed parameter that names
+    no declared bean is `none` even when a channel the index knows shares the
+    name — never a phantom `BeanRef(method=None)` of a type the container would
+    not inject. The same qualifier on a channel-typed parameter IS that channel."""
+    workspace = _loaded(tmp_path, _bean(_CONTAINER, _CONTAINER_TYPE) + [_method(_HELPER)])
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset({"auditChannel"}))
+    workspace.close()
+
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "c", qualifier="auditChannel")) == (
+        Unresolved("none")
+    )
+    assert table.bean_of(_parameter(_CHANNEL_TYPE, "c", qualifier="auditChannel")) == BeanRef(
+        method=None, name="auditChannel", erased_return=None
+    )
+
+
 def test_a_channel_parameter_resolves_by_name_never_by_type(tmp_path: Path):
     """Spec §0b A2. One `@Bean MessageChannel ordersChannel()` in the module; the
     parameter `inputChannel` of that type is NOT it — the container sees
@@ -189,6 +207,37 @@ def test_a_channel_parameter_resolves_by_name_never_by_type(tmp_path: Path):
     assert table.kind_of(_CHANNEL_TYPE) == "channel"
     assert table.bean_of(_parameter(_CHANNEL_TYPE, "inputChannel")) == Unresolved("none")
     assert table.bean_of(_parameter(_CHANNEL_TYPE, "ordersChannel")) == _orders_channel_ref()
+
+
+@pytest.mark.parametrize(
+    "interface",
+    [
+        "org/springframework/messaging/SubscribableChannel#",
+        "org/springframework/messaging/PollableChannel#",
+    ],
+)
+def test_every_channel_interface_the_framework_beans_implement_is_a_channel(
+    tmp_path: Path, interface: str
+):
+    """Fix round 1. The model lists the channel INTERFACES the framework's own
+    beans implement — `errorChannel` is a `SubscribableChannel`, `nullChannel`
+    both — because a parameter declared by any of them has those beans among its
+    candidates and resolves by name; the module's single `@Bean` of the interface
+    is not unique. A concrete channel CLASS is not listed: no framework bean is
+    of it, so the module's single `@Bean DirectChannel` is the unique candidate
+    and the type rung is right."""
+    direct = "org/springframework/integration/channel/DirectChannel#"
+    facts = _bean(_ORDERS_CHANNEL, interface) + _bean(_CONTAINER, direct) + [_method(_HELPER)]
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    assert table.kind_of(interface) == "channel"
+    assert table.bean_of(_parameter(interface, "inputChannel")) == Unresolved("none")
+    assert table.kind_of(direct) == "other"
+    assert table.bean_of(_parameter(direct, "inputChannel")) == BeanRef(
+        method=_MODULE + _CONTAINER, name="container", erased_return=direct
+    )
 
 
 def test_a_channel_name_the_index_knows_resolves_without_a_bean(tmp_path: Path):
@@ -207,8 +256,8 @@ def test_a_channel_name_the_index_knows_resolves_without_a_bean(tmp_path: Path):
 
 
 def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path):
-    """The container's own order for a type no framework bean shares
-    (`DefaultListableBeanFactory.determineAutowireCandidate`, CP-27): one bean of
+    """The container's own candidate order for a type no framework bean shares
+    (cited on `bean-models/spring.yml`, CP-27): one bean of
     the type is it whatever the parameter is called; two are `ambiguous` — unless
     the parameter is named like one of them, which is the name rung."""
     one = _bean(_CONTAINER, _CONTAINER_TYPE) + [_method(_HELPER)]

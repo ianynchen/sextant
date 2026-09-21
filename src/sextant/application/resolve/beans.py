@@ -11,8 +11,8 @@ and never the type. The container itself sees more channel candidates than the m
 declares (it registers its own error and null channels), so a fold that picked the
 module's single channel bean by type would name a bean the container never injects. Any
 OTHER reference (a container type no framework bean shares) takes the container's own
-order: the qualifier, else exactly one declared bean of that erased type, else the name
-(`DefaultListableBeanFactory.determineAutowireCandidate`, CP-27).
+candidate order — the qualifier, else exactly one declared bean of that erased type, else
+the name — cited on the model (`bean-models/spring.yml`, CP-27).
 
 No rung answers, or a rung has two candidates, is `Unresolved`, and the two are told
 apart: `ambiguous` is a rung that weighed candidates and could not choose, `none` is no
@@ -95,12 +95,13 @@ class BeanTable:
 
     def bean_of(self, reference: Parameter) -> BeanRef | Unresolved:
         """The bean this injected parameter names, by the rungs of its kind."""
+        is_channel = self.kind_of(reference.erased_type) == "channel"
         if reference.qualifier is not None:
-            return self._named_or_known(reference.qualifier)
-        if self.kind_of(reference.erased_type) == "channel":
+            return self._named_or_known(reference.qualifier, is_channel)
+        if is_channel:
             if reference.name is None:
                 return Unresolved("none")
-            return self._named_or_known(reference.name)
+            return self._named_or_known(reference.name, is_channel=True)
         by_type = self._declared.by_type.get(reference.erased_type, ())
         if len(by_type) == 1:
             return by_type[0]
@@ -124,11 +125,16 @@ class BeanTable:
             return None
         return found[0] if len(found) == 1 else Unresolved("ambiguous")
 
-    def _named_or_known(self, name: str) -> BeanRef | Unresolved:
+    def _named_or_known(self, name: str, is_channel: bool) -> BeanRef | Unresolved:
+        """A declared bean of that name, else — for a CHANNEL reference only — a channel
+        the index knows under it. The container auto-creates a channel under a
+        referenced name, never a container or any other type, so a qualifier on a
+        non-channel parameter that names no declared bean is `none` even when a channel
+        happens to share the name (fix round 1)."""
         named = self._named(name)
         if named is not None:
             return named
-        if name in self._known_channels:
+        if is_channel and name in self._known_channels:
             return BeanRef(method=None, name=name, erased_return=None)
         return Unresolved("none")
 
