@@ -762,7 +762,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**78 of 93 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**79 of 94 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -813,6 +813,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `spring-actuator` | `org.springframework.boot:spring-boot-actuator` | 3.5.10, 4.1.1 |
 | `spring-cloud-gateway-outbound` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |
+| `spring-cloud-gateway-properties` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |
 | `spring-cloud-gateway` | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 |
 | `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.0.1, 4.1.1 |
 |  | `org.springframework.data:spring-data-jpa` | 4.1.1 |

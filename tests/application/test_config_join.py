@@ -1324,7 +1324,7 @@ def test_a_catalog_requiring_the_config_capability_is_skipped_without_it(
 @pytest.mark.parametrize(
     ("matches", "expected"),
     [
-        ({}, "declares neither"),
+        ({}, "declares none of"),
         (
             {"address_from_config": {"binding": {"from": "bean_name", "suffix": []}}},
             "needs `key` and `binding`",
@@ -2813,3 +2813,449 @@ def test_a_composed_definition_under_an_unmapped_binder_derives_no_row(tmp_path:
 
     assert rows == []
     assert [q["question"] for q in questions] == ["binder_protocol"]
+
+
+# --- job 1, the third address form: `indexed:` (spec 2026-09-21 §7b) ---------------
+
+
+_ROUTES = "acme.edge.routes"
+_EDGE_COORDINATE = "com.acme:acme-edge"
+
+
+def _indexed(**overrides: object) -> dict:
+    """The invented edge router's `indexed:` block — items under a list prefix, each
+    with a predicate list read through the `shortcut` grammar and a target field —
+    in the shape `spring-cloud-gateway-properties.yml` declares, with invented
+    spellings for the reason every other block in this file is invented."""
+    item: dict = {
+        "predicates": {"field": "predicates", "grammar": "shortcut", "positional": "_pos_"},
+        "path": {
+            "name": "Path",
+            "args": ["patterns", "matchTrailingSlash"],
+            "gather": "list_tail_flag",
+        },
+        "method": {"name": "Method", "args": ["methods"], "gather": "list"},
+        "requirements": {
+            "Header": {"kind": "header", "args": ["header", "regexp"]},
+            "Query": {"kind": "query", "args": ["param", "regexp", "predicate"]},
+            "Cookie": {"kind": "cookie", "args": ["name", "regexp"]},
+        },
+        "pass_through": ["Host", "After", "Weight"],
+        "peer": {"field": "uri", "direction": "outbound"},
+    }
+    item.update(overrides.pop("item", {}))  # type: ignore[arg-type]
+    block: dict = {"prefix": _ROUTES, "item": item}
+    block.update(overrides)
+    return block
+
+
+def _edge_catalog(matches: dict | None = None) -> Catalog:
+    return Catalog(
+        id="invented-edge",
+        style="config_join",
+        protocol="http",
+        direction="inbound",
+        requires=("resolved_config",),
+        matches=matches if matches is not None else {"indexed": _indexed()},
+        source=Path("tests/invented-edge.yml"),
+        detect_coordinates=(_EDGE_COORDINATE,),
+    )
+
+
+def _route(index: int, *entries: tuple[str, str]) -> list[tuple[str, str, str | None]]:
+    """One item's keys, agreed across two environments — `entries` are `(field, value)`
+    pairs under `<prefix>[index].`, the field spelled as the config layer flattens it
+    (`predicates[0]`, `predicates[1].name`, `predicates[1].args.patterns`, `uri`)."""
+    return [
+        (f"{_ROUTES}[{index}].{field}", environment, value)
+        for field, value in entries
+        for environment in ("default", "prod")
+    ]
+
+
+def _edge_rows(workspace: DuckDbWorkspace) -> list[tuple]:
+    """Every row's identity columns, in one total order (`key=str`: a verb-less row sits
+    beside verbed ones on the same path)."""
+    return sorted(
+        (
+            (
+                r["direction"],
+                r["method"],
+                r["path"],
+                r["handler"],
+                r["caller"],
+                r["peer"],
+                r["resolution"],
+            )
+            for r in _rows(workspace)
+        ),
+        key=str,
+    )
+
+
+def _edge_stash(workspace: DuckDbWorkspace) -> list[tuple]:
+    return sorted(
+        (
+            (
+                r["caller"],
+                r["handler"],
+                r["method"],
+                r["path"],
+                r["kind"],
+                r["name"],
+                r["value"],
+                r["requirement"],
+                r["resolution"],
+            )
+            for r in workspace.query("route_requirements")
+        ),
+        key=str,
+    )
+
+
+def _edge_questions(workspace: DuckDbWorkspace, catalog: Catalog) -> list[dict]:
+    reset_open_questions(workspace)
+    record_service_identity_gaps(workspace, [catalog])
+    return workspace.query("open_questions")
+
+
+def _edge_workspace(tmp_path: Path, config: list[tuple[str, str, str | None]]) -> DuckDbWorkspace:
+    workspace = _workspace(tmp_path, [], config, coordinates=(_EDGE_COORDINATE,))
+    # The pipeline creates the requirement stash before the engines run
+    # (`derive_endpoints`); reaching `run` directly, the test does.
+    workspace.derive("route_requirements_reset")
+    return workspace
+
+
+def test_a_shortcut_route_derives_one_inbound_row_per_verb_and_its_target(tmp_path: Path):
+    """The whole form in one item: `Path=/orders/**`, `Method=GET,POST` and
+    `uri: lb://orders` under `routes[0]` derive two inbound rows — one per verb, the
+    pattern as the served path, no handler and no caller (a configured route dispatches
+    to no method) — and one outbound row carrying the target VERBATIM with `peer` NULL,
+    exactly as the DSL sibling publishes a `uri(…)`: a routing destination is kept whole,
+    never split into a peer and an empty path. Every row `resolved`, `evidence:
+    compiler`, this catalog's id."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0,
+            ("predicates[0]", "Path=/orders/**"),
+            ("predicates[1]", "Method=GET,POST"),
+            ("uri", "lb://orders"),
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    whole = _rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", "GET", "/orders/**", None, None, None, "resolved"),
+        ("inbound", "POST", "/orders/**", None, None, None, "resolved"),
+        ("outbound", None, "lb://orders", None, None, None, "resolved"),
+    ]
+    assert {(r["protocol"], r["evidence"], r["catalog_id"]) for r in whole} == {
+        ("http", "compiler", "invented-edge")
+    }
+
+
+def test_a_route_with_no_method_predicate_is_one_verb_less_row(tmp_path: Path):
+    """§0b A7: no `Method=` → `method` NULL, resolved — the DSL catalog's rendering of a
+    method-less route, one family one rendering, never an `all_methods` fan-out. Two
+    patterns → two rows; a trailing `true`/`false` on `Path` is the framework's
+    `matchTrailingSlash` flag (CP-29 row 7, GATHER_LIST_TAIL_FLAG), not a pattern."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0, ("predicates[0]", "Path=/a/**,/b/**,false"), ("uri", "http://items.internal:8080")
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", None, "/a/**", None, None, None, "resolved"),
+        ("inbound", None, "/b/**", None, None, None, "resolved"),
+        ("outbound", None, "http://items.internal:8080", None, None, None, "resolved"),
+    ]
+
+
+def test_the_map_form_reads_the_same_item(tmp_path: Path):
+    """`predicates[M].name` + `predicates[M].args.<field>` is the same predicate the
+    shortcut spells (CP-29 row 3: a `PredicateDefinition` is a name and an args map, and
+    the shortcut fills the map with positional keys). Field names are the measured
+    `shortcutFieldOrder`; a positional key in the map form (`_pos_0`) maps through the
+    same order; a list-gathering field written as one scalar splits on `,` as the
+    binder does."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args.patterns", "/items/**"),
+            ("predicates[1].name", "Method"),
+            ("predicates[1].args._pos_0", "GET"),
+            ("predicates[1].args._pos_1", "DELETE"),
+            ("uri", "lb://items"),
+        )
+        + _route(
+            1,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args._pos_0", "/x/**"),
+            ("predicates[1].name", "Method"),
+            ("predicates[1].args.methods", "PUT,PATCH"),
+            ("uri", "lb://x"),
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", "DELETE", "/items/**", None, None, None, "resolved"),
+        ("inbound", "GET", "/items/**", None, None, None, "resolved"),
+        ("inbound", "PATCH", "/x/**", None, None, None, "resolved"),
+        ("inbound", "PUT", "/x/**", None, None, None, "resolved"),
+        ("outbound", None, "lb://items", None, None, None, "resolved"),
+        ("outbound", None, "lb://x", None, None, None, "resolved"),
+    ]
+
+
+def test_header_query_and_cookie_predicates_are_the_rows_requirements(tmp_path: Path):
+    """`Header=X-Api,v2`, `Query=debug` and `Cookie=session,.*` narrow WHO is served,
+    never the address: each is one `route_requirements` row against EVERY inbound row
+    of the item — `caller` and `handler` NULL (the join in `_from_stash` is `None ==
+    None`), `required`, the regexp as written in `value` or NULL where none was
+    written, `resolved`. The pass-throughs (`Host=…`) contribute nothing and poison
+    nothing."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0,
+            ("predicates[0]", "Path=/g/**"),
+            ("predicates[1]", "Method=GET,POST"),
+            ("predicates[2]", "Header=X-Api,v2"),
+            ("predicates[3]", "Query=debug"),
+            ("predicates[4]", "Cookie=session,.*"),
+            ("predicates[5]", "Host=**.acme.com"),
+            ("uri", "lb://g"),
+        ),
+    )
+    catalog = _edge_catalog()
+    config_join.run(workspace, catalog)
+    rows = _edge_rows(workspace)
+    stash = _edge_stash(workspace)
+    workspace.derive("endpoint_metadata_reset")
+    from sextant.application.resolve.request_requirements import record_request_requirements
+
+    record_request_requirements(workspace, [catalog])
+    metadata = sorted(
+        (r["method"], r["path"], r["caller"], r["kind"], r["name"], r["value"], r["requirement"])
+        for r in workspace.query("endpoint_metadata")
+    )
+    workspace.close()
+
+    assert [r[:3] for r in rows] == [
+        ("inbound", "GET", "/g/**"),
+        ("inbound", "POST", "/g/**"),
+        ("outbound", None, "lb://g"),
+    ]
+    assert stash == sorted(
+        (None, None, verb, "/g/**", kind, name, value, "required", "resolved")
+        for verb in ("GET", "POST")
+        for kind, name, value in (
+            ("header", "X-Api", "v2"),
+            ("query", "debug", None),
+            ("cookie", "session", ".*"),
+        )
+    )
+    assert metadata == sorted(
+        (verb, "/g/**", None, kind, name, value, "required")
+        for verb in ("GET", "POST")
+        for kind, name, value in (
+            ("header", "X-Api", "v2"),
+            ("query", "debug", None),
+            ("cookie", "session", ".*"),
+        )
+    )
+
+
+def test_an_unknown_predicate_name_leaves_the_items_rows_unresolved(tmp_path: Path):
+    """A name that is neither the path, the method, a requirement nor a pass-through —
+    a predicate this catalog never measured — narrows the served set in a way nothing
+    here can read (§8: never assert what the evidence does not support). The rows keep
+    the address they read and say `unresolved`; a shortcut with no `=` (the framework
+    refuses it) is the same answer. No row is dropped: the route is declared."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0, ("predicates[0]", "Path=/v/**"), ("predicates[1]", "Version=1.0"), ("uri", "lb://v")
+        )
+        + _route(
+            1, ("predicates[0]", "Path=/w/**"), ("predicates[1]", "Broken"), ("uri", "lb://w")
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", None, "/v/**", None, None, None, "unresolved"),
+        ("inbound", None, "/w/**", None, None, None, "unresolved"),
+        ("outbound", None, "lb://v", None, None, None, "unresolved"),
+        ("outbound", None, "lb://w", None, None, None, "unresolved"),
+    ]
+
+
+def test_a_route_with_no_path_predicate_serves_every_path(tmp_path: Path):
+    """The DSL sibling's rule (spec §7 case 3): a route whose predicates name no path — a
+    host-only route — serves every path, `/**`."""
+    workspace = _edge_workspace(
+        tmp_path, _route(0, ("predicates[0]", "Host=**.acme.com"), ("uri", "lb://h"))
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", None, "/**", None, None, None, "resolved"),
+        ("outbound", None, "lb://h", None, None, None, "resolved"),
+    ]
+
+
+def test_an_item_that_differs_between_environments_is_one_question_and_no_row(tmp_path: Path):
+    """The existing `config_join` rule applied per item: every key the item is read
+    from passes through `_agreed`, and one that environments answer differently — or
+    that only one environment declares, since `resolved_config` carries a `missing_key`
+    row for the other — is not one route. No row for that item (the other item is
+    untouched), and one `environment_divergence` question from `gaps`, keyed on the
+    item, with every disagreeing key and its per-environment values as candidates."""
+    key = f"{_ROUTES}[0].uri"
+    config = (
+        _route(0, ("predicates[0]", "Path=/d/**"))
+        + [
+            (key, "default", "lb://d-dev"),
+            (key, "prod", "lb://d-prod"),
+        ]
+        + _route(1, ("predicates[0]", "Path=/s/**"), ("uri", "lb://s"))
+    )
+    workspace = _edge_workspace(tmp_path, config)
+    catalog = _edge_catalog()
+    config_join.run(workspace, catalog)
+    rows = _edge_rows(workspace)
+    questions = _edge_questions(workspace, catalog)
+    workspace.close()
+
+    assert rows == [
+        ("inbound", None, "/s/**", None, None, None, "resolved"),
+        ("outbound", None, "lb://s", None, None, None, "resolved"),
+    ]
+    assert [(q["question"], q["protocol"], q["method"], q["path"]) for q in questions] == [
+        ("environment_divergence", "http", None, f"{_ROUTES}[0]")
+    ]
+    assert json.loads(questions[0]["candidates"]) == [
+        {"key": key, "values": {"default": "lb://d-dev", "prod": "lb://d-prod"}}
+    ]
+    assert key in questions[0]["evidence"]
+
+
+@pytest.mark.declines("spring-cloud-gateway-properties")
+@pytest.mark.pins("config_join.indexed-item-exists-through-its-read-fields")
+def test_keys_outside_the_prefix_and_unread_fields_derive_nothing(tmp_path: Path):
+    """The near-miss: a sibling prefix (`acme.edge.routes-extra[0]…`), a scalar at the
+    prefix itself, and an item whose only keys are `filters[…]`/`id`/`order` are not
+    routes. The third is the guard this pins: an item exists only through the fields
+    the block READS, so an entry with none of them is no item — without that it would
+    be an item with no predicates and mint a resolved `/**` row for a route declaring
+    no address and no target. The shipped catalog reads the same block, so its decline
+    is this one."""
+    workspace = _edge_workspace(
+        tmp_path,
+        [
+            (f"{_ROUTES}-extra[0].predicates[0]", "default", "Path=/no/**"),
+            (f"{_ROUTES}-extra[0].uri", "default", "lb://no"),
+            (_ROUTES, "default", "nothing"),
+            (f"{_ROUTES}[0].id", "default", "only-an-id"),
+            (f"{_ROUTES}[0].filters[0]", "default", "StripPrefix=1"),
+            (f"{_ROUTES}[0].order", "default", "1"),
+        ],
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    ("item", "message"),
+    [
+        (
+            {"predicates": {"field": "predicates", "grammar": "csv", "positional": "_pos_"}},
+            "grammar",
+        ),
+        ({"path": {"name": "Path", "args": ["patterns"], "gather": "set"}}, "gather"),
+        ({"requirements": {"Header": {"kind": "form", "args": ["header"]}}}, "kind"),
+        ({"peer": {"field": "uri", "direction": "sideways"}}, "direction"),
+        ({"pass_through": "Host"}, "pass_through"),
+    ],
+    ids=["grammar", "gather", "kind", "direction", "pass_through"],
+)
+def test_an_indexed_block_of_the_wrong_shape_is_refused_at_load(
+    tmp_path: Path, item: dict, message: str
+):
+    """Every value of the block reaches a row's identity or the stash: an unknown grammar
+    or gather word, a requirement kind outside the closed four, a direction outside
+    D00's set, a pass-through list that is not a list — refused at load, naming the
+    field."""
+    with pytest.raises(CatalogError, match=message):
+        config_join.run(
+            _edge_workspace(tmp_path, []), _edge_catalog({"indexed": _indexed(item=item)})
+        )
+
+
+def test_the_shipped_edge_catalog_derives_property_routes_through_derive_endpoints(tmp_path: Path):
+    """The shipped `spring-cloud-gateway-properties.yml` through `derive_endpoints` — the
+    dependency gate (its `detect.coordinates`), the `derives_rows` ordering, the stash
+    reset — on the two routes `fixtures/orders-gateway`'s `application.yml` declares,
+    spelled here as `resolved_config` rows."""
+    catalog = next(
+        c
+        for c in YamlCatalogSource(CATALOGS_DIR).load()
+        if c.id == "spring-cloud-gateway-properties"
+    )
+    prefix = "spring.cloud.gateway.server.webflux.routes"
+    workspace = _workspace(
+        tmp_path,
+        [],
+        [
+            (f"{prefix}[0].id", "default", "cfg-orders"),
+            (f"{prefix}[0].uri", "default", "lb://orders"),
+            (f"{prefix}[0].predicates[0]", "default", "Path=/cfg/orders/**"),
+            (f"{prefix}[0].predicates[1]", "default", "Method=GET,POST"),
+            (f"{prefix}[0].predicates[2]", "default", "Header=X-Api,v2"),
+            (f"{prefix}[1].id", "default", "cfg-items"),
+            (f"{prefix}[1].uri", "default", "http://items.internal:8080"),
+            (f"{prefix}[1].predicates[0].name", "default", "Path"),
+            (f"{prefix}[1].predicates[0].args.patterns", "default", "/cfg/items/**"),
+        ],
+        coordinates=("org.springframework.cloud:spring-cloud-gateway-server-webflux",),
+    )
+    skipped = derive_endpoints(workspace, [catalog], capabilities={"resolved_config"})
+    rows = _edge_rows(workspace)
+    stash = _edge_stash(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert rows == [
+        ("inbound", "GET", "/cfg/orders/**", None, None, None, "resolved"),
+        ("inbound", "POST", "/cfg/orders/**", None, None, None, "resolved"),
+        ("inbound", None, "/cfg/items/**", None, None, None, "resolved"),
+        ("outbound", None, "http://items.internal:8080", None, None, None, "resolved"),
+        ("outbound", None, "lb://orders", None, None, None, "resolved"),
+    ]
+    assert stash == [
+        (None, None, "GET", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),
+        (None, None, "POST", "/cfg/orders/**", "header", "X-Api", "v2", "required", "resolved"),
+    ]

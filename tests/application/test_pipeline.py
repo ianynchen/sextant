@@ -1122,9 +1122,13 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # since spec 2026-09-21 §3a: a catalog that only writes the channel edge's
     # read end runs before every engine that reads it
     # (`_WRITES_ONLY_THE_CHANNEL_EDGE`), skipped or not.
+    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the fourth: a
+    # `config_join` file gated by its style, on a fixture that declares no Gateway —
+    # sorted among the runs-last group by filename, ahead of `spring-data-rest`.
     assert [entry.catalog_id for entry in report.skipped_catalogs] == [
         "spring-integration",
         "spring-rsocket",
+        "spring-cloud-gateway-properties",
         "spring-data-rest",
     ]
 

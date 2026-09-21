@@ -1218,12 +1218,53 @@ def test_gateway_header_and_query_predicates_reach_endpoint_metadata(gateway_tab
     `HeaderRoutePredicateFactory`/`QueryRoutePredicateFactory` each builds does not
     match the route without them. Against the row they guard, `/guarded/**`, whose
     `caller` is NULL: a gateway route has no handler, and an inbound metadata row's
-    `caller` is the handler (§4d). The fixture's other routes state nothing, so these two
-    rows are the table."""
+    `caller` is the handler (§4d). The fixture's other DSL routes state nothing.
+
+    *This pinned the table as exactly those two rows until `gateway-properties-routes`
+    (spec 2026-09-21 §7b): the PROPERTY route `cfg-orders` declares `Header=X-Api,v2`
+    beside `Method=GET,POST`, so the same requirement stands against each of its two
+    rows — through the same stash, joined by `None == None` on `caller` and `handler`
+    (`test_gateway_property_routes_derive_their_inbound_and_outbound_rows` below).*"""
     assert _requirements(gateway_tables["endpoint_metadata"]) == {
         (None, "/guarded/**", None, "header", "X-Api", "v2", "required", "resolved"),
         (None, "/guarded/**", None, "query", "debug", None, "required", "resolved"),
+        ("GET", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
+        ("POST", "/cfg/orders/**", None, "header", "X-Api", "v2", "required", "resolved"),
     }
+
+
+def test_gateway_property_routes_derive_their_inbound_and_outbound_rows(gateway_rows):
+    """`gateway-properties-routes` (spec 2026-09-21 §7b; CP-29), on
+    spring-cloud-gateway-server-webflux 5.0.0: the two routes `application.yml` declares
+    under `spring.cloud.gateway.server.webflux.routes` — `cfg-orders` in the shortcut
+    spelling (`Path=/cfg/orders/**`, `Method=GET,POST`, `Header=X-Api,v2`, `uri:
+    lb://orders`) and `cfg-items` in the map spelling (`name: Path`, `args.patterns:
+    /cfg/items/**`, `uri: http://items.internal:8080`) — read by
+    `spring-cloud-gateway-properties.yml` through `config_join`'s `indexed:` form.
+
+    Inbound: one row per verb for `cfg-orders`, one verb-less row for `cfg-items` (no
+    `Method=` → `method` NULL, resolved — §0b A7, the DSL's own rendering), the pattern
+    as the served path, no handler and no caller (a configured route dispatches to no
+    method), every row resolved. Outbound: one row per `uri`, the target VERBATIM as the
+    `path` with `peer` NULL — exactly the shape `spring-cloud-gateway-outbound.yml`
+    publishes for the DSL's `uri(…)` (`test_rest_outbound_delivered.py`): a routing
+    destination kept whole, never split into a peer and an empty path. The DSL pair's
+    own rows are untouched (their catalog ids are not this one's), and the `Header=`
+    requirement is asserted above."""
+    rows = [r for r in gateway_rows if r["catalog_id"] == "spring-cloud-gateway-properties"]
+    identities = {(r["direction"], r["method"], r["path"], r["resolution"]) for r in rows}
+    assert identities == {
+        ("inbound", "GET", "/cfg/orders/**", "resolved"),
+        ("inbound", "POST", "/cfg/orders/**", "resolved"),
+        ("inbound", None, "/cfg/items/**", "resolved"),
+        ("outbound", None, "lb://orders", "resolved"),
+        ("outbound", None, "http://items.internal:8080", "resolved"),
+    }, sorted(identities, key=str)
+    assert len(rows) == 5, sorted(identities, key=str)
+    assert all(r["handler"] is None and r["caller"] is None and r["peer"] is None for r in rows)
+    assert all(r["protocol"] == "http" and r["evidence"] == "compiler" for r in rows)
+    dsl = {r["catalog_id"] for r in gateway_rows} - {"spring-cloud-gateway-properties"}
+    assert dsl == {"spring-cloud-gateway", "spring-cloud-gateway-outbound"}, dsl
 
 
 # --- §5b `request_params`: what each framework's binder enforces (CP-25 rows 2–12) ------

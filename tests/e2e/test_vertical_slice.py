@@ -1410,9 +1410,12 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # spec 2026-09-21 §3a: a catalog that only writes the channel edge's read
     # end runs before every engine that reads it (`resolve/endpoints.py`).
     metadata = json.loads((full_run / "metadata.json").read_text())
+    # `spring-cloud-gateway-properties` (spec 2026-09-21 §7b) is the third: a
+    # `config_join` file gated by its style, on a fixture that declares no Gateway.
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
         "spring-integration",
         "spring-rsocket",
+        "spring-cloud-gateway-properties",
     ]
 
     workspace = DuckDbWorkspace(full_run / "workspace.duckdb")

@@ -4453,10 +4453,10 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     **Six catalogs ARE skipped here, and that is the behaviour rather than a
     hole in it** (2O design §2a, ruling R9; `A-C5`; F2 §3.6): the two
     dependency-gated STYLES derive from evidence that names no framework —
-    `spring-data-rest` from an interface that names no HTTP, the three
-    `config_join` files from a method's return type, a configuration key and an
-    annotation argument — so all four are gated on the module's build declaring
-    the framework.
+    `spring-data-rest` from an interface that names no HTTP, the four
+    `config_join` files from a method's return type, a configuration key, an
+    annotation argument and an indexed configuration list — so all five are gated
+    on the module's build declaring the framework.
 
     `spring-rsocket`, `spring-stomp` and `spring-stomp-advice` are the fifth,
     sixth and seventh, and they are gated per-CATALOG rather than by style
@@ -4490,6 +4490,9 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
 
     assert [catalog.id for catalog in catalogs] != []
     assert sorted(entry.catalog_id for entry in skipped) == [
+        # The fourth `config_join` file (spec 2026-09-21 §7b), gated by its style like
+        # the other three: a configuration key names no framework on its own.
+        "spring-cloud-gateway-properties",
         "spring-cloud-stream",
         "spring-data-rest",
         "spring-integration",

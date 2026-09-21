@@ -1646,6 +1646,22 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "config_join.indexed-item-exists-through-its-read-fields": Guard(
+        what="an `indexed:` item is read into existence only by the fields the block "
+        "declares — its predicate list and its peer field; a `<prefix>[N]` carrying only "
+        "`id`, `order`, `filters[…]` or `metadata` is no item at all",
+        why="spec 2026-09-21 §7b: an item naming no path serves every path, `/**`. Without "
+        "this filter an entry whose only keys are the unread ones — an `id`, a filter "
+        "list — becomes an item with no predicates and mints a resolved `/**` row for a "
+        "route that declares no address and no target",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/config_join.py",
+                find="        if not (field.startswith(predicates) or field == peer):\n            continue",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n            continue",
+            ),
+        ),
+    ),
     "config_join.unmapped-binder-derives-no-row": Guard(
         what="a binding whose configured binder name the catalog maps to no protocol derives "
         "NO ROW — never one on the catalog's own declared `protocol:`",

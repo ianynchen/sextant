@@ -1,0 +1,34 @@
+# application.yml — the gateway's PROPERTY routes (`gateway-properties-routes`, spec
+# 2026-09-21 §7b), the configuration twin of the Java DSL in `GatewayRoutes.java`. Two
+# routes, one in each spelling Spring Cloud Gateway 5.0.0 binds (CP-29 rows 3 and 5):
+#
+#   * `cfg-orders` — the SHORTCUT form, `Name=arg,arg`: `Path` with one pattern,
+#     `Method` with two verbs (one row each), `Header` with a name and a regexp (a
+#     request requirement on both rows, never part of the address), and a load-balanced
+#     `lb://` target.
+#   * `cfg-items` — the MAP form, `name:` + `args.<field>`, with the field name the
+#     factory's own `shortcutFieldOrder` spells (`patterns`); no `Method`, so the route
+#     serves every verb — `method` NULL, resolved (§0b A7) — and a plain `http://`
+#     target.
+#
+# Paths under `/cfg` so the DSL's rows (`/orders/**`, `/guarded/**`, …) cannot be
+# mistaken for these. `filters` deliberately absent: they are not read (they rewrite
+# the UPSTREAM path), and a route with none is what the boundary statement describes.
+spring:
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: cfg-orders
+              uri: lb://orders
+              predicates:
+                - Path=/cfg/orders/**
+                - Method=GET,POST
+                - Header=X-Api,v2
+            - id: cfg-items
+              uri: http://items.internal:8080
+              predicates:
+                - name: Path
+                  args:
+                    patterns: /cfg/items/**
