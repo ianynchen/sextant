@@ -64,9 +64,11 @@ here would restate those documents rather than add anything.
   fluent catalogs' goldens are byte-identical (eight shipped before this branch): a `{owner, method: <init>}` root that is its
   own terminal; root and step `descriptor:` matching on parameter types where a name has
   overloads; per-root `direction:`; the captures `channel_link` (the channel a registration
-  feeds), `channel_source` (the channel a flow consumes) and `handler` (a lambda body's
-  symbol, `none` for a discard), each reading `argN` or `{bean_via: argN}` — the argument as a
-  bean, resolved through the fold and, for a container, its own chain folded in one hop;
+  feeds) and `channel_source` (the channel a flow consumes), each reading `argN` or
+  `{bean_via: argN}` — the argument as a bean, resolved through the fold and, for a container,
+  its own chain folded in one hop — and `handler` (a lambda body's symbol), reading `argN` or
+  the literal `none` for a discard, never `{bean_via: argN}` (a bean handler is a consumer the
+  walk does not name: NULL, the row resolved);
   `beans:` roots reachable only that way; `method_annotation: {annotation, arg, into}`;
   sticky `poisons:` (a `divert` means the message may leave the flow); `compose:` for a
   two-half address; `undeclared_steps: {owner, poisons}`; and the continuation —

@@ -2046,6 +2046,29 @@ to `t` and the row reads `unresolved`. Stated on both catalogs.
 setter-shaped poisons are declared liftable (`poisons: {channel: liftable}`, say) while
 divert-shaped ones stay sticky — a catalog word, once a real module needs it.
 
+### OI-121 — `handler` is a last-wins slot
+**Minor · logged 2026-09-21, found at the final whole-branch review · `src/sextant/application/resolve/engines/fluent.py::_fold_site`, `_derive`**
+
+`from("ch").channel("x").handle(h1).handle(h2)` captures `handler` twice; the capture dict keeps
+`h2` (last wins, D02 §4), so the flow writes `read_by(x, h2)` and nothing for `h1`. The framework
+subscribes `h1` to `x` and hands `h1`'s reply to `h2` on an anonymous channel — so `x`'s reader
+is `h1`, and the row the join mints against `x` names `h2` as its handler and `h1` nowhere. A
+mis-attribution one step along the chain, `OI-115`'s shape one capture over; the wire and the
+channel are right, the handler column is the next consumer rather than the first.
+
+**What happens today:** no fixture flow handles twice in one chain; measured on the invented
+flow catalog, the bindings table holds the one `read_by(x, h2)` edge.
+
+**Real triggering input:** a flow that chains two `handle(...)` steps — the second a
+service activator on the first's reply. Uncommon under a channel source; the idiomatic flow
+handles once or transforms between. The Kafka catalog's boundary list states `handle(Object
+bean, String method)` where the bean is the module's and the lambda flow form; this is the third
+`handle` shape it does not read whole.
+
+**Verify:** `grep -n '"handler" in folded' src/sextant/application/resolve/engines/fluent.py` —
+one slot, folded by `_fold` last-wins. **Closes** with `OI-115`: the chain's handlers as a LIST in
+walk order, the first after a link its reader and each later one the previous one's consumer.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

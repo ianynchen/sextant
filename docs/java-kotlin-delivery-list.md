@@ -568,6 +568,9 @@ carrying no declaration order; `${key:default}` never applying its default in a 
 hop re-walked per reference; `_REQUIREMENT_KINDS` spelled twice; no mechanical descriptor pin for
 `roots:`/`steps:`; `setTopicExpression` then `setTopic` reading unresolved.
 
+**Logged 2026-09-21 (Group E final review) — one issue, Minor, recorded as `OI-121` in
+`open-issues.md`:** `handler` as a last-wins slot (`handle(h1).handle(h2)` keeps `h2` alone).
+
 **Logged 2026-09-20 (Kotlin/Ktor spec, Tasks 1–15) — eight issues real input can reach only
 at the edges, none Critical or Major, recorded as `OI-96`–`OI-103` in `open-issues.md`:**
 `apply_protocol_hints` reclassifying an outbound row after `fluent` wrote its metadata;
