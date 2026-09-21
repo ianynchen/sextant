@@ -98,7 +98,7 @@ that kind and name fails the test the way a missing required body field does. En
 marked `optional` or `absent`, and entries whose `requirement` is NULL (a bare read in the
 handler, stating nothing), do not affect matching. An entry's `value` is the framework's OWN
 spelling of the demand — a literal for Ktor and Spring, the regex as written for Spring Cloud
-Gateway's `header("X-Request-Id", "\\d+")`, matched there as a whole-string regex — so the
+Gateway's `header("X-Request-Id", "\\d+")`, matched there as a whole-string regex (CP-26 row 6) — so the
 stitcher compares a server entry's value with a client's for EQUALITY only where the spelling
 is a literal; a regex-valued demand is matched by name alone, its value a statement about the
 shape of what the client sends that this test does not evaluate. The rows exist today, written

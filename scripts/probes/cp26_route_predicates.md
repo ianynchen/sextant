@@ -16,7 +16,10 @@ gateway's six overloads and which carry a value; Q4 whether `BooleanOpSpec` over
 them (if not, the catalog declares the same rule on both owners because the facts carry
 the receiver's static type); Q5 the `Header=`/`Query=`/`Cookie=` properties spellings,
 recorded for `gateway-properties-routes` — out of §5c's scope, and left here so the item
-that lands it starts from a measurement.
+that lands it starts from a measurement; Q6 (added 2026-09-20, after the whole-branch
+review) how each of the three factories MATCHES the regex a route hands it — the reading
+the `value` column's "regex as written" rule rests on (spec §5a, D01 §3, D02 §2k, M06),
+which those documents had cited as a `javap` read with no row to point at.
 
 **What this probe does not settle.** Nothing was run; every cell is a `javap` read of a
 class file in one of three jars. It measures the compiled surface, not the source or the
@@ -25,10 +28,11 @@ falls through to the next route (and to 404) when a predicate is false is the fu
 router's dispatch contract, read off one predicate here and not re-derived from
 `RouterFunctions`. Q3 reads the overload SIGNATURES; what the `*RoutePredicateFactory`
 each builds does with an absent header (the route does not match) is the gateway's
-documented predicate contract and is not re-read off the factory bodies. Q5 reads the
-shortcut field ORDER only, not the properties binder that consumes it. Nothing here
-measures the resolve-layer rules the spec specifies, which did not yet exist when this was
-recorded.
+documented predicate contract and is not re-read off the factory bodies — Q6 reads those
+bodies for ONE thing, the call that matches a present value against `regexp`, and stops
+there. Q5 reads the shortcut field ORDER only, not the properties binder that consumes
+it. Nothing here measures the resolve-layer rules the spec specifies, which did not yet
+exist when this was recorded.
 
 **Version scope (§5.4).** `org.springframework:spring-webflux` and
 `org.springframework:spring-webmvc` at Maven coordinate `6.1.6`, and
@@ -70,6 +74,7 @@ named artifact.
 | 3 | PredicateSpec header/query/cookie overloads | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 | `header(Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec; ; header(Ljava/lang/String;Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec; ; query(Ljava/lang/String;Ljava/util/function/Predicate;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec; ; query(Ljava/lang/String;Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec; ; query(Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec; ; cookie(Ljava/lang/String;Ljava/lang/String;)Lorg/springframework/cloud/gateway/route/builder/BooleanSpec;` |
 | 4 | BooleanSpec$BooleanOpSpec: superclass, declared members, whether header/query/cookie are overridden | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 | `public class org.springframework.cloud.gateway.route.builder.BooleanSpec$BooleanOpSpec extends org.springframework.cloud.gateway.route.builder.PredicateSpec ; declares: asyncPredicate, nested, not, predicate ; header/query/cookie overridden here: none (inherited)` |
 | 5 | Header/Query/Cookie RoutePredicateFactory.shortcutFieldOrder — the properties spellings | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 | `HeaderRoutePredicateFactory.shortcutFieldOrder: header, regexp ; QueryRoutePredicateFactory.shortcutFieldOrder: param, regexp, predicate ; CookieRoutePredicateFactory.shortcutFieldOrder: name, regexp` |
+| 6 | Header/Query/Cookie RoutePredicateFactory: what apply builds and how its predicate matches regexp — Pattern.asMatchPredicate or String.matches | `org.springframework.cloud:spring-cloud-gateway-server-webflux` | 5.0.0 | `HeaderRoutePredicateFactory.apply: invokestatic Method java/util/regex/Pattern.compile:(Ljava/lang/String;)Ljava/util/regex/Pattern; ; invokespecial Method org/springframework/cloud/gateway/handler/predicate/HeaderRoutePredicateFactory$1."<init>":(Lorg/springframework/cloud/gateway/handler/predicate/HeaderRoutePredicateFactory;Lorg/springframework/cloud/gateway/handler/predicate/HeaderRoutePredicateFactory$Config;Ljava/util/regex/Pattern;)V ; $1.test: invokeinterface InterfaceMethod org/springframework/http/server/reactive/ServerHttpRequest.getHeaders:()Lorg/springframework/http/HttpHeaders; ; invokevirtual Method java/util/regex/Pattern.asMatchPredicate:()Ljava/util/function/Predicate; ; QueryRoutePredicateFactory.apply: invokespecial Method org/springframework/cloud/gateway/handler/predicate/QueryRoutePredicateFactory$1."<init>":(Lorg/springframework/cloud/gateway/handler/predicate/QueryRoutePredicateFactory;Lorg/springframework/cloud/gateway/handler/predicate/QueryRoutePredicateFactory$Config;)V ; $1.test: invokeinterface InterfaceMethod org/springframework/http/server/reactive/ServerHttpRequest.getQueryParams:()Lorg/springframework/util/MultiValueMap; ; invokeinterface InterfaceMethod org/springframework/http/server/reactive/ServerHttpRequest.getQueryParams:()Lorg/springframework/util/MultiValueMap; ; invokedynamic InvokeDynamic #0:test:(Lorg/springframework/cloud/gateway/handler/predicate/QueryRoutePredicateFactory$Config;)Ljava/util/function/Predicate; ; $1.lambda$test$0: invokevirtual Method java/lang/String.matches:(Ljava/lang/String;)Z ; CookieRoutePredicateFactory.apply: invokespecial Method org/springframework/cloud/gateway/handler/predicate/CookieRoutePredicateFactory$1."<init>":(Lorg/springframework/cloud/gateway/handler/predicate/CookieRoutePredicateFactory;Lorg/springframework/cloud/gateway/handler/predicate/CookieRoutePredicateFactory$Config;)V ; $1.test: invokeinterface InterfaceMethod org/springframework/http/server/reactive/ServerHttpRequest.getCookies:()Lorg/springframework/util/MultiValueMap; ; invokedynamic InvokeDynamic #0:test:(Lorg/springframework/cloud/gateway/handler/predicate/CookieRoutePredicateFactory$Config;)Ljava/util/function/Predicate; ; $1.lambda$test$0: invokevirtual Method org/springframework/http/HttpCookie.getValue:()Ljava/lang/String; ; invokevirtual Method java/lang/String.matches:(Ljava/lang/String;)Z` |
 ```
 
 ## Verdicts
@@ -129,4 +134,19 @@ regexp=.*`. Property-declared routes derive nothing today (`gateway-properties-r
 open); when that item lands, its predicates land as the same `request_requirement` word on
 these spellings.
 
-`measured: 2026-09-20`, all five questions (six rows), on the three archives the scope names.
+**Q6 — all three factories match the regex against the whole value (§5a, §5c; the
+`value` column).** `HeaderRoutePredicateFactory.apply` compiles `regexp` with
+`Pattern.compile` and hands the `Pattern` to its anonymous predicate, whose `test` reads
+the request's headers and matches each value with `Pattern.asMatchPredicate()`.
+`QueryRoutePredicateFactory$1.test` reads `getQueryParams` and tests each value through a
+lambda, `lambda$test$0`, that calls `String.matches(regexp)`;
+`CookieRoutePredicateFactory$1.test` reads `getCookies` and its `lambda$test$0` calls
+`String.matches(regexp)` on `HttpCookie.getValue()`. Both JDK calls match the ENTIRE
+input (`asMatchPredicate` is `matcher(s).matches()`, `String.matches` is
+`Pattern.matches` — the JDK's documented contract, not re-read here). So
+`header("X-Request-Id", "\\d+")` demands a
+value the WHOLE of which is digits, and the catalog's `value` carries `\\d+` as written:
+it is the framework's own spelling of the demand, not a literal a client must send, and a
+consumer compares it for equality only where the spelling is a literal (M06).
+
+`measured: 2026-09-20`, all six questions (seven rows), on the three archives the scope names.

@@ -4187,8 +4187,9 @@ that cannot tell query from form: Spring's `@RequestParam`/`params=` and the Ser
 value or NULL — a literal for Ktor's `header(name, value)` and Spring's `params = "view=summary"`,
 the regex AS WRITTEN for Spring Cloud Gateway's `header("X-Request-Id", "\\d+")`, which the
 framework matches as a whole-string regex (`Pattern.asMatchPredicate` for `header`,
-`String.matches` for `query`/`cookie`, spring-cloud-gateway-server-webflux 5.0.0; a consumer compares values for equality only where
-the spelling is a literal, [M06](M06-stitcher.md)) — `evidence:
+`String.matches` for `query`/`cookie` — spring-cloud-gateway-server-webflux 5.0.0, CP-26
+row 6; a consumer compares values for equality only where the spelling is a literal,
+[M06](M06-stitcher.md)) — `evidence:
 compiler`, and **`requirement`** stating what the FRAMEWORK enforces — `required` (it rejects
 a request without it), `optional` (it serves one without it), `absent` (it requires it
 missing) — or NULL where the code states nothing ([D01](D01-graph-schema.md) §3, A3). A read

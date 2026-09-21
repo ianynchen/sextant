@@ -268,9 +268,9 @@ the handler body does with the value. An inbound row's `value` is the framework'
 spelling of the demanded value, or NULL: a literal for Ktor's `header(name, value)` and
 Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's
 `header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex
-(`Pattern.asMatchPredicate` for `header`, `String.matches` for `query`/`cookie`,
-spring-cloud-gateway-server-webflux 5.0.0) — so a
-consumer compares two values for equality only where the spelling is a literal
+(`Pattern.asMatchPredicate` for `header`, `String.matches` for `query`/`cookie` —
+spring-cloud-gateway-server-webflux 5.0.0, CP-26 row 6) — so a consumer compares two
+values for equality only where the spelling is a literal
 ([M06](M06-stitcher.md)). NULL on an inbound row means the code states nothing
 — a bare read in a handler body says only that the handler reads the value — and NULL on
 every outbound row is the existing meaning: an entry sent has no requirement. The insert is

@@ -710,7 +710,7 @@ def q18_micronaut_fallback_spelling(micronaut_core: Path, micronaut_http: Path) 
         named_by = [
             s
             for s in _steps(_method_body(output, method))
-            if "stringValue" in s or "Argument.getName" in s or "orElse:" in s
+            if "stringValue" in s or "Argument.getName" in s or "orElse:" in s or "doBind" in s
         ]
         overrides = "getFallbackFormat(" in output
         cells.append(

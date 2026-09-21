@@ -457,14 +457,18 @@ def test_name_is_the_first_present_name_attribute_else_the_parameters_own(tmp_pa
 )
 def test_the_fallback_spelling_is_the_binders_own(name: str, hyphenated: str, capitalized: str):
     """CP-25 row 18: `hyphenated` is `NameUtils.hyphenate(name)` and
-    `hyphenated-capitalized` is `hyphenate(capitalize(name), false)`, mirrored from
-    micronaut-core 4.7.6's bytecode. Every expected value here is what the REAL
-    `NameUtils` returned for the name (`java -cp micronaut-core-4.7.6.jar`, 2026-09-20),
-    including the ones a reader would not guess: `capitalize` leaves `xTenant` alone
-    (lower-case first, upper-case second), so the header fallback is `x-Tenant`, not
-    `X-Tenant`; the lower-casing loop keeps an acronym together (`apiKEY` → `api-key`,
-    `HTTPClient` → `httpclient`) and splits after a digit only when the digit's own
-    predecessor was lower-case (`a1B` → `a1b`, `ab1C` → `ab1-c`)."""
+    `hyphenated-capitalized` is `hyphenate(capitalize(name), false)`, micronaut-core
+    4.7.6. The row records `hyphenate`'s two paths, `isHyphenatedLowerCase`'s regex,
+    `capitalize`'s early return and the branch predicates of both `separateCamelCase`
+    loops; `request_requirements.py`'s `_hyphenate`, `_separate_camel_case` and
+    `_capitalize` mirror those branches, and every expected value here is what the
+    recorded branches give for the name (the probe's write-up says how the mirror was
+    checked) — including the ones a reader would not guess:
+    `capitalize` leaves `xTenant` alone (lower-case first, upper-case second), so the
+    header fallback is `x-Tenant`, not `X-Tenant`; the lower-casing loop keeps an
+    acronym together (`apiKEY` → `api-key`, `HTTPClient` → `httpclient`) and splits
+    after a digit only when the digit's own predecessor was lower-case (`a1B` → `a1b`,
+    `ab1C` → `ab1-c`)."""
     assert _fallback(name, "hyphenated") == hyphenated
     assert _fallback(name, "hyphenated-capitalized") == capitalized
 
