@@ -485,7 +485,15 @@ run 34669970510; the cell reads `✅`.
 | `sqs-template-receive` | **shipped** (PR A2 Task 2, commit `deb2355`) — `spring-sqs-template-receive.yml` reads all four `receive`/`receiveMany`/`receiveAsync`/`receiveManyAsync` overloads through the options lambda, the queue named inside (`opts.queue("orders-queue")`); handler = the polling method, caller NULL. `G-44`'s fourth and final quarter. Not yet in ```closed — awaiting this PR's CI |
 | `micronaut-jms-over-sqs` | **closed** — implemented, pinned by `test_micronaut_jms_over_sqs_is_sqs_on_both_sides` (`tests/e2e/test_messaging_micronaut_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `micronaut-jms.yml` and `micronaut-jms-producer.yml` each carry a `protocol_hint.hint_when` on `@JMSListener`/`@JMSProducer`'s `value` attribute (R2: `value()` is the sole address-bearing attribute — there is no `connectionFactory` attribute, correcting the wording this row used to carry) equalling `SqsConfiguration.CONNECTION_FACTORY_BEAN_NAME` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §5b); a listener AND a producer bound to that factory both reclassify to `sqs` and link with a Spring SQS sender/listener on the shared queue name (DR-5). **The `@JMSProducer` half shipped with it (ruled 2026-09-18)**: the register named only the listener side, but the same factory-name switch applies identically to the producer's own `@JMSProducer.value()`, so both directions closed in one task (B/C Task 12) rather than leaving the outbound half open under a name of its own. Was: `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms` though the wire is SQS, so a Spring SQS sender and this listener will not link; Category C (§4) |
 
-### Google Pub/Sub — DELIVERED pending CI (`pubsub-channel-adapter` implemented and pinned 2026-09-21; matrix `✅`)
+### Google Pub/Sub — NOT DELIVERED (no open blockers, pending CI; intention test `tests/e2e/test_google_pub_sub_delivered.py` not yet written)
+
+`pubsub-channel-adapter`, the row's last blocker, is implemented and pinned (2026-09-21), so the
+```delivery row is empty and the matrix cell reads `✅` — but the feature is still in
+```intention-test-missing, and this file's own rule is that none is called delivered without an
+intention test (the SSE precedent: the same shape, headed NOT DELIVERED). **Next step:** write
+`tests/e2e/test_google_pub_sub_delivered.py` — a Spring Boot fixture exercising `PubSubTemplate`,
+the raw client and the adapter, asserting on derived rows — and take the name out of
+```intention-test-missing; then the CI run.
 
 | # | issue |
 |---|---|

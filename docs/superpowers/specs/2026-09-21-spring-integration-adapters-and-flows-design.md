@@ -98,7 +98,7 @@ Every sentence the implementation changed carries an inline note; this table is 
 | M9 | §6 | `steps_from: spring-integration` is spelled `step_model: spring-integration`; the loader MERGES the model's `steps` and `undeclared_steps` into the catalog's `matches` (no `Catalog.step_model` field — nothing else would read it); the Pub/Sub catalog names the model too (for its channel-sourced `from` roots) | Task 6 (`c4b0d36`, `c100aab`) |
 | M10 | §11 | The `.transform(…)` pass-through sits on the AMQP DSL flow in the fixture (`Shape5Flows`), not the Kafka one; the Gateway fixture's map form spells `args.patterns`; the fixture files are `Shape4PubSub.java`, `Shape5Flows.java` and `fixtures/orders-gateway/src/main/resources/application.yml` | Task 6 (`2bbd0b4`), Task 8 (`91ace03`) |
 | M11 | §0 F3, §5 | 34 flow-definition members, not 35 (CP-27 row 2) | Task 6 (`2bbd0b4`) |
-| M12 | §12 | D00 carries no fact change; D01 gains `channel_bindings` with `resolution` role-dependent (the wire's on `fed_by`, the NAME's on `read_by`); the fluent parameter rung (`@Value` on the method's own parameter) now answers in fluent for every fluent catalog | Task 6 (`c4b0d36`, `c100aab`), Task 9 |
+| M12 | §6, §12 | D00 carries no fact change; D01 gains `channel_bindings` with `resolution` role-dependent (the wire's on `fed_by`, the NAME's on `read_by`); the fluent parameter rung (`@Value` on the method's own parameter) now answers in fluent for every fluent catalog | Task 6 (`c4b0d36`, `c100aab`), Task 9 |
 
 ---
 
@@ -615,7 +615,9 @@ nowhere in the 5.0.0 jar (row 2) and is not declared. Gateway `filters` are `OI-
 
 ## 10. Nothing existing moves — the proof
 
-1. Every new fluent key is optional; the thirteen shipped fluent catalogs declare none and their
+1. Every new fluent key is optional; the thirteen shipped fluent catalogs *(amended 2026-09-21
+   during implementation: EIGHT fluent catalogs shipped before the branch — `grep -l "^style: fluent"` at
+   `cebc7b5` — and eleven ship now, the three broker catalogs added)* declare none and their
    goldens stay byte-identical (the plan lands the keys before any catalog uses them and runs the
    gate). `config_join` changes only in `gaps` (ask only for a `read_by` with no `fed_by`) and the
    `indexed:` form.

@@ -146,7 +146,8 @@ _NO_KEY_TEMPLATE = (
 _NO_AGREED_VALUE = "resolved_config carries no value every environment agrees on for `{key}`"
 # The two ends of the channel edge this engine touches (spec 2026-09-21 §3b): it WRITES
 # `read_by` — a handler whose annotation names a channel — and READS `fed_by` in `gaps`,
-# to ask only about a channel nothing fed. `sends_to` is the slot for later writers.
+# to ask only about a channel nothing fed. `sends_to` — a handler's output channel,
+# written by the fluent engine — is read by nothing here (`OI-107`).
 _READ_BY = "read_by"
 _FED_BY = "fed_by"
 

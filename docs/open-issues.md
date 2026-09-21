@@ -1789,8 +1789,9 @@ handler reads `out`, so nothing is visibly wrong.
 **Real triggering input:** a flow whose handler's output channel is read by an annotated
 handler — the classic two-stage Spring Integration pipeline.
 
-**Verify:** `grep -n "sends_to\|_SENDS_TO" src/sextant/application/resolve/channel_bindings.py
-src/sextant/application/resolve/engines/config_join.py` — empty. **Closes** when the mint pass
+**Verify:** `grep -n "sends_to\|_SENDS_TO" src/sextant/application/resolve/channel_bindings.py` —
+empty; in `engines/config_join.py` the role is named only in the comment above `_READ_BY`, which
+says it is read by nothing there — no `_SENDS_TO` constant, no query on the role. **Closes** when the mint pass
 or `gaps` reads the role — a `sends_to` is a feeder whose wire is the sender's own row, so the
 reader's question is answerable by that row — and `@MessagingGateway`/`channel.send(…)` gain
 writers on the same role.

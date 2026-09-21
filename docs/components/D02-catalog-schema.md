@@ -40,7 +40,7 @@ matches:
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required`, `satisfied_by` and `superseded_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`; `superseded_by` is read for every catalog that declares it** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
-| `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1c. Optional; a catalog with none claims its framework entire |
+| `slice` | The part of its framework's surface this catalog does NOT read, named method by method with the reason — §1e. Optional; a catalog with none claims its framework entire |
 | `requires` | Capabilities — scanner-declared or pipeline-declared (below). **If unmet, the catalog does not run and the skip is reported.** |
 | `matches` | Style-specific |
 
@@ -143,7 +143,7 @@ per catalog because that is a property of the framework, not of the style.
 - it does not, and nothing leaves the method → silence. Nobody can start it, so it is
   provably not a boundary (GUIDELINES §8: here the absence genuinely is unambiguous).
 
-### 1c. `slice` — what a catalog does not read (F2 §3.8)
+### 1e. `slice` — what a catalog does not read (F2 §3.8)
 
 **Catalog presence used to mean completeness, and it never was.** `spring-jms-template`
 reads ONE of the 37 methods `JmsTemplate` declares; `aws-sqs-sdk` reads one of
