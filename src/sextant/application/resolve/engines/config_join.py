@@ -806,14 +806,17 @@ class _Predicate:
 
 
 class _Item:
-    """One `<prefix>[N]` item: the values every environment agreed on, by field, and
-    the keys they did not — read once for `run` and `gaps` alike."""
+    """One `<prefix>[N]` item: the values every environment agreed on, by field; the
+    fields declared and resolved NOWHERE (a placeholder no environment answers —
+    `unread`, rendered unresolved); and the keys environments answer DIFFERENTLY
+    (`diverged` — no row, one question). Read once for `run` and `gaps` alike."""
 
-    __slots__ = ("diverged", "index", "values")
+    __slots__ = ("diverged", "index", "unread", "values")
 
     def __init__(self, index: int) -> None:
         self.index = index
         self.values: dict[str, str] = {}
+        self.unread: set[str] = set()
         self.diverged: dict[str, dict[str, str | None]] = {}
 
 
@@ -824,9 +827,12 @@ def _indexed_items(
     block reads — the predicate list and the peer field. `id`, `order`, `metadata` and
     `filters[…]` are not read: the served path is the predicate's, and a filter that
     rewrites it changes the UPSTREAM path (spec §7b's stated boundary). Each read key
-    passes through `_agreed`; one that environments answer differently — or that only
-    one environment declares — lands in `diverged`, and `run` mints nothing for that
-    item while `gaps` files the question."""
+    is settled across environments three ways — `_agreed`'s one answer, split (fix
+    round 1): one value everywhere is the value; a value in SOME environments, or two
+    values, is true divergence (`diverged` — `run` mints nothing for the item, `gaps`
+    files the question); declared and unresolved EVERYWHERE — `uri: ${ORDERS_URL}`
+    with no environment answering — is `unread`, and the field renders unresolved
+    while the item's other rows are minted."""
     block = catalog.matches[_INDEXED]
     prefix = str(block["prefix"]) + "["
     predicates = str(block["item"]["predicates"]["field"]) + "["
@@ -838,15 +844,18 @@ def _indexed_items(
         close = key.find("].", len(prefix))
         if close < 0 or not key[len(prefix) : close].isdigit():
             continue
+        index = int(key[len(prefix) : close])
         field = key[close + 2 :]
         if not (field.startswith(predicates) or field == peer):
             continue
-        item = items.setdefault(int(key[len(prefix) : close]), _Item(int(key[len(prefix) : close])))
-        agreed = _agreed(config, key)
-        if agreed is None:
+        item = items.setdefault(index, _Item(index))
+        distinct = set(per_environment.values())
+        if len(distinct) > 1:
             item.diverged[key] = per_environment
-        else:
-            item.values[field] = agreed
+        elif distinct == {None}:
+            item.unread.add(field)
+        elif distinct:
+            item.values[field] = str(distinct.pop())
     return str(block["prefix"]), [items[index] for index in sorted(items)]
 
 
@@ -891,78 +900,123 @@ def _fields_of(
     predicate: _Predicate, rule: dict[str, Any], positional: str
 ) -> dict[str, list[str]]:
     """The predicate's arguments bound onto the rule's declared field order (CP-29 row
-    7): positional argument N is field N (`DEFAULT`); under `gather: list` every
-    positional argument goes into a list under field 0; under `list_tail_flag` a
-    trailing `true`/`false` goes to field 1 and the rest into that list. A named
-    argument binds to its own field, split on `,` where the field gathers a list —
-    the binder's own reading of one scalar into a list."""
+    7). Under `gather: list` / `list_tail_flag` the framework's normaliser reads
+    `args.values()` and tests NO key (`ShortcutType$2`/`$3.normalize`, CP-29 row 7) —
+    so EVERY argument is collected: the positional `<positional>K` by K, then the
+    remaining keys in flattened order (`k[N]` by N, then by name — `args.patterns:
+    [/a/**, /b/**]` reaches here as `patterns[0]`, `patterns[1]`; `args.pattern:
+    /x/**` as one value under a key the framework would not have tested either),
+    into a list under field 0; under `list_tail_flag` a trailing `true`/`false` is
+    field 1 (`matchTrailingSlash`). A map-form scalar is ONE value, never split on
+    `,` (fix round 1: the split was unmeasured; the binder wraps a scalar in a
+    one-element list). Without `gather` (`DEFAULT`) positional K is field K and a
+    named key binds to its own field."""
     order = [str(name) for name in rule["args"]]
     gather = rule.get("gather")
-    ordered = sorted(
+    indexed = sorted(
         (int(key[len(positional) :]), value)
         for key, value in predicate.args.items()
         if key.startswith(positional) and key[len(positional) :].isdigit()
     )
-    values = [value for _, value in ordered]
+    values = [value for _, value in indexed]
     fields: dict[str, list[str]] = {}
     if gather in _GATHERS:
+        values.extend(
+            value
+            for _, value in sorted(
+                (_flattened_order(key), value)
+                for key, value in predicate.args.items()
+                if not (key.startswith(positional) and key[len(positional) :].isdigit())
+            )
+        )
         if gather == _GATHER_LIST_TAIL_FLAG and values and values[-1].lower() in ("true", "false"):
             fields[order[1]] = [values.pop()]
         if values:
             fields[order[0]] = values
-    else:
-        for n, value in enumerate(values):
-            if n < len(order):
-                fields[order[n]] = [value]
+        return fields
+    for n, value in enumerate(values):
+        if n < len(order):
+            fields[order[n]] = [value]
     for key, value in predicate.args.items():
-        if key.startswith(positional) or key not in order:
-            continue
-        gathers = gather in _GATHERS and key == order[0]
-        fields[key] = [t.strip() for t in value.split(",") if t.strip()] if gathers else [value]
+        if key in order:
+            fields[key] = [value]
     return fields
+
+
+def _flattened_order(key: str) -> tuple[str, int]:
+    """`(base, N)` for a flattened list key `base[N]`, `(key, -1)` for a bare one —
+    the order the config layer wrote a list in (`ingress/read/yaml_config.py`)."""
+    if key.endswith("]") and "[" in key:
+        base, _, index = key[:-1].rpartition("[")
+        if index.isdigit():
+            return (base, int(index))
+    return (key, -1)
 
 
 def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
     """One inbound row per (pattern × verb) and one outbound row per target, per item
-    every environment agrees on. The rows carry no handler and no caller — a route
-    declared in configuration dispatches to no method — so their identity is the
+    no environment answers differently. The rows carry no handler and no caller — a
+    route declared in configuration dispatches to no method — so their identity is the
     address alone, and their requirements join the stash by `None == None`
     (`request_requirements._from_stash`). A predicate whose name the block does not
     read — neither the path, the verbs, a requirement nor a pass-through — narrows the
     served set in a way nothing here can read, and every row of that item says
     `unresolved` with the address it did read (§8: unresolved is an answer, invention
-    is not); the framework's own refusal (a shortcut with no `=`) is the same answer.
-    The target is written VERBATIM with `peer` NULL — a routing destination the
-    framework resolves, kept whole (D02), exactly as the DSL sibling publishes it."""
+    is not); the framework's own refusal (a shortcut with no `=`) is the same answer;
+    a predicate resolved in no environment is unread — the item's INBOUND rows say
+    `unresolved` (the target is untouched: it was read), and where no pattern was read
+    at all the path is NULL rather than the any-path pattern (nothing here names an
+    address). A verb that is not one verb — a map-form scalar still carrying the
+    grammar's `,` — is unread the same way: `method` NULL, the inbound row
+    `unresolved` (the framework binds a method that matches nothing; publishing it as
+    a verb would be a phantom). The target is written VERBATIM with `peer` NULL
+    — a routing destination the framework resolves, kept whole (D02), exactly as the
+    DSL sibling publishes it — or NULL and `unresolved` where no environment resolved
+    it.
+
+    Two items collapsing to ONE address (fix round 1; spec 2026-09-19 §4d, the
+    combinator's `_shared` rule restated): two header-versioned routes on `/api/**`
+    are two ways the framework may dispatch one address, and a request satisfying
+    EITHER is served — so the row's requirements are those every alternative makes
+    (an intersection, in the first item's order), and any unresolved alternative
+    makes the row unresolved."""
     block = catalog.matches[_INDEXED]
     item_block = block["item"]
+    predicates_field = str(item_block["predicates"]["field"]) + "["
     positional = str(item_block["predicates"]["positional"])
     path_rule, method_rule = item_block["path"], item_block["method"]
     requirement_rules: dict[str, dict[str, Any]] = item_block.get("requirements", {})
     pass_through = {str(name) for name in item_block.get("pass_through", [])}
     peer_field = str(item_block["peer"]["field"])
     peer_direction = str(item_block["peer"].get("direction", catalog.direction))
+    inbound = str(Direction.INBOUND)
     config = _config_values(workspace)
     _, items = _indexed_items(config, catalog)
-    rows: list[dict[str, Any]] = []
-    stash: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
+    # Insertion-ordered by wire identity: a later item on an address already minted
+    # folds into the row rather than adding one or being dropped.
+    minted: dict[tuple[str, str | None, str | int], _Minted] = {}
     for item in items:
         if item.diverged:
             continue
-        patterns: list[str] = []
+        patterns: list[str | None] = []
         verbs: list[str | None] = []
         requirements: list[tuple[str, str, str | None]] = []
+        # `resolved` is the ITEM's: an unknown predicate name unsettles every row of it
+        # (spec §7b). `served` is the inbound rows' alone: a predicate or a verb nobody
+        # could read leaves the address in doubt and says nothing about the target.
         resolved = True
+        served = not any(field.startswith(predicates_field) for field in item.unread)
         for predicate in _predicates_of(item, block):
             if predicate.name == path_rule["name"]:
                 fields = _fields_of(predicate, path_rule, positional)
                 patterns.extend(fields.get(str(path_rule["args"][0]), []))
             elif predicate.name == method_rule["name"]:
                 fields = _fields_of(predicate, method_rule, positional)
-                verbs.extend(
-                    v for v in fields.get(str(method_rule["args"][0]), []) if v not in verbs
-                )
+                for spelled in fields.get(str(method_rule["args"][0]), []):
+                    if "," in spelled:
+                        served = False
+                    elif spelled not in verbs:
+                        verbs.append(spelled)
             elif predicate.name in requirement_rules:
                 rule = requirement_rules[predicate.name]
                 fields = _fields_of(predicate, rule, positional)
@@ -974,46 +1028,84 @@ def _derive_indexed(workspace: Workspace, catalog: Catalog) -> None:
                     resolved = False
             elif predicate.name not in pass_through:
                 resolved = False
-        resolution = "resolved" if resolved else "unresolved"
-        inbound = str(Direction.INBOUND)
-        for pattern in patterns or [_ANY_PATH]:
-            path = _addressed(pattern, catalog.protocol, inbound)
+        if not patterns:
+            patterns = [_ANY_PATH] if served else [None]
+        for pattern in patterns:
+            path = None if pattern is None else _addressed(pattern, catalog.protocol, inbound)
             for verb in verbs or [None]:
-                identity = (inbound, str(verb), path)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                rows.append(_indexed_row(catalog, inbound, verb, path, resolution))
-                stash.extend(
-                    {
-                        "caller": None,
-                        "handler": None,
-                        "method": verb,
-                        "path": path,
-                        "catalog_id": catalog.id,
-                        "kind": kind,
-                        "name": name,
-                        "value": value,
-                        "requirement": "required",
-                        "resolution": "resolved",
-                        "evidence": "compiler",
-                    }
-                    for kind, name, value in requirements
-                )
+                _mint(minted, catalog, inbound, verb, path, resolved and served, requirements)
+        if peer_field in item.unread:
+            _mint(minted, catalog, peer_direction, None, None, False, [])
         target = item.values.get(peer_field)
         if target is not None:
             destination = _addressed(target, catalog.protocol, peer_direction)
-            identity = (peer_direction, "", destination)
-            if identity not in seen:
-                seen.add(identity)
-                rows.append(_indexed_row(catalog, peer_direction, None, destination, resolution))
+            _mint(minted, catalog, peer_direction, None, destination, resolved, [])
+    rows = [each.row for each in minted.values()]
+    stash = [
+        {
+            "caller": None,
+            "handler": None,
+            "method": each.row["method"],
+            "path": each.row["path"],
+            "catalog_id": catalog.id,
+            "kind": kind,
+            "name": name,
+            "value": value,
+            "requirement": "required",
+            "resolution": "resolved",
+            "evidence": "compiler",
+        }
+        for each in minted.values()
+        for kind, name, value in each.requirements
+    ]
     workspace.derive("call_endpoints", rows=rows)
     if stash:
         workspace.derive("route_requirements_insert", rows=stash)
 
 
+class _Minted:
+    """One row on its way to `call_endpoints` and the requirements every item that
+    collapsed onto it makes."""
+
+    __slots__ = ("requirements", "row")
+
+    def __init__(
+        self, row: dict[str, Any], requirements: list[tuple[str, str, str | None]]
+    ) -> None:
+        self.row = row
+        self.requirements = requirements
+
+
+def _mint(
+    minted: dict[tuple[str, str | None, str | int], _Minted],
+    catalog: Catalog,
+    direction: str,
+    method: str | None,
+    path: str | None,
+    resolved: bool,
+    requirements: list[tuple[str, str, str | None]],
+) -> None:
+    """Adds one row, or folds it into the row of the same identity: the requirements
+    the two have in common, in the kept row's order (`combinator._shared`'s rule —
+    only a demand every alternative makes is one the framework enforces at that
+    address), and `unresolved` if either is. A row with no address never collapses
+    (SQL's `NULL = NULL` is unknown, and each is its own unread declaration)."""
+    resolution = "resolved" if resolved else "unresolved"
+    # A NULL address is keyed by its own ordinal, so it never collapses.
+    identity = (direction, method, len(minted) if path is None else path)
+    kept = minted.get(identity)
+    if kept is None:
+        minted[identity] = _Minted(
+            _indexed_row(catalog, direction, method, path, resolution), list(requirements)
+        )
+        return
+    kept.requirements = [each for each in kept.requirements if each in requirements]
+    if not resolved:
+        kept.row["resolution"] = "unresolved"
+
+
 def _indexed_row(
-    catalog: Catalog, direction: str, method: str | None, path: str, resolution: str
+    catalog: Catalog, direction: str, method: str | None, path: str | None, resolution: str
 ) -> dict[str, Any]:
     """`_row`'s shape with the verb the item's method predicate named and the
     resolution the item's predicates earned — the one place this style writes a
@@ -1608,7 +1700,7 @@ def _validate_indexed(catalog: Catalog, block: Any) -> None:
             and isinstance(declared.get("args"), list)
             and declared["args"]
             and all(isinstance(field, str) for field in declared["args"])
-            and declared.get("gather", _GATHER_LIST) in _GATHERS
+            and ("gather" not in declared or declared["gather"] in _GATHERS)
         )
         if not shaped:
             raise CatalogError(

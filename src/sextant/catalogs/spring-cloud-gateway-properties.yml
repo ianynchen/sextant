@@ -75,8 +75,13 @@ requires: [resolved_config]
 #     a pattern except a trailing `true`/`false`, which is the flag — `gather:
 #     list_tail_flag`); `Method` is `GATHER_LIST` over `[methods]` (`gather: list`);
 #     `Header` `[header, regexp]`, `Query` `[param, regexp, predicate]` and `Cookie`
-#     `[name, regexp]` inherit `DEFAULT` (positional N is field N). A list-gathering
-#     field written as one scalar in the map form is split on `,` as the binder does.
+#     `[name, regexp]` inherit `DEFAULT` (positional N is field N). The two GATHERING
+#     normalisers read `args.values()` and test NO key (row 7), so in the map form EVERY
+#     argument of `Path`/`Method` is collected whatever it is keyed — `args.pattern:
+#     /x/**` is one pattern, `args.patterns: [/a/**, /b/**]` two — and a scalar is ONE
+#     value, never split on `,`: `methods: PUT,PATCH` binds a method that matches
+#     nothing, so `method` reads NULL and the inbound row `unresolved` (a phantom verb
+#     is the one thing not to publish).
 #   * row 6 — fifteen predicate factories at 5.0.0, named by their class name less
 #     `RoutePredicateFactory`: `After Before Between CloudFoundryRouteService Cookie
 #     Header Host Method Path Query ReadBody RemoteAddr Version Weight

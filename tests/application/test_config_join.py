@@ -2984,23 +2984,38 @@ def test_a_route_with_no_method_predicate_is_one_verb_less_row(tmp_path: Path):
 def test_the_map_form_reads_the_same_item(tmp_path: Path):
     """`predicates[M].name` + `predicates[M].args.<field>` is the same predicate the
     shortcut spells (CP-29 row 3: a `PredicateDefinition` is a name and an args map, and
-    the shortcut fills the map with positional keys). Field names are the measured
-    `shortcutFieldOrder`; a positional key in the map form (`_pos_0`) maps through the
-    same order; a list-gathering field written as one scalar splits on `,` as the
-    binder does."""
+    the shortcut fills the map with positional keys). A GATHERING predicate collects
+    EVERY args value and tests no key (CP-29 row 7, `ShortcutType$2/$3.normalize` read
+    `args.values()`): a positional `_pos_K` by K, then the remaining keys in flattened
+    order — so `args.pattern: /items/**` (a key the framework's field order does not
+    name) is one pattern, `args.patterns: [/a/**, /b/**]` (flattened to `patterns[0]`,
+    `patterns[1]`) is two, and `args.methods: [GET, DELETE]` is two verbs. A map-form
+    scalar is ONE value, never split on `,`: `methods: PUT,PATCH` is a verb string that
+    is not one verb — the framework binds a method matching nothing — so `method` is
+    NULL and the inbound row `unresolved`, never a phantom `PUT,PATCH` verb; the target
+    row is untouched, its address was read."""
     workspace = _edge_workspace(
         tmp_path,
         _route(
             0,
             ("predicates[0].name", "Path"),
-            ("predicates[0].args.patterns", "/items/**"),
+            ("predicates[0].args.pattern", "/items/**"),
             ("predicates[1].name", "Method"),
-            ("predicates[1].args._pos_0", "GET"),
-            ("predicates[1].args._pos_1", "DELETE"),
+            ("predicates[1].args.methods[0]", "GET"),
+            ("predicates[1].args.methods[1]", "DELETE"),
             ("uri", "lb://items"),
         )
         + _route(
             1,
+            ("predicates[0].name", "Path"),
+            ("predicates[0].args.patterns[0]", "/a/**"),
+            ("predicates[0].args.patterns[1]", "/b/**"),
+            ("predicates[1].name", "Method"),
+            ("predicates[1].args._pos_0", "PUT"),
+            ("uri", "lb://ab"),
+        )
+        + _route(
+            2,
             ("predicates[0].name", "Path"),
             ("predicates[0].args._pos_0", "/x/**"),
             ("predicates[1].name", "Method"),
@@ -3012,14 +3027,103 @@ def test_the_map_form_reads_the_same_item(tmp_path: Path):
     rows = _edge_rows(workspace)
     workspace.close()
 
-    assert rows == [
-        ("inbound", "DELETE", "/items/**", None, None, None, "resolved"),
-        ("inbound", "GET", "/items/**", None, None, None, "resolved"),
-        ("inbound", "PATCH", "/x/**", None, None, None, "resolved"),
-        ("inbound", "PUT", "/x/**", None, None, None, "resolved"),
-        ("outbound", None, "lb://items", None, None, None, "resolved"),
-        ("outbound", None, "lb://x", None, None, None, "resolved"),
+    assert rows == sorted(
+        [
+            ("inbound", "GET", "/items/**", None, None, None, "resolved"),
+            ("inbound", "DELETE", "/items/**", None, None, None, "resolved"),
+            ("inbound", "PUT", "/a/**", None, None, None, "resolved"),
+            ("inbound", "PUT", "/b/**", None, None, None, "resolved"),
+            ("inbound", None, "/x/**", None, None, None, "unresolved"),
+            ("outbound", None, "lb://items", None, None, None, "resolved"),
+            ("outbound", None, "lb://ab", None, None, None, "resolved"),
+            ("outbound", None, "lb://x", None, None, None, "resolved"),
+        ],
+        key=str,
+    )
+
+
+def test_two_items_on_one_address_intersect_their_requirements(tmp_path: Path):
+    """Fix round 1; spec 2026-09-19 §4d, the combinator's `_shared` rule restated: two
+    items collapsing to ONE address — header-versioned `/api/**`, `Header=X-Version,v1`
+    and `Header=X-Version,v2` — are two ways the framework may dispatch it, and a request
+    satisfying EITHER is served, so the row carries only what every alternative demands:
+    here nothing (`X-Version=v1` AND `v2` both required would be a demand the framework
+    never makes). The common `Query=tenant` survives. And an unresolved alternative
+    makes the collapsed row unresolved — first-wins would have published `resolved` for
+    an address one of its routes could not read."""
+    workspace = _edge_workspace(
+        tmp_path,
+        _route(
+            0,
+            ("predicates[0]", "Path=/api/**"),
+            ("predicates[1]", "Header=X-Version,v1"),
+            ("predicates[2]", "Query=tenant"),
+            ("uri", "lb://v1"),
+        )
+        + _route(
+            1,
+            ("predicates[0]", "Path=/api/**"),
+            ("predicates[1]", "Header=X-Version,v2"),
+            ("predicates[2]", "Query=tenant"),
+            ("uri", "lb://v2"),
+        )
+        + _route(2, ("predicates[0]", "Path=/legacy/**"), ("uri", "lb://old"))
+        + _route(
+            3,
+            ("predicates[0]", "Path=/legacy/**"),
+            ("predicates[1]", "Version=1"),
+            ("uri", "lb://older"),
+        ),
+    )
+    config_join.run(workspace, _edge_catalog())
+    rows = _edge_rows(workspace)
+    stash = _edge_stash(workspace)
+    workspace.close()
+
+    assert [r for r in rows if r[0] == "inbound"] == [
+        ("inbound", None, "/api/**", None, None, None, "resolved"),
+        ("inbound", None, "/legacy/**", None, None, None, "unresolved"),
     ]
+    assert stash == [(None, None, None, "/api/**", "query", "tenant", None, "required", "resolved")]
+
+
+def test_a_key_resolved_in_no_environment_renders_unresolved_and_drops_nothing_else(
+    tmp_path: Path,
+):
+    """Fix round 1: `_agreed`'s one None covered both "environments disagree" and
+    "declared but unresolved everywhere", and the second is not divergence — `uri:
+    ${ORDERS_URL}` with no environment answering is one route whose target nobody
+    could read. So: the item's OTHER rows are minted, the unread field renders
+    unresolved — an outbound row with `path` NULL — and no `environment_divergence`
+    question is filed. A `Path` predicate unresolved everywhere is the inbound half of
+    the same rule: the address is in doubt, so the item's inbound row is `unresolved`
+    with `path` NULL (nothing here names an address; `/**` would assert one), and its
+    target row is untouched."""
+    uri = f"{_ROUTES}[0].uri"
+    path_key = f"{_ROUTES}[1].predicates[0]"
+    config = (
+        _route(0, ("predicates[0]", "Path=/o/**"))
+        + [(uri, "default", None), (uri, "prod", None)]
+        + _route(1, ("uri", "lb://p"))
+        + [(path_key, "default", None), (path_key, "prod", None)]
+    )
+    workspace = _edge_workspace(tmp_path, config)
+    catalog = _edge_catalog()
+    config_join.run(workspace, catalog)
+    rows = _edge_rows(workspace)
+    questions = _edge_questions(workspace, catalog)
+    workspace.close()
+
+    assert rows == sorted(
+        [
+            ("inbound", None, "/o/**", None, None, None, "resolved"),
+            ("outbound", None, None, None, None, None, "unresolved"),
+            ("inbound", None, None, None, None, None, "unresolved"),
+            ("outbound", None, "lb://p", None, None, None, "resolved"),
+        ],
+        key=str,
+    )
+    assert questions == []
 
 
 def test_header_query_and_cookie_predicates_are_the_rows_requirements(tmp_path: Path):
