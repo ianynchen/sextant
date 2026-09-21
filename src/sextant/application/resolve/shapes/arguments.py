@@ -868,7 +868,18 @@ def linked_channels(
     real call site, or a linked call none of the declared forms' owner+name
     (and arity, where declared) reaches, all give the same one-tuple honest
     answer `channel_of` gives an unreadable destination: peer/path both
-    None, `unresolved`."""
+    None, `unresolved`.
+
+    An ARRAY argument walks its elements (Task 6 fix round 1, 2026-09-21):
+    `setQueues(new Queue("a"), new Queue("b"))` is one varargs slot (9.15)
+    whose elements each carry their own constructor's `source` while the
+    array carries none — so the ladder runs per element, one destination
+    each through the same forms, and an element no form reaches is its own
+    `unresolved` tuple (never the whole array given up on, never one failure
+    hiding a readable sibling)."""
+    elements = _array_elements(argument)
+    if elements is not None:
+        return [tuple_ for element in elements for tuple_ in linked_channels(element, facts, forms)]
     source = argument.get("source") if argument is not None else None
     if source is None:
         return [(None, None, "unresolved")]

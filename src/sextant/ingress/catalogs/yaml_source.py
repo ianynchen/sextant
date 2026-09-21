@@ -14,6 +14,7 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
+from sextant.domain.symbols import parameter_types
 
 # The safe loader, compiled where the interpreter has the C library and pure
 # Python where it does not — the same YAML subset, the same Python objects
@@ -240,18 +241,27 @@ def _with_step_model(
     return merged
 
 
-def _step_identity(step: Any) -> tuple[str, str, str]:
-    """What makes one step entry the same overload as another: its owner (a list
-    spelled as one, so `[A, B]` and `[A, B]` collide and `[A]` beside `[B]` do
-    not), its method and its descriptor — the engine's own match key."""
+def _step_identity(step: Any) -> tuple[frozenset[str], str, str | None]:
+    """What makes one step entry the same overload as another, as the engine
+    matches it: its owners as a SET (`[A, B]` and `[B, A]` are one owner set),
+    its method, and its descriptor's PARAMETER portion (a return type is not
+    method identity — `fluent._same_overload`'s rule). A descriptor not spelled
+    as one is compared as written; the engine refuses it by file."""
     if not isinstance(step, dict):
-        return (repr(step), "", "")
+        return (frozenset({repr(step)}), "", None)
     owner = step.get("owner")
-    return (
-        ",".join(str(name) for name in owner) if isinstance(owner, list) else str(owner),
-        str(step.get("method")),
-        str(step.get("descriptor")),
+    owners = (
+        frozenset(str(name) for name in owner)
+        if isinstance(owner, list)
+        else frozenset({str(owner)})
     )
+    descriptor = step.get("descriptor")
+    parameters = (
+        parameter_types(descriptor)
+        if isinstance(descriptor, str) and ")" in descriptor
+        else (None if descriptor is None else str(descriptor))
+    )
+    return (owners, str(step.get("method")), parameters)
 
 
 def _named_model(

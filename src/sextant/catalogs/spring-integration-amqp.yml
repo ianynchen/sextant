@@ -59,18 +59,26 @@ direction: inbound
 #
 # `setQueueNames("a"); addQueueNames("b")` reads `b` (last wins — the walk has no
 # accumulating destination word): every queue it reports is one the container
-# listens to; the under-report is stated.
+# listens to; the under-report is stated. A `Queue...` slot — `setQueues(new
+# Queue("a"), new Queue("b"))`, `Amqp.inboundAdapter(cf, new Queue("a"))` — is
+# one array whose elements each carry their own constructor: the `channel_via`
+# ladder walks the elements, one queue per element, and an element built by
+# anything but a `Queue` constructor is its own `unresolved` row.
+#
+# A FLOW SOURCED FROM A CHANNEL (`from("ch")`, `from(<channel bean>)`) is a root
+# here as in the other two broker catalogs: ending in this catalog's sink it is
+# the outbound row with an outbound `fed_by` for the source channel; ending in
+# an inline handler it is the channel's READER (`read_by`, the join pass minting
+# the row beside the channel's feeder — one row however many broker catalogs
+# wrote the reader).
 #
 # BOUNDARIES STATED (spec §4, §5, §8): `inboundGateway`, `outboundGateway`,
 # `asyncOutboundGateway`, `inboundPolledAdapter`, `channel`,
 # `publishSubscribeChannel`, `pollableChannel` (row 8 — request-reply and
-# channel-backed forms); a `Queue` element inside the varargs array whose name
-# the extractor did not read; `configureContainer(c -> c.addQueueNames(…))`
-# inside a source spec (fewer queues, never a wrong one); a flow sourced from a
-# CHANNEL (`from("ch")`) that ends in this catalog's sink — the outbound row
-# derives, the source channel's edge does not (the `from` roots are the Kafka
-# catalog's, spec §5); a registration built outside a `@Bean` method; a link
-# set in a different method than the construction; XML beans.
+# channel-backed forms); `configureContainer(c -> c.addQueueNames(…))` inside a
+# source spec (fewer queues, never a wrong one); a registration built outside a
+# `@Bean` method; a link set in a different method than the construction; XML
+# beans.
 
 detect:
   coordinates: ["org.springframework.integration:spring-integration-amqp"]
@@ -129,6 +137,17 @@ matches:
         captures: { channel: { bean_via: arg0 } },
         via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
         continue: true }
+    # --- a flow sourced from a CHANNEL (CP-27 row 1): `channel_source`, and what
+    # the chain then captures decides the row — a sink's wire makes it the
+    # outbound row with an outbound `fed_by` for the source; an inline handler
+    # makes the flow the channel's READER (`read_by`, no row — the join pass
+    # dedupes the reader every broker catalog writes); neither, nothing (a bridge).
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: arg0 } }
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: { bean_via: arg0 } } }
     # --- the DSL sink (§5): its chain continues into the flow's `handle(spec)` --
     - { owner: org.springframework.integration.amqp.dsl.Amqp, method: outboundAdapter,
         descriptor: "(Lorg/springframework/amqp/core/AmqpTemplate;)Lorg/springframework/integration/amqp/dsl/AmqpOutboundChannelAdapterSpec;",

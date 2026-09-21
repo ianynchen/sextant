@@ -142,6 +142,26 @@ def test_two_readers_of_one_fed_channel_mint_two_rows(tmp_path: Path):
     ]
 
 
+def test_one_reader_written_by_several_catalogs_mints_one_row(tmp_path: Path):
+    """Task 6 fix round 1 (ruling 3): a channel-sourced flow with an inline handler
+    (`from("orders").handle(lambda)`) is read by every broker catalog that declares the
+    `from` roots — three catalogs, three `read_by` edges naming ONE reader. The join is
+    over readers, not edges: one row, because `call_endpoints`' guard reads the table as
+    it stood before the batch and would have let three same-identity rows through."""
+    reader = _handler_symbol("handle")
+    workspace = _bound(
+        tmp_path,
+        _fed_by("orders"),
+        {**_read_by("orders", reader), "catalog_id": "one"},
+        {**_read_by("orders", reader), "catalog_id": "two"},
+        {**_read_by("orders", reader), "catalog_id": "three"},
+    )
+    rows = _minted(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["handler"]) for row in rows] == [("orders.queue", reader)]
+
+
 def test_a_feeder_nobody_reads_still_mints_its_adapter_row_with_no_handler(tmp_path: Path):
     """The adapter exists whether or not anything subscribes: a registration that reads a
     queue onto a channel nobody consumes is still a boundary the module holds open. The

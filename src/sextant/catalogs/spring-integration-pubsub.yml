@@ -65,6 +65,14 @@ direction: inbound
 # here (the adapter's own row still derives from its constructor chain, with
 # `handler` NULL).
 #
+# A FLOW SOURCED FROM A CHANNEL (`from("ch")`, `from(<channel bean>)`) is a root
+# here as in the other two broker catalogs (spec §5): with an inline handler it
+# is the channel's READER — `read_by`, the join pass minting the row beside the
+# channel's feeder, one row however many broker catalogs wrote the reader — so
+# a module on Pub/Sub alone still joins its DSL consumers to its adapters. The
+# flow's members are the shared `step_model`; this catalog declares no sink, so
+# a channel-sourced flow never derives a Pub/Sub wire of its own.
+#
 # BOUNDARIES STATED (spec §4, §5): the flow sourced from an adapter bean, above;
 # a registration built outside a `@Bean` method or through a factory method; a
 # link set in a different method than the construction (`@PostConstruct`, a
@@ -84,12 +92,11 @@ measured:
 
 requires: [call_site, string_constants, chain_reconstruction]
 
-# The dependency-injection vocabulary `bean_via` resolves through (D02 §1c),
-# declared once beside the catalogs. No `step_model`: every root here is a
-# constructor whose chain is its own setters — no chain of this catalog's
-# reaches a flow definition's members (the boundary above), and a step table
-# no chain can reach would be a declaration nothing reads.
+# The dependency-injection vocabulary `bean_via` resolves through (D02 §1c) and
+# the flow definition's step table (spec §5) the channel-sourced `from` roots
+# walk, each declared once beside the catalogs and named here.
 bean_model: spring
+step_model: spring-integration
 
 matches:
   roots:
@@ -108,6 +115,17 @@ matches:
         captures: { channel: arg1 }, direction: outbound,
         method_annotation: { annotation: org.springframework.integration.annotation.ServiceActivator,
                              arg: inputChannel, into: channel_link } }
+    # --- a flow sourced from a CHANNEL (CP-27 row 1): `channel_source`, and what
+    # the chain then captures decides the row — a sink's wire makes it the
+    # outbound row with an outbound `fed_by` for the source; an inline handler
+    # makes the flow the channel's READER (`read_by`, no row — the join pass
+    # dedupes the reader every broker catalog writes); neither, nothing (a bridge).
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: arg0 } }
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: { bean_via: arg0 } } }
   steps:
     # `MessageProducerSupport`'s two setters (CP-27 row 5), reached on the
     # adapter's own owner — javac names the receiver's static type, and the
@@ -129,8 +147,10 @@ matches:
         owner: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,
         poisons: [channel] }
   # A constructor root is its own terminal (Task 3's carry: a `<init>` root
-  # without this derives nothing).
-  terminal: ["<init>"]
+  # without this derives nothing); `get()` ends a channel-sourced flow — and is
+  # a declared word, so the builder's own `get` poisons nothing under the step
+  # model's `undeclared_steps`.
+  terminal: ["<init>", get]
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary
   # (2F design §4), so no framework name reaches the engine. Copied from

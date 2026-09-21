@@ -1078,6 +1078,109 @@ def test_a_queue_built_in_the_containers_own_method_reaches_the_row_through_the_
     assert (row["path"], row["resolution"]) == ("q", "resolved")
 
 
+def _queue(container: str, ordinal: int, receiver: int, name: str) -> CallSiteFact:
+    return _call(
+        container,
+        QUEUE,
+        "<init>",
+        ordinal,
+        receiver=receiver,
+        result=None,
+        arguments=[CallArgument(kind="string", value=name)],
+        invoke_kind="special",
+    )
+
+
+def test_every_queue_element_of_a_varargs_setter_reaches_its_own_constructor(tmp_path: Path):
+    """Fix round 1 (Task 6, ruling 2): `container.setQueues(new Queue("a"), new Queue("b"))`
+    — a varargs slot is ONE `array` argument (9.15) whose elements each carry the
+    `source` of their own constructor, while the array itself carries none. The ladder
+    walks the elements: one destination per element, through the same `channel_via`
+    forms, so the adapter derives two rows."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(),
+        _queue(container, 1, 8, "a"),
+        _queue(container, 2, 9, "b"),
+        _call(
+            container,
+            CONTAINER,
+            "setQueues",
+            3,
+            receiver=7,
+            result=None,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="unresolved", source=8),
+                        CallArgument(kind="unresolved", source=9),
+                    ],
+                )
+            ],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted((row["path"], row["resolution"]) for row in rows) == [
+        ("a", "resolved"),
+        ("b", "resolved"),
+    ]
+
+
+def test_an_element_no_declared_form_reaches_is_unresolved_on_its_own(tmp_path: Path):
+    """The near-miss, per element: beside `new Queue("a")`, an element produced by a
+    call no `channel_via` form names (`Names.of("q")` is not a `Queue` constructor).
+    The readable element is its row; the other is `unresolved` — never the helper's
+    argument published as a queue, and never the whole array given up on."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(),
+        _queue(container, 1, 8, "a"),
+        _call(
+            container,
+            NAMES,
+            "of",
+            2,
+            receiver=None,
+            result=9,
+            arguments=[CallArgument(kind="string", value="not-a-queue")],
+            invoke_kind="static",
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "setQueues",
+            3,
+            receiver=7,
+            result=None,
+            arguments=[
+                CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="unresolved", source=8),
+                        CallArgument(kind="unresolved", source=9),
+                    ],
+                )
+            ],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted((row["path"] or "", row["resolution"]) for row in rows) == [
+        ("", "unresolved"),
+        ("a", "resolved"),
+    ]
+
+
 def test_a_container_destination_off_a_getter_is_never_read_off_the_adapters_own_ids(
     tmp_path: Path,
 ):

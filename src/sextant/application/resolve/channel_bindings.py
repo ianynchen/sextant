@@ -50,19 +50,25 @@ def mint_channel_rows(workspace: Workspace, catalogs: list[Catalog]) -> None:
     read: every value a row needs travels on the edge itself (`catalog_id` is the
     feeder's — the catalog whose chain read the wire)."""
     feeders: list[dict[str, Any]] = []
-    readers: dict[str, list[str]] = {}
+    # Readers by channel, each reader ONCE (Task 6 fix round 1): a channel-sourced flow
+    # with an inline handler is read by every broker catalog that declares the `from`
+    # roots, and each writes its own `read_by` edge naming the same reader — three edges,
+    # one consumer. The join is over readers, and `call_endpoints`' insert-if-absent reads
+    # the table as it stood before the batch, so three same-identity rows in one batch
+    # would all have landed. Keyed insertion order (`dict`) keeps the rows deterministic
+    # (NFR-1) where a set would not.
+    readers: dict[str, dict[str, None]] = {}
     for row in workspace.query("channel_bindings"):
         if row["direction"] != "inbound":
             continue
         if row["role"] == _FED_BY:
             feeders.append(dict(row))
         elif row["role"] == _READ_BY and row["resolution"] == "resolved":
-            readers.setdefault(str(row["channel"]), []).append(str(row["symbol"]))
-    rows = [
-        _row(feeder, handler)
-        for feeder in feeders
-        for handler in readers.get(str(feeder["channel"]), [None])
-    ]
+            readers.setdefault(str(row["channel"]), {})[str(row["symbol"])] = None
+    rows: list[dict[str, Any]] = []
+    for feeder in feeders:
+        handlers: list[str | None] = list(readers.get(str(feeder["channel"]), {}))
+        rows.extend(_row(feeder, handler) for handler in handlers or [None])
     workspace.derive("call_endpoints", rows=rows)
 
 

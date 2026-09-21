@@ -5027,6 +5027,52 @@ def _shipped(catalog_id: str) -> Catalog:
     return next(c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == catalog_id)
 
 
+def test_a_webclient_uri_handed_the_methods_own_value_parameter_reads_its_expression(
+    tmp_path: Path,
+):
+    """The field ladder's parameter rung (2F design §4, rung 2a) in THIS engine, on a
+    shipped catalog (Task 6 fix round 1, 2026-09-21): `webClient.get().uri(url)` where
+    `url` is the calling method's own `@Value("${svc.url}")` parameter derives the
+    expression — where it derived `unresolved`, because `fluent` never handed the ladder
+    the caller the index is an index into. Every shipped fluent catalog sees this: more
+    resolution, in the direction `single_call` already took."""
+    # Module-prefixed on both sides: the site's `caller` and the declaration's `symbol`
+    # are what the rung joins (D00 §5a), and the join is on the full spelling.
+    caller = _MODULE + "com/acme/http/Client#parameterFed(Ljava/lang/String;)."
+    facts = [
+        *_spring_client_chain(caller, _WEBCLIENT_FQN, _WEBCLIENT_SPEC, "get", "retrieve"),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=caller,
+            construct_kind="method",
+            enclosing=_MODULE + "com/acme/http/Client#",
+            signature=Signature(
+                parameters=[
+                    Parameter(
+                        name="url",
+                        type=TypeRef(symbol="java/lang/String#"),
+                        erased_symbol="java/lang/String#",
+                        annotations=[
+                            AnnotationUse(
+                                annotation="org/springframework/beans/factory/annotation/Value#",
+                                args={"value": "${svc.url}"},
+                            )
+                        ],
+                    )
+                ]
+            ),
+        ),
+    ]
+    facts[1] = facts[1].model_copy(update={"arguments": [CallArgument(kind="parameter", value=0)]})
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("spring-webclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "${svc.url}", "resolved")
+    ]
+
+
 def test_webclient_head_and_options_start_a_request_the_way_get_does(tmp_path: Path):
     """`A-M3`, the positive half. `WebClient` declares eight request-starting
     methods (CP-12 Q1, spring-webflux 6.1.6 and 7.0.2) and the catalog declared

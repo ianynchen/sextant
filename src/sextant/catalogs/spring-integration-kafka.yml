@@ -176,7 +176,8 @@ matches:
     # --- a flow sourced from a CHANNEL (row 1): `channel_source`, and what the
     # chain then captures decides the row — a sink's wire makes it the outbound
     # row with an outbound `fed_by` for the source; an inline handler makes the
-    # flow the channel's READER (`read_by`, no row); neither, nothing (a bridge).
+    # flow the channel's READER (`read_by`, no row — the join pass dedupes the
+    # reader every broker catalog writes); neither, nothing (a bridge).
     - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
         descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
         captures: { channel_source: arg0 } }

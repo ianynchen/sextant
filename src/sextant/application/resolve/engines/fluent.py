@@ -229,7 +229,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     and a chain that captured a `channel_link` writes a `channel_bindings`
     `fed_by` edge — INSTEAD of a row when inbound (the join pass mints the
     row from the edge, so a linked adapter is never counted twice), beside
-    its row when outbound (§3b: so the question is not asked)."""
+    its row when outbound (§3b: so the question is not asked).
+
+    Since 2026-09-21 (Task 6) the field ladder's parameter rung answers in this
+    engine as it does in `single_call`: an address handed in as the calling
+    method's own `@Value` parameter — `uri(url)`, `new Adapter(ops, subscription)`
+    — derives its `${…}` expression where it derived `unresolved`, and so does
+    each element of a varargs slot. Every shipped fluent catalog sees it; it is
+    more resolution in the direction the ladder already took, never a new claim
+    (`_own_parameter`, `_address_read`)."""
     matches = catalog.matches
     # Validated on the RAW (pre-`_catalog_symbol`) entries, before
     # `_channel_via_forms` ever dereferences an `owner` — the same two-phase
@@ -1465,7 +1473,10 @@ def _same_overload(entry: dict[str, Any], site: dict[str, Any]) -> bool:
     changing — ten `spring-kafka-template` rows once matched nothing in a 2.x
     module for exactly that."""
     declared = entry["descriptor"]
-    return declared is None or parameter_types(declared) == parameter_types(str(site["descriptor"]))
+    if declared is None:
+        return True
+    recorded = site.get("descriptor")
+    return recorded is not None and parameter_types(declared) == parameter_types(str(recorded))
 
 
 def _validated_descriptor(entry: dict[str, Any], catalog: Catalog, where: str) -> str | None:
