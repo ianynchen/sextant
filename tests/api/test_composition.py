@@ -100,3 +100,22 @@ def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
         output_dirs=(),
     )
     assert api._skip_reason(module) is None
+
+
+def test_the_catalog_hash_changes_when_any_model_beside_the_catalogs_changes(tmp_path: Path):
+    """`_catalog_hash` is the identity of the framework knowledge a run was produced
+    with, and the shape, bean and step models are that knowledge as much as the
+    catalogs are (D02 §1b, §1c; spec 2026-09-21 §5): an edit to any of the three
+    directories must move it, or two runs would claim one knowledge while reading
+    different tables."""
+    (tmp_path / "invented.yml").write_text("id: invented\n", encoding="utf-8")
+    baseline = api._catalog_hash(tmp_path)
+    hashes = [baseline]
+    for subdirectory in ("shape-models", "bean-models", "step-models"):
+        (tmp_path / subdirectory).mkdir()
+        (tmp_path / subdirectory / "model.yml").write_text(
+            f"id: {subdirectory}\n", encoding="utf-8"
+        )
+        hashes.append(api._catalog_hash(tmp_path))
+
+    assert len(set(hashes)) == len(hashes), "an edit to one of the model directories went unseen"

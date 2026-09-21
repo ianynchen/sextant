@@ -77,7 +77,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor, method_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -260,6 +260,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 if "owner" in step
                 else None
             ),
+            # Spec 2026-09-21 §5 (Task 6): an optional `descriptor` narrows a step
+            # to ONE overload of its name — `handle(Class, GenericHandler)` carries
+            # the handler at slot 1, `handle(GenericHandler)` at slot 0, and a name
+            # alone would read one slot for both. None for the ordinary step.
+            "descriptor": _validated_descriptor(step, catalog, "steps"),
             "captures": _merged_captures(step),
             # F5 §6.2 (W29): the repeatable half. A step declaring `collects` accumulates
             # an entry per visit instead of overwriting, because a request may carry any
@@ -474,6 +479,11 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
         # owner against a tuple and silently match nothing.
         "owners": catalog_symbols(root.get("owner"), f"{catalog.source}: {where}[].owner"),
         "method": _root_method(root, catalog, where),
+        # §5: an optional `descriptor` narrows the root to one overload — the ten
+        # `messageDrivenChannelAdapter` overloads carry their topics at different
+        # slots (CP-27 row 6), and one name matching all ten would read one slot
+        # for each; None for the root that matches by owner and name alone.
+        "descriptor": _validated_descriptor(root, catalog, where),
         "captures": _merged_captures(root),
         # Carried forward (never a root's own field, D02 §2's `fluent`
         # style) purely so `_validate_captures` can see and refuse it,
@@ -1251,8 +1261,26 @@ def _address_read(argument: dict[str, Any] | None, context: _ChainContext) -> di
     `field`-kind argument — or a getter's own result — that the field ladder
     can name a configuration expression for is replaced by that expression as
     a string literal BEFORE any existing resolution path sees it, so an
-    imperatively-fed address behaves downstream exactly as a written one."""
-    return address_argument(argument, context.field_sources, context.facts)
+    imperatively-fed address behaves downstream exactly as a written one. The
+    caller handed to the ladder's parameter rung is the one the argument
+    carries (`_own_parameter`) — the method whose signature the index is an
+    index into — never the chain's, which a lambda body's capture is not."""
+    if isinstance(argument, dict) and argument.get("kind") == "array":
+        # A varargs slot is one `array` argument (9.15), one destination per
+        # element (spec 2026-09-21 §3c) — and each element is an address in
+        # its own right, so each takes the ladder: `inboundAdapter(cf,
+        # this.valueQueue)` is a field-fed queue exactly as `uri(this.url)`
+        # is a field-fed address. The array itself names no expression, so
+        # before this every varargs registration fed from configuration read
+        # `unresolved` element by element.
+        return {
+            **argument,
+            "elements": [
+                _address_read(element, context) for element in argument.get("elements") or []
+            ],
+        }
+    caller = argument.get("caller") if isinstance(argument, dict) else None
+    return address_argument(argument, context.field_sources, context.facts, caller)
 
 
 def _composed_address(
@@ -1414,14 +1442,51 @@ def _response_descriptor(
 
 
 def _matching_root(site: dict[str, Any], roots: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    """The first declared root `site` is a call to: its owner, its name, and — where
+    the root declares a `descriptor` — its parameter types (`_same_overload`)."""
     return next(
         (
             root
             for root in roots
-            if site["owner"] in root["owners"] and site["name"] == root["method"]
+            if site["owner"] in root["owners"]
+            and site["name"] == root["method"]
+            and _same_overload(root, site)
         ),
         None,
     )
+
+
+def _same_overload(entry: dict[str, Any], site: dict[str, Any]) -> bool:
+    """Whether `site` is the overload `entry` declares — every overload where the
+    entry declares no `descriptor`, else the one whose PARAMETER TYPES are the
+    declared ones. The parameter portion alone, `single_call._matching_method`'s
+    own rule (F2 §4.1): a method is identified by its name and parameter types,
+    and a return type moves between framework releases without a caller's source
+    changing — ten `spring-kafka-template` rows once matched nothing in a 2.x
+    module for exactly that."""
+    declared = entry["descriptor"]
+    return declared is None or parameter_types(declared) == parameter_types(str(site["descriptor"]))
+
+
+def _validated_descriptor(entry: dict[str, Any], catalog: Catalog, where: str) -> str | None:
+    """An entry's optional `descriptor`, refused unless it is spelled the way the
+    extractor records one — a string opening with `(` and closing its parameter
+    list — because a descriptor no call site can ever equal matches nothing, and
+    an overload declared that way silently derives nothing (the `single_call`
+    refusal, for its reason). The message names no language: `descriptor` is
+    whatever the module's own extractor records at `target.descriptor`."""
+    declared = entry.get("descriptor")
+    if declared is None:
+        return None
+    if not (isinstance(declared, str) and declared.startswith("(") and ")" in declared):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `{where}` entry `{entry.get('method')}` "
+            f"declares `descriptor: {declared!r}`, which is not a method descriptor — its "
+            f"parameter portion is compared against a call site's own `target.descriptor`, "
+            f"so it must be spelled the way the extractor records one, opening with `(` "
+            f"(spec 2026-09-21 §5)"
+        )
+    return declared
 
 
 def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -1441,6 +1506,7 @@ def _matching_step(site: dict[str, Any], steps: list[dict[str, Any]]) -> dict[st
             for step in steps
             if step["method"] == name
             and (step["owners"] is None or site["owner"] in step["owners"])
+            and _same_overload(step, site)
         ),
         None,
     )
@@ -1451,9 +1517,11 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
     `owner` telling them apart — silent last-wins would hide exactly the bug
     it is meant to catch (`ports/catalogs.py`'s own discipline: an unchecked
     value does not stay in the file). Two entries are distinguishable only
-    when BOTH declare an `owner` and the owners differ; an owner-less entry
-    matches every owner, so it collides with any sibling regardless of what
-    that sibling declares."""
+    when BOTH declare an `owner` and the owners differ — or, sharing an
+    owner, when BOTH declare a `descriptor` and the parameter types differ
+    (spec 2026-09-21 §5); an owner-less entry matches every owner, and a
+    descriptor-less one every overload, so either collides with any sibling
+    regardless of what that sibling declares."""
     by_method: dict[str, list[dict[str, Any]]] = {}
     for step in steps:
         by_method.setdefault(step["method"], []).append(step)
@@ -1465,18 +1533,35 @@ def _validate_steps(steps: list[dict[str, Any]], catalog: Catalog) -> None:
         # several (§3.1): `[JmsTemplate, JmsOperations]` beside `[JmsOperations]`
         # is two entries that both match a `JmsOperations` receiver, which is the
         # same silent last-wins this refusal exists to prevent — a scalar pair
-        # could only collide by being equal.
-        owner_sets = [step["owners"] for step in group]
+        # could only collide by being equal. Two entries sharing an owner are
+        # still distinguishable when BOTH declare a `descriptor` and the
+        # descriptors differ (spec 2026-09-21 §5: the `handle` overloads on one
+        # definition type); one of them declaring none would match every
+        # overload, which is the same silent last-wins.
         overlapping = any(
-            first is None or second is None or set(first) & set(second)
-            for index, first in enumerate(owner_sets)
-            for second in owner_sets[index + 1 :]
+            _overlapping_owners(first["owners"], second["owners"])
+            and not _distinct_overloads(first, second)
+            for index, first in enumerate(group)
+            for second in group[index + 1 :]
         )
         if overlapping:
             raise CatalogError(
                 f"loading catalog {catalog.source}: steps named `{method}` need distinct "
-                f"`owner`s to tell them apart (D02 §4's fluent style)"
+                f"`owner`s or distinct `descriptor`s to tell them apart (D02 §4's fluent "
+                f"style)"
             )
+
+
+def _overlapping_owners(first: tuple[str, ...] | None, second: tuple[str, ...] | None) -> bool:
+    return first is None or second is None or bool(set(first) & set(second))
+
+
+def _distinct_overloads(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    return (
+        first["descriptor"] is not None
+        and second["descriptor"] is not None
+        and parameter_types(first["descriptor"]) != parameter_types(second["descriptor"])
+    )
 
 
 def _validate_captures(
@@ -2412,10 +2497,35 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
                 "caller": site["caller"],
             }
         elif _reads_an_argument(field, value):
-            resolved[field] = _arg_at(site["arguments"], _arg_index(value))
+            resolved[field] = _own_parameter(_arg_at(site["arguments"], _arg_index(value)), site)
         else:
             resolved[field] = value
     return resolved
+
+
+def _own_parameter(argument: dict[str, Any] | None, site: dict[str, Any]) -> dict[str, Any] | None:
+    """A `parameter`-kind argument with the site's own caller beside it (spec
+    2026-09-21 §3c: a destination handed in as the constructing method's
+    `@Value` parameter reads its expression through the field ladder's rung
+    2a, which needs the declaration the index is an index INTO). The same
+    discipline as the `bean_via` marker above, for the same reason: captures
+    fold up out of lambda bodies, and a lambda's `parameter 1` is a captured
+    variable of ITS signature — read against the enclosing method's it would
+    fabricate that method's expression. Every other kind travels untouched."""
+    if argument is None:
+        return None
+    if argument.get("kind") == "array":
+        # Each element of a varargs slot is read on its own (`_address_read`),
+        # so each parameter among them carries the caller too.
+        return {
+            **argument,
+            "elements": [
+                _own_parameter(element, site) for element in argument.get("elements") or []
+            ],
+        }
+    if argument.get("kind") != "parameter":
+        return argument
+    return {**argument, "caller": site["caller"]}
 
 
 def _reads_an_argument(field: str, value: Any) -> bool:

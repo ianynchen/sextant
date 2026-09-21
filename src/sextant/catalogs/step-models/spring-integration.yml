@@ -1,0 +1,194 @@
+id: spring-integration
+displayName: The Spring Integration Java DSL flow definition (every member, classified)
+
+# WHAT THIS FILE IS, and why it is not a catalog.
+#
+# Spec 2026-09-21 §5. The steps a `fluent` walk folds through between a flow's
+# source and its consumer are the members of ONE type — the core library's
+# `BaseIntegrationFlowDefinition` (and the functional-interface overloads its
+# subclass `IntegrationFlowDefinition` adds) — and the same table serves every
+# broker catalog that walks a flow: Kafka, AMQP and Pub/Sub name it with
+# `step_model: spring-integration`, and the loader merges these `steps` and the
+# `undeclared_steps` block into each catalog's `matches` beside the catalog's
+# own steps (`ingress/catalogs/yaml_source.py`, `_with_step_model`). Declared
+# once, so the three cannot drift apart — the `shape_model` discipline (D02
+# §1b) applied to a step table.
+#
+# This file is NOT a catalog and lives outside the `*.yml` glob that loads
+# them: it declares no `style`, no `matches` and no boundary. A catalog naming
+# an id no file here carries is refused by file, exactly as an unknown
+# `shape_model` is.
+#
+# EVERY MEMBER IS CLASSIFIED (D02's slice rule: a declared member is a rule, a
+# pass-through or a divert). Measured on spring-integration-core 6.2.4 —
+# `scripts/probes/cp27_spring_integration_wiring.md`, rows 2, 3, 3b and 4: the
+# base type declares thirty-FOUR public instance members (the spec's F3 says
+# thirty-five beside a list of thirty-four names; the probe contradicts the
+# number and confirms the names), the subclass redeclares five of them for a
+# functional-interface argument, and row 4 is the bytecode behind each
+# `divert`. Four kinds:
+#
+#   pass-through  captures nothing; the walk continues. A transformer, a filter,
+#                 a splitter, an aggregator, a logger, a wire tap — the message
+#                 stays in the linear chain.
+#   channel link  `channel(String)`/`fixedSubscriberChannel(String)` name the
+#                 channel the flow FEEDS from here (`channel_link`); the walk
+#                 continues (§0b A4: a flow may bridge on). `channel(MessageChannel)`
+#                 names it through the bean fold. `channel(MessageChannelSpec)` and
+#                 `channel(Function)` carry a spec the walk does not open: the link
+#                 is unreadable from here on (`poisons: [channel_link]`), and the
+#                 chain keeps its own row.
+#   handler       `handle`/`handleReactive` name the consumer: a lambda argument's
+#                 body becomes the row's `handler`; a bean, a bean-and-method pair
+#                 or a processor spec is a consumer the walk cannot name (NULL,
+#                 resolved). `handle(MessageHandlerSpec)` is where a SINK spec's
+#                 own chain continues into the flow (the broker catalog's root
+#                 declares `via_argument_of … handle`), so it captures nothing here.
+#                 `nullChannel` is the discard: `handler: none`, the TRUE answer.
+#   divert        `poisons: [handler]` — the member constructs a router, a gateway,
+#                 a scatter-gather handler, a fan-out channel, a control bus or a
+#                 trigger (CP-27 row 4), so the message may leave the linear chain
+#                 and a `handle` folded after it is not certainly what receives it
+#                 (§0b A5). Sticky: a later `handle` does not lift it.
+#
+# OWNERS, measured rather than inferred (CP-27 row 16): a flow compiled by javac
+# names the receiver's STATIC type at every call site — `IntegrationFlowBuilder`
+# after `from(...)` and after every generic `B` return's checkcast,
+# `IntegrationFlowDefinition` inside a `flow -> flow.handle(...)` lambda — and
+# never the declaring `BaseIntegrationFlowDefinition`. All three are declared so
+# a flow compiled against any of them matches, and so an owned step folds
+# BACKWARD into a sink's continuation (`_prefix_captures`' owner gate).
+#
+# `handle` and `channel` are keyed BY DESCRIPTOR (spec §5; CP-27 rows 3, 3b):
+# the handler sits at slot 0 in `handle(GenericHandler)` and at slot 1 in
+# `handle(Class, GenericHandler)`, and one name matching both would read one
+# slot for each. The engine compares the parameter portion alone
+# (`fluent._same_overload`, F2 §4.1's rule): the return type differs between the
+# base's and the subclass's `handle` and moves between releases.
+#
+# THE MEMBERS THE OWNERS DECLARE BEYOND THE THIRTY-FOUR — `IntegrationFlowBuilder`'s
+# own `get()` and `toReactivePublisher()` — are not steps: `get()` ends the flow
+# and every catalog naming this model declares it a `terminal`; `toReactivePublisher`
+# hands the messages out as a `Publisher`, which is a divert by the
+# `undeclared_steps` rule below and needs no entry.
+
+owners: &owners
+  - org.springframework.integration.dsl.IntegrationFlowDefinition
+  - org.springframework.integration.dsl.BaseIntegrationFlowDefinition
+  - org.springframework.integration.dsl.IntegrationFlowBuilder
+
+steps:
+  # --- pass-through: every overload of each name (twenty names) --------------
+  - { method: aggregate,      owner: *owners, captures: {} }
+  - { method: barrier,        owner: *owners, captures: {} }
+  - { method: bridge,         owner: *owners, captures: {} }
+  - { method: claimCheckIn,   owner: *owners, captures: {} }
+  - { method: claimCheckOut,  owner: *owners, captures: {} }
+  - { method: convert,        owner: *owners, captures: {} }
+  - { method: delay,          owner: *owners, captures: {} }
+  - { method: enrich,         owner: *owners, captures: {} }
+  - { method: enrichHeaders,  owner: *owners, captures: {} }
+  - { method: filter,         owner: *owners, captures: {} }
+  - { method: fluxTransform,  owner: *owners, captures: {} }
+  - { method: headerFilter,   owner: *owners, captures: {} }
+  - { method: intercept,      owner: *owners, captures: {} }
+  - { method: log,            owner: *owners, captures: {} }
+  - { method: resequence,     owner: *owners, captures: {} }
+  - { method: split,          owner: *owners, captures: {} }
+  - { method: splitWith,      owner: *owners, captures: {} }
+  - { method: transform,      owner: *owners, captures: {} }
+  - { method: transformWith,  owner: *owners, captures: {} }
+  - { method: wireTap,        owner: *owners, captures: {} }
+  # `fixedSubscriberChannel()` — the no-argument form is a pass-through (an
+  # anonymous channel, §0b A5); the `(String)` form below is a link.
+  - { method: fixedSubscriberChannel, owner: *owners, captures: {},
+      descriptor: "()Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+
+  # --- channel link ----------------------------------------------------------
+  - { method: channel, owner: *owners, captures: { channel_link: arg0 },
+      descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: fixedSubscriberChannel, owner: *owners, captures: { channel_link: arg0 },
+      descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: channel, owner: *owners, captures: { channel_link: { bean_via: arg0 } },
+      descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  # A channel SPEC (`MessageChannels.direct("x")`, or a function building one):
+  # the name is inside the spec's own chain, which this walk does not open —
+  # a stated boundary, never a guess at the name.
+  - { method: channel, owner: *owners, poisons: [channel_link],
+      descriptor: "(Lorg/springframework/integration/dsl/MessageChannelSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: channel, owner: *owners, poisons: [channel_link],
+      descriptor: "(Ljava/util/function/Function;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+
+  # --- handler: the lambda forms, by the slot the handler sits in --------------
+  # The subclass's own `handle(GenericHandler[, Consumer])` (CP-27 row 3b) — the
+  # form a flow most often writes — with its own return type.
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/integration/core/GenericHandler;)Lorg/springframework/integration/dsl/IntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/integration/core/GenericHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/IntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg1 },
+      descriptor: "(Ljava/lang/Class;Lorg/springframework/integration/core/GenericHandler;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg1 },
+      descriptor: "(Ljava/lang/Class;Lorg/springframework/integration/core/GenericHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/messaging/MessageHandler;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/messaging/MessageHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  # A bean, a bean-and-method pair, a bean NAME, or a processor spec: a consumer
+  # this walk cannot name — `handler` reads the argument and answers NULL for
+  # anything but a lambda, and the row stays resolved (the handler never moves
+  # the wire's resolution). `handle(Object bean, String method)` where the bean
+  # is the module's own is a stated boundary (spec §5).
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Ljava/lang/Object;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Ljava/lang/Object;Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Ljava/lang/Object;Ljava/lang/String;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Ljava/lang/String;Ljava/lang/String;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Ljava/lang/String;Ljava/lang/String;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/integration/dsl/MessageProcessorSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/integration/dsl/MessageProcessorSpec;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  # A SINK spec (`Kafka.outboundChannelAdapter(t).topic("x")`): its own chain
+  # continues into this call and derives the OUTBOUND row; nothing to capture
+  # here, and the source's own chain reaches this step with its handler absent —
+  # the message leaves on the sink's wire.
+  - { method: handle, owner: *owners, captures: {},
+      descriptor: "(Lorg/springframework/integration/dsl/MessageHandlerSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  - { method: handle, owner: *owners, captures: {},
+      descriptor: "(Lorg/springframework/integration/dsl/MessageHandlerSpec;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
+  # `handleReactive` — the same two shapes, a reactive handler or a reactive
+  # sink spec; it returns the finished flow (no `get()` follows).
+  - { method: handleReactive, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/messaging/ReactiveMessageHandler;)Lorg/springframework/integration/dsl/IntegrationFlow;" }
+  - { method: handleReactive, owner: *owners, captures: { handler: arg0 },
+      descriptor: "(Lorg/springframework/messaging/ReactiveMessageHandler;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/IntegrationFlow;" }
+  - { method: handleReactive, owner: *owners, captures: {},
+      descriptor: "(Lorg/springframework/integration/dsl/ReactiveMessageHandlerSpec;)Lorg/springframework/integration/dsl/IntegrationFlow;" }
+  - { method: handleReactive, owner: *owners, captures: {},
+      descriptor: "(Lorg/springframework/integration/dsl/ReactiveMessageHandlerSpec;Ljava/util/function/Consumer;)Lorg/springframework/integration/dsl/IntegrationFlow;" }
+
+  # --- discard ---------------------------------------------------------------
+  - { method: nullChannel, owner: *owners, captures: { handler: none } }
+
+  # --- divert (nine names; CP-27 row 4 for what each constructs) -------------
+  - { method: route,                   owner: *owners, poisons: [handler] }
+  - { method: routeByException,        owner: *owners, poisons: [handler] }
+  - { method: routeToRecipients,       owner: *owners, poisons: [handler] }
+  - { method: gateway,                 owner: *owners, poisons: [handler] }
+  - { method: scatterGather,           owner: *owners, poisons: [handler] }
+  - { method: publishSubscribeChannel, owner: *owners, poisons: [handler] }
+  - { method: controlBus,              owner: *owners, poisons: [handler] }
+  - { method: trigger,                 owner: *owners, poisons: [handler] }
+  - { method: to,                      owner: *owners, poisons: [handler] }
+
+# An undeclared member of the flow definition — a release adding one, or the
+# builder's own `toReactivePublisher` — is a divert (spec §5): the walk cannot
+# say the message stayed in the chain, so it says nothing about the handler.
+undeclared_steps:
+  owner: *owners
+  poisons: [handler]

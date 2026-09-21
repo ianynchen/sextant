@@ -1,0 +1,148 @@
+id: spring-integration-pubsub
+displayName: Spring Integration Pub/Sub adapters (spring-cloud-gcp-pubsub)
+style: fluent
+protocol: pubsub
+direction: inbound
+
+# THE REGISTRATION BEHIND A CHANNEL (spec 2026-09-21 §4; closes `pubsub-channel-adapter`).
+#
+# `spring-integration.yml` (`config_join`) indexes the `@ServiceActivator` that
+# READS a channel and, having no wire of its own to name, files a
+# `channel_destination` question per handler. The wire is here: a
+# `PubSubInboundChannelAdapter` is constructed with its SUBSCRIPTION as a
+# constructor argument and told which channel it FEEDS by one of two inherited
+# setters (CP-28 rows 1, 2); a `PubSubMessageHandler` is constructed with its
+# TOPIC and consumes the channel its own `@Bean` method's `@ServiceActivator`
+# names (CP-28 row 3). The chain is a constructor root and void setters on the
+# constructed value — the `fluent` walk's registration words, every one
+# optional and spelled by no request catalog:
+#
+#   `{owner, method: <init>}`      the constructor root; `arg0…` its arguments
+#   `terminal: ["<init>"]`         the constructed value IS the registration —
+#                                  the root is its own terminal (the Apache
+#                                  `<init>` precedent without the execute-join)
+#   `channel_link: arg0`           the channel this registration feeds, by name
+#   `channel_link: {bean_via: arg0}` … or by BEAN: an injected channel parameter
+#                                  (its `@Qualifier`, else its name — never by
+#                                  type, `bean-models/spring.yml`) or a direct
+#                                  call to the channel's `@Bean` method
+#   `direction: outbound` (root)   the handler bean, in an inbound catalog
+#   `method_annotation`            the constructing method's own annotation
+#                                  supplies the channel the handler consumes
+#   `poisons: [channel]`           a SpEL expression is not a literal
+#
+# WHAT A CHAIN WRITES. An inbound adapter that named its channel writes a
+# `channel_bindings` `fed_by` edge and NO row of its own: the join pass
+# (`resolve/channel_bindings.py`) mints one inbound row per reader of the
+# channel — `path` the subscription, `handler` the `@ServiceActivator` method,
+# `caller` the adapter's `@Bean` method — and the `channel_destination` question
+# for that channel is not asked. An adapter whose channel could not be named
+# keeps its own row with `handler` NULL (a channel we cannot name is not a
+# channel we can bind). The handler bean derives its OUTBOUND row here (`path`
+# the topic) and an outbound `fed_by` so the question is not asked for the
+# channel it consumes; an outbound row never carries a handler.
+#
+# DESTINATIONS GO THROUGH THE FIELD LADDER (`field_sources` below, the block
+# `spring-resttemplate.yml` carries): a literal; a `@Value("${…}")` parameter or
+# field, or a `@ConfigurationProperties` getter → the `${…}` expression,
+# substituted per environment by `resolved_peers`; anything else → `path`
+# unresolved. `setTopic("t")` after the constructor overrides the constructor's
+# topic (last wins — Spring's setter semantics); `setTopicExpression(e)` or
+# `setTopicExpressionString(s)` make it unreadable for the REST of the chain
+# (a catalog poison is sticky: `setTopicExpression(e); setTopic("t")` derives
+# `unresolved`, not `t` — the no-false-positive direction).
+#
+# THE DSL FORM `IntegrationFlow.from(<adapter bean>)` IS NOT DECLARED, and why
+# (spec §5 sketches it as "`from(<bean>)` resolves through `bean_via` to the §4
+# root's captures"). `from(MessageProducerSupport)` — the one `from` overload an
+# adapter satisfies (CP-28 row 2) — takes EVERY broker's adapter: an AMQP or
+# Kafka adapter bean handed to it would match a root declared here, the bean
+# fold would find no Pub/Sub constructor in that bean's method, and this catalog
+# would derive an unresolved row under `protocol: pubsub` for another broker's
+# wire — a wrong row, which no unresolved column repairs. A root matched by
+# descriptor cannot tell whose adapter arrived; until the bean fold can gate on
+# the bean's type, a flow sourced from an adapter BEAN is a stated boundary
+# here (the adapter's own row still derives from its constructor chain, with
+# `handler` NULL).
+#
+# BOUNDARIES STATED (spec §4, §5): the flow sourced from an adapter bean, above;
+# a registration built outside a `@Bean` method or through a factory method; a
+# link set in a different method than the construction (`@PostConstruct`, a
+# second `@Bean` taking the adapter); `setOutputChannel(new DirectChannel())`
+# (anonymous — the row derives, no edge); `PubSubMessageSource` (the polled
+# source, `from(MessageSource, Consumer)`); `from(Supplier)`; the lambda flow
+# form's implicit `<beanName>.input`; XML beans.
+
+detect:
+  coordinates: ["com.google.cloud:spring-cloud-gcp-pubsub"]
+
+measured:
+  - { artifact: com.google.cloud:spring-cloud-gcp-pubsub, versions: ["5.1.2"],
+      identity: reported, by: scripts/probes/cp28_gcp_pubsub_integration.md }
+  - { artifact: org.springframework.integration:spring-integration-core, versions: ["6.2.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# The dependency-injection vocabulary `bean_via` resolves through (D02 §1c),
+# declared once beside the catalogs. No `step_model`: every root here is a
+# constructor whose chain is its own setters — no chain of this catalog's
+# reaches a flow definition's members (the boundary above), and a step table
+# no chain can reach would be a declaration nothing reads.
+bean_model: spring
+
+matches:
+  roots:
+    # `PubSubInboundChannelAdapter(PubSubSubscriberOperations, String)` — the
+    # subscription at slot 1 (CP-28 row 1).
+    - { owner: com.google.cloud.spring.pubsub.integration.inbound.PubSubInboundChannelAdapter,
+        method: <init>,
+        descriptor: "(Lcom/google/cloud/spring/pubsub/core/subscriber/PubSubSubscriberOperations;Ljava/lang/String;)V",
+        captures: { channel: arg1 } }
+    # `PubSubMessageHandler(PubSubPublisherOperations, String)` — the topic at
+    # slot 1; a consumer, so outbound, reading the channel it consumes off the
+    # constructing method's `@ServiceActivator(inputChannel)` (CP-28 row 3).
+    - { owner: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,
+        method: <init>,
+        descriptor: "(Lcom/google/cloud/spring/pubsub/core/publisher/PubSubPublisherOperations;Ljava/lang/String;)V",
+        captures: { channel: arg1 }, direction: outbound,
+        method_annotation: { annotation: org.springframework.integration.annotation.ServiceActivator,
+                             arg: inputChannel, into: channel_link } }
+  steps:
+    # `MessageProducerSupport`'s two setters (CP-27 row 5), reached on the
+    # adapter's own owner — javac names the receiver's static type, and the
+    # adapter redeclares neither (CP-28 row 1).
+    - { method: setOutputChannelName,
+        owner: com.google.cloud.spring.pubsub.integration.inbound.PubSubInboundChannelAdapter,
+        captures: { channel_link: arg0 } }
+    - { method: setOutputChannel,
+        owner: com.google.cloud.spring.pubsub.integration.inbound.PubSubInboundChannelAdapter,
+        captures: { channel_link: { bean_via: arg0 } } }
+    # `PubSubMessageHandler`'s topic setters (CP-28 row 3).
+    - { method: setTopic,
+        owner: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,
+        captures: { channel: arg0 } }
+    - { method: setTopicExpression,
+        owner: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,
+        poisons: [channel] }
+    - { method: setTopicExpressionString,
+        owner: com.google.cloud.spring.pubsub.integration.outbound.PubSubMessageHandler,
+        poisons: [channel] }
+  # A constructor root is its own terminal (Task 3's carry: a `<init>` root
+  # without this derives nothing).
+  terminal: ["<init>"]
+  # Which annotations carry configuration onto a field, a constructor
+  # parameter or a whole properties type — the field ladder's own vocabulary
+  # (2F design §4), so no framework name reaches the engine. Copied from
+  # `spring-resttemplate.yml`.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`.
+# A channel handler's signature is the framework's convention and no shape is
+# read here (spec §3c), so the model is named for the harvest compatibility
+# every fluent catalog keeps, the `google-pubsub-publisher.yml` precedent.
+shape_model: json

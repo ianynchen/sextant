@@ -18,7 +18,13 @@ from sextant.ingress.catalogs import yaml_source
 from sextant.resources import catalogs_dir
 
 CATALOGS = catalogs_dir()
-SHIPPED = sorted(CATALOGS.glob("*.yml")) + sorted((CATALOGS / "shape-models").glob("*.yml"))
+# The models beside the catalogs are read by the same loader (`_models`), so the
+# two-loader proof covers them too.
+SHIPPED = sorted(CATALOGS.glob("*.yml")) + [
+    path
+    for subdirectory in ("shape-models", "bean-models", "step-models")
+    for path in sorted((CATALOGS / subdirectory).glob("*.yml"))
+]
 
 
 def test_the_compiled_loader_is_present_and_is_the_one_in_use():

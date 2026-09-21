@@ -266,9 +266,25 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if site["owner"] in root["owners"] and site["name"] '
-                '== root["method"]',
-                replace='            if site["owner"] in root["owners"]  # guard disabled',
+                find='            and site["name"] == root["method"]\n',
+                replace="            and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.root-owner-is-the-declared-type": Guard(
+        what="a chain roots only on a call whose OWNER is one the root declares — the "
+        "other half of the pair above",
+        why="rooting on a method name (and parameter types) alone would start a chain on "
+        "any type that happens to declare the same member: a module's own helper named "
+        "`messageDrivenChannelAdapter`, or the framework's polled `PubSubMessageSource` "
+        "beside its `PubSubInboundChannelAdapter` — same `(operations, String)` "
+        "constructor, a different registration — would publish a destination at "
+        "`resolved`/`compiler` on evidence about a type the catalog never read",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='            if site["owner"] in root["owners"]\n',
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -36,8 +36,9 @@ class YamlCatalogSource:
         self._directory = directory
 
     def _models(self, subdirectory: str) -> dict[str, dict[str, Any]]:
-        """The models one subdirectory holds, by id — `shape-models` (D02 §1b)
-        and `bean-models` (D02 §1c), one read for both.
+        """The models one subdirectory holds, by id — `shape-models` (D02 §1b),
+        `bean-models` (D02 §1c) and `step-models` (spec 2026-09-21 §5), one read
+        for each.
 
         A SUBDIRECTORY rather than more files beside the catalogs, because a
         model is not a catalog: it declares no `style`, no `matches` and
@@ -70,6 +71,7 @@ class YamlCatalogSource:
         """
         shape_models = self._models("shape-models")
         bean_models = self._models("bean-models")
+        step_models = self._models("step-models")
         catalogs = []
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
@@ -83,7 +85,13 @@ class YamlCatalogSource:
                     protocol=_closed_or_absent(raw, "protocol", Protocol, path),
                     direction=_closed_or_absent(raw, "direction", Direction, path),
                     requires=tuple(raw.get("requires", [])),
-                    matches=_required(raw, "matches", path),
+                    # Spec 2026-09-21 §5: the step model's `steps` and
+                    # `undeclared_steps` merged in beside the catalog's own, so
+                    # the engine reads one table; `matches` as written for a
+                    # catalog naming no `step_model`.
+                    matches=_with_step_model(
+                        _required(raw, "matches", path), raw, step_models, path
+                    ),
                     source=path,
                     detect_coordinates=_coordinates(raw, path),
                     detect_satisfied_by=_detect_satisfied_by(raw, path),
@@ -181,12 +189,69 @@ def _shape_model_of(
     return model
 
 
-# The two keys a catalog names a model with, each to the subdirectory that holds
+# The three keys a catalog names a model with, each to the subdirectory that holds
 # the files and the section that defines it — the refusal below names both.
 _MODEL_DIRECTORIES = {
     "shape_model": ("shape-models", "D02 §1b"),
     "bean_model": ("bean-models", "D02 §1c"),
+    "step_model": ("step-models", "spec 2026-09-21 §5"),
 }
+
+
+def _with_step_model(
+    matches: Any, raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> Any:
+    """`matches` with the named step model's `steps` and `undeclared_steps` merged in
+    (spec 2026-09-21 §5, §6) — the table of a flow definition's members is the core
+    library's, shared by every broker catalog that walks a flow, and declared once.
+
+    The UNION, not a replacement: a broker catalog declares the steps on its own
+    specs (`topic`, `exchangeName`) beside the shared table. A `(owner, method,
+    descriptor)` both sides declare is refused here, by file — the engine's own
+    same-name check would refuse it too, but after the union has hidden which side
+    wrote it. `undeclared_steps` is one block, taken from the model or written by
+    the catalog and never both, the `shape_model` rule for the same reason: two
+    blocks would be two claims about the same unknown member.
+    """
+    model = _named_model(raw, "step_model", models, path)
+    if model is None:
+        return matches
+    if not isinstance(matches, dict):
+        raise CatalogError(f"loading catalog {path}: `matches` must be a mapping")
+    own = list(matches.get("steps") or [])
+    shared = list(model.get("steps") or [])
+    seen = {_step_identity(step) for step in own}
+    twice = sorted(str(step.get("method")) for step in shared if _step_identity(step) in seen)
+    if twice:
+        raise CatalogError(
+            f"loading catalog {path}: names `step_model: {raw['step_model']}` and also "
+            f"declares its steps `{'`, `'.join(twice)}` — one owner, method and descriptor "
+            f"from both sides is two entries for one overload (spec 2026-09-21 §5)"
+        )
+    merged: dict[str, Any] = {**matches, "steps": [*own, *shared]}
+    if "undeclared_steps" in model:
+        if "undeclared_steps" in matches:
+            raise CatalogError(
+                f"loading catalog {path}: names `step_model: {raw['step_model']}` and also "
+                f"declares `undeclared_steps` — a catalog takes the model's block or writes "
+                f"its own, never both (spec 2026-09-21 §5)"
+            )
+        merged["undeclared_steps"] = model["undeclared_steps"]
+    return merged
+
+
+def _step_identity(step: Any) -> tuple[str, str, str]:
+    """What makes one step entry the same overload as another: its owner (a list
+    spelled as one, so `[A, B]` and `[A, B]` collide and `[A]` beside `[B]` do
+    not), its method and its descriptor — the engine's own match key."""
+    if not isinstance(step, dict):
+        return (repr(step), "", "")
+    owner = step.get("owner")
+    return (
+        ",".join(str(name) for name in owner) if isinstance(owner, list) else str(owner),
+        str(step.get("method")),
+        str(step.get("descriptor")),
+    )
 
 
 def _named_model(

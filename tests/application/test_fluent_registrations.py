@@ -17,7 +17,14 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_call_engines import _MODULE, _call, _document
+from test_call_engines import (
+    _MODULE,
+    FIELD_SOURCES,
+    VALUE_ANNOTATION,
+    _annotated_field,
+    _call,
+    _document,
+)
 from test_config_join import _module_document
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -1985,3 +1992,429 @@ def test_a_channel_via_descriptor_that_is_not_a_string_is_refused(tmp_path: Path
         "roots": [{**_FLOW_MATCHES["roots"][0], "channel_via": [{**_PROPS_VIA, "descriptor": 3}]}],
     }
     _refused(tmp_path, matches, "invented-adapters.*descriptor")
+
+
+# --- roots and steps by descriptor (spec 2026-09-21 §5, Task 6) -------------------------
+#
+# `Kafka.messageDrivenChannelAdapter` has ten overloads at 6.2.4 and the topic list sits
+# at slot 1 in `(ConsumerFactory, String...)` and at slot 2 in `(ConsumerFactory,
+# ListenerMode, String...)` (CP-27 row 6); `handle` has thirteen on the base definition
+# and two more on the subclass, the handler at slot 0 in `handle(GenericHandler)` and at
+# slot 1 in `handle(Class, GenericHandler)` (CP-27 rows 3, 3b). A root or step matched by
+# owner and name alone reads one slot for every overload, so a root or step may declare a
+# `descriptor:` and match only a site whose own parameter types are the declared ones —
+# `single_call`'s rule, compared on the parameter portion (F2 §4.1): a return type is not
+# method identity and moves between framework releases.
+
+_BY_LIST = "(Lcom/acme/Factory;[Ljava/lang/String;)Lcom/acme/flows/SourceSpec;"
+_BY_MODE_AND_LIST = (
+    "(Lcom/acme/Factory;Lcom/acme/Mode;[Ljava/lang/String;)Lcom/acme/flows/SourceSpec;"
+)
+_BY_PATTERN = "(Lcom/acme/Factory;Ljava/util/regex/Pattern;)Lcom/acme/flows/SourceSpec;"
+_HANDLE_LAMBDA = "(Lcom/acme/Handler;)Lcom/acme/flows/FlowDefinition;"
+_HANDLE_TYPED = "(Ljava/lang/Class;Lcom/acme/Handler;)Lcom/acme/flows/FlowDefinition;"
+
+_DESCRIPTOR_MATCHES = {
+    **_FLOW_MATCHES,
+    "roots": [
+        {
+            "owner": SOURCES_TYPE,
+            "method": "listenerSpec",
+            "descriptor": _BY_LIST,
+            "captures": {"channel": "arg1"},
+            "via_argument_of": {"owner": FLOW_TYPE, "method": "from"},
+            "continue": True,
+        },
+        {
+            "owner": SOURCES_TYPE,
+            "method": "listenerSpec",
+            "descriptor": _BY_MODE_AND_LIST,
+            "captures": {"channel": "arg2"},
+            "via_argument_of": {"owner": FLOW_TYPE, "method": "from"},
+            "continue": True,
+        },
+    ],
+    "steps": [
+        {
+            "method": "handle",
+            "owner": FLOW_DEF_TYPE,
+            "descriptor": _HANDLE_LAMBDA,
+            "captures": {"handler": "arg0"},
+        },
+        {
+            "method": "handle",
+            "owner": FLOW_DEF_TYPE,
+            "descriptor": _HANDLE_TYPED,
+            "captures": {"handler": "arg1"},
+        },
+    ],
+}
+
+
+def _site(
+    owner: str,
+    name: str,
+    descriptor: str,
+    ordinal: int,
+    *,
+    receiver: int | None,
+    result: int | None,
+    arguments: list[CallArgument],
+    invoke_kind: str = "virtual",
+) -> CallSiteFact:
+    """`_call` with the site's own descriptor — the one thing this section is about."""
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=CALLER,
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind=invoke_kind,
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=arguments,
+    )
+
+
+def _topics(*topics: str) -> CallArgument:
+    return CallArgument(
+        kind="array", elements=[CallArgument(kind="string", value=topic) for topic in topics]
+    )
+
+
+def test_a_root_matches_only_the_overload_whose_descriptor_it_declares(tmp_path: Path):
+    """The `(factory, mode, topics)` overload carries its topics at slot 2. Read by name
+    alone, the first root (`channel: arg1`) would take the mode enum for the destination
+    and derive an unresolved row; by descriptor the second root reads slot 2."""
+    facts = [
+        _site(
+            SOURCES,
+            "listenerSpec",
+            _BY_MODE_AND_LIST,
+            0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="instance", source=2, symbol="com/acme/Factory#"),
+                CallArgument(kind="unresolved"),
+                _topics(TOPIC),
+            ],
+            invoke_kind="static",
+        ),
+        _from(1, source=10, result=11),
+        _site(FLOW_DEF, "handle", _HANDLE_LAMBDA, 2, receiver=11, result=12, arguments=[_lambda()]),
+        _call(CALLER, FLOW_DEF, "get", 3, receiver=12, result=13),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_DESCRIPTOR_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (TOPIC, _MODULE + BODY, "resolved")
+
+
+def test_a_site_whose_descriptor_matches_no_declared_root_starts_nothing(tmp_path: Path):
+    """The near-miss: the `(factory, Pattern)` overload, same owner and name, a descriptor
+    neither root declares — no chain starts, nothing derives, even though a `from` and a
+    handler follow. A catalog that wants that overload declares it."""
+    facts = [
+        _site(
+            SOURCES,
+            "listenerSpec",
+            _BY_PATTERN,
+            0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="instance", source=2, symbol="com/acme/Factory#"),
+                CallArgument(kind="unresolved", source=7),
+            ],
+            invoke_kind="static",
+        ),
+        _from(1, source=10, result=11),
+        _site(FLOW_DEF, "handle", _HANDLE_LAMBDA, 2, receiver=11, result=12, arguments=[_lambda()]),
+        _call(CALLER, FLOW_DEF, "get", 3, receiver=12, result=13),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_DESCRIPTOR_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert rows == []
+
+
+def test_a_root_descriptor_is_compared_on_its_parameter_types_alone(tmp_path: Path):
+    """F2 §4.1's rule, kept here: a site whose overload returns a DIFFERENT type than the
+    catalog's descriptor spells still matches — the parameter list is the identity."""
+    facts = [
+        _site(
+            SOURCES,
+            "listenerSpec",
+            _BY_LIST.replace("SourceSpec", "OlderSourceSpec"),
+            0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="instance", source=2, symbol="com/acme/Factory#"),
+                _topics(TOPIC),
+            ],
+            invoke_kind="static",
+        ),
+        _from(1, source=10, result=11),
+        _site(FLOW_DEF, "handle", _HANDLE_LAMBDA, 2, receiver=11, result=12, arguments=[_lambda()]),
+        _call(CALLER, FLOW_DEF, "get", 3, receiver=12, result=13),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_DESCRIPTOR_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"]) == (TOPIC, _MODULE + BODY)
+
+
+def test_a_step_matches_only_the_overload_whose_descriptor_it_declares(tmp_path: Path):
+    """`handle(Class, handler)` carries the handler at slot 1. Read by name alone, the
+    first `handle` step would take the class literal for the handler and read NULL; by
+    descriptor the second step reads slot 1 and the row carries the lambda's body."""
+    facts = [
+        _site(
+            SOURCES,
+            "listenerSpec",
+            _BY_LIST,
+            0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="instance", source=2, symbol="com/acme/Factory#"),
+                _topics(TOPIC),
+            ],
+            invoke_kind="static",
+        ),
+        _from(1, source=10, result=11),
+        _site(
+            FLOW_DEF,
+            "handle",
+            _HANDLE_TYPED,
+            2,
+            receiver=11,
+            result=12,
+            arguments=[CallArgument(kind="class", symbol="java/lang/String#"), _lambda()],
+        ),
+        _call(CALLER, FLOW_DEF, "get", 3, receiver=12, result=13),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_DESCRIPTOR_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"]) == (TOPIC, _MODULE + BODY)
+
+
+def test_a_step_whose_descriptor_matches_no_declared_step_is_an_undeclared_member(
+    tmp_path: Path,
+):
+    """A `handle` overload the model does not declare, on an owner `undeclared_steps`
+    lists, is the divert every unknown member is: `handler` poisoned, the row resolved
+    with `handler` NULL — never the wrong slot read as the handler."""
+    matches = {
+        **_DESCRIPTOR_MATCHES,
+        "undeclared_steps": {"owner": FLOW_DEF_TYPE, "poisons": ["handler"]},
+    }
+    facts = [
+        _site(
+            SOURCES,
+            "listenerSpec",
+            _BY_LIST,
+            0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="instance", source=2, symbol="com/acme/Factory#"),
+                _topics(TOPIC),
+            ],
+            invoke_kind="static",
+        ),
+        _from(1, source=10, result=11),
+        _site(
+            FLOW_DEF,
+            "handle",
+            "(Ljava/lang/Object;Ljava/lang/String;)Lcom/acme/flows/FlowDefinition;",
+            2,
+            receiver=11,
+            result=12,
+            arguments=[_lambda(), CallArgument(kind="string", value="onMessage")],
+        ),
+        _call(CALLER, FLOW_DEF, "get", 3, receiver=12, result=13),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (TOPIC, None, "resolved")
+
+
+def test_a_root_descriptor_that_is_not_a_method_descriptor_is_refused(tmp_path: Path):
+    matches = {
+        **_DESCRIPTOR_MATCHES,
+        "roots": [{**_DESCRIPTOR_MATCHES["roots"][0], "descriptor": "listenerSpec(Factory)"}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*descriptor")
+
+
+def test_a_step_descriptor_that_is_not_a_string_is_refused(tmp_path: Path):
+    matches = {
+        **_DESCRIPTOR_MATCHES,
+        "steps": [{**_DESCRIPTOR_MATCHES["steps"][0], "descriptor": 7}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*descriptor")
+
+
+def test_two_steps_of_one_name_and_owner_need_distinct_descriptors(tmp_path: Path):
+    """The existing refusal, one dimension finer: two `handle` steps on one owner are
+    told apart by descriptor, and one of them declaring none would match every overload
+    — the silent last-wins the refusal exists to prevent."""
+    matches = {
+        **_DESCRIPTOR_MATCHES,
+        "steps": [
+            _DESCRIPTOR_MATCHES["steps"][0],
+            {k: v for k, v in _DESCRIPTOR_MATCHES["steps"][1].items() if k != "descriptor"},
+        ],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*steps named `handle`")
+
+
+# --- the field ladder's parameter rung, in this engine ----------------------------------
+
+
+def _value_parameter(erased: str, expression: str) -> DeclaredParameter:
+    return DeclaredParameter(
+        name="subscription",
+        type=TypeRef(symbol=erased),
+        erased_symbol=erased,
+        annotations=[AnnotationUse(annotation=VALUE_ANNOTATION, args={"value": expression})],
+    )
+
+
+def test_a_destination_handed_in_as_an_annotated_parameter_reads_its_expression(
+    tmp_path: Path,
+):
+    """Spec §3c: `new Adapter(ops, subscription)` where `subscription` is the constructing
+    method's own `@Value("${probe.subscription}")` parameter — the field ladder's rung 2a,
+    which reads the parameter's annotation off THAT method's declared signature and so
+    needs the site's own caller. The row carries the expression, resolved, exactly as a
+    literal would; `resolved_peers` substitutes it per environment downstream."""
+    matches = {**_ADAPTER_MATCHES, "field_sources": FIELD_SOURCES}
+    facts = [
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            subscription=CallArgument(kind="parameter", value=1),
+        ),
+        _declared(
+            CALLER[len(_MODULE) :],
+            parameters=[
+                _parameter("com/acme/streams/Ops#", "ops"),
+                _value_parameter("java/lang/String#", "${probe.subscription}"),
+            ],
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (
+        "${probe.subscription}",
+        _MODULE + BODY,
+        "resolved",
+    )
+
+
+def test_a_parameter_captured_inside_a_lambda_body_is_never_read_against_the_enclosing_method(
+    tmp_path: Path,
+):
+    """The soundness half (Task 4's `bean_via` marker, the same reason): a lambda body's
+    `parameter 1` is an index into the LAMBDA's own signature — a captured variable, the
+    builder — and reading it against the enclosing method, whose parameter 1 happens to
+    carry a `@Value`, would fabricate that method's expression as this chain's
+    destination. The lambda's own declaration carries no annotation, so the read is
+    honest: `path` NULL, `unresolved`."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "steps": [
+            *_ADAPTER_MATCHES["steps"],
+            # `apply(lambda)` hands the lambda in; its body's `configure(x)` is the read.
+            {"method": "apply", "captures": {"channel": "arg0"}},
+            {"method": "configure", "captures": {"channel": "arg0"}},
+        ],
+        "field_sources": FIELD_SOURCES,
+    }
+    body = "com/acme/streams/Wiring#lambda$inbound$1(Lcom/acme/streams/Config;)V."
+    facts = [
+        *_adapter(("apply", [CallArgument(kind="lambda", source=9, symbol=body)])),
+        _call(
+            _MODULE + body,
+            "com/acme/streams/Config#",
+            "configure",
+            0,
+            receiver=None,
+            result=None,
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        _declared(
+            CALLER[len(_MODULE) :],
+            parameters=[
+                _parameter("com/acme/streams/Ops#", "ops"),
+                _value_parameter("java/lang/String#", "${probe.subscription}"),
+            ],
+        ),
+        _declared(body, parameters=[_parameter("com/acme/streams/Config#", "config")]),
+        _body_symbol(body),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_every_element_of_a_varargs_destination_goes_through_the_field_ladder(tmp_path: Path):
+    """Spec §3c: a vararg array is one row per element AND every destination goes through
+    the ladder — so `inboundAdapter(cf, "literal.q", this.valueQueue, paramQueue)` is three
+    rows: the literal, the field's `@Value` expression (rung 1) and the parameter's (rung
+    2a), each resolved. Before this the ladder ran on the whole argument, an array named
+    no expression, and every varargs registration fed from configuration was `unresolved`
+    — the dominant AMQP and Kafka DSL form."""
+    matches = {**_ADAPTER_MATCHES, "field_sources": FIELD_SOURCES}
+    field = "com/acme/streams/Wiring#valueQueue."
+    facts = [
+        *_adapter(
+            ("onMessage", [_lambda()]),
+            subscription=CallArgument(
+                kind="array",
+                elements=[
+                    CallArgument(kind="string", value="literal.q"),
+                    CallArgument(kind="field", symbol=field),
+                    CallArgument(kind="parameter", value=1),
+                ],
+            ),
+        ),
+        *_annotated_field(field, "${probe.value-queue}"),
+        _declared(
+            CALLER[len(_MODULE) :],
+            parameters=[
+                _parameter("com/acme/streams/Ops#", "ops"),
+                _value_parameter("java/lang/String#", "${probe.param-queue}"),
+            ],
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted((row["path"], row["resolution"]) for row in rows) == [
+        ("${probe.param-queue}", "resolved"),
+        ("${probe.value-queue}", "resolved"),
+        ("literal.q", "resolved"),
+    ]
+    assert {row["handler"] for row in rows} == {_MODULE + BODY}

@@ -180,7 +180,7 @@ def qualifier_of(annotations: list[Any], model: dict[str, Any]) -> str | None:
     is the decoded `signature.parameters[].annotations` list — `{annotation, args}` dicts
     in descriptor form. The name is read off the `value` attribute, as a string or the
     first element of an array: the one attribute the qualifier annotation declares (spec
-    §0a F8; CP-27 row (bean attributes)). That spelling stays here rather than in the
+    §0a F8; CP-27 row 14). That spelling stays here rather than in the
     model as long as every model's qualifier names its bean in `value`; a container
     whose qualifier spells it otherwise adds a `qualifier_attrs` key beside
     `name_attrs`, read here the same way."""

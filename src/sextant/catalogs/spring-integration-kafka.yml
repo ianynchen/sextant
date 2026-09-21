@@ -1,0 +1,235 @@
+id: spring-integration-kafka
+displayName: Spring Integration Kafka flows (spring-integration-kafka Java DSL)
+style: fluent
+protocol: kafka
+direction: inbound
+
+# THE DESTINATION BEHIND A CHANNEL, KAFKA (spec 2026-09-21 §5; COVERAGE §5.8's new
+# "Spring Integration Kafka (DSL + adapters)" line, §5.12's boundary shipped).
+#
+# THE FLOW (§5). `Kafka.messageDrivenChannelAdapter(...)` builds a SOURCE spec
+# whose chain has no terminal of its own: it is handed to `IntegrationFlow.from`
+# and the walk CONTINUES along the flow definition — `via_argument_of … from,
+# continue: true` — through the flow's members (the shared `step_model`:
+# pass-throughs, channel links, diverts) to the `handle(lambda)` whose body is
+# the row's `handler`, or to a `.channel("x")` the flow feeds (then the join
+# pass mints the row for that channel's annotated reader and the
+# `channel_destination` question is not asked). `Kafka.outboundChannelAdapter`
+# is the SINK: its spec chain (`.topic("t")`) continues into the flow's
+# `handle(spec)` and derives the OUTBOUND row, `caller` the flow method — from a
+# channel-sourced flow (`from("ch")`, a root here capturing the SOURCE channel)
+# with an outbound `fed_by` edge for that channel.
+#
+# EVERY OVERLOAD BY DESCRIPTOR (F2; CP-27 row 6). Ten `messageDrivenChannelAdapter`
+# forms, and the slot the destination sits in differs: a `String[]` at slot 1 in
+# `(ConsumerFactory, String...)` and at slot 2 in `(ConsumerFactory, ListenerMode,
+# String...)` — one row per element (a varargs slot is one array, 9.15); a
+# `ContainerProperties` at slot 1 whose own `(String...)` constructor carries the
+# topics — one producing-site hop, `channel_via` BY DESCRIPTOR because its
+# `(Pattern)` and `(TopicPartitionOffset...)` constructors share the arity (row
+# 13); a `Pattern` or a `TopicPartitionOffset[]` at the destination slot is NOT
+# a topic name — the capture reads the slot and finds no literal, so the row
+# derives with `path` unresolved, never a guess; a whole listener container at
+# slot 0 is a bean hop this catalog does not take — read as the slot it is, it
+# resolves to nothing, and the row is unresolved likewise. Four polled
+# `inboundChannelAdapter` forms carry a `ConsumerProperties` at slot 1, read
+# through its `(String...)` constructor the same way. A root or step matched by
+# owner and name alone would read ONE slot for every overload; the descriptor
+# (its parameter portion — `fluent._same_overload`) is what tells them apart.
+#
+# THE SINK'S TOPIC: `topic(String)` on the producer spec (row 7); `topic(Function)`,
+# `topicExpression(String)` and `topicExpression(Expression)` are not literals
+# and poison it (sticky — `topicExpression(e); topic("t")` derives unresolved).
+# `outboundChannelAdapter(ProducerFactory)` returns the template-spec subclass,
+# which is why the steps name both owners.
+#
+# WHAT A CHAIN WRITES — the `fluent` engine's registration words (every one
+# optional; no request catalog spells them): an inbound flow with an inline
+# handler writes its row, `handler` the lambda's body joined to its full symbol;
+# one whose `route`/`gateway`/`scatterGather`/… diverted the message before the
+# handler writes the row with `handler` NULL — resolved, because the handler
+# never moves the wire's resolution; one that named the channel it feeds writes
+# the `fed_by` edge instead of a row. Destinations go through the field ladder
+# (`field_sources` below). `get()` and the builder return end the flow.
+#
+# BOUNDARIES STATED (spec §5, §8): `Pattern` and `TopicPartitionOffset`
+# subscriptions and container-built sources (unresolved rows, above);
+# `inboundGateway`, `outboundGateway`, `channel`, `publishSubscribeChannel`,
+# `pollableChannel` (row 6 — request-reply and Kafka-backed channels); the
+# lambda flow form's implicit `<beanName>.input`; `from(Supplier)`,
+# `from(MessageSource)`, `from(MessageProducerSupport)` (an adapter BEAN — a
+# root matched by descriptor could not tell whose adapter arrived);
+# `configureContainer(c -> …)` inside a source spec; `handle(Object bean,
+# String method)` where the bean is the module's; the bean-wired
+# `KafkaMessageDrivenChannelAdapter` (no fixture exhibits it).
+
+detect:
+  coordinates: ["org.springframework.integration:spring-integration-kafka"]
+
+measured:
+  - { artifact: org.springframework.integration:spring-integration-kafka, versions: ["6.2.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+  - { artifact: org.springframework.integration:spring-integration-core, versions: ["6.2.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp27_spring_integration_wiring.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+# The dependency-injection vocabulary `bean_via` resolves through (D02 §1c) and
+# the flow definition's step table (spec §5), each declared once beside the
+# catalogs and named here; the loader merges the model's steps into `matches`.
+bean_model: spring
+step_model: spring-integration
+
+matches:
+  roots:
+    # --- the source specs: ten `messageDrivenChannelAdapter` overloads (row 6) --
+    # A whole listener container at slot 0: the topics are a bean hop away.
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/listener/AbstractMessageListenerContainer;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec;",
+        captures: { channel: arg0 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/listener/AbstractMessageListenerContainer;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec;",
+        captures: { channel: arg0 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # `ContainerProperties` at slot 1: the topics on its `(String...)` constructor.
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ContainerProperties;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ContainerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ContainerProperties;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ContainerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # `TopicPartitionOffset[]` at slot 1 / 2: a partition subscription, not a topic name.
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;[Lorg/springframework/kafka/support/TopicPartitionOffset;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg1 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;[Lorg/springframework/kafka/support/TopicPartitionOffset;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg2 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # `String[]` at slot 1 / 2: the topics themselves.
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;[Ljava/lang/String;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg1 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;[Ljava/lang/String;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg2 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # `Pattern` at slot 1 / 2: a subscription pattern, not a topic name.
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Ljava/util/regex/Pattern;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg1 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: messageDrivenChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/integration/kafka/inbound/KafkaMessageDrivenChannelAdapter$ListenerMode;Ljava/util/regex/Pattern;)Lorg/springframework/integration/kafka/dsl/KafkaMessageDrivenChannelAdapterSpec$KafkaMessageDrivenChannelAdapterListenerContainerSpec;",
+        captures: { channel: arg2 },
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # --- the polled sources: four `inboundChannelAdapter` overloads (row 6) ----
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: inboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ConsumerProperties;)Lorg/springframework/integration/kafka/dsl/KafkaInboundChannelAdapterSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ConsumerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: inboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ConsumerProperties;Z)Lorg/springframework/integration/kafka/dsl/KafkaInboundChannelAdapterSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ConsumerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: inboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ConsumerProperties;Lorg/springframework/integration/kafka/inbound/KafkaMessageSource$KafkaAckCallbackFactory;)Lorg/springframework/integration/kafka/dsl/KafkaInboundChannelAdapterSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ConsumerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: inboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ConsumerFactory;Lorg/springframework/kafka/listener/ConsumerProperties;Lorg/springframework/integration/kafka/inbound/KafkaMessageSource$KafkaAckCallbackFactory;Z)Lorg/springframework/integration/kafka/dsl/KafkaInboundChannelAdapterSpec;",
+        captures: { channel: arg1 },
+        channel_via: [{ owner: org.springframework.kafka.listener.ConsumerProperties, method: <init>,
+                        descriptor: "([Ljava/lang/String;)V", arg: 0 }],
+        via_argument_of: { owner: org.springframework.integration.dsl.IntegrationFlow, method: from },
+        continue: true }
+    # --- a flow sourced from a CHANNEL (row 1): `channel_source`, and what the
+    # chain then captures decides the row — a sink's wire makes it the outbound
+    # row with an outbound `fed_by` for the source; an inline handler makes the
+    # flow the channel's READER (`read_by`, no row); neither, nothing (a bridge).
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: arg0 } }
+    - { owner: org.springframework.integration.dsl.IntegrationFlow, method: from,
+        descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;",
+        captures: { channel_source: { bean_via: arg0 } } }
+    # --- the sink (row 6): its chain continues into the flow's `handle(spec)` --
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: outboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/KafkaTemplate;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec;",
+        captures: {}, direction: outbound,
+        via_argument_of: { owner: [org.springframework.integration.dsl.IntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.BaseIntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.IntegrationFlowBuilder],
+                           method: handle },
+        continue: true }
+    - { owner: org.springframework.integration.kafka.dsl.Kafka, method: outboundChannelAdapter,
+        descriptor: "(Lorg/springframework/kafka/core/ProducerFactory;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec;",
+        captures: {}, direction: outbound,
+        via_argument_of: { owner: [org.springframework.integration.dsl.IntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.BaseIntegrationFlowDefinition,
+                                   org.springframework.integration.dsl.IntegrationFlowBuilder],
+                           method: handle },
+        continue: true }
+  steps:
+    # The sink's topic (row 7).
+    - { method: topic,
+        owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
+                org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
+        descriptor: "(Ljava/lang/String;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec;",
+        captures: { channel: arg0 } }
+    - { method: topic,
+        owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
+                org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
+        descriptor: "(Ljava/util/function/Function;)Lorg/springframework/integration/kafka/dsl/KafkaProducerMessageHandlerSpec;",
+        poisons: [channel] }
+    - { method: topicExpression,
+        owner: [org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec,
+                org.springframework.integration.kafka.dsl.KafkaProducerMessageHandlerSpec$KafkaProducerMessageHandlerTemplateSpec],
+        poisons: [channel] }
+  # `get()` ends a flow, and is a declared word (so the builder's own `get`
+  # poisons nothing under the step model's `undeclared_steps`); a continued
+  # chain is executable from its consumer on (spec §5: the consumer IS the
+  # terminal), so the source specs need no terminal of their own.
+  terminal: [get]
+  # The field ladder's own vocabulary (2F design §4); copied from
+  # `spring-resttemplate.yml`.
+  field_sources:
+    value_annotation: org.springframework.beans.factory.annotation.Value
+    properties_annotation: org.springframework.boot.context.properties.ConfigurationProperties
+    prefix_from: prefix
+    getter_prefixes: [get, is]
+
+# D02 §1b — the payload-type blocks, declared once in `shape-models/json.yml`;
+# no shape is read here (spec §3c), the model is the harvest-compatibility
+# every fluent catalog keeps.
+shape_model: json

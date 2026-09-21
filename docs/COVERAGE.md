@@ -762,7 +762,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**75 of 90 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**78 of 93 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -821,6 +821,15 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.springframework:spring-core` | 6.2.15 |
 |  | `org.springframework:spring-web` | 6.1.6, 6.2.15 |
 |  | `org.springframework:spring-webmvc` | 6.1.6, 6.2.15, 7.0.2, 7.0.9 |
+| `spring-integration-amqp` | `org.springframework.amqp:spring-amqp` | 3.1.4 |
+|  | `org.springframework.amqp:spring-rabbit` | 3.1.4 |
+|  | `org.springframework.integration:spring-integration-amqp` | 6.2.4 |
+|  | `org.springframework.integration:spring-integration-core` | 6.2.4 |
+| `spring-integration-kafka` | `org.springframework.integration:spring-integration-core` | 6.2.4 |
+|  | `org.springframework.integration:spring-integration-kafka` | 6.2.4 |
+|  | `org.springframework.kafka:spring-kafka` | 3.1.4 |
+| `spring-integration-pubsub` | `com.google.cloud:spring-cloud-gcp-pubsub` | 5.1.2 |
+|  | `org.springframework.integration:spring-integration-core` | 6.2.4 |
 | `spring-jms-template` | `org.springframework:spring-jms` | 6.1.6 |
 | `spring-jms` | `org.springframework:spring-jms` | 6.1.6, 7.0.9 |
 | `spring-kafka-media` | `io.confluent:kafka-avro-serializer` | 7.6.0 |
