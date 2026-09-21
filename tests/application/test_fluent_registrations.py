@@ -1007,6 +1007,205 @@ def test_two_container_beans_of_the_type_and_no_name_match_are_unresolved(tmp_pa
     assert (row["path"], row["resolution"]) == (None, "unresolved")
 
 
+QUEUE = "com/acme/streams/Queue#"
+QUEUE_TYPE = "com.acme.streams.Queue"
+NAMES = "com/acme/streams/Names#"
+NAMES_TYPE = "com.acme.streams.Names"
+
+_LINKED_CONTAINER_MATCHES = {
+    **_CONTAINER_MATCHES,
+    "steps": [
+        *_CONTAINER_MATCHES["steps"],
+        {
+            "method": "setQueues",
+            "captures": {"channel": "arg0"},
+            "channel_via": [{"owner": QUEUE_TYPE, "method": "<init>", "arg": 0}],
+        },
+        {
+            "method": "setQueueNamesFrom",
+            "captures": {"channel": "arg0"},
+            "channel_via": [{"owner": NAMES_TYPE, "method": "of", "arg": 0}],
+        },
+        {"method": "setQueuesBean", "captures": {"channel": {"bean_via": "arg0"}}},
+        {"method": "withQueue", "captures": {"channel": "arg0"}},
+    ],
+}
+
+
+def test_a_queue_built_in_the_containers_own_method_reaches_the_row_through_the_hop(
+    tmp_path: Path,
+):
+    """Fix round 1, finding 1: `container.setQueues(new Queue("q"))` — the destination is
+    on the constructor's argument, one `channel_via` hop, and that hop is resolved in
+    the CONTAINER method's own context (D00 §5: value ids are per method), so the
+    adapter's row reads `q` as a literal that carries no id of another method's."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(),
+        _call(
+            container,
+            QUEUE,
+            "<init>",
+            1,
+            receiver=8,
+            result=None,
+            arguments=[CallArgument(kind="string", value="q")],
+            invoke_kind="special",
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "setQueues",
+            2,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=8)],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == ("q", "resolved")
+
+
+def test_a_container_destination_off_a_getter_is_never_read_off_the_adapters_own_ids(
+    tmp_path: Path,
+):
+    """The near-miss finding 1 closes: the container's `setQueueNamesFrom(props.getQueues())`
+    carries `source: 9` in the CONTAINER method; the adapter's method has its own value
+    9 — `Names.of("fabricated")`, exactly what the step's `channel_via` names. Read in
+    the wrong method the hop would answer `fabricated`; read in the container's it
+    answers nothing, and the row is unresolved."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _call(
+            CALLER,
+            NAMES,
+            "of",
+            1,
+            receiver=None,
+            result=9,
+            arguments=[CallArgument(kind="string", value="fabricated")],
+            invoke_kind="static",
+        ),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(),
+        _call(
+            container,
+            "com/acme/streams/Props#",
+            "getQueues",
+            1,
+            receiver=None,
+            result=9,
+            arguments=[],
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "setQueueNamesFrom",
+            2,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=9)],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_a_bean_reference_inside_the_containers_chain_is_not_followed(tmp_path: Path):
+    """One hop only (spec §4, finding 2): a `bean_via` met inside a `beans:` chain is
+    not resolved — the container's `setQueuesBean(<parameter>)` poisons the capture
+    there, and the adapter's destination is unread."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        _declared(CONTAINER_BEAN, parameters=[_parameter(QUEUE, "queue")], returns=CONTAINER),
+        _annotated(CONTAINER_BEAN, _BEAN),
+        *_bean(WIRING + "queue(sig_0000aaaa).", QUEUE),
+        _call(
+            container,
+            CONTAINER,
+            "<init>",
+            0,
+            receiver=7,
+            result=None,
+            arguments=[],
+            invoke_kind="special",
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "setQueuesBean",
+            1,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_two_ends_of_the_containers_chain_that_disagree_leave_the_destination_unresolved(
+    tmp_path: Path,
+):
+    """Finding 2: the container's chain forks (`c.withQueue("a")`, `c.withQueue("b")` —
+    two value-producing calls on one receiver) and its two ends capture different
+    destinations; the hop takes neither, never one of them."""
+    container = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(),
+        _call(
+            container,
+            CONTAINER,
+            "withQueue",
+            1,
+            receiver=7,
+            result=8,
+            arguments=[CallArgument(kind="string", value="a")],
+        ),
+        _call(
+            container,
+            CONTAINER,
+            "withQueue",
+            2,
+            receiver=7,
+            result=9,
+            arguments=[CallArgument(kind="string", value="b")],
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_LINKED_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_a_beans_entry_carrying_a_root_only_word_is_refused(tmp_path: Path):
+    """A `beans:` chain is walked for its captures alone: a direction, a composition or a
+    method annotation on it would be read by nothing, so the file is refused."""
+    matches = {
+        **_CONTAINER_MATCHES,
+        "beans": [{**_CONTAINER_MATCHES["beans"][0], "direction": "outbound"}],
+    }
+    with pytest.raises(CatalogError, match="invented-adapters.*beans.*direction"):
+        _run(tmp_path, _adapter(), _catalog(matches))
+
+
 # --- method_annotation ----------------------------------------------------------------
 
 
@@ -1202,13 +1401,10 @@ _FLOW_MATCHES = {
             "via_argument_of": {"owner": FLOW_TYPE, "method": "from"},
             "continue": True,
         },
-        # An OUTBOUND flow reads a channel (§5): `from("ch")`, the link is its source.
-        {
-            "owner": FLOW_TYPE,
-            "method": "from",
-            "captures": {"channel_link": "arg0"},
-            "direction": "outbound",
-        },
+        # A channel-sourced flow (§5): `from("ch")` CONSUMES the channel — `channel_source`,
+        # not a link and not a direction; what the chain then captures decides the row
+        # (fix round 1, finding 4).
+        {"owner": FLOW_TYPE, "method": "from", "captures": {"channel_source": "arg0"}},
         # No `sinks:` word: a sink is a root whose continuation is the flow.
         {
             "owner": SINKS_TYPE,
@@ -1218,19 +1414,25 @@ _FLOW_MATCHES = {
             "continue": True,
         },
     ],
+    # The flow definition's steps declare their owner, as the real ones do (spec §5:
+    # every member of one definition type) — which is also what lets them fold BACKWARD
+    # into a continuation's prefix (`_prefix_captures`' owner gate).
     "steps": [
-        {"method": "handle", "captures": {"handler": "arg0"}},
-        {"method": "route", "poisons": ["handler"]},
-        {"method": "channel", "captures": {"channel_link": "arg0"}},
+        {"method": "handle", "owner": FLOW_DEF_TYPE, "captures": {"handler": "arg0"}},
+        {"method": "route", "owner": FLOW_DEF_TYPE, "poisons": ["handler"]},
+        {"method": "channel", "owner": FLOW_DEF_TYPE, "captures": {"channel_link": "arg0"}},
         {"method": "topic", "owner": SINK_SPEC_TYPE, "captures": {"channel": "arg0"}},
     ],
-    # The `build()` form: a spec that ends in its builder call, handed to `from`.
+    # The `build()` form: a spec that ends in its builder call, handed to `from`; and
+    # `get()`, the flow definition's own end — what a channel-sourced flow (a root of
+    # its own, continued by nothing) reaches to derive.
     "terminal": [
         {
             "method": "build",
             "terminal_via_argument": {"owner": FLOW_TYPE, "method": "from"},
             "continue": True,
-        }
+        },
+        "get",
     ],
 }
 
@@ -1412,13 +1614,11 @@ def test_the_join_pass_mints_the_row_for_a_flow_that_links_a_channel_and_handles
     assert (row["path"], row["handler"], row["caller"]) == (TOPIC, _MODULE + BODY, CALLER)
 
 
-def test_a_handler_before_the_link_is_the_wires_consumer_not_the_channels_reader(
-    tmp_path: Path,
-):
-    """The near-miss that keeps the reader honest: `handle(h)` BEFORE `.channel("x")` —
-    h consumes what the spec delivers and its OUTPUT feeds x, so h reads nothing from x.
-    The link is still recorded (the flow feeds x with what came off the wire); no
-    `read_by` is written for h."""
+def test_a_link_after_the_handler_is_the_handlers_output_channel(tmp_path: Path):
+    """Fix round 1, finding 3: the link's meaning depends on where it sits. `handle(h)`
+    BEFORE `.channel("x")` — h consumes what the wire delivers (the row, with h) and its
+    OUTPUT goes to x: a `sends_to` edge naming h, the table's reserved role's first
+    writer. No `fed_by` (the wire does not feed x; h's output does) and no `read_by`."""
     facts = [
         _source_spec(),
         _from(1, source=10, result=11),
@@ -1431,18 +1631,54 @@ def test_a_handler_before_the_link_is_the_wires_consumer_not_the_channels_reader
         _body_symbol(),
     ]
     workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
-    bindings = _bindings(workspace)
+    [row] = _rows(workspace)
+    [binding] = _bindings(workspace)
     workspace.close()
 
-    assert [(b["role"], b["channel"]) for b in bindings] == [("fed_by", "x")]
+    assert (row["path"], row["handler"], row["resolution"]) == (TOPIC, _MODULE + BODY, "resolved")
+    assert binding == {
+        "channel": "x",
+        "role": "sends_to",
+        "symbol": _MODULE + BODY,
+        "protocol": "amqp",
+        "direction": "inbound",
+        "destination": None,
+        "catalog_id": "invented-adapters",
+        "resolution": "resolved",
+    }
+
+
+def test_a_link_before_any_handler_is_the_wires_feed_and_writes_no_row(tmp_path: Path):
+    """The other order, restated beside its twin: `.channel("x")` before `handle(h)` is
+    the SOURCE's feed — `fed_by`, the handler after it a reader, no row of the chain's
+    own (the join pass mints it)."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(
+            ("channel", [CallArgument(kind="string", value="x")]),
+            ("handle", [_lambda()]),
+            start=2,
+            receiver=11,
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    roles = sorted(b["role"] for b in _bindings(workspace))
+    workspace.close()
+
+    assert (rows, roles) == ([], ["fed_by", "read_by"])
 
 
 def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
-    """§5's outbound flow: `from("ch")` is a root (`channel_link`, `direction:
-    outbound`) and `.handle(sinkSpec)` consumes the sink chain — a root whose
-    continuation is the flow. Its captures (`channel: "out"` from `.topic("out")`)
-    merge with the consumer's prefix (`from("ch")` before `handle`): ONE outbound row
-    `path=out`, `caller` the flow method, and one outbound `fed_by` on `ch`."""
+    """§5's outbound flow: `from("ch")` is a root (`channel_source`) and
+    `.handle(sinkSpec)` consumes the sink chain — a root whose continuation is the
+    flow. Its captures (`channel: "out"` from `.topic("out")`) merge with the
+    consumer's prefix (`from("ch")` before `handle`): a channel-sourced chain that
+    captured a WIRE is the outbound row — ONE row `path=out`, `caller` the flow method
+    — and an outbound `fed_by` on `ch` (§3b: the channel's wire end is known, so the
+    question is not asked)."""
     facts = [
         _call(
             CALLER,
@@ -1502,6 +1738,105 @@ def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
         "outbound",
         "out",
     )
+
+
+def _channel_sourced_flow(*steps: tuple[str, list[CallArgument]]) -> list:
+    """`Flow.from("ch")` followed by `steps` and `get()` — a flow nothing continues."""
+    return [
+        _call(
+            CALLER,
+            FLOW,
+            "from",
+            0,
+            receiver=None,
+            result=20,
+            arguments=[CallArgument(kind="string", value="ch")],
+            invoke_kind="static",
+        ),
+        *_flow_steps(*steps, start=1, receiver=20),
+    ]
+
+
+def test_a_channel_sourced_flow_with_an_inline_handler_is_the_channels_reader(
+    tmp_path: Path,
+):
+    """§5: `from("ch").handle(h)` is a channel CONSUMER, not a wire — it writes
+    `read_by(ch, h)` and no row, so the adapter feeding `ch` gains h as a handler
+    through the join pass."""
+    facts = [*_channel_sourced_flow(("handle", [_lambda()])), _body_symbol()]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (binding["role"], binding["channel"], binding["symbol"], binding["direction"]) == (
+        "read_by",
+        "ch",
+        _MODULE + BODY,
+        "inbound",
+    )
+
+
+def test_a_bridge_between_two_channels_writes_nothing(tmp_path: Path):
+    """The stated boundary: `from("a").channel("b")` — a channel-sourced flow that
+    captured neither a wire nor a handler says nothing about any wire."""
+    facts = _channel_sourced_flow(("channel", [CallArgument(kind="string", value="b")]))
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert (rows, bindings) == ([], [])
+
+
+def test_a_channel_sourced_flow_that_links_and_reaches_a_wire_writes_both_edges(
+    tmp_path: Path,
+):
+    """`channel_source` and `channel_link` on one chain (source `ch`, feeding `b`) with
+    a sink's wire: the outbound row, an outbound `fed_by` for the source AND one for
+    the link — each edge by its own rule."""
+    facts = [
+        *_channel_sourced_flow(("channel", [CallArgument(kind="string", value="b")]))[:2],
+        _call(
+            CALLER,
+            SINKS,
+            "senderSpec",
+            2,
+            receiver=None,
+            result=29,
+            arguments=[CallArgument(kind="instance", source=3, symbol="com/acme/flows/Template#")],
+            invoke_kind="static",
+        ),
+        _call(
+            CALLER,
+            SINK_SPEC,
+            "topic",
+            3,
+            receiver=29,
+            result=30,
+            arguments=[CallArgument(kind="string", value="out")],
+        ),
+        _call(
+            CALLER,
+            FLOW_DEF,
+            "handle",
+            4,
+            receiver=21,
+            result=22,
+            arguments=[CallArgument(kind="unresolved", source=30)],
+        ),
+        _call(CALLER, FLOW_DEF, "get", 5, receiver=22, result=23),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    [row] = _rows(workspace)
+    edges = sorted(
+        (b["role"], b["channel"], b["direction"], b["destination"]) for b in _bindings(workspace)
+    )
+    workspace.close()
+
+    assert (row["direction"], row["path"]) == ("outbound", "out")
+    assert edges == [("fed_by", "b", "outbound", "out"), ("fed_by", "ch", "outbound", "out")]
 
 
 def test_a_build_terminated_spec_continues_exactly_as_a_bare_one(tmp_path: Path):

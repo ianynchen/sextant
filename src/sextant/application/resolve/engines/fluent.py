@@ -126,6 +126,16 @@ _BEAN_VIA = "bean_via"
 # rows are there when this engine runs because `resolve/endpoints.py` runs the
 # index's catalog first (`_writes_only_the_channel_edge`).
 _READ_BY = "read_by"
+# The edge's third role (§3b's reserved slot), and its first writer (fix round
+# 1, finding 3): a `channel_link` captured AFTER a handler is that handler's
+# OUTPUT channel, not the wire's feed.
+_SENDS_TO = "sends_to"
+
+# The two consumer-side channel captures that name a channel rather than an
+# address: `channel_link` — the channel this registration FEEDS (§3b) — and
+# `channel_source` — the channel a flow CONSUMES (`from("ch")`, §5; fix round
+# 1, finding 4). Each reads `argN` or `{bean_via: argN}` (the bean's name).
+_CHANNEL_NAME_FIELDS = ("channel_link", "channel_source")
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -155,6 +165,12 @@ _COMPOSE = "\x00compose"
 # wire's own consumer (`_derive`'s `read_by` edge).
 _CONTINUE = "\x00continue"
 _READS_LINK = "\x00reads_link"
+# The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
+# present exactly when the link sits after a handler step, holding that
+# handler's argument: the link is then that handler's output channel
+# (`sends_to`), and the row's handler is that handler, whatever a later
+# `handle` after the link captured (a reader of the channel, `_READS_LINK`).
+_LINK_SENDER = "\x00link_sender"
 
 # F5 §6.2 (W29). Where a chain's collected metadata entries ride while it is walked.
 # A reserved key inside `captures` rather than a second parameter threaded through
@@ -432,8 +448,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
 
 
+# The root words a `beans:` entry may not carry (fix round 1, Minor 2): a bean's
+# chain is walked for its captures alone (`_bean_chain_capture` takes one field
+# and nothing else), so a direction, a composition, an annotation capture or a
+# continuation on it would be read by nothing — silently, which is the one
+# thing a catalog key must never be.
+_ROOT_ONLY_WORDS = ("direction", "compose", "method_annotation", "via_argument_of", "continue")
+
+
 def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
     """One `roots` (or `beans` — `where`) entry as the walk reads it."""
+    if where == "beans":
+        carried = sorted(word for word in _ROOT_ONLY_WORDS if word in root)
+        if carried:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: a `beans` entry (`{root.get('method')}`) "
+                f"declares `{'`, `'.join(carried)}` — a bean's chain is walked for its "
+                f"captures alone, and nothing reads those there (spec 2026-09-21 §4)"
+            )
     return {
         # A LIST or a scalar (§3.1): one library reachable under its class name
         # and under the interface a codebase more often declares its field as.
@@ -806,13 +838,18 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
     # `fluent` style) reads, so the guard is evaluated here, in
     # `_resolve_captures`'s caller, rather than inside it.
     folded = _step_captures(step, site)
-    # Spec 2026-09-21 §5: whether the handler this step captures arrives
-    # AFTER a link the chain already holds — then it reads the linked
-    # channel (the DSL subscribes the next endpoint to it) — and a new link
-    # after a handler starts that question over: the handler before it was
-    # the wire's own consumer, and its output is what feeds the channel.
+    # Spec 2026-09-21 §5 and fix round 1 (finding 3): a link's meaning depends
+    # on where it sits. A handler captured AFTER a link the chain holds READS
+    # the linked channel (the DSL subscribes the next endpoint to it,
+    # `_READS_LINK`); a link captured AFTER a handler is that handler's OUTPUT
+    # channel (`_LINK_SENDER` holds it), and a new link starts the reader
+    # question over.
     if "channel_link" in folded:
         captures[_READS_LINK] = False
+        if "handler" in captures:
+            captures[_LINK_SENDER] = captures["handler"]
+        else:
+            captures.pop(_LINK_SENDER, None)
     elif "handler" in folded and _string_value(captures.get("channel_link")) is not None:
         captures[_READS_LINK] = True
     _fold(captures, folded)
@@ -875,6 +912,31 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     if _COMPOSE in captures:
         composed_field, halves, join = captures[_COMPOSE]
         captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
+    # The consumer the chain captured, whatever the direction (read on the row
+    # for an inbound one alone, below); and — fix round 1, finding 4 — a
+    # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
+    # what it captured: a WIRE (a sink's `topic`, a composed exchange/routing
+    # key) makes it the OUTBOUND row, `caller` the flow method, with an
+    # outbound `fed_by` for the source channel (§3b: the channel's wire end
+    # is known, so the question is not asked); a handler and no wire makes it
+    # the source channel's READER — `read_by`, no row (§5: "a channel-sourced
+    # flow with an inline handler is a channel consumer, not a wire"); neither
+    # says nothing about any wire (a bridge, `from("a").channel("b")` — the
+    # stated boundary). A source whose name could not be read consumes an
+    # unknown channel: its wire still derives (no edge to write), its handler
+    # reads nothing nameable.
+    last_handler = _handler_symbol(captures.get("handler"), context.method_symbols)
+    sourced = "channel_source" in captures
+    source = _string_value(captures.get("channel_source")) if sourced else None
+    if sourced:
+        if "channel" in captures:
+            direction = "outbound"
+        else:
+            if source is not None and last_handler is not None:
+                context.bindings.append(
+                    _edge(_READ_BY, source, last_handler, context, "inbound", protocol=None)
+                )
+            return
     # A verb the catalog spelled as a literal is that literal; one it spelled
     # as `argN` (`A-C2`) is whatever the matched call's own argument reads as a
     # string, and None where nothing could read it — the honest gap, not the
@@ -937,16 +999,24 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
     # Spec 2026-09-21 §3c: the consumer, on an inbound row alone — an outbound
-    # registration hands its messages to nobody in this module.
+    # registration hands its messages to nobody in this module. Where the
+    # chain's link sits AFTER a handler (finding 3), the row's handler is
+    # THAT handler — the wire's consumer — not whatever a later `handle`
+    # after the link captured, which reads the channel instead.
+    link_after_handler = _LINK_SENDER in captures
     handler = (
-        _handler_symbol(captures.get("handler"), context.method_symbols)
+        (
+            _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+            if link_after_handler
+            else last_handler
+        )
         if direction == "inbound"
         else None
     )
     # §3b: the channel this registration feeds, where the chain read its name.
-    # Poisoned, unresolved or spelled through a bean (the bean fold's word, not
-    # read here) all read None: a channel we cannot name is not a channel we
-    # can bind, and the chain then keeps its own row with `handler` NULL.
+    # Poisoned, unresolved or a bean the fold could not name all read None: a
+    # channel we cannot name is not a channel we can bind, and the chain then
+    # keeps its own row with `handler` NULL.
     link = _string_value(captures.get("channel_link"))
     for peer, path, url_resolution in destinations:
         # 2O design §8, folded in from single_call: identity is the URL the
@@ -1014,7 +1084,34 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             context.seen.add(key)
         for entry in captures.get(_COLLECTED) or ():
             context.metadata.append(_metadata_row(entry, context, direction, verb, path))
-        if link is not None:
+        if source is not None:
+            # Finding 4: the channel-sourced chain reached a wire — the source
+            # channel's wire end is this row, an outbound `fed_by`.
+            context.bindings.append(
+                _edge("fed_by", source, context.caller, context, direction, path, resolution)
+            )
+        # Spec 2026-09-21 §5, §0b A4: a handler folded AFTER the link —
+        # `.channel("x").handle(h)` — is a READER of the linked channel, the
+        # same edge a handler's own annotation writes; the join pass then
+        # mints the row naming the feeder and that reader, beside any other
+        # reader of the channel. Only a handler the chain could name: an
+        # unread one is no reader.
+        if (
+            direction == "inbound"
+            and link is not None
+            and last_handler is not None
+            and captures.get(_READS_LINK)
+        ):
+            context.bindings.append(
+                _edge(_READ_BY, link, last_handler, context, direction, protocol=None)
+            )
+        if link is not None and direction == "inbound" and link_after_handler:
+            # Finding 3: a link AFTER the handler is the handler's OUTPUT channel
+            # — `sends_to`, and the row derives with that handler: the wire's
+            # consumer is known, and what it hands on is a separate edge.
+            if handler is not None:
+                context.bindings.append(_edge(_SENDS_TO, link, handler, context, direction))
+        elif link is not None:
             # Spec 2026-09-21 §3b: the `fed_by` edge — the wire this chain read,
             # the constructing method, the registration's direction. An inbound
             # chain writes the edge INSTEAD of its row (the plan's ruling: the
@@ -1025,37 +1122,9 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
             # `config_join.gaps` stops asking who feeds the channel. The row's
             # own `resolution` travels with it: the edge stands in for the row.
             context.bindings.append(
-                {
-                    "channel": link,
-                    "role": "fed_by",
-                    "symbol": context.caller,
-                    "protocol": context.catalog.protocol,
-                    "direction": direction,
-                    "destination": path,
-                    "catalog_id": context.catalog.id,
-                    "resolution": resolution,
-                }
+                _edge("fed_by", link, context.caller, context, direction, path, resolution)
             )
             if direction == "inbound":
-                # Spec 2026-09-21 §5, §0b A4: a handler folded AFTER the link
-                # — `.channel("x").handle(h)` — is a READER of the linked
-                # channel, the same edge a handler's own annotation writes;
-                # the join pass then mints the row naming this feeder and
-                # that reader, beside any other reader of the channel. Only
-                # a handler the chain could name: an unread one is no reader.
-                if handler is not None and captures.get(_READS_LINK):
-                    context.bindings.append(
-                        {
-                            "channel": link,
-                            "role": _READ_BY,
-                            "symbol": handler,
-                            "protocol": None,
-                            "direction": direction,
-                            "destination": None,
-                            "catalog_id": context.catalog.id,
-                            "resolution": "resolved",
-                        }
-                    )
                 continue
         context.rows.append(
             {
@@ -1081,6 +1150,36 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
                 "produces": None,
             }
         )
+
+
+def _edge(
+    role: str,
+    channel: str,
+    symbol: str,
+    context: _ChainContext,
+    direction: str,
+    destination: str | None = None,
+    resolution: str = "resolved",
+    *,
+    protocol: str | None = "",
+) -> dict[str, Any]:
+    """One `channel_bindings` row (spec 2026-09-21 §3b): `fed_by` carries the
+    wire (this catalog's protocol, the destination, the row's own resolution
+    — the edge stands in for the row); `read_by` carries the reader and
+    nothing about the wire (`protocol=None`, no destination — a reader knows
+    only the channel's name); `sends_to` the sender under this catalog's
+    protocol, the wire it hands on being the sender's own concern (no
+    destination)."""
+    return {
+        "channel": channel,
+        "role": role,
+        "symbol": symbol,
+        "protocol": context.catalog.protocol if protocol == "" else protocol,
+        "direction": direction,
+        "destination": destination,
+        "catalog_id": context.catalog.id,
+        "resolution": resolution,
+    }
 
 
 def _metadata_row(
@@ -1435,13 +1534,13 @@ def _validate_captures(
                     f"`handler: {value}` — a handler reads `argN` or is the literal "
                     f"`{_HANDLER_NONE}` (spec 2026-09-21 §5's `discard`)"
                 )
-            if field == "channel_link" and not (
+            if field in _CHANNEL_NAME_FIELDS and not (
                 _ARG_REFERENCE.match(str(value)) or _valid_bean_via(value)
             ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{entry['method']}` captures "
-                    f"`channel_link: {value!r}` — a channel link reads `argN` or "
-                    f"`{{{_BEAN_VIA}: argN}}` (spec 2026-09-21 §4)"
+                    f"`{field}: {value!r}` — a channel name reads `argN` or "
+                    f"`{{{_BEAN_VIA}: argN}}` (spec 2026-09-21 §4, §5)"
                 )
         when = entry.get("when")
         if when is None:
@@ -1615,12 +1714,16 @@ def _fold_bean_captures(captures: dict[str, Any], context: _ChainContext) -> Non
     framework honours, so it must be free to override it.
 
     One hop only: in the collecting context (`beans` None) a reference is not
-    followed, and a container built in a third bean is unresolved (§4)."""
+    followed — the field is `_POISONED` there — and a container built in a
+    third bean is unresolved (§4)."""
     for field, value in list(captures.items()):
         if not isinstance(value, dict) or value.get("kind") != _BEAN_VIA:
             continue
         if context.beans is None:
-            captures[field] = _unresolved_bean("second_hop")
+            # The second hop (§4): a statement about the chain, not a read
+            # failure a later setter lifts — the container's own destination
+            # lives in a third bean this walk does not reach.
+            captures[field] = _POISONED
             continue
         if value.get("caller") != context.caller:
             captures[field] = _unresolved_bean("across_bodies")
@@ -1628,7 +1731,7 @@ def _fold_bean_captures(captures: dict[str, Any], context: _ChainContext) -> Non
         bean = _bean_reference(value.get("argument"), context)
         if isinstance(bean, Unresolved):
             captures[field] = _unresolved_bean(bean.reason)
-        elif field == "channel_link":
+        elif field in _CHANNEL_NAME_FIELDS:
             captures[field] = {"kind": "string", "value": bean.name}
         else:
             captures[field] = _bean_chain_capture(bean, field, context)
@@ -1731,12 +1834,48 @@ def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> An
         }
         _fold_bean_captures(captures, collecting)
         _walk(site, captures, reached_terminal=False, context=collecting)
-    values = [end[field] for end in collected if field in end]
+    values = [_literal_of(field, end, collecting) for end in collected if field in end]
     if not values:
         return _unresolved_bean("no_chain" if not collected else "field_uncaptured")
     if any(value != values[0] for value in values[1:]):
         return _unresolved_bean("chains_disagree")
     return values[0]
+
+
+def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
+    """What one chain end of a referenced bean captured under `field`, READ IN
+    THAT BEAN'S OWN METHOD (fix round 1, finding 1) and handed back as a
+    literal-shaped argument carrying no value id: value ids are per method
+    (D00 §5), so a `source` the container's chain captured must never reach
+    the adapter's `_derive`, where the field ladder's getter join and the
+    `channel_via` ladder would search the ADAPTER method's sites for it — a
+    same-numbered value there is unrelated, and reading it fabricates.
+
+    So the read `_derive` would do runs here, against the collecting
+    context's own facts: the field ladder (`_address_read`), then for a
+    destination the array read and the end's own `channel_via` ladder,
+    exactly as `_derive` orders them. The answer is a `string`, an `array`
+    whose elements are strings (an unreadable element stays an `unresolved`
+    element, so the adapter's read degrades as `channels_of` always has), a
+    catalog poison as itself, or `unresolved`."""
+    value = end[field]
+    if value is _POISONED:
+        return _POISONED
+    argument = _address_read(value, context)
+    if field != "channel":
+        text = _string_value(argument)
+        return {"kind": "string", "value": text} if text is not None else _unresolved_bean("unread")
+    found = channels_of(argument)
+    forms = end.get("channel_via") or []
+    if found[0][2] != "resolved" and forms:
+        found = linked_channels(argument, context.facts, forms)
+    elements = [
+        {"kind": "string", "value": path}
+        if resolution == "resolved" and path is not None
+        else _unresolved_bean("unread")
+        for _, path, resolution in found
+    ]
+    return elements[0] if len(elements) == 1 else {"kind": "array", "elements": elements}
 
 
 def _undeclared_steps(
