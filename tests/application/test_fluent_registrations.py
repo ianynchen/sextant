@@ -496,6 +496,22 @@ def test_a_composed_address_joins_both_captured_halves_in_declared_order(tmp_pat
     )
 
 
+def test_a_composed_address_whose_first_half_is_empty_is_the_tail_alone(tmp_path: Path):
+    """Final fix wave, item 2. `setExchangeName("").setRoutingKey("orders")` publishes
+    through the default exchange, and the destination is `orders` — the spelling
+    `single_call._paired_destination` already gives the same wire (§8.1 rule 1), never
+    `/orders`, which nothing routes to."""
+    facts = _adapter(
+        ("setExchangeName", [CallArgument(kind="string", value="")]),
+        ("setRoutingKey", [CallArgument(kind="string", value="orders")]),
+    )
+    workspace = _run(tmp_path, facts, _catalog(_COMPOSED_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == ("orders", "resolved")
+
+
 def test_a_composed_address_with_a_half_never_captured_is_unresolved(tmp_path: Path):
     """§0b A3: the framework fills an unset half from defaults the walk does not read, so
     half an address is no address — `path` NULL, `unresolved`."""
@@ -615,6 +631,19 @@ def test_a_poison_naming_no_declared_capture_is_refused(tmp_path: Path):
     _refused(tmp_path, matches, "invented-adapters.*poisons.*peer")
 
 
+@pytest.mark.parametrize("where", ["roots", "beans"])
+def test_a_poisons_on_a_root_is_refused(tmp_path: Path, where: str):
+    """Final fix wave, item 4. `poisons:` is a STEP's word (spec §4): a root starts the
+    chain with nothing captured yet to poison, and the entry was rebuilt from named keys
+    — so the word loaded, read as valid, and did nothing. Refused by file, on a `roots`
+    and on a `beans` entry alike."""
+    matches = {
+        **_CONTAINER_MATCHES,
+        where: [{**_CONTAINER_MATCHES[where][0], "poisons": ["channel"]}],
+    }
+    _refused(tmp_path, matches, f"invented-adapters.*{where}.*poisons")
+
+
 def test_a_malformed_compose_is_refused(tmp_path: Path):
     matches = {
         **_COMPOSED_MATCHES,
@@ -632,6 +661,7 @@ def test_malformed_undeclared_steps_are_refused(tmp_path: Path):
 
 _BEAN = "org/springframework/context/annotation/Bean#"
 _QUALIFIER = "org/springframework/beans/factory/annotation/Qualifier#"
+_PRIMARY = "org/springframework/context/annotation/Primary#"
 _CHANNEL_TYPE = "org/springframework/messaging/MessageChannel#"
 # An invented container type: nothing a framework bean shares, so the container rungs
 # (qualifier, unique type, name) are what resolve a parameter of it.
@@ -1012,6 +1042,49 @@ def test_two_container_beans_of_the_type_and_no_name_match_are_unresolved(tmp_pa
     workspace.close()
 
     assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_the_primary_container_bean_wins_over_the_one_the_parameter_is_named_after(
+    tmp_path: Path,
+):
+    """Final fix wave, item 1. Two container beans, `container()` marked primary and
+    `second()` not, and the adapter's parameter named `second`: the container injects
+    the PRIMARY (spring-beans 6.1.6 tries `determinePrimaryCandidate` before it compares
+    names — CP-27 row 15), so the row carries the primary's queue, never the queue of
+    the bean the parameter happens to be named after — which is what the name rung
+    alone folded before this fix."""
+    second_bean = WIRING + "second(sig_5ec0nd00)."
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "second")]),
+        *_container_bean(("setQueueNames", [_queue_names("primary.q")])),
+        _annotated(CONTAINER_BEAN, _PRIMARY),
+        _call(
+            _MODULE + second_bean,
+            CONTAINER,
+            "<init>",
+            0,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="parameter", value=0)],
+            invoke_kind="special",
+        ),
+        _call(
+            _MODULE + second_bean,
+            CONTAINER,
+            "setQueueNames",
+            1,
+            receiver=7,
+            result=None,
+            arguments=[_queue_names("second.q")],
+        ),
+        *_bean(second_bean, CONTAINER),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == ("primary.q", "resolved")
 
 
 QUEUE = "com/acme/streams/Queue#"
@@ -1501,6 +1574,7 @@ FLOW_DEF_TYPE = "com.acme.flows.FlowDefinition"
 PROPS = "com/acme/flows/Props#"
 PROPS_TYPE = "com.acme.flows.Props"
 TOPIC = "orders.topic"
+FROM_STRING = "(Ljava/lang/String;)Lcom/acme/flows/FlowDefinition;"
 
 _FLOW_MATCHES = {
     "roots": [
@@ -1513,8 +1587,16 @@ _FLOW_MATCHES = {
         },
         # A channel-sourced flow (§5): `from("ch")` CONSUMES the channel — `channel_source`,
         # not a link and not a direction; what the chain then captures decides the row
-        # (fix round 1, finding 4).
-        {"owner": FLOW_TYPE, "method": "from", "captures": {"channel_source": "arg0"}},
+        # (fix round 1, finding 4). By DESCRIPTOR, as the shipped catalogs key it: the
+        # spec form `from(spec)` (a `()V` site here) is the continuation's consumer and
+        # not a root of its own — before this, the root matched both and a spec-sourced
+        # flow also started a second, source-less chain (final fix wave, item 3).
+        {
+            "owner": FLOW_TYPE,
+            "method": "from",
+            "descriptor": FROM_STRING,
+            "captures": {"channel_source": "arg0"},
+        },
         # No `sinks:` word: a sink is a root whose continuation is the flow.
         {
             "owner": SINKS_TYPE,
@@ -1790,16 +1872,7 @@ def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
     — and an outbound `fed_by` on `ch` (§3b: the channel's wire end is known, so the
     question is not asked)."""
     facts = [
-        _call(
-            CALLER,
-            FLOW,
-            "from",
-            0,
-            receiver=None,
-            result=20,
-            arguments=[CallArgument(kind="string", value="ch")],
-            invoke_kind="static",
-        ),
+        _channel_sourced_flow()[0],
         _call(
             CALLER,
             SINKS,
@@ -1853,15 +1926,15 @@ def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
 def _channel_sourced_flow(*steps: tuple[str, list[CallArgument]]) -> list:
     """`Flow.from("ch")` followed by `steps` and `get()` — a flow nothing continues."""
     return [
-        _call(
-            CALLER,
-            FLOW,
-            "from",
-            0,
+        CallSiteFact(
+            document_id="doc_1",
+            caller=CALLER,
+            target=CallTarget(owner=FLOW, name="from", descriptor=FROM_STRING),
+            invoke_kind="static",
+            ordinal=0,
             receiver=None,
             result=20,
             arguments=[CallArgument(kind="string", value="ch")],
-            invoke_kind="static",
         ),
         *_flow_steps(*steps, start=1, receiver=20),
     ]
@@ -1885,6 +1958,33 @@ def test_a_channel_sourced_flow_with_an_inline_handler_is_the_channels_reader(
         "ch",
         _MODULE + BODY,
         "inbound",
+    )
+
+
+def test_a_channel_sourced_flow_that_links_before_its_handler_reads_the_link(
+    tmp_path: Path,
+):
+    """Final fix wave, item 3. `from("a").channel("b").handle(h)`: the framework
+    subscribes `h` to `b` (M4's rule — a handler after a link reads the LINKED channel),
+    and `a → b` is the bridge the boundary already states. One edge, `read_by(b, h)`;
+    nothing about `a`, and never `read_by(a, h)`, which would attribute the handler to
+    the source."""
+    facts = [
+        *_channel_sourced_flow(
+            ("channel", [CallArgument(kind="string", value="b")]), ("handle", [_lambda()])
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (binding["role"], binding["channel"], binding["symbol"]) == (
+        "read_by",
+        "b",
+        _MODULE + BODY,
     )
 
 

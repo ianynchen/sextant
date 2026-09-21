@@ -65,6 +65,7 @@ _SPRING = yaml.safe_load(
 )
 _BEAN = "org/springframework/context/annotation/Bean#"
 _QUALIFIER = "org/springframework/beans/factory/annotation/Qualifier#"
+_PRIMARY = "org/springframework/context/annotation/Primary#"
 _CHANNEL_TYPE = "org/springframework/messaging/MessageChannel#"
 _CONTAINER_TYPE = "org/springframework/amqp/rabbit/listener/SimpleMessageListenerContainer#"
 
@@ -111,6 +112,16 @@ def _bean(
             use=AnnotationUse(annotation=annotation, args=args or {}),
         ),
     ]
+
+
+def _primary(bare: str) -> AnnotationFact:
+    """The primary-marking annotation on a declared factory method."""
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + bare,
+        retention="runtime",
+        use=AnnotationUse(annotation=_PRIMARY, args={}),
+    )
 
 
 def _catalog(model: dict, catalog_id: str = "invented") -> Catalog:
@@ -259,7 +270,8 @@ def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path)
     """The container's own candidate order for a type no framework bean shares
     (cited on `bean-models/spring.yml`, CP-27): one bean of
     the type is it whatever the parameter is called; two are `ambiguous` — unless
-    the parameter is named like one of them, which is the name rung."""
+    one is primary (the next test) or the parameter is named like one of them,
+    which is the name rung."""
     one = _bean(_CONTAINER, _CONTAINER_TYPE) + [_method(_HELPER)]
     workspace = _loaded(tmp_path, one)
     table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
@@ -286,6 +298,74 @@ def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path)
     assert table.bean_of(_parameter(_CONTAINER_TYPE, "anything")) == Unresolved("ambiguous")
     assert table.bean_of(_parameter(_CONTAINER_TYPE, "otherContainer")) == BeanRef(
         method=_MODULE + _OTHER_CONTAINER, name="otherContainer", erased_return=_CONTAINER_TYPE
+    )
+
+
+def test_one_primary_among_the_type_candidates_wins_over_the_name_match(tmp_path: Path):
+    """Final fix wave, item 1. Two beans of the container type, one marked
+    primary, and a parameter NAMED after the other: the container injects the
+    primary (`determineAutowireCandidate` tries `determinePrimaryCandidate`
+    before it compares names — spring-beans 6.1.6, CP-27 row 15), so the fold
+    answers the primary and never the name match, which would fold the wrong
+    container's queues into the row. A parameter named after neither takes the
+    primary too."""
+    facts = (
+        _bean(_CONTAINER, _CONTAINER_TYPE)
+        + [_primary(_CONTAINER)]
+        + _bean(_OTHER_CONTAINER, _CONTAINER_TYPE)
+        + [_method(_HELPER)]
+    )
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    primary = BeanRef(
+        method=_MODULE + _CONTAINER, name="container", erased_return=_CONTAINER_TYPE, primary=True
+    )
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "otherContainer")) == primary
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "anything")) == primary
+    # A qualifier still comes first — it names the other bean outright.
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "c", qualifier="otherContainer")) == BeanRef(
+        method=_MODULE + _OTHER_CONTAINER, name="otherContainer", erased_return=_CONTAINER_TYPE
+    )
+
+
+def test_two_primaries_among_the_type_candidates_are_ambiguous(tmp_path: Path):
+    """Two primaries of one type fail the container's injection
+    (`determinePrimaryCandidate` raises `NoUniqueBeanDefinitionException` when
+    both are the factory's own definitions — CP-27 Q15), so the fold does not
+    fall through to the name rung either: `ambiguous`, even for a parameter
+    named after one of them."""
+    facts = (
+        _bean(_CONTAINER, _CONTAINER_TYPE)
+        + [_primary(_CONTAINER)]
+        + _bean(_OTHER_CONTAINER, _CONTAINER_TYPE)
+        + [_primary(_OTHER_CONTAINER), _method(_HELPER)]
+    )
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "otherContainer")) == Unresolved("ambiguous")
+    assert table.bean_of(_parameter(_CONTAINER_TYPE, "anything")) == Unresolved("ambiguous")
+
+
+def test_a_primary_on_a_channel_bean_changes_nothing(tmp_path: Path):
+    """A channel reference is never resolved by type (spec §0b A2), so the
+    primary rung — a choice AMONG type candidates — never runs for it: the
+    parameter's name is still the one rung, and a primary channel bean whose
+    name is not the parameter's is still `none`."""
+    facts = _bean(_ORDERS_CHANNEL, _CHANNEL_TYPE) + [_primary(_ORDERS_CHANNEL), _method(_HELPER)]
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    assert table.bean_of(_parameter(_CHANNEL_TYPE, "inputChannel")) == Unresolved("none")
+    assert table.bean_of(_parameter(_CHANNEL_TYPE, "ordersChannel")) == BeanRef(
+        method=_MODULE + _ORDERS_CHANNEL,
+        name="ordersChannel",
+        erased_return=_CHANNEL_TYPE,
+        primary=True,
     )
 
 
@@ -410,6 +490,7 @@ def test_the_fold_is_shared_by_every_catalog_naming_the_same_model(tmp_path: Pat
         "declaring_annotation": "com.acme.di.Provides",
         "name_attrs": ["named"],
         "qualifier_annotation": "com.acme.di.Named",
+        "primary_annotation": "com.acme.di.Preferred",
         "channel_types": ["com.acme.di.Pipe"],
     }
     facts = (

@@ -439,6 +439,7 @@ id: spring
 declaring_annotation: org.springframework.context.annotation.Bean
 name_attrs: [name, value]                    # either present names the bean; else the method name
 qualifier_annotation: org.springframework.beans.factory.annotation.Qualifier
+primary_annotation: org.springframework.context.annotation.Primary   # the preferred one of several of a type
 channel_types:                               # exact membership — the channel INTERFACES
   - org.springframework.messaging.MessageChannel
   - org.springframework.messaging.SubscribableChannel
@@ -453,8 +454,10 @@ knows (the container auto-creates a channel under any referenced name) — and n
 Spring Integration auto-registers `errorChannel` and `nullChannel`, both of every channel
 interface, so the module's single `@Bean MessageChannel` is never the container's unique
 candidate. Any **other** reference resolves by `@Qualifier`, else exactly one declared bean of
-its erased type, else its name — the container's own candidate order, cited on the model
-(CP-27 row 15). Two candidates on any rung, or none, is `Unresolved`, never a guess; a
+its erased type, else the one of several marked `@Primary` (the `primary_annotation` — two so
+marked fail the injection and read `ambiguous`), else its name — the container's own candidate
+order, cited on the model (CP-27 row 15; `@Priority` is not read, a boundary stated there). Two
+candidates on any rung, or none, is `Unresolved`, never a guess; a
 parameter compiled without names skips the name rung. The list is the INTERFACES the
 framework's beans implement, with exact membership: a parameter declared as a concrete
 channel class (`DirectChannel`) has no framework bean beside the module's own and IS unique

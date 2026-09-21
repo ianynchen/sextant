@@ -12,7 +12,8 @@ declares (it registers its own error and null channels), so a fold that picked t
 module's single channel bean by type would name a bean the container never injects. Any
 OTHER reference (a container type no framework bean shares) takes the container's own
 candidate order — the qualifier, else exactly one declared bean of that erased type, else
-the name — cited on the model (`bean-models/spring.yml`, CP-27).
+the one of several marked primary (two so marked fail the injection: `ambiguous`), else
+the name — cited on the model (`bean-models/spring.yml`, CP-27 row 15).
 
 No rung answers, or a rung has two candidates, is `Unresolved`, and the two are told
 apart: `ambiguous` is a rung that weighed candidates and could not choose, `none` is no
@@ -40,11 +41,13 @@ class BeanRef:
     """A resolved bean. `method` is the declaring method's full symbol, or None for a
     channel the index knows but no method declares — its name is then its whole
     identity; `erased_return` is the declaring method's erased return type, None where
-    there is no method or the method returns a type variable."""
+    there is no method or the method returns a type variable; `primary` whether the
+    declaring method carries the model's `primary_annotation` (final fix wave, item 1)."""
 
     method: str | None
     name: str
     erased_return: str | None
+    primary: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,16 @@ class BeanTable:
         by_type = self._declared.by_type.get(reference.erased_type, ())
         if len(by_type) == 1:
             return by_type[0]
+        # Several of the type: the one marked primary is the container's choice before
+        # any name is compared (CP-27 row 15 — `determinePrimaryCandidate` runs before
+        # `matchesBeanName`), so a parameter named after the OTHER bean still gets the
+        # primary; two marked primary fail the injection, and the name rung is not
+        # tried for them either.
+        primaries = [bean for bean in by_type if bean.primary]
+        if len(primaries) == 1:
+            return primaries[0]
+        if len(primaries) > 1:
+            return Unresolved("ambiguous")
         # The name rung reads every declared bean, not only the type candidates: the
         # fold carries no type hierarchy, so a parameter declared as a supertype of
         # the bean's erased return has no type candidate at all, and its name is the
@@ -164,13 +177,14 @@ def bean_table(workspace: Workspace, catalog: Catalog, known_channels: frozenset
 def declared_beans(workspace: Workspace, model: dict[str, Any]) -> DeclaredBeans:
     """The fold: every method carrying the model's declaring annotation, once per load
     and per model. Keyed through `Workspace.once` on the model's CONTENTS — the
-    declaring annotation and the name attributes are all the fold reads — so two
-    catalogs naming the same model share one entry."""
+    declaring annotation, the name attributes and the primary annotation are all the
+    fold reads — so two catalogs naming the same model share one entry."""
     where = f"bean model {model.get('id')!r}"
     return workspace.once(
         _Fold(
             declaring=type_descriptor(_string(model, "declaring_annotation", where)),
             name_attrs=_strings(model, "name_attrs", where),
+            primary=type_descriptor(_string(model, "primary_annotation", where)),
         )
     )
 
@@ -200,6 +214,7 @@ def qualifier_of(annotations: list[Any], model: dict[str, Any]) -> str | None:
 class _Fold:
     declaring: str  # descriptor form, the grammar `annotation_index` is keyed in
     name_attrs: tuple[str, ...]
+    primary: str  # descriptor form likewise
 
     def __call__(self, workspace: Workspace) -> DeclaredBeans:
         index = annotation_index(workspace)
@@ -208,12 +223,9 @@ class _Fold:
         by_type: dict[str, list[BeanRef]] = {}
         for row in workspace.query("method_declarations"):
             symbol = str(row["symbol"])
+            annotations = index.get(symbol, [])
             args = next(
-                (
-                    args
-                    for annotation, args in index.get(symbol, [])
-                    if annotation == self.declaring
-                ),
+                (args for annotation, args in annotations if annotation == self.declaring),
                 None,
             )
             if args is None:
@@ -224,7 +236,12 @@ class _Fold:
             # `names_a_type`): the bean is still declared, still named, still callable.
             erased_return = str(returned) if returned and names_a_type(str(returned)) else None
             name = _first_string(args, self.name_attrs) or method_name(bare_descriptor(symbol))
-            bean = BeanRef(method=symbol, name=name, erased_return=erased_return)
+            bean = BeanRef(
+                method=symbol,
+                name=name,
+                erased_return=erased_return,
+                primary=any(annotation == self.primary for annotation, _ in annotations),
+            )
             by_method[symbol] = bean
             by_name.setdefault(name, []).append(bean)
             if erased_return is not None:

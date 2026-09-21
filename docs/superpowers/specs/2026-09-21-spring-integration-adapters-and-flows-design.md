@@ -98,6 +98,12 @@ Every sentence the implementation changed carries an inline note; this table is 
 | M9 | §6 | `steps_from: spring-integration` is spelled `step_model: spring-integration`; the loader MERGES the model's `steps` and `undeclared_steps` into the catalog's `matches` (no `Catalog.step_model` field — nothing else would read it); the Pub/Sub catalog names the model too (for its channel-sourced `from` roots) | Task 6 (`c4b0d36`, `c100aab`) |
 | M10 | §11 | The `.transform(…)` pass-through sits on the AMQP DSL flow in the fixture (`Shape5Flows`), not the Kafka one; the Gateway fixture's map form spells `args.patterns`; the fixture files are `Shape4PubSub.java`, `Shape5Flows.java` and `fixtures/orders-gateway/src/main/resources/application.yml` | Task 6 (`2bbd0b4`), Task 8 (`91ace03`) |
 | M11 | §0 F3, §5 | 34 flow-definition members, not 35 (CP-27 row 2) | Task 6 (`2bbd0b4`) |
+| M13 | §3a | The container rungs gain `@Primary` between the type rung and the name rung — the container's own order (CP-27 row 15: `determinePrimaryCandidate` before `matchesBeanName`); one primary among the type candidates wins over a parameter named after the other; two primaries read `ambiguous`; the model gains `primary_annotation`; `@Priority` stays unread (a stated boundary) | Final-review fix, item 1 |
+| M14 | §5 | M4's rule under `channel_source`: `from("a").channel("b").handle(h)` writes `read_by(b, h)` and nothing for `a` | Final-review fix, item 3 |
+| M15 | §5 | `handleReactive` returns the finished flow (no `get()`), so every broker catalog declares it a terminal; `nullChannel()`/`to(...)` end a flow the same way and write nothing at a terminal either, so they are not declared | Final-review fix, item 7(b) |
+| M16 | §8 | `poisons:` on a root or a `beans:` entry is refused by file (it loaded and did nothing) | Final-review fix, item 4 |
+| M17 | §4 | An empty first half of a composed destination is the tail alone (`single_call._paired_destination`'s rule, §8.1 rule 1) | Final-review fix, item 2 |
+| M18 | §4 | The container built in the adapter's own `@Bean` method is a stated boundary (`unresolved`) | Final-review fix, item 7(a) |
 | M12 | §6, §12 | D00 carries no fact change; D01 gains `channel_bindings` with `resolution` role-dependent (the wire's on `fed_by`, the NAME's on `read_by`); the fluent parameter rung (`@Value` on the method's own parameter) now answers in fluent for every fluent catalog | Task 6 (`c4b0d36`, `c100aab`), Task 9 |
 
 ---
@@ -181,7 +187,11 @@ call to a `@Bean` method of the same class. Rungs depend on WHAT is referenced (
 - any **other** reference (a catalog-declared registration or container type — nothing a
   framework bean shares): `@Qualifier` → exactly one `@Bean` method of that erased type → the
   parameter's name — Spring's own order (`DefaultListableBeanFactory.determineAutowireCandidate`,
-  CP-27).
+  CP-27). *(amended 2026-09-21 during implementation, M13: → the one of several marked `@Primary`
+  sits between the type rung and the name rung, as the container's order has it (CP-27 row 15:
+  `determinePrimaryCandidate` before `matchesBeanName`); two primaries fail the injection and
+  read `ambiguous`; the model gains `primary_annotation`. `@Priority` is not read — a boundary
+  stated on the model.)*
 
 No rung answers, or a rung has two candidates → `Unresolved`. A parameter compiled without
 `-parameters` skips the name rung. **This module is the general answer to "a value built in one
@@ -335,9 +345,16 @@ a cross-method `source` read is a fabrication path; every chain end must agree o
 sources are `OI-110`.)* `compose:` builds
 one field from two captured halves in order; a half never captured leaves `channel` unresolved
 (§0b A3 — the framework fills it from the `RabbitTemplate`'s defaults, which the walk does not
-read). `channel_via` on the `Queue` constructor is the existing word (`TopicName.of(p, t)` uses it).
+read). *(amended 2026-09-21 during implementation, M17: an EMPTY first half — `exchangeName("")`,
+`setExchangeName("")` — composes as the tail alone, `orders` and never `/orders`: the rule
+`single_call._paired_destination` already applies to `spring-rabbit-template.yml` for the same
+wire, GUIDELINES §8.1 rule 1.)* `channel_via` on the `Queue` constructor is the existing word
+(`TopicName.of(p, t)` uses it).
 
 **Boundaries stated:** a registration built outside a `@Bean` method or through a factory method;
+a container built and configured in the adapter's OWN `@Bean` method (`new
+SimpleMessageListenerContainer(cf)` handed straight to the adapter — no bean, `bean_via` reads
+nothing, the row is `unresolved`; M18);
 a link set in a different method than the construction (`@PostConstruct`, a second `@Bean` taking
 the adapter); `setOutputChannel(new DirectChannel())` (anonymous — the destination row derives, no
 `fed_by`); XML beans.
@@ -425,7 +442,13 @@ form, a stated boundary. `.channel("x").handle(h)` on a WIRE-sourced flow writes
 and `read_by(x, h)`, no row of its own, and the join mints the row naming both beside any
 `@ServiceActivator(inputChannel = "x")`; `handle(h).channel("y")` keeps the row with `h` and
 writes `sends_to(y, h)`, M4. `channel_link` is a last-wins slot: `.channel("x").handle(h).channel("y")`
-loses `fed_by(x)` — `OI-115`.)*
+loses `fed_by(x)` — `OI-115`. M14: M4's rule holds under `channel_source` too —
+`from("a").channel("b").handle(h)` writes `read_by(b, h)` and nothing for `a` (the bridge
+`a → b` is the stated boundary), never `read_by(a, h)`. M15: `handleReactive` returns the
+finished flow with no `get()` after it, so every broker catalog declares it a terminal
+beside `get` — `from("ch").handleReactive(h)` writes `read_by(ch, h)`; `nullChannel()` and
+`to(...)` end a flow the same way and write nothing at a terminal either, so they are not
+declared as one.)*
 
 The AMQP DSL twin: `Amqp.inboundAdapter(ConnectionFactory, String…)` `captures: { channel: arg1 }`;
 `(ConnectionFactory, Queue…)` through the `Queue` `channel_via`; `(SimpleMessageListenerContainer)`
@@ -477,8 +500,9 @@ implementation, M1 — the keys as BUILT, D02's `fluent` section is the referenc
 `descriptor:`; root `direction:`; root `method_annotation:`; capture values `argN`,
 `{bean_via: argN}` on any field, and `none` on `handler` (a literal `unresolved` is REFUSED — a
 root whose destination sits in a non-string slot captures the slot and reads to nothing);
-capture fields `channel_link`, `channel_source`, `handler`; step `poisons:` (on a root, silently
-dropped — logged); root `compose:`; catalog `undeclared_steps: {owner, poisons}`; `beans:`
+capture fields `channel_link`, `channel_source`, `handler`; step `poisons:` (on a root or a
+`beans:` entry, REFUSED by file — M16; it was silently dropped before the final-review fix);
+root `compose:`; catalog `undeclared_steps: {owner, poisons}`; `beans:`
 (validated like `roots`; refuses `direction`/`compose`/`method_annotation`/`via_argument_of`);
 `via_argument_of … continue: true` on a root or step and `continue: true` on a terminal's
 `terminal_via_argument`; no `new:`, no `sinks:`. `channel_via` gained an optional `descriptor`

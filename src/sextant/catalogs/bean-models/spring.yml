@@ -29,14 +29,24 @@ name_attrs: [name, value]
 # injected parameter it names the bean outright and is the
 # first rung for every reference kind. The rungs after it, for a reference that
 # is not a channel, are the container's own candidate order — a qualifier, else
-# exactly one bean of the type, else the bean whose name is the parameter's
+# exactly one bean of the type, else the one of several marked `@Primary`, else
+# the bean whose name is the parameter's
 # (`DefaultListableBeanFactory.determineAutowireCandidate`, spring-beans 6.1.6;
 # CP-27 row 15 — `determinePrimaryCandidate`, `determineHighestPriorityCandidate`,
-# then `matchesBeanName` over the candidates; the two rungs the fold does not
-# read, `@Primary` and `@Priority`, leave a two-candidate reference `Unresolved`,
-# never a wrong bean). `resolve/beans.py` implements that order and cites it
-# here rather than spelling the class itself.
+# then `matchesBeanName` over the candidates, in that order: `javap -c -p` puts
+# the three calls at offsets 8, 24 and 119 of the method). `@Primary` is read
+# (below); two beans of the type both marked primary fail the injection
+# (`determinePrimaryCandidate` throws `NoUniqueBeanDefinitionException` when
+# both are the factory's own definitions), and the fold answers `ambiguous`.
+# `@Priority` is NOT read: two candidates neither of which is primary go
+# straight to the name rung, which is the container's own next step when no
+# candidate carries `@Priority`; a module that ranks two beans of one type by
+# `@Priority` AND names the parameter after the lower-ranked one gets the name
+# match here where the container gives the higher-ranked bean — a stated
+# boundary. `resolve/beans.py` implements that order and cites it here rather
+# than spelling the class itself.
 qualifier_annotation: org.springframework.beans.factory.annotation.Qualifier
+primary_annotation: org.springframework.context.annotation.Primary
 
 # A parameter of one of these erased types is a CHANNEL reference and is never
 # resolved by type (spec §0b A2): Spring Integration auto-registers

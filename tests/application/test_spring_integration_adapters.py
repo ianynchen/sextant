@@ -37,6 +37,9 @@ _FROM_SPEC = "(Lorg/springframework/integration/dsl/MessageProducerSpec;)Lorg/sp
 _HANDLE = "(Ljava/lang/Class;Lorg/springframework/integration/core/GenericHandler;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;"
 _GET = "()Lorg/springframework/integration/dsl/StandardIntegrationFlow;"
 _PUBSUB_INIT = "(Lcom/google/cloud/spring/pubsub/core/subscriber/PubSubSubscriberOperations;Ljava/lang/String;)V"
+# CP-27 rows 1 and 3.
+_FROM_STRING = "(Ljava/lang/String;)Lorg/springframework/integration/dsl/IntegrationFlowBuilder;"
+_HANDLE_REACTIVE = "(Lorg/springframework/messaging/ReactiveMessageHandler;)Lorg/springframework/integration/dsl/IntegrationFlow;"
 
 
 def _shipped(catalog_id: str) -> Catalog:
@@ -112,15 +115,21 @@ def _factory(owner: str, name: str, descriptor: str, factory_type: str) -> CallS
     )
 
 
-def _rows(tmp_path: Path, facts: list, catalog_id: str) -> list[dict]:
+def _derived(tmp_path: Path, facts: list, catalog_id: str) -> tuple[list[dict], list[dict]]:
+    """The endpoint rows and the `channel_bindings` edges the shipped catalog derives."""
     write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_shipped(catalog_id)], capabilities=FLUENT_CAPABILITIES)
     assert skipped == []
     rows = [dict(row) for row in workspace.query("endpoints")]
+    bindings = [dict(row) for row in workspace.query("channel_bindings")]
     workspace.close()
-    return rows
+    return rows, bindings
+
+
+def _rows(tmp_path: Path, facts: list, catalog_id: str) -> list[dict]:
+    return _derived(tmp_path, facts, catalog_id)[0]
 
 
 # --- AMQP -----------------------------------------------------------------------------
@@ -259,3 +268,49 @@ def test_a_pubsub_message_source_is_not_the_adapter_and_derives_nothing(tmp_path
     Rooting on the constructor's shape alone would publish it as the adapter's row. It
     differs from the positive in the owner alone."""
     assert _rows(tmp_path, _constructed(PUBSUB_SOURCE), "spring-integration-pubsub") == []
+
+
+# --- the flow that ends without `get()` (every broker catalog) --------------------------
+
+
+@pytest.mark.parametrize(
+    "catalog_id",
+    ["spring-integration-kafka", "spring-integration-amqp", "spring-integration-pubsub"],
+)
+def test_a_channel_sourced_flow_ending_in_handle_reactive_is_the_channels_reader(
+    tmp_path: Path, catalog_id: str
+):
+    """Final fix wave, item 7(b). `IntegrationFlow.from("orders.ch").handleReactive(h)` —
+    `handleReactive` returns the finished flow (spring-integration-core 6.2.4, CP-27 row
+    3), so no `get()` follows and, with `get` the only terminal, the chain never derived:
+    no `read_by`, the handler lost. Each broker catalog declares `handleReactive` a
+    terminal beside `get`, and the flow writes `read_by(orders.ch, h)` and no row, exactly
+    as `from("orders.ch").handle(h).get()` does."""
+    facts = [
+        _site(
+            FLOW,
+            "from",
+            _FROM_STRING,
+            0,
+            receiver=None,
+            result=11,
+            arguments=[CallArgument(kind="string", value="orders.ch")],
+            invoke_kind="static",
+        ),
+        _site(
+            BUILDER,
+            "handleReactive",
+            _HANDLE_REACTIVE,
+            1,
+            receiver=11,
+            result=12,
+            arguments=[_lambda()],
+        ),
+        _body_symbol(),
+    ]
+    rows, bindings = _derived(tmp_path, facts, catalog_id)
+
+    assert rows == []
+    assert [(b["role"], b["channel"], b["symbol"]) for b in bindings] == [
+        ("read_by", "orders.ch", _MODULE + BODY)
+    ]

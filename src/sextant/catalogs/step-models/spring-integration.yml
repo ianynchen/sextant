@@ -71,6 +71,16 @@ displayName: The Spring Integration Java DSL flow definition (every member, clas
 # and every catalog naming this model declares it a `terminal`; `toReactivePublisher`
 # hands the messages out as a `Publisher`, which is a divert by the
 # `undeclared_steps` rule below and needs no entry.
+#
+# THREE MEMBERS RETURN THE FINISHED FLOW, so no `get()` follows them (row 3:
+# `handleReactive` ×4, `nullChannel` and `to` return `IntegrationFlow`). A
+# spec-sourced flow is executable from its consumer on and derives whatever it
+# ends in; a CHANNEL-sourced flow (`from("ch")`, a root continued by nothing)
+# derives only at a terminal, so every catalog naming this model declares
+# `handleReactive` a terminal beside `get` — `from("ch").handleReactive(h)` then
+# writes `read_by(ch, h)` as `from("ch").handle(h).get()` does. `nullChannel()`
+# (`handler: none`) and `to(...)` (a divert) write nothing at a terminal either,
+# so they are not declared as one.
 
 owners: &owners
   - org.springframework.integration.dsl.IntegrationFlowDefinition

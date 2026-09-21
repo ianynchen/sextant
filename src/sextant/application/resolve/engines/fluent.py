@@ -479,6 +479,16 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
                 f"declares `{'`, `'.join(carried)}` — a bean's chain is walked for its "
                 f"captures alone, and nothing reads those there (spec 2026-09-21 §4)"
             )
+    # `poisons:` is a step's word: a root starts the chain with nothing yet
+    # captured to poison, and this dict is rebuilt from named keys, so the
+    # word would load, read as valid, and do nothing (the `collects` lesson
+    # one function over).
+    if "poisons" in root:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry (`{root.get('method')}`) "
+            f"declares `poisons` — a poison is a step's own effect on the chain it sits "
+            f"in, and a root has no chain before it (spec 2026-09-21 §4)"
+        )
     return {
         # A LIST or a scalar (§3.1): one library reachable under its class name
         # and under the interface a codebase more often declares its field as.
@@ -942,7 +952,11 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # says nothing about any wire (a bridge, `from("a").channel("b")` — the
     # stated boundary). A source whose name could not be read consumes an
     # unknown channel: its wire still derives (no edge to write), its handler
-    # reads nothing nameable.
+    # reads nothing nameable. A handler folded AFTER a link the chain holds
+    # (`from("a").channel("b").handle(h)`, `_READS_LINK`) reads the LINKED
+    # channel, M4's rule under `channel_source` too: the framework subscribes
+    # `h` to `b`, and `a → b` is the bridge the boundary states — so the edge
+    # is `read_by(b, h)` and nothing is written for the source.
     last_handler = _handler_symbol(captures.get("handler"), context.method_symbols)
     sourced = "channel_source" in captures
     source = _string_value(captures.get("channel_source")) if sourced else None
@@ -950,9 +964,12 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         if "channel" in captures:
             direction = "outbound"
         else:
-            if source is not None and last_handler is not None:
+            read = (
+                _string_value(captures.get("channel_link")) if captures.get(_READS_LINK) else source
+            )
+            if read is not None and last_handler is not None:
                 context.bindings.append(
-                    _edge(_READ_BY, source, last_handler, context, "inbound", protocol=None)
+                    _edge(_READ_BY, read, last_handler, context, "inbound", protocol=None)
                 )
             return
     # A verb the catalog spelled as a literal is that literal; one it spelled
@@ -1388,10 +1405,21 @@ def _composed_field(
     whole field unresolved (§0b A3: the framework fills an unset half from
     defaults the walk does not read, so half an address is no address) —
     `_composed_address`'s own rule for `base`+`url`, restated for a
-    destination."""
+    destination.
+
+    An EMPTY first half is the composite's own degenerate spelling and the
+    field is then the tail alone — `single_call._paired_destination`'s rule,
+    restated here for the same wire (§8.1 rule 1: an exchange name of `""` is
+    AMQP's default exchange, and the routing key alone names the queue), so
+    the DSL sink and the template publish the same address for the same
+    call. As there, it holds while every protocol composing here reads an
+    empty first half as "the default routing"; one that does not needs its
+    own rule rather than this one widened."""
     parts = [_string_value(_address_read(captures.get(half), context)) for half in halves]
     if any(part is None for part in parts):
         return _UNRESOLVED_ARGUMENT
+    if parts[0] == "":
+        parts = parts[1:]
     return {"kind": "string", "value": join.join(str(part) for part in parts)}
 
 

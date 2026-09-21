@@ -149,8 +149,11 @@ matches:
   # A constructor root is its own terminal (Task 3's carry: a `<init>` root
   # without this derives nothing); `get()` ends a channel-sourced flow — and is
   # a declared word, so the builder's own `get` poisons nothing under the step
-  # model's `undeclared_steps`.
-  terminal: ["<init>", get]
+  # model's `undeclared_steps`; `handleReactive` returns the finished flow with
+  # no `get()` after it, so a channel-sourced flow ending there needs it
+  # declared a terminal too (`spring-integration-kafka.yml` says why
+  # `nullChannel()` and `to(...)` are not).
+  terminal: ["<init>", get, handleReactive]
   # Which annotations carry configuration onto a field, a constructor
   # parameter or a whole properties type — the field ladder's own vocabulary
   # (2F design §4), so no framework name reaches the engine. Copied from

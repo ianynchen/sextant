@@ -220,8 +220,13 @@ matches:
   # `get()` ends a flow, and is a declared word (so the builder's own `get`
   # poisons nothing under the step model's `undeclared_steps`); a continued
   # chain is executable from its consumer on (spec §5: the consumer IS the
-  # terminal), so the source specs need no terminal of their own.
-  terminal: [get]
+  # terminal), so the source specs need no terminal of their own. `handleReactive`
+  # returns the finished flow with no `get()` after it (row 3), so a
+  # channel-sourced flow ending there needs it declared a terminal too, or its
+  # `read_by` is never written; `nullChannel()` and `to(...)` end a flow the
+  # same way and write nothing either way (a discard, a divert), so they are
+  # not listed.
+  terminal: [get, handleReactive]
   # The field ladder's own vocabulary (2F design §4); copied from
   # `spring-resttemplate.yml`.
   field_sources:

@@ -76,9 +76,13 @@ direction: inbound
 # `asyncOutboundGateway`, `inboundPolledAdapter`, `channel`,
 # `publishSubscribeChannel`, `pollableChannel` (row 8 — request-reply and
 # channel-backed forms); `configureContainer(c -> c.addQueueNames(…))` inside a
-# source spec (fewer queues, never a wrong one); a registration built outside a
-# `@Bean` method; a link set in a different method than the construction; XML
-# beans.
+# source spec (fewer queues, never a wrong one); the LOCAL container — `new
+# SimpleMessageListenerContainer(cf)` built and configured in the SAME `@Bean`
+# method as the adapter that takes it — is no bean, so `bean_via` resolves it
+# to nothing and the adapter's row is `unresolved` (the queues are a value hop
+# away, not a bean hop; a miss, never a wrong queue); a registration built
+# outside a `@Bean` method; a link set in a different method than the
+# construction; XML beans.
 
 detect:
   coordinates: ["org.springframework.integration:spring-integration-amqp"]
@@ -253,8 +257,11 @@ matches:
   # A constructor root is its own terminal; `get()` ends a flow — and is a
   # declared word, so the builder's own `get` poisons nothing under the step
   # model's `undeclared_steps`. A continued chain is executable from its
-  # consumer on (spec §5: the consumer IS the terminal).
-  terminal: ["<init>", get]
+  # consumer on (spec §5: the consumer IS the terminal). `handleReactive`
+  # returns the finished flow with no `get()` after it, so a channel-sourced
+  # flow ending there needs it declared a terminal too (`spring-integration-kafka.yml`
+  # says why `nullChannel()` and `to(...)` are not).
+  terminal: ["<init>", get, handleReactive]
   # The field ladder's own vocabulary (2F design §4); copied from
   # `spring-resttemplate.yml`.
   field_sources:

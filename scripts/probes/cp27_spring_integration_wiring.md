@@ -209,10 +209,21 @@ arity. `Queue`'s four constructors all take the name at slot 0.
 `determineAutowireCandidate` tries `determinePrimaryCandidate`, then
 `determineHighestPriorityCandidate`, then walks the candidates comparing each to the
 dependency's NAME (`matchesBeanName`, after a `containsValue` check for a pre-resolved
-instance). The bean model's container rung — a qualifier, else exactly one bean of the
-type, else the bean whose name is the parameter's — is this order with the two rungs the
-fold does not read (`@Primary`, `@Priority`) stated as such: a module using either has two
-candidates and a name the fold may not match, which is `Unresolved`, never a wrong bean.
+instance) — row 15's invoke sequence, in that order; `javap -c -p` on the 6.1.6 class puts
+the three calls at bytecode offsets 8, 24 and 119. The bean model's container rungs
+(`bean-models/spring.yml`, `resolve/beans.py`) are this order: a qualifier, else exactly
+one bean of the type, else the one of several marked `@Primary`, else the bean whose name
+is the parameter's. Two primaries fail the injection — read by hand off the same jar, not
+a row of the table: `determinePrimaryCandidate` constructs and throws
+`NoUniqueBeanDefinitionException` when both candidates are the factory's own definitions
+(`javap -c -p` offsets 98–123) — so the fold answers `ambiguous` and does not fall through
+to the name rung. `@Priority` is the one rung the fold does not read: with no primary among
+them, two candidates go to the name rung, which is the container's next step only when no
+candidate carries `@Priority` — stated on the model as a boundary. *(This paragraph
+previously said a module using `@Primary` was `Unresolved`; the fold fell from the
+two-candidate type rung to the name rung and, for a parameter named after the
+non-primary bean, named that bean — the final-review fix corrected the code to the row and
+this text to the code.)*
 
 **Q16 — the owners a compiled flow names (§5).** The fixture's flows, compiled with javac
 release 21, name `IntegrationFlow` for `from`; `IntegrationFlowBuilder` for `channel`,
