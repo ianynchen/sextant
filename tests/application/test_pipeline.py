@@ -1107,11 +1107,14 @@ def test_resolve_finds_every_fixture_endpoint_exactly_once_when_run_end_to_end(
     # ORDER is the engine ordering `derive_endpoints` sorts by, not the catalog
     # id: `spring-rsocket` is `annotation_driven` and runs before the two
     # dependency-gated styles, which is why it heads the list rather than
-    # trailing it alphabetically.
+    # trailing it alphabetically — and `spring-integration` heads even that
+    # since spec 2026-09-21 §3a: a catalog that only writes the channel edge's
+    # read end runs before every engine that reads it
+    # (`_WRITES_ONLY_THE_CHANNEL_EDGE`), skipped or not.
     assert [entry.catalog_id for entry in report.skipped_catalogs] == [
+        "spring-integration",
         "spring-rsocket",
         "spring-data-rest",
-        "spring-integration",
     ]
 
     # Task 7: `handler_signature` comes from the IMPLEMENTING method (spec

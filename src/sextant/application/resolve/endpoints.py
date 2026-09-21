@@ -69,6 +69,19 @@ _DERIVES_ROWS: dict[str, Callable[[Catalog], bool]] = {
     "config_join": config_join.derives_rows,
 }
 
+# The one exception to running last, ahead of every other rank (spec
+# 2026-09-21 §3a): a catalog whose only effect on the loop is the `read_by`
+# end of the channel edge — the shipped channel index — runs FIRST, because
+# an engine in this same loop reads those names to resolve a channel
+# reference by parameter name (the fluent engine's bean fold), and a name
+# written after that engine ran resolves nothing. Such a catalog mints no
+# row and stamps nothing, so nothing that made the style run last applies to
+# it. The predicate lives on the engine, as `_DERIVES_ROWS`' does: which
+# blocks mean "only the edge" is that style's own vocabulary.
+_WRITES_ONLY_THE_CHANNEL_EDGE: dict[str, Callable[[Catalog], bool]] = {
+    "config_join": config_join.writes_only_the_channel_edge,
+}
+
 # The one style whose derivation runs once per resolve over every catalog of
 # the style, with a per-catalog half at each catalog's turn (P-4). Named here
 # because `derive_endpoints` calls the style's `stage` before the turns begin;
@@ -139,6 +152,7 @@ def derive_endpoints(
     ordered = sorted(
         engines,
         key=lambda pair: (
+            not _writes_only_the_channel_edge(pair[0]),
             pair[0].style in _RUNS_LAST,
             _derives_rows(pair[0]),
             pair[0].direction != "inbound",
@@ -242,6 +256,13 @@ def _superseded_by(workspace: Workspace, catalog: Catalog) -> str | None:
         if coordinate in declared:
             return coordinate
     return None
+
+
+def _writes_only_the_channel_edge(catalog: Catalog) -> bool:
+    """Whether `catalog` is the channel index alone (`_WRITES_ONLY_THE_CHANNEL_EDGE`),
+    and so runs before every engine that reads its names."""
+    predicate = _WRITES_ONLY_THE_CHANNEL_EDGE.get(catalog.style)
+    return predicate is not None and predicate(catalog)
 
 
 def _derives_rows(catalog: Catalog) -> int:

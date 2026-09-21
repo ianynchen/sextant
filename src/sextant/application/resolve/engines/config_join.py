@@ -129,6 +129,34 @@ _READ_BY = "read_by"
 _FED_BY = "fed_by"
 
 
+def writes_only_the_channel_edge(catalog: Catalog) -> bool:
+    """Whether this catalog's whole effect on the engine loop is the `read_by`
+    end of the channel edge (spec 2026-09-21 §3b): an annotation-valued
+    address block with no `key` — so `_derive_channels` mints no row — and no
+    media block to stamp. Read by `resolve/endpoints.py`'s ordering, which
+    runs such a catalog FIRST.
+
+    The style runs last so that its rows meet the insert-if-absent guard after
+    every observing engine has written, and its stamps reach rows that already
+    exist; a catalog with neither has nothing to order after them (`derives_rows`
+    already says such a file "may sort anywhere"). It has one thing to order
+    BEFORE them: the names it writes are what a bean-resolving engine reads to
+    tell a channel a handler subscribes to from a parameter name that is
+    nothing (spec §3a's name rung, `fluent._READ_BY`), and that engine runs
+    in the same loop. `gaps` is unaffected: it runs from the `service_identity`
+    seam, after everything.
+
+    The shipped channel index (`spring-integration.yml`) is exactly this shape.
+    A channels catalog that ALSO declares a `key` keeps its last turn — its
+    rows must — and its names reach no engine that ran before it: stated here
+    as the boundary, with no shipped instance."""
+    address = catalog.matches.get(_ADDRESS)
+    if not isinstance(address, dict) or "key" in address or _MEDIA in catalog.matches:
+        return False
+    binding = address.get("binding")
+    return isinstance(binding, dict) and binding.get("from") == _ANNOTATION_VALUE
+
+
 def derives_rows(catalog: Catalog) -> bool:
     """Whether this catalog DERIVES endpoint rows rather than only enriching
     rows other catalogs derived — read by `resolve/endpoints.py`'s ordering

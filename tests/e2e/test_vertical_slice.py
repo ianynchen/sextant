@@ -1387,10 +1387,14 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
     # Before W16 neither was gated on anything that could tell them apart — the
     # annotation belongs to both frameworks, and Spring's own handlers scan for
     # it with the same predicate — so these rows were `websocket` on no evidence.
+    #
+    # The order is the engine ordering, and `spring-integration` leads since
+    # spec 2026-09-21 §3a: a catalog that only writes the channel edge's read
+    # end runs before every engine that reads it (`resolve/endpoints.py`).
     metadata = json.loads((full_run / "metadata.json").read_text())
     assert [entry["catalog_id"] for entry in metadata["skipped_catalogs"]] == [
-        "spring-rsocket",
         "spring-integration",
+        "spring-rsocket",
     ]
 
     workspace = DuckDbWorkspace(full_run / "workspace.duckdb")

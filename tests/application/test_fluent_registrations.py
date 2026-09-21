@@ -16,14 +16,27 @@ symbol (D00 §5a).
 from pathlib import Path
 
 import pytest
+import yaml
 from test_call_engines import _MODULE, _call, _document
+from test_config_join import _module_document
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import fluent
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, SymbolFact
+from sextant.domain.facts import (
+    AnnotationFact,
+    AnnotationUse,
+    CallArgument,
+    ModuleFact,
+    Signature,
+    SymbolFact,
+    TypeRef,
+)
+from sextant.domain.facts import Parameter as DeclaredParameter
+from sextant.domain.symbols import method_descriptor
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CAPABILITIES = {"call_site", "string_constants", "chain_reconstruction"}
@@ -35,6 +48,14 @@ CALLER = _MODULE + "com/acme/streams/Wiring#inbound()."
 # the module coordinates.
 BODY = "com/acme/streams/Wiring#lambda$inbound$0(Lcom/acme/streams/Message;)V."
 SUBSCRIPTION = "orders.queue"
+
+# The bean fold is driven by the shipped `bean-models/spring.yml`, as `test_beans.py`
+# drives it: the model's own spellings are what the bean facts below are read through, and
+# the engine spells none of them. Every catalog here names it, because `_ADAPTER_MATCHES`
+# spells a `bean_via` capture and a catalog spelling one without a model is refused.
+_SPRING = yaml.safe_load(
+    (catalogs_dir() / "bean-models" / "spring.yml").read_text(encoding="utf-8")
+)
 
 _ADAPTER_MATCHES = {
     "roots": [{"owner": ADAPTER_TYPE, "method": "<init>", "captures": {"channel": "arg1"}}],
@@ -53,7 +74,11 @@ _ADAPTER_MATCHES = {
 
 
 def _catalog(
-    matches: dict, *, direction: str = "inbound", catalog_id: str = "invented-adapters"
+    matches: dict,
+    *,
+    direction: str = "inbound",
+    catalog_id: str = "invented-adapters",
+    bean_model: dict | None = None,
 ) -> Catalog:
     return Catalog(
         id=catalog_id,
@@ -63,6 +88,7 @@ def _catalog(
         requires=("call_site", "string_constants", "chain_reconstruction"),
         matches=matches,
         source=Path(f"tests/{catalog_id}.yml"),
+        bean_model=_SPRING if bean_model is None else bean_model,
     )
 
 
@@ -106,15 +132,21 @@ def _adapter(
     return facts
 
 
-def _run(tmp_path: Path, facts: list, catalog: Catalog) -> DuckDbWorkspace:
+def _run(
+    tmp_path: Path, facts: list, catalog: Catalog, readers: list[dict] | None = None
+) -> DuckDbWorkspace:
     """The engine alone, on the tables `derive_endpoints` would have reset for it — so a
     chain that writes a binding INSTEAD of a row is observable as exactly that, before
-    the join pass mints anything from the binding."""
+    the join pass mints anything from the binding. `readers` are `read_by` edges already
+    in the table when the engine runs — what the channel index's catalog wrote before
+    it (spec §3a's "a channel name the channel index knows")."""
     write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     workspace.derive("endpoints_reset")
     workspace.derive("channel_bindings_reset")
+    if readers:
+        workspace.derive("channel_bindings_insert", rows=readers)
     fluent.run(workspace, catalog)
     return workspace
 
@@ -583,3 +615,551 @@ def test_a_malformed_compose_is_refused(tmp_path: Path):
 def test_malformed_undeclared_steps_are_refused(tmp_path: Path):
     matches = {**_ADAPTER_MATCHES, "undeclared_steps": {"poisons": ["handler"]}}
     _refused(tmp_path, matches, "invented-adapters.*undeclared_steps")
+
+
+# --- bean_via: the channel bean's name, and the container hop (spec §3a, §4) ----------
+
+_BEAN = "org/springframework/context/annotation/Bean#"
+_QUALIFIER = "org/springframework/beans/factory/annotation/Qualifier#"
+_CHANNEL_TYPE = "org/springframework/messaging/MessageChannel#"
+# An invented container type: nothing a framework bean shares, so the container rungs
+# (qualifier, unique type, name) are what resolve a parameter of it.
+CONTAINER = "com/acme/streams/Container#"
+CONTAINER_TYPE = "com.acme.streams.Container"
+WIRING = "com/acme/streams/Wiring#"
+CALLER_BARE = WIRING + "inbound()."
+ORDERS_CHANNEL_BEAN = WIRING + "ordersChannel(sig_1a2b3c4d)."
+CONTAINER_BEAN = WIRING + "container(sig_c0c0c0c0)."
+ACTIVATOR = "com.acme.fn.Activator"
+ACTIVATOR_SYMBOL = "com/acme/fn/Activator#"
+
+
+def _declared(
+    bare: str,
+    *,
+    parameters: list[DeclaredParameter] | None = None,
+    returns: str | None = None,
+) -> SymbolFact:
+    """A declared method — the constructing method with its injected parameters, or a
+    factory method with its return type — under the module-prefixed symbol the
+    `method_declarations` query and `annotations.target` both carry (D00 §5a)."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + bare,
+        construct_kind=ConstructKind.METHOD,
+        enclosing=_MODULE + WIRING,
+        signature=Signature(
+            parameters=parameters or [],
+            returns=None if returns is None else TypeRef(symbol=returns),
+        ),
+    )
+
+
+def _annotated(bare: str, annotation: str, args: dict | None = None) -> AnnotationFact:
+    return AnnotationFact(
+        document_id="doc_1",
+        target=_MODULE + bare,
+        retention="runtime",
+        use=AnnotationUse(annotation=annotation, args=args or {}),
+    )
+
+
+def _bean(bare: str, returns: str, *, args: dict | None = None) -> list:
+    return [_declared(bare, returns=returns), _annotated(bare, _BEAN, args)]
+
+
+def _parameter(erased: str, name: str | None, qualifier: str | None = None) -> DeclaredParameter:
+    annotations = (
+        [AnnotationUse(annotation=_QUALIFIER, args={"value": qualifier})] if qualifier else []
+    )
+    return DeclaredParameter(
+        name=name, type=TypeRef(symbol=erased), erased_symbol=erased, annotations=annotations
+    )
+
+
+def _linked_to_parameter(index: int = 0) -> list:
+    """`new QueueAdapter(ops, "orders.queue"); adapter.linkToBean(<parameter index>)` —
+    the link handed in as an injected parameter of the constructing method."""
+    return _adapter(("linkToBean", [CallArgument(kind="parameter", value=index)]))
+
+
+def test_a_qualified_channel_parameter_links_the_bean_it_names(tmp_path: Path):
+    """Spec §4: `setOutputChannel(channel)` where the parameter carries the model's
+    qualifier — the first rung for every reference kind — links the channel under the
+    bean's name: one `fed_by`, no row, exactly as a literal link would."""
+    facts = [
+        *_linked_to_parameter(),
+        _declared(
+            CALLER_BARE,
+            parameters=[_parameter(_CHANNEL_TYPE, "inputChannel", qualifier="ordersChannel")],
+        ),
+        *_bean(ORDERS_CHANNEL_BEAN, _CHANNEL_TYPE),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert rows == []
+    assert (binding["channel"], binding["role"], binding["destination"]) == (
+        "ordersChannel",
+        "fed_by",
+        SUBSCRIPTION,
+    )
+
+
+def test_a_channel_parameter_links_the_bean_its_own_name_declares(tmp_path: Path):
+    """The name rung (§0b A2): a channel parameter is never resolved by type — the
+    container sees more channel candidates than the module declares — so its declared
+    NAME, where a factory method declares a bean of it, is the link."""
+    facts = [
+        *_linked_to_parameter(),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "ordersChannel")]),
+        *_bean(ORDERS_CHANNEL_BEAN, _CHANNEL_TYPE),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    [binding] = _bindings(workspace)
+    assert _rows(workspace) == []
+    workspace.close()
+
+    assert binding["channel"] == "ordersChannel"
+
+
+def test_a_channel_parameter_named_for_a_channel_the_index_knows_links_it(tmp_path: Path):
+    """The other half of the name rung: no method declares the bean, but a handler's
+    annotation names the channel — the container auto-creates one under a referenced
+    name — and the channel index's `read_by` edge is how the engine knows it (spec §3a,
+    §3b). The reader's own edge is left standing beside the new one."""
+    reader = {
+        "channel": "auditChannel",
+        "role": "read_by",
+        "symbol": _MODULE + WIRING + "audit(sig_aud1t000).",
+        "protocol": None,
+        "direction": "inbound",
+        "destination": None,
+        "catalog_id": "invented-channels",
+        "resolution": "resolved",
+    }
+    facts = [
+        *_linked_to_parameter(),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "auditChannel")]),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES), readers=[reader])
+    bindings = _bindings(workspace)
+    assert _rows(workspace) == []
+    workspace.close()
+
+    assert sorted((b["role"], b["channel"]) for b in bindings) == [
+        ("fed_by", "auditChannel"),
+        ("read_by", "auditChannel"),
+    ]
+
+
+def test_a_channel_name_the_index_knows_only_under_a_placeholder_never_answered_is_no_name(
+    tmp_path: Path,
+):
+    """The near-miss on the index's side: a `read_by` whose name configuration never
+    resolved is `unresolved` and names no channel a parameter could be matched to."""
+    reader = {
+        "channel": "${acme.audit-channel}",
+        "role": "read_by",
+        "symbol": _MODULE + WIRING + "audit(sig_aud1t000).",
+        "protocol": None,
+        "direction": "inbound",
+        "destination": None,
+        "catalog_id": "invented-channels",
+        "resolution": "unresolved",
+    }
+    facts = [
+        *_linked_to_parameter(),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "${acme.audit-channel}")]),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES), readers=[reader])
+    [row] = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"]) == (SUBSCRIPTION, None)
+    assert [b["role"] for b in bindings] == ["read_by"]
+
+
+def test_two_beans_of_one_name_leave_the_link_unresolved(tmp_path: Path):
+    """A rung with two candidates is `ambiguous` (§3a): the registration keeps its own
+    row with `handler` NULL — the wire is known — and writes no edge, because a channel
+    we cannot name is not a channel we can bind."""
+    facts = [
+        *_linked_to_parameter(),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "ordersChannel")]),
+        *_bean(ORDERS_CHANNEL_BEAN, _CHANNEL_TYPE),
+        *_bean(WIRING + "other(sig_0ffe0ffe).", _CHANNEL_TYPE, args={"name": ["ordersChannel"]}),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    [row] = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (SUBSCRIPTION, None, "resolved")
+    assert bindings == []
+
+
+def test_a_later_literal_link_overrides_an_unresolved_bean_link(tmp_path: Path):
+    """The bean fold's failure is a setter's own read failure, not a catalog poison: a
+    later `setOutputChannelName("x")` is the setter the framework honours (last wins),
+    so it overrides the unresolved bean link rather than being refused by it."""
+    facts = [
+        *_adapter(
+            ("linkToBean", [CallArgument(kind="parameter", value=0)]),
+            ("linkTo", [CallArgument(kind="string", value="lateChannel")]),
+        ),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "nobody")]),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert binding["channel"] == "lateChannel"
+
+
+def test_a_direct_call_to_the_factory_method_links_its_bean(tmp_path: Path):
+    """`setOutputChannel(ordersChannel())` — the argument is the RESULT of a call to the
+    declaring method in the same class (`bean_called`), and the bean is that method's.
+    The call names it by owner, name and JVM descriptor; the declaration by the symbol
+    whose disambiguator is that descriptor's digest (D00 §5a) — `method_descriptor` is
+    the bridge, so the bean here is declared under exactly that spelling."""
+    declared_under = method_descriptor(WIRING, "ordersChannel", "()V")
+    facts = [
+        *_adapter(),
+        _call(
+            CALLER,
+            WIRING,
+            "ordersChannel",
+            1,
+            receiver=None,
+            result=8,
+            arguments=[],
+        ),
+        _call(
+            CALLER,
+            ADAPTER,
+            "linkToBean",
+            2,
+            receiver=5,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=8)],
+        ),
+        _declared(CALLER_BARE),
+        *_bean(declared_under, _CHANNEL_TYPE),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert binding["channel"] == "ordersChannel"
+
+
+# --- the container hop -------------------------------------------------------------
+
+_CONTAINER_MATCHES = {
+    "roots": [
+        {"owner": ADAPTER_TYPE, "method": "<init>", "captures": {"channel": {"bean_via": "arg0"}}}
+    ],
+    # Chains `bean_via` may fold from, rooted at THEIR constructors (spec §4's `beans:`).
+    "beans": [{"owner": CONTAINER_TYPE, "method": "<init>", "captures": {}}],
+    "steps": [
+        {"method": "setQueueNames", "captures": {"channel": "arg0"}},
+        {"method": "setQueueExpression", "poisons": ["channel"]},
+    ],
+    "terminal": ["<init>"],
+}
+
+
+def _container_adapter(*, argument: CallArgument | None = None) -> list:
+    """`new QueueAdapter(container)` in the constructing method."""
+    return [
+        _call(
+            CALLER,
+            ADAPTER,
+            "<init>",
+            0,
+            receiver=5,
+            result=None,
+            arguments=[argument or CallArgument(kind="parameter", value=0)],
+            invoke_kind="special",
+        )
+    ]
+
+
+def _container_bean(*setters: tuple[str, list[CallArgument]]) -> list:
+    """The container's own factory method: `new Container(cf)` configured by `setters`,
+    declared and annotated as a bean of the container type."""
+    caller = _MODULE + CONTAINER_BEAN
+    facts = [
+        _call(
+            caller,
+            CONTAINER,
+            "<init>",
+            0,
+            receiver=7,
+            result=None,
+            arguments=[CallArgument(kind="parameter", value=0)],
+            invoke_kind="special",
+        )
+    ]
+    for ordinal, (name, arguments) in enumerate(setters, start=1):
+        facts.append(
+            _call(caller, CONTAINER, name, ordinal, receiver=7, result=None, arguments=arguments)
+        )
+    return [*facts, *_bean(CONTAINER_BEAN, CONTAINER)]
+
+
+def _queue_names(*names: str) -> CallArgument:
+    """`setQueueNames("q1", "q2")` — a varargs slot, ONE array argument (9.15)."""
+    return CallArgument(
+        kind="array", elements=[CallArgument(kind="string", value=name) for name in names]
+    )
+
+
+def test_a_container_reference_folds_the_queues_its_own_chain_captured(tmp_path: Path):
+    """Spec §4's container hop: `new AmqpInboundChannelAdapter(container)` names its
+    queues nowhere — the container bean's own `setQueueNames("q1", "q2")` does. The
+    argument resolves to the bean (a container type: unique by type), its method's chain
+    is walked from the matching `beans:` root, and its `channel` capture becomes this
+    chain's: one row per element (§3c), `caller` the ADAPTER's method."""
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(("setQueueNames", [_queue_names("q1", "q2")])),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_CONTAINER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert [(row["path"], row["caller"], row["resolution"]) for row in rows] == [
+        ("q1", CALLER, "resolved"),
+        ("q2", CALLER, "resolved"),
+    ]
+
+
+def test_a_container_whose_chain_poisoned_the_capture_leaves_the_row_unresolved(
+    tmp_path: Path,
+):
+    """The bean's chain is walked with the catalog's own steps, poisons included."""
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        *_container_bean(
+            ("setQueueNames", [_queue_names("q1")]),
+            ("setQueueExpression", [CallArgument(kind="parameter", value=1)]),
+        ),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_a_container_built_in_a_third_bean_is_unresolved(tmp_path: Path):
+    """One hop only (spec §4): the container bean's method constructs nothing of its
+    own — it is handed the container by a third bean — so no `beans:` root is found
+    in its chain, and the adapter's destination is unread: `path` NULL, `unresolved`."""
+    third_hop = _MODULE + CONTAINER_BEAN
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "container")]),
+        _call(
+            third_hop,
+            "com/acme/streams/ContainerFactory#",
+            "create",
+            0,
+            receiver=None,
+            result=7,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        *_bean(CONTAINER_BEAN, CONTAINER),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+def test_two_container_beans_of_the_type_and_no_name_match_are_unresolved(tmp_path: Path):
+    """The container rungs (§0b A2): no qualifier, two beans of the type, a parameter
+    name neither declares — `ambiguous`, and the row says so on `path`. (Named
+    `listener`: a parameter named `container` would resolve by the name rung to the
+    `container()` bean, which is the container's own third rung and the right answer.)"""
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, "listener")]),
+        *_container_bean(("setQueueNames", [_queue_names("q1")])),
+        *_bean(WIRING + "second(sig_5ec0nd00).", CONTAINER),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_CONTAINER_MATCHES))
+    [row] = _rows(workspace)
+    workspace.close()
+
+    assert (row["path"], row["resolution"]) == (None, "unresolved")
+
+
+# --- method_annotation ----------------------------------------------------------------
+
+
+def test_the_constructing_methods_annotation_supplies_the_link(tmp_path: Path):
+    """Spec §4: the outbound handler bean — `@ServiceActivator(inputChannel = "orders")`
+    on the `@Bean` method that builds the handler — reads its channel off its own
+    annotation: the outbound row from the chain AND an outbound `fed_by`, so the
+    channel's question is not asked (§3b)."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "roots": [
+            {
+                **_ADAPTER_MATCHES["roots"][0],
+                "direction": "outbound",
+                "method_annotation": {
+                    "annotation": ACTIVATOR,
+                    "arg": "inputChannel",
+                    "into": "channel_link",
+                },
+            }
+        ],
+    }
+    facts = [
+        *_adapter(),
+        _declared(CALLER_BARE),
+        _annotated(CALLER_BARE, ACTIVATOR_SYMBOL, {"inputChannel": "ordersChannel"}),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    [binding] = _bindings(workspace)
+    workspace.close()
+
+    assert (row["direction"], row["path"], row["handler"]) == ("outbound", SUBSCRIPTION, None)
+    assert (binding["channel"], binding["direction"], binding["destination"]) == (
+        "ordersChannel",
+        "outbound",
+        SUBSCRIPTION,
+    )
+
+
+def test_a_constructing_method_without_the_annotation_captures_nothing(tmp_path: Path):
+    """Absent → nothing captured: the chain is exactly what it was without the word."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "roots": [
+            {
+                **_ADAPTER_MATCHES["roots"][0],
+                "direction": "outbound",
+                "method_annotation": {
+                    "annotation": ACTIVATOR,
+                    "arg": "inputChannel",
+                    "into": "channel_link",
+                },
+            }
+        ],
+    }
+    facts = [*_adapter(), _declared(CALLER_BARE), _annotated(CALLER_BARE, ACTIVATOR_SYMBOL, {})]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert row["path"] == SUBSCRIPTION
+    assert bindings == []
+
+
+# --- through the pipeline: the channel index runs before the engine that reads it -----
+
+
+def test_the_channel_index_is_written_before_the_engine_that_resolves_a_name_through_it(
+    tmp_path: Path,
+):
+    """The one ordering the bean fold depends on, pinned end to end: a `config_join`
+    catalog that mints no rows and stamps nothing (the shipped channel index's shape)
+    runs BEFORE the engines, so its `read_by` names are there when a channel parameter
+    resolves by name — and the join pass then mints the linked registration's row with
+    the reader as its handler. Were the index written at that style's usual last turn,
+    the name would resolve to nothing, the chain would keep its own row with `handler`
+    NULL, and no edge would join."""
+    reader = WIRING + "audit(sig_aud1t000)."
+    facts = [
+        *_linked_to_parameter(),
+        _declared(CALLER_BARE, parameters=[_parameter(_CHANNEL_TYPE, "auditChannel")]),
+        _declared(reader),
+        _annotated(reader, ACTIVATOR_SYMBOL, {"inputChannel": "auditChannel"}),
+    ]
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    write_fact_file(
+        tmp_path / "facts" / "module.jsonl",
+        _module_document(),
+        [
+            ModuleFact(
+                document_id="doc_module",
+                module_id="com.acme:orders-service",
+                module_kind="service",
+                languages=["java"],
+                source_roots=["src/main/java"],
+                output_dirs=["target/classes"],
+                dependency_coordinates=["com.acme:acme-channels"],
+            )
+        ],
+    )
+    channels = Catalog(
+        id="invented-channels",
+        style="config_join",
+        protocol="",
+        direction="",
+        requires=("resolved_config",),
+        matches={
+            "address_from_config": {
+                "binding": {
+                    "from": "annotation_value",
+                    "channels": [
+                        {"annotation": ACTIVATOR, "arg": "inputChannel", "direction": "inbound"}
+                    ],
+                }
+            }
+        },
+        source=Path("tests/invented-channels.yml"),
+        detect_coordinates=("com.acme:acme-channels",),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.derive("resolved_config_reset")
+    skipped = derive_endpoints(
+        workspace,
+        [_catalog(_ADAPTER_MATCHES), channels],
+        capabilities={*CAPABILITIES, "resolved_config"},
+    )
+    [row] = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert skipped == []
+    assert (row["path"], row["handler"], row["caller"]) == (SUBSCRIPTION, _MODULE + reader, CALLER)
+    assert sorted(b["role"] for b in bindings) == ["fed_by", "read_by"]
+
+
+# --- validation of the bean words ---------------------------------------------------
+
+
+def test_a_bean_via_capture_on_a_catalog_naming_no_bean_model_is_refused(tmp_path: Path):
+    """`bean_via` resolves through the catalog's bean model (D02 §1c); a catalog naming
+    none would resolve nothing and say nothing, so it is refused by file at load."""
+    with pytest.raises(CatalogError, match="invented-adapters.*bean_model"):
+        _run(tmp_path, _adapter(), _catalog(_ADAPTER_MATCHES, bean_model={}))
+
+
+def test_a_malformed_beans_entry_is_refused(tmp_path: Path):
+    matches = {**_CONTAINER_MATCHES, "beans": [{"owner": CONTAINER_TYPE}]}
+    with pytest.raises(CatalogError, match="invented-adapters.*beans"):
+        _run(tmp_path, _adapter(), _catalog(matches))
+
+
+def test_a_malformed_method_annotation_is_refused(tmp_path: Path):
+    matches = {
+        **_ADAPTER_MATCHES,
+        "roots": [{**_ADAPTER_MATCHES["roots"][0], "method_annotation": {"annotation": ACTIVATOR}}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*method_annotation")

@@ -38,12 +38,21 @@ positional slot.
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.beans import (
+    BeanRef,
+    BeanTable,
+    Parameter,
+    Unresolved,
+    bean_table,
+    qualifier_of,
+)
+from sextant.application.resolve.conditions import annotation_index
 from sextant.application.resolve.shapes.arguments import (
     CallFacts,
     CarrierRules,
@@ -54,7 +63,7 @@ from sextant.application.resolve.shapes.arguments import (
     argument_descriptor,
     call_site_index,
     carries_expression,
-    channel_of,
+    channels_of,
     declared_parameters_of,
     field_facts,
     linked_channels,
@@ -68,7 +77,7 @@ from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 # The capture fields whose declared value is an `argN` reference into
 # the matched call site's own arguments, rather than a literal already known
@@ -107,6 +116,16 @@ _ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")
 # each against exactly these two shapes.
 _HANDLER_NONE = "none"
 _BEAN_VIA = "bean_via"
+
+# The `read_by` end of the channel edge (spec 2026-09-21 §3b), read here for the
+# names the channel index knows — the bean fold's name rung for a channel
+# reference (§3a): the container auto-creates a channel under any referenced
+# name, so a name a handler's annotation carries is a channel whether or not a
+# factory method declares it. Only a RESOLVED reader's name counts: one still
+# spelled as a placeholder configuration never answered names nothing. The
+# rows are there when this engine runs because `resolve/endpoints.py` runs the
+# index's catalog first (`_writes_only_the_channel_edge`).
+_READ_BY = "read_by"
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -195,30 +214,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # known-good).
     _validate_channel_via_entries(matches.get("roots", []), catalog)
     _validate_channel_via_entries(matches.get("steps", []), catalog)
-    roots = [
-        {
-            # A LIST or a scalar (§3.1): one library reachable under its class name
-            # and under the interface a codebase more often declares its field as.
-            # `owners`, not `owner` — the plural name is what makes every consumer
-            # of the old singular key fail loudly rather than compare a call site's
-            # owner against a tuple and silently match nothing.
-            "owners": catalog_symbols(root["owner"], f"{catalog.source}: roots[].owner"),
-            "method": root["method"],
-            "captures": _merged_captures(root),
-            # Carried forward (never a root's own field, D02 §2's `fluent`
-            # style) purely so `_validate_captures` can see and refuse it,
-            # exactly as an unchecked value must not silently survive the file.
-            "when": root.get("when"),
-            # Spec 2026-09-21 §4: a root's own direction, overriding the
-            # catalog's for the chains it starts (the outbound handler bean
-            # declared in an inbound catalog); None keeps the catalog's.
-            "direction": _validated_direction(root, catalog),
-            # §4's `compose:` — one field joined from two captured halves at
-            # derive time; None for the root that declares none.
-            "compose": _validated_compose(root, catalog),
-        }
-        for root in matches.get("roots", [])
-    ]
+    _validate_channel_via_entries(matches.get("beans", []), catalog)
+    roots = [_root_entry(root, catalog, "roots") for root in matches.get("roots", [])]
+    # Spec 2026-09-21 §4's `beans:` — root-shaped entries reachable only through a
+    # `bean_via` capture: the chain a referenced bean's own factory method
+    # builds, walked for its captures and never for a row of its own
+    # (`_bean_chain_capture`). The same shape as `roots`, validated the same
+    # way, kept apart so a container's constructor never starts a chain of
+    # this catalog's on its own.
+    bean_roots = [_root_entry(root, catalog, "beans") for root in matches.get("beans", [])]
     steps = [
         {
             "method": step["method"],
@@ -255,10 +259,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     ]
     _validate_steps(steps, catalog)
     _validate_captures(roots, catalog, allow_when=False)
+    _validate_captures(bean_roots, catalog, allow_when=False)
     _validate_captures(steps, catalog, allow_when=True)
-    _validate_url_channel_exclusivity(roots, steps, catalog)
+    _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)
     undeclared_owners, undeclared_poisons = _undeclared_steps(matches, catalog)
-    _validate_poisons(roots, steps, undeclared_poisons, catalog)
+    _validate_poisons([*roots, *bean_roots], steps, undeclared_poisons, catalog)
     terminal_names, via_argument_names = _terminal_index(matches.get("terminal", []))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
@@ -292,10 +297,40 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # coordinates a symbol fact carries). Read only where a catalog declares
     # the capture: every shipped request catalog declares none, and a read
     # nothing consumes is a read per catalog for nothing (GUIDELINES §8.7).
+    #
+    # The bean fold's direct-call rung joins through the same map (spec §3a:
+    # `setOutputChannel(ordersChannel())` names the declaring method by the
+    # call's own owner+name+descriptor, which `method_descriptor` spells bare),
+    # so a catalog spelling any `bean_via` reads it too.
     method_symbols: dict[str, str] = {}
-    if any("handler" in entry["captures"] for entry in (*roots, *steps)):
+    resolves_beans = any(
+        _valid_bean_via(value)
+        for entry in (*roots, *bean_roots, *steps)
+        for value in entry["captures"].values()
+    )
+    if resolves_beans or any("handler" in entry["captures"] for entry in (*roots, *steps)):
         for row in workspace.query("method_symbols"):
             method_symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
+    # Spec 2026-09-21 §3a: the declared beans of the module, read only where a
+    # catalog spells a `bean_via` — `bean_table` refuses a catalog naming no
+    # model, by file, at load rather than at the first chain that reaches the
+    # capture. `known_channels` is the channel index's `read_by` end (the
+    # comment above `_READ_BY`).
+    beans: BeanTable | None = None
+    if resolves_beans:
+        known_channels = frozenset(
+            str(row["channel"])
+            for row in workspace.query("channel_bindings")
+            if row["role"] == _READ_BY and row["resolution"] == "resolved"
+        )
+        beans = bean_table(workspace, catalog, known_channels)
+    # §4's `method_annotation`: the constructing method's own annotations, read
+    # through the shared index only where a root declares the word.
+    annotations = (
+        annotation_index(workspace)
+        if any(root["method_annotation"] is not None for root in roots)
+        else {}
+    )
 
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
@@ -352,6 +387,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             bindings=bindings,
             undeclared_owners=undeclared_owners,
             undeclared_poisons=undeclared_poisons,
+            beans=beans,
+            bean_roots=bean_roots,
+            all_parameters=caller_parameters,
+            annotations=annotations,
         )
         # Sites are already ordinal-ordered (the `call_sites` query), so a
         # fork — several rows sharing one receiver — is walked in ordinal
@@ -366,11 +405,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             captures = {
                 **_prefix_captures(site, context),
                 **_resolve_captures(root["captures"], site),
+                **_method_annotation_capture(root, context),
             }
             if root["direction"] is not None:
                 captures[_DIRECTION] = root["direction"]
             if root["compose"] is not None:
                 captures[_COMPOSE] = root["compose"]
+            _fold_bean_captures(captures, context)
             _walk(site, captures, reached_terminal=False, context=context)
 
     workspace.derive("call_endpoints", rows=rows)
@@ -383,6 +424,48 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # one of them would erase whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
+
+
+def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """One `roots` (or `beans` — `where`) entry as the walk reads it."""
+    return {
+        # A LIST or a scalar (§3.1): one library reachable under its class name
+        # and under the interface a codebase more often declares its field as.
+        # `owners`, not `owner` — the plural name is what makes every consumer
+        # of the old singular key fail loudly rather than compare a call site's
+        # owner against a tuple and silently match nothing.
+        "owners": catalog_symbols(root.get("owner"), f"{catalog.source}: {where}[].owner"),
+        "method": _root_method(root, catalog, where),
+        "captures": _merged_captures(root),
+        # Carried forward (never a root's own field, D02 §2's `fluent`
+        # style) purely so `_validate_captures` can see and refuse it,
+        # exactly as an unchecked value must not silently survive the file.
+        "when": root.get("when"),
+        # Spec 2026-09-21 §4: a root's own direction, overriding the
+        # catalog's for the chains it starts (the outbound handler bean
+        # declared in an inbound catalog); None keeps the catalog's.
+        "direction": _validated_direction(root, catalog),
+        # §4's `compose:` — one field joined from two captured halves at
+        # derive time; None for the root that declares none.
+        "compose": _validated_compose(root, catalog),
+        # §4's `method_annotation:` — a capture read off the constructing
+        # method's own annotation; None for the root that declares none.
+        "method_annotation": _validated_method_annotation(root, catalog),
+    }
+
+
+def _root_method(root: dict[str, Any], catalog: Catalog, where: str) -> str:
+    """The method a root entry names, refused when missing: an entry without
+    one would match no site and derive nothing with nothing saying why — the
+    `beans:` list is where that first mattered, being reachable through no
+    chain a test could observe start."""
+    method = root.get("method")
+    if not isinstance(method, str) or not method:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a `{where}` entry names no `method` — "
+            f"got {root!r} (D02 §2's `fluent` style)"
+        )
+    return method
 
 
 @dataclass(frozen=True)
@@ -441,6 +524,24 @@ class _ChainContext:
     # matches no declared step poisons. Both empty for a catalog declaring none.
     undeclared_owners: tuple[str, ...]
     undeclared_poisons: tuple[str, ...]
+    # Spec 2026-09-21 §3a/§4: the module's declared beans under the catalog's
+    # model — None for a catalog spelling no `bean_via`, and None again in the
+    # collecting context that walks a referenced bean's own chain, which is
+    # how a `bean_via` met there is not followed (one hop).
+    beans: BeanTable | None
+    # §4's `beans:` — the roots a referenced bean's chain may start from.
+    bean_roots: list[dict[str, Any]]
+    # Every declared method's parameters (`declared_parameters_of`), so a
+    # referenced bean's own method gets its `CallFacts` exactly as the caller
+    # got its own; `facts.caller_parameters` is this caller's slice of it.
+    all_parameters: dict[str, tuple[dict[str, Any], ...]]
+    # §4's `method_annotation`: every annotation by target, or empty where no
+    # root declares the word.
+    annotations: dict[str, list[tuple[str, dict[str, Any]]]]
+    # Where a walk records each chain END's captures instead of deriving a row
+    # — the collecting context `_bean_chain_capture` builds. None on the
+    # deriving walk.
+    collect: list[dict[str, Any]] | None = None
 
 
 def _prefix_captures(root_site: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
@@ -560,7 +661,14 @@ def _walk(
         next_captures = dict(captures)
         _fold_site(next_site, next_captures, context)
         _walk(next_site, next_captures, reached_terminal, context)
-    if not forked and reached_terminal:
+    if forked:
+        return
+    # A collecting walk (spec 2026-09-21 §4's container hop) records every
+    # chain end, terminal or not: a referenced bean's chain is that bean's
+    # configuration, not a registration, and nothing marks it executable.
+    if context.collect is not None:
+        context.collect.append(captures)
+    elif reached_terminal:
         _derive(captures, context)
 
 
@@ -611,6 +719,11 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
     # is the row's identity — without this the row derives with `path` NULL and a
     # real outbound call has no address at all.
     _fold_lambda_captures(captures, context)
+    # Spec 2026-09-21 §4: a step whose captured argument is a BEAN reference
+    # takes its value from the bean — its name, or the captures of its own
+    # chain — resolved here, where the step folded, so a later setter's
+    # literal overrides it exactly as it overrides any earlier capture.
+    _fold_bean_captures(captures, context)
 
 
 def _fold(captures: dict[str, Any], folded: dict[str, Any]) -> None:
@@ -684,14 +797,19 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # collapses to the same one-tuple list `single_call`'s own non-ladder
     # case builds by hand.
     destinations: Sequence[tuple[str | None, str | None, str]]
+    # `channels_of`, not `channel_of` (spec 2026-09-21 §3c): a varargs
+    # destination — the container's `setQueueNames("q1", "q2")`, one `array`
+    # argument (9.15) — is one row per element; a slot that is not an array
+    # reads exactly as it always did, one tuple, so the ladder below still
+    # runs only where that one literal did not resolve.
     if "channel" in captures:
         channel_argument = _address_read(captures.get("channel"), context)
-        literal = channel_of(channel_argument)
+        literal = channels_of(channel_argument)
         channel_via_forms = captures.get("channel_via") or []
-        if literal[2] != "resolved" and channel_via_forms:
+        if literal[0][2] != "resolved" and channel_via_forms:
             destinations = linked_channels(channel_argument, context.facts, channel_via_forms)
         else:
-            destinations = [literal]
+            destinations = literal
     else:
         destinations = [_composed_address(captures, context)]
     # Computed once, outside the destinations loop — the same
@@ -1161,11 +1279,16 @@ def _validate_captures(
     misplaced or malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
-            if field in _ARGUMENT_FIELDS and not _ARG_REFERENCE.match(str(value)):
+            # `{bean_via: argN}` is a position too (spec 2026-09-21 §4): the
+            # argument at it is read as a bean reference rather than as the
+            # value itself — the container hop, `channel: {bean_via: arg0}`.
+            if field in _ARGUMENT_FIELDS and not (
+                _ARG_REFERENCE.match(str(value)) or _valid_bean_via(value)
+            ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{entry['method']}` captures "
                     f"`{field}: {value}`, which is not a call-site position — an argument "
-                    f"capture reads `argN` (D02 §4's fluent style)"
+                    f"capture reads `argN` or `{{{_BEAN_VIA}: argN}}` (D02 §4's fluent style)"
                 )
             # Spec 2026-09-21 §4: the two consumer captures, each `argN` or its
             # one literal spelling — anything else is a typo that would
@@ -1253,8 +1376,8 @@ def _valid_when(when: Any) -> bool:
 
 def _valid_bean_via(value: Any) -> bool:
     """Whether a capture value is exactly `{bean_via: argN}` (spec 2026-09-21
-    §4) — the shape the bean fold reads; accepted here so the catalog loads,
-    and read as no link until that fold answers it."""
+    §4) — the shape `_resolve_captures` holds as a bean reference and
+    `_fold_bean_captures` resolves."""
     return (
         isinstance(value, dict)
         and set(value) == {_BEAN_VIA}
@@ -1302,6 +1425,184 @@ def _validated_compose(
             f"exactly (spec 2026-09-21 §4)"
         )
     return str(fields[0]), tuple(str(half) for half in halves), str(compose["join"])
+
+
+def _validated_method_annotation(
+    root: dict[str, Any], catalog: Catalog
+) -> tuple[str, str, str] | None:
+    """A root's `method_annotation:` as `(annotation descriptor, arg, into)`
+    (spec 2026-09-21 §4): the constructing method's own annotation, the
+    attribute to read and the capture field it fills — exactly those three
+    strings, or None for the root that declares none. `annotation` is
+    converted to the SCIP form the annotation index is keyed in, once here."""
+    declared = root.get("method_annotation")
+    if declared is None:
+        return None
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != {"annotation", "arg", "into"}
+        or not all(isinstance(declared[key], str) and declared[key] for key in declared)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: root `{root.get('method')}` declares "
+            f"`method_annotation: {declared!r}`, which must be `{{annotation, arg, into}}` "
+            f"exactly (spec 2026-09-21 §4)"
+        )
+    return _catalog_symbol(declared["annotation"]), declared["arg"], declared["into"]
+
+
+def _method_annotation_capture(root: dict[str, Any], context: _ChainContext) -> dict[str, Any]:
+    """The capture a root's `method_annotation` reads off the constructing
+    method (spec 2026-09-21 §4): `{into: <string argument>}` where the method
+    carries the annotation with that attribute as a string literal —
+    `@ServiceActivator(inputChannel = "orders")` on the factory method that
+    builds the outbound handler — and nothing at all otherwise. Absent is no
+    claim: the chain then derives exactly as it would without the word."""
+    if root["method_annotation"] is None:
+        return {}
+    annotation, arg, into = root["method_annotation"]
+    for used, args in context.annotations.get(context.caller, []):
+        if used == annotation and isinstance(args.get(arg), str):
+            return {into: {"kind": "string", "value": args[arg]}}
+    return {}
+
+
+def _fold_bean_captures(captures: dict[str, Any], context: _ChainContext) -> None:
+    """Replaces every captured value that is a bean REFERENCE (`_resolve_captures`'
+    `bean_via` marker) with what the bean answers, in place (spec 2026-09-21
+    §3a, §4): on `channel_link`, the bean's NAME as a string argument — the
+    channel it is registered under, which is what a `read_by` edge names too;
+    on any other field, the value the bean's own chain captured under that
+    field (`_bean_chain_capture` — the container hop). A reference nothing
+    resolves reads as the compiler's own `unresolved` kind, with the reason,
+    which every downstream reader already answers as a read failure — and NOT
+    as `_POISONED`: a bean the fold could not name is this setter's own
+    failure, and a later `setOutputChannelName("x")` is the setter the
+    framework honours, so it must be free to override it.
+
+    One hop only: in the collecting context (`beans` None) a reference is not
+    followed, and a container built in a third bean is unresolved (§4)."""
+    for field, value in list(captures.items()):
+        if not isinstance(value, dict) or value.get("kind") != _BEAN_VIA:
+            continue
+        if context.beans is None:
+            captures[field] = _unresolved_bean("second_hop")
+            continue
+        if value.get("caller") != context.caller:
+            captures[field] = _unresolved_bean("across_bodies")
+            continue
+        bean = _bean_reference(value.get("argument"), context)
+        if isinstance(bean, Unresolved):
+            captures[field] = _unresolved_bean(bean.reason)
+        elif field == "channel_link":
+            captures[field] = {"kind": "string", "value": bean.name}
+        else:
+            captures[field] = _bean_chain_capture(bean, field, context)
+
+
+def _unresolved_bean(reason: str) -> dict[str, Any]:
+    """The compiler's own `unresolved` shape (`_UNRESOLVED_ARGUMENT`), with the
+    bean fold's reason — a fresh mapping, so `_fold` overwrites it as it does
+    any read failure that is not a catalog poison."""
+    return {"kind": "unresolved", "reason": f"bean_{reason}"}
+
+
+def _bean_reference(
+    argument: dict[str, Any] | None, context: _ChainContext
+) -> BeanRef | Unresolved:
+    """The bean one argument names (spec 2026-09-21 §3a), by the two shapes a
+    reference takes in a factory method: the caller's own injected parameter —
+    `{kind: parameter, value: i}`, read off the declared signature for its
+    erased type, name and qualifier — or the RESULT of a direct call, in this
+    same caller, to a declaring method (`bean_called`; the call's target joined
+    to its symbol through `method_descriptor`, the same arithmetic every
+    caller-to-callee join uses). Anything else — a field, a literal, a call to
+    a method that declares no bean — is `none`. Only ever called with a bean
+    table in hand (`_fold_bean_captures` answers the collecting context's
+    case before reaching here); a context without one resolves nothing."""
+    if context.beans is None or argument is None:
+        return Unresolved("none")
+    if argument.get("kind") == "parameter" and isinstance(argument.get("value"), int):
+        index = int(argument["value"])
+        parameters = context.facts.caller_parameters
+        if index >= len(parameters):
+            return Unresolved("none")
+        declared = parameters[index]
+        erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
+        if not isinstance(erased, str):
+            return Unresolved("none")
+        name = declared.get("name")
+        return context.beans.bean_of(
+            Parameter(
+                method=context.caller,
+                index=index,
+                erased_type=erased,
+                name=str(name) if isinstance(name, str) else None,
+                qualifier=qualifier_of(
+                    list(declared.get("annotations") or []), context.catalog.bean_model
+                ),
+            )
+        )
+    source = argument.get("source")
+    if source is None:
+        return Unresolved("none")
+    producer = next((site for site in context.sites if _chain_key(site) == source), None)
+    if producer is None or producer.get("owner") is None or producer.get("descriptor") is None:
+        return Unresolved("none")
+    bare = method_descriptor(
+        str(producer["owner"]), str(producer["name"]), str(producer["descriptor"])
+    )
+    full = context.method_symbols.get(bare)
+    bean = context.beans.bean_called(full) if full is not None else None
+    return bean if bean is not None else Unresolved("none")
+
+
+def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> Any:
+    """What a referenced bean's own chain captured under `field` (spec
+    2026-09-21 §4's container hop): the bean's declaring method's sites,
+    walked from each `beans:` root they hold with a fresh capture dict and a
+    COLLECTING context — the same walk, the same steps and poisons, recording
+    each chain end's captures instead of deriving — and the value under
+    `field` where every end that captured one agrees. No declaring method, no
+    root in it, no end capturing the field, or two ends disagreeing, is the
+    `unresolved` kind with the reason: the adapter's destination is then unread
+    (`path` NULL), never guessed from one of several containers' queues."""
+    if bean.method is None:
+        return _unresolved_bean("no_method")
+    sites = context.by_caller.get(bare_descriptor(bean.method), [])
+    by_receiver: dict[Any, list[dict[str, Any]]] = {}
+    for site in sites:
+        by_receiver.setdefault(site["receiver"], []).append(site)
+    collected: list[dict[str, Any]] = []
+    collecting = replace(
+        context,
+        caller=bean.method,
+        sites=sites,
+        by_receiver=by_receiver,
+        facts=replace(
+            context.facts,
+            caller_call_sites=sites,
+            caller_parameters=context.all_parameters.get(bean.method, ()),
+        ),
+        beans=None,
+        collect=collected,
+    )
+    for site in sites:
+        root = _matching_root(site, context.bean_roots)
+        if root is None:
+            continue
+        captures = {
+            **_prefix_captures(site, collecting),
+            **_resolve_captures(root["captures"], site),
+        }
+        _fold_bean_captures(captures, collecting)
+        _walk(site, captures, reached_terminal=False, context=collecting)
+    values = [end[field] for end in collected if field in end]
+    if not values:
+        return _unresolved_bean("no_chain" if not collected else "field_uncaptured")
+    if any(value != values[0] for value in values[1:]):
+        return _unresolved_bean("chains_disagree")
+    return values[0]
 
 
 def _undeclared_steps(
@@ -1767,7 +2068,18 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
     only the value itself says which."""
     resolved: dict[str, Any] = {}
     for field, value in declared.items():
-        if _reads_an_argument(field, value):
+        if _valid_bean_via(value):
+            # Spec 2026-09-21 §4: the argument is a bean REFERENCE. Held with
+            # the site's own caller until `_fold_bean_captures` resolves it —
+            # a `parameter` argument is an index into THAT method's signature,
+            # and a marker folded up out of a lambda body would otherwise be
+            # read against the enclosing method's.
+            resolved[field] = {
+                "kind": _BEAN_VIA,
+                "argument": _arg_at(site["arguments"], _arg_index(value[_BEAN_VIA])),
+                "caller": site["caller"],
+            }
+        elif _reads_an_argument(field, value):
             resolved[field] = _arg_at(site["arguments"], _arg_index(value))
         else:
             resolved[field] = value
