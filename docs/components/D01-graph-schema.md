@@ -209,6 +209,7 @@ needs it.
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse |
 | `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
+| `channel_bindings` (temp) | One edge between an in-process CHANNEL and a method at one of its ends: `channel`, `role` (`fed_by`, `read_by`, `sends_to`), `symbol`, `protocol`, `direction`, `destination`, `catalog_id`, `resolution`. Working state of one resolve — replaced whole beside `endpoints`, never in a bundle — joined into `endpoints` rows by `resolve/channel_bindings.py` and read by `config_join.gaps` |
 
 **`both` is reserved for the linking tier, and no pass here produces it** (F5 §6.1, W27).
 A wire identity a module both exposes and calls stays TWO rows; the shape of a `both` row is
@@ -278,6 +279,32 @@ insert-if-absent on the full row, because two catalogs can describe one handler 
 identical entries are one entry. Written after `apply_protocol_hints`, for the reason every
 pass below that line gives: an entry names its row by the row's identity columns, and
 `protocol` is final only there.
+
+**`channel_bindings` is the channel EDGE as data** (spec 2026-09-21 §3b). A Spring
+Integration channel is an in-process pipe with no wire identity of its own; what has a wire is
+the adapter or flow that FEEDS it, and what has a handler is the annotated method that READS
+it, and the two are declared in different methods by different frameworks' words. So neither
+side writes an `endpoints` row alone. The fluent engine, walking a registration or a DSL flow,
+writes a `fed_by` row — `channel` the name it captured (a literal, or a channel bean's name
+through the bean fold), `symbol` the constructing method, `protocol` its catalog's,
+`direction` the row's, `destination` the wire it captured; `config_join`, indexing the
+channel each annotation names, writes a `read_by` row — `symbol` the handler, `direction` the
+one the annotation means, `protocol` and `destination` NULL because a reader knows nothing
+about the wire; and a `channel_link` a flow captures AFTER its handler is that handler's
+OUTPUT channel, a `sends_to` row (no reader yet, `OI-107`). Once per resolve, after the
+engine loop, `resolve/channel_bindings.py` joins inbound `fed_by` to resolved inbound
+`read_by` on `channel` and mints one inbound `endpoints` row per pair — `path` and `protocol`
+the feeder's, `handler` the reader, `caller` the feeder's method — one per reader however
+many catalogs wrote it, and one with `handler` NULL for a feeder nobody reads; a reader
+nobody feeds keeps its `channel_destination` question, and `config_join.gaps` asks only for
+those. **`resolution` is role-dependent**: on `fed_by` it is the WIRE's — the edge stands in
+for the row the chain would have written, so an unread destination is an `unresolved` edge
+and mints an `unresolved` row; on `read_by` it is the NAME's — a channel spelled as a
+configuration placeholder is resolved through `resolved_config` before it is written, and
+one no environment answers stays as written, `unresolved`, and joins nothing. A TEMP table
+for `route_requirements`' reason: it lives for the one resolve that reads it, is replaced by
+the next, and never reaches the workspace file or an export bundle
+(`DuckDbWorkspace.schema_objects` leaves it out by name).
 
 **Its `value` is redacted at the ORIGIN, alone among value columns.** Every other one is
 masked at export, because analysis reads it — substituting `REDACTED` into an address would

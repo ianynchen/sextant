@@ -1749,6 +1749,302 @@ resolved compile classpath, the Maven one declared-plus-inherited coordinates an
 transitives (`resolve/dependencies.py`, F1), and `kotlin-reflect` most often arrives
 transitively through `jackson-module-kotlin`, exactly where a Maven-side gate would be blind.
 
+### OI-106 — the field ladder has no bean rung: a `Publisher`, `WebClient` or `KafkaTemplate` built in one `@Bean` method and injected into another is still unresolved
+**Minor · logged 2026-09-21, the named follow-up of spec 2026-09-21 §3a (its §0c B1) ·
+`src/sextant/application/resolve/shapes/arguments.py::address_argument` (the ladder),
+`src/sextant/application/resolve/beans.py` (the fold it would read)**
+
+The field ladder reads a literal, a `@Value` field or parameter, and a `@ConfigurationProperties`
+getter. A value BUILT in one `@Bean` method and injected into the method under analysis —
+`google-pubsub-publisher.yml`'s config-built `Publisher`, `spring-webclient.yml`'s `WebClient`
+bean with a `baseUrl`, a `KafkaTemplate` with a default topic — has no rung, and each is a stated
+boundary in COVERAGE (§5.11, §5.2, §5.8). `resolve/beans.py` now answers "which `@Bean` method
+built this parameter" for the fluent engine's `bean_via`, and `_bean_chain_capture` walks that
+method's chain for a capture; the ladder does not call either.
+
+**What happens today:** those rows derive `path` NULL, `unresolved`, as their COVERAGE rows say.
+
+**Real triggering input:** the commonest Spring style — a client bean configured once and
+injected everywhere.
+
+**Verify:** `grep -n "bean" src/sextant/application/resolve/shapes/arguments.py` — no reference
+to the bean fold. **Closes** when the ladder gains a rung that resolves the parameter through
+`bean_of` and folds the bean method's chain as `fluent._bean_chain_capture` does, once, in the
+bean method's own context.
+
+### OI-107 — `sends_to` edges have no reader
+**Minor · logged 2026-09-21, found at the Task 4–5 fix round (`059342a`) ·
+`src/sextant/application/resolve/engines/fluent.py::_edge`,
+`src/sextant/application/resolve/channel_bindings.py::mint_channel_rows`**
+
+A `channel_link` captured AFTER a handler is that handler's output channel, written as a
+`channel_bindings` row with `role: sends_to` (spec §3b's reserved slot, first writer). The mint
+pass reads `fed_by` and `read_by` only, and `config_join.gaps` skips a channel on a `fed_by`
+alone — so a `sends_to` edge is recorded and consulted by nothing: the channel it names, if a
+`@ServiceActivator` reads it, is still asked about as a `channel_destination` question.
+
+**What happens today:** `handle(h).channel("out")` in the fixture writes the edge; no fixture
+handler reads `out`, so nothing is visibly wrong.
+
+**Real triggering input:** a flow whose handler's output channel is read by an annotated
+handler — the classic two-stage Spring Integration pipeline.
+
+**Verify:** `grep -n "sends_to\|_SENDS_TO" src/sextant/application/resolve/channel_bindings.py
+src/sextant/application/resolve/engines/config_join.py` — empty. **Closes** when the mint pass
+or `gaps` reads the role — a `sends_to` is a feeder whose wire is the sender's own row, so the
+reader's question is answerable by that row — and `@MessagingGateway`/`channel.send(…)` gain
+writers on the same role.
+
+### OI-108 — `@Profile`-conditional twin beans are reported unconditionally
+**Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §0c B5 (shares
+`conditional-controllers`' exposure) · `src/sextant/application/resolve/beans.py::declared_beans`,
+`src/sextant/application/resolve/engines/fluent.py`**
+
+The bean fold reads `@Bean` and `@Qualifier` and nothing conditional: two `@Bean` methods of one
+NAME under different `@Profile`s are `Unresolved(ambiguous)` to every reference (a miss, safe),
+but two adapter beans under different profiles each derive their own row, and one channel bean
+per profile with distinct names resolves whichever a parameter names. A registration that exists
+in one deployment and not another is reported as existing — exactly `conditional-controllers`'
+question for `@ConditionalOnProperty`/`@Profile` controllers, one table over.
+
+**What happens today:** no fixture declares `@Profile` on a `@Bean`; nothing wrong on them.
+
+**Real triggering input:** a module with a `@Profile("local")` in-memory adapter beside its
+`@Profile("prod")` broker one.
+
+**Verify:** `grep -n "Profile\|Conditional" src/sextant/application/resolve/beans.py` — empty.
+**Closes** with `conditional-controllers`' mechanism: a row's existence conditional on
+configuration, stated on the row rather than decided.
+
+### OI-109 — a spec configurer adding queues is a miss
+**Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §5 (adversarial B5) ·
+`src/sextant/catalogs/spring-integration-amqp.yml`,
+`src/sextant/application/resolve/engines/fluent.py::_walk`**
+
+`Amqp.inboundAdapter(cf, "q1").configureContainer(c -> c.addQueueNames("q2"))` adds a queue
+inside a lambda the walk does not open: the row reports `q1` alone. Fewer queues, never a wrong
+one.
+
+**What happens today:** no fixture writes the form.
+
+**Real triggering input:** a DSL flow tuning its container in a configurer that also names
+queues — uncommon but legal.
+
+**Verify:** `grep -n "configureContainer" src/sextant/catalogs/spring-integration-amqp.yml` —
+named as a boundary, declared by no step. **Closes** with a read of the configurer's lambda
+body against the container's own steps — the shape `single_call`'s `lambda_arg`/`lambda_steps`
+already read for `spring-cloud-gateway-outbound.yml`, brought to a fluent step.
+
+### OI-110 — a container built two beans away is unresolved
+**Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §4 (one hop) ·
+`src/sextant/application/resolve/engines/fluent.py::_bean_chain_capture`**
+
+`bean_via` folds ONE hop: the adapter's argument resolves to a container bean, and that bean's
+own chain supplies the queues. A container whose queues come from a THIRD bean (a `Queue` bean
+injected into the container's method, a container factory bean) is `unresolved(bean_second_hop)`
+— a `bean_via` met inside the collecting walk is a poison there. The adapter's row derives with
+`path` NULL.
+
+**What happens today:** the fixture's `topologyContainer` takes a `Queue` parameter and derives
+unresolved, as pinned; nothing references it.
+
+**Real triggering input:** the Spring AMQP style that declares `Queue` beans for auto-declaration
+and injects them into the container.
+
+**Verify:** `grep -n "second_hop\|bean_second_hop" src/sextant/application/resolve/engines/fluent.py`.
+**Closes** with a bounded multi-hop fold (the depth guard the combinator's helper walk already
+has), each hop in its own bean method's context.
+
+### OI-111 — Gateway `filters` rewrite the upstream path and are not read
+**Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §7b ·
+`src/sextant/catalogs/spring-cloud-gateway-properties.yml`, `spring-cloud-gateway.yml`,
+`src/sextant/application/resolve/engines/config_join.py::_indexed_items`**
+
+`RewritePath`, `StripPrefix`, `PrefixPath` and `SetPath` change the path the gateway sends
+UPSTREAM; the served path is the predicate's, and that is what the inbound row publishes. The
+outbound row carries the `uri` verbatim, so a route `Path=/api/orders/**` + `StripPrefix=1` +
+`uri: lb://orders` reports the target as `lb://orders` and says nothing about `/orders/**` being
+what the upstream sees — the stitcher matching this outbound row to the upstream's inbound row
+has no path to compare. The DSL catalog has the same boundary for `.filters(f -> f.stripPrefix(1))`.
+
+**What happens today:** the fixture's routes declare no filters.
+
+**Real triggering input:** nearly every real gateway configuration — prefix-stripping is the
+framework's own first example.
+
+**Verify:** `grep -n "filters" src/sextant/catalogs/spring-cloud-gateway-properties.yml` — named
+unread. **Closes** when the outbound row can carry the rewritten path (a `path` on a `lb://` target
+row, which D02 keeps whole today) — a schema question before a catalog one.
+
+### OI-112 — `IntegrationFlow.from(<adapter bean>)` is not declared
+**Minor · logged 2026-09-21, a stated boundary of spec 2026-09-21 §5 (Task 6 deviation 1,
+ratified) · `src/sextant/catalogs/spring-integration-pubsub.yml`, `spring-integration-amqp.yml`,
+`spring-integration-kafka.yml`; `src/sextant/application/resolve/engines/fluent.py::_matching_root`**
+
+`from(MessageProducerSupport)` is the one `from` overload EVERY broker's adapter satisfies (CP-28
+row 2). A root matched by descriptor cannot tell whose adapter arrived: declared in the Pub/Sub
+catalog, an AMQP adapter bean handed to it would match, the bean fold would find no Pub/Sub
+constructor in that bean's method, and the catalog would derive an unresolved row under
+`protocol: pubsub` for another broker's wire — a wrong row. So no catalog declares it, and a flow
+sourced from an adapter BEAN derives its adapter's own row (`handler` NULL) and nothing for the
+flow's handler.
+
+**What happens today:** no fixture writes the form.
+
+**Real triggering input:** `IntegrationFlow.from(pubSubAdapter).handle(…)` — a documented
+Spring Cloud GCP idiom.
+
+**Verify:** `grep -n "MessageProducerSupport" src/sextant/catalogs/spring-integration-*.yml` —
+named as a boundary, declared by no root. **Closes** with the general fix: derive only when
+`bean_via` resolved to a `beans:` root of THIS catalog — the bean fold gating on the bean's
+constructor owner — after which each broker catalog declares the overload safely.
+
+### OI-113 — `resolved_config` carries no declaration order
+**Minor · logged 2026-09-21, found at the Task 8 fix round 2 (`b98bba0`) ·
+`src/sextant/application/resolve/engines/config_join.py::_fields_of`, `_flattened_order`;
+`src/sextant/storage/duckdb/schema.sql` (`config_entries.seq`)**
+
+`config_entries` carries `seq` (declaration order within the file, `rowid`), and
+`resolved_config` — the one input `config_join` reads — does not: the resolver keys by
+`(key, environment)` and the order of a flattened list's non-positional map-form keys is lost.
+The `indexed:` form therefore finds Gateway's `Path` tail flag BY VALUE (the one `true`/`false`
+literal among the gathered values) rather than as the LAST value the author wrote, and reads
+two such literals as unread; the gather order of non-positional keys is flattened-key order, not
+as written. Only the flag depends on it today.
+
+**What happens today:** the documented map form (`patterns`, `matchTrailingSlash`) reads
+correctly by value; a route whose `args` carry two booleans is unread, stated.
+
+**Real triggering input:** none known — no predicate factory at 5.0.0 gathers two boolean
+fields.
+
+**Verify:** `grep -n "declaration order" src/sextant/application/resolve/engines/config_join.py`.
+**Closes** when `resolved_config` carries the winning entry's `seq` (one column, threaded from
+`config_entries` through the resolver) and `_fields_of` orders gathered values by it.
+
+### OI-114 — `${key:default}` in a channel name never applies the default
+**Minor · logged 2026-09-21, found at Task 2 review · `src/sextant/application/resolve/engines/config_join.py::_channel_name`**
+
+A channel named `${probe.audit-channel:auditChannel}` on a `@ServiceActivator` is looked up under
+`probe.audit-channel`; configuration answering it resolves the name. Configuration NOT answering
+it leaves the name as written, `unresolved`, and joins nothing — the spelled default is never
+substituted, though Spring would use it. A miss (the channel is asked about under its raw
+spelling), never a false join.
+
+**What happens today:** the fixture's `${probe.audit-channel}` spells no default; nothing wrong.
+
+**Real triggering input:** a channel name with a default, unset in every environment file.
+
+**Verify:** `grep -n "default_separator" src/sextant/application/resolve/engines/config_join.py`
+— the separator splits the key off; the default is not read. **Closes** when `_channel_name`
+applies the default where no environment answers — the same rule the field ladder's
+`resolved_peers` substitution would need, and D02 §2i's placeholder model already names the
+separator.
+
+### OI-115 — `channel_link` is a last-wins slot
+**Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_fold_site`, `_derive`**
+
+`.channel("x").handle(h).channel("y")` captures `channel_link` twice; the capture dict keeps `y`,
+so the flow writes `sends_to(y, h)` and the row, and `fed_by(x)` — the channel the wire feeds
+BEFORE the handler — is lost with it. The framework wires both. A miss (a `@ServiceActivator`
+reading `x` keeps its question), never a wrong edge.
+
+**What happens today:** no fixture flow links two channels.
+
+**Real triggering input:** a bridge-then-handle flow — uncommon; the idiomatic flow links once.
+
+**Verify:** `grep -n "_LINK_SENDER\|_READS_LINK" src/sextant/application/resolve/engines/fluent.py`
+— one slot each. **Closes** when a chain's links are a LIST in walk order, each written by its own
+position relative to the handler.
+
+### OI-116 — `read_by`/`sends_to` edges are written once per vararg destination
+**Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_derive`**
+
+`_derive` loops over the destinations a varargs capture yields (one row per element, spec §3c)
+and writes the chain's channel edges inside that loop, so `Amqp.inboundAdapter(cf, "q1",
+"q2")` … `.channel("x").handle(h)` writes `read_by(x, h)` twice. The mint pass keys readers per
+channel and the `call_endpoints` guard dedupes rows, so no row doubles; the table carries the
+duplicate edges.
+
+**What happens today:** the two-queue fixture flow writes its `fed_by` per queue (correct — each
+queue feeds the channel) and its reader edge per queue (redundant); one row per queue derives.
+
+**Real triggering input:** every varargs registration that also links a channel — the duplicate
+is invisible in the export.
+
+**Verify:** `grep -n "for peer, path, url_resolution in destinations" src/sextant/application/resolve/engines/fluent.py`
+— the edge appends sit inside that loop.
+**Closes** by writing the reader-side edges once, outside the per-destination loop.
+
+### OI-117 — the container hop re-walks the bean's chain per reference
+**Minor · logged 2026-09-21, found at the Task 4–5 review (§8.7) · `src/sextant/application/resolve/engines/fluent.py::_bean_chain_capture`**
+
+Every `bean_via` reference to one container bean walks that bean's method's sites again — no
+memo keyed on `(bean method, field)`. Per resolve, per adapter referencing it: a module with N
+adapters on one container walks it N times.
+
+**What happens today:** the fixture has one adapter per container; the cost is one walk.
+
+**Real triggering input:** a module wiring many adapters to one shared container — the walk is
+linear in the container method's sites, so this is a constant-factor cost, not a regression.
+
+**Verify:** `grep -n "once\|memo\|cache" src/sextant/application/resolve/engines/fluent.py` around
+`_bean_chain_capture` — none. **Closes** with a per-run dict on `_ChainContext` keyed on the bean
+method and field.
+
+### OI-118 — `_REQUIREMENT_KINDS` is spelled in two engines
+**Minor · logged 2026-09-21, found at the Task 8 review · `src/sextant/application/resolve/engines/combinator.py::_REQUIREMENT_KINDS`, `src/sextant/application/resolve/engines/config_join.py::_REQUIREMENT_KINDS`**
+
+The closed set `("header", "query", "cookie", "param")` that `endpoint_metadata.kind` admits for
+an inbound requirement is declared once in the combinator (for `request_requirement` rules) and
+once in `config_join` (for the `indexed:` form's `requirements`), both private; the second was
+written rather than imported to avoid a cross-engine import of a private name. Two copies that
+drift would let one engine write a kind the reader does not know.
+
+**What happens today:** both tuples are identical.
+
+**Real triggering input:** none — a drift is a future edit.
+
+**Verify:** `grep -rn "_REQUIREMENT_KINDS = " src/sextant/application/resolve/engines/` — two.
+**Closes** by moving the tuple to `resolve/request_requirements.py` (the pass that reads the
+stash) and importing it in both engines.
+
+### OI-119 — no mechanical pin ties fluent `roots:`/`steps:`/`beans:` descriptors to the probes
+**Minor · logged 2026-09-21, found at the Task 6 self-review · `tests/architecture/test_catalog_descriptors.py`, `scripts/probes/cp10_catalog_descriptors.md`**
+
+CP-10's ratchet reads `matches.methods` rows only. The three broker catalogs and the step model
+declare some seventy `descriptor:` strings on `roots:`, `steps:` and `beans:` entries — the
+ten `messageDrivenChannelAdapter` overloads, the fifteen `handle` forms — checked against
+CP-27/CP-28's tables by eye and by the positive halves of `tests/application/test_spring_integration_adapters.py`
+(a wrong descriptor matches nothing and the positive would fail), never by a test that reads the
+probe table. A descriptor edited after the fact fails only if a fixture happens to exercise it.
+
+**What happens today:** every declared descriptor was copied from a probe row and the positives
+pass.
+
+**Real triggering input:** a future edit — a version bump that changes a return type in a
+descriptor.
+
+**Verify:** `grep -n '"methods"' tests/architecture/test_catalog_descriptors.py` — the one key
+read. **Closes** by extending the harness and the test to `roots`, `steps` and `beans` (and the
+step-model file), the same two-direction agreement.
+
+### OI-120 — `setTopicExpression(e)` followed by `setTopic("t")` reads unresolved
+**Minor · logged 2026-09-21, ruled at Task 3 (sticky poisons) · `src/sextant/application/resolve/engines/fluent.py` (`_POISONED`, `_fold`), `src/sextant/catalogs/spring-integration-pubsub.yml`, `spring-integration-amqp.yml`**
+
+A catalog `poisons:` is sticky by identity: a later capture does not lift it. That is the
+no-false-positive direction for a `divert` (the message may have left the flow) and a miss for a
+setter pair — Spring's setters are last-wins, so `setTopicExpression(e); setTopic("t")` publishes
+to `t` and the row reads `unresolved`. Stated on both catalogs.
+
+**What happens today:** no fixture writes an expression setter before a literal one.
+
+**Real triggering input:** unusual — a bean configured with an expression and then overridden.
+
+**Verify:** `grep -n "sticky" src/sextant/application/resolve/engines/fluent.py`. **Closes** if
+setter-shaped poisons are declared liftable (`poisons: {channel: liftable}`, say) while
+divert-shaped ones stay sticky — a catalog word, once a real module needs it.
+
 ## CLOSED
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none

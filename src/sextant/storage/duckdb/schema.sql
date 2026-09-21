@@ -492,11 +492,14 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- flow that feeds the channel — `symbol` the constructing method, `protocol` and
 -- `destination` the wire behind it), `read_by` (a handler whose annotation names the
 -- channel — `symbol` the handler, `protocol`/`destination` NULL: a reader knows nothing
--- about the wire) and `sends_to` (no writer yet; the slot for a gateway or a direct
--- send); `direction` is the direction the edge means for the endpoint row it may become;
--- `resolution` is the channel NAME's — a name spelled as a configuration placeholder is
--- resolved before it is written, and one configuration never answered stays as written,
--- `unresolved`, and can join nothing. `resolve/channel_bindings.py` joins `fed_by` to
+-- about the wire) and `sends_to` (a handler's OUTPUT channel — a link a flow captures
+-- after its handler; written by fluent, read by nothing yet, and the slot for a gateway
+-- or a direct send); `direction` is the direction the edge means for the endpoint row it
+-- may become; `resolution` is role-dependent (D01 §3): the channel NAME's on `read_by` —
+-- a name spelled as a configuration placeholder is resolved before it is written, and
+-- one configuration never answered stays as written, `unresolved`, and can join nothing —
+-- and the WIRE's on `fed_by`, the edge standing in for the row the chain would have
+-- written. `resolve/channel_bindings.py` joins `fed_by` to
 -- `read_by` on `channel` once per resolve and mints one `endpoints` row per pair (and
 -- one with `handler` NULL for a feeder nobody reads); `config_join.gaps` files a
 -- `channel_destination` question only for a channel no `fed_by` row names.

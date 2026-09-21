@@ -150,6 +150,7 @@ FRAMEWORKS: dict[str, list[str]] = {
     ],
     "Kafka": [
         "Spring Kafka",
+        "Spring Integration Kafka (DSL + adapters)",
         "kafka-clients (raw)",
         "Kafka Streams",
         "Spring Cloud Stream",
@@ -160,6 +161,7 @@ FRAMEWORKS: dict[str, list[str]] = {
     "JMS and AMQP": [
         "Spring JMS",
         "Spring AMQP (RabbitMQ)",
+        "Spring Integration AMQP (adapters + DSL)",
         "Spring AMQP / Spring JMS templates",
         "Jakarta / javax JMS API (direct)",
         "Spring for Apache Pulsar",
@@ -198,10 +200,7 @@ FRAMEWORK_NONE = {"any", "—", ""}
 # frameworks (`test_feature_delivery.py`); this is presentation data.
 ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
-    "dsl-media-route": ["Spring functional routing (MVC + WebFlux, Java + Kotlin DSL)"],
-    "gateway-properties-routes": ["Spring Cloud Gateway"],
     "apache-camel": ["Apache Camel"],
-    "pubsub-channel-adapter": ["Spring Cloud GCP Pub/Sub (Spring Integration)"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
     "temporal-cadence": ["Temporal / Cadence"],
     "vertx-eventbus": ["Vert.x EventBus"],
@@ -237,9 +236,11 @@ FAMILIES: dict[str, list[str]] = {
         "Spring gRPC",
         "net.devh grpc-spring-boot-starter",
         "Spring Kafka",
+        "Spring Integration Kafka (DSL + adapters)",
         "Spring Cloud Stream",
         "Spring JMS",
         "Spring AMQP (RabbitMQ)",
+        "Spring Integration AMQP (adapters + DSL)",
         "Spring AMQP / Spring JMS templates",
         "Spring for Apache Pulsar",
         "Spring Cloud AWS SQS 3.x / 4.x",

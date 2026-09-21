@@ -43,7 +43,7 @@ feature's next spec touches the seam — never silently dropped, never a blocker
 `ktor-route-with-verb` was the first to close that way (2026-09-20, the Kotlin/Ktor spec).
 
 ```delivery
-REST inbound       | REST in    | conditional-controllers dsl-media-route gateway-properties-routes
+REST inbound       | REST in    | conditional-controllers
 REST outbound      | REST out   | apache-camel
 SOAP               | SOAP       |
 GraphQL            | GraphQL    |
@@ -53,7 +53,7 @@ gRPC               | gRPC       |
 Kafka              | Kafka      | smallrye-reactive-messaging
 JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
-Google Pub/Sub     | Pub/Sub    | pubsub-channel-adapter
+Google Pub/Sub     | Pub/Sub    |
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
 Async              | Async      | temporal-cadence vertx-eventbus
 ```
@@ -278,7 +278,9 @@ pins the negative). Composing the prefix needs the same receiver-chain walk
 tiers `B`. It is the Pub/Sub instance of §5.12's "the DESTINATION behind a channel" boundary:
 the subscription name is a constructor argument of the adapter, and `config_join` reads
 configuration files, never call-site arguments. Same engine form as the AMQP and Kafka
-adapters — one spec for the three, not a catalog.
+adapters — one spec for the three, not a catalog. **Closed 2026-09-21** on that spec
+(`docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md`, Group E):
+the three adapters read on `fluent`, bean-wired and DSL spellings alike; run pending.
 
 **Closed** — a blocker leaves this register only when its intention test has passed **in
 the CI pipeline**, and the entry records the run that proves it. Ruled by the user
@@ -290,12 +292,22 @@ be written without a run id, so there is nothing to write until CI has actually 
 
 Format: `id | test node id | CI run URL`
 
-The seven rows at the head of the block (the four Kotlin/Ktor Majors and `kotlin-null-handler`,
+The seven rows after them (the four Kotlin/Ktor Majors and `kotlin-null-handler`,
 `ktor-route-with-verb`, `inbound-request-requirements`; 2026-09-20) were written before their
 PR ran in CI and carried a placeholder until it did; run `35541934750` (PR #32) is the green
 run that closed them.
 
+The three rows at the head of the block (`pubsub-channel-adapter`, `dsl-media-route`,
+`gateway-properties-routes`; 2026-09-21, spec
+`docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md`, branch
+`feat/group-e-spring-integration-adapters`) are written the same way: `<pending PR CI>` is
+filled with the run id once that pipeline is green, and until then they are
+implemented-and-locally-green, not closed by this file's own definition.
+
 ```closed
+pubsub-channel-adapter | tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
+dsl-media-route | tests/e2e/test_rest_inbound_delivered.py::test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
+gateway-properties-routes | tests/e2e/test_rest_inbound_delivered.py::test_gateway_property_routes_derive_their_inbound_and_outbound_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
 kotlin-null-handler | tests/e2e/test_rest_inbound_delivered.py::test_ktor_routing_derives_every_route_under_its_nested_prefixes | https://github.com/ianynchen/sextant/actions/runs/35541934750
 kotlin-class-lambdas | tests/e2e/test_rest_inbound_delivered.py::test_the_class_lambda_twin_derives_identical_rows | https://github.com/ianynchen/sextant/actions/runs/35541934750
 kotlin-default-bridge-calls | tests/application/test_ktor_defaults_fixture.py::test_under_a_catalog_naming_mount_the_defaulted_call_derives_its_route | https://github.com/ianynchen/sextant/actions/runs/35541934750
@@ -359,7 +371,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | `G-30` | **shipped** (PR A2 Task 7, commit `3ca2219`) — `spring-cloud-gateway.yml` reads a route's receiver chain of predicates (`path`, `method`, `host`, `header`, `query`, `cookie`, `remoteAddr`, `xForwardedRemoteAddr`, `after`, `before`, `between`, `readBody`, `weight`, `version`, `cloudFoundryRouteService`, `order`, `alwaysTrue`, `metadata`/`replaceMetadata`/`customize`), composed by `and()`/`or()` and negated by `not()`/`negate()`, folded into the route the chain's terminal `uri(…)` call emits; a route with no `method()` publishes the framework's own catch-all (method NULL, resolved), and `not()` anywhere in the tree poisons the row. Both `routes().route(id, r -> …)` and `routes().route(r -> …)` fold their own body, told apart by the new entry-`arity` word. Not yet in ```closed — awaiting this PR's CI | the commonest edge component in a Spring estate, inbound and outbound |
 | `W44-verb-overloads` | **closed** (PR #25, run 34767891205) — W44's seven `RouterFunctionDsl` verb rules are correct for **1 of 5** overloads | MEASURED 2026-09-13 (not the fabrication this row claimed): `GET(handler)` derives `unresolved` for a deliberate catch-all, `GET("/x", predicate, handler)` loses its handler and reads `resolved`, `GET(predicate, handler)` loses the predicate — mis-graded rows, not invented ones |
 | `GAP-1b` | **closed** (PR #25, run 34767891205) — WebFlux non-coroutine `router { }` derives nothing | whole Kotlin router silent |
-| `gateway-properties-routes` | **logged (PR A2 Task 9, spec §15)** — `spring.cloud.gateway.routes[0].predicates[0]=Path=/orders/**`: routes declared in properties or YAML rather than the Java DSL, `config_join` territory and, in some estates, the commoner spelling of the two | a gateway module configured this way still publishes no routes |
+| `gateway-properties-routes` | **closed** (Group E spec 2026-09-21 §7b, commits `91ace03` + `dc07300` + `b98bba0` + `e68e527`; pinned by `test_gateway_property_routes_derive_their_inbound_and_outbound_rows` — `(GET, /cfg/orders/**)`, `(POST, /cfg/orders/**)`, `(None, /cfg/items/**)` resolved with the `Header=X-Api,v2` requirement on both `cfg-orders` rows, targets `lb://orders` and `http://items.internal:8080` verbatim with `peer` NULL — and `tests/application/test_config_join.py`'s `indexed:` unit tests; run pending) — `spring-cloud-gateway-properties.yml`, a `config_join` catalog on the new `indexed:` address form: items under `spring.cloud.gateway.server.webflux.routes[N]` (CP-29 row 1 — the 5.0.0 prefix; the pre-4.2 `spring.cloud.gateway.routes` binds nowhere in that jar, row 2, and is not declared), each `predicates[M]` read in the shortcut grammar (`Name=a,b`, row 3) or the map form (`name` + `args.<field>`), `Path`/`Method` gathering every `args` value (row 7), `Header`/`Query`/`Cookie` as request requirements, nine pass-throughs, `uri` the target row. Stated boundaries on the catalog: `filters[M]` unread (`OI-111`); the fifteenth factory `Version` unknown → unresolved rows; the tail flag found by value (`OI-113`). Was: **logged (PR A2 Task 9, spec §15)** — `spring.cloud.gateway.routes[0].predicates[0]=Path=/orders/**`: routes declared in properties or YAML rather than the Java DSL, `config_join` territory and, in some estates, the commoner spelling of the two | a gateway module configured this way still publishes no routes |
 | `gateway-and-of-two-paths` | **logged (PR A2 Task 6/7, Minor)** — `path("/a").and().path("/b")` folds to one route, `/a/b` — the framework serves neither path alone, so the folded route is dead on real traffic | a spurious resolved row rather than the two the framework actually refuses to route |
 | `gateway-order-mid-chain` | **logged (PR A2 Task 6/7, Minor)** — `order(int)` returns `PredicateSpec`, so a predicate after it does not extend its result; written mid-chain, the pass-through is reached unconsumed by the body fold and yields a spurious unresolved row beside the route's own resolved one. At the head of the chain it is stepped over cleanly | one extra row per such route |
 | `gateway-detect-4x-coordinate` | **logged (PR A2 Task 9, Minor)** — `spring-cloud-gateway.yml` is a `combinator` catalog, and `detect.coordinates` is inert for that style (`src/sextant/application/resolve/dependencies.py` ~46-70: the rules apply on any module whose bytecode names the matched types, coordinate list or not), so listing `spring-cloud-gateway-server` (the pre-5.0 combined artifact) alongside the 5.x split artifacts changes nothing either way. The real gap is that `measured:` only javap's `spring-cloud-gateway-server-webflux:5.0.0` — the catalog's rules are unverified against a 4.x jar's bytecode | a 4.x module is read by rules measured on 5.0.0 alone, unverified at that version |
@@ -376,7 +388,7 @@ intention tests in CI run 34703991222 and are in ```closed; their rows below say
 | `javalin-crud` | **logged (PR A2 Task 3, Minor)** — `crud("/users/{id}", h)` registers five routes (`GET`, `GET {id}`, `POST`, `PATCH {id}`, `DELETE {id}`) from one call; derivable as five rows off a fixed verb/path table, not built | five routes read as none |
 | `G-45` | **closed** — a Data REST resource over MongoDB derives its route table since `6f088be`, proven in CI run 34669970510. The R2DBC, Cassandra, Elasticsearch, Neo4j and reactive contracts still outside are `GAP-6` | — |
 | `spring7-version` | **closed** — two versions of one route are not reported as a conflict, proven in CI run 34669970510 | — |
-| `dsl-media-route` | `accept(MediaType, Function1)` / `contentType(MediaType, Function1)` on `RouterFunctionDsl` (both stacks) and `CoRouterFunctionDsl`: a route declared under a media guard alone. Before PR A1 this was silence; now it is one honest `unresolved` row (PR A1, the addresses-nothing seam pinned by a guard) — but the proper read needs a word this grammar does not have: "the media value IS the route's own constraint" on a verb-less rule, so the row can carry its handler and its media instead of naming neither | a media-gated route (e.g. a JSON-only handler with no path) derives an unresolved row instead of `path: /**` with its `produces`/`consumes` set |
+| `dsl-media-route` | **closed** (Group E spec 2026-09-21 §7a, commit `c093f8d`; pinned by `test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row` — `spring-webflux-router (None, /**, [application/json], resolved)` with the suspend lambda's `invokeSuspend` as handler, `spring-mvc-router (None, /ktmvc/**, [application/json], resolved)` under its enclosing nest, no unresolved row on either; run pending) — six verb rules `{method: accept \| contentType, verb: null, arity: 2, media_arg: 0, fills: produces \| consumes, handler_arg: 1}` on the three DSL classes (CP-29 row 10: exactly two overloads each), no `all_methods` and no other pin moved (spec §0b A1: `resources(…)` serves GET/HEAD/OPTIONS only, so a fan-out would publish five wrong rows per static route). Was: `accept(MediaType, Function1)` / `contentType(MediaType, Function1)` on `RouterFunctionDsl` (both stacks) and `CoRouterFunctionDsl`: a route declared under a media guard alone. Before PR A1 this was silence; now it is one honest `unresolved` row (PR A1, the addresses-nothing seam pinned by a guard) — but the proper read needs a word this grammar does not have: "the media value IS the route's own constraint" on a verb-less rule, so the row can carry its handler and its media instead of naming neither | a media-gated route (e.g. a JSON-only handler with no path) derives an unresolved row instead of `path: /**` with its `produces`/`consumes` set |
 | `kotlin-class-lambdas` | **closed** (spec 2026-09-19 §3b, commits `645dd1d` + `eefca79` + `b81a2ae`; pinned by `test_the_class_lambda_twin_derives_identical_rows` — `fixtures/orders-ktor-classlambdas`, the same source compiled with `-Xlambdas=class`, derives byte-identical endpoint rows to `orders-ktor` — and `test_the_class_lambda_twin_is_built_from_the_very_same_source`; CI run 35541934750) — engine-wide: the projection sits where every engine reads call sites, so no engine learns the word Kotlin. Was: **logged (PR A2 Task 9, spec §15, Major)** — a lambda compiled as a class (`-Xlambdas=class`, the default before Kotlin 2.0) arrives as `kind: instance`, not `kind: lambda`; the body-linked entry roots and derives zero routes — one unresolved row under §4b, not silence, but the address is unreadable | every Kotlin router DSL module built with Kotlin < 2.0 (or `-Xlambdas=class` explicitly) under-reports |
 | `kotlin-default-bridge-calls` | **closed** (spec 2026-09-19 §3a, commits `389b719` + `b81a2ae`; pinned by `tests/application/test_ktor_defaults_fixture.py` — `mount("/d") { }` omitting `version` reaches the engine as `mount` with `version` unresolved and, under a catalog naming `mount`, derives `/d/x` — and eleven unit tests in `tests/application/test_effective_calls.py` incl. a 33-parameter two-mask function; CI run 35541934750) — `resolve/effective_calls.py` re-targets a `$default` site to the sibling its `bridge_of` fact names, mask bits over the DECLARED parameters (an extension receiver is not one), each omitted parameter `{kind: unresolved, reason: defaulted}`: a defaulted path is an unresolved row, never a guessed default. Was: **logged 2026-09-13 (user question after PR A2), Major when reachable** — a Kotlin call that OMITS a defaulted parameter is compiled as a call to the synthetic `name$default(…, mask, marker)` bridge: a different name and arity, which no catalog rule matches, so the route derives NOTHING (not the unrecognised-overload row — that fires only on a name the vocabulary carries). Named and out-of-order arguments are NOT affected (the compiler reorders them into the declaration's order before the bytecode). Not triggered today: `RoutingBuilderKt` declares zero `$default` bridges (measured, 3.0.3) and the Spring DSL rules are on Java-declared members. Fix when a catalog first covers a Kotlin function with defaults: the catalog declares the bridge form (`name$default`, arity = declared + masks + 1, the same positions) — or the engine maps a `$default` call back to its sibling as the extractor's `KotlinDefaultBridge` already does on the declaration side | a Kotlin DSL function with a default parameter, called without it — silence for that route |
 | `inbound-request-requirements` | **added 2026-09-19 (user ruling) and closed in the same PR** (spec 2026-09-19 §5, commits `51f363b`, `c3546e7`, `c2d6792`, `a45c0a3`, `6107170`, `b277087`, `d4ffd1a`, `e8cf642`; pinned by `test_spring_request_params_record_what_the_binder_enforces`, `test_a_kotlin_defaulted_or_nullable_parameter_is_optional_to_the_binder`, `test_spring_mapping_params_and_headers_expressions_are_requirements`, `test_jaxrs_named_parameters_are_optional_in_both_spellings`, `test_micronaut_binds_required_unless_the_argument_is_nullable`, `test_quarkus_rest_and_reactive_routes_parameters_are_optional`, `test_ktor_selector_requirements_reach_endpoint_metadata`, `test_ktor_handler_reads_reach_endpoint_metadata`, `test_javalin_handler_reads_reach_endpoint_metadata`, `test_servlet_handler_reads_reach_endpoint_metadata`, `test_gateway_header_and_query_predicates_reach_endpoint_metadata`, `test_a_query_param_predicate_reaches_endpoint_metadata_on_the_functional_router`; CI run 35541934750) — no REST inbound row recorded that the endpoint requires a header, query parameter or cookie, while every outbound row already recorded what the call sends. `endpoint_metadata.requirement` (`required`/`optional`/`absent`, NULL where the code states nothing) is now written for fourteen catalogs: Spring MVC/Web (`@RequestParam`/`@RequestHeader`/`@CookieValue` through the binder rule, `@RequestMapping(params=, headers=)` expressions), JAX-RS ×3 and Quarkus's `@Rest*`, Micronaut, reactive routes' `@Param`/`@Header`, Ktor (selectors, handler reads, `required_when_thrown`), Javalin (`ApiBuilder` rows), Servlet ×2 (reads), Gateway DSL (`header`/`query`/`cookie`), Spring router Java (`queryParam`/`param`). Boundaries stated in COVERAGE §5.1: a Javalin flat row's lambda reads, `headers(Predicate)`, `name!=v`'s excluded value, Ktor 2.x interface receivers | every REST inbound framework's rows say what a caller must send; the stitcher's request-compatibility test has headers to compare (M06) |
@@ -473,11 +485,11 @@ run 34669970510; the cell reads `✅`.
 | `sqs-template-receive` | **shipped** (PR A2 Task 2, commit `deb2355`) — `spring-sqs-template-receive.yml` reads all four `receive`/`receiveMany`/`receiveAsync`/`receiveManyAsync` overloads through the options lambda, the queue named inside (`opts.queue("orders-queue")`); handler = the polling method, caller NULL. `G-44`'s fourth and final quarter. Not yet in ```closed — awaiting this PR's CI |
 | `micronaut-jms-over-sqs` | **closed** — implemented, pinned by `test_micronaut_jms_over_sqs_is_sqs_on_both_sides` (`tests/e2e/test_messaging_micronaut_delivered.py`), **closed** on CI run 35416301779 (PR #30, merged 2026-09-18)** — `micronaut-jms.yml` and `micronaut-jms-producer.yml` each carry a `protocol_hint.hint_when` on `@JMSListener`/`@JMSProducer`'s `value` attribute (R2: `value()` is the sole address-bearing attribute — there is no `connectionFactory` attribute, correcting the wording this row used to carry) equalling `SqsConfiguration.CONNECTION_FACTORY_BEAN_NAME` (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md` §5b); a listener AND a producer bound to that factory both reclassify to `sqs` and link with a Spring SQS sender/listener on the shared queue name (DR-5). **The `@JMSProducer` half shipped with it (ruled 2026-09-18)**: the register named only the listener side, but the same factory-name switch applies identically to the producer's own `@JMSProducer.value()`, so both directions closed in one task (B/C Task 12) rather than leaving the outbound half open under a name of its own. Was: `@JMSListener(connectionFactory = "sqsJmsConnectionFactory")` derives through `micronaut-jms.yml` with protocol `jms` though the wire is SQS, so a Spring SQS sender and this listener will not link; Category C (§4) |
 
-### Google Pub/Sub — NOT DELIVERED
+### Google Pub/Sub — DELIVERED pending CI (`pubsub-channel-adapter` implemented and pinned 2026-09-21; matrix `✅`)
 
 | # | issue |
 |---|---|
-| `pubsub-channel-adapter` | `PubSubInboundChannelAdapter` + `@ServiceActivator` — the subscription name is a constructor argument of the adapter, and `config_join` reads configuration files, never call-site arguments. The one Java row COVERAGE §5.11 still tiers `B`; one spec with the AMQP and Kafka adapters (§0, "Named 2026-09-12") |
+| `pubsub-channel-adapter` | **closed** (Group E spec 2026-09-21 §3–§6, commits `2a07658`..`c100aab`; pinned by `tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows` — `orders-sub` and `${probe.subscription}` each joined to `handlePubSubOrder` through `pubsubInputChannel`, the outbound `orders-topic` from the `PubSubMessageHandler` bean, the ambiguous-bean adapter keeping its row with `handler` NULL — beside `test_a_fed_channel_is_a_row_not_a_question` and `test_the_remaining_questions_are_exactly_the_unfed_channels`; run pending) — `spring-integration-pubsub.yml` on `fluent`: the adapter's constructor is the root, its subscription the captured destination (through the field ladder — the `@Value` parameter derives its `${…}` expression), `setOutputChannelName`/`setOutputChannel` the channel it feeds (a bean reference resolved by `resolve/beans.py` through `bean-models/spring.yml`), and the `channel_bindings` join pass mints one row per `@ServiceActivator` reading that channel. The same words read the AMQP container hop and the Kafka/AMQP DSL flows (COVERAGE §5.8, §5.9, §5.12). Was: `PubSubInboundChannelAdapter` + `@ServiceActivator` — the subscription name is a constructor argument of the adapter, and `config_join` reads configuration files, never call-site arguments. The one Java row COVERAGE §5.11 still tiers `B`; one spec with the AMQP and Kafka adapters (§0, "Named 2026-09-12") |
 
 ### Async and internal boundaries — NOT DELIVERED
 
@@ -536,6 +548,17 @@ feature, so it is not in the `closed` block above; it is recorded closed in
 `G-73` `visibility` two-valued for a four-valued concept left this list on 2026-09-12: it
 blocked no feature, so it is not in the `closed` block above; it is recorded closed in
 `open-issues.md`, by the tests named there.
+
+**Logged 2026-09-21 (Group E spec, Tasks 1–8) — fifteen issues, none Critical or Major, recorded
+as `OI-106`–`OI-120` in `open-issues.md`:** the field ladder's missing bean rung (the field-held
+`Publisher`/`WebClient`/`KafkaTemplate` boundaries, now buildable on `resolve/beans.py`);
+`sends_to` edges with no reader; `@Profile`-twin beans (the `conditional-controllers` exposure,
+one table over); a spec configurer adding queues; two-hop container sources; Gateway `filters`
+rewriting the upstream path; `IntegrationFlow.from(<adapter bean>)` undeclared; `resolved_config`
+carrying no declaration order; `${key:default}` never applying its default in a channel name;
+`channel_link` as a last-wins slot; reader edges duplicated per vararg destination; the container
+hop re-walked per reference; `_REQUIREMENT_KINDS` spelled twice; no mechanical descriptor pin for
+`roots:`/`steps:`; `setTopicExpression` then `setTopic` reading unresolved.
 
 **Logged 2026-09-20 (Kotlin/Ktor spec, Tasks 1–15) — eight issues real input can reach only
 at the edges, none Critical or Major, recorded as `OI-96`–`OI-103` in `open-issues.md`:**
@@ -639,7 +662,8 @@ static or instance verb call named inside a lambda passed to an outer call
 spec closes all of them, not only the REST-inbound four. `pubsub-channel-adapter` (§0,
 "Named 2026-09-12") is a DIFFERENT engine form — a `config_join` extension to read a
 constructor argument, not a receiver-chain walk — and stays out of this list for that
-reason.
+reason. *(2026-09-21: it closed on `fluent`'s walk after all — a constructor root with
+void setters IS a receiver chain — see §4 row 3.)*
 
 ### Category C — needs a spec of its own · **SPEC THEN PLAN**
 
@@ -694,7 +718,7 @@ with the spec already written first.
 | 1 | **A. Receiver chain / overload discrimination** — spec `ba59750`; **A1 shipped (#25); A2 in progress**: `G-37`, `W44-verb-overloads`, `GAP-1b`; **A2 is Part II**, the rest | `G-37` `GAP-1b` `W44-verb-overloads` `G-30` `G-30-outbound` `ktor-routing` `javalin-apibuilder` `sqs-template-receive` `jdk-httpclient` (9) | **REST outbound closes**; REST inbound 9 → 3; SQS 2 → 1. Fixes the three `RouterFunctionDsl` overloads the shipped rules mis-grade (`W44-verb-overloads`: a catch-all read as unreadable, a handler lost) |
 | 2 | **B. Sibling-annotation reads** — `annotation_driven` reads an attribute off a sibling annotation of the same method — **DONE — closed on CI run 35416301779, PR #30** (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, B/C Tasks 1–10b) | `quarkus-jaxrs` `jaxrs-sse` (2) | **SSE closes**; REST inbound −1 |
 | 2 | **C. Rules conditional on an annotation attribute** — one plan with B, both grow `annotation_driven` by one word — **DONE — closed on CI run 35416301779, PR #30** (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, B/C Tasks 11–12) | `kafka-batch-generics` `micronaut-jms-over-sqs` (2) | **SQS closed**; Kafka did NOT close — §5.8 still carried SmallRye Reactive Messaging uncatalogued (tier B), now the register item `smallrye-reactive-messaging` |
-| 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument | `pubsub-channel-adapter` (1) | **Pub/Sub closes** |
+| 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument — **DONE 2026-09-21** (spec `docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md`: not a `config_join` extension after all but `fluent` extended with registration words and a bean fold, which also closed `dsl-media-route` and `gateway-properties-routes` as ride-alongs; CI run pending) | `pubsub-channel-adapter` (1) | **Pub/Sub closes** — and REST inbound −2: the row now holds `conditional-controllers` alone |
 | 4 | **D. New `Protocol` members and two naming words** | `temporal-cadence` `vertx-eventbus` (2) | **Async closes** |
 | 5 | **G. Kotlin routes with a NULL handler** — short spec — **DONE 2026-09-20** (spec `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`, which also closed `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-class-lambdas`, `kotlin-default-bridge-calls`, `ktor-route-with-verb` and the new `inbound-request-requirements`; CI run 35541934750) | `kotlin-null-handler` (1) | REST inbound −1 — and −4 more: the row now holds `conditional-controllers`, `dsl-media-route`, `gateway-properties-routes` |
 | 6 | **F. Conditional controllers** — the hardest design question | `conditional-controllers` (1) | **REST inbound closes** |
@@ -730,10 +754,14 @@ same 22 items sorted by mechanism; this table is the same items sorted by what t
    `quarkus-jaxrs` moved to row 2 above; JMS/AMQP waits on CI alone. *2026-09-20:
    `kotlin-null-handler` and the four Kotlin/Ktor Majors are implemented and pinned (row 5
    of §4's table); REST in now waits on `conditional-controllers`, `dsl-media-route`,
-   `gateway-properties-routes` and the CI run.*
+   `gateway-properties-routes` and the CI run. 2026-09-21: `dsl-media-route` and
+   `gateway-properties-routes` are implemented and pinned too (row 3 of §4's table); REST in
+   waits on `conditional-controllers` and the CI run.*
 4. **Category C** — the remaining items that need their own design, `temporal-cadence` and
    `vertx-eventbus` among them; Async waits on those two. `micronaut-jms-over-sqs` moved to
    row 2 above — SQS no longer waits on Category C.
 5. **`pubsub-channel-adapter`** — its own `config_join` extension; Pub/Sub's one open item.
+   *2026-09-21: implemented and pinned on `fluent`, not `config_join` (row 3 of §4's table);
+   Pub/Sub's row is empty and REST in waits on `conditional-controllers` and the CI run.*
 6. **Meridian** (`FR-21`–`FR-24`) has no matrix cell and waits on nothing but being built.
 7. **Section 2's cross-cutting defects** last, to make "no open Critical or Major" true.

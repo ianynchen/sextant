@@ -15,6 +15,130 @@ here would restate those documents rather than add anything.
 ### Added
 
 - **No version bump with this entry — the standing gate still holds** (Spring Boot
+  end-to-end before any bump). The items below close three register ids — `pubsub-channel-adapter`
+  (the Pub/Sub row of the register empties), `dsl-media-route` and `gateway-properties-routes`
+  (REST inbound holds `conditional-controllers` alone) — each in the register's ```closed block
+  with the test that pins it, the CI run id filled in once the PR's pipeline is green. Spec:
+  `docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md` (Group E).
+
+- **The destination behind a Spring Integration channel is read, for Pub/Sub, AMQP and Kafka,
+  in both spellings the framework offers** (`pubsub-channel-adapter`; COVERAGE §5.11, §5.12's
+  "the DESTINATION behind a channel" boundary, §5.8 and §5.9's new lines). Until now
+  `spring-integration.yml` could only say that a `@ServiceActivator` READS a channel and file a
+  `channel_destination` question, because the queue, topic or subscription sits in the code as
+  a constructor argument, a container setter or a DSL factory argument — call-site facts no
+  configuration join reaches. Three catalogs on the `fluent` engine now walk those registrations:
+  `spring-integration-pubsub.yml` (`PubSubInboundChannelAdapter(ops, "sub")` +
+  `setOutputChannelName`/`setOutputChannel`; `PubSubMessageHandler(ops, "topic")` under its
+  `@Bean` method's `@ServiceActivator`), `spring-integration-amqp.yml`
+  (`AmqpInboundChannelAdapter(container)` with the queues read off the CONTAINER bean's own
+  `setQueueNames`/`setQueues` chain; `AmqpOutboundEndpoint` composing `exchange/routingKey`;
+  `Amqp.inboundAdapter(cf, "q1", "q2")`/`Amqp.outboundAdapter(t)` flows) and
+  `spring-integration-kafka.yml` (every `Kafka.messageDrivenChannelAdapter` and
+  `inboundChannelAdapter` overload by descriptor, `Kafka.outboundChannelAdapter` sinks). A
+  destination goes through the field ladder — a literal, a `@Value` parameter or field, a
+  properties getter's `${…}` expression — and a varargs array is one row per element. What a
+  registration writes is the **channel edge as data**: `channel_bindings(channel, role, symbol,
+  protocol, direction, destination, catalog_id, resolution)`, a temp table with `fed_by` rows
+  from the adapters and flows, `read_by` rows from `spring-integration.yml`'s channel index
+  (placeholders resolved first), and `sends_to` for a handler's output channel; a join pass
+  (`resolve/channel_bindings.py`) mints one inbound row per feeder and reader — the wire, the
+  handler, the constructing method — and `config_join.gaps` asks its question only for a
+  channel nothing feeds. Bean identity is a shared fold, `resolve/beans.py` over
+  `catalogs/bean-models/spring.yml` (`@Bean` names, `@Qualifier`, the channel interfaces):
+  a channel parameter resolves by qualifier or name, never by type (Spring auto-registers
+  `errorChannel`/`nullChannel`); a container by qualifier, unique type, then name — Spring's
+  own order (CP-27 row 15). The Java DSL flow's members are a step model,
+  `catalogs/step-models/spring-integration.yml` — all 34 of `BaseIntegrationFlowDefinition`'s
+  (CP-27 row 2) classified pass-through, channel link, handler, discard or divert — merged
+  into each broker catalog by `step_model:`. The probe fixture's `amqpInputChannel` question
+  became the row `(inbound, bean.orders.queue, handleOrder, ordersInboundAdapter)`; every
+  golden stayed byte-identical, and the one other pin that moved is the `skipped_catalogs`
+  order (Changed, below). Boundaries stated on the catalogs and in COVERAGE:
+  `IntegrationFlow.from(<adapter bean>)`, the lambda flow form's implicit input channel,
+  `from(Supplier)`, two-hop containers, `Pattern`/partition subscriptions,
+  `configureContainer(c -> c.addQueueNames(…))`, a link set in a different method, XML.
+
+- **The `fluent` engine speaks registrations, not only requests** (spec §2, §4, §5; D02
+  `fluent`). Every word is optional and no request catalog spells one, so the shipped
+  fluent catalogs' goldens are byte-identical (eight shipped before this branch): a `{owner, method: <init>}` root that is its
+  own terminal; root and step `descriptor:` matching on parameter types where a name has
+  overloads; per-root `direction:`; the captures `channel_link` (the channel a registration
+  feeds), `channel_source` (the channel a flow consumes) and `handler` (a lambda body's
+  symbol, `none` for a discard), each reading `argN` or `{bean_via: argN}` — the argument as a
+  bean, resolved through the fold and, for a container, its own chain folded in one hop;
+  `beans:` roots reachable only that way; `method_annotation: {annotation, arg, into}`;
+  sticky `poisons:` (a `divert` means the message may leave the flow); `compose:` for a
+  two-half address; `undeclared_steps: {owner, poisons}`; and the continuation —
+  `via_argument_of {owner, method}, continue: true` on a root or step, `continue: true` on a
+  terminal's `terminal_via_argument` — so a source spec handed to `IntegrationFlow.from(…)`
+  keeps walking along the flow to its `handle(…)`. A void call on one value folds into its
+  chain (setters); only a value-producing call forks. Inbound fluent rows carry `handler`.
+
+- **Spring Cloud Gateway routes declared in configuration derive** (`gateway-properties-routes`;
+  `spring-cloud-gateway-properties.yml`, a `config_join` catalog on a new general address form,
+  `indexed:` — items under a list prefix, each with fields). `spring.cloud.gateway.server.webflux.routes[N]`
+  (the 5.0.0 prefix, CP-29 row 1; the pre-4.2 one binds nowhere in that jar, row 2) with each
+  `predicates[M]` in the shortcut grammar (`Path=/a/**,/b/**`, split on the first `=`,
+  tokenised on `,`, row 3) or the map form (`name: Path`, `args.patterns`): `Path` one inbound
+  row per pattern (`/**` when absent), `Method` the verbs (`method` NULL when absent, the DSL
+  catalog's rendering), `Header`/`Query`/`Cookie` request requirements reaching
+  `endpoint_metadata`, nine pass-throughs, `uri` the outbound row with the URI verbatim as
+  `path` — exactly what the DSL pair publishes. Gathering predicates collect every `args`
+  value whatever its key (`ShortcutType.normalize` tests none, row 7); a route differing
+  between environments is one `environment_divergence` question and no row; two routes on one
+  address keep the intersection of their requirements. Fixture: `orders-gateway`'s new
+  `application.yml`, two routes. Stated: `filters` unread (`OI-111`), the fifteenth predicate
+  `Version` unknown, the `Path` tail flag found by value (`OI-113`).
+
+- **A Spring router route declared under a media guard alone derives its row**
+  (`dsl-media-route`; `spring-webflux-router.yml`, `spring-mvc-router.yml`). `accept(APPLICATION_JSON) { … }`
+  / `contentType(…) { … }` on `RouterFunctionDsl`, `CoRouterFunctionDsl` and the servlet DSL
+  (CP-29 row 10) are verb rules with `verb: null`, `media_arg`/`fills` and `handler_arg`: one
+  row, `method` NULL, `/**` (or the enclosing nest's `/ktmvc/**`), `produces`/`consumes` set,
+  the lambda body as handler — where they derived one `unresolved` row. No `all_methods` on
+  the router catalogs (spec §0b A1: `resources(…)` serves GET/HEAD/OPTIONS only). The
+  combinator refuses a verb rule on a name a `media` rule also reads unless it declares an
+  `arity`, and a call no verb overload accepts falls to the media rule, so the vararg
+  `accept(JSON)` factory still reads as media beside its twin.
+
+- **Three probes** (`scripts/probes/`): CP-27, the Spring Integration wiring surface of
+  spring-integration-core/-kafka/-amqp 6.2.4, spring-rabbit/spring-kafka 3.1.4 and
+  spring-context/-beans 6.1.6 (seventeen rows: `IntegrationFlow.from`'s overloads, the 34 flow
+  members and what each divert constructs, every adapter factory and setter by descriptor,
+  `@Bean`/`@Qualifier`, `determineAutowireCandidate`, the fixture's own compiled owners);
+  CP-28, spring-cloud-gcp-pubsub 5.1.2's adapter, handler and their setters; CP-29,
+  spring-cloud-gateway-server-webflux 5.0.0's property-route binding, the shortcut grammar,
+  the fifteen predicate factories and their field orders, `Method`'s identity comparison, and
+  spring-web 6.1.6's `HttpMethod.values()` (recorded, not used). Fixture shapes:
+  `spring-integration-probe`'s `Shape4PubSub`, `Shape5Flows` and a variance arm of AMQP flows
+  exercising every ladder rung on a varargs element; `orders-service`'s Kotlin routers gained
+  the media-guarded route.
+
+### Changed
+
+- **`spring-integration.yml` runs FIRST in the engine loop.** A `config_join` catalog whose
+  whole effect is the `read_by` end of the channel edge (an annotation-valued binding, no
+  `key`, no media block) has nothing to order after the observing engines and one thing to
+  order before them: the channel names the bean fold's name rung reads. Order-dependent by
+  construction and pinned end to end; `metadata.json`'s `skipped_catalogs` list order moves
+  on any module where that catalog is skipped. A channels catalog that also declares a `key`
+  keeps the style's last turn — a stated boundary, no shipped instance.
+
+- **The field ladder's `@Value`-parameter rung answers in `fluent`, and a varargs array's
+  elements each take the ladder.** Observable by every fluent catalog, in the ladder's own
+  direction: `webClient.get().uri(url)` with `url` the method's own `@Value("${svc.url}")`
+  parameter now reads the expression where it read `unresolved` (pinned on the shipped
+  `spring-webclient` catalog). No golden moved — no fixture exercised either.
+
+- **The `channel_destination` question is asked only for a channel nothing feeds**; its
+  `protocol` column stays empty on those, as before. **`config_join.gaps` files
+  `environment_divergence`** for an `indexed:` item whose keys disagree between environments.
+  **D00 carries no fact change**: every input this work reads was already published.
+
+### Added
+
+- **No version bump with this entry — the standing gate still holds** (Spring Boot
   end-to-end before any bump). The items below close six register ids and add one; each is
   in the register's ```closed block with the test that pins it, and the CI run id is filled
   in once the PR's pipeline is green.

@@ -417,6 +417,85 @@ estate that is one new file in `shape-models/` rather than eighty-four edited bl
 **It is not by itself a two-file change**: choosing between two models per module is a
 selection rule that does not exist, and nothing here pretends otherwise.
 
+## 1c. `bean_model` — the dependency-injection vocabulary, declared once
+
+A second kind of knowledge that is not a framework boundary and not a payload type: **how
+the container names a bean and how a parameter asks for one** (spec 2026-09-21 §3a). Which
+annotation declares a factory method, which of its attributes name the bean, which
+annotation on a parameter names the one it wants, and which erased types are CHANNEL
+references the container never resolves by type. `resolve/beans.py` reads these as data and
+spells none of them, for the reason the shape models exist: a second container — a .NET DI
+registration, Micronaut's `@Factory`/`@Named` — is a second file in `catalogs/bean-models/`,
+not a second fold.
+
+```yaml
+bean_model: spring
+```
+
+names a file in `catalogs/bean-models/` holding exactly:
+
+```yaml
+id: spring
+declaring_annotation: org.springframework.context.annotation.Bean
+name_attrs: [name, value]                    # either present names the bean; else the method name
+qualifier_annotation: org.springframework.beans.factory.annotation.Qualifier
+channel_types:                               # exact membership — the channel INTERFACES
+  - org.springframework.messaging.MessageChannel
+  - org.springframework.messaging.SubscribableChannel
+  - org.springframework.messaging.PollableChannel
+```
+
+`bean_of(reference)` answers with the `@Bean` method that built the referenced value, or
+`Unresolved(reason)`. The rungs depend on what is referenced. A **channel** reference (a
+parameter whose erased type is in `channel_types`) resolves by `@Qualifier`, else by the
+parameter's own NAME — when it is a declared bean's name or a channel name the channel index
+knows (the container auto-creates a channel under any referenced name) — and never by type:
+Spring Integration auto-registers `errorChannel` and `nullChannel`, both of every channel
+interface, so the module's single `@Bean MessageChannel` is never the container's unique
+candidate. Any **other** reference resolves by `@Qualifier`, else exactly one declared bean of
+its erased type, else its name — the container's own candidate order, cited on the model
+(CP-27 row 15). Two candidates on any rung, or none, is `Unresolved`, never a guess; a
+parameter compiled without names skips the name rung. The list is the INTERFACES the
+framework's beans implement, with exact membership: a parameter declared as a concrete
+channel class (`DirectChannel`) has no framework bean beside the module's own and IS unique
+by type. The fold runs once per resolve through `workspace.once`, keyed on the model's
+values, so two catalogs naming one model share it.
+
+**A bean model is not a catalog**, for §1b's reasons and with §1b's mechanics: it declares
+no `style`, no `matches` and no boundary; a catalog naming an id no file carries is refused
+by file; `api._catalog_hash` walks the directory so an edit changes the analysis identity.
+The `fluent` engine's `bean_via` (§2) is its one consumer today; a catalog spelling
+`bean_via` with no `bean_model` is refused at load. The field ladder's missing bean rung —
+the field-held `Publisher`/`WebClient`/`KafkaTemplate` boundaries in COVERAGE — is the named
+follow-up (`OI-106`).
+
+## 1d. `step_model` — a builder's members, classified once
+
+The third: **the members of one builder type, classified**, where several catalogs walk the
+same builder. Spring Integration's Java DSL flow definition has 34 public members (CP-27 row
+2) and the Kafka, AMQP and Pub/Sub catalogs each walk a flow through them; three copies
+would be `A-C3` with a different symbol.
+
+```yaml
+step_model: spring-integration
+```
+
+names a file in `catalogs/step-models/` holding an `id`, a `steps:` list in the `fluent`
+style's own step grammar (every entry with an `owner`, and `descriptor:` where a name has
+overloads) and, optionally, one `undeclared_steps:` block. **The loader MERGES them into the
+catalog's `matches`** — the UNION, the model's steps appended after the catalog's own (a broker
+catalog declares the steps on its own specs, `topic`, `exchangeName`, beside the shared
+table) — and there is no `Catalog.step_model` field: the engine reads one step table and
+nothing else would read the name. Refused by file: an id no model carries; a `(owner, method, descriptor)` declared on
+both sides; a catalog declaring `undeclared_steps` beside a model that has one. The shipped
+model classifies every member as a pass-through (captures nothing), a channel link
+(`channel(String)` → `channel_link`), a handler (`handle(lambda)` → `handler`, by
+descriptor — the lambda sits at slot 0 or 1), a discard (`nullChannel` → `handler: none`)
+or a divert (`route`, `gateway`, `scatterGather`, … → `poisons: [handler]`, because the
+member constructs a router or fan-out and the message may leave the linear chain), and its
+`undeclared_steps` makes any member it does not name a divert. `get()` is not a step: every
+catalog naming the model declares it a terminal.
+
 ---
 
 ## 2. The styles
@@ -1659,6 +1738,161 @@ could not be read" are different facts:
   they are left out of the fold rather than poisoned into a value their readers cannot
   interpret.
 
+**A chain may be a REGISTRATION rather than a request** (spec 2026-09-21 §2, §4, §5; the
+Spring Integration adapters and flows, `spring-integration-pubsub.yml`,
+`spring-integration-amqp.yml`, `spring-integration-kafka.yml`). A value constructed at a
+root, configured along its receiver chain, its destination captured from arguments, and its
+consumer attached by further calls is the same walk a request builder is — so the words
+below extend the style rather than add an engine. Every one is optional; no request catalog
+spells one, and the shipped request catalogs' goldens are byte-identical.
+
+```yaml
+style: fluent
+protocol: amqp
+direction: inbound
+bean_model: spring                 # §1c — what `bean_via` resolves through
+step_model: spring-integration     # §1d — the flow definition's members, merged into `steps`
+matches:
+  roots:
+    - { owner: …AmqpInboundChannelAdapter, method: <init>, descriptor: "(…MessageListenerContainer;)V",
+        captures: { channel: { bean_via: arg0 } } }                        # the container BEAN's own chain supplies the queues
+    - { owner: …AmqpOutboundEndpoint, method: <init>, descriptor: "(…AmqpTemplate;)V",
+        captures: {}, direction: outbound,
+        compose: { channel: [exchange, routing_key], join: "/" },
+        method_annotation: { annotation: …ServiceActivator, arg: inputChannel, into: channel_link } }
+    - { owner: …Amqp, method: inboundAdapter, descriptor: "(…ConnectionFactory;[Ljava/lang/String;)…",
+        captures: { channel: arg1 },
+        via_argument_of: { owner: …IntegrationFlow, method: from }, continue: true }   # the walk continues along the flow
+    - { owner: …IntegrationFlow, method: from, descriptor: "(Ljava/lang/String;)…",
+        captures: { channel_source: arg0 } }                                # a flow sourced from a channel
+    - { owner: …Amqp, method: outboundAdapter, …, direction: outbound, compose: { … },
+        via_argument_of: { owner: […FlowDefinition, …], method: handle }, continue: true }   # a sink: its chain continues into `handle(spec)`
+  beans:                                                                    # roots reachable only through `bean_via`
+    - { owner: …SimpleMessageListenerContainer, method: <init>, captures: {} }
+  steps:
+    - { method: setQueueNames, owner: […], captures: { channel: arg0 } }
+    - { method: setOutputChannelName, owner: …AmqpInboundChannelAdapter, captures: { channel_link: arg0 } }
+    - { method: setOutputChannel,     owner: …AmqpInboundChannelAdapter, captures: { channel_link: { bean_via: arg0 } } }
+    - { method: setExchangeName, owner: […], captures: { exchange: arg0 } }
+    - { method: setExchangeNameExpression, owner: […], poisons: [exchange] }
+  terminal: ["<init>", get]
+  field_sources: { … }                                                      # §2j, the same block a request catalog carries
+```
+
+- **A constructor root is `{owner, method: <init>}`** — the existing spelling, no sugar —
+  and names `<init>` in `terminal:` to be its own terminal: the constructed value IS the
+  registration, and a `<init>` root without it derives nothing. `arg0…` are the constructor's
+  arguments. **A VOID call on one value folds into its chain; only a value-producing call
+  forks.** The walk used to read sibling rows sharing a receiver as a fork — right for a
+  builder whose every call returns a new value, wrong for a bean configured by setters, where
+  `compose:` could never see both halves. Proven inert for every shipped request catalog (no
+  shipped chain has void siblings with differing captures). Consequence, stated: a
+  value-returning call on the bean BEFORE its last setter forks the chain and the later
+  setters are lost.
+- **`descriptor:` on a root or a step** — compared on the PARAMETER portion alone
+  (`_same_overload`; F2 §4.1's rule: the return type moves between releases and differs
+  between a base type and its subclass) — tells overloads of one name apart where the
+  destination sits in a different slot: the ten `Kafka.messageDrivenChannelAdapter` forms,
+  `handle(GenericHandler)` at slot 0 beside `handle(Class, GenericHandler)` at slot 1. Two
+  same-owner steps of one name must carry distinct descriptors, refused at load otherwise;
+  a site with no descriptor matches no descriptor-declaring entry.
+- **`direction:` on a root** overrides the catalog's for that registration — the outbound
+  handler bean in an inbound catalog. Checked against D00's closed set.
+- **Three captures name a CHANNEL rather than an address**, each reading `argN` (a string
+  literal is the name) or `{bean_via: argN}` (the argument is a channel bean; its name):
+  **`channel_link`** — the channel this registration FEEDS (`setOutputChannelName("ch")`,
+  `.channel("ch")` on a flow); **`channel_source`** — the channel a flow CONSUMES
+  (`IntegrationFlow.from("ch")`); and **`handler`** — the consumer, reading `argN` (a lambda
+  argument's body symbol, joined through `method_symbols`; anything else — a bean, a
+  bean-and-method pair — is NULL, resolved) or the literal `none` (a discard: NULL is the
+  TRUE answer). **The handler never moves the row's resolution.** An inbound fluent row
+  carries `handler`; an outbound one never does.
+- **`{bean_via: argN}` on ANY capture field** resolves the argument as a bean through §1c:
+  an injected parameter of the method (its `@Qualifier` and name off `caller_parameters`) or
+  a direct call to a declaring method of the same class. On a channel-naming field the
+  answer is the bean's NAME. On `channel` (or any address field) it is the bean's own
+  CONSTRUCTION CHAIN, folded: the bean's declaring method's sites are walked from the
+  matching **`beans:`** root — a list validated exactly like `roots` (and refusing
+  `direction`, `compose`, `method_annotation`, `via_argument_of`, which nothing reads there)
+  whose entries never start a chain of their own — in the bean method's OWN context, and
+  the field is read there as `_derive` would read it (the ladder, the array read, the
+  `channel_via` ladder against THAT method's sites), because value ids are per method and a
+  cross-method `source` read is a fabrication path. Every chain end must agree or the field
+  is `unresolved`; ONE hop — a `bean_via` met inside the collecting walk is a poison there.
+  An unresolved bean reference is the reader's own failure, overwritable by a later literal
+  (Spring's setters are last-wins), never a catalog poison. The reason travels:
+  `bean_none`, `bean_ambiguous`, `bean_second_hop`, `bean_across_bodies` (a `bean_via` inside
+  a lambda body — a parameter index there is into the LAMBDA's signature), `bean_no_chain`,
+  `bean_field_uncaptured`, `bean_chains_disagree`. A catalog spelling `bean_via` with no
+  `bean_model` is refused at load; the table is built once per run only then.
+- **`method_annotation: {annotation, arg, into}` on a root** — the CONSTRUCTING method's
+  own annotation supplies a capture: `@ServiceActivator(inputChannel = "ch")` on the `@Bean`
+  method that builds a `PubSubMessageHandler` → `channel_link: ch`, the channel that
+  outbound bean consumes. Read off `annotation_index` by the full caller symbol; a string
+  attribute becomes a literal capture, an absent one captures nothing.
+- **`poisons: [field, …]` on a step** marks each field unreadable from that step to the
+  chain's end — a SpEL `setTopicExpression(e)` is not a literal; a flow's `route(…)` means
+  the message may leave the linear chain, so a `handle` after it is not certainly the
+  consumer. **Sticky**: a later capture does not lift it (`_POISONED` is refused by identity
+  in `_fold`), which is the no-false-positive direction and, for a setter pair, a stated miss
+  (`setTopicExpression(e); setTopic("t")` reads `unresolved`, `OI-120`). Refused when naming
+  a field no root, step or `compose` of the catalog captures. On a ROOT it is silently
+  dropped — logged, no catalog writes one.
+- **`compose: {field: [halves], join}` on a root** builds one field from two captured halves
+  in declared order — `exchange/routingKey`, the form `spring-rabbit-template.yml` publishes.
+  Each half goes through the field ladder; a half never captured or unreadable leaves the
+  whole field `unresolved` (the framework fills an unset AMQP half from the template's own
+  defaults, which the walk does not read). The composed field counts in the url/channel
+  exclusivity check.
+- **`undeclared_steps: {owner, poisons}` on the catalog** (or on the step model, never
+  both) — a site on a listed owner that matches no declared step and is not a terminal
+  applies the poisons: a flow-definition member the model does not classify is a divert.
+  Elsewhere the unmatched-passes-through default is unchanged.
+- **The continuation** — `via_argument_of: {owner, method}, continue: true` on a root or a
+  step, or `continue: true` beside `terminal_via_argument: {owner, method}` on a terminal
+  entry (a bare `terminal_via_argument: true` with `continue` is refused: it would continue
+  into any consumer, a log statement included) — is `terminal_via_argument`'s join that does
+  not end the chain: a source spec built by one chain and handed to `IntegrationFlow.from(spec)`
+  keeps walking along `from(…)`'s own result chain with the same captures, and so does a
+  sink spec handed to `.handle(spec)`. Tested at every row the walk reaches; the consumer's
+  pre-root prefix folds first (roots included, so `from("ch")` before `handle(sink)` is seen),
+  the handed-on captures on top (prefix poisons stay), then the consumer's own step; **the
+  consumer IS the terminal** — no `get()` need be declared for a continued chain, and the
+  handed-on chain itself derives nothing. Spec statements before `from(spec)` that are not
+  chained onto the spec are not folded, a stated boundary.
+- **`channel_via` accepts `method: <init>` with a `descriptor`** beside `arity`, keyed on the
+  constructed value's `receiver`: `new ConsumerProperties("t")` at a root's slot, read off the
+  `([Ljava/lang/String;)V` constructor's first argument. An `array` argument walks its
+  elements through the same forms, one tuple per element, an element no form reaches its own
+  `unresolved` — `setQueues(new Queue("a"), new Queue("b"))` is two queues, never one failure
+  hiding a readable sibling.
+- **Destinations go through the field ladder, one row per varargs element** (§2j; spec §3c).
+  Two changes here reach every fluent catalog, both in the ladder's own direction: a
+  `parameter` capture carries its site's own caller, so the `@Value`-parameter rung answers in
+  this engine (`webClient.get().uri(url)` with `url` the method's own `@Value("${svc.url}")`
+  parameter reads the expression — pinned on the shipped `spring-webclient` catalog; a lambda
+  body's parameter is never read against the enclosing method), and an `array` capture's
+  elements each take the ladder (`Amqp.inboundAdapter(cf, this.valueQueue)` derives its
+  `${…}` expression).
+
+**What a registration chain WRITES** ([D01](D01-graph-schema.md) §3, `channel_bindings`).
+An inbound chain that captured a resolved `channel_link` BEFORE any handler writes a `fed_by`
+edge — the channel, the constructing method, this catalog's protocol, the destination, the
+row's own resolution — and NO row of its own: the join pass mints one row per reader of that
+channel and one with `handler` NULL for a feeder nobody reads, so a linked adapter is never
+counted twice. A `channel_link` captured AFTER a handler (`handle(h).channel("y")`) is that
+handler's OUTPUT channel: the row derives with `h` and a `sends_to` edge is written. A
+handler captured after a readable link (`.channel("x").handle(h)`) is a READER of `x`:
+`fed_by(x)` and `read_by(x, h)`, no row, the join minting the row beside any annotated reader
+of `x`. A `channel_source` chain: a wire captured → the row becomes OUTBOUND (`caller` the
+flow method, `path` the wire) and the source is fed outbound; a handler and no wire →
+`read_by(source, handler)`, no row; neither → nothing (a bridge). An unresolved, poisoned
+or unnameable link → the row with `handler` NULL and no edge (a channel we cannot name is
+not a channel we can bind). An outbound chain always writes its row, and its link as an
+outbound `fed_by` so no question is asked for the channel it consumes. Edges accumulate
+across callers and insert once per run; the channel index's `read_by` names are what
+`bean_via`'s name rung reads, which is why the channels catalog runs first (§3).
+
 ### `combinator`
 
 > **A call through a compiler-emitted `$default` bridge reaches every rule as the function it
@@ -1868,6 +2102,23 @@ framework:**
   outside a prefix, `request_requirement` on anything but a prefix or a `pass_through`
   continuation, a `verb_values` holding anything but `getters`, and a getter key that is not
   one owner and one member are each refused at load.
+- **A verb rule may set a media column instead of a verb — the media-guarded route**
+  (spec 2026-09-21 §7a; `dsl-media-route`). `accept(MediaType, Function1)` /
+  `contentType(MediaType, Function1)` on the Spring Kotlin router DSLs declare a route under a
+  media guard alone — no verb, no path — and are `verbs` rules `{owner, method, verb: null,
+  arity: 2, media_arg: 0, fills: produces | consumes, handler_arg: 1}`: `media_arg` + `fills`
+  (both keys together, the position read as a `media` rule reads it) on a VERB rule as on a
+  prefix, and `verb: null` explicitly. One row, `method` NULL, path `/**` (or the enclosing
+  nest's), the media set, the handler named — exactly how `route(predicate, handler)` renders;
+  **no `all_methods`** on the router catalogs, because `resources(…)` is a verb-less row too
+  and serves GET/HEAD/OPTIONS only (CP-29 row 9 records `HttpMethod.values()` and why it is not
+  used). Two refusals and one dispatch rule, because the same NAME is also a `media` rule's
+  (the vararg factory `accept(MediaType…): RequestPredicate`, CP-29 row 10): a verb rule on a
+  name a `media` rule also reads MUST declare an `arity`, else the media rule is unreachable;
+  `fills` without `media_arg` (or the reverse) on a verb is refused; and a call on such a name
+  that no verb overload accepts falls to the media rule (`_falls_to_media`), so the arity-1
+  vararg still fills `produces` beside its arity-2 twin. `_carries_a_handler`'s unresolved row
+  stays for a media name WITHOUT a verb rule.
 - **A verb-less terminal and `all_methods`** (spec 2026-09-19 §4c). A `terminal: true` verb
   rule may declare neither `verb` nor `verb_arg`: it takes the scope's verb, and where none
   is in scope its RESOLVED route fans out through the catalog's top-level **`all_methods`**
@@ -2221,10 +2472,11 @@ merging and counting the same way.
 The declaration is not in the code at all. **The code carries a name — a bean's own
 method name — and configuration says what the name means** (§2d). A `config_join`
 catalog reads exactly one input, the `resolved_config` table [M04](M04-resolver.md)'s
-pass 2 produced, and does two jobs with it: `address_from_config` DERIVES endpoint rows
-from a key template, and `media_from_config` STAMPS declared media onto rows other
-engines already minted. Both blocks are optional and independent; a `config_join`
-catalog declaring neither is a broken file.
+pass 2 produced, and does three jobs with it: `address_from_config` DERIVES endpoint rows
+from a key template, `indexed` DERIVES them from a LIST of items under one prefix (below),
+and `media_from_config` STAMPS declared media onto rows other
+engines already minted. The blocks are optional and independent; a `config_join`
+catalog declaring none is a broken file.
 
 ```yaml
 style: config_join
@@ -2441,6 +2693,91 @@ agree, because it decides which rows EXIST rather than what a single-valued colu
 entries are taken in environment order, so a bean selected in production binds in
 production. An endpoint row says a boundary exists, never which profile it exists under.
 
+#### `indexed` — items under a list prefix, each with fields
+
+The third address form (spec 2026-09-21 §7b; `spring-cloud-gateway-properties.yml`,
+`gateway-properties-routes`). A framework whose declarations are a LIST in configuration —
+Spring Cloud Gateway's routes, `spring.cloud.gateway.server.webflux.routes[N]` — has no bean
+name and no annotation to ask configuration about; the item itself is the declaration, and
+its fields are the address. The config layer already flattens a list to `key[N].field`;
+this block reads exactly those keys.
+
+```yaml
+matches:
+  indexed:
+    prefix: spring.cloud.gateway.server.webflux.routes      # measured: GatewayProperties.PREFIX, CP-29 row 1
+    item:
+      predicates: { field: predicates, grammar: shortcut, positional: _genkey_ }
+      path:   { name: Path,   args: [patterns, matchTrailingSlash], gather: list_tail_flag }
+      method: { name: Method, args: [methods], gather: list }
+      requirements:
+        Header: { kind: header, args: [header, regexp] }
+        Query:  { kind: query,  args: [param, regexp, predicate] }
+        Cookie: { kind: cookie, args: [name, regexp] }
+      pass_through: [Host, After, Before, Between, RemoteAddr, Weight, XForwardedRemoteAddr, CloudFoundryRouteService, ReadBody]
+      peer: { field: uri, direction: outbound }
+```
+
+**`prefix` and `item` are required**; `item.predicates` is `{field, grammar, positional}` with
+`shortcut` the one grammar this engine reads — `Name=a,b`, the name before the FIRST `=`,
+the rest tokenised on `,`, each token bound positionally (`PredicateDefinition(String)`,
+CP-29 row 3) — and `positional` the key prefix the map form (`predicates[M].name` +
+`predicates[M].args.<field>`) may also spell for a positional argument. `path`, `method` and
+each `requirements` entry are `{name | kind, args: [<field>, …], gather?}`: `args` is the
+FIELD ORDER positional arguments bind into (the factory's `shortcutFieldOrder`), and `gather`
+is one of `list` (every argument into field 0 — `Method=GET,POST`) or `list_tail_flag`
+(every argument into field 0 except a trailing `true`/`false`, which is field 1 — `Path`'s
+`matchTrailingSlash`; needs two fields), absent meaning positional N is field N. A
+requirement's `kind` is one of the stash readers' four; `peer` is `{field, direction?}` with
+the direction checked against D00's set and defaulting to the catalog's; `pass_through` is a
+list of names that narrow WHO is served and nothing about the address. Anything else is
+refused by file.
+
+**Per item.** `Path` → one inbound row per pattern; no `Path` → `/**` (the DSL sibling's
+rule). `Method` → one row per verb, published exactly as written (`Method=get` matches
+nothing in the framework — `MethodRoutePredicateFactory` compares by identity, CP-29 row 9 —
+so no spelling is changed); no `Method` → `method` NULL, resolved (the DSL catalog's
+rendering; no fan-out). `Header`/`Query`/`Cookie` → request requirements written to the
+combinator's `route_requirements` stash against every inbound row of the item — `caller` and
+`handler` NULL, `required`, the regexp as written as the value (§2k) — and joined by the
+requirements pass. A pass-through contributes nothing. `peer` → one outbound row per item
+with the field's value VERBATIM as `path` and `peer` NULL (what the DSL sibling publishes);
+no such field → no target row. An unknown predicate name, or a shortcut with no `=` → the
+item's rows `unresolved` with whatever address they read. `id`, `order`, `metadata`,
+`enabled` and `filters[M]` are not read — `filters` rewrite the UPSTREAM path at runtime and
+the served path is the predicate's, a stated boundary (`OI-111`).
+
+**Gathering reads every argument, keyed or not.** The two gathering normalisers read
+`args.values()` and test no key (`ShortcutType.normalize`, CP-29 row 7): in the map form
+EVERY argument of a gathering predicate is collected whatever it is keyed —
+`args.pattern: /x/**` is one pattern, `args.patterns: [/a/**, /b/**]` two — positional
+`<positional>K` by K, then the remaining keys in flattened order. **A scalar is ONE value,
+never split on `,`**: `methods: PUT,PATCH` binds a verb the framework never matches, so
+`method` reads NULL and the inbound row `unresolved` (a phantom verb is the one thing not to
+publish); `patterns: /a/**,/b/**` is one verbatim pattern the framework parses and is
+published as written. **The tail flag is found BY VALUE**, not as the last value —
+`resolved_config` carries no declaration order (`OI-113`): the one `true`/`false` literal
+among `Path`'s gathered values is the flag wherever it sits; two such literals, one under a
+gather with no flag (`Method=true`), or a gather left EMPTY once the flag is removed
+(`Path=true`) is unread — the inbound rows `unresolved`, `path` NULL where no pattern was
+read, the target row untouched.
+
+**Environments, three ways, per key.** Every key of an item is settled across the
+environments `resolved_config` holds: one agreed value → the value; two or more distinct
+values → the ITEM is diverged — no rows, and one `environment_divergence` question filed
+from `gaps` (key `…routes[N]`, candidates `{key, values}` per diverging key: a route that
+differs between environments is one question, not a row); a key resolved in NO environment
+→ that field is unread, the item's other rows are minted — `uri` unread → a `path` NULL
+`unresolved` target row, a predicate unread → the inbound rows `unresolved`. Two items
+collapsing to one address keep the INTERSECTION of their requirements (spec 2026-09-19
+§4d's rule, restated here rather than imported from the combinator), and any unresolved
+alternative makes the kept row `unresolved`; a row whose `path` is NULL carries no
+requirements, because the stash joins on `path`. **Row shape**: `evidence: compiler`,
+`caller`/`handler` NULL on every row, `peer` NULL; the item's inbound rows and its target
+row share the catalog's `protocol`, because a catalog carries one `style` and this block
+carries `direction` per rule (spec §0b A6). A `config_join` catalog declaring `indexed`
+derives rows (`derives_rows`) and is ordered with the deriving catalogs.
+
 **Ordering: `config_join` runs LAST**, after every call-site and annotation style,
 whatever its own declared direction (§3) — it was the first style to need that, and
 `schema_operations` later joined it. A style
@@ -2450,7 +2787,15 @@ insert-if-absent guard, so a wire identity another catalog already recorded stay
 catalog's row. **Within the style, every catalog declaring `address_from_config` runs
 before every catalog that only stamps**, for the same reason one level down — filename
 order must not decide whether a stamp arrives before the rows it was meant to enrich.
-Direction and filename remain the tiebreaks after that rank.
+Direction and filename remain the tiebreaks after that rank. **One catalog shape runs
+FIRST in the whole loop instead** (spec 2026-09-21 §3b): a `config_join` file whose whole
+effect on the loop is the `read_by` end of the channel edge — an annotation-valued binding,
+no `key` (so it mints no row), no media block (so it stamps nothing) — has nothing to
+order after the observing engines and one thing to order before them: the channel names
+the bean fold's name rung reads, in the same loop (`writes_only_the_channel_edge`, read by
+`resolve/endpoints.py`). `spring-integration.yml` is exactly this shape. A channels catalog
+that ALSO declares a `key` keeps the style's last turn — its rows must — and its names reach
+no engine that ran before it: a stated boundary with no shipped instance.
 
 **Every join this style makes is RECORDED with its full trail, and verified later.** The
 trail is `resolved_config` (the key, its value, the file that won it, per environment)
@@ -3686,8 +4031,10 @@ names a channel, not a topic — that is `mp.messaging.incoming.orders.topic`. M
 
 The pattern is constant: **the code carries a name, and configuration says what the name
 means.** Configuration resolution is already a first-class pass, so what is missing is only
-the vocabulary for the derivation. Two vocabularies read `resolved_config` this way:
-`address_from_config`, below, and `media_from_config` (end of this section), which stamps a
+the vocabulary for the derivation. Three vocabularies read `resolved_config` this way:
+`address_from_config`, below; `indexed` (§2, `config_join`), where the code carries NO name
+and the configuration item is itself the declaration — Spring Cloud Gateway's property
+routes; and `media_from_config` (end of this section), which stamps a
 module's declared media types from the same source rather than an address. A catalog
 declares the first:
 
@@ -4356,7 +4703,14 @@ rather than an engine, and its position is stated where it runs: after the engin
 and before the format ladder (§2's `protocol_hint`).
 
 **The order is a property of the engine style, not of the catalog file.** A catalog cannot
-request a position.
+request a position. **One exception, decided by what a catalog DECLARES rather than by a
+request** (spec 2026-09-21 §3b): a `config_join` catalog that only writes the `read_by` end
+of the channel edge — annotation-valued binding, no `key`, no media block; today
+`spring-integration.yml` — runs before every engine, because the `fluent` engine's bean fold
+reads those channel names in the same loop (§2, `config_join`'s ordering paragraph).
+Order-dependent by construction, pinned end to end
+(`test_the_channel_index_is_written_before_the_engine_that_resolves_a_name_through_it`);
+`metadata.json`'s `skipped_catalogs` list order moves with it.
 
 ---
 
