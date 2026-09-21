@@ -1,0 +1,39 @@
+id: spring
+displayName: The Spring dependency-injection model (@Bean, @Qualifier, the channel type)
+
+# WHAT THIS FILE IS, and why it is not a catalog.
+#
+# D02 §1c. The dependency-injection vocabulary a catalog's `bean_via` resolves
+# through (spec 2026-09-21 §3a): which annotation declares a factory method,
+# which of its attributes name the bean, which annotation on a parameter names
+# the bean it wants. `resolve/beans.py` reads these as data and spells none of
+# them — the resolve layer names no framework, for the reason the shape models
+# exist (D02 §1b): a second container (a .NET DI registration, Micronaut's
+# `@Factory`/`@Named`) is a second file in this directory, not a second fold.
+#
+# This file is NOT a catalog and lives outside the `*.yml` glob that loads
+# them: it declares no `style`, no `matches` and no boundary. A catalog names it
+# with `bean_model: spring` and the loader hands the mapping through as
+# `Catalog.bean_model`; a catalog naming an id no file here carries is refused
+# by file, exactly as an unknown `shape_model` is.
+
+# `@Bean` declares `value()` and `name()`, both `String[]` and aliases of each
+# other (spring-context 6.1.6, `@AliasFor` — spec §0a F8; CP-27 row (bean
+# attributes)). Either present names the bean: the first element of the array
+# the scanner recorded. Neither present, the bean is named after the method.
+declaring_annotation: org.springframework.context.annotation.Bean
+name_attrs: [name, value]
+
+# `@Qualifier` declares `value()` (spring-beans 6.1.6 — F8; CP-27 row (bean
+# attributes)). On an injected parameter it names the bean outright and is the
+# first rung for every reference kind.
+qualifier_annotation: org.springframework.beans.factory.annotation.Qualifier
+
+# A parameter of one of these erased types is a CHANNEL reference and is never
+# resolved by type (spec §0b A2): Spring Integration auto-registers
+# `errorChannel` and `nullChannel`, both `MessageChannel`s, so the module's
+# single `@Bean MessageChannel` is never Spring's unique candidate — Spring
+# falls back to the parameter NAME, and so does the fold. Exact erased types,
+# not subtypes: the parameter's declared type is what the container matches
+# on, and every fixture and probe (CP-25, CP-27) declares the interface.
+channel_types: [org.springframework.messaging.MessageChannel]
