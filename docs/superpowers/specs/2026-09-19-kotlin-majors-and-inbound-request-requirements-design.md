@@ -405,7 +405,7 @@ NULL on every outbound row (an outbound entry is something *sent*). `schema.sql`
 column; the table is rebuilt every resolve, so nothing migrates. Inbound rows: `direction =
 inbound`; `caller` = handler symbol; `kind ∈ {header, query, cookie, param}` — `param` only
 for the two APIs that cannot tell query from form (Spring `@RequestParam`, Servlet
-`getParameter`), said on the catalog entry; `value` = a fixed demanded value or NULL *(amended 2026-09-20 at the whole-branch review: the framework's OWN spelling of the demanded value — a literal for Ktor's `header(name, value)` and Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's `header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex (`Pattern.asMatchPredicate` in `HeaderRoutePredicateFactory`, `String.matches` in the query and cookie factories — spring-cloud-gateway-server-webflux 5.0.0, `javap`); M14)*. A read
+`getParameter`), said on the catalog entry; `value` = a fixed demanded value or NULL *(amended 2026-09-20 at the whole-branch review: the framework's OWN spelling of the demanded value — a literal for Ktor's `header(name, value)` and Spring's `params = "view=summary"`, and the regex AS WRITTEN for Spring Cloud Gateway's `header("X-Request-Id", "\\d+")`, which the framework matches as a whole-string regex (`Pattern.asMatchPredicate` in `HeaderRoutePredicateFactory`, `String.matches` in the query and cookie factories — spring-cloud-gateway-server-webflux 5.0.0, CP-26 row 6); M14)*. A read
 whose name is not a string literal/constant produces `name` NULL, `resolution = unresolved`
 — "this handler reads a header it does not name" is a different statement from "reads
 none", the reasoning the outbound table was built on.
@@ -525,7 +525,7 @@ Catalogs and their entries (attributes measured 2026-09-19, F8/F9):
   — because that is the framework's own spelling of the demand (`HeaderRoutePredicateFactory`
   matches it as a whole-string regex, `Pattern.compile(regex).asMatchPredicate()`; the query
   and cookie factories use `String.matches` — spring-cloud-gateway-server-webflux 5.0.0,
-  `javap`); it is not a literal a client must send, and a consumer
+  CP-26 row 6); it is not a literal a client must send, and a consumer
   comparing values for equality (M06's request test) does so only where the spelling is a
   literal, M14.)* The properties side
   (`Header=X,regex`, `Query=x[,regex]`, `Cookie=name,regex`) is **not** in scope: property-
@@ -634,7 +634,7 @@ table naming the jar-reported version (`tests/architecture/test_probe_provenance
 | **CP-23** kotlinc 2.2.0 call-site shapes — a Maven module beside `orders-ktor` compiled twice, default and `-Xlambdas=class` | a `$default` call's mask literal and bit meaning (F3), receiver vs static sibling, a two-mask (33-parameter) function; a lambda class's superclass (`Lambda`/`SuspendLambda`), its `invoke`/`invokeSuspend` methods and synthetic flags, constructor-captured fields; `@kotlin.Metadata`'s `declaresDefaultValue` flag on a defaulted parameter | §3a, §3b, §3c |
 | **CP-24** Ktor 3.0.3 routing surface | the selector signatures (F4), `HttpMethod.DefaultMethods`, the `HttpMethod$Companion.get*` and `ContentType$Application.get*` getters (F5), `ParametersKt.getOrFail` and what it throws, the `StringValues.get` owners of the three containers; `HttpMethodRouteSelector.evaluate` returning `Failure` on a method mismatch (A11 — bytecode, no server run) | §4b, §4c, §5d |
 | **CP-25** binder rules — spring-web 6.1.6, micronaut-http 4.7.6, RESTEasy Reactive, quarkus-reactive-routes, javalin 6.4.0, jakarta.servlet | F6's predicate; `HeadersRequestCondition` dropping `Accept`/`Content-Type` (A4); Micronaut's required-ness (nullability/`Optional`/default); JAX-RS and reactive-routes absent-parameter behaviour; Javalin `Validator.get()` throwing; `getParameter`/`getHeader` returning null. *(amended 2026-09-20 during implementation: shared by three sections — row 1 is Javalin `ApiBuilder`'s thread-local guard, the measured fact behind `follow_calls: all` (§4a); rows 2–12 are §5b's binder rules; rows 13–17 are `AbstractNameValueExpression`'s grammar (§5c), Javalin's `Context` read/set overloads by arity and `Validator.get()` throwing, and the Servlet API's `getParameter`/`getHeader` null-on-absent on Tomcat 10.1.50 and 9.0.121 (§5d), M10; row 18, added at the whole-branch review, is Micronaut's unwritten-name fallback — `AbstractArgumentBinder.doResolve` retrying `NameUtils.hyphenate`, the header binder's `capitalize` — behind `fallback_spelling`, M16)* | §4a, §5b, §5c, §5d |
-| **CP-26** predicates — spring-webflux 6.1.6, gateway 5.0.0 | `RequestPredicates.queryParam` overloads; `PredicateSpec`/`BooleanOpSpec` header/query/cookie overloads; the properties spellings | §5c |
+| **CP-26** predicates — spring-webflux 6.1.6, gateway 5.0.0 | `RequestPredicates.queryParam` overloads; `PredicateSpec`/`BooleanOpSpec` header/query/cookie overloads; the properties spellings; how the three factories match the regex (row 6) | §5a, §5c |
 
 ---
 

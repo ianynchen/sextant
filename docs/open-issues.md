@@ -1720,7 +1720,7 @@ the written name is the documented one.
 fallback as a second accepted spelling (a second row, or a column for it) — a schema question,
 D01 §3.
 
-### OI-105 — `optional` for a Kotlin default or nullable parameter assumes `kotlin-reflect` at runtime
+### OI-105 — `optional` for a Kotlin default parameter assumes `kotlin-reflect` at runtime
 **Minor · logged 2026-09-20, found at the whole-branch review (item 2, CP-25 row 3) ·
 `src/sextant/catalogs/spring-mvc.yml`, `spring-web.yml` (`request_params`),
 `src/sextant/application/resolve/request_requirements.py::_requirement`**

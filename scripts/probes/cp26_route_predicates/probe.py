@@ -7,7 +7,10 @@ makes the requirement `required`; Spring Cloud Gateway's `PredicateSpec` `header
 superclass (the three are INHERITED there, so a call after `and()`/`or()` carries the
 subclass as its owner and no override exists to declare separately); and the
 `Header=`/`Query=`/`Cookie=` properties spellings read off each `*RoutePredicateFactory`'s
-`shortcutFieldOrder` — recorded for `gateway-properties-routes`, which is out of §5c's scope.
+`shortcutFieldOrder` — recorded for `gateway-properties-routes`, which is out of §5c's scope;
+and how each of those three factories MATCHES the regex it is given (the `value` column
+carries the regex as written because the framework matches it whole-string — `Pattern.
+asMatchPredicate` in the header factory, `String.matches` in the query and cookie ones).
 
 Called by `run.sh`, which resolves the jars; this script downloads nothing. Like CP-16
 through CP-24 it reads each jar's own identity out of its own bytes before it measures
@@ -221,6 +224,47 @@ def q5_shortcut_field_orders(jar: Path) -> str:
     return _STEP.join(cells)
 
 
+# --- Q6: how the three factories match the regex (§5a/§5c, the `value` column) -----------
+
+
+def q6_regex_matchers(jar: Path) -> str:
+    """What each `*RoutePredicateFactory.apply` builds and how its predicate tests a
+    value against `regexp`: the header factory compiles the regex in `apply` and its
+    anonymous predicate's `test` calls `Pattern.asMatchPredicate`; the query and cookie
+    factories' predicates match in a `lambda$test$0` that calls `String.matches` — all
+    three whole-string matches, which is why the `value` column carries the regex as
+    written and a consumer compares it for equality only where the spelling is a literal."""
+    package = "org.springframework.cloud.gateway.handler.predicate"
+    cells = []
+    for factory in ("Header", "Query", "Cookie"):
+        outer = _javap("-p", "-c", f"{package}.{factory}RoutePredicateFactory", classpath=jar)
+        apply = _steps(
+            _method_body(outer, f"apply({package}.{factory}RoutePredicateFactory$Config)"),
+            keep=("Pattern.compile", '$1."<init>"'),
+        )
+        inner = _javap("-p", "-c", f"{package}.{factory}RoutePredicateFactory$1", classpath=jar)
+        test = _steps(
+            _method_body(
+                inner, "public boolean test(org.springframework.web.server.ServerWebExchange)"
+            ),
+            keep=(
+                "getHeaders",
+                "getQueryParams",
+                "getCookies",
+                "asMatchPredicate",
+                "String.matches",
+                "InvokeDynamic",
+            ),
+        )
+        cell = f"{factory}RoutePredicateFactory.apply: {_STEP.join(apply)}"
+        cell += f" ; $1.test: {_STEP.join(test)}"
+        if "lambda$test$0(" in inner:
+            matcher = _steps(_method_body(inner, "lambda$test$0("), keep=("matches", "getValue"))
+            cell += f" ; $1.lambda$test$0: {_STEP.join(matcher)}"
+        cells.append(cell)
+    return _STEP.join(cells)
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
     for spec in specs:
@@ -288,6 +332,12 @@ def main(specs: list[str]) -> int:
         "Header/Query/Cookie RoutePredicateFactory.shortcutFieldOrder — the properties spellings",
         gateway,
         q5_shortcut_field_orders(gateway.jar),
+    )
+    row(
+        "6",
+        "Header/Query/Cookie RoutePredicateFactory: what apply builds and how its predicate matches regexp — Pattern.asMatchPredicate or String.matches",
+        gateway,
+        q6_regex_matchers(gateway.jar),
     )
     return 0
 
