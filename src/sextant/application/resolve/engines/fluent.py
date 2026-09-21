@@ -159,10 +159,18 @@ _DIRECTION = "\x00direction"
 _COMPOSE = "\x00compose"
 # Two more (spec 2026-09-21 §5): the consumer a root's `via_argument_of …
 # continue: true` names, riding with the chain so its end — wherever the
-# value is handed on — can find that consumer (`_continuations`); and
-# whether the chain's `handler` was captured AFTER its `channel_link`, which
-# is what makes that handler a READER of the linked channel rather than the
-# wire's own consumer (`_derive`'s `read_by` edge).
+# value is handed on — can find that consumer (`_continuations`); and the
+# `channel_link` value the chain's `handler` was captured AFTER — present
+# exactly when a link step of ANY readability preceded the handler, holding
+# that link's value as it stood then — which is what makes that handler a
+# READER of the linked channel rather than the wire's (or the source's) own
+# consumer (`_derive`'s `read_by` edge). The VALUE, not a flag, and never
+# reset by a later link (residual fix, 2026-09-21): a link after the handler
+# overwrites `channel_link` but not what the handler read, so
+# `.channel("b").handle(h).channel("c")` keeps `b` here while `channel_link`
+# holds `c`. An unreadable value here (a poisoned spec form, a read failure)
+# says the handler reads a channel nobody can name — no edge, and never the
+# source or the wire in its place.
 _CONTINUE = "\x00continue"
 _READS_LINK = "\x00reads_link"
 # The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
@@ -868,18 +876,19 @@ def _fold_site(site: dict[str, Any], captures: dict[str, Any], context: _ChainCo
     folded = _step_captures(step, site)
     # Spec 2026-09-21 §5 and fix round 1 (finding 3): a link's meaning depends
     # on where it sits. A handler captured AFTER a link the chain holds READS
-    # the linked channel (the DSL subscribes the next endpoint to it,
-    # `_READS_LINK`); a link captured AFTER a handler is that handler's OUTPUT
-    # channel (`_LINK_SENDER` holds it), and a new link starts the reader
-    # question over.
+    # the linked channel (the DSL subscribes the next endpoint to it —
+    # `_READS_LINK` keeps the link's value, readable or not, because an
+    # unreadable link before the handler still means the handler reads
+    # SOMETHING other than the wire or the source); a link captured AFTER a
+    # handler is that handler's OUTPUT channel (`_LINK_SENDER` holds it) and
+    # leaves what the handler read untouched.
     if "channel_link" in folded:
-        captures[_READS_LINK] = False
         if "handler" in captures:
             captures[_LINK_SENDER] = captures["handler"]
         else:
             captures.pop(_LINK_SENDER, None)
-    elif "handler" in folded and _string_value(captures.get("channel_link")) is not None:
-        captures[_READS_LINK] = True
+    elif "handler" in folded and "channel_link" in captures:
+        captures[_READS_LINK] = captures["channel_link"]
     _fold(captures, folded)
     if step["continue_via"] is not None:
         captures[_CONTINUE] = step["continue_via"]
@@ -956,21 +965,35 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # (`from("a").channel("b").handle(h)`, `_READS_LINK`) reads the LINKED
     # channel, M4's rule under `channel_source` too: the framework subscribes
     # `h` to `b`, and `a → b` is the bridge the boundary states — so the edge
-    # is `read_by(b, h)` and nothing is written for the source.
+    # is `read_by(b, h)` and nothing is written for the source. A link before
+    # the handler that could not be read (`channel(<spec>)`, residual fix)
+    # is the same bridge to a channel nobody can name: nothing is written,
+    # and never `read_by(a, h)` in its place. A link AFTER the handler
+    # (`_LINK_SENDER`) is that handler's output, `sends_to`, the wire
+    # branch's own edge written here too.
     last_handler = _handler_symbol(captures.get("handler"), context.method_symbols)
+    reads_link = _READS_LINK in captures
+    read = _string_value(captures[_READS_LINK]) if reads_link else None
     sourced = "channel_source" in captures
     source = _string_value(captures.get("channel_source")) if sourced else None
     if sourced:
         if "channel" in captures:
             direction = "outbound"
         else:
-            read = (
-                _string_value(captures.get("channel_link")) if captures.get(_READS_LINK) else source
-            )
+            if not reads_link:
+                read = source
             if read is not None and last_handler is not None:
                 context.bindings.append(
                     _edge(_READ_BY, read, last_handler, context, "inbound", protocol=None)
                 )
+            sender = (
+                _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
+                if _LINK_SENDER in captures
+                else None
+            )
+            sent = _string_value(captures.get("channel_link"))
+            if sent is not None and sender is not None:
+                context.bindings.append(_edge(_SENDS_TO, sent, sender, context, "inbound"))
             return
     # A verb the catalog spelled as a literal is that literal; one it spelled
     # as `argN` (`A-C2`) is whatever the matched call's own argument reads as a
@@ -1037,12 +1060,19 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
     # registration hands its messages to nobody in this module. Where the
     # chain's link sits AFTER a handler (finding 3), the row's handler is
     # THAT handler — the wire's consumer — not whatever a later `handle`
-    # after the link captured, which reads the channel instead.
+    # after the link captured, which reads the channel instead. A handler
+    # that followed a link (`_READS_LINK`) is that channel's reader and not
+    # the wire's consumer whether or not the link could be read (residual
+    # fix): an unreadable link before it leaves the row's handler NULL rather
+    # than crediting the wire with a consumer the framework subscribed
+    # elsewhere.
     link_after_handler = _LINK_SENDER in captures
     handler = (
         (
             _handler_symbol(captures[_LINK_SENDER], context.method_symbols)
             if link_after_handler
+            else None
+            if reads_link
             else last_handler
         )
         if direction == "inbound"
@@ -1129,16 +1159,14 @@ def _derive(captures: dict[str, Any], context: _ChainContext) -> None:
         # `.channel("x").handle(h)` — is a READER of the linked channel, the
         # same edge a handler's own annotation writes; the join pass then
         # mints the row naming the feeder and that reader, beside any other
-        # reader of the channel. Only a handler the chain could name: an
-        # unread one is no reader.
-        if (
-            direction == "inbound"
-            and link is not None
-            and last_handler is not None
-            and captures.get(_READS_LINK)
-        ):
+        # reader of the channel. The channel is the one the handler FOLLOWED
+        # (`_READS_LINK`), not the chain's last link, which a `.channel("y")`
+        # after the handler overwrote (`OI-115`'s shape). Only a handler the
+        # chain could name and a link it could read: an unread handler is no
+        # reader, and an unreadable link is a channel nobody can name.
+        if direction == "inbound" and read is not None and last_handler is not None:
             context.bindings.append(
-                _edge(_READ_BY, link, last_handler, context, direction, protocol=None)
+                _edge(_READ_BY, read, last_handler, context, direction, protocol=None)
             )
         if link is not None and direction == "inbound" and link_after_handler:
             # Finding 3: a link AFTER the handler is the handler's OUTPUT channel

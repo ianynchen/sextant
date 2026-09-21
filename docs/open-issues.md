@@ -1946,17 +1946,28 @@ separator.
 **Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_fold_site`, `_derive`**
 
 `.channel("x").handle(h).channel("y")` captures `channel_link` twice; the capture dict keeps `y`,
-so the flow writes `sends_to(y, h)` and the row, and `fed_by(x)` — the channel the wire feeds
-BEFORE the handler — is lost with it. The framework wires both. A miss (a `@ServiceActivator`
-reading `x` keeps its question), never a wrong edge.
+so the flow writes `sends_to(y, h)` and `read_by(x, h)` (the link `h` followed rides in its own
+marker, `_READS_LINK`, which a later link no longer resets — residual fix, 2026-09-21) and the
+row with `h` as the wire's handler; `fed_by(x)` — the channel the wire feeds BEFORE the handler —
+is lost, and the row credits the wire with a consumer the framework subscribed to `x`. The
+framework wires `fed_by(x)`, `read_by(x, h)`, `sends_to(y, h)` and no direct wire-to-`h` row. So:
+two edges right, one edge missing, and the row's `handler` one hop too close — the same
+mis-attribution as `OI-121`'s, from the other side. Under a channel source
+(`from("a").channel("x").handle(h).channel("y")`) the shape is now correct — `read_by(x, h)`
+and `sends_to(y, h)`, nothing for `a` (the bridge) — pinned by
+`tests/application/test_fluent_registrations.py::test_a_channel_sourced_flow_that_links_before_and_after_its_handler_writes_both_edges`;
+before the residual fix the reset credited `h` to `a`, a wrong edge.
 
-**What happens today:** no fixture flow links two channels.
+**What happens today:** no fixture flow links two channels; measured on the invented flow
+catalog, the wire shape writes `read_by(x, h)`, `sends_to(y, h)` and the row.
 
 **Real triggering input:** a bridge-then-handle flow — uncommon; the idiomatic flow links once.
 
 **Verify:** `grep -n "_LINK_SENDER\|_READS_LINK" src/sextant/application/resolve/engines/fluent.py`
-— one slot each. **Closes** when a chain's links are a LIST in walk order, each written by its own
-position relative to the handler.
+— `_READS_LINK` holds the link the handler followed (the value, so `x` is in hand), `_LINK_SENDER`
+the handler the later link followed. **Closes** when the wire branch writes `fed_by(x)` from
+`_READS_LINK` and withholds the row where the `_LINK_SENDER` handler itself followed a link —
+the value the fix needs is already there; what is missing is the wire branch reading it.
 
 ### OI-116 — `read_by`/`sends_to` edges are written once per vararg destination
 **Minor · logged 2026-09-21, found at the Task 4–5 review · `src/sextant/application/resolve/engines/fluent.py::_derive`**

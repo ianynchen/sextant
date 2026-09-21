@@ -1863,6 +1863,54 @@ def test_a_link_before_any_handler_is_the_wires_feed_and_writes_no_row(tmp_path:
     assert (rows, roles) == ([], ["fed_by", "read_by"])
 
 
+# The step model's `channel(MessageChannelSpec)`/`channel(Function)` forms poison the
+# link: here the invented `channel` word carries only a spec — a link the walk cannot
+# read from there on — and the model's other link word, `fixedSubscriberChannel(String)`,
+# is the one that captures (a poison must name a field some step captures). Beside it,
+# the compiler's own read failure on the string form.
+_SPEC_LINK_MATCHES = {
+    **_FLOW_MATCHES,
+    "steps": [
+        *(step for step in _FLOW_MATCHES["steps"] if step["method"] != "channel"),
+        {
+            "method": "fixedSubscriberChannel",
+            "owner": FLOW_DEF_TYPE,
+            "captures": {"channel_link": "arg0"},
+        },
+        {"method": "channel", "owner": FLOW_DEF_TYPE, "poisons": ["channel_link"]},
+    ],
+}
+_UNREADABLE_LINKS = [
+    pytest.param(_FLOW_MATCHES, CallArgument(kind="unresolved"), id="unresolved"),
+    pytest.param(_SPEC_LINK_MATCHES, CallArgument(kind="unresolved"), id="poisoned"),
+]
+
+
+@pytest.mark.parametrize(("matches", "link"), _UNREADABLE_LINKS)
+def test_a_wire_sourced_flow_whose_link_before_the_handler_is_unreadable_keeps_the_row_without_it(
+    tmp_path: Path, matches: dict, link: CallArgument
+):
+    """Residual fix, item 1, the wire side: `from(spec).channel(<unreadable>).handle(h)`.
+    The framework subscribes `h` to the channel the spec builds, never to the wire —
+    so `h` is not the wire's consumer and the row keeps `handler` NULL, resolved (the
+    wire was read; its consumer was not). No `fed_by` (a channel we cannot name is not
+    a channel we can bind, as before) and no `read_by`: the bridge to an anonymous
+    channel is the stated boundary."""
+    facts = [
+        _source_spec(),
+        _from(1, source=10, result=11),
+        *_flow_steps(("channel", [link]), ("handle", [_lambda()]), start=2, receiver=11),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    [row] = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert (row["path"], row["handler"], row["resolution"]) == (TOPIC, None, "resolved")
+    assert bindings == []
+
+
 def test_a_sink_spec_handed_to_handle_derives_the_outbound_flow(tmp_path: Path):
     """§5's outbound flow: `from("ch")` is a root (`channel_source`) and
     `.handle(sinkSpec)` consumes the sink chain — a root whose continuation is the
@@ -1986,6 +2034,73 @@ def test_a_channel_sourced_flow_that_links_before_its_handler_reads_the_link(
         "b",
         _MODULE + BODY,
     )
+
+
+@pytest.mark.parametrize(("matches", "link"), _UNREADABLE_LINKS)
+def test_a_channel_sourced_flow_whose_link_before_the_handler_is_unreadable_writes_nothing(
+    tmp_path: Path, matches: dict, link: CallArgument
+):
+    """Residual fix, item 1: `from("a").channel(<unreadable>).handle(h)`. The framework
+    subscribes `h` to the channel the spec builds, not to `a` — so `read_by(a, h)` would
+    be a wrong edge, and the link's name is what the walk cannot read. Nothing is
+    written: no edge and no row (the bridge to an anonymous channel is the stated
+    boundary). Before the fix the handler was credited to the source."""
+    facts = [
+        *_channel_sourced_flow(("channel", [link]), ("handle", [_lambda()])),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(matches))
+    rows = _rows(workspace)
+    bindings = _bindings(workspace)
+    workspace.close()
+
+    assert (rows, bindings) == ([], [])
+
+
+def test_a_channel_sourced_flow_that_links_before_and_after_its_handler_writes_both_edges(
+    tmp_path: Path,
+):
+    """`OI-115`'s shape under a channel source: `from("a").channel("b").handle(h)
+    .channel("c")`. The link BEFORE `h` is what `h` reads and the link AFTER it is
+    where `h`'s output goes — two markers, so the later link does not reset the
+    reader: `read_by(b, h)` and `sends_to(c, h)`, nothing for `a` (the bridge), and
+    never `read_by(a, h)`, which the reset used to write."""
+    facts = [
+        *_channel_sourced_flow(
+            ("channel", [CallArgument(kind="string", value="b")]),
+            ("handle", [_lambda()]),
+            ("channel", [CallArgument(kind="string", value="c")]),
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    edges = sorted((b["role"], b["channel"], b["symbol"]) for b in _bindings(workspace))
+    workspace.close()
+
+    assert rows == []
+    assert edges == [("read_by", "b", _MODULE + BODY), ("sends_to", "c", _MODULE + BODY)]
+
+
+def test_a_channel_sourced_flow_that_links_after_its_handler_reads_the_source_and_sends_to_the_link(
+    tmp_path: Path,
+):
+    """The twin without a first link: `from("ch").handle(h).channel("c")` — `h` reads
+    the source (no link preceded it) and its output goes to `c`, the `sends_to` edge
+    the sourced branch now writes beside the reader."""
+    facts = [
+        *_channel_sourced_flow(
+            ("handle", [_lambda()]), ("channel", [CallArgument(kind="string", value="c")])
+        ),
+        _body_symbol(),
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_FLOW_MATCHES))
+    rows = _rows(workspace)
+    edges = sorted((b["role"], b["channel"], b["symbol"]) for b in _bindings(workspace))
+    workspace.close()
+
+    assert rows == []
+    assert edges == [("read_by", "ch", _MODULE + BODY), ("sends_to", "c", _MODULE + BODY)]
 
 
 def test_a_bridge_between_two_channels_writes_nothing(tmp_path: Path):

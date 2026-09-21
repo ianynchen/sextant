@@ -61,7 +61,10 @@ direction: inbound
 # root matched by descriptor could not tell whose adapter arrived);
 # `configureContainer(c -> …)` inside a source spec; `handle(Object bean,
 # String method)` where the bean is the module's; the bean-wired
-# `KafkaMessageDrivenChannelAdapter` (no fixture exhibits it).
+# `KafkaMessageDrivenChannelAdapter` (no fixture exhibits it); a `handle` after
+# `channel(MessageChannelSpec)`/`channel(Function)` — it reads the channel the
+# spec builds, which the walk cannot name, so it is written nowhere (the row
+# keeps `handler` NULL; under `from("ch")` no edge at all).
 
 detect:
   coordinates: ["org.springframework.integration:spring-integration-kafka"]

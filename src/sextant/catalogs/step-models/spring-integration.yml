@@ -37,7 +37,11 @@ displayName: The Spring Integration Java DSL flow definition (every member, clas
 #                 names it through the bean fold. `channel(MessageChannelSpec)` and
 #                 `channel(Function)` carry a spec the walk does not open: the link
 #                 is unreadable from here on (`poisons: [channel_link]`), and the
-#                 chain keeps its own row.
+#                 chain keeps its own row with `handler` NULL — a `handle` after
+#                 the spec form reads the channel the spec builds, which nothing
+#                 here can name, so it is written nowhere: not as the wire's
+#                 consumer, not as the source's reader under `from("ch")`. The
+#                 bridge to an anonymous channel is a stated boundary.
 #   handler       `handle`/`handleReactive` name the consumer: a lambda argument's
 #                 body becomes the row's `handler`; a bean, a bean-and-method pair
 #                 or a processor spec is a consumer the walk cannot name (NULL,
@@ -123,7 +127,8 @@ steps:
       descriptor: "(Lorg/springframework/messaging/MessageChannel;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   # A channel SPEC (`MessageChannels.direct("x")`, or a function building one):
   # the name is inside the spec's own chain, which this walk does not open —
-  # a stated boundary, never a guess at the name.
+  # a stated boundary, never a guess at the name, and the handler after it
+  # is credited to nobody (see the classification above).
   - { method: channel, owner: *owners, poisons: [channel_link],
       descriptor: "(Lorg/springframework/integration/dsl/MessageChannelSpec;)Lorg/springframework/integration/dsl/BaseIntegrationFlowDefinition;" }
   - { method: channel, owner: *owners, poisons: [channel_link],
