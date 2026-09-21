@@ -477,6 +477,8 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- same pass that writes those — the one place "which method can this site run" is
 -- answered.
 --
+-- ---------------------------------------------------------------------------------------
+--
 -- NOT DECLARED HERE, AND DOCUMENTED HERE SO THE OMISSION IS DELIBERATE: `channel_bindings`
 -- (spec 2026-09-21 §3b), the channel edge as data, is a TEMP table
 -- (`reset_channel_bindings.sql`), like `route_requirements` and `endpoint_candidates`:
@@ -498,6 +500,9 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- `read_by` on `channel` once per resolve and mints one `endpoints` row per pair (and
 -- one with `handler` NULL for a feeder nobody reads); `config_join.gaps` files a
 -- `channel_destination` question only for a channel no `fed_by` row names.
+--
+-- ---------------------------------------------------------------------------------------
+--
 -- F5 §6.2 (W29). What an outbound call carries BESIDE its address and payload: an HTTP
 -- header or query parameter, a Kafka record header or partition key, an AMQP routing key,
 -- a JMS property, an SQS message attribute, a Pub/Sub attribute. It is what makes an

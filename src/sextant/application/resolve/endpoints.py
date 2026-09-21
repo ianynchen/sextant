@@ -110,7 +110,8 @@ def derive_endpoints(
     # long as the resolve that reads it (`record_request_requirements`).
     workspace.derive("route_requirements_reset")
     # The channel edge (spec 2026-09-21 §3b), re-created here for the same reason again:
-    # `config_join` writes its `read_by` end and the fluent engine its `fed_by` end, so
+    # `config_join` writes its `read_by` end, and an engine that reads a channel's
+    # destination (the fluent engine, from the spec's §4) writes its `fed_by` end, so
     # neither may own the reset, and a module naming no channel leaves an empty table.
     # Read by `mint_channel_rows` below and by `config_join.gaps` from the
     # `service_identity` seam, both on this connection.

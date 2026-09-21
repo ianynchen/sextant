@@ -2,20 +2,22 @@
 edge into endpoint rows.
 
 A named in-process channel has two ends that two different engines read. An adapter or
-a flow FEEDS it — a chain captured the channel's name and the destination behind it, and
-wrote a `fed_by` row with the wire (`protocol`, `destination`) and the constructing
-method. A handler READS it — its annotation names the channel, and `config_join` wrote a
-`read_by` row with the handler and nothing about the wire, because a reader knows
-nothing about it. Neither engine can mint the endpoint row alone: the feeder has the
-wire and no handler, the reader has the handler and no wire. This pass joins them on the
-channel's name, once per resolve, after every engine has written its end.
+a flow FEEDS it — an engine that reads a channel's destination (the fluent engine, from
+the spec's §4) writes a `fed_by` row with the wire (`protocol`, `destination`) and the
+constructing method. A handler READS it — its annotation names the channel, and
+`config_join` writes a `read_by` row with the handler and nothing about the wire,
+because a reader knows nothing about it. Neither engine can mint the endpoint row alone:
+the feeder has the wire and no handler, the reader has the handler and no wire. This
+pass joins them on the channel's name, once per resolve, after every engine has written
+its end.
 
 One row per `(feeder, reader)` pair, inbound, the wire the feeder's and the handler the
 reader's, `caller` the constructing method — §3c's inbound row. A feeder nobody reads
 still mints its row with `handler` NULL: the adapter exists and holds a wire open whether
-or not anything subscribes, and the chain that found it deliberately wrote the edge
-INSTEAD of a row so a linked adapter is never counted twice. An OUTBOUND feeder mints
-nothing: it is an outbound handler bean whose chain derived the outbound row already,
+or not anything subscribes. Whether the feeding engine ALSO derives a row of its own for
+the registration is that engine's business, not this pass's: `call_endpoints` dedupes on
+wire identity either way, so a linked adapter is never counted twice. An OUTBOUND feeder
+mints nothing: it is an outbound handler bean whose own engine derives the outbound row,
 and its edge exists so `config_join.gaps` stops asking about the channel.
 
 Only a reader whose channel NAME was read joins: a `read_by` still spelled as a

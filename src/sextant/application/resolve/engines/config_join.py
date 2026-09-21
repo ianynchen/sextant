@@ -38,7 +38,7 @@ answered, and it rides the `service_identity` seam rather than `run` because
 the ledger is reset AFTER the engine loop (`resolve/pipeline.py`).
 
 The channel edge is data since spec 2026-09-21 §3b: `run` also writes one
-`read_by` row per indexed channel to `channel_bindings` (`_write_readers`),
+`read_by` row per indexed channel to `channel_bindings` (`_derive_channels`),
 so an engine that learns what FEEDS a channel can be joined to the handler
 reading it (`resolve/channel_bindings.py`), and `gaps` asks only about a
 channel no `fed_by` row names.
@@ -177,7 +177,6 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if _ADDRESS in catalog.matches:
         if _binding_source(catalog) == _ANNOTATION_VALUE:
             _derive_channels(workspace, catalog)
-            _write_readers(workspace, catalog)
         else:
             _derive_bindings(workspace, catalog)
     if _MEDIA in catalog.matches:
@@ -769,16 +768,52 @@ def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
     framework passes a channel handler is its own convention, and no probe
     has measured one), so both shape columns and `handler_signature` stay
     NULL rather than claiming a contract nobody read.
+
+    **The same walk also writes the channel edge** (spec 2026-09-21 §3b): one
+    `read_by` row per indexed channel — the handler, the direction the
+    annotation's attribute means, and nothing about the wire, so `protocol` and
+    `destination` are NULL and a feeder's row supplies both when the join pass
+    finds one. Collected in this loop rather than in a second one so the
+    annotation facts, the method symbols and `resolved_config` are each read
+    once per run (GUIDELINES §8.7), and BEFORE the key-template gate below:
+    the edge is written whether or not the catalog declares a `key`, and that
+    is the point of the table — this catalog's destinations are not in
+    configuration at all, so the only thing that can answer for a channel is
+    an engine that read the adapter feeding it, and this edge is how that
+    answer reaches the handler.
+
+    The channel NAME on the edge is resolved on the way in, unlike the key
+    lookup one line down, because the two ask different things. The key
+    template asks configuration about the name AS WRITTEN — a project
+    convention keyed on the spelling. The edge must carry the name the
+    framework actually subscribes the handler to, which for a placeholder is
+    the configured VALUE, or the feeder that read that value never joins
+    (§0c B5).
     """
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
+    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
     rows: list[dict[str, Any]] = []
+    readers: list[dict[str, Any]] = []
     # Every row here has a known identity — a channel with no answered
     # destination derives nothing at all — so unlike `_derive_bindings` this
     # set can never hold the NULL-path rows that must not collapse.
     seen: set[tuple[str, str, str]] = set()
     for channel in _channels(workspace, catalog):
+        name, resolution = _channel_name(config, placeholders, channel.name)
+        readers.append(
+            {
+                "channel": name,
+                "role": _READ_BY,
+                "symbol": channel.handler,
+                "protocol": None,
+                "direction": channel.direction,
+                "destination": None,
+                "catalog_id": catalog.id,
+                "resolution": resolution,
+            }
+        )
         if template is None:
             continue
         protocol = _protocol_of(config, address, channel.name, catalog)
@@ -805,6 +840,7 @@ def _derive_channels(workspace: Workspace, catalog: Catalog) -> None:
         seen.add(identity)
         rows.append(_row(catalog, protocol, channel.direction, destination, channel.handler, None))
     workspace.derive("call_endpoints", rows=rows)
+    workspace.derive("channel_bindings_insert", rows=readers)
 
 
 def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
@@ -866,42 +902,6 @@ def channel_index(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
     referenced name, so a name this index knows is a channel whether or not a method
     declares it. Each entry carries `name`, `handler` and `direction`."""
     return _channels(workspace, catalog)
-
-
-def _write_readers(workspace: Workspace, catalog: Catalog) -> None:
-    """One `read_by` edge per indexed channel (spec 2026-09-21 §3b): the handler, the
-    direction the annotation's attribute means, and nothing about the wire — a reader
-    knows the channel's name and not what feeds it, so `protocol` and `destination` are
-    NULL and the feeder's row supplies both when the join pass finds one.
-
-    Written whether or not the catalog declares a `key`, and that is the point of the
-    table: this catalog's destinations are not in configuration at all, so the only
-    thing that can answer for a channel is an engine that read the adapter feeding it,
-    and this edge is how that engine's answer reaches this channel's handler.
-
-    The channel NAME is resolved on the way in, unlike `_derive_channels`' key lookup,
-    because the two ask different things. The key template asks configuration about the
-    name AS WRITTEN — a project convention keyed on the spelling. The edge must carry the
-    name the framework actually subscribes the handler to, which for a placeholder is
-    the configured VALUE, or the feeder that read that value never joins (§0c B5)."""
-    config = _config_values(workspace)
-    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
-    rows = []
-    for channel in _channels(workspace, catalog):
-        name, resolution = _channel_name(config, placeholders, channel.name)
-        rows.append(
-            {
-                "channel": name,
-                "role": _READ_BY,
-                "symbol": channel.handler,
-                "protocol": None,
-                "direction": channel.direction,
-                "destination": None,
-                "catalog_id": catalog.id,
-                "resolution": resolution,
-            }
-        )
-    workspace.derive("channel_bindings_insert", rows=rows)
 
 
 def _channel_name(
@@ -992,8 +992,11 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     # join pass minted the row, or the feeder's own chain derived it — so the question
     # would ask a human for what the document states. Any direction and any protocol:
     # an outbound handler bean's edge says `outbound` and answers the channel just the
-    # same. Keyed on the name the framework uses, which for a placeholder-spelled channel
-    # is the configured value the feeder read, never the handler's spelling.
+    # same. An `unresolved` feeder counts too: it both mints an `unresolved` row and
+    # suppresses this question, so the human hand-off for that unread destination is the
+    # feeding engine's own row, not a `channel_destination` question here. Keyed on the
+    # name the framework uses, which for a placeholder-spelled channel is the configured
+    # value the feeder read, never the handler's spelling.
     fed = {
         str(row["channel"]) for row in workspace.query("channel_bindings") if row["role"] == _FED_BY
     }
