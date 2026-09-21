@@ -243,6 +243,10 @@ def _workspace(
         )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
+    # The channel edge's stash (spec 2026-09-21 §3b), created the way the pipeline leaves
+    # it before an engine runs: `run` writes its `read_by` end, and the tests below reach
+    # `run` directly rather than through `derive_endpoints`, which owns the reset.
+    workspace.derive("channel_bindings_reset")
     if config:
         workspace.derive(
             "resolved_config_insert",

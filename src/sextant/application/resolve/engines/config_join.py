@@ -37,6 +37,12 @@ hand-off an `annotation_value` catalog files for a name configuration never
 answered, and it rides the `service_identity` seam rather than `run` because
 the ledger is reset AFTER the engine loop (`resolve/pipeline.py`).
 
+The channel edge is data since spec 2026-09-21 §3b: `run` also writes one
+`read_by` row per indexed channel to `channel_bindings` (`_write_readers`),
+so an engine that learns what FEEDS a channel can be joined to the handler
+reading it (`resolve/channel_bindings.py`), and `gaps` asks only about a
+channel no `fed_by` row names.
+
 Framework knowledge — which key template names a destination, which
 functional interface means which binding suffix and direction, which
 serializer class means which MIME type, which binder name means which
@@ -48,6 +54,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.config import _DEFAULT_PLACEHOLDERS
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
@@ -115,6 +122,11 @@ _NO_KEY_TEMPLATE = (
     "key names this channel's destination"
 )
 _NO_AGREED_VALUE = "resolved_config carries no value every environment agrees on for `{key}`"
+# The two ends of the channel edge this engine touches (spec 2026-09-21 §3b): it WRITES
+# `read_by` — a handler whose annotation names a channel — and READS `fed_by` in `gaps`,
+# to ask only about a channel nothing fed. `sends_to` is the slot for later writers.
+_READ_BY = "read_by"
+_FED_BY = "fed_by"
 
 
 def derives_rows(catalog: Catalog) -> bool:
@@ -165,6 +177,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if _ADDRESS in catalog.matches:
         if _binding_source(catalog) == _ANNOTATION_VALUE:
             _derive_channels(workspace, catalog)
+            _write_readers(workspace, catalog)
         else:
             _derive_bindings(workspace, catalog)
     if _MEDIA in catalog.matches:
@@ -846,6 +859,91 @@ def _channels(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
     return sorted(found, key=lambda channel: (channel.name, channel.direction, channel.handler))
 
 
+def channel_index(workspace: Workspace, catalog: Catalog) -> list[_Channel]:
+    """`_channels` under its public name (spec 2026-09-21 §3a): the channel names a
+    module's handlers subscribe to, which a bean-identity caller reads to resolve a
+    channel reference by name — the container auto-creates a channel under any
+    referenced name, so a name this index knows is a channel whether or not a method
+    declares it. Each entry carries `name`, `handler` and `direction`."""
+    return _channels(workspace, catalog)
+
+
+def _write_readers(workspace: Workspace, catalog: Catalog) -> None:
+    """One `read_by` edge per indexed channel (spec 2026-09-21 §3b): the handler, the
+    direction the annotation's attribute means, and nothing about the wire — a reader
+    knows the channel's name and not what feeds it, so `protocol` and `destination` are
+    NULL and the feeder's row supplies both when the join pass finds one.
+
+    Written whether or not the catalog declares a `key`, and that is the point of the
+    table: this catalog's destinations are not in configuration at all, so the only
+    thing that can answer for a channel is an engine that read the adapter feeding it,
+    and this edge is how that engine's answer reaches this channel's handler.
+
+    The channel NAME is resolved on the way in, unlike `_derive_channels`' key lookup,
+    because the two ask different things. The key template asks configuration about the
+    name AS WRITTEN — a project convention keyed on the spelling. The edge must carry the
+    name the framework actually subscribes the handler to, which for a placeholder is
+    the configured VALUE, or the feeder that read that value never joins (§0c B5)."""
+    config = _config_values(workspace)
+    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
+    rows = []
+    for channel in _channels(workspace, catalog):
+        name, resolution = _channel_name(config, placeholders, channel.name)
+        rows.append(
+            {
+                "channel": name,
+                "role": _READ_BY,
+                "symbol": channel.handler,
+                "protocol": None,
+                "direction": channel.direction,
+                "destination": None,
+                "catalog_id": catalog.id,
+                "resolution": resolution,
+            }
+        )
+    workspace.derive("channel_bindings_insert", rows=rows)
+
+
+def _channel_name(
+    config: dict[str, dict[str, str | None]], placeholders: dict[str, str], raw: str
+) -> tuple[str, str]:
+    """The channel name the framework subscribes a handler to, and whether it was read:
+    `(value, "resolved")` for a name whose every placeholder configuration answered
+    with one value (`_agreed`), `(raw, "unresolved")` where any placeholder went
+    unanswered, and `(raw, "resolved")` for a name carrying no placeholder at all —
+    nothing was asked, so nothing went unanswered.
+
+    The delimiters are the config model's, read as `resolve/config.py` reads them and
+    defaulting as it defaults, never hard-coded here. An opening delimiter with no
+    closing one is text, as it is there. A `default_separator` inside a placeholder
+    splits the KEY off for the lookup and nothing more: a spelled default is not
+    substituted when configuration does not answer, so such a name stays `unresolved`
+    rather than resolving to a default this pass did not verify the framework applies
+    under every layering — the conservative answer, revisited if a fixture spells one."""
+    open_ = placeholders.get("open", "${")
+    close_ = placeholders.get("close", "}")
+    separator = placeholders.get("default_separator", ":")
+    parts: list[str] = []
+    index = 0
+    while True:
+        start = raw.find(open_, index)
+        if start == -1:
+            parts.append(raw[index:])
+            break
+        end = raw.find(close_, start + len(open_))
+        if end == -1:
+            parts.append(raw[index:])
+            break
+        key = raw[start + len(open_) : end].split(separator, 1)[0]
+        value = _agreed(config, key)
+        if value is None:
+            return raw, "unresolved"
+        parts.append(raw[index:start])
+        parts.append(value)
+        index = end + len(close_)
+    return "".join(parts), "resolved"
+
+
 def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     """The `channel_destination` open questions this catalog's unanswered
     channels earn — one per `(channel, handler)` whose destination
@@ -889,6 +987,16 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     address = catalog.matches[_ADDRESS]
     template = address.get("key")
     config = _config_values(workspace)
+    placeholders = catalog.config_model.get("placeholders", _DEFAULT_PLACEHOLDERS)
+    # A channel some engine FED (spec 2026-09-21 §3b) has its destination answered — the
+    # join pass minted the row, or the feeder's own chain derived it — so the question
+    # would ask a human for what the document states. Any direction and any protocol:
+    # an outbound handler bean's edge says `outbound` and answers the channel just the
+    # same. Keyed on the name the framework uses, which for a placeholder-spelled channel
+    # is the configured value the feeder read, never the handler's spelling.
+    fed = {
+        str(row["channel"]) for row in workspace.query("channel_bindings") if row["role"] == _FED_BY
+    }
     rows: list[dict[str, Any]] = []
     # One question per channel-and-handler pair, not per direction: the
     # question is "what destination does this channel carry", and a method
@@ -898,6 +1006,9 @@ def gaps(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
     for channel in _channels(workspace, catalog):
         key = None if template is None else str(template).replace(_BINDING, channel.name)
         if key is not None and _agreed(config, key) is not None:
+            continue
+        name, resolution = _channel_name(config, placeholders, channel.name)
+        if resolution == "resolved" and name in fed:
             continue
         if (channel.name, channel.handler) in seen:
             continue

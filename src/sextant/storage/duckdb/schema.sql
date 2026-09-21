@@ -476,6 +476,28 @@ CREATE TABLE IF NOT EXISTS reachability (
 -- Both are replaced whole per resolve, like `call_edges` and `return_flows`, from the
 -- same pass that writes those — the one place "which method can this site run" is
 -- answered.
+--
+-- NOT DECLARED HERE, AND DOCUMENTED HERE SO THE OMISSION IS DELIBERATE: `channel_bindings`
+-- (spec 2026-09-21 §3b), the channel edge as data, is a TEMP table
+-- (`reset_channel_bindings.sql`), like `route_requirements` and `endpoint_candidates`:
+-- working state of one resolve, never a bundle table, left out of `schema_objects` by
+-- name.
+--
+--     channel_bindings(channel TEXT, role TEXT, symbol TEXT, protocol TEXT,
+--                      direction TEXT, destination TEXT, catalog_id TEXT, resolution TEXT)
+--
+-- `channel` is the in-process channel's name; `role` is one of `fed_by` (an adapter or
+-- flow that feeds the channel — `symbol` the constructing method, `protocol` and
+-- `destination` the wire behind it), `read_by` (a handler whose annotation names the
+-- channel — `symbol` the handler, `protocol`/`destination` NULL: a reader knows nothing
+-- about the wire) and `sends_to` (no writer yet; the slot for a gateway or a direct
+-- send); `direction` is the direction the edge means for the endpoint row it may become;
+-- `resolution` is the channel NAME's — a name spelled as a configuration placeholder is
+-- resolved before it is written, and one configuration never answered stays as written,
+-- `unresolved`, and can join nothing. `resolve/channel_bindings.py` joins `fed_by` to
+-- `read_by` on `channel` once per resolve and mints one `endpoints` row per pair (and
+-- one with `handler` NULL for a feeder nobody reads); `config_join.gaps` files a
+-- `channel_destination` question only for a channel no `fed_by` row names.
 -- F5 §6.2 (W29). What an outbound call carries BESIDE its address and payload: an HTTP
 -- header or query parameter, a Kafka record header or partition key, an AMQP routing key,
 -- a JMS property, an SQS message attribute, a Pub/Sub attribute. It is what makes an

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.capabilities import missing_capabilities
+from sextant.application.resolve.channel_bindings import mint_channel_rows
 from sextant.application.resolve.dependencies import _declared_coordinates, unmet_dependency
 from sextant.application.resolve.engines import (
     annotation_driven,
@@ -108,6 +109,12 @@ def derive_endpoints(
     # the previous run's rows. A TEMP table of this connection, so it lives exactly as
     # long as the resolve that reads it (`record_request_requirements`).
     workspace.derive("route_requirements_reset")
+    # The channel edge (spec 2026-09-21 §3b), re-created here for the same reason again:
+    # `config_join` writes its `read_by` end and the fluent engine its `fed_by` end, so
+    # neither may own the reset, and a module naming no channel leaves an empty table.
+    # Read by `mint_channel_rows` below and by `config_join.gaps` from the
+    # `service_identity` seam, both on this connection.
+    workspace.derive("channel_bindings_reset")
     # D02 §3: the merge runs once, after every engine, so this ordering does
     # not affect which rows it finds — it exists for determinism only (NFR-1):
     # inbound before outbound, filename breaking the tie within a direction,
@@ -189,6 +196,13 @@ def derive_endpoints(
     )
     for catalog, engine in running:
         engine(workspace, catalog)
+    # After every engine, because both ends of a channel edge must have been written
+    # before the join can find a pair (spec 2026-09-21 §3b); before the drop below, so a
+    # sibling module's channel rows are dropped like any other; and inside this call
+    # rather than a pipeline step of its own, so the row set every later pass reads —
+    # `apply_protocol_hints` first among them — is complete when `derive_endpoints`
+    # returns, as it always was.
+    mint_channel_rows(workspace, catalogs)
     # Once per resolve, after every catalog. F4 §5.2 (W24): a sibling module's own
     # rows are this module's to drop, never to publish.
     #
