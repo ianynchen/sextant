@@ -1300,7 +1300,6 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
-    _validate_fallback_prefix_attr(catalog, mapping)
     members = mapping.get("members")
     if members is not None:
         if members not in _MEMBER_RULES:
@@ -1347,6 +1346,13 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         _validate_unless(catalog, entry)
         _validate_entry_fallback(catalog, entry)
         _validate_container(catalog, entry)
+    # AFTER the entry loop, and the order is the rule rather than a placement:
+    # this check READS every entry's own fallback word, so a misspelled one
+    # reaches it as an unrecognised word and would be reported as "the
+    # attribute names a rule nothing runs" — a refusal naming the wrong key,
+    # which sends a catalog author to fix a line that is correct. The
+    # closed-set check above says what is actually wrong, so it runs first.
+    _validate_fallback_prefix_attr(catalog, mapping)
     _sibling_sources(catalog, mapping)
     inherit_siblings = mapping.get("inherit_siblings")
     if inherit_siblings is not None and inherit_siblings not in _INHERIT_SIBLINGS:
@@ -1496,17 +1502,19 @@ def _validate_entry_fallback(catalog: Catalog, entry: dict[str, Any]) -> None:
 
 def _validate_fallback_prefix_attr(catalog: Catalog, mapping: dict[str, Any]) -> None:
     """Refuses a mapping that declares the prefix-composing fallback word
-    without naming the attribute carrying the prefix, or names the attribute
-    without the word (spec 2026-09-22 §2b).
+    without naming the attribute carrying the prefix or without the type gate
+    that attribute is read off, and one that names the attribute with no word
+    reading it (spec 2026-09-22 §2b).
 
-    Both halves matter, and neither is symmetry for its own sake. WITHOUT the
-    attribute, the word composes an empty prefix onto every row it names — an
-    address that is a fragment of the one the framework serves, published at
-    `resolved`/`compiler`, which is the confidently-wrong-address failure the
-    whole naming vocabulary is checked for. WITH the attribute and no word
-    reading it, the catalog states a rule nothing runs, and a reader of the file
-    believes the prefix is composed somewhere: the `_RESOLVES` discipline, and
-    the one this engine applies to every key it would otherwise ignore.
+    None of the three is symmetry for its own sake. WITHOUT the attribute, or
+    without a `type_annotation` to read it off, the word composes an empty
+    prefix onto every row it names — an address that is a fragment of the one
+    the framework serves, published at `resolved`/`compiler`, which is the
+    confidently-wrong-address failure the whole naming vocabulary is checked
+    for. WITH the attribute and no word reading it, the catalog states a rule
+    nothing runs, and a reader of the file believes the prefix is composed
+    somewhere: the `_RESOLVES` discipline, and the one this engine applies to
+    every key it would otherwise ignore.
 
     Both LEVELS are consulted, because either can name the word (`OI-5`): the
     attribute belongs to the FILE, since the type it is read off is the file's
@@ -1529,6 +1537,23 @@ def _validate_fallback_prefix_attr(catalog: Catalog, mapping: dict[str, Any]) ->
                 f"attribute — got {attribute!r}. The word composes the declaring type's own "
                 f"prefix, and with nothing to read it from every row would carry the bare "
                 f"member name the framework does not serve (spec 2026-09-22 §2b)"
+            )
+        # AND THE TYPE GATE, the `members` class-gate check's shape one key
+        # over. The attribute is read off the declaring type's
+        # `type_annotation` USE and nowhere else, so a catalog that declares no
+        # `type_annotation` has no annotation row to read it from — every
+        # address the word composes is then the bare member name, which is a
+        # FRAGMENT of the one the framework serves and exactly what the two
+        # refusals above exist to prevent. It is refused rather than left
+        # inert, because a fragment published at `resolved`/`compiler` is
+        # indistinguishable downstream from an address that was observed.
+        if catalog.matches.get("type_annotation") is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_PREFIXED_FALLBACK}` is "
+                f"declared with no `type_annotation` — `mapping.{_FALLBACK_PREFIX_ATTR}: "
+                f"{attribute}` is read off the declaring type's own `type_annotation` use, so "
+                f"with no such gate every row would compose the bare member name without the "
+                f"prefix in front of it (spec 2026-09-22 §2b)"
             )
     elif attribute is not None:
         raise CatalogError(
@@ -1589,7 +1614,7 @@ def _synthetic_annotations(
     mapping_annotations: list[dict[str, object]],
     prefix_fqns: list[str] | None,
     type_annotation_fqns: list[str] | None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
     CTE expects (D02 §2, §3): every row `folded_rows`, `composed_mapping_rows`
     and, where `run_inheritance`, `inherited_rows` derive, `args` re-serialized
@@ -1687,9 +1712,23 @@ def _synthetic_annotations(
         if run_inheritance
         else []
     )
+    # `inherited` says WHICH pass wrote a row, and it is carried because one
+    # rule has to tell them apart (spec 2026-09-22 §2c): a gate carried across
+    # a type boundary by the INHERITANCE walk is a gate the type does not
+    # declare, while a folded or composed row is the very annotation the author
+    # wrote on that type, read out of the shape javac stored it in (`OI-36`) or
+    # through the stereotype it was composed into (`A-C7`). `catalog_id` cannot
+    # answer this: all three passes write it. Every consumer but the one that
+    # asks reads this column not at all, so the other rules are unchanged.
     return [
-        {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
-        for row in (*folded, *composed, *inherited)
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.dumps(row["args"]),
+            "inherited": inherited_pass,
+        }
+        for rows, inherited_pass in ((folded, False), (composed, False), (inherited, True))
+        for row in rows
     ]
 
 
@@ -1981,7 +2020,7 @@ def effective_annotation_uses(
         for row in workspace.query("annotations")
     ]
     mapping = catalog.matches.get("mapping")
-    synthetic: list[dict[str, str]] = []
+    synthetic: list[dict[str, Any]] = []
     if mapping is not None:
         type_annotation = catalog.matches.get("type_annotation")
         synthetic = _synthetic_annotations(

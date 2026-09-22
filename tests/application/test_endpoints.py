@@ -3033,6 +3033,239 @@ def test_declared_type_methods_skips_a_member_the_gate_class_declares_itself(tmp
     assert _contract_member_paths(tmp_path / "b", "declared_type_methods") == {"ChargeCard"}
 
 
+def _composed_gate_facts(root: Path) -> None:
+    """The gate reaching a contract type through a MODULE-LOCAL STEREOTYPE
+    rather than written on it directly: `@BillingContract` is an annotation
+    type of this module's own, meta-annotated with the catalog's gate, and the
+    contract wears the stereotype.
+
+    The pre-pass reads that back to the gate itself (`A-C7`), so the contract
+    type carries a SYNTHETIC gate row — and telling that row apart from one the
+    inheritance walk carried across a type boundary is the whole of what
+    `annotations_effective.inherited` exists for. Read as "any synthetic row",
+    the fence drops this contract's every member silently.
+
+    An annotation type is an interface in bytecode, which is what puts it in
+    `interface_symbols` and makes the composition pre-pass follow it.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/BillingActivities.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    stereotype = _contract_type("BillingContract")
+    # The same type as a USE site names it: an annotation fact records its
+    # annotation as a BARE fqn descriptor and its target as a module-prefixed
+    # symbol (D00 §5a), so the stereotype appears under both spellings at once.
+    stereotype_fqn = "com/acme/orders/BillingContract#"
+    contract = _contract_type("BillingActivities")
+    write_fact_file(
+        root / "BillingActivities.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1", symbol=stereotype, construct_kind=ConstructKind.INTERFACE
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=stereotype,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "billing_"}),
+            ),
+            SymbolFact(
+                document_id="doc_1", symbol=contract, construct_kind=ConstructKind.INTERFACE
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=contract,
+                retention="runtime",
+                use=AnnotationUse(annotation=stereotype_fqn, args={}),
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_member("BillingActivities", "chargeCard"),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=contract,
+                visibility="public",
+                signature=_VOID,
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize("members", ["public_methods", "declared_type_methods"])
+def test_a_gate_reaching_the_contract_through_a_composed_stereotype_still_gates_it(
+    tmp_path: Path, members: str
+):
+    """The fence excludes an INHERITED gate and nothing else.
+
+    `annotations_effective` marks three different pre-passes' rows, and only
+    the inheritance walk carries an annotation across a type boundary: folding
+    reads a repeated annotation out of the container javac stored it in, and
+    composition reads a module-local stereotype back to the annotation it was
+    built from. In both, the author really did write that annotation on THIS
+    type. A fence keyed on "synthetic" rather than on "inherited" drops the
+    composed case, and drops it silently — the contract's whole surface, from
+    ordinary scanned input, which is the same loss this engine already records
+    as having deleted a controller's entire surface one rule over.
+
+    Both words answer the same here, and the parametrisation is the point:
+    `public_methods` is the control, and the new word must not differ from it
+    on a gate the contract type genuinely carries."""
+    _composed_gate_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _contract_catalog(
+        members=members,
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"billing_ChargeCard"}
+
+
+def _gated_ancestry_facts(root: Path) -> None:
+    """A gated class extending a gated base, where only the BASE declares the
+    member — `A-M15`'s own shape, with a gate and a prefix on each level."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/BillingBase.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    base = _contract_type("BillingBase")
+    sub = _contract_type("BillingSub")
+    write_fact_file(
+        root / "BillingBase.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=base, construct_kind=ConstructKind.CLASS),
+            AnnotationFact(
+                document_id="doc_1",
+                target=base,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "base_"}),
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_member("BillingBase", "op"),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=base,
+                visibility="public",
+                signature=_VOID,
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=sub,
+                construct_kind=ConstructKind.CLASS,
+                superclass=base,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=sub,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "sub_"}),
+            ),
+        ],
+    )
+
+
+def test_an_inherited_member_takes_the_name_of_the_gate_it_is_attributed_to(tmp_path: Path):
+    """WHICH type the new words name, on the one shape where "the declaring
+    type" and "the type this row is attributed to" are different types.
+
+    `A-M15` already attributes an INHERITED member to the gate the walk started
+    from rather than to the base class that declares it — `member_declarations`
+    says so in as many words — and the walk starts from every gate in the
+    chain. So one declaration of `op()` on a gated base, under a gated
+    subclass, is TWO endpoints, each named and prefixed by the gate it is
+    attributed to.
+
+    That double-derivation is `A-M15`/w63 behaviour these words inherit rather
+    than introduce, and it is not this vocabulary's to change. What IS this
+    vocabulary's is which type supplies the name, and the two prefixes make the
+    answer visible: `base_Op` from the base's own gate, `sub_Op` from the
+    subclass's. Pinned so the next reader finds it stated rather than
+    discovering it."""
+    _gated_ancestry_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _contract_catalog(
+        members="declared_type_methods",
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"base_Op", "sub_Op"}
+
+
+def test_the_prefix_composing_word_is_refused_without_a_type_gate_to_read(tmp_path: Path):
+    """The attribute is read off the declaring type's own `type_annotation`
+    use and nowhere else, so a catalog declaring no such gate has no row to
+    read it from — and the word would then compose every address WITHOUT its
+    prefix. A fragment of the address the framework serves is the same
+    confidently-wrong answer an empty prefix attribute gives, reached by a
+    third route, so it is refused at load the same way (the `members` class
+    gate's own shape)."""
+    catalog = _contract_catalog(
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    del catalog.matches["type_annotation"]
+
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(tmp_path, catalog)
+
+    assert "type_annotation" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+def test_a_misspelled_entry_word_is_refused_as_a_typo_and_not_as_an_unread_key(tmp_path: Path):
+    """Which refusal a file gets is part of the refusal. A catalog whose
+    ANNOTATION ENTRY misspells the prefix-composing word, with the attribute
+    declared beside it, has exactly one thing wrong — the word — and a refusal
+    naming `fallback_prefix_attr` would send its author to correct the line
+    that is right. So the closed-set check runs first and this one reads every
+    entry's word after it has been vouched for."""
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(
+            tmp_path,
+            _contract_catalog(
+                path_fallback="construct_name",
+                fallback_prefix_attr="namePrefix",
+                annotations=[
+                    {"fqn": _CONTRACT_GATE},
+                    {"fqn": _CONTRACT_OP, "path_fallback": "prefixed_capitalised_construct_name"},
+                ],
+            ),
+        )
+
+    assert "prefixed_capitalised_construct_name" in str(raised.value)
+    assert "is not one of" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
 def test_the_prefix_attribute_is_refused_without_the_word_that_reads_it(tmp_path: Path):
     """The `_RESOLVES` discipline: a key nothing reads is a rule the author
     believes is being applied. No other fallback word composes a prefix, so an

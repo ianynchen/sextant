@@ -277,6 +277,15 @@
 --                           itself carries, `args` JSON-encoded as text the
 --                           same way this file's own STRUCT bindings always
 --                           are. Empty where a catalog composes nothing.
+--                           `inherited` says WHICH pass wrote the row: true
+--                           only for the inheritance walk, which carries an
+--                           annotation ACROSS a type boundary, and false for
+--                           the folded (`OI-36`) and composed (`A-C7`) passes,
+--                           which rewrite an annotation the author really did
+--                           write on that very target. One rule asks — the
+--                           direct gate `members: declared_type_methods` reads
+--                           — and `catalog_id` cannot answer it, because all
+--                           three passes stamp it.
 
 -- Named explicitly: `endpoints` also carries request_shape/response_shape
 -- (D01 §3 Contracts), which this engine does not populate — that is the
@@ -323,7 +332,8 @@ WITH RECURSIVE catalog_params AS (
             flip_direction VARCHAR, flip_owners VARCHAR[],
             flip_handlers STRUCT(declaration VARCHAR, handler VARCHAR)[],
             flip_canonical_path BOOLEAN,
-            synthetic_annotations STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR)[]
+            synthetic_annotations
+                STRUCT(target VARCHAR, annotation VARCHAR, args VARCHAR, inherited BOOLEAN)[]
         )[]
     ) AS s)
 ),
@@ -413,9 +423,21 @@ annotations_effective AS (
     -- consumer first equi-joins `annotation` to a fqn a catalog declared,
     -- which is what makes the batch cost the sum of the catalogs rather than
     -- the product.
-    SELECT CAST(NULL AS VARCHAR) AS catalog_id, target, annotation, args FROM annotations
+    --
+    -- `inherited` is the second thing a row says about itself, and it answers
+    -- a question `catalog_id` cannot: WHICH pre-pass wrote it. A real row is
+    -- false because nothing carried it anywhere — a scanner read it off the
+    -- target it names. Of the three synthetic passes only the inheritance walk
+    -- carries an annotation ACROSS a type boundary; folding and composition
+    -- rewrite an annotation the author wrote on that very target into the
+    -- spelling the catalog declares. One rule reads this column (the direct
+    -- gate below); every other join ignores it and derives what it always did.
+    SELECT CAST(NULL AS VARCHAR) AS catalog_id, target, annotation, args,
+           FALSE AS inherited
+    FROM annotations
     UNION ALL
-    SELECT u.catalog_id AS catalog_id, s.target, s.annotation, s.args::JSON
+    SELECT u.catalog_id AS catalog_id, s.target, s.annotation, s.args::JSON,
+           s.inherited AS inherited
     FROM (SELECT cp.catalog_id AS catalog_id, UNNEST(cp.synthetic_annotations) AS s
           FROM catalog_params cp) u
 ),
@@ -651,17 +673,31 @@ gate_types AS (
 ),
 -- THE DIRECT GATE, and the whole of `members: declared_type_methods` (spec
 -- 2026-09-22 §2c, M-3): the same gate types as above and the ones
--- `$type_annotation` names, restricted to the rows a scanner actually READ.
+-- `$type_annotation` names, restricted to the types that carry the gate
+-- THEMSELVES rather than by inheritance.
 --
--- The restriction is one conjunct, `a.catalog_id IS NULL`, and it works
--- because `annotations_effective` already carries the distinction its own
--- comment states: a REAL row — an annotation written in the code and read off
--- it — carries NULL there, and a row this engine's pre-passes synthesized
--- carries the catalog's own id. So this set is exactly "the types that carry
--- the gate THEMSELVES", and the inherited gate is exactly what it drops. The
--- usual `(a.catalog_id IS NULL OR a.catalog_id = <the catalog>)` conjunct is
--- subsumed rather than missing: a real row is readable by every catalog, and
--- this CTE admits nothing else.
+-- The restriction is one conjunct, `NOT a.inherited`, and the column it reads
+-- exists for this rule alone. It is deliberately NOT `a.catalog_id IS NULL`,
+-- which is the same sentence read one level too coarsely and was this rule's
+-- first spelling: `catalog_id` distinguishes a REAL row from ANY synthetic
+-- one, and three passes write synthetic rows. Folding (`OI-36`) reads a
+-- repeated annotation out of the container javac actually stored it in, and
+-- composition (`A-C7`) reads a module-local stereotype back to the annotation
+-- it was built from — in both, the author wrote that annotation on THAT type,
+-- and the pass only undoes a spelling. Only the inheritance walk carries an
+-- annotation ACROSS a type boundary, which is the one thing this word means
+-- to exclude.
+--
+-- Read as `catalog_id IS NULL`, a contract type wearing a module-local
+-- stereotype composed from the gate qualifies nowhere, and the word derives
+-- NOTHING for it — the whole contract surface, silently, from ordinary
+-- scanned input. That is the failure `_synthetic_annotations`' own comment
+-- records as having "deleted the controller's whole surface" one rule over,
+-- and it is why the composed gate carries a test of its own.
+--
+-- The usual `(a.catalog_id IS NULL OR a.catalog_id = <the catalog>)` conjunct
+-- is kept rather than subsumed, now that synthetic rows can qualify: a
+-- composition one catalog's closure resolved is not evidence for another's.
 --
 -- WHY THAT IS THE RULE, and it is a fabrication removed rather than a
 -- narrowing for its own sake. The gate annotation sits on a CONTRACT type and
@@ -683,12 +719,14 @@ directly_gated_types AS (
     SELECT DISTINCT mc.catalog_id AS catalog_id, a.target AS type_symbol
     FROM annotations_effective a
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
-    WHERE a.catalog_id IS NULL
+         AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
+    WHERE NOT a.inherited
     UNION
     SELECT DISTINCT g.catalog_id AS catalog_id, a.target AS type_symbol
     FROM annotations_effective a
     JOIN type_gates g ON g.fqn = a.annotation
-    WHERE a.catalog_id IS NULL
+         AND (a.catalog_id IS NULL OR a.catalog_id = g.catalog_id)
+    WHERE NOT a.inherited
 ),
 -- `A-M15`: every type whose members a gated class EXPOSES — the gate type
 -- itself, then its superclass, then its superclass's, within what was scanned.
@@ -1319,12 +1357,24 @@ derived AS (
         -- fallback branch below reads it several times — four in the accessor
         -- strip, twice more in the capitalising word beside it.
         regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1) AS construct_name,
-        -- THE DECLARING TYPE, for the three words that name it instead of the
-        -- construct (spec 2026-09-22 §2b, CP-30 row 1). It is the type the
-        -- ANNOTATION sat on — `m.gate_type` where a member rule carried one,
-        -- the annotation target's own enclosing type otherwise — which is the
-        -- same `coalesce` every other read in this CTE already makes, for
-        -- `A-M15`'s reason.
+        -- THE TYPE THIS ROW IS ATTRIBUTED TO, for the three words that name a
+        -- type instead of the construct (spec 2026-09-22 §2b, CP-30 row 1).
+        -- It is the type the ANNOTATION sat on — `m.gate_type` where a member
+        -- rule carried one, the annotation target's own enclosing type
+        -- otherwise — which is the same `coalesce` every other read in this
+        -- CTE already makes, for `A-M15`'s reason.
+        --
+        -- NAMED for what it is rather than "the declaring type", because on a
+        -- member row the two are not always the same type and `A-M15` says so
+        -- in `member_declarations` above: an INHERITED member is attributed to
+        -- the gate the walk started from, not to the base class that declares
+        -- it. So a gated subclass of a gated base publishes the base's member
+        -- twice — once under each gate, each with that gate's own name and
+        -- prefix — which is `A-M15`/w63 behaviour these words inherit rather
+        -- than introduce, and which a test pins so the next reader finds it
+        -- stated. For an ANNOTATED declaration, and for every member whose
+        -- own declaring type carries the gate directly (which is every member
+        -- `declared_type_methods` keeps), this IS the declaring type.
         --
         -- And it is NOT the handler. The two come apart exactly where these
         -- words are needed: the declaration sits on the contract type while
