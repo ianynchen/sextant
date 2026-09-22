@@ -2244,7 +2244,18 @@ common one.
 mechanism answers both, and answering them separately would be two.
 
 ### OI-127 — `registerWorkflowImplementationFactory` and the SDK's own start-up validations are reproduced by nothing
-**Minor · logged 2026-09-22, found at Group D Task 5 · `src/sextant/catalogs/temporal-workflow.yml` (the `THE SDK'S OWN VALIDATIONS` boundary bullet), `temporal-activity.yml`**
+**Major · logged 2026-09-22 as Minor, REGRADED at the branch review 2026-09-22 · `src/sextant/catalogs/temporal-workflow.yml` (the `THE SDK'S OWN VALIDATIONS` boundary bullet), `temporal-activity.yml`**
+
+> **Why the regrade.** Severity follows measurement, and the measurement is in this
+> entry's own text: the factory arm produces a row of the WRONG DIRECTION — a contract
+> the module SERVES read as one it calls — where every other Group D Minor is a miss. A
+> wrong-direction row links a caller to a caller and is the false-positive class the
+> group's standing requirement forbids; a miss is honest under-reporting. And the arm
+> clears the real-input bar: `registerWorkflowImplementationFactory` exists for
+> implementations that need constructor injection the SDK cannot do, which is ordinary
+> code rather than a module nobody runs. The VALIDATIONS half of this entry stays what it
+> was — reproducing them needs a module the SDK would refuse to start — and the grade
+> here is set by the factory arm.
 
 The catalog states it: *"THE SDK'S OWN VALIDATIONS are not reproduced — duplicate workflow-type
 names, a `@WorkflowInterface` with more than one `@WorkflowMethod`, `DynamicWorkflow`,
@@ -2382,10 +2393,72 @@ sorted order, or the alias declaration's. One probe question against
 is the standing rule — *predict the framework's error handling exactly, never our own* — and
 picking a winner because it is the first entry in our list is our tie-break, not Micronaut's. The
 framework's behaviour is knowable from its own bytecode, so guessing at it is the one thing not
-allowed. (`metadata_from` has no first-present-wins form either; that machinery is `path_from`'s,
-one key over.)
+allowed.
 
-**Verify:** `grep -n "both" src/sextant/catalogs/micronaut-kafka.yml` and CP-32 Q12/Q13.
+**Three options, and the measurement still decides between them** — added at the branch review,
+because this entry had argued against one option without recording that it has a precedent here
+and without recording the third option at all:
+
+1. **Write both rows** (what ships). Over-reports on a self-contradictory declaration; never
+   misses the ordinary short spelling.
+2. **First-present-wins.** This entry called that machinery "`path_from`'s, one key over" as
+   though it were foreign. It is not foreign, it is this engine's OWN PRECEDENT — and it is
+   declared eleven lines below the `metadata_from` block **in this same catalog**:
+   `path_from: [value, patterns]`, first present wins. So adopting it here would be reusing a
+   rule the file already applies to the address, not inventing one. DR-6's objection still
+   stands and is unchanged: the rule would pick a winner by OUR list order rather than by the
+   order Micronaut's metadata builder puts the elements in.
+3. **Write NO row for that endpoint's group.** Neither of the two, on the grounds that the
+   standing requirement says *every ambiguity is an unresolved column or an absent row, never a
+   guess* — and two aliased entries disagreeing on one endpoint is exactly an ambiguity. Neither
+   the catalog nor this entry had considered it. It costs the group on a declaration that has
+   one, which is why it is not obviously right either.
+
+**The shipped behaviour does not change on this entry.** What closes it is still the
+measurement named above — WHICH of the two the `put` lands on — and that answer picks among the
+three rather than being one of them.
+
+**Verify:** `grep -n "both" src/sextant/catalogs/micronaut-kafka.yml`, the `path_from` line
+eleven lines below the `metadata_from` block in the same file, and CP-32 Q12/Q13.
+
+### OI-131 — `uniqueGroupId = true` makes the recorded consumer group a PREFIX of the one joined
+**Minor · logged 2026-09-22 at the Group D branch review · `src/sextant/catalogs/micronaut-kafka.yml`
+(the `STATED BOUNDARY` paragraph above `metadata_from`), `docs/COVERAGE.md` §5.8**
+
+`@KafkaListener` declares `uniqueGroupId(): boolean`, default `false`. CP-32 Q9 (offsets
+146-167, micronaut-kafka 5.6.0) reads the processor composing `<declared>-<random UUID>`
+when it is `true`, and joining `<declared>` when it is not. We record the declared value
+either way, so under `uniqueGroupId = true` the `consumer_group` row states a **prefix** of
+the group the consumer is actually in.
+
+**Filed rather than left as prose, and that is the whole point of this entry.** Two
+documents already say it — the catalog paragraph and COVERAGE §5.8 — and neither is the
+register. `OI-130` files the both-written alias case from the same annotation, the same
+probe and the same review; this is the same class of defect (a `consumer_group` value that
+is not the group) and was the only one of the two living in prose alone.
+
+**What happens today:** a peer reading the row looks for a group nobody is in. The
+direction is not the dangerous one — linking gates on the value, so a prefix under-links
+rather than mis-links, and the declared value is still the name a human would search for —
+but it is a value stated as the group when it is not the group.
+
+**Real triggering input:** ordinary, unlike `OI-130`'s. `uniqueGroupId = true` is the
+supported way to make every instance of a service its own consumer group, which is what a
+broadcast-to-all-replicas listener needs; a repository using it is not contradicting
+itself.
+
+**Why it is not encoded:** `metadata_from` has no conditional form — an entry names one
+annotation, one attribute and one `kind`, and cannot read a SECOND attribute to decide what
+to do with the first. Nor could it spell the value: the suffix is a UUID minted at startup.
+
+**Closes** either by a `metadata_from` entry that may be gated on a sibling attribute — the
+`annotation_driven` conditional machinery B/C already built for `wrappers[].when`, one key
+over — recording the group at `unresolved` where the gate fires, or by recording
+`uniqueGroupId` as a `kind` of its own beside the group so a reader sees both facts. Both
+are catalog-shaped; neither is written.
+
+**Verify:** `grep -n "uniqueGroupId" src/sextant/catalogs/micronaut-kafka.yml docs/COVERAGE.md`
+and CP-32 Q9.
 
 ## CLOSED
 

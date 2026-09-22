@@ -13,8 +13,11 @@ are recorded by **one generic `metadata_from` key applied across every listener 
 calls "D. New `Protocol` members and two naming words", and with them Category C's last two items.
 **Rides along:** the qualifying attributes the shipped listener catalogs drop today — Kafka's
 consumer group, JMS's selector and durable subscription, Rabbit's exclusivity (§2e).
-**Rows it changes:** the **Async** column of the register's ```delivery``` block empties — the row
-closes. COVERAGE §5.12 gains two shipped framework lines; §§5.8–5.9 gain the recorded attributes.
+**Rows it changes:** the register's ```delivery``` **Async** row loses `temporal-cadence` and
+`vertx-eventbus` — *and does NOT close*. This line said it would; §8 carries the correction and the
+reason (a row cannot close while its own COVERAGE section holds an uncatalogued library, and §5.12
+holds `quartz` and `akka-pekko-actors`). COVERAGE §5.12 gains two shipped framework lines;
+§§5.8–5.9 gain the recorded attributes.
 
 Every factual claim below carries the command that produces it, or names the probe (§6) that must
 record it before the key it forces is written. Claims marked **measured 2026-09-22** were verified
@@ -47,14 +50,14 @@ smallrye-mutiny-vertx-core 3.16.0.
 | M6 | `EventBus.consumer(String, Handler)` **is** `consumer(String)` followed by `MessageConsumer.handler(h)`: `EventBusImpl.consumer(String, Handler)` calls `consumer:(Ljava/lang/String;)` at offset 9 and `MessageConsumer.handler` at 15 | §3b's two-step chain and its terminal |
 | M7 | vertx-core 4.5.10 and 5.0.0 differ: 4.5 has the callback `request(String, Object, Handler)`, `(String, Object, DeliveryOptions, Handler)` and `MessageProducer.write(T, Handler)`, none of which exist at 5.0.0; 5.0.0 adds `consumer(MessageConsumerOptions[, Handler])`, whose address sits in `MessageConsumerOptions.setAddress(String)` | §3a's per-version rows; §3d's builder-tail boundary |
 | M8 | Quarkus `@ConsumeEvent`'s default address is the **declaring bean class's fully-qualified name**: `VertxProcessor` calls `AnnotationProxyBuilder.withDefaultValue("value", BeanInfo.getBeanClass().toString())` at offsets 63–76. `@ConsumeEvent`'s own `AnnotationDefault` for `value()` is `""` and for `local()` is **`true`** | §3c's `declaring_type_qualified_name` and its `metadata_from` entry's `absent_value` |
-| M9 | The Mutiny facade `io.vertx.mutiny.core.eventbus.EventBus` declares `send`/`publish`/`request`/`consumer`/`localConsumer` with its own descriptors — `request` returns `io.smallrye.mutiny.Uni`, `consumer`'s handler is a `java.util.function.Consumer` — and declares **no `sender`/`publisher` at all** | §3a's second owner |
+| M9 | The Mutiny facade `io.vertx.mutiny.core.eventbus.EventBus` declares `send`/`publish`/`request`/`consumer`/`localConsumer`/`sender`/`publisher` with its own descriptors — `request` returns `io.smallrye.mutiny.Uni`, `consumer`'s handler is a `java.util.function.Consumer` — and shares **not one descriptor** with `io.vertx.core.eventbus.EventBus`. *(This row said the facade declares **no `sender`/`publisher` at all**. CP-31 Q8 FALSIFIED it: the facade declares **four**, at smallrye-mutiny-vertx-core 3.16.0 — `sender(String)`, `sender(String, DeliveryOptions)`, `publisher(String)` and `publisher(String, DeliveryOptions)`, each returning `io.vertx.mutiny.core.eventbus.MessageProducer`. The shared-nothing clause is the one the design actually rests on and it survives: it is why the facade is a catalog of its own, `vertx-eventbus-mutiny.yml`, rather than a second `owner:` on `vertx-eventbus.yml` — one `single_call` file's `methods:` rows apply to every owner it names, and here there is no row the two owners could share)* | §3a's second owner |
 | M10 | `WorkflowClient.newUntypedWorkflowStub(String, …)` names the **workflow type** at argument 0; `WorkflowStub.signal/query/update(String, …)` name a **member** at argument 0 with no workflow type at the call site | §2f: the first derives, the second does not |
 
 ### 0a. What the adversarial self-review changed
 
 | # | Finding | Severity | Ruling |
 |---|---|---|---|
-| M-1 | §2 built a new engine, a new `contract-models/` file kind and a shared `resolve/contracts.py` for what `annotation_driven` already does — the interface→implementor annotation inheritance walk (`effective_annotations.py`, interfaces *and* superclasses), `members` with its ancestry walk, per-annotation `method: [kind]` and per-annotation `path_fallback`, and the `declared_on: class`/`declared_on: interface` partition `jakarta-jws.yml`/`jakarta-jws-client.yml` already use to split one annotation into an inbound and an outbound catalog | **Major** | **(a)** Rewrite onto `annotation_driven`. The new engine, model kind and fold are deleted before they are written; §2 is four catalogs plus three words in vocabularies that already exist |
+| M-1 | §2 built a new engine, a new `contract-models/` file kind and a shared `resolve/contracts.py` for what `annotation_driven` already does — the interface→implementor annotation inheritance walk (`effective_annotations.py`, interfaces *and* superclasses), `members` with its ancestry walk, per-annotation `method: [kind]` and per-annotation `path_fallback`, and the `declared_on: class`/`declared_on: interface` partition `jakarta-jws.yml`/`jakarta-jws-client.yml` already use to split one annotation into an inbound and an outbound catalog | **Major** | **(a)** Rewrite onto `annotation_driven`. The new engine, model kind and fold are deleted before they are written; §2 is catalogs plus words in vocabularies that already exist. *(Amended: this said "four catalogs plus three words". What shipped is THREE Temporal catalogs — §2d's amendment collapsed the four contract files to two, and §2f's untyped one is the third — plus FOUR `path_fallback` words, one `members` word and three keys)* |
 | M-2 | With M-1 resolved, nothing could write the task queue at all — `endpoint_metadata` has exactly two producers (`request_requirements.py`, `fluent`) and neither is reachable from `annotation_driven`. The same hole silently drops `@KafkaListener(groupId)`, `@JmsListener(selector)`/`(subscription)` and `@ConsumeEvent(local)` | **Major** | **(b)** Build a generic `metadata_from` key and **apply it across every listener catalog in this group**, not only the new ones. §1f states the rule that decides path-vs-metadata; §2e lists the attributes and the tests that move with them |
 | M-3 | `members: public_methods` enumerates the **gated class's** members, and the gate fires on the impl class (the annotation is inherited onto it) — so a public helper on an activity implementation would publish as an activity nothing polls. JAX-WS does not have this problem because the framework really does expose every public method; Temporal exposes the interface's | **Major** | **(a)** A new member word `declared_type_methods`: enumerate only members whose declaring type carries the type annotation **directly**, never by inheritance |
 | m-1 | `argument_chain` (a new `fluent`/`single_call` word) was proposed for reading a value out of an argument's producing chain | minor | Deleted. The existing `channel_via` reads a value off an argument's producing call, which covers `new MessageConsumerOptions().setAddress("x")`; the builder-tail spelling is a stated boundary (§3d) |
@@ -124,8 +127,10 @@ it as a Temporal preference. It is recorded as an `endpoint_metadata` row (`kind
 
 `path` is the address string, verbatim; nothing is composed and nothing is split, the `channel` rule
 every destination protocol already keeps. Inbound rows carry `request_shape` from the handler's
-payload parameter, outbound rows from the send's own `body_arg`, and `request(...)` carries
-`response_shape` from its declared reply type.
+payload parameter and outbound rows from the send's own `body_arg`. *(Amended: this said
+`request(...)` carries `response_shape` from its declared reply type. It does not — the reply type
+is the call's RETURN type and `single_call`'s only response word is an argument POSITION, so the
+row ships with no `response_shape` at all. §3a states the boundary and `OI-125` files it)*
 
 ### 1f. The rule that decides path versus metadata
 
@@ -252,7 +257,10 @@ attribute becomes one `endpoint_metadata` row against the endpoint that declarat
 attribute becomes one row per element; a `${…}` value stays `unresolved`; the existing
 `endpoint_metadata_insert` is reused unchanged.
 
-The four Temporal catalogs, all `protocol: temporal`, all `style: annotation_driven`:
+The Temporal contract catalogs, both `protocol: temporal`, both `style: annotation_driven` —
+*(amended: this said FOUR, an inbound file beside an outbound one per contract kind. §2d's box above
+records why the inbound half never shipped; with §2f's `temporal-untyped.yml` the group ships three
+Temporal catalogs in all)*:
 
 ```yaml
 # temporal-workflow.yml   direction: outbound + a resolves.direction flip to inbound
@@ -265,12 +273,20 @@ type_annotation: io.temporal.workflow.WorkflowInterface
 mapping:
   method_from: method
   all_methods: []
+  # AMENDED to what shipped. `construct_name` would publish a bare `cancel` —
+  # the very collision §2f refuses — so the three member kinds take the fourth
+  # naming word, which composes `<workflow type><separator><the name that won>`.
+  # The paragraph after this block is what authorised it.
+  fallback_scope_separator: "/"
   annotations:
     - { fqn: io.temporal.workflow.WorkflowMethod, method: [workflow],
         path_fallback: declaring_type_simple_name }
-    - { fqn: io.temporal.workflow.SignalMethod, method: [signal], path_fallback: construct_name }
-    - { fqn: io.temporal.workflow.QueryMethod,  method: [query],  path_fallback: construct_name }
-    - { fqn: io.temporal.workflow.UpdateMethod, method: [update], path_fallback: construct_name }
+    - { fqn: io.temporal.workflow.SignalMethod, method: [signal],
+        path_fallback: declaring_type_scoped_name }
+    - { fqn: io.temporal.workflow.QueryMethod,  method: [query],
+        path_fallback: declaring_type_scoped_name }
+    - { fqn: io.temporal.workflow.UpdateMethod, method: [update],
+        path_fallback: declaring_type_scoped_name }
 metadata_from:                       # inbound file only — a client states no queue
   - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues, kind: task_queue }
 
@@ -278,7 +294,10 @@ metadata_from:                       # inbound file only — a client states no 
 declared_on: interface
 resolves:
   direction:
-    - when: { owner_implemented_by_type_annotated: [io.temporal.activity.ActivityImpl] }
+    # AMENDED: the measured fqn is the STARTER's, `io.temporal.spring.boot`
+    # (M5, CP-30 Q6). As written this YAML named a class that does not exist and
+    # would not load.
+    - when: { owner_implemented_by_type_annotated: [io.temporal.spring.boot.ActivityImpl] }
       then: inbound
 type_annotation: io.temporal.activity.ActivityInterface
 mapping:
@@ -345,9 +364,12 @@ colliding identity is the fabrication class the standing rule forbids.
 - **The programmatic worker.** `WorkerFactory.newWorker("orders")` +
   `registerWorkflowImplementationTypes(…)` / `registerActivitiesImplementations(…)` contributes
   nothing: the rows come from the impl class's own declaration, and the queue is read only from the
-  starter annotations (M5). A module that registers its workers programmatically therefore derives
-  its rows **without** a `task_queue` entry. Recorded as an open issue with the mechanism it would
-  need (an engine attaching metadata to another engine's rows), which does not exist today.
+  starter annotations (M5). *(Amended: this said such a module derives its rows **without** a
+  `task_queue` entry. §2d's box is what actually shipped — the starter annotation is the
+  REGISTRATION evidence, so without it the fence subtracts the contract and the flip declines, and
+  the module derives **nothing at all** for its own implementations rather than rows missing a
+  queue.)* Recorded as an open issue with the mechanism it would need (an engine attaching metadata
+  to another engine's rows), which does not exist today.
 - **A contract in a jar.** A client module that does not declare the `@WorkflowInterface` itself
   derives nothing — Feign's and the JWS client's own limitation.
 - **`newWorkflowStub(Class, String workflowId)`, `newExternalWorkflowStub`**: these address a
@@ -373,7 +395,7 @@ established after an overload collision published a payload as a destination.
 | `request(String, Object)`, `(String, Object, DeliveryOptions)` | outbound | same; **no `response_shape`** — see below |
 | `request(String, Object, Handler)`, `(String, Object, DeliveryOptions, Handler)` | outbound | **4.5 only** (M7) |
 | `consumer(String, Handler)`, `localConsumer(String, Handler)` | inbound | `channel_arg: 0`, handler at 1 |
-| `consumer(MessageConsumerOptions[, Handler])` | inbound | **5.0 only** (M7); address through the existing `channel_via` into `setAddress` |
+| `consumer(MessageConsumerOptions, Handler)` | inbound | **5.0 only** (M7); address through the existing `channel_via` into `setAddress`. *(Amended: this row was written `consumer(MessageConsumerOptions[, Handler])`, which reads as though both overloads derive. CP-31 Q4c measured that the HANDLER-LESS form registers nothing, exactly as `consumer(String)` does not — M6's rule does not care which argument carries the address — so only the two-argument overload is an inbound row)* |
 
 Both major versions are declared in one file; an overload absent from the version a module builds
 against simply never matches.
@@ -385,7 +407,9 @@ argument 1 would publish the REQUEST's own shape as the reply's. The row still d
 its address, so what is missing is a payload refinement rather than an identity. Shipped as a stated
 boundary on the catalog, with a test that FAILS the day an engine word lands, so the boundary retires
 deliberately instead of drifting (`OI-125`). **Second owner:** the Mutiny facade (M9), which is what a Quarkus
-service injects, with its own descriptors and no `sender`/`publisher`.
+service injects, with its own descriptors — including its own `sender`/`publisher`, which this
+sentence said it had none of until CP-31 Q8 counted four (M9). It shares no descriptor with
+`io.vertx.core.eventbus.EventBus`, which is why it is a file of its own, `vertx-eventbus-mutiny.yml`.
 
 ### 3b. `vertx-eventbus-chain.yml` — the two-step forms (`fluent`)
 
@@ -473,9 +497,10 @@ declares the listeners whose attributes are now read.
 - A negative test per fabrication this design removes: the activity impl's helper method
   (§2c), the interface-only client module against the inbound catalog, the handler-less consumer
   (§3b), and `stub.signal(...)` (§2f).
-- Unit tests beside their peers for the three `path_fallback` words, the `declared_type_methods`
-  word and `metadata_from` — each including its catalog-error path, since a closed vocabulary that
-  does not refuse a typo is the hole it exists to close.
+- Unit tests beside their peers for the four `path_fallback` words (*amended: three, before §2d's
+  own paragraph authorised `declaring_type_scoped_name`*), the `declared_type_methods` word and
+  `metadata_from` — each including its catalog-error path, since a closed vocabulary that does not
+  refuse a typo is the hole it exists to close.
 - **The §2e moves:** every test that reads `endpoint_metadata` is updated in the same task as the
   catalog line that changes it — `tests/e2e/test_vertical_slice.py`,
   `tests/e2e/test_rest_inbound_delivered.py`, `tests/application/test_combinator_engine.py`,
@@ -508,10 +533,10 @@ compiled classes. Nothing is executed.
 | `domain/closed_sets.py` | `TEMPORAL`, `EVENTBUS`, one edit |
 | `egress/render/document.py` | `temporal` into `_VERBED_PROTOCOLS` |
 | `tests/architecture/test_source_rules.py` | both names into `PROTOCOLS` |
-| `resolve/engines/annotation_driven.py` | three `_PATH_FALLBACKS` words, `declared_type_methods` in `_MEMBER_RULES`, the `metadata_from` key and its validation |
-| `storage/duckdb/derive_endpoints.sql` | the three naming words' composition; the `declared_type_methods` conjunct |
+| `resolve/engines/annotation_driven.py` | **four** `_PATH_FALLBACKS` words (*amended from three*), `declared_type_methods` in `_MEMBER_RULES`, and three keys with their validation — `metadata_from`, `fallback_prefix_attr` and `fallback_scope_separator` |
+| `storage/duckdb/derive_endpoints.sql` | the **four** naming words' composition (*amended from three*); the `declared_type_methods` conjunct |
 | `resolve/` (metadata writer) | `metadata_from` rows into the existing `endpoint_metadata_insert` |
-| catalogs, new | `temporal-workflow.yml`, `temporal-workflow-client.yml`, `temporal-activity.yml`, `temporal-activity-client.yml`, `temporal-untyped.yml`, `vertx-eventbus.yml`, `vertx-eventbus-chain.yml`, `quarkus-consume-event.yml` |
+| catalogs, new | `temporal-workflow.yml`, `temporal-activity.yml`, `temporal-untyped.yml`, `vertx-eventbus.yml`, `vertx-eventbus-chain.yml`, `vertx-eventbus-mutiny.yml`, `quarkus-consume-event.yml` — **seven**. *(Amended: this listed eight, including `temporal-workflow-client.yml` and `temporal-activity-client.yml`, which §2d's box explains were never created, and omitting `vertx-eventbus-mutiny.yml`, which M9's shared-nothing finding required)* |
 | catalogs, amended (§2e) | `spring-kafka.yml`, `micronaut-kafka.yml`, `spring-jms.yml`, `micronaut-jms.yml`, `spring-rabbit.yml` |
 | fixtures | `temporal-probe`, `orders-eventbus` |
 | probes | `cp30_temporal_contract_naming`, `cp31_eventbus_surface`, `cp32_listener_attributes` |
@@ -542,7 +567,7 @@ down to one item rather than empty. `scripts/coverage_matrix.py`'s
 `ITEM_FRAMEWORKS` entries for the two ids go with them. COVERAGE §5.12 gains two shipped framework
 lines with their boundaries; §§5.8–5.9 record the attributes §2e now reads.
 
-Nine open issues shipped, `OI-122`–`OI-130`, where this section listed five: the linking-tier
+Ten open issues shipped, `OI-122`–`OI-131` (*the branch review added `OI-131` and regraded `OI-127` to Major*), where this section listed five: the linking-tier
 refinement rule (§1f); a Cadence re-measurement trigger (§1b); the programmatic worker's unread task
 queue with the mechanism it would need (§2g); a `MessageConsumer` handed across methods (§3d);
 `registerWorkflowImplementationFactory` (§2g); `request(...)`'s unread reply shape (§3a); and three
@@ -553,14 +578,17 @@ outside the descriptor gate entirely; and Micronaut's both-written alias case, w
 javac writes both elements (CP-32 Q12) and the framework's own alias processing overwrites rather
 than refuses (CP-32 Q13). That last one names the measurement that would close it — WHICH of the two
 the overwrite lands on — rather than inventing a first-present-wins rule, which would be our
-tie-break rather than the framework's and so a DR-6 violation.
+tie-break rather than the framework's and so a DR-6 violation. The tenth is the branch review's:
+`uniqueGroupId = true` makes the recorded consumer group a PREFIX of the one actually joined,
+the same class as the alias case and the one half of it that had been left as prose
+(`OI-131`).
 
 ---
 
 ## 9. Self-review
 
 **Placeholders:** none. **Internal consistency:** §1c's verbed/verbless split matches §1d's kinds
-and §1e's silence; §2's four catalogs each name the word §7 adds; §3's per-version rows match M7 and
+and §1e's silence; §2's three catalogs each name the word §7 adds; §3's per-version rows match M7 and
 the fixture arms in §4; §1f's rule is what §1d, §2d, §2e and §3c all cite.
 
 **No false positives, form by form:** the activity/workflow asymmetry (M4, §2c); the helper-method
@@ -569,8 +597,9 @@ consumer (M6); `stub.signal` deriving nothing rather than a colliding identity (
 running-execution stubs (§2g).
 
 **Existing functionality:** the only shipped output that moves is §2e's, which is the user's own
-ruling; its tests move in the same task. Every other change is additive — two enum members, three
-words and one key in closed vocabularies that refuse the unknown, and eight new catalogs.
+ruling; its tests move in the same task. Every other change is additive — two enum members, five
+words and three keys in closed vocabularies that refuse the unknown, and seven new catalogs.
+*(Amended: "three words and one key … eight new catalogs", the counts §7's own rows now carry.)*
 
 **Reuse:** the adversarial pass deleted one engine, one model-file kind, one shared fold and three
 engine words by finding the shipped mechanism that already did each job (§0a). What remains new is

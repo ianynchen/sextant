@@ -231,6 +231,17 @@ shape_model: json
 #   * CADENCE (`com.uber.cadence`) gets no rows: every fqn here is
 #     `io.temporal.*`, and folding Cadence under this protocol would let a
 #     Cadence worker answer a Temporal caller (§1b).
+#   * A NESTED `@WorkflowImpl` CLASS TAKES THE OUTER CLASS'S QUEUE. The
+#     `metadata_from` read looks for the starter annotation on the handler and
+#     on the handler's ENCLOSING TYPE, and the enclosing type is found with
+#     `owner_of`, which cuts the symbol at its FIRST type marker — so for a
+#     member of `Outer#Nested#` it answers `Outer#`, the OUTERMOST type, never
+#     the immediately enclosing one. Where an outer class also carries
+#     `@WorkflowImpl`, a nested implementation that carries none of its own
+#     takes the OUTER's `taskQueues`, and a nested one that carries its own
+#     still wins by nearest-wins. Not measured on any corpus and not encoded:
+#     stating it is the honest half, and the fix is a symbol question
+#     (`enclosing_of`) rather than a catalog line.
 #   * THE SDK'S OWN VALIDATIONS are not reproduced — duplicate workflow-type
 #     names, a `@WorkflowInterface` with more than one `@WorkflowMethod`,
 #     `DynamicWorkflow`, `registerWorkflowImplementationFactory` and Nexus

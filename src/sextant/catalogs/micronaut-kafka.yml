@@ -95,7 +95,9 @@ matches:
   # `<declared>`, so the recorded value is then a PREFIX of the group the
   # consumer really joins. Stated rather than encoded: `metadata_from` has no
   # conditional form, and the declared value is still the group a reader would
-  # look for.
+  # look for. FILED as `OI-131` at the branch review: the same class as the
+  # both-written alias case one paragraph down, which `OI-130` already carries,
+  # and this half had been stated in prose alone.
   #
   # NOT RECORDED, and each is the criterion applied rather than an omission:
   # `clientId`, `producerClientId`, `producerTransactionalId`, `threads`,

@@ -261,6 +261,12 @@ FAMILIES: dict[str, list[str]] = {
         "MicroProfile GraphQL",
         "Quarkus gRPC",
         "SmallRye Reactive Messaging (Quarkus)",
+        # The Vert.x EventBus line is Quarkus's too, the way the JAX-RS line is
+        # Helidon's: `quarkus-consume-event.yml` ships `@ConsumeEvent` and §5.12
+        # bills it under this line, because Quarkus's event bus IS Vert.x's. Left
+        # out, the grid's Quarkus/Async cell read `—` — *this family declares no
+        # line here* — of a family with a shipped async entry point.
+        "Vert.x EventBus",
     ],
     "Micronaut": [
         "Micronaut HTTP",

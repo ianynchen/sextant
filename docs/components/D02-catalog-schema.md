@@ -1052,9 +1052,13 @@ mapping:
 - **Inherited members keep `A-M15`'s attribution**, which these words inherit rather than
   introduce: a member is attributed to the gate the walk started from, not to the base
   class that declares it, so a gated subclass of a gated base publishes the base's member
-  once under each gate. Under `declared_type_methods` every surviving member's own
-  declaring type carries the gate directly, so for those rows the attributed type *is* the
-  declaring type.
+  once under each gate. `declared_type_methods` narrows WHICH members survive — every one
+  of them is declared by a type carrying the gate directly — but it does not change WHICH
+  GATE a surviving member is attributed to. So the base's own member still publishes once
+  under each gate, and under the subclass's gate the attributed type is the SUBCLASS while
+  the declaring type is the base. *(This bullet used to end "so for those rows the
+  attributed type is the declaring type", which the sentence before it contradicts. The
+  two coincide only where a gated type has no gated base.)*
 
 **Phase D also adds four naming words and the two keys they read** (spec 2026-09-22 §2b and
 §1d, measured by CP-30). All four join `path_fallback`'s closed vocabulary, at either level.
