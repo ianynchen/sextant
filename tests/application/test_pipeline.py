@@ -4607,6 +4607,7 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         "record_environment_divergence",
         "apply_protocol_hints",
         "record_request_requirements",
+        "record_endpoint_attributes",
         "record_self_exchange",
         "record_routing_conflicts",
         "record_roots",

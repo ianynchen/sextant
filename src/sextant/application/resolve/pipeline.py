@@ -9,6 +9,7 @@ from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.config import resolve_config
+from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
@@ -228,6 +229,15 @@ def resolve(
     # `derive_endpoints`, above the hint pass — W29's order, unchanged here.)
     with _timed("record_request_requirements"):
         record_request_requirements(workspace, declared)
+    # Spec 2026-09-22 §1f, and BELOW `apply_protocol_hints` for the reason the pass above
+    # gives in full: a qualifying attribute names its row by the row's identity columns,
+    # `protocol` among them, and that pass reclassifies `protocol` on rows the engines
+    # minted. Below the `endpoint_metadata` reset too, because it WRITES that table and a
+    # row written above the reset would simply be erased. Its order against
+    # `record_request_requirements` does not matter — the two write disjoint kinds, and
+    # the insert is insert-if-absent on the whole row either way.
+    with _timed("record_endpoint_attributes"):
+        record_endpoint_attributes(workspace, declared)
     # F5 §6.1 (W27), and BELOW `apply_protocol_hints` rather than beside the other
     # question-filing passes: `protocol` is part of the identity this question names,
     # and that pass reclassifies it on rows other engines minted. Filed above this line,

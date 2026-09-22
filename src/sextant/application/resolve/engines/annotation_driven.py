@@ -1455,6 +1455,113 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         )
 
 
+def metadata_from(catalog: Catalog) -> list[dict[str, Any]]:
+    """The catalog's `metadata_from` entries, validated and converted to the
+    descriptor form the `annotations` view spells, or empty where it declares
+    none (spec 2026-09-22 §1f).
+
+    Read here rather than in `endpoint_attributes.py` because the key is this
+    engine's — a `metadata_from` entry names an ANNOTATION and one of its
+    attributes, which is the same vocabulary `mapping.annotations` is written
+    in — and because the one check that needs the catalog's direction rule
+    (`_direction_rule`) lives in this module.
+    """
+    declared = catalog.matches.get("metadata_from")
+    if declared is None:
+        return []
+    where = f"loading catalog {catalog.source}: `metadata_from`"
+    if not isinstance(declared, list) or not declared:
+        raise CatalogError(
+            f"{where} must be a non-empty list of entries, got {declared!r} — a catalog that "
+            f"declares the key and names no attribute records nothing while reading as though "
+            f"it did"
+        )
+    _validate_metadata_from(catalog, where)
+    return [_metadata_entry(entry, where) for entry in declared]
+
+
+def _validate_metadata_from(catalog: Catalog, where: str) -> None:
+    """Refuses `metadata_from` on a catalog whose rows can only ever be
+    OUTBOUND, and that is a claim rather than a limit nobody has lifted yet.
+
+    Spec 2026-09-22 §1f rules that a qualifying attribute belongs to the side
+    of the wire that DECLARES it. Every attribute this key reads sits on a
+    listener or on an implementation — the receiving side — so an outbound
+    catalog declaring it would be stating a peer's configuration as its own:
+    a row saying "this call is made under consumer group X" when X is a fact
+    about whoever answers.
+
+    A catalog's DECLARED direction is not the test, because one of the first
+    consumers declares `outbound` and reaches `inbound` through a
+    `resolves.direction` flip (the flip is what keeps a contract's own
+    declaration as the row while rebinding the handler to the implementor's
+    override). So the question asked here is the honest one: can this catalog
+    own an inbound row at all? Its declared direction, or the direction its
+    flip resolves to, must be inbound. The PASS then reads each row's own
+    `direction` column, which is final by the time it runs.
+    """
+    rule = _direction_rule(catalog)
+    reachable = {catalog.direction} | ({rule[0]} if rule is not None else set())
+    if Direction.INBOUND.value in reachable:
+        return
+    raise CatalogError(
+        f"{where} is declared on a catalog whose rows are {'/'.join(sorted(reachable))} — a "
+        f"qualifying attribute belongs to the side of the wire that declares it (spec "
+        f"2026-09-22 §1f), and every attribute this key reads sits on the receiving side, so "
+        f"an outbound entry would state a peer's configuration as this module's own"
+    )
+
+
+def _metadata_entry(entry: object, where: str) -> dict[str, Any]:
+    """One `{annotation, attribute, kind}` triple, with an optional
+    `absent_value`.
+
+    The SHAPE is checked and the vocabulary is not: `endpoint_metadata.kind`'s
+    own comment says the set of kinds is per protocol and the catalog names it,
+    exactly as `semantics` on a wrapper is — so `task_queue`,
+    `consumer_group`, `selector` are the catalog's words and this engine has no
+    list to check them against. What IS checked is that each is a non-empty
+    string, because an empty `kind` or `attribute` read as written would put a
+    nameless row in a published table.
+
+    `absent_value` is a STRING and a YAML boolean is refused rather than
+    coerced: the value lands in a TEXT column beside values read off the class
+    file, where `true` is the text a JSON boolean reads back as (`_unless_equals`
+    states the same rule), and `str(True)` is `'True'` — a spelling nothing
+    else in this repository writes. Quoting it in the catalog is one character
+    and removes the question.
+    """
+    if not isinstance(entry, dict) or not set(entry) <= _METADATA_FROM_KEYS:
+        raise CatalogError(
+            f"{where} entries carry only {'/'.join(sorted(_METADATA_FROM_KEYS))}, got {entry!r}"
+        )
+    for key in ("annotation", "attribute", "kind"):
+        value = entry.get(key)
+        if not isinstance(value, str) or not value:
+            raise CatalogError(f"{where} `{key}` must be a non-empty string: {entry!r}")
+    absent = entry.get("absent_value")
+    if absent is not None and (not isinstance(absent, str) or not absent):
+        raise CatalogError(
+            f"{where} `absent_value` must be a non-empty string — quoted, so a YAML `true` is "
+            f"the text the value reads back as rather than a boolean: {entry!r}"
+        )
+    return {
+        "annotation": _catalog_symbol(str(entry["annotation"])),
+        "attribute": str(entry["attribute"]),
+        "kind": str(entry["kind"]),
+        "absent_value": None if absent is None else str(absent),
+    }
+
+
+# Every key a `metadata_from` entry may carry (spec 2026-09-22 §1f). `absent_value` is
+# the one optional: an attribute the declaration did not write reaches the class file
+# nowhere at all, so a catalog that has MEASURED the annotation's own `AnnotationDefault`
+# states it here and cites the probe beside the line. A catalog that has not measured one
+# writes nothing for an absent attribute — silence is the honest answer, and a default
+# nobody measured must never be invented (GUIDELINES §8.2).
+_METADATA_FROM_KEYS = frozenset({"annotation", "attribute", "kind", "absent_value"})
+
+
 def _validate_unless(catalog: Catalog, entry: dict[str, Any]) -> None:
     """Refuses an `unless` filter whose shape the derivation cannot honour.
 
