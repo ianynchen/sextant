@@ -2403,7 +2403,8 @@ and without recording the third option at all:
    misses the ordinary short spelling.
 2. **First-present-wins.** This entry called that machinery "`path_from`'s, one key over" as
    though it were foreign. It is not foreign, it is this engine's OWN PRECEDENT — and it is
-   declared eleven lines below the `metadata_from` block **in this same catalog**:
+   declared two lines below the `metadata_from` block **in this same catalog** — the key
+   at line 112, its two entries ending at 116, `path_from` at 118:
    `path_from: [value, patterns]`, first present wins. So adopting it here would be reusing a
    rule the file already applies to the address, not inventing one. DR-6's objection still
    stands and is unchanged: the rule would pick a winner by OUR list order rather than by the
@@ -2419,7 +2420,8 @@ measurement named above — WHICH of the two the `put` lands on — and that ans
 three rather than being one of them.
 
 **Verify:** `grep -n "both" src/sextant/catalogs/micronaut-kafka.yml`, the `path_from` line
-eleven lines below the `metadata_from` block in the same file, and CP-32 Q12/Q13.
+two lines below the `metadata_from` block in the same file (line 118 against 112-116),
+and CP-32 Q12/Q13.
 
 ### OI-131 — `uniqueGroupId = true` makes the recorded consumer group a PREFIX of the one joined
 **Minor · logged 2026-09-22 at the Group D branch review · `src/sextant/catalogs/micronaut-kafka.yml`
@@ -2461,6 +2463,63 @@ are catalog-shaped; neither is written.
 and CP-32 Q9.
 
 ## CLOSED
+
+### OI-132 — `request_requirements` wrote its `endpoint_metadata` values UNREDACTED into the export
+**Major · found and CLOSED 2026-09-22 by the Group D branch re-review ·
+`src/sextant/application/resolve/request_requirements.py`,
+`src/sextant/storage/duckdb/insert_endpoint_metadata.sql`,
+`src/sextant/storage/duckdb/workspace.py` (the export map's `endpoint_metadata` entry)**
+
+`_entry` wrote `"value": value` verbatim, with no redactor anywhere in the module. Three
+documents state the opposite invariant — `schema.sql`'s `value` column ("redacted at the
+ORIGIN, never at export"), `insert_endpoint_metadata.sql`'s header ("already redacted by
+the pass that read it"), and `workspace.py`'s export map, which exports the table **whole
+and unmasked on exactly that stated ground**.
+
+**Reproduced on the shipped test, not argued from the code.** Running
+`tests/application/test_request_requirements.py`'s mapping-attribute case with
+`headers=["X-Api-Key=s3cret-literal"]`:
+
+```
+('GET', '/orders', …, 'header', 'X-Api-Key', 's3cret-literal', 'required', 'resolved')
+```
+
+`spring-mvc.yml:140` and `spring-web.yml:136` both declare
+`request_requirement_attrs: {params: param, headers: header}`, so
+`@GetMapping(headers = "X-Api-Key=…")` is ORDINARY Spring input — this is not a shape a
+repository has to contrive. The row reached `graph/*.parquet` in the clear, and the bundle
+is the trust boundary.
+
+**Cost while it stood:** every literal a route predicate carried left in the clear in every
+exported bundle. Bounded only by how often a credential is written into a routing
+predicate, which is a real if uncommon way to gate an internal endpoint.
+
+**Pre-existing**, not introduced by Group D — this branch found it, because the sibling
+fix at the other origin (`endpoint_attributes`, same commit group) shipped a comment
+claiming it was the last one. That claim is corrected in place rather than deleted: a
+wrong rationale is what stops the next reader looking.
+
+**Closed** by the same rule the other two origins apply: `Redactor.from_rules()` in
+`_entry`, which every one of the four mechanisms funnels through. It is the name/value pair
+`redaction.py`'s `redact_json` docstring calls *how a credential actually reaches this
+grammar*, and here there is a real header or parameter NAME to key on, so `redact_value`
+does the work directly. A value whose name could not be read — the combinator reads both
+literals off a call argument and writes `name` NULL where the name was not one — is masked
+WHOLE, `engines/fluent.py`'s rule for `fluent`'s own reason.
+
+**No existing assertion moved**, which was the stop condition: the whole suite is green at
+3979 passed, 8 skipped, 4 xfailed, and the two new tests both fail — and only those two —
+with the redaction removed. Nothing reads `endpoint_metadata.value` downstream, so no
+derived row could move: the table's only consumer is the export map.
+
+**And the cause is removed, not only the instance.** The invariant was stated in three
+documents and tied to no writer, which is how two of the three origins came to violate it.
+`tests/architecture/test_source_rules.py::test_every_origin_writing_endpoint_metadata_holds_a_redactor`
+now requires a module reaching `endpoint_metadata_insert` to build a `Redactor`, so a
+fourth origin cannot be written without meeting it.
+
+**Verify:** `grep -rn "endpoint_metadata_insert" src/sextant | grep -v workspace.py` names
+the three origins; each holds a `Redactor`.
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none
 **Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·

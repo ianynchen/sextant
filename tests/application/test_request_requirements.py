@@ -50,6 +50,7 @@ from sextant.domain.facts import (
     CallTarget,
     Document,
 )
+from sextant.domain.redaction import REDACTED
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -199,6 +200,33 @@ def test_the_stash_is_joined_to_its_row_and_carries_the_rows_final_protocol(tmp_
             "evidence": "compiler",
             "requirement": None,
         },
+    ]
+
+
+def test_a_stashed_value_whose_name_could_not_be_read_is_masked_whole(tmp_path: Path):
+    """The combinator reads both literals off a CALL ARGUMENT and writes `name` NULL where
+    the name was not one (`combinator._Requirement`). An unread name is an unanswerable
+    question — `redact_value("", literal)` answers it *not a secret*, which is the one
+    direction this must not guess in — so the value is masked whole, `engines/fluent.py`'s
+    rule verbatim and for its own reason. A header assembled from a constant field beside
+    a compiled-in credential is exactly that shape.
+
+    The `resolution` the stash wrote is untouched: masking is not reading."""
+    workspace = _workspace(tmp_path, ("http", "GET", "/orders", HANDLER, ROUTES))
+    _stash(
+        workspace,
+        HANDLER,
+        None,
+        "required",
+        value="Bearer sk-live-fixture-secret",
+        resolution="unresolved",
+    )
+    record_request_requirements(workspace, [_catalog()])
+    entries = _entries(workspace)
+    workspace.close()
+
+    assert [(e["name"], e["value"], e["resolution"]) for e in entries] == [
+        (None, REDACTED, "unresolved")
     ]
 
 
@@ -859,6 +887,41 @@ def test_method_and_class_expressions_union_into_one_row_each(tmp_path: Path):
         ("GET", "/orders", METHOD, "param", "v", "1", "required", "resolved"),
         ("GET", "/orders", METHOD, "header", "X-Legacy", None, "absent", "resolved"),
         ("GET", "/orders", METHOD, "param", "tenant", None, "required", "resolved"),
+    }
+
+
+def test_a_predicate_value_is_redacted_at_the_origin_and_an_ordinary_one_passes_through(
+    tmp_path: Path,
+):
+    """`schema.sql`'s invariant on the `value` column, at this pass's origin. The value is
+    masked HERE because nothing downstream masks one and `workspace.py` exports
+    `endpoint_metadata` whole on exactly that stated ground — so a value written in the
+    clear reaches `graph/*.parquet` in the clear. This pass was writing it in the clear,
+    and `@GetMapping(headers = "X-Api-Key=…")` is ordinary Spring input, not a contrived
+    shape: `spring-mvc.yml` and `spring-web.yml` both declare
+    `request_requirement_attrs: {params: param, headers: header}`.
+
+    Both arms in one test because the rule is one decision. `X-Api-Key` normalizes to
+    `xapikey`, which carries the built-in `apikey`, so its value masks WHOLE — this is the
+    name/value pair `redaction.py` calls how a credential actually reaches this grammar,
+    and here there is a real name to key on. `v=1` beside it passes through character for
+    character, which is the arm that makes this rule-based rather than blanket masking: a
+    route predicate is a routing fact and `NFR-7` depends on it surviving.
+
+    The NAME is never masked — it is a schema, not a value, and a row saying a masked
+    header is required would state nothing a reader could act on."""
+    annotations = [
+        _annotated(
+            METHOD,
+            GET_MAPPING,
+            value=["/orders"],
+            params=["v=1"],
+            headers=["X-Api-Key=s3cret-literal"],
+        ),
+    ]
+    assert _mapping_rows(tmp_path, annotations) == {
+        ("GET", "/orders", METHOD, "param", "v", "1", "required", "resolved"),
+        ("GET", "/orders", METHOD, "header", "X-Api-Key", REDACTED, "required", "resolved"),
     }
 
 

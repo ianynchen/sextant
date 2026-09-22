@@ -104,6 +104,62 @@ def test_the_protocol_set_policed_here_is_the_whole_set():
     assert PROTOCOLS == {member.value for member in Protocol}
 
 
+# The one statement whose rows carry a value nothing downstream will ever mask.
+_METADATA_INSERT = "endpoint_metadata_insert"
+
+
+def test_every_origin_writing_endpoint_metadata_holds_a_redactor():
+    """`schema.sql`'s `value` column, `insert_endpoint_metadata.sql`'s header and
+    `workspace.py`'s export map all state one invariant: a metadata value is masked AT THE
+    ORIGIN, because nothing downstream masks one and the table is exported whole. Three
+    passes write that table, and nothing tied the invariant to any of them — two of the
+    three were writing values in the clear into a bundle, for waves, with every document
+    saying they could not be.
+
+    So the rule is stated where it can be checked: a module that reaches
+    `endpoint_metadata_insert` builds a `Redactor`. It does not check that the redactor is
+    USED on the right column, but it does mean a fourth origin cannot be written without
+    meeting this, which is how the first two got in.
+
+    **A STRONGER rule exists and this is not it**, which is worth stating plainly because
+    an earlier draft of this docstring claimed no source rule could go further. One can:
+    pin the `value` entry of the row dict itself — every dict literal in these modules
+    carrying the row's key set must have its `value` expression mention `redact_value` or
+    `REDACTED`. Measured 2026-09-22, that rule passes on all three origins as they stand
+    and flags the pre-fix `request_requirements.py`, so it would have caught this bug by
+    the column rather than by the import. It is not adopted here because it is keyed to
+    an incidental code SHAPE — the three origins happen to build a dict literal in one
+    place, and a row assembled incrementally or spread with `**` would satisfy it
+    vacuously. That defeat is itself detectable (the module would match no row dict at
+    all), so the stronger rule is a real option, deliberately declined rather than
+    unavailable. The limitation is recorded here so the next reader weighs it instead of
+    rediscovering it.
+
+    Structural rather than textual: the docstrings of these modules name the statement
+    while explaining the invariant, and a rule that fired on its own rationale would be
+    deleted (`rules.py`'s own note)."""
+    missing = []
+    for path in python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        writes = any(
+            isinstance(node, ast.Call)
+            and any(
+                isinstance(argument, ast.Constant) and argument.value == _METADATA_INSERT
+                for argument in node.args
+            )
+            for node in ast.walk(tree)
+        )
+        if not writes:
+            continue
+        holds = any(
+            isinstance(node, ast.Attribute) and node.attr == "from_rules" for node in ast.walk(tree)
+        )
+        if not holds:
+            missing.append(str(path.relative_to(SRC)))
+
+    assert missing == [], f"origins writing {_METADATA_INSERT} with no redactor: {missing}"
+
+
 def test_jvm_names_stay_in_the_jvm_extractor():
     """§10 language confinement.
 

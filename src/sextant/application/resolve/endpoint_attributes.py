@@ -71,7 +71,13 @@ from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 # It is here because `storage/duckdb/schema.sql`'s `value` column states the invariant
 # that a metadata value is masked AT THE ORIGIN — nothing downstream masks one, and
 # `endpoint_metadata` IS in the export map, so an unmasked value reaches `graph/*.parquet`
-# verbatim. This pass was the one origin writing it in the clear.
+# verbatim. This pass was writing it in the clear.
+#
+# **It was not the only one, and an earlier draft of this comment said it was.** The
+# re-review found `request_requirements.py` writing its own `value` verbatim on the same
+# table — `@GetMapping(headers = "X-Api-Key=…")`, ordinary Spring input. Both origins mask
+# now; the claim that this was the last one is what would have stopped the next reader
+# looking, so it is recorded here rather than quietly deleted.
 #
 # No shipped row moves: the six kinds the eight shipped catalogs declare — `task_queue`,
 # `consumer_group`, `selector`, `subscription`, `exclusive`, `local` — carry no built-in

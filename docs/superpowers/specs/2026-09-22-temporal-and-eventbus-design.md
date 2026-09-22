@@ -271,6 +271,9 @@ resolves:
       then: inbound
 type_annotation: io.temporal.workflow.WorkflowInterface
 mapping:
+  path_from: [name]                  # each member annotation's own `name` attribute
+  prefix_from: []                    # inert: nothing here composes a type-level prefix
+  prefix_annotation: null            # no member rule, so no gate to carry
   method_from: method
   all_methods: []
   # AMENDED to what shipped. `construct_name` would publish a bare `cancel` —
@@ -287,7 +290,9 @@ mapping:
         path_fallback: declaring_type_scoped_name }
     - { fqn: io.temporal.workflow.UpdateMethod, method: [update],
         path_fallback: declaring_type_scoped_name }
-metadata_from:                       # inbound file only — a client states no queue
+metadata_from:                       # AMENDED from "inbound file only": there is no
+                                     # second file, and the key finds nothing on a module
+                                     # whose rows never flip to inbound
   - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues, kind: task_queue }
 
 # temporal-activity.yml   direction: outbound + the same flip on @ActivityImpl
@@ -302,10 +307,21 @@ resolves:
 type_annotation: io.temporal.activity.ActivityInterface
 mapping:
   members: declared_type_methods
+  path_from: [name]                  # `@ActivityMethod(name = …)`, used verbatim (M2)
   path_fallback: prefixed_capitalized_construct_name
+  fallback_prefix_attr: namePrefix   # WHICH attribute the word composes in front (§2b)
+  prefix_from: []                    # inert: `namePrefix` is read through the key above
+  prefix_annotation: io.temporal.activity.ActivityInterface   # the gate, third place
   method_from: method
-  all_methods: []
+  # AMENDED to what shipped: an UNANNOTATED member has no annotation to read a
+  # kind off and `all_methods` is what a member row takes, so `[activity]`
+  # rather than `[]`. `temporal-workflow.yml` keeps `[]` — it has no member
+  # rule and each of its annotations states its own kind.
+  all_methods: [activity]
   annotations:
+    # The TYPE-level gate entry, present for the member rule's sake. It mints no
+    # row of its own: the derivation admits only methods and functions.
+    - { fqn: io.temporal.activity.ActivityInterface }
     - { fqn: io.temporal.activity.ActivityMethod, method: [activity] }
 metadata_from:
   - { annotation: io.temporal.spring.boot.ActivityImpl, attribute: taskQueues, kind: task_queue }
