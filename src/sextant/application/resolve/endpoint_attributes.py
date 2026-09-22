@@ -61,7 +61,22 @@ from sextant.application.resolve.engines.annotation_driven import (
     metadata_from,
 )
 from sextant.domain.closed_sets import Direction
+from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
+
+# The redactor every ORIGIN writer of `endpoint_metadata` holds, built the same way
+# `engines/fluent.py` and `enrich/validate.py` build theirs: the built-ins alone, because
+# no redactor reaches a resolve engine from the composition root (`OI-71`, stated there).
+#
+# It is here because `storage/duckdb/schema.sql`'s `value` column states the invariant
+# that a metadata value is masked AT THE ORIGIN — nothing downstream masks one, and
+# `endpoint_metadata` IS in the export map, so an unmasked value reaches `graph/*.parquet`
+# verbatim. This pass was the one origin writing it in the clear.
+#
+# No shipped row moves: the six kinds the eight shipped catalogs declare — `task_queue`,
+# `consumer_group`, `selector`, `subscription`, `exclusive`, `local` — carry no built-in
+# key pattern as a substring, and no queue, group or selector carries URL userinfo.
+_REDACTOR = Redactor.from_rules()
 
 # The one form of value this pass refuses to answer for, spelled as
 # `engines/scheduled_work.py` spells it and for its reason: a property placeholder is
@@ -247,6 +262,29 @@ def _entry(endpoint: dict[str, object], *, kind: str, value: str) -> dict[str, A
     attribute states nothing about what the framework demands of a request. `direction`
     is the ROW's, not a constant: the row is inbound by the filter above, and reading
     it is what keeps that true rather than assumed.
+
+    **The value is REDACTED here, and here is the only place it can be** (`schema.sql`'s
+    own invariant on the column): nothing downstream masks a metadata value, and
+    `endpoint_metadata` is in `workspace.py`'s export map, so a value written in the clear
+    reaches `graph/*.parquet` in the clear.
+
+    The rule applied is the ordinary rule-based one, `redact_value`, with the row's `kind`
+    in the KEY position — not a stand-in invented here: the paragraph above says `name` is
+    NULL because *the catalog's `kind` is the name of the thing*, and the key position is
+    where a name is weighed. So a catalog declaring `kind: token` masks its values whole,
+    and the value itself still goes through `redact_text` — URL userinfo stripping and a
+    repository's own value patterns.
+
+    **Not `fluent._entry`'s mask-whole-when-nameless rule**, though the row shape is
+    identical and that module reaches for it there. `fluent` reads a name off a call
+    argument, so an unread one is an unanswerable question; here the name is absent BY
+    CONSTRUCTION on every row — a task queue, a consumer group, a selector have none — and
+    masking whole would destroy every value this key exists to record rather than close a
+    hole.
+
+    **`resolution` reads the value as WRITTEN, before the mask.** A `${…}` placeholder is
+    unresolved whether or not a rule then masks what it spelled, and asking the masked
+    text would report a masked placeholder as `resolved` — the marker carries no `${`.
     """
     return {
         "protocol": endpoint["protocol"],
@@ -256,7 +294,7 @@ def _entry(endpoint: dict[str, object], *, kind: str, value: str) -> dict[str, A
         "caller": endpoint["handler"],
         "kind": kind,
         "name": None,
-        "value": value,
+        "value": _REDACTOR.redact_value(kind, value),
         "resolution": "unresolved" if _PLACEHOLDER in value else "resolved",
         "evidence": "compiler",
         "requirement": None,

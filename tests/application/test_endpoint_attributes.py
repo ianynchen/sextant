@@ -43,6 +43,7 @@ from sextant.application.resolve.endpoint_attributes import record_endpoint_attr
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
+from sextant.domain.redaction import REDACTED
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -462,6 +463,45 @@ def test_a_kind_outside_every_shipped_vocabulary_is_accepted(tmp_path: Path):
     catalog = _catalog({**TASK_QUEUE, "kind": "an_invented_word"})
     assert _shape(_run(tmp_path, annotations, catalogs=[catalog])) == [
         ("an_invented_word", None, "orders", "resolved")
+    ]
+
+
+def test_a_value_is_redacted_at_the_origin_and_an_ordinary_queue_passes_through(
+    tmp_path: Path,
+):
+    """`schema.sql`'s invariant on the `value` column, as a test rather than a comment:
+    the value is masked HERE because nothing downstream masks one and `endpoint_metadata`
+    is in the export map, so an unmasked value reaches `graph/*.parquet` verbatim.
+
+    Three arms in one test because the rule is one decision with three outcomes. The
+    row's `kind` sits in the KEY position — the docstring's own statement that the
+    catalog's `kind` is the name of the thing — so a `kind` naming a credential masks its
+    value whole; a value carrying URL userinfo is stripped by the value half whatever the
+    kind; and an ordinary task queue passes through CHARACTER FOR CHARACTER, which is the
+    arm that makes this a rule-based check rather than `fluent`'s mask-whole-when-nameless
+    one. That rule here would destroy every value this key exists to record."""
+    annotations = [
+        _annotated(IMPL, IMPL_ANNOTATION, taskQueues=["orders", "amqp://user:pw@broker/vhost"]),
+        _annotated(HANDLER, LISTEN, selector="s3cret-literal"),
+    ]
+    catalog = _catalog(
+        TASK_QUEUE, {"annotation": LISTEN, "attribute": "selector", "kind": "auth_token"}
+    )
+    assert sorted(_shape(_run(tmp_path, annotations, catalogs=[catalog]))) == [
+        ("auth_token", None, REDACTED, "resolved"),
+        ("task_queue", None, "amqp://broker/vhost", "resolved"),
+        ("task_queue", None, "orders", "resolved"),
+    ]
+
+
+def test_a_placeholder_under_a_masking_kind_is_still_unresolved(tmp_path: Path):
+    """`resolution` reads the value as WRITTEN, before the mask. A `${…}` placeholder is
+    unresolved whether or not a rule then masks what it spelled, and asking the masked
+    text instead would report it `resolved` — the marker carries no `${`."""
+    annotations = [_annotated(HANDLER, LISTEN, selector="${broker.password}")]
+    catalog = _catalog({"annotation": LISTEN, "attribute": "selector", "kind": "password"})
+    assert _shape(_run(tmp_path, annotations, catalogs=[catalog])) == [
+        ("password", None, REDACTED, "unresolved")
     ]
 
 
