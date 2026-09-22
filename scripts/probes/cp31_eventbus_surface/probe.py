@@ -395,7 +395,14 @@ def q_fixture_owners(classes: Path) -> str:
     """Every `io.vertx.*`/`io.quarkus.*` owner and member the fixture's own compiled classes
     name at a call site, per class — enumerated off the compiled tree rather than off a list
     of class names typed here, so an arm added to the fixture appears in this cell without
-    the probe being edited."""
+    the probe being edited.
+
+    Owners are bucketed by their FULL internal name, not by the simple name they used to
+    be. `io/vertx/core/eventbus/Message` and `io/vertx/mutiny/core/eventbus/Message` are
+    different types (Q10a/Q10c) and so are the two `MultiMap`s, and the fixture now names
+    all four; a bucket keyed on `Message` collapsed each pair into one cell entry with the
+    same descriptor beside it and hid the exact distinction this probe measures.
+    """
     cells: list[str] = []
     for name in _fixture_classes(classes):
         output = _javap("-p", "-c", name, classpath=classes)
@@ -413,7 +420,7 @@ def q_fixture_owners(classes: Path) -> str:
             owner, rest = target.split(".", 1)
             if not owner.startswith(("io/vertx/", "io/quarkus/")):
                 continue
-            owners.setdefault(owner.rsplit("/", 1)[1], set()).add(rest)
+            owners.setdefault(owner, set()).add(rest)
         if owners:
             cells.append(
                 f"{name}: "

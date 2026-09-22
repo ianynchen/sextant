@@ -201,22 +201,31 @@ matches:
 # value the engine acts on (`expansion.py` derives `required` from it) and would
 # publish every event-bus payload as nullable.
 #
-# WHY IT IS DECLARED HERE, where no row can reach it through an inbound
-# parameter. The inbound rows above carry no `body_arg` at all, so the only
-# position this file reads a payload at is `body_arg: 1` on
-# `send`/`publish`/`request` — the VALUE a call site hands the bus. A forwarding
-# call site can hand it an envelope (`bus.send("out", msg)` inside a consumer),
-# and without this row the shape published for that wire would be
-# `io.vertx.core.eventbus.Message` itself: framing recorded as payload, on an
-# address whose other half carries an `Order`.
+# WHY IT IS DECLARED HERE, AND WHAT THAT REASON IS NOT. No row in this file has
+# been measured to reach a `Message` at a payload position, and no fixture arm
+# exercises this entry. The inbound rows above carry no `body_arg` at all, so
+# the only position this file reads a payload at is `body_arg: 1` on
+# `send`/`publish`/`request` — the VALUE a call site hands the bus — and a
+# forwarding call site (`bus.send("out", msg)` inside a consumer) is the one
+# spelling that could put an envelope there. **What such a call actually puts on
+# the wire is UNMEASURED.** `send` hands the object to a codec, and whether a
+# forwarded `Message` crosses as the envelope or as its body is a framework
+# question no probe in this repository answers; CP-31 Q10 measured the type's
+# shape, not the codec's behaviour. This entry is therefore NOT declared on a
+# claim about that call, and the day such a call site turns up, what its wire
+# carries is a question for CP-31 rather than something this file has settled.
 #
-# The second reason is the one the copied block above already states for the
+# It is declared so that every event-bus catalog gives ONE answer for this type,
+# which is the reason the copied block above already states for the
 # `ResponseEntity` row: shape expansion is a GLOBAL, insert-if-absent pass keyed
 # on the type symbol, so the first catalog to reach a type is the one that
-# describes it for everyone. A file that reached a `Message` without this rule
-# would expand `Message` itself as a shape — `body`, `headers`, `address` as
-# fields — and `quarkus-consume-event.yml`'s correct answer would then depend on
-# catalog sort order. Declaring it in every event-bus file is what closes that.
+# describes it for everyone. MEASURED on `fixtures/orders-eventbus` by running
+# the analysis with these entries removed: `quarkus-consume-event.yml`'s
+# envelope consumer produced `io/vertx/core/eventbus/Message#<com/acme/eb/
+# Order#>` as its `request_shape` AND the envelope was expanded as a second
+# entry in `shapes`. A file left without the rule is a file that could insert
+# that entry first and decide the answer for the catalog that comes after it.
+# Agreement across the four files is what removes sort order from the question.
 #
 # The FACADE's `io.vertx.mutiny.core.eventbus.Message` is NOT named here, and
 # that is the same boundary `owner:` states: it is a different type in a

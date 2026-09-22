@@ -124,13 +124,18 @@ matches:
 # spelling for a broker's own envelope (`ConsumerRecord`), which is what this
 # is. Not `optional`, the one member the engine acts on.
 #
-# Reachability, stated the way this file states its other boundaries: the
-# inbound rows above declare no `body_arg`, so no row here reads a payload off a
-# consumer's parameter and the envelope can only arrive at `body_arg: 1` on a
-# forwarding `send`/`publish`/`request`. It is declared regardless, because
-# shape expansion is a GLOBAL insert-if-absent pass keyed on the type symbol: a
-# catalog that reached a `Message` without this rule would expand the envelope
-# itself as a shape for every catalog that came after it.
+# Reachability, stated the way this file states its other boundaries: no row
+# here has been measured to reach a `Message` and no fixture arm exercises this
+# entry. The inbound rows above declare no `body_arg`, so the envelope could
+# only arrive at `body_arg: 1` on a forwarding `send`/`publish`/`request` — and
+# what the bus does with an envelope handed back to it is UNMEASURED, a
+# framework question CP-31 has not asked. This entry makes no claim about it.
+# It is declared for AGREEMENT: shape expansion is a GLOBAL insert-if-absent
+# pass keyed on the type symbol, so a file left without the rule could be the
+# one that reaches a `Message` first and inserts the envelope as a shape for
+# every catalog after it. `quarkus-consume-event.yml` names THIS type too,
+# because Quarkus accepts either spelling (CP-31 Q11), and the two files must
+# not give one type two answers.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }

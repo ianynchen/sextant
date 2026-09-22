@@ -588,7 +588,7 @@ def _eventbus_row(row: dict) -> tuple:
 def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     """Spec §4's second fixture, arm by arm, off a real analysis.
 
-    Eighteen rows and no more. The four catalogs partition the surface rather than
+    Twenty rows and no more. The four catalogs partition the surface rather than
     overlapping on it: `vertx-eventbus.yml` takes the core interface's one-call forms,
     `vertx-eventbus-chain.yml` the two-step ones, `vertx-eventbus-mutiny.yml` the facade a
     Quarkus service injects, and `quarkus-consume-event.yml` the declarations. Two arms of
@@ -602,13 +602,15 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
         simple name;
       * `${orders.address}` at `unresolved` — a placeholder carried verbatim, never a
         guessed deployed value;
-      * `orders.headers` carrying `com/acme/eb/Order#` — the payload of a
-        `(MultiMap, Order)` method is its SECOND parameter, which is what
-        `request_body.excludes` reads;
+      * `orders.headers` and `orders.mutiny.headers` both carrying `com/acme/eb/Order#` —
+        the payload of a `(MultiMap, Order)` method is its SECOND parameter, which is what
+        `request_body.excludes` reads, and Quarkus's own `isMessageHeaders` accepts the
+        core `MultiMap` and the Mutiny one alike (CP-31 Q11), so the list names both;
       * `orders.created` appearing TWICE under `quarkus-consume-event`, once per handler,
-        and carrying `com/acme/eb/Order#` on BOTH —
+        and carrying `com/acme/eb/Order#` on BOTH, with `orders.mutiny.created` the same
+        pair's Mutiny spelling —
         `test_the_envelope_spelling_and_the_payload_spelling_record_one_shape` below is
-        where that equality is the subject rather than one column of a set;
+        where those equalities are the subject rather than one column of a set;
       * `orders.twostep`'s handler is the LAMBDA `.handler(...)` was given, while
         `orders.inbox`'s is the enclosing method: the one-call form registers at the call
         the catalog matched, the chain registers at its terminal;
@@ -621,14 +623,16 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     but it does not pin that the two `single_call` catalogs stay partitioned: a leak in
     the other direction — the core catalog widened to name the facade as a second owner
     and given the facade's descriptor as a row — was INJECTED and measured, and this
-    analysis still produced exactly these seventeen rows with `catalog_id` unchanged,
-    because two catalogs deriving the identical row collapse into one. A count and an
-    exact set are both blind to that.
+    analysis still produced exactly the set this assertion then held, with `catalog_id`
+    unchanged, because two catalogs deriving the identical row collapse into one. That
+    measurement was taken at SEVENTEEN rows, before the envelope arm and the two Mutiny
+    arms; the three arms since do not touch what it showed. A count and an exact set are
+    both blind to that.
     `test_call_engines.py::test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cores`
     is what holds the partition, and it does hold it: the same injection makes it fail.
     """
     endpoints, _ = eventbus
-    assert len(endpoints) == 18
+    assert len(endpoints) == 20
     assert {_eventbus_row(r) for r in endpoints} == {
         # --- quarkus-consume-event: the declarations -------------------------
         (
@@ -681,6 +685,24 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "inbound",
             "orders.headers",
             "OrderConsumers.onOrderWithHeaders",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.mutiny.created",
+            "OrderConsumers.onMutinyOrderEnvelope",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.mutiny.headers",
+            "OrderConsumers.onMutinyHeaderOrder",
             None,
             "resolved",
             _ORDER,
@@ -825,18 +847,37 @@ def test_the_envelope_spelling_and_the_payload_spelling_record_one_shape(
     with the first, it is what catches the whole envelope being published as a payload
     type. The wire's other half is `m.reply(order)`, an `Order`, so a linker holding the
     envelope shape on one side would never match the two halves of one address.
+
+    **BOTH envelope types, because Quarkus accepts both.** CP-31 Q11 measured
+    `VertxConstants.isMessage` returning true for `io.vertx.core.eventbus.Message` **or**
+    `io.vertx.mutiny.core.eventbus.Message`, so the catalog declares a wrapper for each and
+    `onMutinyOrderEnvelope` is the arm that exercises the second one. It is asserted the
+    same way and separately: measured, without its wrapper entry that row records
+    `io/vertx/mutiny/core/eventbus/Message#<com/acme/eb/Order#>` and the analysis grows a
+    second shape, exactly as the core one did. The two are DIFFERENT types (CP-31 Q10c),
+    so one entry never covers the other and one assertion never covers the other either.
     """
     endpoints, _ = eventbus
+    quarkus = [r for r in endpoints if str(r["catalog_id"]) == "quarkus-consume-event"]
     shapes = {
         _typed_member(r["handler"]): _shape(r["request_shape"])
-        for r in endpoints
-        if r["path"] == "orders.created" and str(r["catalog_id"]) == "quarkus-consume-event"
+        for r in quarkus
+        if r["path"] == "orders.created"
     }
     assert set(shapes) == {"OrderConsumers.onOrderCreated", "OrderConsumers.onOrderCreatedEnvelope"}
     assert (
         shapes["OrderConsumers.onOrderCreatedEnvelope"] == shapes["OrderConsumers.onOrderCreated"]
     )
     assert shapes["OrderConsumers.onOrderCreatedEnvelope"] == _ORDER
+
+    mutiny = {
+        _typed_member(r["handler"]): _shape(r["request_shape"])
+        for r in quarkus
+        if r["path"] == "orders.mutiny.created"
+    }
+    assert set(mutiny) == {"OrderConsumers.onMutinyOrderEnvelope"}
+    assert mutiny["OrderConsumers.onMutinyOrderEnvelope"] == shapes["OrderConsumers.onOrderCreated"]
+    assert mutiny["OrderConsumers.onMutinyOrderEnvelope"] == _ORDER
 
 
 def test_every_eventbus_row_is_verbless_and_states_no_reply_shape(
@@ -881,8 +922,8 @@ def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
 ):
     """`@ConsumeEvent.local()`'s `AnnotationDefault` is the boolean `true` (CP-31 Q6), so
     an undecorated consumer is LOCAL-ONLY and `absent_value: "true"` is what says so. The
-    set is exact and covers all six Quarkus consumers, which is what makes it a pin: a
-    `metadata_from` that wrote its `absent_value` unconditionally would still produce five
+    set is exact and covers all eight Quarkus consumers, which is what makes it a pin: a
+    `metadata_from` that wrote its `absent_value` unconditionally would still produce seven
     of these rows, and `orders.cluster`'s `false` is the one that fails it.
 
     `kind` is `local`, named after the attribute, and the value is the ATTRIBUTE's own
@@ -901,4 +942,6 @@ def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
         ("orders.created", "local", "true", "OrderConsumers.onOrderCreated", None),
         ("orders.created", "local", "true", "OrderConsumers.onOrderCreatedEnvelope", None),
         ("orders.headers", "local", "true", "OrderConsumers.onOrderWithHeaders", None),
+        ("orders.mutiny.created", "local", "true", "OrderConsumers.onMutinyOrderEnvelope", None),
+        ("orders.mutiny.headers", "local", "true", "OrderConsumers.onMutinyHeaderOrder", None),
     }

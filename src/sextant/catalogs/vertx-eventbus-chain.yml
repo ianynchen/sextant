@@ -115,13 +115,19 @@ matches:
 # rows (`fluent` has no word for "the type argument of the handler's own
 # parameter" any more than `single_call` does).
 #
-# It is declared anyway, for the outbound half and for the sort-order reason.
-# `write`'s `body: arg0` reads the VALUE handed to the producer, which a
-# forwarding call site can spell as an envelope; and shape expansion is global
-# and insert-if-absent, so a file that reached a `Message` without this rule
-# would expand `Message` as a shape for every catalog. MEASURED (CP-31 Q10a,
-# Q10b): `body()` is the one descriptor of the five that names what crossed the
-# wire, byte-identical at 4.5.10 and 5.0.0.
+# It is declared anyway, and for ONE reason rather than two. No row here has
+# been measured to reach a `Message`, and no fixture arm exercises this entry:
+# the only position that could is `write`'s `body: arg0`, the value handed to
+# the producer, and what the bus does with an envelope handed back to it is
+# UNMEASURED — the same open question `vertx-eventbus.yml`'s own block states,
+# and this file makes no claim about it either. What is declared here is
+# AGREEMENT: shape expansion is a global, insert-if-absent pass keyed on the
+# type symbol, so a file left without the rule could be the one that reaches a
+# `Message` first and inserts the envelope as a shape for every catalog after
+# it (measured on `fixtures/orders-eventbus` with the entries removed — see
+# `vertx-eventbus.yml`). MEASURED (CP-31 Q10a, Q10b): `body()` is the one
+# descriptor of the five that names what crossed the wire, byte-identical at
+# 4.5.10 and 5.0.0.
 #
 # The CORE `Message`, not the facade's: every root and step above is owned by
 # `io.vertx.core.eventbus.*`, and CP-31 Q10c measured the facade's as a

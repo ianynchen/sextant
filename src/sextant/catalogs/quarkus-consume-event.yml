@@ -43,10 +43,26 @@ matches:
   # leaves exactly one, which is the body — the same shape
   # `spring-kafka.yml` uses to exclude `Acknowledgment`.
   #
-  # `io.vertx.core.MultiMap` is the headers type by its own declaration; the
-  # fixture's `onOrderWithHeaders(MultiMap, Order)` is the arm that proves the
-  # exclusion fires.
-  request_body: { fallback: sole_unannotated, excludes: [io.vertx.core.MultiMap] }
+  # BOTH `MultiMap` TYPES, and that is measured rather than defensive breadth.
+  # MEASURED (CP-31 Q11, quarkus-vertx-deployment 3.17.5):
+  # `VertxConstants.isMessageHeaders(DotName)` — the predicate `VertxProcessor`
+  # asks of a two-parameter consumer's FIRST parameter — returns true when the
+  # name equals `MESSAGE_HEADERS` **or** `MUTINY_MESSAGE_HEADERS`, and the
+  # static initializer names those two by `ldc class` at offsets 11 and 33:
+  # `io/vertx/core/MultiMap` and `io/vertx/mutiny/core/MultiMap`. Quarkus cannot
+  # tell the two spellings apart, so this list must not either. Naming only the
+  # core one left the Mutiny spelling with TWO bare parameters and no payload at
+  # all — and that spelling is the mainstream case rather than an exotic one,
+  # since a Quarkus service injects the Mutiny facade (which is why
+  # `vertx-eventbus-mutiny.yml` exists) and `io.vertx.mutiny.core.MultiMap` is
+  # what `io.vertx.mutiny.core.eventbus.Message.headers()` returns (CP-31 Q10c).
+  #
+  # The fixture's `onOrderWithHeaders(MultiMap, Order)` and
+  # `onMutinyHeaderOrder(io.vertx.mutiny.core.MultiMap, Order)` are the two arms
+  # that prove the exclusion fires on each, one arm per entry.
+  request_body:
+    { fallback: sole_unannotated,
+      excludes: [io.vertx.core.MultiMap, io.vertx.mutiny.core.MultiMap] }
   mapping:
     # `@ConsumeEvent` declares five elements (CP-31 Q6) and exactly one of them
     # is an address: `value()`. `path_from` is a single-alias list for that
@@ -186,11 +202,16 @@ matches:
 # (`expansion.py` derives `required` from it) and would publish every event-bus
 # payload as nullable.
 #
-# A RAW `Message` — a consumer declaring `void handle(Message m)` — reaches
-# `root_type` with no type argument at the payload position and is left
-# unopened, `unmatched_wrapper`, which is the engine's existing answer for an
-# envelope whose payload is not visible. It is not silently read as the
-# envelope's own type, and it is not guessed past.
+# A RAW `Message` — a consumer declaring `void handle(Message m)` — carries NO
+# payload shape at all, which is the answer this file wants and is worth naming
+# the mechanism for, since it is not the one the `unmatched_wrapper` flag
+# suggests. `root_type` has no type argument to descend into, so the walk stops
+# on the envelope itself; `contracts.py`'s `_payload_descriptor` then asks
+# `_matching_wrapper` about the type it stopped on and returns None when a
+# wrapper claims it — a declared envelope is never described as a payload. The
+# `unmatched_wrapper` flag rooting also sets is branched on by `error_advice.py`
+# alone and decides nothing here. Either way the envelope's own type is not
+# published as the wire's, and nothing is guessed past.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
@@ -215,17 +236,6 @@ shape_model: json
 #     shape to hang one on; there is no such annotation here, and a reply row
 #     naming the consumer's own address would claim this endpoint answers
 #     itself.
-#   * THE MUTINY `MultiMap` AS A HEADERS PARAMETER. `request_body.excludes`
-#     above names `io.vertx.core.MultiMap` alone, and CP-31 Q11 measured that
-#     Quarkus accepts either: `VertxConstants.isMessageHeaders(DotName)` returns
-#     true for `MESSAGE_HEADERS` **or** `MUTINY_MESSAGE_HEADERS`, loaded by `ldc
-#     class` at offsets 11 and 33 as `io/vertx/core/MultiMap` and
-#     `io/vertx/mutiny/core/MultiMap`. A consumer spelling
-#     `(io.vertx.mutiny.core.MultiMap headers, Order body)` therefore leaves TWO
-#     bare parameters for `sole_unannotated` and derives NO payload at all — a
-#     missing shape, never a wrong one, and the address and its metadata are
-#     still published. Recorded here rather than closed with the envelope rows
-#     above because it is a different defect and moves no shipped row.
 #   * THE FAILURE CODES. `ConsumeEvent.FAILURE_CODE` and
 #     `EXPLICIT_FAILURE_CODE` are constants on the annotation type, not
 #     attributes of a use, and name nothing on a wire.
