@@ -183,7 +183,9 @@ the limitation Feign and the JWS client already have, stated in COVERAGE.
 
 ### 2b. The naming words
 
-Three additions to `_PATH_FALLBACKS`, the closed vocabulary that already refuses a typo rather than
+FOUR additions to `_PATH_FALLBACKS` (*amended: this said three; §2d's `declaring_type_scoped_name`
+is the fourth, and unlike the other three it composes around a declared name as well as a defaulted
+one*), the closed vocabulary that already refuses a typo rather than
 reading it as "no fallback":
 
 | word | rule | measured |
@@ -224,7 +226,25 @@ conjunct — the declaring type's annotation row must be a real one rather than 
 test as well as a positive one, because this vocabulary's own comment calls it the sharpest in the
 engine: a word read as something it is not mints endpoints out of ordinary methods.
 
-### 2d. `metadata_from`, and the four catalogs
+### 2d. `metadata_from`, and the catalogs
+
+> **Amended 2026-09-22 during implementation (Task 5).** This section specified FOUR contract
+> catalogs, an inbound one gated `declared_on: class` beside an outbound one gated
+> `declared_on: interface`. **The inbound half was defective and never shipped.** Under the
+> inheritance walk the contract interface's own annotated row is filtered out and only the row
+> synthesized onto the IMPLEMENTING class survives, whose declaring type is the implementor — so
+> `declaring_type_simple_name` would have published `OrderWorkflowImpl`, a workflow type no client
+> ever starts. What shipped is TWO catalogs, one per contract kind, each carrying both directions on
+> `spring-http-interface.yml`'s shape: `declared_on: interface` with `direction: outbound`, plus
+> `resolves.direction: [{when: {owner_implemented_by_type_annotated: [<the starter annotation>]},
+> then: inbound}]`, which flips the row to inbound and rebinds `handler` to the implementor's
+> override (ruling R12: the fence yields to the flip).
+>
+> **That also restores registration-as-evidence, which §0a M-1 recorded as given up.** An
+> implementation carrying no starter annotation is neither served nor called here — the fence
+> subtracts it and the flip declines — so it derives NOTHING rather than an inbound row for a worker
+> nobody registered. The cost is §2g's first boundary: a module that registers its workers
+> programmatically derives no rows for its own implementations.
 
 `metadata_from` is a new `annotation_driven` key: a list of `{annotation, attribute, kind}`, with an
 optional `absent_value` for an attribute whose `AnnotationDefault` carries the meaning. Each present
@@ -235,8 +255,12 @@ attribute becomes one row per element; a `${…}` value stays `unresolved`; the 
 The four Temporal catalogs, all `protocol: temporal`, all `style: annotation_driven`:
 
 ```yaml
-# temporal-workflow.yml            direction: inbound      declared_on: class
-# temporal-workflow-client.yml     direction: outbound     declared_on: interface
+# temporal-workflow.yml   direction: outbound + a resolves.direction flip to inbound
+declared_on: interface
+resolves:
+  direction:
+    - when: { owner_implemented_by_type_annotated: [io.temporal.spring.boot.WorkflowImpl] }
+      then: inbound
 type_annotation: io.temporal.workflow.WorkflowInterface
 mapping:
   method_from: method
@@ -250,8 +274,12 @@ mapping:
 metadata_from:                       # inbound file only — a client states no queue
   - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues, kind: task_queue }
 
-# temporal-activity.yml             direction: inbound      declared_on: class
-# temporal-activity-client.yml      direction: outbound     declared_on: interface
+# temporal-activity.yml   direction: outbound + the same flip on @ActivityImpl
+declared_on: interface
+resolves:
+  direction:
+    - when: { owner_implemented_by_type_annotated: [io.temporal.activity.ActivityImpl] }
+      then: inbound
 type_annotation: io.temporal.activity.ActivityInterface
 mapping:
   members: declared_type_methods
@@ -264,9 +292,21 @@ metadata_from:
   - { annotation: io.temporal.spring.boot.ActivityImpl, attribute: taskQueues, kind: task_queue }
 ```
 
-The signal/query/update path is composed `<workflow type>/<member>` by the existing prefix
-machinery, with the workflow type supplied by the same `declaring_type_simple_name` read the
-`@WorkflowMethod` row uses — one composition rule, not a second grammar.
+The signal/query/update path is composed `<workflow type>/<member>` — **and no existing machinery
+could do it.** Every other naming route reads an ATTRIBUTE, `@WorkflowInterface` declares none at all
+(CP-30 Q10), and `path_prefix` is a catalog constant that cannot vary per contract. Two independent
+analyses confirmed that before a fourth word was authorised: `declaring_type_scoped_name`, composing
+the declaring type's simple name, a CATALOG-STATED separator (`fallback_scope_separator` — the engine
+may not know a framework's punctuation) and the name that won. *(Amended: this paragraph claimed "the
+existing prefix machinery" and was wrong.)*
+
+**That word is not only a fallback, and the asymmetry is deliberate.** §1d's `<member name>` is the
+WIRE name, and CP-30 Q1 shows the SDK reading `getNameFromAnnotation()` before either branch — so
+`@SignalMethod(name = "Abort")` is `OrderWorkflow/Abort`, not a bare `Abort`, which is the very
+collision §2f refuses. A pure fallback fires only where the declaration named nothing, so this word's
+arm is hoisted ahead of that test. The hoist was verified not to move any other catalog by dumping
+444 endpoint rows across all 17 compiled fixtures, patching the arm out, re-running and diffing: the
+only difference is the three intended rows.
 
 ### 2e. The same key, applied to the shipped listener catalogs
 
@@ -330,13 +370,21 @@ established after an overload collision published a payload as a destination.
 | row | direction | reads |
 |---|---|---|
 | `send`, `publish` (both arities) | outbound | `channel_arg: 0`, `body_arg: 1` |
-| `request(String, Object)`, `(String, Object, DeliveryOptions)` | outbound | same; reply type → `response_shape` |
+| `request(String, Object)`, `(String, Object, DeliveryOptions)` | outbound | same; **no `response_shape`** — see below |
 | `request(String, Object, Handler)`, `(String, Object, DeliveryOptions, Handler)` | outbound | **4.5 only** (M7) |
 | `consumer(String, Handler)`, `localConsumer(String, Handler)` | inbound | `channel_arg: 0`, handler at 1 |
 | `consumer(MessageConsumerOptions[, Handler])` | inbound | **5.0 only** (M7); address through the existing `channel_via` into `setAddress` |
 
 Both major versions are declared in one file; an overload absent from the version a module builds
-against simply never matches. **Second owner:** the Mutiny facade (M9), which is what a Quarkus
+against simply never matches.
+
+**`request(...)` derives no `response_shape`, and this row is an amendment.** The table above said
+"reply type → `response_shape`". The reply type is the call's RETURN type, and `single_call`'s only
+response word is `response_arg`, an argument POSITION — no argument carries the reply, and reading
+argument 1 would publish the REQUEST's own shape as the reply's. The row still derives and links on
+its address, so what is missing is a payload refinement rather than an identity. Shipped as a stated
+boundary on the catalog, with a test that FAILS the day an engine word lands, so the boundary retires
+deliberately instead of drifting (`OI-125`). **Second owner:** the Mutiny facade (M9), which is what a Quarkus
 service injects, with its own descriptors and no `sender`/`publisher`.
 
 ### 3b. `vertx-eventbus-chain.yml` — the two-step forms (`fluent`)
@@ -372,7 +420,9 @@ A `${…}` address is carried verbatim at `unresolved`.
 ### 3d. Stated boundaries
 
 - An options object whose address is set before a later setter
-  (`new MessageConsumerOptions().setAddress("a").setOrdered(true)`): `channel_via` reads the
+  (`new MessageConsumerOptions().setAddress("a").setLocalOnly(true)` — *amended: this example said
+  `setOrdered`, which CP-31 Q5b found does not exist; `setLocalOnly` and `setMaxBufferedMessages` are
+  the real setters that return the options object, so the tail is reachable in real code*): `channel_via` reads the
   argument's producing call, which is then the last setter, so the address is `unresolved` (m-1).
 - The SockJS/TCP **event-bus bridge** — a regex is not an address, and a permitted-address list is
   policy rather than a consumer.
@@ -475,15 +525,35 @@ compiled classes. Nothing is executed.
 
 ## 8. The register afterwards
 
-```delivery``` loses `temporal-cadence` and `vertx-eventbus`; the **Async** column empties and the
-row closes. Category C loses its last two items, leaving `apache-camel` and
-`smallrye-reactive-messaging` as the only unsequenced work. `scripts/coverage_matrix.py`'s
+```delivery``` loses `temporal-cadence` and `vertx-eventbus`. **The Async row does NOT close, and
+this section said it would.** *(Amended 2026-09-22, Task 10 — the error is this spec's, not the
+implementation's.)* The claim was read off the register's ```delivery``` block alone and missed the
+second clause of the delivered definition: a row cannot be marked delivered while its own COVERAGE
+section holds an uncatalogued library, and §5.12 carries a **Quartz** row (tier A for the annotation
+half, B for the builder half) and an **Akka / Pekko actors** row (tier C) that no catalog reads.
+Group D closes its own two items; the row's blockers become `quartz` and `akka-pekko-actors`, on the
+`smallrye-reactive-messaging` precedent, which surfaced exactly this way at the Kafka B/C close. Two
+frameworks that were always missing are now named instead of hidden behind two items that were not.
+
+Emptying the cell fails `test_a_feature_with_no_blockers_is_marked_delivered[Async]`, and moving
+`Async` to ```scoped-out``` would be false — that block means the gaps are in languages out of scope,
+and these are Java. Category C keeps `conditional-controllers`, which is §4's own group F, so it is
+down to one item rather than empty. `scripts/coverage_matrix.py`'s
 `ITEM_FRAMEWORKS` entries for the two ids go with them. COVERAGE §5.12 gains two shipped framework
 lines with their boundaries; §§5.8–5.9 record the attributes §2e now reads.
 
-New open issues: the linking-tier refinement rule (§1f); a Cadence re-measurement trigger (§1b);
-the programmatic worker's unread task queue, with the mechanism it would need (§2g); a
-`MessageConsumer` handed across methods (§3d); `registerWorkflowImplementationFactory` (§2g).
+Nine open issues shipped, `OI-122`–`OI-130`, where this section listed five: the linking-tier
+refinement rule (§1f); a Cadence re-measurement trigger (§1b); the programmatic worker's unread task
+queue with the mechanism it would need (§2g); a `MessageConsumer` handed across methods (§3d);
+`registerWorkflowImplementationFactory` (§2g); `request(...)`'s unread reply shape (§3a); and three
+the work uncovered — CP-10 filing a descriptor two versions declare under the first alone;
+`catalog_descriptors()` reading `matches.methods` only, so a `fluent` catalog's roots and steps are
+outside the descriptor gate entirely; and Micronaut's both-written alias case, where
+`@KafkaListener(value = "a", groupId = "b")` writes two contradicting `consumer_group` rows because
+javac writes both elements (CP-32 Q12) and the framework's own alias processing overwrites rather
+than refuses (CP-32 Q13). That last one names the measurement that would close it — WHICH of the two
+the overwrite lands on — rather than inventing a first-present-wins rule, which would be our
+tie-break rather than the framework's and so a DR-6 violation.
 
 ---
 
