@@ -575,8 +575,18 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
         the catalog matched, the chain registers at its terminal;
       * the four `mutiny.*` rows come from `vertx-eventbus-mutiny.yml` and NOT from
         `vertx-eventbus.yml`, which is the whole point of the fourth file — CP-31 Q8
-        measured that the facade shares no descriptor with the core interface, so the
-        catalog that owns a row is itself an assertion here.
+        measured that the facade shares no descriptor with the core interface.
+
+    **What this set does NOT catch, stated so the docstring does not read as coverage it
+    does not provide.** The `catalog_id` column above pins which catalog OWNS each row,
+    but it does not pin that the two `single_call` catalogs stay partitioned: a leak in
+    the other direction — the core catalog widened to name the facade as a second owner
+    and given the facade's descriptor as a row — was INJECTED and measured, and this
+    analysis still produced exactly these seventeen rows with `catalog_id` unchanged,
+    because two catalogs deriving the identical row collapse into one. A count and an
+    exact set are both blind to that.
+    `test_call_engines.py::test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cores`
+    is what holds the partition, and it does hold it: the same injection makes it fail.
     """
     endpoints, _ = eventbus
     assert len(endpoints) == 17

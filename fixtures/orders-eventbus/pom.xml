@@ -3,13 +3,16 @@
   <groupId>com.acme</groupId>
   <artifactId>orders-eventbus</artifactId>
   <version>1.0.0</version>
-  <!-- The Vert.x event bus, raw and through Quarkus's `@ConsumeEvent`
+  <!-- The Vert.x event bus — raw, through the Mutiny facade, and through
+       Quarkus's `@ConsumeEvent`
        (CP-31, `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`
        §4). API jars only, every dependency blanket-excluded so nothing
        transitive resolves — the `temporal-probe`/`orders-pekko` shape. This
        module never runs; it exists to be `javap`'d (CP-31's fixture row) and
-       to be scanned by `vertx-eventbus.yml`, `vertx-eventbus-chain.yml` and
-       `quarkus-consume-event.yml`.
+       to be scanned by all FOUR event-bus catalogs: `vertx-eventbus.yml`,
+       `vertx-eventbus-chain.yml`, `vertx-eventbus-mutiny.yml` and
+       `quarkus-consume-event.yml`. One arm per catalog, and
+       `smallrye-mutiny-vertx-core` below is the fourth one's.
 
        vertx-core is pinned to 4.5.10 EXPLICITLY rather than taken from a
        Quarkus BOM: CP-31 measures 4.5.10 and 5.0.0, the catalogs declare the
