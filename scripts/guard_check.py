@@ -623,12 +623,13 @@ GUARDS: dict[str, Guard] = {
                 find="    JOIN mapping_catalog mc ON mc.fqn = a.annotation",
                 replace="    JOIN mapping_catalog mc ON regexp_extract(mc.fqn, '[^/]*$')"
                 " = regexp_extract(a.annotation, '[^/]*$')",
-                # The same join, written at four places in the file (an
-                # annotated declaration, the class gate, the member rule's
-                # exclusion, and the prefix scan). One guard, so all four move
-                # together — disabling it at one site alone would measure a
-                # different question from the one the catalogs' near-misses ask.
-                occurrences=4,
+                # The same join, written at five places in the file (an
+                # annotated declaration, the class gate, the DIRECT class gate
+                # the second member word reads, the member rule's exclusion,
+                # and the prefix scan). One guard, so all five move together —
+                # disabling it at one site alone would measure a different
+                # question from the one the catalogs' near-misses ask.
+                occurrences=5,
             ),
         ),
     ),

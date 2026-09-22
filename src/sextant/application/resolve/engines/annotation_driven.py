@@ -223,6 +223,15 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # unannotated exposed member (`$members`). Empty where the catalog
         # declares no fallback at all, and empty for `construct_name`.
         "path_fallback_prefixes": list(_PATH_FALLBACKS.get(str(mapping.get("path_fallback")), ())),
+        # Spec 2026-09-22 §2b: WHICH attribute of the declaring type's own
+        # `type_annotation` use carries the prefix
+        # `prefixed_capitalized_construct_name` composes. NULL for every
+        # catalog that declares no such word — which is every catalog written
+        # before it — so the derivation's own prefix read finds no row and the
+        # composition is inert. `_validate_fallback_prefix_attr` above refuses
+        # the word without the attribute and the attribute without the word, so
+        # this is never NULL on a catalog whose fallback reads it.
+        "fallback_prefix_attr": mapping.get(_FALLBACK_PREFIX_ATTR),
         "qualifier_from": list(mapping.get("qualifier_from", [])),
         "qualifier_separator": mapping.get("qualifier_separator"),
         # 2I design §2's two QName forms, both optional and both inert unless
@@ -557,11 +566,67 @@ def _corroboration(catalog: Catalog) -> list[str] | None:
 # `derive_endpoints.sql`, because that is where the construct's own name is
 # read. `getURL -> uRL` is the edge that tells this rule apart from every
 # plausible paraphrase of it, and it is asserted.
+#
+# **THE THREE DECLARING-TYPE WORDS** (spec 2026-09-22 §2b, CP-30 rows 1-3) bind
+# an EMPTY tuple, and the empty tuple says something different for them than it
+# does for `construct_name`: they do not read the construct's own name the way
+# the accessor words do, so there is no prefix to strip off it. The derivation
+# branches on the WORD for these three, which is why they live in this mapping
+# rather than in a second one beside it — a second vocabulary would let a typo
+# be refused by one check and read as "no fallback" by the other, and the
+# refusal is the whole reason this is a closed set.
+#
+# `declaring_type_simple_name` — the simple name of the type that DECLARED the
+# annotated member, which is NOT the handler's own class. Under the inheritance
+# walk the declaration sits on the interface while the row's handler is the
+# implementor's override, and the two coming apart is the whole of the rule:
+# CP-30 Q1 disassembles the constructor that takes `getSimpleName()` of the
+# INTERFACE on one branch (offset 101) and the reflected method's own name on
+# every other (offset 122). Reading the handler's class instead would publish
+# the implementor's name, which is a type no caller ever names.
+#
+# `declaring_type_qualified_name` — the same type, fully qualified, nothing
+# stripped (CP-30's row 3 framework has no simple-name step at all).
+#
+# `prefixed_capitalized_construct_name` — the declaring type's own prefix
+# attribute (named by `mapping.fallback_prefix_attr`, read off that type's
+# `type_annotation` use) in front of the construct name with its first
+# character upper-cased. Both halves are measured: CP-30 Q2 shows the
+# empty-name test at offset 50 GUARDING the prefix composition at offset 66,
+# and Q3 shows the default name is `substring(0, 1).toUpperCase()` appended to
+# `substring(1)`. Composing the prefix INSIDE the fallback is what makes the
+# named-member edge free — a member carrying its own name never reaches a
+# fallback, so it skips the prefix BY CONSTRUCTION rather than by a flag, and a
+# member named `Charge` under the prefix `billing_` is `Charge` and never
+# `billing_Charge`. That edge is what tells this rule from every paraphrase of
+# it, and it is asserted.
+#
+# What a misread costs here is the accessor words' cost one step worse: read as
+# `construct_name`, a declaring-type word publishes a MEMBER name where a TYPE
+# name belongs — an identity nothing answers, at `resolved`/`compiler` where
+# nothing downstream can tell it from an observation.
 _PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
     "construct_name": (),
     "read_accessor_property": ("get", "is"),
     "write_accessor_property": ("set",),
+    "declaring_type_simple_name": (),
+    "declaring_type_qualified_name": (),
+    "prefixed_capitalized_construct_name": (),
 }
+
+# The one word above that composes a prefix, and the mapping key naming WHICH
+# attribute of the declaring type's `type_annotation` use carries it.
+#
+# A key of its own rather than `mapping.prefix_from`, and the two must not be
+# conflated: `derive_endpoints.sql` feeds a `prefix_from` value into
+# `type_prefix`, which joins the FRONT of every address the catalog composes —
+# so a catalog naming the prefix there would compose it a SECOND time onto
+# every row, including the explicitly-named member that must not carry it at
+# all. A catalog reaching for this word therefore leaves the ordinary prefix
+# machinery inert (`prefix_from: []`, no `path_prefix`/`path_separator`) and
+# states the attribute here instead.
+_PREFIXED_FALLBACK = "prefixed_capitalized_construct_name"
+_FALLBACK_PREFIX_ATTR = "fallback_prefix_attr"
 
 
 # F2 §3.5. How a class-level annotation relates to the methods inside it.
@@ -808,7 +873,29 @@ _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 # one here: this is the only word in the mapping vocabulary that derives rows
 # for declarations carrying NO annotation at all, so a word read as something
 # it is not mints endpoints out of ordinary methods.
-_MEMBER_RULES = frozenset({"public_methods"})
+#
+# `declared_type_methods` is the second word (spec 2026-09-22 §2c, M-3), and it
+# exists because `public_methods` is WRONG for a framework whose contract lives
+# on a type the implementor inherits. The gate annotation is inherited onto the
+# implementing class — that is what makes the class a gate type at all — so
+# `public_methods` enumerates the implementor's OWN declarations too, and a
+# public helper beside the contract methods publishes as an operation nothing
+# calls. §2c's example is a class implementing a two-method contract and
+# declaring a `reloadRates()` of its own: `public_methods` publishes it.
+#
+# The new word is `public_methods` plus one conjunct — the member's DECLARING
+# type must carry the gate as a REAL annotation row, never the synthetic one
+# the inheritance walk wrote — so only members declared where the contract is
+# declared are enumerated. CP-30 Q4 is why such a catalog needs a member rule
+# at all: the qualification predicate returns true at offset 73 for an
+# UNANNOTATED non-static, non-synthetic method, so the contract's members are
+# operations whether or not anything marks them.
+#
+# Read as `public_methods` this word costs exactly what M-3 costs: one endpoint
+# per helper method on every implementing class, at `resolved`/`compiler`.
+# Read as "no member rule" it costs the whole contract — every member of it,
+# silently, because none of them carries an annotation to derive from.
+_MEMBER_RULES = frozenset({"public_methods", "declared_type_methods"})
 
 # Whether the inheritance walk carries a catalog's declared SIBLINGS along
 # with an inherited mapping (spec 2026-09-18 §3b word 3, amended after the
@@ -1213,6 +1300,7 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
             f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` is not one "
             f"of {', '.join(sorted(_PATH_FALLBACKS))} (2H design §1)"
         )
+    _validate_fallback_prefix_attr(catalog, mapping)
     members = mapping.get("members")
     if members is not None:
         if members not in _MEMBER_RULES:
@@ -1403,6 +1491,51 @@ def _validate_entry_fallback(catalog: Catalog, entry: dict[str, Any]) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `path_fallback: {declared}` on "
             f"`{entry.get('fqn')}` is not one of {', '.join(sorted(_PATH_FALLBACKS))} (`OI-5`)"
+        )
+
+
+def _validate_fallback_prefix_attr(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping that declares the prefix-composing fallback word
+    without naming the attribute carrying the prefix, or names the attribute
+    without the word (spec 2026-09-22 §2b).
+
+    Both halves matter, and neither is symmetry for its own sake. WITHOUT the
+    attribute, the word composes an empty prefix onto every row it names — an
+    address that is a fragment of the one the framework serves, published at
+    `resolved`/`compiler`, which is the confidently-wrong-address failure the
+    whole naming vocabulary is checked for. WITH the attribute and no word
+    reading it, the catalog states a rule nothing runs, and a reader of the file
+    believes the prefix is composed somewhere: the `_RESOLVES` discipline, and
+    the one this engine applies to every key it would otherwise ignore.
+
+    Both LEVELS are consulted, because either can name the word (`OI-5`): the
+    attribute belongs to the FILE, since the type it is read off is the file's
+    own gate, but the word that needs it may sit on one annotation entry.
+    """
+    declared = {mapping.get("path_fallback")}
+    declared |= {
+        entry.get("path_fallback") for entry in mapping["annotations"] if isinstance(entry, dict)
+    }
+    attribute = mapping.get(_FALLBACK_PREFIX_ATTR)
+    if _PREFIXED_FALLBACK in declared:
+        # A non-string scalar or an empty name is refused rather than read as
+        # absent, the `path_prefix` precedent: `str()` of a YAML int is an
+        # attribute name nobody wrote, and an empty one reads every row's
+        # prefix as absent while looking like a file that states one.
+        if not isinstance(attribute, str) or attribute == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_PREFIXED_FALLBACK}` is "
+                f"declared with no `mapping.{_FALLBACK_PREFIX_ATTR}` naming a non-empty "
+                f"attribute — got {attribute!r}. The word composes the declaring type's own "
+                f"prefix, and with nothing to read it from every row would carry the bare "
+                f"member name the framework does not serve (spec 2026-09-22 §2b)"
+            )
+    elif attribute is not None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{_FALLBACK_PREFIX_ATTR}: {attribute}` is "
+            f"declared with no `path_fallback: {_PREFIXED_FALLBACK}` to read it — no other word "
+            f"composes a prefix, so the attribute names a rule nothing runs "
+            f"(spec 2026-09-22 §2b)"
         )
 
 

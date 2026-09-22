@@ -125,7 +125,24 @@
 --                           `annotation_driven.py::_PATH_FALLBACKS`, measured
 --                           by CP-15 rows 4a-4b; the three CONDITIONS of the
 --                           strip are spelled below, where the construct's own
---                           name is read.
+--                           name is read. EMPTY for the three words that name
+--                           the DECLARING TYPE rather than the construct
+--                           (spec 2026-09-22 §2b): they read no member name to
+--                           strip a prefix off, so the branch below reads the
+--                           WORD for those and this list for the rest.
+--   $fallback_prefix_attr -- spec 2026-09-22 §2b, CP-30 row 2: the attribute of
+--                           the DECLARING type's own $type_annotation use that
+--                           carries the prefix
+--                           'prefixed_capitalized_construct_name' composes, or
+--                           NULL where the catalog declares no such word —
+--                           which is every catalog written before it, so the
+--                           read below finds no row and the composition is
+--                           inert. Deliberately NOT $prefix_from: that value
+--                           feeds $type_prefix, which joins the FRONT of every
+--                           composed address, so a catalog naming the prefix
+--                           there would compose it a second time onto every
+--                           row — including the explicitly-named member that
+--                           must not carry it at all.
 --   $qualifier_from      -- attribute names holding the SCOPE the declared
 --                           name sits inside, read off the SAME (method-level)
 --                           annotation, first present wins — kept apart from
@@ -200,12 +217,16 @@
 --                           on its own, with no member-level annotation
 --                           anywhere, or NULL where a catalog declares no such
 --                           rule (every catalog whose framework exposes only
---                           what an annotation marks). Today's one word is
---                           'public_methods'. A member-level rule OVERRIDES
---                           this for the member it names — one row per member,
---                           never two — and $path_fallback is required beside
---                           it, since a member carries no name attribute at
---                           all (`annotation_driven.py::_validate_naming`).
+--                           what an annotation marks). The first word was
+--                           'public_methods'; 'declared_type_methods' (spec
+--                           2026-09-22 §2c) is that rule plus one conjunct —
+--                           the member's DECLARING type must carry the gate
+--                           DIRECTLY, never by inheritance. A member-level rule
+--                           OVERRIDES either for the member it names — one row
+--                           per member, never two — and $path_fallback is
+--                           required beside both, since a member carries no
+--                           name attribute at all
+--                           (`annotation_driven.py::_validate_naming`).
 --   $declared_on         -- 2I design §4: the construct kind the enclosing
 --                           type must be for this catalog's rules to apply,
 --                           or NULL to apply them to any — which is every
@@ -272,7 +293,7 @@
 -- it out by name, the way it leaves out the redaction staging tables).
 CREATE OR REPLACE TEMP TABLE endpoint_candidates AS
 WITH RECURSIVE catalog_params AS (
-    -- One row per catalog in the batch: the 32 values `annotation_driven.py::
+    -- One row per catalog in the batch: the 33 values `annotation_driven.py::
     -- params_for` builds, every one of them a field, the STRUCT spelled once.
     -- `s.*` expands the struct into columns, so the rest of the file reads
     -- `cp.<field>` where it used to read `$<field>`.
@@ -295,6 +316,7 @@ WITH RECURSIVE catalog_params AS (
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
             all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
+            fallback_prefix_attr VARCHAR,
             qualifier_from VARCHAR[], qualifier_separator VARCHAR, qualifier_format VARCHAR,
             namespace_template VARCHAR, members VARCHAR, path_separator VARCHAR,
             path_prefix VARCHAR, canonical_path BOOLEAN,
@@ -627,6 +649,47 @@ gate_types AS (
     JOIN mapping_catalog mc ON mc.fqn = a.annotation
          AND (a.catalog_id IS NULL OR a.catalog_id = mc.catalog_id)
 ),
+-- THE DIRECT GATE, and the whole of `members: declared_type_methods` (spec
+-- 2026-09-22 §2c, M-3): the same gate types as above and the ones
+-- `$type_annotation` names, restricted to the rows a scanner actually READ.
+--
+-- The restriction is one conjunct, `a.catalog_id IS NULL`, and it works
+-- because `annotations_effective` already carries the distinction its own
+-- comment states: a REAL row — an annotation written in the code and read off
+-- it — carries NULL there, and a row this engine's pre-passes synthesized
+-- carries the catalog's own id. So this set is exactly "the types that carry
+-- the gate THEMSELVES", and the inherited gate is exactly what it drops. The
+-- usual `(a.catalog_id IS NULL OR a.catalog_id = <the catalog>)` conjunct is
+-- subsumed rather than missing: a real row is readable by every catalog, and
+-- this CTE admits nothing else.
+--
+-- WHY THAT IS THE RULE, and it is a fabrication removed rather than a
+-- narrowing for its own sake. The gate annotation sits on a CONTRACT type and
+-- the inheritance walk carries it onto the implementing class — which is what
+-- makes that class a gate type in the first place, so the rows this file
+-- derives for it are right. Its OWN declarations are not: a public helper
+-- beside the contract's members is an ordinary method nobody calls over a
+-- wire, and `public_methods` publishes it as an operation at
+-- `resolved`/`compiler`. Enumerating only what the DECLARING type declares is
+-- the rule every contract-interface framework follows, and it is why the word
+-- that carries it has a NEGATIVE test as well as a positive one.
+--
+-- BOTH gate shapes, for the reason `_validate_naming`'s own class-gate check
+-- accepts both: a catalog may name its gate in `$type_annotation` or write it
+-- as a `mapping.annotations` entry found on a TYPE, and a word that read only
+-- one of them would derive NOTHING for a file using the other — silently,
+-- which is the failure direction this vocabulary is least able to afford.
+directly_gated_types AS (
+    SELECT DISTINCT mc.catalog_id AS catalog_id, a.target AS type_symbol
+    FROM annotations_effective a
+    JOIN mapping_catalog mc ON mc.fqn = a.annotation
+    WHERE a.catalog_id IS NULL
+    UNION
+    SELECT DISTINCT g.catalog_id AS catalog_id, a.target AS type_symbol
+    FROM annotations_effective a
+    JOIN type_gates g ON g.fqn = a.annotation
+    WHERE a.catalog_id IS NULL
+),
 -- `A-M15`: every type whose members a gated class EXPOSES — the gate type
 -- itself, then its superclass, then its superclass's, within what was scanned.
 --
@@ -775,7 +838,15 @@ exposed_members AS (
     FROM symbols s
     JOIN gate_ancestry g ON g.owner_symbol = s.enclosing
     JOIN catalog_params cp ON cp.catalog_id = g.catalog_id
-    WHERE cp.members = 'public_methods'
+    -- BOTH member words enumerate the same candidates, and they differ by one
+    -- conjunct applied AFTER the dedup (`member_declarations` below) rather
+    -- than by a second walk here — the split this CTE already makes between
+    -- what is enumerated and what is filtered off the winner. Sited before the
+    -- dedup instead, the new conjunct would drop an overriding declaration out
+    -- of its own partition and let the ancestor declaration it shadows win
+    -- there: the same fabrication one level down that the declaring-class
+    -- filter below is sited after the dedup to avoid.
+    WHERE cp.members IN ('public_methods', 'declared_type_methods')
       AND s.construct_kind = 'method'
       AND s.visibility = 'public'
       AND coalesce(s.modifiers ->> 'synthetic', 'false') <> 'true'
@@ -915,6 +986,23 @@ member_declarations AS (
       -- still derive for C, exactly as `getMethods()` still returns them.
       AND s.enclosing IN (SELECT type_symbol FROM gate_types
                           WHERE gate_types.catalog_id = em.catalog_id)
+      -- AND, UNDER `declared_type_methods`, IT MUST CARRY THE GATE ITSELF
+      -- (spec 2026-09-22 §2c, M-3). The conjunct above is satisfied by an
+      -- INHERITED gate, and an inherited gate is precisely what makes an
+      -- implementing class a gate type — so on such a class the rule above
+      -- enumerates the class's own helper methods beside the contract's
+      -- members and publishes each as an operation nothing calls.
+      -- `directly_gated_types` is the same set restricted to the annotation
+      -- rows a scanner READ, so this admits only members declared where the
+      -- contract itself is declared. See that CTE for the whole argument.
+      --
+      -- Written as a disjunction on the WORD rather than as a second rule, so
+      -- `public_methods` evaluates exactly what it always did: the first
+      -- branch is true for every row of every catalog written before this
+      -- word, and the subquery is never reached for them.
+      AND (cp.members <> 'declared_type_methods'
+           OR s.enclosing IN (SELECT type_symbol FROM directly_gated_types
+                              WHERE directly_gated_types.catalog_id = em.catalog_id))
       AND NOT EXISTS (
           SELECT 1 FROM annotations_effective a
           JOIN mapping_catalog mc ON mc.fqn = a.annotation
@@ -1061,6 +1149,37 @@ peers AS (
          AND (a.catalog_id IS NULL OR a.catalog_id = pg.catalog_id)
     JOIN catalog_params cp ON cp.catalog_id = pg.catalog_id
 ),
+-- The prefix `prefixed_capitalized_construct_name` composes (spec 2026-09-22
+-- §2b, CP-30 row 2), read off the DECLARING type's own gate annotation —
+-- `$fallback_prefix_attr` names the attribute, and `type_gates` is the join,
+-- mirroring `prefixes` one attribute over.
+--
+-- A DIFFERENT prefix from `prefixes.prefix`, and the difference is the point:
+-- that one joins the FRONT of every composed address, while this one is
+-- reached only by the fallback and therefore only by a member that named
+-- nothing. CP-30 Q2 is why that distinction is the framework's own and not a
+-- convenience — the prefix composition sits INSIDE the empty-name branch, so a
+-- member carrying its own name skips it, and a prefix machinery applying to
+-- every row would compose an address nothing answers for exactly that member.
+--
+-- Empty for every catalog that declares no such attribute, so the LEFT JOIN
+-- below finds nothing and the composition is inert. Scalar-or-array like every
+-- other attribute read in this file. A type carrying the gate and NOT the
+-- attribute yields '' — the same `coalesce(..., '')` `prefixes` makes one
+-- level over, and the same reading: the halves compose, and a half nobody
+-- wrote contributes nothing rather than removing the other.
+fallback_prefixes AS (
+    SELECT
+        g.catalog_id AS catalog_id,
+        a.target AS type_symbol,
+        coalesce(a.args -> cp.fallback_prefix_attr ->> 0,
+                 a.args ->> cp.fallback_prefix_attr, '') AS prefix
+    FROM annotations_effective a
+    JOIN type_gates g ON g.fqn = a.annotation
+         AND (a.catalog_id IS NULL OR a.catalog_id = g.catalog_id)
+    JOIN catalog_params cp ON cp.catalog_id = g.catalog_id
+    WHERE cp.fallback_prefix_attr IS NOT NULL
+),
 -- Spec 2026-09-18 §3b word 2: the class-level media default read off a TYPE-level sibling
 -- (`@Produces` on a JAX-RS resource class). Keyed on the type so it joins exactly as
 -- `prefixes` does; the combine below is coalesce — the method's declaration, else the
@@ -1197,8 +1316,44 @@ derived AS (
         -- relies on. `$` is in the class because the JVM admits it in a method
         -- name; a symbol this failed to match would yield '' silently, which is
         -- the empty-address failure again. Spelled once as a column because the
-        -- accessor strip below reads it four times.
+        -- fallback branch below reads it several times — four in the accessor
+        -- strip, twice more in the capitalising word beside it.
         regexp_extract(s.symbol, '#([A-Za-z0-9_$]+)\(', 1) AS construct_name,
+        -- THE DECLARING TYPE, for the three words that name it instead of the
+        -- construct (spec 2026-09-22 §2b, CP-30 row 1). It is the type the
+        -- ANNOTATION sat on — `m.gate_type` where a member rule carried one,
+        -- the annotation target's own enclosing type otherwise — which is the
+        -- same `coalesce` every other read in this CTE already makes, for
+        -- `A-M15`'s reason.
+        --
+        -- And it is NOT the handler. The two come apart exactly where these
+        -- words are needed: the declaration sits on the contract type while
+        -- `handler` below may be rebound to the implementor's own override, so
+        -- reading the handler's class would publish the implementor's name —
+        -- a type no caller ever names, and the whole of what CP-30 Q1
+        -- measured (the constructor takes the INTERFACE's simple name on one
+        -- branch and the reflected method's own name on every other).
+        --
+        -- Spelled as three columns because the two words read the same symbol
+        -- two ways: the module prefix is everything up to the last space
+        -- (D00 §1), the trailing `#` is the type separator, and the SIMPLE
+        -- name is what follows the last package separator or nested-type
+        -- separator — the innermost name, which is what the measured call
+        -- returns for a nested type as well as a top-level one.
+        --
+        -- A declaration with NO declaring type at all — a free function (D00
+        -- §4) — reads NULL here and composes NULL rather than an invented
+        -- name, which is the honest answer for a word that names a type where
+        -- there is none. It is unreachable for any catalog that can sensibly
+        -- declare one of these words: the gate filter below already drops a
+        -- row whose enclosing type is NULL, and a word naming the DECLARING
+        -- type on a catalog with no type gate would have nothing to name.
+        -- No extractor writing into these facts emits one today in any case,
+        -- which is the same reason the construct-kind join below calls its own
+        -- free-function branch a no-op.
+        regexp_extract(coalesce(m.gate_type, s.enclosing), '[^ ]*$') AS declaring_descriptor,
+        replace(rtrim(declaring_descriptor, '#'), '/', '.') AS declaring_qualified_name,
+        regexp_extract(rtrim(declaring_descriptor, '#'), '[^/$]*$') AS declaring_simple_name,
         CASE WHEN coalesce(m.qualifier, q.qualifier) IS NOT NULL
              THEN CASE WHEN cp.qualifier_format = 'qname'
                        THEN '{' || coalesce(m.qualifier, q.qualifier) || '}'
@@ -1229,8 +1384,35 @@ derived AS (
             -- method named with a non-ASCII letter yields '' here long before
             -- the seam test runs. This stops being right the day that character
             -- class widens.
+            --
+            -- THE THREE DECLARING-TYPE WORDS (spec 2026-09-22 §2b) branch on
+            -- the WORD rather than on a prefix list, because none of them
+            -- strips anything off a member name — two of them do not read the
+            -- member name at all. They are inside the same fallback branch and
+            -- not beside it, and that is the rule rather than a tidier
+            -- spelling: a declaration that NAMED itself never reaches a
+            -- fallback, so the prefix the third word composes is skipped by
+            -- construction for exactly the member CP-30 Q2 measured skipping
+            -- it (`@…(name = "Charge")` under the prefix `billing_` is
+            -- `Charge`, never `billing_Charge`). A flag outside this branch
+            -- would have to re-derive that edge and could get it wrong.
+            --
+            -- The capitalisation is `upper` of the FIRST character and the
+            -- remainder untouched — CP-30 Q3's `substring(0, 1).toUpperCase()`
+            -- appended to `substring(1)`, offsets 15-26 — never a title-casing
+            -- of the whole name, which would rewrite every character after the
+            -- first of an all-caps member name.
             || CASE WHEN m.path_suffix = '' AND m.path_fallback IS NOT NULL
-                    THEN coalesce(list_extract(list_filter(list_transform(
+                    THEN CASE
+                         WHEN m.path_fallback = 'declaring_type_simple_name'
+                              THEN declaring_simple_name
+                         WHEN m.path_fallback = 'declaring_type_qualified_name'
+                              THEN declaring_qualified_name
+                         WHEN m.path_fallback = 'prefixed_capitalized_construct_name'
+                              THEN coalesce(fp.prefix, '')
+                                   || upper(substr(construct_name, 1, 1))
+                                   || substr(construct_name, 2)
+                         ELSE coalesce(list_extract(list_filter(list_transform(
                              m.path_fallback_prefixes,
                              x -> CASE WHEN starts_with(construct_name, x)
                                             AND length(construct_name) > length(x)
@@ -1238,7 +1420,7 @@ derived AS (
                                                 substr(construct_name, length(x) + 1, 1), '[A-Z]')
                                        THEN lower(substr(construct_name, length(x) + 1, 1))
                                             || substr(construct_name, length(x) + 2) END
-                         ), v -> v IS NOT NULL), 1), construct_name)
+                         ), v -> v IS NOT NULL), 1), construct_name) END
                     ELSE m.path_suffix END AS scoped_name,
         -- THE CONSTANT PREFIX ($path_prefix), joined onto the FRONT of the
         -- type-level prefix under the same seam rule the address seam below
@@ -1479,6 +1661,13 @@ derived AS (
     -- comment for why the two agree for every catalog but this group's new one.
     LEFT JOIN peers pr ON pr.catalog_id = m.catalog_id
            AND pr.type_symbol = coalesce(m.gate_type, s.enclosing)
+    -- Spec 2026-09-22 §2b: the prefix the third fallback word composes, read
+    -- off the DECLARING type — the same key every join here uses, so the word
+    -- reads the prefix of the type whose name the other two words publish
+    -- rather than of whatever type happens to hold the handler. Empty for
+    -- every catalog that declares no `$fallback_prefix_attr`.
+    LEFT JOIN fallback_prefixes fp ON fp.catalog_id = m.catalog_id
+           AND fp.type_symbol = coalesce(m.gate_type, s.enclosing)
     -- `type_media` only ever matches a TYPE symbol because the join key is the
     -- enclosing type; a method-level `@Produces` row in `annotations_effective`
     -- has a method target and never joins here.
