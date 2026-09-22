@@ -87,14 +87,21 @@ class Artifact:
 
 
 class Fixture:
-    """One committed fixture's compiled classes, labelled with the one identity a class
-    file states about itself: its own class-file major version. CP-27's row 16, CP-30's
-    Q9 and CP-31's Q9, same reasoning."""
+    """One directory of compiled classes, labelled with the one identity a class file states
+    about itself: its own class-file major version. CP-27's row 16, CP-30's Q9 and CP-31's
+    Q9, same reasoning.
 
-    def __init__(self, key: str, name: str, classes: Path, identity_class: str):
+    Two of the three are committed fixtures and the third is Q12's throwaway compile, so
+    `where` is carried per instance rather than composed from the name: a row that printed
+    `fixtures/AliasProbe.java (target/classes)` would name a fixture this repository does
+    not have.
+    """
+
+    def __init__(self, key: str, name: str, classes: Path, identity_class: str, where: str):
         self.key = key
         self.name = name
         self.classes = classes
+        self.where = where
         output = _javap("-v", identity_class, classpath=classes)
         match = re.search(r"major version: (\d+)", output)
         if match is None:
@@ -366,21 +373,50 @@ def main(specs: list[str]) -> int:
             fixture_paths[key.split(":", 1)[1]] = (name, Path(path))
             continue
         artifacts[key] = Artifact(key, group, name, requested, Path(path))
-    missing = {"kafka", "jms", "rabbit", "mnkafka", "mnjms"} - set(artifacts)
-    if missing or {"spring", "micronaut"} - set(fixture_paths):
+    missing = {
+        "kafka",
+        "jms",
+        "rabbit",
+        "mnkafka",
+        "mnjms",
+        "mnprocessor",
+        "mncore",
+        "mninject",
+    } - set(artifacts)
+    if missing or {"spring", "micronaut", "alias"} - set(fixture_paths):
         raise ProbeError(f"run.sh handed in no spec for {sorted(missing)}")
     kafka = artifacts["kafka"]
     jms = artifacts["jms"]
     rabbit = artifacts["rabbit"]
     mnkafka = artifacts["mnkafka"]
     mnjms = artifacts["mnjms"]
+    # `mncore` and `mninject` fill no cell: they complete Q12's compile classpath, and they
+    # go through `Artifact` anyway so a jar reporting an unexpected version aborts the run
+    # rather than silently changing what compiled.
+    mnprocessor = artifacts["mnprocessor"]
     spring_fixture = Fixture(
-        "spring", *fixture_paths["spring"], "com.acme.orders.messaging.OrderEventsListener"
+        "spring",
+        *fixture_paths["spring"],
+        "com.acme.orders.messaging.OrderEventsListener",
+        where="`fixtures/orders-service` (target/classes)",
     )
     micronaut_fixture = Fixture(
-        "micronaut", *fixture_paths["micronaut"], "com.acme.mn.OrderMessaging"
+        "micronaut",
+        *fixture_paths["micronaut"],
+        "com.acme.mn.OrderMessaging",
+        where="`fixtures/orders-micronaut` (target/classes)",
     )
-    fixtures = {"spring": spring_fixture, "micronaut": micronaut_fixture}
+    alias_classes = Fixture(
+        "alias",
+        *fixture_paths["alias"],
+        "AliasProbe$Both",
+        where="`scripts/probes/cp32_listener_attributes/AliasProbe.java`, compiled by this run",
+    )
+    fixtures = {
+        "spring": spring_fixture,
+        "micronaut": micronaut_fixture,
+        "alias": alias_classes,
+    }
 
     columns = sorted({a.observed for a in artifacts.values()})
     print("| what the run read | " + " | ".join(columns) + " |")
@@ -411,7 +447,7 @@ def main(specs: list[str]) -> int:
         where = (
             f"`{artifact.group}:{artifact.name}` | {artifact.observed}"
             if isinstance(artifact, Artifact)
-            else f"`fixtures/{artifact.name}` (target/classes) | {artifact.observed}"
+            else f"{artifact.where} | {artifact.observed}"
         )
         print(f"| {number} | {question} | {where} | `{observed}` |")
 
@@ -500,6 +536,27 @@ def main(specs: list[str]) -> int:
             fixtures[key],
             q_fixture_uses(fixtures[key].classes),
         )
+    # Q12 is read by the SAME function as Q11, deliberately: the question is what a scan
+    # finds in a class file, and asking it through a second reader written for the occasion
+    # would let the two disagree about what "the elements it writes" means.
+    row(
+        "12",
+        "what javac writes when a declaration sets BOTH aliased elements of Micronaut's "
+        "`@KafkaListener` (`value` and `groupId`), beside the short spelling as a control",
+        fixtures["alias"],
+        q_fixture_uses(fixtures["alias"].classes),
+    )
+    row(
+        "13",
+        "the WHOLE body of every method of `AbstractAnnotationMetadataBuilder` that "
+        "references `annotationName` — where an `@AliasFor` is actually resolved",
+        mnprocessor,
+        q_bodies_referencing(
+            mnprocessor.jar,
+            "io.micronaut.inject.annotation.AbstractAnnotationMetadataBuilder",
+            "String annotationName",
+        ),
+    )
     return 0
 
 

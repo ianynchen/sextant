@@ -4779,9 +4779,14 @@ matches:
   metadata_from:
     - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues,
         kind: task_queue }
-    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: delivery,
+    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: local,
         absent_value: "true" }        # …the measured AnnotationDefault, quoted
 ```
+
+The second line's `kind` is `local` and not §2e's table's `delivery`, which this example
+followed until Task 9 swept the section: `delivery` + a boolean is ambiguous (true of
+what?) while `local` + `true` states the fact the attribute states. The closing paragraph
+of this section has the rest of that reading.
 
 **Why a key rather than a path segment.** §1f splits a qualifying attribute into two
 classes. A **routing** attribute changes which endpoint a message arrives at (a Temporal
@@ -4806,8 +4811,10 @@ than a gap: `endpoint_metadata.kind`'s comment — the one on the column itself,
 `src/sextant/storage/duckdb/schema.sql:536`, not in D01 §3, which this paragraph cited until
 Task 9 went looking for it — says the
 vocabulary is per protocol and the catalog names it, exactly as `semantics` on a wrapper is,
-so `task_queue`, `consumer_group`, `selector`, `subscription` and `delivery` need no schema
-change and neither does the next protocol's word.
+so the six words the shipped catalogs use — `task_queue`, `consumer_group`, `selector`,
+`subscription`, and `exclusive` and `local` where an earlier draft of §2e's table said
+`delivery` for both (see the closing paragraph below) — need no schema change, and neither
+does the next protocol's word.
 
 **Two rules a catalog author cannot otherwise discover:**
 

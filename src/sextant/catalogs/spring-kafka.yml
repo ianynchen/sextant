@@ -57,10 +57,15 @@ matches:
   # `concurrency`, `containerFactory`, `errorHandler`, `autoStartup`,
   # `clientIdPrefix`, `containerGroup`, `beanRef`, `batch`, `filter`,
   # `splitIterables`, `contentTypeConverter`, `info`, `containerPostProcessor`,
-  # `properties` — the rest of the 20 elements CP-32 Q1a lists. Every one of
-  # them decides how THIS node runs a listener a message has already reached,
-  # which no peer can observe. `id` is not recorded either, for a different
-  # reason: it names a container bean, not anything on the wire.
+  # `properties` — 14 of the 20 elements CP-32 Q1a lists. Every one of them
+  # decides how THIS node runs a listener a message has already reached, which
+  # no peer can observe. `id` is not recorded either, for a different reason: it
+  # names a container bean, not anything on the wire. That is 15; the remaining
+  # five are each addressed elsewhere in this file rather than silently dropped
+  # — `groupId` is the one recorded, `topics`, `topicPattern` and
+  # `topicPartitions` are the ADDRESS's own question (`path_from` below, and the
+  # CP-16 note at the foot of the file for the third), and `idIsGroup` is read
+  # in the `absent_value` paragraph above.
   #
   # STATED BOUNDARY (CP-32 Q6): `resolveExpressionAsString` means a written
   # value may be a `${…}` placeholder — carried verbatim at `unresolved` — or a

@@ -37,9 +37,19 @@ names its row by the row's identity columns and `protocol` is one of them.
 
 Cost per resolve (GUIDELINES §8.7): one read of `endpoints`, and one
 `effective_annotation_uses` walk per catalog that DECLARES the key and owns an
-inbound row — no shipped catalog declares it yet, so today that is zero, and the
-`endpoints` read itself is skipped where nothing declared the key. The annotation
-lookup is built once per handler, so a verbless mapping's eight rows are one lookup.
+inbound row. **Eight shipped catalogs declare it** — `temporal-workflow.yml`,
+`temporal-activity.yml` and `quarkus-consume-event.yml` (spec §2d/§1e; the two
+Temporal CLIENT catalogs cannot, being outbound), and `spring-kafka.yml`,
+`spring-jms.yml`, `spring-rabbit.yml`, `micronaut-kafka.yml` and
+`micronaut-jms.yml` (§2e) — so the `endpoints` read is no longer skipped on a
+module that detects any of them, and the walk count is the number of THOSE
+catalogs that own an inbound row rather than the number that exist: three on a
+typical Spring module, one on a Micronaut one, zero on a module that detects
+none of the eight. Each walk is one `workspace.query("annotations")` plus the
+closure the catalog's own mapping fqns seed, and it is recomputed per catalog
+for `effective_annotation_uses`'s own stated reason (there is no set that serves
+two). The annotation lookup is built once per handler, so a verbless mapping's
+eight rows are one lookup.
 """
 
 from typing import Any

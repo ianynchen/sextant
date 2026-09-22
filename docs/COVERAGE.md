@@ -812,6 +812,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `io.micronaut.jms:micronaut-jms-sqs` | 4.2.0 |
 | `micronaut-kafka-client` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
 | `micronaut-kafka` | `io.micronaut.kafka:micronaut-kafka` | 5.6.0 |
+|  | `io.micronaut:micronaut-core-processor` | 4.7.6 |
 | `micronaut-pubsub-client` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `micronaut-pubsub` | `io.micronaut.gcp:micronaut-gcp-pubsub` | 5.8.0 |
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |

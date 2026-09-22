@@ -16,6 +16,13 @@ measured:
   # `metadata_from` entries above needs the probe that asked that question.
   - { artifact: io.micronaut.kafka:micronaut-kafka, versions: ["5.6.0"],
       identity: reported, by: scripts/probes/cp32_listener_attributes.md }
+  # A THIRD row, and a DIFFERENT artifact rather than a widened second one: the
+  # both-written boundary above rests on what resolves an `@AliasFor`, which is
+  # `micronaut-core-processor`'s `AbstractAnnotationMetadataBuilder` and not
+  # anything in `micronaut-kafka` at all (CP-32 Q13). 4.7.6 is the version
+  # `fixtures/orders-micronaut`'s own POM resolves.
+  - { artifact: io.micronaut:micronaut-core-processor, versions: ["4.7.6"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }
 requires: [annotation_args]
 # One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
 # and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
@@ -40,8 +47,31 @@ matches:
   # Micronaut's own MERGED metadata, where the alias has already been applied —
   # so `value` is as much the consumer group as `groupId` is, and an entry
   # naming only `groupId` would silently miss every declaration written the
-  # short way. A declaration writes at most one of the two, so the pair below
-  # yields exactly one row.
+  # short way.
+  #
+  # A DECLARATION CAN WRITE BOTH, AND THAT IS NOW MEASURED RATHER THAN ASSUMED
+  # (fix round 1: this file said "a declaration writes at most one of the two"
+  # and nothing had asked). CP-32 Q12 compiles
+  # `@KafkaListener(value = "by-value", groupId = "by-group-id")` and reads the
+  # class file back: javac accepts it and writes BOTH elements into
+  # `RuntimeVisibleAnnotations`. CP-32 Q13 reads what Micronaut then does with
+  # it — `AbstractAnnotationMetadataBuilder.processAnnotationAlias`, offsets
+  # 164-195: a WITHIN-annotation `@AliasFor` (one naming `member` and no
+  # `annotation`/`annotationName`, which is exactly this pair) is a `Map.put` of
+  # the aliased name into the SAME members map, so it OVERWRITES rather than
+  # refuses. Micronaut resolves such a declaration to ONE group, silently — and
+  # this pass would write TWO `consumer_group` rows contradicting each other.
+  #
+  # STATED, NOT ENCODED, and the reason is where a fix would have to live:
+  # `metadata_from` has no first-present-wins form — that is `path_from`'s alias
+  # machinery, one key over — so encoding it is an engine change. The exposure
+  # is bounded to a declaration that names two DIFFERENT consumer groups for one
+  # listener, which is a module Micronaut itself silently collapses; a
+  # declaration writing both with the same value yields one row through the
+  # insert-if-absent guard. It is recorded here rather than left implied,
+  # because a second row on a real endpoint is the false-positive class this key
+  # is organised against, and saying so is what stops a reader taking the pair
+  # below for a guarantee.
   #
   # BEHAVIOURAL, not routing (§1f): every consumer group on a topic receives
   # every message, so the group qualifies the endpoint and never enters its
@@ -72,7 +102,9 @@ matches:
   # `threadsValue`, `pollTimeout`, `sessionTimeout`, `heartbeatInterval`,
   # `offsetStrategy`, `offsetReset`, `isolation`, `errorStrategy`,
   # `redelivery`, `batch`, `properties`, `autoStartup`, `uniqueGroupId` — the
-  # rest of the 21 elements CP-32 Q4a lists. Every one decides how THIS node
+  # other 17 of the 19 elements CP-32 Q4a lists (Q4a's `×21` counts those 19
+  # plus the annotation TYPE's own `@Retention` and `@Target`), `value` and
+  # `groupId` being the two recorded. Every one of the 17 decides how THIS node
   # polls, commits or retries a message that has already reached it, which no
   # peer can observe.
   metadata_from:

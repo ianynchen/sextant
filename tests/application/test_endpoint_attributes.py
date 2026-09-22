@@ -20,11 +20,18 @@ each of the two ways a union would go wrong (two values for one endpoint; a meas
 default beside the explicit value contradicting it), and one holding that nearest-wins is
 per annotation rather than per handler.
 
-## Everything here is invented
+## Everything ABOVE the last section is invented
 
 Invented symbols, an invented catalog id, invented annotations — the reason every pass
-test in this directory gives: one behaviour per test, isolated and fast. No shipped
-catalog declares `metadata_from` yet, so there is no shipped answer to pin beside these.
+test in this directory gives: one behaviour per test, isolated and fast.
+
+The last section is not, and it says why in its own header comment. Eight shipped
+catalogs now declare `metadata_from` (spec §2d/§1e's Temporal and Quarkus pair, and
+§2e's five listener catalogs), and a `metadata_from` entry is the shape GUIDELINES §10's
+pair rule names: an annotation or attribute name one character off passes the loader's
+own validation, matches nothing, and leaves every assertion of absence green. So each of
+§2e's five catalogs carries a positive paired with a near-miss, run over the REAL loaded
+files rather than an invented stand-in.
 """
 
 from pathlib import Path
@@ -719,6 +726,43 @@ def test_micronaut_kafka_reads_the_group_under_either_of_the_two_names_it_has(tm
     ) == [
         ("mn.orders.placed", "consumer_group", "orders", "resolved"),
         ("mn.orders.shipped", "consumer_group", "shipments", "resolved"),
+    ]
+
+
+def test_micronaut_kafka_writes_both_groups_where_one_declaration_names_two(tmp_path: Path):
+    """The stated boundary the two entries carry, pinned as BEHAVIOUR so a later
+    first-present-wins form in the engine would visibly change it rather than quietly.
+
+    CP-32 Q12 compiles `@KafkaListener(value = …, groupId = …)` and reads BOTH elements back
+    out of `RuntimeVisibleAnnotations`: javac accepts the declaration and merges nothing. CP-32
+    Q13 reads what Micronaut does with it — `processAnnotationAlias`, offsets 164-195: a
+    within-annotation `@AliasFor` is a `Map.put` into the same members map, which OVERWRITES,
+    so the framework resolves one group silently rather than refusing. This pass reads each
+    entry independently, so two DIFFERENT values yield two contradicting rows on one endpoint.
+    That is a real false positive and it is stated in `micronaut-kafka.yml` rather than encoded
+    away, because the only fix lives in the engine (`metadata_from` has no first-present-wins
+    form) — and because dropping the `value` entry would turn a bounded self-contradictory case
+    into a silent miss on the ordinary short spelling.
+
+    The second arm is the bound: both elements written with the SAME value is ONE row, through
+    the insert-if-absent guard the pass already goes through."""
+    same = "com/acme/orders/Same#"
+    annotations = [
+        _annotated(_LISTENER, _MN_KAFKA_LISTENER, value="by-value", groupId="by-group-id"),
+        _annotated(_ON_EVENT, _MN_TOPIC, value=["mn.orders.both"]),
+        _annotated(same, _MN_KAFKA_LISTENER, value="agreed", groupId="agreed"),
+        _annotated(same + "onSame(sig_00000017).", _MN_TOPIC, value=["mn.orders.agreed"]),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "mn.orders.both", _ON_EVENT),
+        (None, "mn.orders.agreed", same + "onSame(sig_00000017)."),
+        catalog_id="micronaut-kafka",
+    ) == [
+        ("mn.orders.agreed", "consumer_group", "agreed", "resolved"),
+        ("mn.orders.both", "consumer_group", "by-group-id", "resolved"),
+        ("mn.orders.both", "consumer_group", "by-value", "resolved"),
     ]
 
 
