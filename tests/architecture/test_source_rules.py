@@ -31,6 +31,12 @@ FRAMEWORKS = {
     "fastapi",
     "flask",
 }
+# Every member of `domain.closed_sets.Protocol`, spelled out rather than read off the
+# enum: the rule below is about NAMES appearing in `storage/`, and a rule that imported
+# the set it polices could never catch a member the enum gained and the rule forgot. What
+# catches that instead is `test_the_protocol_set_policed_here_is_the_whole_set`, which
+# compares the two — `pulsar` and `rsocket` had been missing since they were added, and
+# were the only protocol names `storage/` was free to mention.
 PROTOCOLS = {
     "http",
     "kafka",
@@ -43,6 +49,8 @@ PROTOCOLS = {
     "pubsub",
     "websocket",
     "sse",
+    "pulsar",
+    "rsocket",
     "temporal",
     "eventbus",
 }
@@ -82,6 +90,18 @@ def test_storage_names_no_framework_language_or_protocol():
     and the next protocol needs a code change instead of a YAML file."""
     files = python_files("storage") + sql_files("storage")
     assert offenders(files, FRAMEWORKS | PROTOCOLS | LANGUAGES) == {}
+
+
+def test_the_protocol_set_policed_here_is_the_whole_set():
+    """The rule above is only as wide as its list, and the list is hand-written — so a
+    protocol added to `Protocol` and not added here is a name `storage/` may mention with
+    nothing objecting. That is not hypothetical: `pulsar`, `rsocket`, `temporal` and
+    `eventbus` were each added to the enum in their own wave, and the first two were still
+    missing here two waves later. This compares the two sets, so the next member fails a
+    test instead of quietly widening what `storage/` may say."""
+    from sextant.domain.closed_sets import Protocol
+
+    assert PROTOCOLS == {member.value for member in Protocol}
 
 
 def test_jvm_names_stay_in_the_jvm_extractor():

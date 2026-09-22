@@ -433,13 +433,48 @@ def test_workflow_interface_default_method_derives_nothing(
 
 def test_activity_impl_only_method_derives_nothing(temporal: tuple[list[dict], list[dict]]):
     """task-6 report table, arm 9: `BillingActivitiesImpl.reloadRates()` is declared only
-    by the implementor, never by `BillingActivities` — the `declared_on: interface` fence
-    (`declared_type_methods`) reads members the CONTRACT carries, and this one isn't among
-    them."""
+    by the implementor, never by `BillingActivities`.
+
+    **The fence that stops it is `declared_on: interface`, not `declared_type_methods`**,
+    and this docstring used to credit the wrong one. `reloadRates` is enclosed by a CLASS,
+    so the catalog's own partition gates the whole type out before any member rule runs —
+    swapping `members:` to `public_methods` leaves this arm green. The member word's own
+    discriminating shape is one interface up, and it is
+    `test_a_sub_interface_of_an_activity_contract_derives_nothing` below."""
     endpoints, _ = temporal
     handler_members = {_member(r["handler"]) for r in endpoints if r["handler"]}
     assert "reloadRates" not in handler_members
     assert not any(r["path"] == "billing_ReloadRates" for r in endpoints)
+
+
+def test_a_sub_interface_of_an_activity_contract_derives_nothing(
+    temporal: tuple[list[dict], list[dict]],
+):
+    """`declared_type_methods`, measured — the arm the branch review added because nothing
+    measured the word at all.
+
+    `AuditedLedgerActivities extends LedgerActivities` carries `@ActivityInterface` only
+    SYNTHETICALLY, through the inheritance walk, and declares a member of its own. The
+    word admits a member only where the member's own declaring type carries the gate as a
+    real annotation row, so `audit` derives nothing.
+
+    WHY that matters, measured against this shipped catalog: under `public_methods` the
+    same fixture derives `outbound activity "ledger_Audit"` on
+    `AuditedLedgerActivities#audit` — the sub-declared member published under the BASE's
+    `namePrefix`, an activity name no worker polls for, at `resolved`/`compiler`. Before
+    this arm existed that swap moved no shipped output and failed no test.
+
+    `LedgerActivities` itself derives nothing either, for a different fence: no class
+    implements it, but an interface in this module EXTENDS it, so the outbound (SEI) fence
+    subtracts the contract and the flip to inbound declines. Asserted, so that a change
+    which starts publishing the base cannot hide behind this test's other half."""
+    endpoints, _ = temporal
+    members = {_member(r["handler"]) for r in endpoints if r["handler"]} | {
+        _member(r["caller"]) for r in endpoints if r["caller"]
+    }
+    assert "audit" not in members
+    assert "post" not in members
+    assert not any(str(r["path"]).startswith("ledger_") for r in endpoints if r["path"])
 
 
 def test_shipping_activities_pair_derives_nothing(temporal: tuple[list[dict], list[dict]]):

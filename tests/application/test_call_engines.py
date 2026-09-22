@@ -10422,6 +10422,15 @@ def test_a_stub_signal_names_a_member_and_derives_nothing(tmp_path: Path):
     what holds that: the same shape as the positive above, on the method §2f names,
     deriving nothing.
 
+    **Two calls, because the real one alone pinned the wrong conjunct.**
+    `WorkflowStub.signal` is declared on `WorkflowStub` while the catalog's `owner:` is
+    `WorkflowClient`, so the OWNER gate rejects it first and a verbatim `signal` row added
+    to `temporal-untyped.yml` left this green — it measured the owner, not the decision.
+    The second call is a CONSTRUCTED shape, and constructed on purpose: `signal` on the
+    catalog's own owner, which the SDK does not declare there. Holding the owner constant
+    is what isolates §2f's actual decision — that no `signal` row exists — so adding one
+    turns this red.
+
     Not marked `declines`: it measures a row this catalog never had rather than a
     conjunct of one it does, so no guard's removal makes it fire."""
     call = CallSiteFact(
@@ -10441,7 +10450,26 @@ def test_a_stub_signal_names_a_member_and_derives_nothing(tmp_path: Path):
             CallArgument(kind="array", elements=[]),
         ],
     )
-    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    on_the_declared_owner = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#signalUntyped().",
+        target=CallTarget(
+            owner="io/temporal/client/WorkflowClient#",
+            name="signal",
+            descriptor="(Ljava/lang/String;[Ljava/lang/Object;)V",
+        ),
+        invoke_kind="interface",
+        ordinal=1,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="string", value="cancel"),
+            CallArgument(kind="array", elements=[]),
+        ],
+    )
+    workspace = _resolve(
+        tmp_path, [call, on_the_declared_owner], _catalog_by_id("temporal-untyped")
+    )
     rows = workspace.query("endpoints")
     workspace.close()
 
@@ -10502,8 +10530,20 @@ _EB_CONSUMER_1 = "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;"
 
 
 def _eventbus_call(
-    *, owner: str = _EB, name: str, descriptor: str, address: str = "orders.created"
+    *,
+    owner: str = _EB,
+    name: str,
+    descriptor: str,
+    address: str = "orders.created",
+    body: bool = True,
 ) -> CallSiteFact:
+    """`body=False` drops the payload argument, which is what a ONE-argument event-bus
+    call carries — `consumer(String)`. The default two-element list would be rejected on
+    ARITY before any catalog rule was consulted, so a near-miss about a missing row and
+    not about arity has to be able to say so."""
+    arguments = [CallArgument(kind="string", value=address)]
+    if body:
+        arguments.append(CallArgument(kind="parameter", value=0))
     return CallSiteFact(
         document_id="doc_1",
         caller="com/acme/eb/OrderBus#placeOrder().",
@@ -10512,10 +10552,7 @@ def _eventbus_call(
         ordinal=0,
         receiver=1,
         result=2,
-        arguments=[
-            CallArgument(kind="string", value=address),
-            CallArgument(kind="parameter", value=0),
-        ],
+        arguments=arguments,
     )
 
 
@@ -10572,15 +10609,27 @@ def test_a_bare_event_bus_consumer_derives_nothing_from_the_one_call_catalog(tmp
     registration lives in `handler` and a consumer never given one receives nothing.
     `vertx-eventbus.yml` therefore declares the two-argument overload and NOT the
     one-argument one — the call below carries the real descriptor of the real method on
-    the real owner, and still derives nothing. `vertx-eventbus-chain.yml` is what reads
-    it, and only once a chain reaches `.handler(...)`.
+    the real owner AND the one argument that method takes, and still derives nothing.
+    `vertx-eventbus-chain.yml` is what reads it, and only once a chain reaches
+    `.handler(...)`.
+
+    **The argument list is the load-bearing part and this test did not have it right.**
+    Written with the helper's default two-element list the site was rejected on ARITY
+    before any catalog rule was consulted, so declaring a verbatim `consumer(String)` row
+    in `vertx-eventbus.yml` left it green — it pinned the helper, not the catalog. With
+    one argument, as the method really has, adding that row turns it red.
 
     Not marked `declines`: it measures a row this catalog never had rather than a
     conjunct of one it does."""
     assert (
         _eventbus_rows(
             tmp_path,
-            _eventbus_call(name="consumer", descriptor=_EB_CONSUMER_1, address="orders.unhandled"),
+            _eventbus_call(
+                name="consumer",
+                descriptor=_EB_CONSUMER_1,
+                address="orders.unhandled",
+                body=False,
+            ),
         )
         == []
     )

@@ -75,9 +75,13 @@ matches:
     # cover is one interface up: an `interface Sub extends
     # @ActivityInterface Base` carries the gate SYNTHETICALLY, is an interface,
     # and under `public_methods` publishes its own members as activities of
-    # Base's contract, under Base's `namePrefix`. Measured against this shipped
-    # catalog: `public_methods` derives `b_SubOp` there and
-    # `declared_type_methods` derives nothing. The word stays.
+    # Base's contract, under Base's `namePrefix`. `fixtures/temporal-probe`
+    # carries that shape as `AuditedLedgerActivities extends LedgerActivities`,
+    # measured both ways against this shipped catalog: `public_methods` derives
+    # `outbound activity "ledger_Audit"` on `AuditedLedgerActivities#audit` and
+    # `declared_type_methods` derives nothing
+    # (`tests/e2e/test_async_delivered.py`). The word stays — and until that arm
+    # was committed nothing measured it: the swap left the whole suite green.
     members: declared_type_methods
     # MEASURED (CP-30 Q2, offsets 45-58): `POJOActivityMethodMetadata`'s
     # constructor reads `ActivityMethod.name()`, tests `.isEmpty()` at offset 50
@@ -159,3 +163,8 @@ shape_model: json
 #     inside a workflow body, and this catalog derives from declarations.
 #   * A DYNAMIC activity (`DynamicActivity`) names its activity type at
 #     runtime and declares nothing this file can read.
+#   * A NESTED `@ActivityImpl` CLASS TAKES THE OUTER CLASS'S QUEUE, exactly as
+#     `temporal-workflow.yml`'s own bullet states for `@WorkflowImpl`: the
+#     enclosing type the `metadata_from` read looks at is `owner_of`'s answer,
+#     which cuts the symbol at its FIRST type marker and so names the OUTERMOST
+#     type rather than the immediately enclosing one.
