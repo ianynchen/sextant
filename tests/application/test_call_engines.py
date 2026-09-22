@@ -10584,3 +10584,93 @@ def test_a_bare_event_bus_consumer_derives_nothing_from_the_one_call_catalog(tmp
         )
         == []
     )
+
+
+# --- vertx-eventbus-mutiny: the facade, and the descriptors that keep it apart ---------
+
+_MUTINY_EB = "io/vertx/mutiny/core/eventbus/EventBus#"
+_MUTINY_SEND_2 = "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;"
+
+
+def _mutiny_rows(tmp_path: Path, call: CallSiteFact, catalog_id: str) -> list[tuple]:
+    workspace = _resolve(tmp_path, [call], _catalog_by_id(catalog_id))
+    rows = sorted(
+        (str(row["direction"]), str(row["protocol"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_a_mutiny_event_bus_send_derives_the_address_it_names(tmp_path: Path):
+    """The positive both near-misses below are measured against: `send(String, Object)` at
+    the erased descriptor CP-31 Q8 read off smallrye-mutiny-vertx-core 3.16.0, on the
+    facade type a Quarkus service injects.
+
+    `unresolved` for the reason the core catalog's own positive states: these facts carry
+    no signature for the parameter handed to `body_arg`. The compiled fixture derives
+    `resolved` and `test_eventbus_shapes_rows` pins that."""
+    assert _mutiny_rows(
+        tmp_path,
+        _eventbus_call(
+            owner=_MUTINY_EB,
+            name="send",
+            descriptor=_MUTINY_SEND_2,
+            address="mutiny.orders.created",
+        ),
+        "vertx-eventbus-mutiny",
+    ) == [("outbound", "eventbus", "mutiny.orders.created", "unresolved")]
+
+
+@pytest.mark.declines("vertx-eventbus-mutiny")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_mutiny_send_on_an_applications_own_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone: the facade's own erased
+    descriptor on a module's own wrapper type. Without the owner conjunct that wrapper's
+    argument 0 would publish an event-bus address at `resolved`/`compiler`."""
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(
+                owner="com/acme/eb/OwnMutinyBus#",
+                name="send",
+                descriptor=_MUTINY_SEND_2,
+                address="mutiny.orders.created",
+            ),
+            "vertx-eventbus-mutiny",
+        )
+        == []
+    )
+
+
+def test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cores(
+    tmp_path: Path,
+):
+    """The two files partition the surface, and the DESCRIPTORS are what do it.
+
+    MEASURED (CP-31 Q8): not one of the facade's 56 descriptors equals one on
+    `io.vertx.core.eventbus.EventBus` — every `send`/`publish` returns the mutiny
+    `EventBus`, `request` returns `io.smallrye.mutiny.Uni`, `consumer` takes a
+    `java.util.function.Consumer`. So a call on the facade must derive nothing from
+    `vertx-eventbus.yml` and a call on the core interface nothing from
+    `vertx-eventbus-mutiny.yml`. Both directions are asserted, because a catalog whose
+    rows leaked onto the other owner would double every send this fixture makes.
+
+    Not marked `declines`: it measures the boundary BETWEEN two catalogs rather than a
+    conjunct of a row either one has."""
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(owner=_MUTINY_EB, name="send", descriptor=_MUTINY_SEND_2),
+            "vertx-eventbus",
+        )
+        == []
+    )
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(name="send", descriptor=_EB_SEND_2),
+            "vertx-eventbus-mutiny",
+        )
+        == []
+    )

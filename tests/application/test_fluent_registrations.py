@@ -2864,6 +2864,8 @@ def test_a_vertx_consumer_on_an_applications_own_type_derives_nothing(tmp_path: 
     assert _vertx_rows(tmp_path, with_handler=True, owner="com.acme.eb.OwnBus") == []
 
 
+@pytest.mark.declines("vertx-eventbus-chain")
+@pytest.mark.pins("fluent.no-terminal-no-row")
 def test_a_vertx_consumer_never_given_a_handler_derives_nothing(tmp_path: Path):
     """The TERMINAL conjunct, and the measured reason this catalog is shaped around it.
 
@@ -2877,10 +2879,9 @@ def test_a_vertx_consumer_never_given_a_handler_derives_nothing(tmp_path: Path):
     the only difference is that the chain ends on an undeclared step instead of on
     `handler`.
 
-    NOT marked `declines`, and the reason is an inventory gap rather than a judgement
-    about this input: a `declines` test must name exactly one guard from
-    `scripts/guard_check.py`, and that file has no id for `fluent`'s "a chain that never
-    reaches a terminal derives nothing" — the rule this test measures. The marked
-    near-miss above names the root-owner guard instead; this one stands beside it because
-    the terminal is what the catalog exists for, marker or no marker."""
+    `fluent.no-terminal-no-row` is the guard, added in this task's fix round: the registry
+    carried four `fluent.*` guards and none covered the terminal conjunct — the one rule
+    this catalog exists for — so two tests asserted the behaviour and nothing proved
+    either would notice a regression. Disabling it derives a row for this input, which is
+    the false positive M6 forbids."""
     assert _vertx_rows(tmp_path, with_handler=False) == []

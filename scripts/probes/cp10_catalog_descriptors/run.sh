@@ -116,6 +116,12 @@ ARTIFACTS=(
   # `fixtures/orders-eventbus/pom.xml` pins.
   "io.vertx|vertx-core|4.5.10|META-INF/MANIFEST.MF|Implementation-Version"
   "io.vertx|vertx-core|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `vertx-eventbus-mutiny.yml` (Group D Task 8 fix round 1). The Mutiny facade a
+  # Quarkus service injects is a DIFFERENT artifact from the interface it wraps and
+  # shares no descriptor with it (CP-31 Q8), which is why it is a catalog of its own
+  # and why its coordinate is one of its own here. Pinned to the version CP-31
+  # measured and `fixtures/orders-eventbus/pom.xml` declares.
+  "io.smallrye.reactive|smallrye-mutiny-vertx-core|3.16.0|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

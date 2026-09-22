@@ -306,6 +306,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "fluent.no-terminal-no-row": Guard(
+        what="a chain derives a row only where it REACHED a terminal — a builder that was "
+        "constructed, configured and never executed derives nothing",
+        why="D02 §4 states it and four `fluent.*` guards measured everything around it, so the "
+        "one rule `vertx-eventbus-chain.yml` exists FOR was the one nothing pinned. "
+        "MEASURED (CP-31 Q4, vertx-core 4.5.10 and 5.0.0, byte-identical): "
+        "`EventBusImpl.consumer(String, Handler)` calls `consumer(String)` at offset 9 and "
+        "`MessageConsumer.handler` at offset 15, so registration lives in `handler` and a "
+        "`MessageConsumer` built but never handed one receives NO MESSAGE. Without this "
+        "conjunct every `bus.consumer(addr)` in a codebase — including the ones a method "
+        "builds and abandons — publishes an inbound endpoint at `resolved`/`compiler`, "
+        "which is a served endpoint nothing serves. The same edit weakens every fluent "
+        "catalog's terminal; this id is named for the near-miss that pins it",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="    elif reached_terminal:\n        _derive(captures, context)",
+                replace="    elif True:  # guard disabled by scripts/guard_check.py\n"
+                "        _derive(captures, context)",
+            ),
+        ),
+    ),
     "fluent.url-via-follows-only-a-declared-call": Guard(
         what="a `url_via` (or `channel_via`) form follows the argument's linked call only "
         "where that call's OWNER is the one the form declares — `URI.create`, never any "

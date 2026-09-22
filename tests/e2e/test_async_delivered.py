@@ -522,6 +522,19 @@ def _shape(value: str | None) -> str | None:
     return None if value is None else str(json.loads(value)["shape_id"])
 
 
+def _typed_member(symbol: str | None) -> str | None:
+    """`Class.member` — the declaring type kept, unlike `_member` above.
+
+    This fixture declares `receiveOrders` on BOTH `OrderBus` and `MutinyOrderBus`, one
+    per facade, so a bare member name would let the two rows swap without the set
+    noticing. The module coordinates and the signature hash are still dropped: those are
+    the fixture build's, not this test's subject."""
+    if symbol is None:
+        return None
+    owner, member = symbol.split("#", 1)
+    return f"{owner.rsplit('/', 1)[-1]}.{member.split('(', 1)[0]}"
+
+
 def _eventbus_row(row: dict) -> tuple:
     """`(catalog, direction, path, handler, caller, resolution, request shape)` — the whole
     row a reader would act on, per catalog, so a path that moved between catalogs or a
@@ -530,8 +543,8 @@ def _eventbus_row(row: dict) -> tuple:
         str(row["catalog_id"]),
         str(row["direction"]),
         row["path"],
-        _member(row["handler"]),
-        _member(row["caller"]),
+        _typed_member(row["handler"]),
+        _typed_member(row["caller"]),
         str(row["resolution"]),
         _shape(row["request_shape"]),
     )
@@ -540,12 +553,13 @@ def _eventbus_row(row: dict) -> tuple:
 def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     """Spec §4's second fixture, arm by arm, off a real analysis.
 
-    Thirteen rows and no more. The three catalogs partition the surface rather than
-    overlapping on it: `vertx-eventbus.yml` takes the one-call forms,
-    `vertx-eventbus-chain.yml` the two-step ones, `quarkus-consume-event.yml` the
-    declarations. Two arms of the fixture derive NOTHING and their absence is what the
-    count holds — the handler-less `consumer("orders.unhandled")` (M6/CP-31 Q4) and
-    `OrderConsumers`' own payload type, which is not an endpoint of anything.
+    Seventeen rows and no more. The four catalogs partition the surface rather than
+    overlapping on it: `vertx-eventbus.yml` takes the core interface's one-call forms,
+    `vertx-eventbus-chain.yml` the two-step ones, `vertx-eventbus-mutiny.yml` the facade a
+    Quarkus service injects, and `quarkus-consume-event.yml` the declarations. Two arms of
+    the fixture derive NOTHING and their absence is what the count holds — the
+    handler-less `consumer("orders.unhandled")` (M6/CP-31 Q4) and `Order` itself, which is
+    a payload and not an endpoint of anything.
 
     The values worth reading twice:
       * `com.acme.eb.OrderConsumers` — the bare `@ConsumeEvent`'s address is the declaring
@@ -558,17 +572,21 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
         `request_body.excludes` reads;
       * `orders.twostep`'s handler is the LAMBDA `.handler(...)` was given, while
         `orders.inbox`'s is the enclosing method: the one-call form registers at the call
-        the catalog matched, the chain registers at its terminal.
+        the catalog matched, the chain registers at its terminal;
+      * the four `mutiny.*` rows come from `vertx-eventbus-mutiny.yml` and NOT from
+        `vertx-eventbus.yml`, which is the whole point of the fourth file — CP-31 Q8
+        measured that the facade shares no descriptor with the core interface, so the
+        catalog that owns a row is itself an assertion here.
     """
     endpoints, _ = eventbus
-    assert len(endpoints) == 13
+    assert len(endpoints) == 17
     assert {_eventbus_row(r) for r in endpoints} == {
         # --- quarkus-consume-event: the declarations -------------------------
         (
             "quarkus-consume-event",
             "inbound",
             "${orders.address}",
-            "onConfiguredOrder",
+            "OrderConsumers.onConfiguredOrder",
             None,
             "unresolved",
             _ORDER,
@@ -577,7 +595,7 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "quarkus-consume-event",
             "inbound",
             "com.acme.eb.OrderConsumers",
-            "onAnyOrder",
+            "OrderConsumers.onAnyOrder",
             None,
             "resolved",
             _ORDER,
@@ -586,7 +604,7 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "quarkus-consume-event",
             "inbound",
             "orders.cluster",
-            "onClusteredOrder",
+            "OrderConsumers.onClusteredOrder",
             None,
             "resolved",
             _ORDER,
@@ -595,7 +613,7 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "quarkus-consume-event",
             "inbound",
             "orders.created",
-            "onOrderCreated",
+            "OrderConsumers.onOrderCreated",
             None,
             "resolved",
             _ORDER,
@@ -604,31 +622,63 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "quarkus-consume-event",
             "inbound",
             "orders.headers",
-            "onOrderWithHeaders",
+            "OrderConsumers.onOrderWithHeaders",
             None,
             "resolved",
             _ORDER,
         ),
-        # --- vertx-eventbus: the one-call forms ------------------------------
-        ("vertx-eventbus", "inbound", "orders.inbox", "receiveOrders", None, "resolved", None),
+        # --- vertx-eventbus: the core interface's one-call forms -------------
         (
             "vertx-eventbus",
             "inbound",
-            "orders.local",
-            "receiveLocalOrders",
+            "orders.inbox",
+            "OrderBus.receiveOrders",
             None,
             "resolved",
             None,
         ),
-        ("vertx-eventbus", "outbound", "orders.created", None, "placeOrder", "resolved", _ORDER),
-        ("vertx-eventbus", "outbound", "orders.events", None, "announceOrder", "resolved", _ORDER),
-        ("vertx-eventbus", "outbound", "orders.lookup", None, "lookupOrder", "resolved", _ORDER),
+        (
+            "vertx-eventbus",
+            "inbound",
+            "orders.local",
+            "OrderBus.receiveLocalOrders",
+            None,
+            "resolved",
+            None,
+        ),
+        (
+            "vertx-eventbus",
+            "outbound",
+            "orders.created",
+            None,
+            "OrderBus.placeOrder",
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "vertx-eventbus",
+            "outbound",
+            "orders.events",
+            None,
+            "OrderBus.announceOrder",
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "vertx-eventbus",
+            "outbound",
+            "orders.lookup",
+            None,
+            "OrderBus.lookupOrder",
+            "resolved",
+            _ORDER,
+        ),
         (
             "vertx-eventbus",
             "outbound",
             "orders.priority",
             None,
-            "placeOrderWithOptions",
+            "OrderBus.placeOrderWithOptions",
             "resolved",
             _ORDER,
         ),
@@ -637,8 +687,8 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "vertx-eventbus-chain",
             "inbound",
             "orders.twostep",
-            "lambda$receiveOrdersInTwoSteps$2",
-            "receiveOrdersInTwoSteps",
+            "OrderBus.lambda$receiveOrdersInTwoSteps$2",
+            "OrderBus.receiveOrdersInTwoSteps",
             "resolved",
             None,
         ),
@@ -647,7 +697,44 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "outbound",
             "orders.shipments",
             None,
-            "shipOrder",
+            "OrderBus.shipOrder",
+            "resolved",
+            _ORDER,
+        ),
+        # --- vertx-eventbus-mutiny: the facade a Quarkus service injects -----
+        (
+            "vertx-eventbus-mutiny",
+            "inbound",
+            "mutiny.orders.inbox",
+            "MutinyOrderBus.receiveOrders",
+            None,
+            "resolved",
+            None,
+        ),
+        (
+            "vertx-eventbus-mutiny",
+            "outbound",
+            "mutiny.orders.created",
+            None,
+            "MutinyOrderBus.placeOrder",
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "vertx-eventbus-mutiny",
+            "outbound",
+            "mutiny.orders.events",
+            None,
+            "MutinyOrderBus.announceOrder",
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "vertx-eventbus-mutiny",
+            "outbound",
+            "mutiny.orders.lookup",
+            None,
+            "MutinyOrderBus.lookupOrder",
             "resolved",
             _ORDER,
         ),
@@ -661,13 +748,13 @@ def test_every_eventbus_row_is_verbless_and_states_no_reply_shape(
     than sampled.
 
     `method` is NULL because an event-bus address has no verb — `eventbus` is not a verbed
-    protocol and none of the three catalogs declares `all_methods`. `response_shape` is
-    NULL everywhere INCLUDING on `orders.lookup`, which is a `request(...)`: spec §3a asks
-    for the reply type to become `response_shape`, and the reply type is the call's RETURN
-    type, which `single_call`'s only response word (`response_arg`, an argument POSITION)
-    cannot name. `vertx-eventbus.yml` states that as a boundary; this is what holds it, so
-    the day an engine word closes it this test fails and the boundary is retired
-    deliberately rather than drifting."""
+    protocol and none of the four catalogs declares `all_methods`. `response_shape` is NULL
+    everywhere INCLUDING on `orders.lookup` and `mutiny.orders.lookup`, which are
+    `request(...)` calls: the reply type is the call's RETURN type — `Future<Message<T>>`
+    on the core interface, `Uni<Message<T>>` on the facade — and `single_call`'s only
+    response word (`response_arg`, an argument POSITION) cannot name one. Both catalogs
+    state that as a boundary; this is what holds it, so the day an engine word closes it
+    this test fails and the boundary is retired deliberately rather than drifting."""
     endpoints, _ = eventbus
     assert {row["method"] for row in endpoints} == {None}
     assert {row["response_shape"] for row in endpoints} == {None}
@@ -691,7 +778,7 @@ def test_a_consumer_never_given_a_handler_derives_nothing(
     assert "prepareUnhandledConsumer" not in members
 
 
-def test_eventbus_delivery_metadata_is_the_measured_default_or_the_declared_value(
+def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
     eventbus: tuple[list[dict], list[dict]],
 ):
     """`@ConsumeEvent.local()`'s `AnnotationDefault` is the boolean `true` (CP-31 Q6), so
@@ -700,19 +787,19 @@ def test_eventbus_delivery_metadata_is_the_measured_default_or_the_declared_valu
     `metadata_from` that wrote its `absent_value` unconditionally would still produce four
     of these rows, and `orders.cluster`'s `false` is the one that fails it.
 
-    The value is the ATTRIBUTE's own, lowercase — `true` means local-only, `false` means
-    reachable from another node — rather than a word this project coined for it. Only
-    `orders.cluster` declares `local = false`; the other four derive the measured default.
-    No row of the five raw event-bus arms carries delivery metadata at all, because a
-    call site declares no such attribute."""
+    `kind` is `local`, named after the attribute, and the value is the ATTRIBUTE's own
+    boolean, lowercase — `true` means local-only, `false` means reachable from another
+    node. Only `orders.cluster` declares `local = false`; the other four derive the
+    measured default. None of the twelve raw event-bus rows carries metadata at all,
+    because a call site declares no such attribute."""
     _, metadata = eventbus
     assert {
-        (str(r["path"]), str(r["kind"]), str(r["value"]), _member(r["caller"]), str(r["name"]))
+        (str(r["path"]), str(r["kind"]), str(r["value"]), _typed_member(r["caller"]), r["name"])
         for r in metadata
     } == {
-        ("${orders.address}", "delivery", "true", "onConfiguredOrder", "None"),
-        ("com.acme.eb.OrderConsumers", "delivery", "true", "onAnyOrder", "None"),
-        ("orders.cluster", "delivery", "false", "onClusteredOrder", "None"),
-        ("orders.created", "delivery", "true", "onOrderCreated", "None"),
-        ("orders.headers", "delivery", "true", "onOrderWithHeaders", "None"),
+        ("${orders.address}", "local", "true", "OrderConsumers.onConfiguredOrder", None),
+        ("com.acme.eb.OrderConsumers", "local", "true", "OrderConsumers.onAnyOrder", None),
+        ("orders.cluster", "local", "false", "OrderConsumers.onClusteredOrder", None),
+        ("orders.created", "local", "true", "OrderConsumers.onOrderCreated", None),
+        ("orders.headers", "local", "true", "OrderConsumers.onOrderWithHeaders", None),
     }

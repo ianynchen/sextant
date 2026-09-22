@@ -118,9 +118,16 @@ matches:
   # a spelling nothing else here writes.
   #
   # THE VALUE WRITTEN IS THE ATTRIBUTE'S OWN, lowercase: `true` for a
-  # local-only consumer (declared or defaulted), `false` for
-  # `local = false`. `kind: delivery` names what the pair MEANS — the delivery
-  # scope of this endpoint — which is D02 §2l's own example verbatim.
+  # local-only consumer (declared or defaulted), `false` for `local = false`.
+  #
+  # `kind: local` rather than `kind: delivery`, and the difference is whether a
+  # reader can act on the pair without going back to the annotation. `delivery`
+  # + `true` is ambiguous — true of WHAT? — while `local` + `true` states the
+  # fact the attribute states: this consumer is local-only. The value stays the
+  # boolean the declaration carries, which is the only thing `metadata_from`
+  # writes and what D02 §2l documents; naming the KIND after the attribute is
+  # what makes that honest rather than cryptic. (D02 §2l's worked example spells
+  # `delivery`; spec §1e is being amended to `local`, and the example with it.)
   #
   # `blocking()`, `ordered()` and `codec()` are NOT read, and that is §2e's
   # criterion applied rather than an omission: each decides how this node
@@ -128,7 +135,7 @@ matches:
   # observe. They are tuning knobs, the same class as `concurrency` and
   # `containerFactory` on a Spring listener.
   metadata_from:
-    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: delivery,
+    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: local,
         absent_value: "true" }
 
 # Copied verbatim from spring-resttemplate.yml (harvest compatibility, the same

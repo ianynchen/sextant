@@ -1,0 +1,139 @@
+id: vertx-eventbus-mutiny
+displayName: Vert.x event bus, Mutiny facade (one-call forms)
+style: single_call
+protocol: eventbus
+direction: outbound
+
+# A FOURTH FILE RATHER THAN A SECOND OWNER ON `vertx-eventbus.yml`, and the
+# reason is this line: `detect.coordinates` is CATALOG-level, and the facade
+# ships in a DIFFERENT artifact from the interface it wraps. A catalog naming
+# both owners would detect on `io.vertx:vertx-core` while reading a type that
+# artifact does not carry, and its `measured:` block would span two unrelated
+# artifacts as though one probe had bounded both. A file of its own gets the
+# right coordinate and its own 3.16.0 provenance.
+#
+# The second reason is measured (CP-31 Q8): NOT ONE of the facade's 56
+# descriptors equals a descriptor on `io.vertx.core.eventbus.EventBus`. Every
+# `send`/`publish` returns the MUTINY `EventBus`, `request` returns
+# `io.smallrye.mutiny.Uni` rather than `io.vertx.core.Future`, and
+# `consumer`/`localConsumer` take a `java.util.function.Consumer` rather than an
+# `io.vertx.core.Handler`. `matches.owner`'s list form is for more than one
+# spelling of ONE owner (§3.1) — two types sharing no method is the opposite of
+# that, and every row would claim a method the other owner does not declare.
+#
+# WHY IT SHIPS NOW rather than later: `quarkus-consume-event.yml` reads the
+# consumers of exactly the framework whose services inject this facade. A module
+# whose `@ConsumeEvent` handlers derive while its sends derive nothing is the
+# half-feature this group exists to avoid.
+detect:
+  coordinates: ["io.smallrye.reactive:smallrye-mutiny-vertx-core"]
+
+# §5.4. The jar states an `Implementation-Version` in its own manifest and CP-31
+# aborts on a mismatch — `identity: reported`.
+measured:
+  - { artifact: io.smallrye.reactive:smallrye-mutiny-vertx-core, versions: ["3.16.0"],
+      identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # SCALAR, not a one-element list: §3.1's list form is for more than one
+  # spelling of ONE owner, never a wrapper around a single name.
+  owner: io.vertx.mutiny.core.eventbus.EventBus
+  # EVERY ROW DECLARES ITS OWN ERASED DESCRIPTOR, `spring-rabbit-template.yml`'s
+  # rule restated — and here it is doing more work than usual, because the
+  # facade's descriptors are the ONLY thing that tells its rows apart from
+  # `vertx-eventbus.yml`'s. The two files name different owners, so a call site
+  # can only match one of them; the descriptors below are what stop a row from
+  # matching an overload of its own name at the same arity.
+  #
+  # MEASURED, every one (CP-31 Q8, smallrye-mutiny-vertx-core 3.16.0).
+  #
+  # `address_separator` is NOT declared and there is no second address argument:
+  # an event-bus address is ONE opaque string (§1e).
+  methods:
+    # --- outbound, point-to-point --------------------------------------------
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    # --- outbound, fan-out ----------------------------------------------------
+    - { name: publish, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: publish, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    # --- outbound, request/reply ----------------------------------------------
+    #
+    # `response_shape` stays NULL here for `vertx-eventbus.yml`'s reason, one
+    # facade over: the reply type is the RETURN type (`Uni<Message<T>>`) and
+    # `single_call`'s only response word names an argument POSITION. Stated at
+    # BOUNDARIES below.
+    - { name: request, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/smallrye/mutiny/Uni;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: request, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/smallrye/mutiny/Uni;",
+        channel_arg: 0, body_arg: 1 }
+    # --- inbound: the forms that register in one call -------------------------
+    #
+    # The two-argument forms only, exactly as `vertx-eventbus.yml` declares only
+    # the two-argument core forms: the facade delegates to the SAME
+    # `EventBusImpl` underneath, where registration happens inside
+    # `MessageConsumer.handler` (CP-31 Q4), so a `consumer(addr)` with no
+    # consumer function registers nothing here either.
+    #
+    # `body_arg` is NOT declared: argument 1 is the consumer function, and the
+    # payload's type lives in ITS parameter. Reading it as a body would publish
+    # a lambda where a payload shape belongs.
+    - { name: consumer, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;",
+        channel_arg: 0, direction: inbound }
+    - { name: localConsumer, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;",
+        channel_arg: 0, direction: inbound }
+
+# Copied verbatim from spring-resttemplate.yml (harvest compatibility, the same
+# discipline every catalog here keeps).
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered (spec §3d, COVERAGE):
+#
+#   * THE CHAIN FORMS — `sender(addr).write(...)`, `publisher(addr).write(...)`
+#     and `consumer(addr).handler(...)` — derive NOTHING, and there is no
+#     `vertx-eventbus-mutiny-chain.yml`. This is a ruling, not an omission, and
+#     it rests on a measurement: the facade's own two-step surface is a
+#     DIFFERENT SHAPE from the core one, so `vertx-eventbus-chain.yml`'s steps
+#     could not be reused and a second file would need its own measurement pass.
+#     MEASURED (CP-31 Q8): the facade's `MessageProducer` declares THREE send
+#     terminals where the core interface declares one or two —
+#     `write(Ljava/lang/Object;)Lio/smallrye/mutiny/Uni;`,
+#     `writeAndAwait(Ljava/lang/Object;)Ljava/lang/Void;` and
+#     `writeAndForget(Ljava/lang/Object;)V` — and its `MessageConsumer.handler`
+#     takes a `java.util.function.Consumer` at two erased descriptors (the
+#     covariant bridge to `io.vertx.mutiny.core.streams.ReadStream`). The
+#     two-step spelling is also rare in Mutiny code, which is written around
+#     `Uni`. A module writing it derives nothing here; that is a stated miss.
+#   * `requestAndAwait` AND `requestAndForget`, and the whole `*AndAwait`/
+#     `*AndForget` family the facade adds (CP-31 Q8 records every one). They
+#     address a wire the same way `request` does and are not declared: the
+#     ruling scopes this file to the five CALL forms above, and a row nobody
+#     measured against a fixture is a row nobody has seen derive.
+#   * A REPLY'S SHAPE. `request(...)` returns `Uni<Message<T>>`; no
+#     `single_call` word reads a return type, so `response_shape` is NULL — the
+#     boundary `vertx-eventbus.yml` states, with the same consequence: the row
+#     carries its address and its request body and links on its address.
+#   * `Message.reply(...)`, THE EVENT-BUS BRIDGE and VERT.X 3.x, each for the
+#     reason `vertx-eventbus.yml` gives for it.
+#   * SMALLRYE-MUTINY-VERTX-CORE OTHER THAN 3.16.0 is unmeasured. Every
+#     descriptor above is version-scoped; re-running
+#     `scripts/probes/cp31_eventbus_surface/run.sh` is the check.

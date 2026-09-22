@@ -772,7 +772,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**85 of 100 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**86 of 101 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -892,6 +892,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `temporal-workflow` | `io.temporal:temporal-sdk` | 1.27.0 |
 |  | `io.temporal:temporal-spring-boot-autoconfigure` | 1.27.0 |
 | `vertx-eventbus-chain` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
+| `vertx-eventbus-mutiny` | `io.smallrye.reactive:smallrye-mutiny-vertx-core` | 3.16.0 |
 | `vertx-eventbus` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
 
 **No `measured:` block.** Not the same as unbounded, and not a claim that these do not work. Some are bounded by a library SEXTANT ITSELF ships — `grpc-schema` and `grpc-java` by `grpcio-tools>=1.83.1` and `protobuf>=7.36.1`, `graphql-schema` by `graphql-core>=3.2.6`, all declared in `pyproject.toml` — so their version bound is already determinable and merely unrecorded. Others rest on framework knowledge taken from documentation or source. **Telling those two apart per catalog is deferred, not impossible**: there is always a way to find the real version if we want it.

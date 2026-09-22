@@ -34,5 +34,16 @@
       <groupId>io.quarkus</groupId><artifactId>quarkus-vertx</artifactId><version>3.17.5</version>
       <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
     </dependency>
+    <!-- `MutinyOrderBus`'s arm (fix round 1): the facade a Quarkus service actually
+         injects. Pinned to 3.16.0, the version CP-31 Q8 measured, and `mutiny` beside
+         it for `Uni`, which is `request(...)`'s declared return type. -->
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId><artifactId>smallrye-mutiny-vertx-core</artifactId><version>3.16.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.smallrye.reactive</groupId><artifactId>mutiny</artifactId><version>2.6.2</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
   </dependencies>
 </project>

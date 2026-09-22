@@ -9925,7 +9925,7 @@ def test_a_consume_event_with_no_address_takes_the_beans_fully_qualified_name(tm
     and `absent_value` writes it."""
     assert _consume_event_rows(tmp_path, annotation=_QCE_ANNOTATION, args={}) == (
         [("inbound", "com.acme.eb.OrderConsumers", "resolved")],
-        [("com.acme.eb.OrderConsumers", "delivery", "true")],
+        [("com.acme.eb.OrderConsumers", "local", "true")],
     )
 
 
@@ -9938,7 +9938,7 @@ def test_a_consume_event_declaring_local_false_is_cluster_reachable(tmp_path: Pa
         tmp_path, annotation=_QCE_ANNOTATION, args={"value": "orders.cluster", "local": False}
     ) == (
         [("inbound", "orders.cluster", "resolved")],
-        [("orders.cluster", "delivery", "false")],
+        [("orders.cluster", "local", "false")],
     )
 
 
