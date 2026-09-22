@@ -27,6 +27,7 @@ catalogs against.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import sys
@@ -52,12 +53,37 @@ class ProbeError(RuntimeError):
     """A run that cannot label its own output. Fatal, never advisory."""
 
 
+# The `entry`/`key` pair a coordinate writes when the archive states no version
+# of its own ANYWHERE — no manifest `Implementation-Version`, no Maven
+# `pom.properties`, no version file of its own making. `io.temporal:temporal-sdk`
+# is the first such artifact this harness reads, and CP-30 measured the absence
+# rather than assuming it: that jar's manifest carries only `Manifest-Version`
+# and `Multi-Release`, it ships no `META-INF/maven/*/pom.properties`, and no
+# class in it holds the literal version string.
+#
+# §5.4's mechanism — read the run's own output, never the parameter — has
+# nothing to read for such an archive, so the fallback is the next
+# self-verifying fact that exists: Maven wrote a `.jar.sha1` sidecar beside the
+# jar when it resolved this exact coordinate, and that sidecar is a checksum of
+# the archive's own bytes. `_verify_checksum` recomputes it from the jar this
+# run actually opened and ABORTS on a mismatch, so a corrupted or
+# hand-substituted local jar still fails loud. What is lost, and is stated in
+# the write-up rather than smoothed over, is that the version COLUMN for such an
+# artifact is the requested coordinate rather than something the archive says.
+# This is CP-30's own fallback, applied here rather than reinvented.
+_NO_SELF_REPORT = "-"
+
+
 def self_reported_version(jar: Path, entry: str, key: str) -> str:
     """The version this ARCHIVE claims for itself, read out of its own bytes.
 
     `entry`/`key` say where the artifact writes it; the answer is always the
     file's. Raises rather than returning a default: a missing self-report is
     exactly the case where a hand-written column header would go unchallenged.
+
+    An artifact whose coordinate declares `-`/`-` states no version anywhere at
+    all (see `_NO_SELF_REPORT`); the SHA-1 check stands in, and the caller
+    labels the column with the requested coordinate.
     """
     with zipfile.ZipFile(jar) as archive:
         names = [name for name in archive.namelist() if name == entry or name.endswith("/" + entry)]
@@ -69,6 +95,28 @@ def self_reported_version(jar: Path, entry: str, key: str) -> str:
         if match and match.group(1).lower() == key.lower():
             return match.group(2)
     raise ProbeError(f"{jar.name}'s `{entry}` declares no `{key}`")
+
+
+def _verify_checksum(jar: Path) -> None:
+    """Recompute the jar's own SHA-1 from its bytes and abort if it disagrees
+    with the `.jar.sha1` sidecar Maven wrote when it resolved this coordinate —
+    the one self-verifying check left once the archive states no version.
+
+    Byte-for-byte CP-30's own `_verify_checksum`, and deliberately so: two
+    probes reading the same two version-less archives should fail the same way.
+    """
+    sidecar = jar.with_name(jar.name + ".sha1")
+    if not sidecar.exists():
+        raise ProbeError(
+            f"no `{sidecar.name}` beside {jar.name} to verify the resolved jar against"
+        )
+    expected = sidecar.read_text().strip().split()[0]
+    observed = hashlib.sha1(jar.read_bytes()).hexdigest()
+    if observed != expected:
+        raise ProbeError(
+            f"{jar.name}'s SHA-1 {observed!r} disagrees with {sidecar.name}'s {expected!r} "
+            "— the resolved jar is not the one Maven checksummed for this coordinate"
+        )
 
 
 def classes_of(jar: Path) -> set[str]:
@@ -219,7 +267,11 @@ def main(specs: list[str]) -> int:
         jar = Path(path)
         if not jar.is_file():
             raise ProbeError(f"{group}:{artifact}:{requested} did not resolve to a jar at {jar}")
-        reported = self_reported_version(jar, entry, key)
+        if (entry, key) == (_NO_SELF_REPORT, _NO_SELF_REPORT):
+            _verify_checksum(jar)
+            reported = requested
+        else:
+            reported = self_reported_version(jar, entry, key)
         if reported != requested:
             # ABORTS, never warns. CP-5 printed the version it believed beside
             # output from the version it ran and the two disagreed in plain

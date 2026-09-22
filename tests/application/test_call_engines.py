@@ -10340,3 +10340,109 @@ def test_a_programmatic_registration_on_somebody_elses_builder_derives_nothing(t
     workspace.close()
 
     assert rows == [], "matched `create(Class, String)` on a type that is not the Builder"
+
+
+# --- temporal-untyped: the workflow type at argument 0, and only there -----
+
+_WORKFLOW_CLIENT = "io/temporal/client/WorkflowClient#"
+_NEW_UNTYPED = "(Ljava/lang/String;)Lio/temporal/client/WorkflowStub;"
+
+
+def test_an_untyped_workflow_stub_names_the_workflow_type_it_starts(tmp_path: Path):
+    """The positive the near-miss below is measured against (§2f, CP-30 Q7).
+
+    `WorkflowClient.newUntypedWorkflowStub(String)` takes the workflow TYPE at
+    argument 0 — measured, with no workflow type anywhere else in the descriptor —
+    so the derived path is the same identity `temporal-workflow.yml` derives from
+    the `@WorkflowInterface` declaration itself. That agreement is the whole
+    reason the untyped stub is worth reading."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#startUntyped().",
+        target=CallTarget(
+            owner=_WORKFLOW_CLIENT, name="newUntypedWorkflowStub", descriptor=_NEW_UNTYPED
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=[CallArgument(kind="string", value="OrderWorkflow")],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = [
+        (str(row["protocol"]), str(row["direction"]), str(row["method"]), str(row["path"]))
+        for row in workspace.query("endpoints")
+    ]
+    workspace.close()
+
+    assert rows == [("temporal", "outbound", "workflow", "OrderWorkflow")]
+
+
+@pytest.mark.declines("temporal-untyped")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_new_untyped_workflow_stub_on_somebody_elses_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone.
+
+    Every other conjunct of the row holds — the method name, the erased descriptor
+    CP-10 read off `temporal-sdk` 1.27.0, and a plain string in the position the
+    catalog reads as a workflow type. Only the type the call is made ON differs,
+    and an application's own thin wrapper named `newUntypedWorkflowStub` around the
+    real client is the ordinary way that happens. Without the owner conjunct that
+    wrapper's own argument would publish a Temporal workflow type at
+    `resolved`/`compiler`, where nothing downstream can tell it from an
+    observation."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/app/Clients#start().",
+        target=CallTarget(
+            owner="com/acme/app/OwnWorkflowClients#",
+            name="newUntypedWorkflowStub",
+            descriptor=_NEW_UNTYPED,
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=[CallArgument(kind="string", value="OrderWorkflow")],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "matched `newUntypedWorkflowStub` on a type that is not the client"
+
+
+def test_a_stub_signal_names_a_member_and_derives_nothing(tmp_path: Path):
+    """§2f's refusal, as a row that is not there rather than as a comment.
+
+    `WorkflowStub.signal(String, Object...)` names a MEMBER at argument 0 with no
+    workflow type anywhere in the descriptor (CP-30 Q7), so a row read off it would
+    publish the bare path `cancel` — an identity colliding with every other
+    workflow's signal of that name. The catalog declares no row for it, and this is
+    what holds that: the same shape as the positive above, on the method §2f names,
+    deriving nothing.
+
+    Not marked `declines`: it measures a row this catalog never had rather than a
+    conjunct of one it does, so no guard's removal makes it fire."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#signalUntyped().",
+        target=CallTarget(
+            owner="io/temporal/client/WorkflowStub#",
+            name="signal",
+            descriptor="(Ljava/lang/String;[Ljava/lang/Object;)V",
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="string", value="cancel"),
+            CallArgument(kind="array", elements=[]),
+        ],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "a bare member name was published as a workflow identity"

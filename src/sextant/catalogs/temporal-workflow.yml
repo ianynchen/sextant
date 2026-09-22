@@ -1,0 +1,221 @@
+id: temporal-workflow
+displayName: Temporal workflows
+style: annotation_driven
+protocol: temporal
+direction: outbound
+
+# `temporal-sdk` ships the `@WorkflowInterface`/`@WorkflowMethod` package, so
+# this coordinate is what any Temporal module declares. The Spring Boot starter
+# (`temporal-spring-boot-autoconfigure`) is NOT named here and that is
+# deliberate: a module may declare a workflow contract and call it without the
+# starter on its classpath at all, and the starter's own annotations are read
+# by `resolves.direction` and `metadata_from` below, which find nothing where
+# it is absent. A weak discriminator either way, moot while catalog-module
+# matching is unimplemented; the annotation match is what actually gates.
+detect:
+  coordinates: ["io.temporal:temporal-sdk"]
+
+# §5.4. NEITHER Temporal archive states a version anywhere in its own bytes —
+# no `Implementation-Version`, no `META-INF/maven/*/pom.properties`, and no
+# class constant-pool entry holding the literal `1.27.0` (CP-30's Version scope
+# paragraph, checked exhaustively). So `identity: assumed`: the number below is
+# the coordinate `run.sh` requested and Maven resolved, not something either
+# jar reports. CP-30 aborts instead on a SHA-1 mismatch against the `.jar.sha1`
+# sidecar Maven wrote beside each jar, which is the one self-verifying fact
+# these two archives carry.
+measured:
+  - { artifact: io.temporal:temporal-sdk, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp30_temporal_contract_naming.md }
+  - { artifact: io.temporal:temporal-spring-boot-autoconfigure, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp30_temporal_contract_naming.md }
+
+requires: [annotation_args, typed_signatures]
+
+# D02 §2c, and `spring-http-interface.yml`'s shape rather than spec §2d's.
+#
+# THE SPEC'S ORIGINAL SKETCH WAS TWO FILES — an inbound one gated
+# `declared_on: class` and an outbound one gated `declared_on: interface` — and
+# the Task 3 review proved the inbound half defective. Under the inheritance
+# walk the contract interface's own annotated row is filtered out and only the
+# row synthesized onto the IMPLEMENTING class survives, whose declaring type is
+# the implementor: `declaring_type_simple_name` would then publish
+# `OrderWorkflowImpl`, a workflow type no client ever starts. That is a false
+# identity, so this is ONE file carrying both directions instead.
+#
+# `direction: outbound` above is therefore a DEFAULT, in the same way it is on
+# `spring-http-interface.yml`: a workflow contract this module DECLARES but does
+# not implement is one it calls, and a contract it implements under the starter
+# annotation is one it serves. Which it is depends on what else the module
+# contains, and the rule below is what asks.
+#
+# MEASURED (CP-30 Q6, `temporal-spring-boot-autoconfigure` 1.27.0):
+# `io.temporal.spring.boot.WorkflowImpl` declares exactly `String[] workers()`
+# and `String[] taskQueues()`. It is the starter's REGISTRATION marker — the
+# annotation that puts an implementation on a worker — and registration is the
+# evidence this rule turns on. Where it is present the row becomes inbound and
+# `handler` is rebound to the implementor's override; where it is absent the
+# flip declines.
+#
+# WHY THAT IS THE RIGHT CONDITION AND NOT `owner_implemented_in_module`. An
+# implementation the module never registers is served by nothing — the SDK
+# polls a task queue for workflow types a `Worker` was told about, and an
+# unregistered POJO answers no poll. Spec §0a M-1 recorded registration-as-
+# evidence as given up when the design moved onto `annotation_driven`; keying
+# the flip on the starter annotation restores it, at the cost stated under
+# BOUNDARIES below.
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - io.temporal.spring.boot.WorkflowImpl
+      then: inbound
+
+matches:
+  # `jakarta-jws-client.yml`'s partition argument, one framework over. The
+  # contract is the INTERFACE: it is what a client's stub is built against and
+  # what the SDK reads every name off (CP-30 Q1 takes `getSimpleName()` of the
+  # INTERFACE argument, at offset 101). Gating on the interface is what makes
+  # `declaring_type_simple_name` read the contract's own name rather than the
+  # implementor's.
+  #
+  # AND IT OPTS THIS CATALOG INTO THE SEI FENCE, which is the second half of
+  # the shape: an outbound interface-gated derivation SUBTRACTS every interface
+  # the module's own classes implement, on the reading that an outbound row
+  # claims somebody ELSE answers the call.
+  #
+  # THE FENCE YIELDS TO THE FLIP (ruling R12, as on `spring-http-interface.yml`)
+  # rather than cancelling it: where the implementor carries the starter
+  # annotation the row is not subtracted, it becomes the inbound row. What the
+  # fence still covers is exactly the case the flip declines — a contract
+  # implemented in-module by a class no worker was ever told about, which this
+  # module neither calls nor serves. That pair derives NOTHING, in either
+  # direction, which is the whole point of keying on registration.
+  declared_on: interface
+  type_annotation: io.temporal.workflow.WorkflowInterface
+  # CP-30 Q6 and §1f. The task queue is a ROUTING fact — a worker on `orders`
+  # never sees `orders-staging` work — and it still does not enter the path,
+  # because it fails §1f's both-sides test structurally: an outbound row comes
+  # from the interface declaration, so a caller can never spell the queue at
+  # all, and a queue in the path would make the inbound row
+  # `{orders}OrderWorkflow` against an outbound `OrderWorkflow` — two halves of
+  # one wire that never meet. An identity half only one side can spell is not
+  # an identity, so it is `endpoint_metadata` (D02 §2l).
+  #
+  # `workers()` is NOT read beside `taskQueues()`, and that is a claim: a worker
+  # NAME is the starter's own bean naming, not anything on the wire, so a peer
+  # could not care about it. No `absent_value`: CP-30 measured the annotation's
+  # attributes, not their `AnnotationDefault`s, and silence is the honest answer
+  # where nobody measured the default (D02 §2l).
+  metadata_from:
+    - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues,
+        kind: task_queue }
+  mapping:
+    # MEASURED (CP-30 Q1, temporal-sdk 1.27.0). `POJOWorkflowMethodMetadata`'s
+    # constructor reads `getNameFromAnnotation()` at offset 81 — BEFORE either
+    # branch — and wraps both branches in `Optional.orElse(...)`, so an explicit
+    # `@WorkflowMethod(name = "X")` always wins outright and the fallback below
+    # is never reached for it. `name` is the only attribute `@WorkflowMethod`
+    # declares (`javap`: `public abstract java.lang.String name()`).
+    path_from: [name]
+    # The ordinary prefix machinery stays INERT. `@WorkflowInterface` declares
+    # no attribute at all — it is a bare marker — so there is nothing on the
+    # type to read a prefix off, and a `prefix_annotation` naming it would join
+    # an empty prefix onto every address. Stated rather than omitted so the
+    # next reader does not add one.
+    prefix_from: []
+    prefix_annotation: null
+    # §1c: `temporal` is a VERBED protocol, and the kind is part of what the
+    # wire names — a signal `cancel` and a query `cancel` on one type are
+    # different operations. `all_methods: []` because the annotation states the
+    # kind by BEING itself; there is no attribute to read one from, which is
+    # `microprofile-graphql.yml`'s shape exactly.
+    method_from: method
+    all_methods: []
+    # NO `members:` HERE, and the asymmetry with `temporal-activity.yml` is the
+    # framework's own. CP-30 Q5 corrected spec §0 M4's citation without changing
+    # its outcome: `validateAndQualifiedForWorkflowMethod` returns `true` at
+    # offset 82 for an unannotated non-synthetic method, structurally identical
+    # to the activity predicate — but `getWorkflowInterfaceMethods` then drops
+    # it by a SEPARATE `getType() == WorkflowMethodType.NONE` test (offsets
+    # 209-212) before any `POJOWorkflowMethodMetadata` is constructed (offset
+    # 228). So an unannotated method of a `@WorkflowInterface` is a member of
+    # nothing, and a member rule here would mint an endpoint per helper.
+    annotations:
+      # CP-30 Q1, the WORKFLOW branch: `getType() == WORKFLOW` at offset 92
+      # takes `Class.getSimpleName()` on the INTERFACE argument at offset 101.
+      # The name comes from the interface while the row's handler is the
+      # implementor's override — which is precisely why the word reads the
+      # attributed type and not the handler's class.
+      - { fqn: io.temporal.workflow.WorkflowMethod, method: [workflow],
+          path_fallback: declaring_type_simple_name }
+      #
+      # `@SignalMethod`, `@QueryMethod` and `@UpdateMethod` are DELIBERATELY NOT
+      # DECLARED, and this is an under-report with a measured reason rather than
+      # an oversight.
+      #
+      # Spec §1d gives a signal, query or update the identity
+      # `<workflow type>/<member name>` — `OrderWorkflow/cancel`. CP-30 Q1's
+      # other branch is why the second half is the MEMBER name (offset 122,
+      # `Method.getName()`), and §1d's first half is what keeps two workflows'
+      # `cancel` apart. No shipped naming vocabulary composes that pair:
+      # `declaring_type_simple_name` yields the type ALONE, `construct_name`
+      # yields the member ALONE, and the type-level prefix
+      # (`prefix_from`/`path_prefix`) and the qualifier (`qualifier_from`/
+      # `namespace_default`) are both read off ATTRIBUTES — and
+      # `@WorkflowInterface` declares none. Measured, not assumed: declaring the
+      # three with `path_fallback: construct_name` against
+      # `fixtures/temporal-probe` derives the paths `cancel`, `status` and
+      # `amend`.
+      #
+      # A bare `cancel` is exactly the identity §2f refuses for
+      # `WorkflowStub.signal("cancel", …)` — one that collides with every other
+      # workflow's signal of that name — and it collides the same way whether it
+      # is read off a call site or off a contract: a caller-only module
+      # declaring a `@SignalMethod cancel` would publish `outbound cancel`
+      # against this module's `inbound cancel` and the two would link, across
+      # workflows that share nothing. Under-reporting is honest; a colliding
+      # identity is the fabrication class the standing rule forbids.
+      #
+      # WHAT WOULD CLOSE IT: one further `path_fallback` word composing the
+      # declaring type's simple name, a catalog-stated separator and the member
+      # name — the same three pieces the qualifier machinery already composes,
+      # reached from the fallback branch so an explicitly named member skips it
+      # by construction. That is engine vocabulary, not catalog data, so it is
+      # recorded here and in `docs/COVERAGE.md` rather than worked around.
+
+# Deliberately NO `wrappers` block. A workflow method's declared return type is
+# what the SDK's own data converter marshals; it wraps nothing this project
+# models, and `Promise`/`CompletablePromise` are the workflow-side futures a
+# workflow uses INSIDE its own body, never the contract a caller sees.
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered (§2g, COVERAGE):
+#
+#   * THE PROGRAMMATIC WORKER. `WorkerFactory.newWorker("orders")` +
+#     `registerWorkflowImplementationTypes(…)` is read by nothing here: CP-30 Q8
+#     confirms the queue a worker POLLS is named on `WorkerFactory` at argument
+#     0, and this catalog reads the queue only off the starter annotation. A
+#     module that registers its workers programmatically therefore derives no
+#     `task_queue` entry — and, since the flip is keyed on the starter
+#     annotation, no INBOUND row for its own implementations either. That is
+#     a stated miss standing in for what would otherwise be a false positive:
+#     an unregistered implementation published as a served endpoint.
+#   * A CONTRACT IN A JAR. A client module that depends on the
+#     `@WorkflowInterface` rather than declaring it derives nothing — Feign's
+#     and the JWS client's own limitation, for the same reason: there is no
+#     declaration in this module to read.
+#   * SIGNALS, QUERIES AND UPDATES, for the reason written out above.
+#   * `newWorkflowStub(Class, String workflowId)` and `newExternalWorkflowStub`
+#     address a RUNNING execution and start nothing; no call site is read for
+#     them at all (§2g). `temporal-untyped.yml` reads the one factory whose
+#     argument 0 IS a workflow type.
+#   * CADENCE (`com.uber.cadence`) gets no rows: every fqn here is
+#     `io.temporal.*`, and folding Cadence under this protocol would let a
+#     Cadence worker answer a Temporal caller (§1b).
+#   * THE SDK'S OWN VALIDATIONS are not reproduced — duplicate workflow-type
+#     names, a `@WorkflowInterface` with more than one `@WorkflowMethod`,
+#     `DynamicWorkflow`, `registerWorkflowImplementationFactory` and Nexus
+#     services. A module the SDK would refuse to start still produces rows here.

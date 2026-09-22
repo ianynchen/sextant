@@ -9530,3 +9530,182 @@ def test_a_method_inherited_from_a_plain_base_is_not_an_operation_of_the_subclas
         )
         == []
     )
+
+
+# --- Temporal: registration is the evidence (Group D, spec §2d + ruling R12) ---
+
+_TP_MODULE = "sextant-jvm maven com.acme/temporal-probe 1.0.0 "
+_TP_CONTRACTS = {
+    "temporal-workflow": (
+        _TP_MODULE + "com/acme/tp/OrderWorkflow#",
+        "io/temporal/workflow/WorkflowInterface#",
+        "io/temporal/workflow/WorkflowMethod#",
+        "io/temporal/spring/boot/WorkflowImpl#",
+        "workflow",
+        "OrderWorkflow",
+    ),
+    "temporal-activity": (
+        _TP_MODULE + "com/acme/tp/BillingActivities#",
+        "io/temporal/activity/ActivityInterface#",
+        "io/temporal/activity/ActivityMethod#",
+        "io/temporal/spring/boot/ActivityImpl#",
+        "activity",
+        "Charge",
+    ),
+}
+_TP_IMPL = _TP_MODULE + "com/acme/tp/ContractImpl#"
+
+
+def _temporal_facts(root: Path, catalog_id: str, *, implementor: str | None) -> None:
+    """One Temporal contract interface declaring one named operation, and
+    optionally a local class implementing it.
+
+    `implementor` is the fqn of the annotation that class carries, or None for no
+    implementing class at all — the two knobs that are the flip's own conjuncts.
+    The operation carries an EXPLICIT name so the row's identity does not depend
+    on which naming word the catalog happens to declare; the naming words are
+    measured end to end against the compiled fixture instead.
+    """
+    contract, gate, member_annotation, _starter, _kind, name = _TP_CONTRACTS[catalog_id]
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/tp/Contract.java",
+        module_id="com.acme:temporal-probe",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    void = Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type=""))
+    member = contract + "operate(sig_a)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=contract, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=member,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=contract,
+            signature=void,
+            modifiers={"public": True},
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=contract,
+            retention="runtime",
+            use=AnnotationUse(annotation=gate, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=member,
+            retention="runtime",
+            use=AnnotationUse(annotation=member_annotation, args={"name": name}),
+        ),
+    ]
+    if implementor is not None:
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_TP_IMPL,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[contract],
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_TP_IMPL + "operate(sig_a).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_TP_IMPL,
+                signature=void,
+                modifiers={"public": True},
+            ),
+        ]
+        if implementor:
+            facts.append(
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=_TP_IMPL,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=implementor, args={"taskQueues": ["orders"]}),
+                )
+            )
+    write_fact_file(root / "Contract.jsonl", document, facts)
+
+
+def _temporal_rows(tmp_path: Path, catalog_id: str, *, implementor: str | None) -> list[tuple]:
+    _temporal_facts(tmp_path / "facts", catalog_id, implementor=implementor)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert (
+        derive_endpoints(workspace, [_shipped(catalog_id)], capabilities=set(_TASK_7_CAPABILITIES))
+        == []
+    )
+    rows = sorted(
+        (
+            str(row["direction"]),
+            row["method"] and str(row["method"]),
+            str(row["path"]),
+            row["handler"] and str(row["handler"]),
+            row["caller"] and str(row["caller"]),
+        )
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_a_temporal_contract_a_registered_implementation_serves_is_inbound(
+    tmp_path: Path, catalog_id: str
+):
+    """The positive both near-misses below are measured against.
+
+    The Spring Boot starter's `@WorkflowImpl`/`@ActivityImpl` is what puts an
+    implementation on a worker (CP-30 Q6: each declares `String[] workers()` and
+    `String[] taskQueues()` and nothing else), so where it is present the contract
+    is one this module SERVES. The row flips to inbound, keeps the CONTRACT's own
+    name — the whole point of gating on the interface — and rebinds `handler` to
+    the implementor's override."""
+    _contract, _gate, _member, starter, kind, name = _TP_CONTRACTS[catalog_id]
+    assert _temporal_rows(tmp_path, catalog_id, implementor=starter) == [
+        ("inbound", kind, name, _TP_IMPL + "operate(sig_a).", None)
+    ]
+
+
+@pytest.mark.declines("temporal-workflow")
+@pytest.mark.declines("temporal-activity")
+@pytest.mark.pins("annotation_driven.flip-implementer-is-a-controller")
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_a_temporal_contract_an_unregistered_class_implements_derives_nothing(
+    tmp_path: Path, catalog_id: str
+):
+    """§10 near-miss for the flip's SECOND conjunct, and the reason the shape is
+    keyed on the starter annotation rather than on `owner_implemented_in_module`.
+
+    One annotation different from the positive above and the module neither serves
+    the contract nor calls it. A Temporal worker polls a task queue for the types
+    a `Worker` was told about, so an implementation nothing registered answers no
+    poll: an inbound row here would invent an endpoint (§8.1 rule 4). The outbound
+    row the SEI fence subtracts stays subtracted, because a module does not call
+    what it implements. Net: nothing, in either direction — which is the whole
+    reason registration is the condition."""
+    assert _temporal_rows(tmp_path, catalog_id, implementor="") == []
+
+
+@pytest.mark.pins("derive_endpoints.direction-flip-is-owner-scoped")
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_an_unimplemented_temporal_contract_still_derives_outbound(tmp_path: Path, catalog_id: str):
+    """§10 near-miss for the flip's FIRST conjunct: the same contract with no local
+    implementation at all is an ordinary client-side declaration and must keep
+    deriving exactly the outbound row it always did — caller intact, handler
+    absent.
+
+    A flip keyed on the catalog's rule rather than on the OWNER would rewrite every
+    workflow and activity contract a caller-only module declares into an endpoint
+    that module serves, which is the largest fabrication available here."""
+    contract, _gate, _member, _starter, kind, name = _TP_CONTRACTS[catalog_id]
+    assert _temporal_rows(tmp_path, catalog_id, implementor=None) == [
+        ("outbound", kind, name, None, contract + "operate(sig_a).")
+    ]

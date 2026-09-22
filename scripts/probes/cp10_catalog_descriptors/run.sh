@@ -94,6 +94,16 @@ ARTIFACTS=(
   # (measured with `unzip -l`), and the manifest is read here. Pinned to the version
   # `fixtures/orders-gateway/pom.xml` declares.
   "org.springframework.cloud|spring-cloud-gateway-server-webflux|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `temporal-untyped.yml` (Group D Task 5). `WorkflowClient.newUntypedWorkflowStub`
+  # lives here. THE SELF-REPORT ENTRY IS `-`/`-`, and that is a measurement rather
+  # than a shortcut: this archive states no version anywhere in its own bytes — its
+  # manifest carries only `Manifest-Version` and `Multi-Release`, it ships no
+  # `META-INF/maven/*/pom.properties`, and no class constant pool holds the literal
+  # `1.27.0` (CP-30's Version scope section checked all three exhaustively). The
+  # sentinel routes `descriptors.py` to the SHA-1 check against Maven's own
+  # `.jar.sha1` sidecar, which is what CP-30 does with the same two archives.
+  # Pinned to the version `fixtures/temporal-probe/pom.xml` declares.
+  "io.temporal|temporal-sdk|1.27.0|-|-"
 )
 
 specs=()

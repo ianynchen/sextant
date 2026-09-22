@@ -1,0 +1,95 @@
+id: temporal-untyped
+displayName: Temporal untyped workflow stubs
+style: single_call
+protocol: temporal
+direction: outbound
+
+detect:
+  coordinates: ["io.temporal:temporal-sdk"]
+
+# `identity: assumed` for the reason `temporal-workflow.yml` states at length:
+# `temporal-sdk-1.27.0.jar` reports no version anywhere in its own bytes, so the
+# column below is the coordinate the harness requested. Two probes, because they
+# answer two different questions: CP-30 Q7 is what the argument-0 read is FOR
+# (which overloads name a workflow type there), and CP-10 is the check that each
+# `descriptor:` string below is one the jar actually declares.
+measured:
+  - { artifact: io.temporal:temporal-sdk, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp30_temporal_contract_naming.md }
+  - { artifact: io.temporal:temporal-sdk, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp10_catalog_descriptors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: io.temporal.client.WorkflowClient
+  # MEASURED (CP-30 Q7, temporal-sdk 1.27.0): `newUntypedWorkflowStub` has FOUR
+  # overloads, and exactly three take the workflow TYPE as a bare `String` at
+  # argument 0. Those three are declared here, each with its own erased
+  # descriptor — the rule `spring-rabbit-template.yml` established after an
+  # overload collision published a payload as a destination, and it matters here
+  # for the same reason: the fourth overload takes a `WorkflowExecution` at
+  # argument 0, and reading THAT position as a workflow type would publish a
+  # running execution's identity as a workflow name.
+  #
+  # Declaring a descriptor on one row CLAIMS the name at that arity for every
+  # row (D02 §2), which is exactly what is wanted: the
+  # `(WorkflowExecution, Optional)` overload shares arity 2 with
+  # `(String, WorkflowOptions)` and must derive NOTHING rather than fall through
+  # to it.
+  #
+  # `http_method` on a `temporal` catalog is the literal-verb key D02 §2 names,
+  # not an HTTP claim: `temporal` is a verbed protocol (§1c) and the kind a
+  # stub STARTS is a workflow, which is what the inbound catalog's
+  # `@WorkflowMethod` rows carry too. Without it the row's `method` would be
+  # NULL and the two halves of one wire would not read as the same kind.
+  #
+  # §2f: the string at argument 0 is the workflow type, so this row's path is
+  # what `temporal-workflow.yml` derives for the contract itself — which is the
+  # whole reason the untyped stub is worth reading at all.
+  methods:
+    - { name: newUntypedWorkflowStub, arity: 1, http_method: workflow,
+        descriptor: "(Ljava/lang/String;)Lio/temporal/client/WorkflowStub;",
+        channel_arg: 0 }
+    - { name: newUntypedWorkflowStub, arity: 2, http_method: workflow,
+        descriptor: "(Ljava/lang/String;Lio/temporal/client/WorkflowOptions;)Lio/temporal/client/WorkflowStub;",
+        channel_arg: 0 }
+    - { name: newUntypedWorkflowStub, arity: 3, http_method: workflow,
+        descriptor: "(Ljava/lang/String;Ljava/util/Optional;Ljava/util/Optional;)Lio/temporal/client/WorkflowStub;",
+        channel_arg: 0 }
+
+# WHAT IS DELIBERATELY NOT DECLARED, and why each absence is a rule rather than
+# an omission.
+#
+# `WorkflowStub.signal(String, Object...)`, `query(String, Class, Object...)`,
+# `query(String, Class, Type, Object...)` and `update(String, Class, Object...)`
+# (§2f, M10, measured by CP-30 Q7: all four take the member name as a bare
+# `String` at argument 0, with no workflow type anywhere in the descriptor).
+# Their argument 0 is a MEMBER name with no workflow type at the call site, so
+# the derived path would be a bare `cancel` — an identity that collides with
+# every other workflow's signal of that name, and one this project cannot tell
+# apart from an observation once it is published at `resolved`/`compiler`.
+# Under-reporting is honest; a colliding identity is not. Recorded but not
+# declared for the same reason: `signalWithStart`, `startUpdate` (both
+# overloads), `startUpdateWithStart` and `getUpdateHandle`, of which the first
+# and last name a member at argument 0 the same way, while the two
+# `UpdateOptions`-taking overloads name no wire identity at argument 0 at all.
+#
+# `newUntypedWorkflowStub(WorkflowExecution, Optional<String>)` — argument 0 is
+# a RUNNING execution's identity, and the type name is only optionally present
+# at argument 1. §2g: a stub that addresses a running execution starts nothing.
+#
+# `newWorkflowStub(Class, …)` — §2g again, and it is the TYPED half in any case:
+# the contract it names is derived from its own `@WorkflowInterface`
+# declaration by `temporal-workflow.yml`, so reading the call site as well would
+# publish the same identity twice from two kinds of evidence.
+#
+# THE SLICE. `WorkflowClient` declares a good deal more than this one factory —
+# `newActivityCompletionClient`, `newWorkflowStub`, the static `start`/`execute`
+# helpers and the service accessors. No `slice:` block is declared because
+# `scripts/probes/w19_catalog_surface.md`'s enumeration does not cover
+# `io.temporal:temporal-sdk`, and a `slice.outside` entry the enumeration cannot
+# confirm is stale the moment it is written
+# (`tests/architecture/test_catalog_slice_coverage.py` checks both directions).
+# The honest summary a reader needs is the paragraph above: this catalog models
+# ONE factory, the one whose argument 0 is a workflow type.
