@@ -7,6 +7,10 @@
 # own manifest `Implementation-Version` rather than trusting the coordinate that resolved
 # it, and aborts when a jar reports a version other than the one the run expected — so a
 # stale or mis-resolved archive cannot fill a column labelled with a version it never was.
+# NEITHER jar below states an `Implementation-Version` at all (unlike every jar CP-27
+# through CP-29 read this way): `probe.py` falls back to verifying the resolved jar's own
+# SHA-1 against the `.jar.sha1` sidecar `mvn dependency:get` wrote beside it, aborting on a
+# mismatch the same way — see `cp30_temporal_contract_naming.md`'s Version scope section.
 #
 # Two specs only, for now: `temporal-sdk` (the naming rules themselves) and
 # `temporal-spring-boot-autoconfigure` (the three starter annotations). Task 6 appends a

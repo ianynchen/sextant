@@ -136,14 +136,19 @@ def _bodies(output: str) -> list[tuple[str, list[str]]]:
 
 
 def _step_with_offset(line: str) -> str | None:
-    """`"<offset>: <mnemonic> <comment>"` for one instruction line — the offset kept
-    visible, unlike CP-27's `_step`, because the brief's expected answers cite offsets."""
+    """`"<offset>: <mnemonic> <comment-or-operand>"` for one instruction line — the offset
+    kept visible, unlike CP-27's `_step`, because the brief's expected answers cite offsets.
+    A branch or `goto`'s destination is a BARE trailing operand with no `//` in `javap`'s
+    own output (`95: if_acmpne   116`, not `95: if_acmpne   116  // ...`); splitting on `//`
+    unconditionally silently dropped every branch target this method sees (fix-round-1
+    finding 1). When there is no `//` comment, the raw operand is kept instead of being
+    discarded."""
     match = re.match(r"^\s*(\d+):\s+(\S+)(.*)$", line)
     if match is None:
         return None
     offset, mnemonic, operands = match.groups()
-    comment = operands.split("//", 1)[1].strip() if "//" in operands else ""
-    return f"{offset}: {mnemonic} {comment}".strip()
+    text = operands.split("//", 1)[1].strip() if "//" in operands else operands.strip()
+    return f"{offset}: {mnemonic} {text}".strip()
 
 
 def _full_body(output: str, method_name_fragment: str) -> list[str]:
@@ -216,15 +221,42 @@ def q4_activity_qualification(sdk: Path) -> str:
     return _STEP.join(body)
 
 
+_CALLER_GATE_NEEDLES = (
+    "validateAndQualifiedForWorkflowMethod",
+    "WorkflowMethodType.NONE",
+    'POJOWorkflowMethodMetadata."<init>"',
+)
+
+
 def q5_workflow_qualification(sdk: Path) -> str:
     output = _javap(
         "-c", "-p", "io.temporal.common.metadata.POJOWorkflowInterfaceMetadata", classpath=sdk
     )
-    body = _full_body(
+    predicate = _full_body(
         output,
         "validateAndQualifiedForWorkflowMethod(io.temporal.common.metadata.POJOWorkflowMethod)",
     )
-    return _STEP.join(body)
+    # Q5's write-up claims a SEPARATE check gates construction after this predicate already
+    # returned true for an unannotated method — fix-round-1 finding 2 was that this claim
+    # named the wrong caller (`newInstanceInternal`) and cited it from a one-off read, not
+    # from the harness. `getWorkflowInterfaceMethods` is the actual caller (confirmed:
+    # `javap`'s own declaration lines place offsets 140-145/204-212 inside it, not inside
+    # `newInstanceInternal`); this pulls the same evidence mechanically, the same way every
+    # other row does, rather than restating a claim nothing here generates.
+    caller = _full_body(
+        output, "getWorkflowInterfaceMethods(java.lang.Class<?>, boolean, java.util.Map<"
+    )
+    gate: list[str] = []
+    for index, step in enumerate(caller):
+        if any(needle in step for needle in _CALLER_GATE_NEEDLES):
+            gate.append(step)
+            if index + 1 < len(caller):
+                gate.append(caller[index + 1])
+    marker = (
+        "--- getWorkflowInterfaceMethods's construction gate, reached AFTER the "
+        "predicate above already returned true ---"
+    )
+    return _STEP.join(predicate + [marker] + gate)
 
 
 # --- Q6: the three Spring Boot starter annotations' attributes -------------------------
