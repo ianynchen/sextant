@@ -99,11 +99,37 @@ matches:
   # silence and no `poisons:` entry is warranted.
   terminal: [handler, write]
 
-# Copied verbatim from spring-resttemplate.yml (harvest compatibility, the same
-# discipline every fluent catalog here keeps).
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, the same discipline every fluent catalog here keeps). The third
+# is the bus's own envelope, and `vertx-eventbus.yml`'s own comment carries the
+# full reasoning and the measurement; what follows is what is different HERE.
+#
+# THIS FILE'S INBOUND ROWS CARRY NO PAYLOAD SHAPE AT ALL, so the envelope cannot
+# reach them. The consumer terminal captures `handler: arg0` — the handler
+# itself, which becomes the row's HANDLER column, never a shape — and no root or
+# step declares a `body` capture on the inbound side. `orders.twostep`'s shipped
+# row carries `request_shape` NULL for that reason, and it still does. The
+# envelope defect `quarkus-consume-event.yml` had is therefore NOT present on
+# these rows: there is no shape to get wrong, only a shape that is missing, and
+# that miss is the same one `vertx-eventbus.yml` states for its own inbound
+# rows (`fluent` has no word for "the type argument of the handler's own
+# parameter" any more than `single_call` does).
+#
+# It is declared anyway, for the outbound half and for the sort-order reason.
+# `write`'s `body: arg0` reads the VALUE handed to the producer, which a
+# forwarding call site can spell as an envelope; and shape expansion is global
+# and insert-if-absent, so a file that reached a `Message` without this rule
+# would expand `Message` as a shape for every catalog. MEASURED (CP-31 Q10a,
+# Q10b): `body()` is the one descriptor of the five that names what crossed the
+# wire, byte-identical at 4.5.10 and 5.0.0.
+#
+# The CORE `Message`, not the facade's: every root and step above is owned by
+# `io.vertx.core.eventbus.*`, and CP-31 Q10c measured the facade's as a
+# different type in a different artifact.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
 
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.

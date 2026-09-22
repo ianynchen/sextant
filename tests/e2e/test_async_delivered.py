@@ -588,7 +588,7 @@ def _eventbus_row(row: dict) -> tuple:
 def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     """Spec §4's second fixture, arm by arm, off a real analysis.
 
-    Seventeen rows and no more. The four catalogs partition the surface rather than
+    Eighteen rows and no more. The four catalogs partition the surface rather than
     overlapping on it: `vertx-eventbus.yml` takes the core interface's one-call forms,
     `vertx-eventbus-chain.yml` the two-step ones, `vertx-eventbus-mutiny.yml` the facade a
     Quarkus service injects, and `quarkus-consume-event.yml` the declarations. Two arms of
@@ -605,6 +605,10 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
       * `orders.headers` carrying `com/acme/eb/Order#` — the payload of a
         `(MultiMap, Order)` method is its SECOND parameter, which is what
         `request_body.excludes` reads;
+      * `orders.created` appearing TWICE under `quarkus-consume-event`, once per handler,
+        and carrying `com/acme/eb/Order#` on BOTH —
+        `test_the_envelope_spelling_and_the_payload_spelling_record_one_shape` below is
+        where that equality is the subject rather than one column of a set;
       * `orders.twostep`'s handler is the LAMBDA `.handler(...)` was given, while
         `orders.inbox`'s is the enclosing method: the one-call form registers at the call
         the catalog matched, the chain registers at its terminal;
@@ -624,7 +628,7 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     is what holds the partition, and it does hold it: the same injection makes it fail.
     """
     endpoints, _ = eventbus
-    assert len(endpoints) == 17
+    assert len(endpoints) == 18
     assert {_eventbus_row(r) for r in endpoints} == {
         # --- quarkus-consume-event: the declarations -------------------------
         (
@@ -659,6 +663,15 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
             "inbound",
             "orders.created",
             "OrderConsumers.onOrderCreated",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.created",
+            "OrderConsumers.onOrderCreatedEnvelope",
             None,
             "resolved",
             _ORDER,
@@ -786,6 +799,46 @@ def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
     }
 
 
+def test_the_envelope_spelling_and_the_payload_spelling_record_one_shape(
+    eventbus: tuple[list[dict], list[dict]],
+):
+    """Two spellings of ONE wire contract, one shape — the pin, asserted as an EQUALITY
+    between the two rows rather than against a literal.
+
+    `OrderConsumers` declares `orders.created` twice: `onOrderCreated(Order)` and
+    `onOrderCreatedEnvelope(Message<Order>)`. Quarkus permits both — MEASURED (CP-31 Q12,
+    quarkus-vertx-deployment 3.17.5): its own validation constant reads *"An event consumer
+    business method that accepts io.vertx.core.eventbus.Message or
+    io.vertx.mutiny.core.eventbus.Message must return void"*, so the envelope parameter is
+    ordinary input and the only condition attached to it is the one this fixture arm
+    satisfies. `Message<T>` is the bus's own framing — `address()`, `headers()`,
+    `replyAddress()`, `isSend()` and `body()` (CP-31 Q10a/Q10b, byte-identical at 4.5.10 and
+    5.0.0) — and `body()` is the one of the five that names what crossed the wire.
+
+    Asserted as `==` between the two rows, not as two separate literals: the claim is that
+    the spelling does not change the contract, and an equality is what says that. It is then
+    also asserted to be `Order`, because two rows could be equal by both being wrong.
+
+    Before the `wrappers` entry that makes this pass, the envelope row recorded
+    `io/vertx/core/eventbus/Message#<com/acme/eb/Order#>` and the analysis expanded
+    `Message` ITSELF as a second shape — so the second assertion below is not redundant
+    with the first, it is what catches the whole envelope being published as a payload
+    type. The wire's other half is `m.reply(order)`, an `Order`, so a linker holding the
+    envelope shape on one side would never match the two halves of one address.
+    """
+    endpoints, _ = eventbus
+    shapes = {
+        _typed_member(r["handler"]): _shape(r["request_shape"])
+        for r in endpoints
+        if r["path"] == "orders.created" and str(r["catalog_id"]) == "quarkus-consume-event"
+    }
+    assert set(shapes) == {"OrderConsumers.onOrderCreated", "OrderConsumers.onOrderCreatedEnvelope"}
+    assert (
+        shapes["OrderConsumers.onOrderCreatedEnvelope"] == shapes["OrderConsumers.onOrderCreated"]
+    )
+    assert shapes["OrderConsumers.onOrderCreatedEnvelope"] == _ORDER
+
+
 def test_every_eventbus_row_is_verbless_and_states_no_reply_shape(
     eventbus: tuple[list[dict], list[dict]],
 ):
@@ -828,8 +881,8 @@ def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
 ):
     """`@ConsumeEvent.local()`'s `AnnotationDefault` is the boolean `true` (CP-31 Q6), so
     an undecorated consumer is LOCAL-ONLY and `absent_value: "true"` is what says so. The
-    set is exact and covers all five Quarkus consumers, which is what makes it a pin: a
-    `metadata_from` that wrote its `absent_value` unconditionally would still produce four
+    set is exact and covers all six Quarkus consumers, which is what makes it a pin: a
+    `metadata_from` that wrote its `absent_value` unconditionally would still produce five
     of these rows, and `orders.cluster`'s `false` is the one that fails it.
 
     `kind` is `local`, named after the attribute, and the value is the ATTRIBUTE's own
@@ -846,5 +899,6 @@ def test_eventbus_local_metadata_is_the_measured_default_or_the_declared_value(
         ("com.acme.eb.OrderConsumers", "local", "true", "OrderConsumers.onAnyOrder", None),
         ("orders.cluster", "local", "false", "OrderConsumers.onClusteredOrder", None),
         ("orders.created", "local", "true", "OrderConsumers.onOrderCreated", None),
+        ("orders.created", "local", "true", "OrderConsumers.onOrderCreatedEnvelope", None),
         ("orders.headers", "local", "true", "OrderConsumers.onOrderWithHeaders", None),
     }

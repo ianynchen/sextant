@@ -5,8 +5,11 @@ event bus's own surface — every descriptor `EventBus`, `MessageConsumer` and
 delegation inside `EventBusImpl.consumer(String, Handler)` (Q4, M6); `MessageConsumerOptions`
 and its `setAddress` (Q5, M7); `@ConsumeEvent`'s own `AnnotationDefault` values (Q6, M8);
 the default-address call inside Quarkus's `VertxProcessor` (Q7, M8); the Mutiny facade's own
-descriptors (Q8, M9); and the owners `fixtures/orders-eventbus`'s own compiled classes name
-at their event-bus call sites (Q9, CP-27's row-16 / CP-30's Q9 pattern applied here).
+descriptors (Q8, M9); the owners `fixtures/orders-eventbus`'s own compiled classes name
+at their event-bus call sites (Q9, CP-27's row-16 / CP-30's Q9 pattern applied here); and
+the bus's OWN ENVELOPE — both `Message` types' whole declared surface (Q10) and the two
+places Quarkus states what it will accept in a consumer's parameter (Q11, Q12), added by
+the 2026-09-22 wrapper fix.
 
 Called by `run.sh`, which resolves the five jars and compiles the fixture; this script
 downloads nothing. Like CP-27 and CP-30 it reads each jar's own identity out of its own
@@ -316,6 +319,58 @@ def q_mutiny_surface(jar: Path) -> str:
     return _STEP.join(cells)
 
 
+# --- Q10-Q12: the bus's OWN ENVELOPE, `Message<T>` --------------------------------------
+#
+# Added by the wrapper fix (2026-09-22). Q1-Q9 measured every type the catalogs name as an
+# OWNER and none of the type a consumer's parameter is DECLARED as, which is how three of
+# the four catalogs came to ship with no bus envelope in `wrappers` at all: nothing had been
+# measured to declare one from, and the absence read as "no envelope exists" rather than
+# "nobody looked". Q10 reads both `Message` types' whole declared surface — the core one and
+# the facade's, which are DIFFERENT types and must not be conflated. Q11 and Q12 read the
+# framework's own rule about them, because whether the spelling even compiles under Quarkus
+# decides whether the wrapper is ordinary input or an exotic shape.
+
+_MESSAGE = "io.vertx.core.eventbus.Message"
+_MUTINY_MESSAGE = "io.vertx.mutiny.core.eventbus.Message"
+_CONSTANTS = "io.quarkus.vertx.deployment.VertxConstants"
+
+
+def q_message_gate(jar: Path) -> str:
+    """`VertxConstants.isMessage`, `isMessageHeaders` and the static initializer that fills
+    the `DotName`s both read — WHOLE bodies, the Q4/Q7 discipline.
+
+    This is the pair of predicates Quarkus's own `VertxProcessor` asks about a consumer's
+    parameters, so the class names loaded by `<clinit>` are the exact set of types the
+    framework treats as an envelope and as headers. A probe that read only `isMessage`
+    would record the branch without recording WHICH two names it compares against.
+    """
+    output = _javap("-c", "-p", _CONSTANTS, classpath=jar)
+    cells: list[str] = []
+    for fragment in ("isMessage(", "isMessageHeaders(", "static {}"):
+        cells.append(f"--- {fragment.rstrip('(')} ---")
+        cells.extend(_full_body(output, fragment))
+    return _STEP.join(cells)
+
+
+def q_processor_string_constants(jar: Path) -> str:
+    """EVERY `String` constant `VertxProcessor`'s own constant pool holds, in pool order.
+
+    Not the four that mention `Message`: a probe that grepped for the expected sentence
+    could only ever confirm it. The validation rules Quarkus enforces on a consumer's
+    signature are written into these constants verbatim, so the whole pool is dumped and a
+    reader sees the rules beside everything else the class says.
+    """
+    output = _javap("-v", "-p", _PROCESSOR, classpath=jar)
+    found = [
+        line.split("//", 1)[1].strip()
+        for line in output.splitlines()
+        if re.match(r"^\s*#\d+ = String\b", line) and "//" in line
+    ]
+    if not found:
+        raise ProbeError(f"{_PROCESSOR} holds no String constant at all")
+    return f"×{len(found)} ; " + _STEP.join(found)
+
+
 # --- Q9: the fixture's own compiled classes ---------------------------------------------
 
 _FIXTURE_IDENTITY_CLASS = "com.acme.eb.OrderBus"
@@ -490,6 +545,31 @@ def main(specs: list[str]) -> int:
         "`io.vertx`/`io.quarkus` call sites",
         None,
         q_fixture_owners(classes),
+    )
+    for suffix, artifact, owner in (
+        ("a", core45, _MESSAGE),
+        ("b", core50, _MESSAGE),
+        ("c", mutiny, _MUTINY_MESSAGE),
+    ):
+        row(
+            f"10{suffix}",
+            f"every descriptor `{owner}` declares — the bus's own envelope",
+            artifact,
+            q_type_surface(artifact.jar, owner),
+        )
+    row(
+        "11",
+        "`VertxConstants.isMessage`, `isMessageHeaders` and `<clinit>` — whole bodies, and "
+        "the class names they compare against",
+        deployment,
+        q_message_gate(deployment.jar),
+    )
+    row(
+        "12",
+        "every `String` constant `VertxProcessor` holds — Quarkus's own rules about a "
+        "consumer's signature, in its own words",
+        deployment,
+        q_processor_string_constants(deployment.jar),
     )
     return 0
 

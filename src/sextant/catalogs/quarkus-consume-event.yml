@@ -138,13 +138,64 @@ matches:
     - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: local,
         absent_value: "true" }
 
-# Copied verbatim from spring-resttemplate.yml (harvest compatibility, the same
-# discipline every catalog here keeps — see `spring-kafka.yml`'s own copy for
-# the full rationale, including why a disagreeing copy would make a shared
-# type's answer depend on catalog sort order).
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, the same discipline every catalog here keeps — see
+# `spring-kafka.yml`'s own copy for the full rationale, including why a
+# disagreeing copy would make a shared type's answer depend on catalog sort
+# order). The last two are the bus's own envelope, and THIS is the file where
+# leaving them out produced a wrong row rather than a missing one.
+#
+# WHAT WENT WRONG WITHOUT THEM. `request_body.fallback: sole_unannotated` above
+# reads the consumer's one bare parameter, so
+#
+#     @ConsumeEvent("orders.created") void handle(Message<Order> m) { … }
+#     @ConsumeEvent("orders.created") void handle(Order o)          { … }
+#
+# — two spellings of ONE wire contract — recorded two different payload shapes,
+# `Message` for the first and `Order` for the second. The consumer answering a
+# request replies `m.reply(order)`, an `Order`, so the envelope row would not
+# link to the other half of its own request/reply pair.
+#
+# THE SPELLING IS ORDINARY INPUT, MEASURED (CP-31 Q12, quarkus-vertx-deployment
+# 3.17.5). `VertxProcessor` holds the rule in its own words: *"An event consumer
+# business method that accepts io.vertx.core.eventbus.Message or
+# io.vertx.mutiny.core.eventbus.Message must return void"*. Quarkus permits the
+# envelope parameter outright and attaches a RETURN-TYPE condition to it. Two
+# more of its constants bound where the envelope can sit: a consumer *"must
+# accept exactly one parameter"* unless the first is a `MultiMap`, and a
+# two-parameter consumer *"must not accept"* either `Message`. So an envelope
+# parameter is always the SOLE parameter — exactly the position
+# `sole_unannotated` reads, and never the second slot the headers/body split
+# uses.
+#
+# BOTH TYPES, and that is measured too rather than defensive breadth. CP-31 Q11:
+# `VertxConstants.isMessage(DotName)` returns true for `MESSAGE` **or**
+# `MUTINY_MESSAGE`, and its static initializer loads those two by `ldc class` at
+# offsets 0 and 22 — `io/vertx/core/eventbus/Message` and
+# `io/vertx/mutiny/core/eventbus/Message`. Quarkus cannot tell the two apart, so
+# a Quarkus consumer may spell its envelope either way and this file has to read
+# both. They are genuinely different types (CP-31 Q10a/Q10c: a class with a
+# `delegate` field versus the interface, and a `headers()` returning a different
+# `MultiMap`), which is why this is two rows and not one.
+#
+# `payload_arg: 0` on both: `Message<T>` takes one type argument and `body()` is
+# what returns it. `semantics: envelope` from the existing closed set —
+# `spring-kafka.yml` already spells a broker's own envelope (`ConsumerRecord`)
+# that way and this is the same thing one bus over. Not `http_envelope` (no
+# HTTP) and not `optional`, which is the one member the engine acts on
+# (`expansion.py` derives `required` from it) and would publish every event-bus
+# payload as nullable.
+#
+# A RAW `Message` — a consumer declaring `void handle(Message m)` — reaches
+# `root_type` with no type argument at the payload position and is left
+# unopened, `unmatched_wrapper`, which is the engine's existing answer for an
+# envelope whose payload is not visible. It is not silently read as the
+# envelope's own type, and it is not guessed past.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
+  - { type: io.vertx.mutiny.core.eventbus.Message, payload_arg: 0, semantics: envelope }
 
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
@@ -164,6 +215,17 @@ shape_model: json
 #     shape to hang one on; there is no such annotation here, and a reply row
 #     naming the consumer's own address would claim this endpoint answers
 #     itself.
+#   * THE MUTINY `MultiMap` AS A HEADERS PARAMETER. `request_body.excludes`
+#     above names `io.vertx.core.MultiMap` alone, and CP-31 Q11 measured that
+#     Quarkus accepts either: `VertxConstants.isMessageHeaders(DotName)` returns
+#     true for `MESSAGE_HEADERS` **or** `MUTINY_MESSAGE_HEADERS`, loaded by `ldc
+#     class` at offsets 11 and 33 as `io/vertx/core/MultiMap` and
+#     `io/vertx/mutiny/core/MultiMap`. A consumer spelling
+#     `(io.vertx.mutiny.core.MultiMap headers, Order body)` therefore leaves TWO
+#     bare parameters for `sole_unannotated` and derives NO payload at all — a
+#     missing shape, never a wrong one, and the address and its metadata are
+#     still published. Recorded here rather than closed with the envelope rows
+#     above because it is a different defect and moves no shipped row.
 #   * THE FAILURE CODES. `ConsumeEvent.FAILURE_CODE` and
 #     `EXPLICIT_FAILURE_CODE` are constants on the annotation type, not
 #     attributes of a use, and name nothing on a wire.

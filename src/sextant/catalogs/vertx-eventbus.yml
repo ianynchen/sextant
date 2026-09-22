@@ -169,16 +169,65 @@ matches:
         channel_via: [{ owner: io.vertx.core.eventbus.MessageConsumerOptions,
                         method: setAddress, arg: 0 }] }
 
-# Copied verbatim from spring-resttemplate.yml (harvest compatibility, same
-# discipline as spring-kafka-template.yml — see its own comment for the full
-# rationale).
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, same discipline as spring-kafka-template.yml — see its own
+# comment for the full rationale). The third is this bus's own envelope, added
+# to the event-bus files only, the way `spring-kafka.yml` adds `ConsumerRecord`
+# to itself alone.
 #
-# No bus-specific wrapper is added: a `send`/`publish`/`request` payload is read
-# directly off its declared position, never through an envelope type a
-# `wrappers` rule would need to unwrap.
+# THE BUS'S OWN ENVELOPE, and the sentence that used to stand here instead.
+#
+# This block read "No bus-specific wrapper is added: a `send`/`publish`/`request`
+# payload is read directly off its declared position, never through an envelope
+# type a `wrappers` rule would need to unwrap." The first half is true and the
+# word "never" was a claim about the FRAMEWORK made with no probe row behind it
+# — CP-31 Q1-Q9 measured every type this file names as an OWNER and not one of
+# them is `Message`, so at the time nothing had been measured that could have
+# contradicted it. Q10 has now measured it, and the claim does not hold.
+#
+# MEASURED (CP-31 Q10a/Q10b, vertx-core 4.5.10 AND 5.0.0).
+# `io.vertx.core.eventbus.Message<T>` declares five descriptors byte-identically
+# in both releases: `address()`, `headers()`, `body()`, `replyAddress()` and
+# `isSend()`. FOUR of the five are framing the bus itself adds on delivery and
+# strips on receipt — where it came from, where a reply goes, whether it was
+# sent or published, and the delivery headers. Only `body()` names what crossed
+# the wire. That is the same relationship `ResponseEntity<T>` has to its body,
+# which the row above already unwraps.
+#
+# `semantics: envelope`, from the existing closed set and not a new member:
+# `spring-kafka.yml` already spells a BROKER's own envelope
+# (`ConsumerRecord<K,V>`) that way, which is exactly what this is. It is not
+# `http_envelope` — there is no HTTP here — and not `optional`, which is the one
+# value the engine acts on (`expansion.py` derives `required` from it) and would
+# publish every event-bus payload as nullable.
+#
+# WHY IT IS DECLARED HERE, where no row can reach it through an inbound
+# parameter. The inbound rows above carry no `body_arg` at all, so the only
+# position this file reads a payload at is `body_arg: 1` on
+# `send`/`publish`/`request` — the VALUE a call site hands the bus. A forwarding
+# call site can hand it an envelope (`bus.send("out", msg)` inside a consumer),
+# and without this row the shape published for that wire would be
+# `io.vertx.core.eventbus.Message` itself: framing recorded as payload, on an
+# address whose other half carries an `Order`.
+#
+# The second reason is the one the copied block above already states for the
+# `ResponseEntity` row: shape expansion is a GLOBAL, insert-if-absent pass keyed
+# on the type symbol, so the first catalog to reach a type is the one that
+# describes it for everyone. A file that reached a `Message` without this rule
+# would expand `Message` itself as a shape — `body`, `headers`, `address` as
+# fields — and `quarkus-consume-event.yml`'s correct answer would then depend on
+# catalog sort order. Declaring it in every event-bus file is what closes that.
+#
+# The FACADE's `io.vertx.mutiny.core.eventbus.Message` is NOT named here, and
+# that is the same boundary `owner:` states: it is a different type in a
+# different artifact (CP-31 Q10c — a class holding the core interface in a
+# private `delegate` field, whose `headers()` returns the MUTINY `MultiMap`),
+# and this file's owner hands nobody one. `vertx-eventbus-mutiny.yml` declares
+# it, against its own 3.16.0 measurement.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
 
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.

@@ -96,11 +96,45 @@ matches:
         descriptor: "(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;",
         channel_arg: 0, direction: inbound }
 
-# Copied verbatim from spring-resttemplate.yml (harvest compatibility, the same
-# discipline every catalog here keeps).
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, the same discipline every catalog here keeps). The third is the
+# bus's own envelope — and it is THE FACADE'S, which is the whole point of
+# naming it here separately.
+#
+# MEASURED (CP-31 Q10c, smallrye-mutiny-vertx-core 3.16.0).
+# `io.vertx.mutiny.core.eventbus.Message<T>` is a DIFFERENT TYPE from
+# `io.vertx.core.eventbus.Message<T>`, not a spelling of it: it is a CLASS, not
+# the interface, it holds the core interface in a private `delegate` field and
+# hands it back through `getDelegate()`, its `headers()` returns
+# `io.vertx.mutiny.core.MultiMap` rather than the core `MultiMap`, and its
+# `replyAndRequest` family returns `io.smallrye.mutiny.Uni`. It declares 31
+# descriptors where the core interface declares 10-12. What the two DO share is
+# the one that matters: `body()Ljava/lang/Object;`, the single descriptor of the
+# envelope's surface that names what crossed the wire — the other four
+# (`address()`, `headers()`, `replyAddress()`, `isSend()`) are framing the bus
+# adds and strips.
+#
+# A wrapper rule matches on the TYPE SYMBOL, so naming the core one here would
+# declare an envelope this file's owner never hands anybody, and the facade's
+# own would stay unwrapped. `vertx-eventbus.yml` states the mirror of this at
+# its own `wrappers` block; between them the two files cover both types without
+# either claiming the other's.
+#
+# `semantics: envelope`, from the existing closed set — `spring-kafka.yml`'s
+# spelling for a broker's own envelope (`ConsumerRecord`), which is what this
+# is. Not `optional`, the one member the engine acts on.
+#
+# Reachability, stated the way this file states its other boundaries: the
+# inbound rows above declare no `body_arg`, so no row here reads a payload off a
+# consumer's parameter and the envelope can only arrive at `body_arg: 1` on a
+# forwarding `send`/`publish`/`request`. It is declared regardless, because
+# shape expansion is a GLOBAL insert-if-absent pass keyed on the type symbol: a
+# catalog that reached a `Message` without this rule would expand the envelope
+# itself as a shape for every catalog that came after it.
 wrappers:
   - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
   - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.mutiny.core.eventbus.Message, payload_arg: 0, semantics: envelope }
 
 # D02 §1b — the payload-type blocks, declared once in
 # `shape-models/json.yml` rather than copied into this file.
