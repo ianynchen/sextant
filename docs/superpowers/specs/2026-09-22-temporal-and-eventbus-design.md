@@ -152,8 +152,10 @@ never match. An identity half only one side can spell is not an identity. Everyt
 therefore lands in `endpoint_metadata`, for two different stated reasons.
 
 `endpoint_metadata.kind` is catalog-declared and not a closed set in D00 — the column's own comment
-says so — so `task_queue`, `consumer_group`, `selector`, `subscription` and `delivery` need no
-schema change. The linking refinement is recorded as an open issue for that tier, not built here.
+says so — so `task_queue`, `consumer_group`, `selector`, `subscription`, `exclusive` and `local` need no
+schema change. *(This sentence said `delivery`. Implementation replaced that one kind with two:
+`metadata_from` writes the attribute's own value, and a `delivery` kind carrying a bare boolean
+reads as "true of what?", where `local: "true"` and `exclusive: "true"` each say what they are.)* The linking refinement is recorded as an open issue for that tier, not built here.
 
 ---
 
@@ -278,8 +280,8 @@ group, the selector, the durable subscription name and exclusivity are recorded;
 |---|---|---|
 | `spring-kafka.yml`, `micronaut-kafka.yml` | `groupId` | `consumer_group` |
 | `spring-jms.yml`, `micronaut-jms.yml` | `selector`, `subscription` | `selector`, `subscription` |
-| `spring-rabbit.yml` | `exclusive` | `delivery` |
-| `quarkus-consume-event.yml` | `local` (`absent_value: "true"`) | `delivery` |
+| `spring-rabbit.yml` | `exclusive` | `exclusive` |
+| `quarkus-consume-event.yml` | `local` (`absent_value: "true"`) | `local` |
 
 **This moves shipped output**, which the standing requirements otherwise forbid: existing endpoints
 gain `endpoint_metadata` rows. Every attribute is measured by probe (§6) before its line is written,
@@ -361,7 +363,7 @@ publishes something false:
 
 - **`path_fallback: declaring_type_qualified_name`** — the default address is the declaring bean
   class's fully-qualified name (M8), not the method name and not the simple name.
-- **`metadata_from: [{annotation: …ConsumeEvent, attribute: local, kind: delivery,
+- **`metadata_from: [{annotation: …ConsumeEvent, attribute: local, kind: local,
   absent_value: "true"}]`** — `local()` defaults to `true` (M8), so an undecorated `@ConsumeEvent` is a
   local-only consumer. The reverse default would publish every Quarkus consumer as cluster-reachable.
 
@@ -417,7 +419,7 @@ declares the listeners whose attributes are now read.
 
 - `tests/e2e/test_async_delivered.py` gains `test_temporal_shapes_rows` and
   `test_eventbus_shapes_rows` — path, kind, direction, handler/caller, and the `task_queue`/
-  `delivery` metadata, asserted off a real analysis.
+  `local` metadata, asserted off a real analysis.
 - A negative test per fabrication this design removes: the activity impl's helper method
   (§2c), the interface-only client module against the inbound catalog, the handler-less consumer
   (§3b), and `stub.signal(...)` (§2f).
