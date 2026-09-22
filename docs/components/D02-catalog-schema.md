@@ -1056,9 +1056,11 @@ mapping:
   declaring type carries the gate directly, so for those rows the attributed type *is* the
   declaring type.
 
-**Phase D also adds three naming words and the key one of them reads** (spec 2026-09-22
-§2b, measured by CP-30). All three join `path_fallback`'s closed vocabulary, at either
-level, and all three are reached only by a declaration that named nothing itself:
+**Phase D also adds four naming words and the two keys they read** (spec 2026-09-22 §2b and
+§1d, measured by CP-30). All four join `path_fallback`'s closed vocabulary, at either level.
+**The first three are reached only by a declaration that named nothing itself; the fourth is
+not**, and the bullet below the table says why that asymmetry is the rule rather than an
+inconsistency:
 
 | word | composes | measured |
 |---|---|---|

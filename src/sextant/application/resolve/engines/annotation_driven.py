@@ -575,14 +575,18 @@ def _corroboration(catalog: Catalog) -> list[str] | None:
 # read. `getURL -> uRL` is the edge that tells this rule apart from every
 # plausible paraphrase of it, and it is asserted.
 #
-# **THE THREE DECLARING-TYPE WORDS** (spec 2026-09-22 §2b, CP-30 rows 1-3) bind
-# an EMPTY tuple, and the empty tuple says something different for them than it
-# does for `construct_name`: they do not read the construct's own name the way
-# the accessor words do, so there is no prefix to strip off it. The derivation
-# branches on the WORD for these three, which is why they live in this mapping
-# rather than in a second one beside it — a second vocabulary would let a typo
-# be refused by one check and read as "no fallback" by the other, and the
-# refusal is the whole reason this is a closed set.
+# **THE FOUR DECLARING-TYPE WORDS** (spec 2026-09-22 §2b and §1d, CP-30 rows
+# 1-3 and row 10) bind an EMPTY tuple, and the empty tuple says something
+# different for them than it does for `construct_name`: they do not read the
+# construct's own name the way the accessor words do, so there is no prefix to
+# strip off it. The derivation branches on the WORD for all four, which is why
+# they live in this mapping rather than in a second one beside it — a second
+# vocabulary would let a typo be refused by one check and read as "no fallback"
+# by the other, and the refusal is the whole reason this is a closed set.
+#
+# Three of them are reached only by a declaration that named NOTHING itself.
+# The fourth, `declaring_type_scoped_name`, is not, and its own block below the
+# dict says why that asymmetry is the rule rather than an inconsistency.
 #
 # `declaring_type_simple_name` — the simple name of the type that DECLARED the
 # annotated member, which is NOT the handler's own class. Under the inheritance
