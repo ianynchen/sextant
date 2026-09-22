@@ -117,13 +117,20 @@ matches:
     # is never reached for it. `name` is the only attribute `@WorkflowMethod`
     # declares (`javap`: `public abstract java.lang.String name()`).
     path_from: [name]
-    # The ordinary prefix machinery stays INERT. `@WorkflowInterface` declares
-    # no attribute at all — it is a bare marker — so there is nothing on the
-    # type to read a prefix off, and a `prefix_annotation` naming it would join
-    # an empty prefix onto every address. Stated rather than omitted so the
-    # next reader does not add one.
+    # The ordinary prefix machinery stays INERT. MEASURED (CP-30 Q10,
+    # temporal-sdk 1.27.0): `@WorkflowInterface` declares NO attribute at all —
+    # it is a bare marker — so there is nothing on the type to read a prefix
+    # off, and a `prefix_annotation` naming it would join an empty prefix onto
+    # every address. That one measured fact is also why the signal/query/update
+    # entries below need a naming word rather than the prefix machinery: every
+    # other route to a type-level address fragment reads an ATTRIBUTE.
     prefix_from: []
     prefix_annotation: null
+    # §1d: a signal, query or update is `<workflow type>/<member name>`, and
+    # `/` is stated here rather than in the engine for `path_separator`'s
+    # reason — which punctuation joins two halves of an address is a
+    # framework's convention. Read only by `declaring_type_scoped_name` below.
+    fallback_scope_separator: "/"
     # §1c: `temporal` is a VERBED protocol, and the kind is part of what the
     # wire names — a signal `cancel` and a query `cancel` on one type are
     # different operations. `all_methods: []` because the annotation states the
@@ -149,39 +156,42 @@ matches:
       - { fqn: io.temporal.workflow.WorkflowMethod, method: [workflow],
           path_fallback: declaring_type_simple_name }
       #
-      # `@SignalMethod`, `@QueryMethod` and `@UpdateMethod` are DELIBERATELY NOT
-      # DECLARED, and this is an under-report with a measured reason rather than
-      # an oversight.
+      # THE OTHER THREE KINDS, and the word they need. §1d's identity for a
+      # signal, query or update is `<workflow type>/<member name>` —
+      # `OrderWorkflow/cancel`.
       #
-      # Spec §1d gives a signal, query or update the identity
-      # `<workflow type>/<member name>` — `OrderWorkflow/cancel`. CP-30 Q1's
-      # other branch is why the second half is the MEMBER name (offset 122,
-      # `Method.getName()`), and §1d's first half is what keeps two workflows'
-      # `cancel` apart. No shipped naming vocabulary composes that pair:
-      # `declaring_type_simple_name` yields the type ALONE, `construct_name`
-      # yields the member ALONE, and the type-level prefix
-      # (`prefix_from`/`path_prefix`) and the qualifier (`qualifier_from`/
-      # `namespace_default`) are both read off ATTRIBUTES — and
-      # `@WorkflowInterface` declares none. Measured, not assumed: declaring the
-      # three with `path_fallback: construct_name` against
-      # `fixtures/temporal-probe` derives the paths `cancel`, `status` and
-      # `amend`.
+      # MEASURED (CP-30 Q1, offsets 116-131): on every branch but `WORKFLOW`
+      # the constructor falls to `Method.getName()` at offset 122 — the
+      # member's own name — wrapped in the same `Optional.orElse` against
+      # `getNameFromAnnotation()` read at offset 81, so an explicit
+      # `@SignalMethod(name = "Abort")` wins outright. That is the FRAMEWORK's
+      # name, and it is the second half of the identity only.
       #
-      # A bare `cancel` is exactly the identity §2f refuses for
-      # `WorkflowStub.signal("cancel", …)` — one that collides with every other
-      # workflow's signal of that name — and it collides the same way whether it
-      # is read off a call site or off a contract: a caller-only module
-      # declaring a `@SignalMethod cancel` would publish `outbound cancel`
-      # against this module's `inbound cancel` and the two would link, across
-      # workflows that share nothing. Under-reporting is honest; a colliding
-      # identity is the fabrication class the standing rule forbids.
+      # THE FIRST HALF IS OURS, and this is why the word composes around a
+      # declared name as well as a defaulted one. Temporal addresses a signal
+      # at a running execution, so the wire never repeats the workflow type;
+      # §1d puts it in the path anyway, because without it every workflow's
+      # `cancel` is one endpoint and a caller-only module's `outbound cancel`
+      # would link to any other module's `inbound cancel`. `@SignalMethod(name
+      # = "Abort")` therefore derives `OrderWorkflow/Abort`, not a bare
+      # `Abort` — the identity §2f refuses for `WorkflowStub.signal("cancel",
+      # …)`, reached by the other route.
       #
-      # WHAT WOULD CLOSE IT: one further `path_fallback` word composing the
-      # declaring type's simple name, a catalog-stated separator and the member
-      # name — the same three pieces the qualifier machinery already composes,
-      # reached from the fallback branch so an explicitly named member skips it
-      # by construction. That is engine vocabulary, not catalog data, so it is
-      # recorded here and in `docs/COVERAGE.md` rather than worked around.
+      # WHY A WORD AND NOT THE EXISTING MACHINERY (fix round 1, and confirmed
+      # independently by the reviewer at the SQL): every other route to a
+      # type-level address fragment reads an ATTRIBUTE — `prefix_from` and
+      # `qualifier_from` off an annotation, `namespace_default` off the
+      # package — and CP-30 Q10 measures `@WorkflowInterface` declaring none;
+      # `path_prefix` is a catalog CONSTANT and cannot vary per contract.
+      # `declaring_type_scoped_name` reads the DECLARING type off the
+      # declaration's own symbol, so an inherited member composes against the
+      # contract that declared it rather than against the implementor.
+      - { fqn: io.temporal.workflow.SignalMethod, method: [signal],
+          path_fallback: declaring_type_scoped_name }
+      - { fqn: io.temporal.workflow.QueryMethod, method: [query],
+          path_fallback: declaring_type_scoped_name }
+      - { fqn: io.temporal.workflow.UpdateMethod, method: [update],
+          path_fallback: declaring_type_scoped_name }
 
 # Deliberately NO `wrappers` block. A workflow method's declared return type is
 # what the SDK's own data converter marshals; it wraps nothing this project
@@ -207,7 +217,13 @@ shape_model: json
 #     `@WorkflowInterface` rather than declaring it derives nothing — Feign's
 #     and the JWS client's own limitation, for the same reason: there is no
 #     declaration in this module to read.
-#   * SIGNALS, QUERIES AND UPDATES, for the reason written out above.
+#   * A SIGNAL, QUERY OR UPDATE SENT THROUGH A TYPED STUB is not read as a call
+#     site: `WorkflowClient.newWorkflowStub(OrderWorkflow.class, …)` returns a
+#     proxy and the member invocation on it is an ordinary interface call. The
+#     outbound row for such a member comes from the CONTRACT declaration above
+#     — which is why a caller-only module derives all four kinds and an
+#     implementing one derives them inbound, and why neither depends on a
+#     stub's call site being traced.
 #   * `newWorkflowStub(Class, String workflowId)` and `newExternalWorkflowStub`
 #     address a RUNNING execution and start nothing; no call site is read for
 #     them at all (§2g). `temporal-untyped.yml` reads the one factory whose

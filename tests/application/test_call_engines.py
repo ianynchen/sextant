@@ -10446,3 +10446,45 @@ def test_a_stub_signal_names_a_member_and_derives_nothing(tmp_path: Path):
     workspace.close()
 
     assert rows == [], "a bare member name was published as a workflow identity"
+
+
+@pytest.mark.declines("temporal-untyped")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_an_untyped_stub_for_a_running_execution_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the DESCRIPTOR conjunct, and the one false positive the
+    three-row shape was chosen to prevent (§2g).
+
+    CP-30 Q7 measured four `newUntypedWorkflowStub` overloads. Three take the
+    workflow TYPE as a bare `String` at argument 0 and are declared; the fourth,
+    `(WorkflowExecution, Optional<String>)`, takes a RUNNING EXECUTION's identity
+    there instead — and it shares its arity with `(String, WorkflowOptions)`, so
+    name and arity cannot tell the two apart. Every conjunct holds here except the
+    erased descriptor: same owner, same name, same argument count.
+
+    Without the claimed-arity rule this call falls through to a sibling row and
+    argument 0 is read positionally as a workflow type — a running execution's
+    identity published as the name of a workflow, which is the fabrication class
+    descriptors were added to this engine for."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#attachToRunning().",
+        target=CallTarget(
+            owner=_WORKFLOW_CLIENT,
+            name="newUntypedWorkflowStub",
+            descriptor="(Lio/temporal/api/common/v1/WorkflowExecution;Ljava/util/Optional;)"
+            "Lio/temporal/client/WorkflowStub;",
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=3,
+        arguments=[
+            CallArgument(kind="instance", symbol="io/temporal/api/common/v1/WorkflowExecution#"),
+            CallArgument(kind="instance", symbol="java/util/Optional#"),
+        ],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "a running execution's identity was read as a workflow type"

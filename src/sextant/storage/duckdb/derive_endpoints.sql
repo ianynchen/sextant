@@ -143,6 +143,21 @@
 --                           there would compose it a second time onto every
 --                           row — including the explicitly-named member that
 --                           must not carry it at all.
+--   $fallback_scope_separator -- spec 2026-09-22 §1d: the punctuation
+--                           'declaring_type_scoped_name' puts between the
+--                           DECLARING type's simple name and the name that
+--                           won, or NULL where the catalog declares no such
+--                           word — which is every catalog written before it,
+--                           so the branch below is unreachable for them and
+--                           their addresses are byte-identical. Catalog data
+--                           for $path_separator's reason: which punctuation
+--                           joins two halves of an address is a framework's
+--                           convention, and an engine that picked one would be
+--                           naming a framework in code.
+--                           UNLIKE every other $path_fallback word, the one
+--                           reading this composes around a name the
+--                           declaration DID write as well as one it did not —
+--                           see the branch below for why that is the rule.
 --   $qualifier_from      -- attribute names holding the SCOPE the declared
 --                           name sits inside, read off the SAME (method-level)
 --                           annotation, first present wins — kept apart from
@@ -302,7 +317,7 @@
 -- it out by name, the way it leaves out the redaction staging tables).
 CREATE OR REPLACE TEMP TABLE endpoint_candidates AS
 WITH RECURSIVE catalog_params AS (
-    -- One row per catalog in the batch: the 33 values `annotation_driven.py::
+    -- One row per catalog in the batch: the values `annotation_driven.py::
     -- params_for` builds, every one of them a field, the STRUCT spelled once.
     -- `s.*` expands the struct into columns, so the rest of the file reads
     -- `cp.<field>` where it used to read `$<field>`.
@@ -325,7 +340,7 @@ WITH RECURSIVE catalog_params AS (
             prefix_from VARCHAR[], peer_from VARCHAR[], method_from VARCHAR,
             all_methods VARCHAR[], consumes_from VARCHAR[], produces_from VARCHAR[],
             path_fallback VARCHAR, path_fallback_prefixes VARCHAR[],
-            fallback_prefix_attr VARCHAR,
+            fallback_prefix_attr VARCHAR, fallback_scope_separator VARCHAR,
             qualifier_from VARCHAR[], qualifier_separator VARCHAR, qualifier_format VARCHAR,
             namespace_template VARCHAR, members VARCHAR, path_separator VARCHAR,
             path_prefix VARCHAR, canonical_path BOOLEAN,
@@ -944,12 +959,18 @@ exposed_members AS (
 --   it is a gap in the refusal, not a property of it.
 --
 --   (ii) `$all_methods` binds here directly, exactly as it does for an
---   annotated declaration. Every catalog declaring `members` today is
---   verbless (`all_methods: []`), which is what makes each member ONE row;
---   a future one with a non-empty `$all_methods` would fan every member
---   across every verb in that list. That may well be right for a framework
---   whose exposed members really do answer several verbs — but it has never
---   been exercised, so it is untested behaviour rather than a decision.
+--   annotated declaration, and a member row has no annotation to read a verb
+--   off — so this list IS the member's verb. `jakarta-jws.yml` is verbless
+--   (`all_methods: []`), which is what makes each of its members ONE
+--   unverbed row. `temporal-activity.yml` (spec 2026-09-22 §1c) is the
+--   catalog that binds a non-empty one, `[activity]`: every member of an
+--   `@ActivityInterface` IS an activity (CP-30 Q4), so the single-element
+--   list is what puts the kind in the `method` column of a member row that
+--   would otherwise carry NULL — measured on `fixtures/temporal-probe`,
+--   where `billing_RefundCard` is derived by this branch. A list with TWO
+--   entries would fan every member across both, which may well be right for
+--   a framework whose exposed members answer several verbs and is the half
+--   of this behaviour no shipped catalog exercises.
 member_declarations AS (
     SELECT
         em.catalog_id AS catalog_id,
@@ -1452,7 +1473,37 @@ derived AS (
             -- appended to `substring(1)`, offsets 15-26 — never a title-casing
             -- of the whole name, which would rewrite every character after the
             -- first of an all-caps member name.
-            || CASE WHEN m.path_suffix = '' AND m.path_fallback IS NOT NULL
+            --
+            -- THE FOURTH DECLARING-TYPE WORD IS HOISTED OUT OF THE
+            -- NAMED-NOTHING TEST (spec 2026-09-22 §1d), and it is the ONE word
+            -- here that is. Every other answers "what is the name when the
+            -- annotation carried none", and skipping a named declaration is
+            -- what makes CP-30 Q2's edge free. This one answers a different
+            -- question: the SCOPE in front of the name is not a framework
+            -- default at all. Temporal's own name for a signal is the bare
+            -- member name (CP-30 Q1, offset 122), or the annotation's own
+            -- where it wrote one (offset 81's `Optional.orElse`, which wins on
+            -- every branch) — the workflow TYPE in front of it is §1d's
+            -- identity rule, and it exists so that two workflows' `cancel` are
+            -- two endpoints rather than one. A scope applied only to the
+            -- declarations that named nothing would leave
+            -- `@SignalMethod(name = "Abort")` publishing a bare `Abort`: the
+            -- colliding identity §2f refuses for
+            -- `WorkflowStub.signal("cancel", …)`, reached by the other route.
+            -- So the word composes around WHICHEVER name won — `m.path_suffix`
+            -- where the declaration wrote one, `construct_name` where it did
+            -- not — and the arm sits ahead of the named-nothing test rather
+            -- than inside it.
+            --
+            -- It is written here rather than beside this whole expression so
+            -- that a catalog declaring no such word reaches an unsatisfiable
+            -- `WHEN` and falls through to exactly the branch it always did:
+            -- every other catalog's address is byte-identical.
+            || CASE WHEN m.path_fallback = 'declaring_type_scoped_name'
+                    THEN declaring_simple_name || cp.fallback_scope_separator
+                         || CASE WHEN m.path_suffix = '' THEN construct_name
+                                 ELSE m.path_suffix END
+                    WHEN m.path_suffix = '' AND m.path_fallback IS NOT NULL
                     THEN CASE
                          WHEN m.path_fallback = 'declaring_type_simple_name'
                               THEN declaring_simple_name

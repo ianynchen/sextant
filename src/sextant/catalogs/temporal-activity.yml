@@ -82,7 +82,10 @@ matches:
     # MEASURED (CP-30 Q2, offsets 45-58): `POJOActivityMethodMetadata`'s
     # constructor reads `ActivityMethod.name()`, tests `.isEmpty()` at offset 50
     # and returns the annotation's own value verbatim at offset 58 when it is
-    # not empty. `name` is the only attribute `@ActivityMethod` declares.
+    # not empty. `name` is the only attribute `@ActivityMethod` declares at all
+    # — CP-30 Q10, which lists every element of all seven SDK annotations, so a
+    # release adding a second name source shows up in that row rather than
+    # silently going unread here.
     path_from: [name]
     # MEASURED (CP-30 Q2 and Q3). The `ifne 66` at offset 53 jumps to the
     # prefix-composition branch ONLY when `name()` was empty, and that branch is
@@ -93,7 +96,12 @@ matches:
     # THE EDGE THAT TELLS THIS RULE FROM EVERY PARAPHRASE OF IT: under
     # `@ActivityInterface(namePrefix = "billing_")`, `chargeCard` is
     # `billing_ChargeCard` and `@ActivityMethod(name = "Charge")` is `Charge` —
-    # never `billing_Charge`. The prefix lives INSIDE this word rather than in
+    # never `billing_Charge`. `namePrefix` is the only attribute
+    # `@ActivityInterface` declares (CP-30 Q10), and it is the only attribute
+    # any of the SDK's two INTERFACE annotations declares: `@WorkflowInterface`
+    # declares none, which is why `temporal-workflow.yml` needs a naming word
+    # where this file needs only an attribute name.
+    # The prefix lives INSIDE this word rather than in
     # the type-level prefix machinery precisely so that a member which named
     # itself skips it by construction instead of by a flag; a `prefix_from`
     # naming `namePrefix` would compose it onto every row including that one.

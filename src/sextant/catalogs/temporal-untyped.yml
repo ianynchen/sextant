@@ -36,7 +36,10 @@ matches:
   # row (D02 §2), which is exactly what is wanted: the
   # `(WorkflowExecution, Optional)` overload shares arity 2 with
   # `(String, WorkflowOptions)` and must derive NOTHING rather than fall through
-  # to it.
+  # to it. That is the one false-positive this three-row shape exists to
+  # prevent, so it is pinned by a test rather than left to this comment —
+  # `tests/application/test_call_engines.py::
+  # test_an_untyped_stub_for_a_running_execution_derives_nothing`.
   #
   # `http_method` on a `temporal` catalog is the literal-verb key D02 §2 names,
   # not an HTTP claim: `temporal` is a verbed protocol (§1c) and the kind a

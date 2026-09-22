@@ -2921,6 +2921,121 @@ def test_declaring_type_qualified_name_keeps_the_package(tmp_path: Path):
     assert paths == ["com.acme.orders.OrderConsumer"]
 
 
+def test_declaring_type_scoped_name_puts_the_contract_in_front_of_the_member(tmp_path: Path):
+    """Spec 2026-09-22 §1d's identity for the kinds CP-30 Q1 names at offset
+    122 — a signal, a query, an update — and the fourth declaring-type word.
+
+    The framework's own name for such a member is the member's own name and
+    nothing else, so `cancel` is what the wire carries; the CONTRACT in front
+    of it is our identity rule, and it is what keeps two workflows' `cancel`
+    apart. Both halves are asserted at once, because either alone is a name
+    something else already answers for."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        member="cancel",
+    )
+
+    assert paths == ["OrderWorkflow/cancel"]
+
+
+def test_an_explicitly_named_member_is_still_scoped_by_its_declaring_type(tmp_path: Path):
+    """The composition edge, and the one place this word parts company with
+    every other in the vocabulary.
+
+    CP-30 Q1 reads `getNameFromAnnotation()` at offset 81, BEFORE either
+    branch, and wraps both in `Optional.orElse` — so an explicit
+    `@SignalMethod(name = "Abort")` wins outright and a pure fallback would
+    never fire for it. That would publish a bare `Abort`, which is the
+    colliding identity §2f refuses for `WorkflowStub.signal("cancel", …)`
+    reached by the other route: the SCOPE is not the framework's default, it is
+    §1d's identity, so it belongs on the declared name as much as on the
+    defaulted one.
+
+    The same declaration as above, one attribute different, and the scope
+    survives."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        member="cancel",
+        op_args={"name": "Abort"},
+    )
+
+    assert paths == ["OrderWorkflow/Abort"]
+
+
+def test_the_scoped_word_names_the_declaring_type_and_not_the_handlers_class(tmp_path: Path):
+    """The word reads the DECLARING type, the same one
+    `declaring_type_simple_name` reads, measured against the one shipped
+    mechanism that pulls the declaring type and the handler apart.
+
+    Under the flip the declaration stays on the contract while the handler
+    becomes the implementor's override, so a word reading the handler's own
+    class would publish `OrderWorkflowImpl/cancel` — a type no caller ever
+    names, in front of a member name that is otherwise right, which is the
+    hardest kind of wrong address to notice."""
+    catalog = replace(
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        direction="outbound",
+        resolves={
+            "direction": [
+                {
+                    "when": {"owner_implemented_by_type_annotated": [_CONTRACT_BEAN]},
+                    "then": "inbound",
+                }
+            ]
+        },
+    )
+
+    assert _contract_rows(tmp_path, catalog, member="cancel", implementor=True) == [
+        ("OrderWorkflow/cancel", _contract_member("OrderWorkflowImpl", "cancel"))
+    ]
+
+
+def test_the_scope_separator_is_refused_without_the_word_that_reads_it(tmp_path: Path):
+    """`fallback_prefix_attr`'s own refusal, one key over, and the `_RESOLVES`
+    discipline: no other word composes a scope, so a separator declared beside
+    one of them states a punctuation rule that never runs — and a reader of the
+    file believes the scope is composed somewhere."""
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(
+            tmp_path,
+            _contract_catalog(path_fallback="construct_name", fallback_scope_separator="/"),
+        )
+
+    assert "fallback_scope_separator" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize("separator", [None, "", 5])
+def test_the_scoping_word_is_refused_without_a_separator_to_compose_with(
+    tmp_path: Path, separator: object
+):
+    """The dangerous half. With nothing between them the two halves compose one
+    token that is neither — `OrderWorkflowcancel`, published at
+    `resolved`/`compiler`, where nothing downstream can tell it from an address
+    somebody observed. An empty string and a non-string scalar are refused
+    beside an absent key for the reason `path_prefix` already states."""
+    mapping: dict[str, object] = {"path_fallback": "declaring_type_scoped_name"}
+    if separator is not None:
+        mapping["fallback_scope_separator"] = separator
+
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(tmp_path, _contract_catalog(**mapping))
+
+    assert "fallback_scope_separator" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
 def _contract_member_facts(root: Path) -> None:
     """A contract type declaring one UNANNOTATED member, and a class that
     implements it, overrides that member, and declares a public helper of its

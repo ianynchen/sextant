@@ -232,6 +232,14 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # the word without the attribute and the attribute without the word, so
         # this is never NULL on a catalog whose fallback reads it.
         "fallback_prefix_attr": mapping.get(_FALLBACK_PREFIX_ATTR),
+        # Spec 2026-09-22 §1d: the punctuation `declaring_type_scoped_name`
+        # puts between the declaring type's simple name and the name that won.
+        # NULL for every catalog that declares no such word, so the
+        # derivation's branch is unreachable for them and their addresses are
+        # byte-identical. `_validate_fallback_scope_separator` refuses the word
+        # without it and it without the word, so this is never NULL on a
+        # catalog whose fallback composes with it.
+        "fallback_scope_separator": mapping.get(_FALLBACK_SCOPE_SEPARATOR),
         "qualifier_from": list(mapping.get("qualifier_from", [])),
         "qualifier_separator": mapping.get("qualifier_separator"),
         # 2I design §2's two QName forms, both optional and both inert unless
@@ -605,6 +613,35 @@ def _corroboration(catalog: Catalog) -> list[str] | None:
 # `construct_name`, a declaring-type word publishes a MEMBER name where a TYPE
 # name belongs — an identity nothing answers, at `resolved`/`compiler` where
 # nothing downstream can tell it from an observation.
+# `declaring_type_scoped_name` — the declaring type's simple name, a
+# catalog-stated separator, and THE NAME THAT WON: the declaration's own name
+# where it wrote one, the construct's name where it did not.
+#
+# **IT IS THE ONE ENTRY IN THIS VOCABULARY THAT ALSO COMPOSES AROUND A NAME THE
+# DECLARATION DID WRITE**, and that is the rule rather than an inconsistency.
+# Every other word answers "what is the name when the annotation carries none";
+# this one answers a different question, because the SCOPE is not a framework
+# default at all. Temporal's own name for a signal IS the bare member name
+# (CP-30 Q1, offset 122) or the annotation's own (`Optional.orElse`, offset 81)
+# — the workflow type in front of it is spec 2026-09-22 §1d's IDENTITY rule,
+# which exists so that two workflows' `cancel` are two endpoints. A scope
+# applied only to the members that named nothing would leave
+# `@SignalMethod(name = "Abort")` publishing a bare `Abort` — the colliding
+# identity §2f refuses for `WorkflowStub.signal("cancel", …)`, reached by the
+# other route. So the word composes either way and the derivation hoists it out
+# of the named-nothing branch; the composition is still written INSIDE the
+# fallback expression, so every catalog that does not declare it derives
+# byte-identically.
+#
+# The separator is CATALOG DATA (`mapping.fallback_scope_separator`), never a
+# literal in the engine, for the reason `$path_separator` and
+# `$qualifier_separator` already state: which punctuation joins two halves of an
+# address is a framework's convention, and an engine that picked one would be
+# naming a framework in code. `_validate_fallback_scope_separator` refuses the
+# word without it and it without the word.
+_SCOPED_FALLBACK = "declaring_type_scoped_name"
+_FALLBACK_SCOPE_SEPARATOR = "fallback_scope_separator"
+
 _PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
     "construct_name": (),
     "read_accessor_property": ("get", "is"),
@@ -612,6 +649,7 @@ _PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
     "declaring_type_simple_name": (),
     "declaring_type_qualified_name": (),
     "prefixed_capitalized_construct_name": (),
+    _SCOPED_FALLBACK: (),
 }
 
 # The one word above that composes a prefix, and the mapping key naming WHICH
@@ -1353,6 +1391,7 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
     # which sends a catalog author to fix a line that is correct. The
     # closed-set check above says what is actually wrong, so it runs first.
     _validate_fallback_prefix_attr(catalog, mapping)
+    _validate_fallback_scope_separator(catalog, mapping)
     _sibling_sources(catalog, mapping)
     inherit_siblings = mapping.get("inherit_siblings")
     if inherit_siblings is not None and inherit_siblings not in _INHERIT_SIBLINGS:
@@ -1691,6 +1730,56 @@ def _validate_fallback_prefix_attr(catalog: Catalog, mapping: dict[str, Any]) ->
             f"declared with no `path_fallback: {_PREFIXED_FALLBACK}` to read it — no other word "
             f"composes a prefix, so the attribute names a rule nothing runs "
             f"(spec 2026-09-22 §2b)"
+        )
+
+
+def _validate_fallback_scope_separator(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping that declares the type-scoping fallback word without
+    the separator it composes with, and one that names the separator with no
+    word reading it (spec 2026-09-22 §1d).
+
+    `_validate_fallback_prefix_attr`'s two refusals, one key over, and they are
+    the same two failures rather than symmetry. WITHOUT the separator the word
+    composes `OrderWorkflowcancel` — one token that is neither half, published
+    at `resolved`/`compiler` where nothing downstream can tell it from an
+    address somebody observed. WITH the separator and no word reading it, the
+    catalog states a punctuation rule nothing runs, and a reader of the file
+    believes the scope is composed somewhere.
+
+    There is no third refusal here, and the absence is deliberate: unlike
+    `prefixed_capitalized_construct_name`, this word reads no ANNOTATION at all
+    — the declaring type comes off the declaration's own symbol — so there is
+    no `type_annotation` for it to be missing.
+
+    Both LEVELS are consulted for the word, because either can name it
+    (`OI-5`), while the separator belongs to the FILE: a catalog whose
+    operations are scoped by their declaring type scopes all of them the same
+    way, and a per-entry separator would let one annotation's rows carry a
+    punctuation the others do not.
+    """
+    declared = {mapping.get("path_fallback")}
+    declared |= {
+        entry.get("path_fallback") for entry in mapping["annotations"] if isinstance(entry, dict)
+    }
+    separator = mapping.get(_FALLBACK_SCOPE_SEPARATOR)
+    if _SCOPED_FALLBACK in declared:
+        # A non-string scalar and an empty string are refused rather than read
+        # as absent, `_validate_fallback_prefix_attr`'s own reading: an empty
+        # separator composes the two halves into one token that is neither.
+        if not isinstance(separator, str) or separator == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_SCOPED_FALLBACK}` is "
+                f"declared with no `mapping.{_FALLBACK_SCOPE_SEPARATOR}` naming a non-empty "
+                f"separator — got {separator!r}. The word joins the declaring type's simple "
+                f"name to the declared name, and with nothing between them every row would "
+                f"carry one token that is neither half (spec 2026-09-22 §1d)"
+            )
+    elif separator is not None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{_FALLBACK_SCOPE_SEPARATOR}: "
+            f"{separator!r}` is declared with no `path_fallback: {_SCOPED_FALLBACK}` to read "
+            f"it — no other word composes a scope, so the separator names a rule nothing runs "
+            f"(spec 2026-09-22 §1d)"
         )
 
 

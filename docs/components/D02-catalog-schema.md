@@ -1065,7 +1065,32 @@ level, and all three are reached only by a declaration that named nothing itself
 | `declaring_type_simple_name` | the simple name of the type the ANNOTATION sat on — the innermost name after the last package or nested-type separator | CP-30 Q1: the constructor takes the *interface's* `getSimpleName()` on the workflow branch and the reflected method's own name on every other |
 | `declaring_type_qualified_name` | that type's fully-qualified name, `$` kept for a nested type — it is the qualified name, not a source spelling | M8: the default address is the declaring bean class's `toString()` |
 | `prefixed_capitalized_construct_name` | `fallback_prefix_attr`'s value + the member name with its FIRST character upper-cased and the remainder untouched | CP-30 Q2–Q3: `substring(0,1).toUpperCase() + substring(1)`, and the prefix branch is the one an explicitly named member never reaches |
+| `declaring_type_scoped_name` | that simple name + `fallback_scope_separator` + **the name that won** — the declaration's own where it wrote one, the construct's where it did not | CP-30 Q1: every branch but `WORKFLOW` falls to `Method.getName()` at offset 122, and CP-30 Q10: `@WorkflowInterface` declares no attribute at all, so no attribute-reading key can supply the scope |
 
+- **`declaring_type_scoped_name` is the one word here that also composes around a name the
+  declaration DID write, and the asymmetry is the rule rather than an inconsistency.** Every
+  other word answers "what is the name when the annotation carried none", which is why
+  skipping a named declaration makes `prefixed_capitalized_construct_name`'s edge free. This
+  one answers a different question, because the scope in front of the name is **not a
+  framework default**. Temporal's own name for a signal is the bare member name, or the
+  annotation's own where it wrote one; the workflow type in front of it is spec 2026-09-22
+  §1d's *identity* rule, and it exists so that two workflows' `cancel` are two endpoints. A
+  scope applied only to the members that named nothing would leave `@SignalMethod(name =
+  "Abort")` publishing a bare `Abort` — the colliding identity §2f refuses when the same
+  string arrives from `WorkflowStub.signal("cancel", …)`. So the derivation hoists this one
+  arm ahead of the named-nothing test; the composition still lives inside the fallback
+  expression, so every catalog that does not declare the word derives byte-identically.
+- **`fallback_scope_separator` is catalog data, never a literal in the engine**, for the
+  reason `path_separator` and `qualifier_separator` already give: which punctuation joins two
+  halves of an address is a framework's convention, and an engine that picked one would be
+  naming a framework in code. Unlike `path_separator` it is **not** constrained to one
+  character — nothing here trims a character set — and unlike `qualifier_separator` it joins
+  a scope the declaration never states rather than one an attribute carries.
+- **Two refusals**, `fallback_prefix_attr`'s own one key over: the word with no
+  `fallback_scope_separator` that is a non-empty string composes `OrderWorkflowcancel`, one
+  token that is neither half; the separator with no word reading it states a punctuation rule
+  nothing runs. There is no third refusal, and the absence is deliberate — this word reads no
+  annotation at all, so there is no `type_annotation` for it to be missing.
 - **The attributed type is not the handler**, and the two come apart exactly where these
   words are needed: the declaration sits on the contract type while `handler` may be
   rebound to the implementor's own override (`resolves.direction`, §2c). Reading the

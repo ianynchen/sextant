@@ -286,6 +286,49 @@ def q6_starter_annotations(boot: Path) -> str:
     return _STEP.join(cells)
 
 
+# --- Q10: the SDK's OWN annotation types, and every attribute each declares ---
+
+# The seven annotation types the Temporal catalogs gate on and name from, in the
+# order the catalogs read them. Q6 measures the Spring Boot STARTER annotations;
+# this row measures the SDK's own, which no row recorded until Task 5's fix round
+# asked for it.
+#
+# WHY IT IS A ROW AND NOT A REMARK. The catalogs' naming argument rests on a
+# NEGATIVE: `@WorkflowInterface` declares no attribute at all, which is why the
+# type-level prefix (`prefix_from`), the qualifier (`qualifier_from`) and the
+# fallback prefix (`fallback_prefix_attr`) — every existing route to a type-level
+# address fragment, all three of them attribute reads — cannot compose §1d's
+# `<workflow type>/<member>`, and why a naming word had to be added for it. A
+# negative nothing measures is exactly the claim that rots silently: an SDK
+# release adding `@WorkflowInterface.name()` would invalidate the argument with
+# no probe to notice. The `-p` read lists EVERY declared element, so a new one
+# appears in this cell the next time the probe runs.
+_SDK_ANNOTATIONS = (
+    "io.temporal.workflow.WorkflowInterface",
+    "io.temporal.workflow.WorkflowMethod",
+    "io.temporal.workflow.SignalMethod",
+    "io.temporal.workflow.QueryMethod",
+    "io.temporal.workflow.UpdateMethod",
+    "io.temporal.activity.ActivityInterface",
+    "io.temporal.activity.ActivityMethod",
+)
+
+
+def q10_sdk_annotations(sdk: Path) -> str:
+    cells = []
+    for name in _SDK_ANNOTATIONS:
+        output = _javap("-p", name, classpath=sdk)
+        members = [
+            line.strip().rstrip(";")
+            for line in output.splitlines()
+            if line.strip().startswith("public abstract")
+        ]
+        # "(none)" rather than an empty cell: the absence IS the measurement
+        # here, and a blank would read as a cell nobody filled in.
+        cells.append(f"{name.rsplit('.', 1)[1]}: " + (", ".join(members) if members else "(none)"))
+    return _STEP.join(cells)
+
+
 # --- Q7: WorkflowClient.newUntypedWorkflowStub and WorkflowStub's signal/query/update ---
 
 
@@ -487,6 +530,14 @@ def main(specs: list[str]) -> int:
         "call sites",
         None,
         q9_fixture_owners(classes),
+    )
+    row(
+        "10",
+        "every attribute the SDK's OWN annotations declare — `@WorkflowInterface`, "
+        "`@WorkflowMethod`, `@SignalMethod`, `@QueryMethod`, `@UpdateMethod`, "
+        "`@ActivityInterface`, `@ActivityMethod`",
+        sdk,
+        q10_sdk_annotations(sdk.jar),
     )
     return 0
 

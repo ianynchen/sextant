@@ -18,6 +18,15 @@ every `*Options$Builder` class the SDK ships (M5's builder half). The brief is e
 the expected column beside each question is a prediction to check, not an assumption to
 encode: "make the probe produce them, not assume them."
 
+**Two rows were added after that brief, each by a later task that found it was building on
+something no row measured.** Q9 (Task 6) is the owners the fixture's own compiled
+`OrderClient` names at its `io.temporal.client` call sites, the CP-27 row-16 pattern applied
+here. Q10 (Task 5 fix round 1) is **every attribute the SDK's own annotations declare** —
+`@WorkflowInterface`, `@WorkflowMethod`, `@SignalMethod`, `@QueryMethod`, `@UpdateMethod`,
+`@ActivityInterface`, `@ActivityMethod`. Q6 measures the Spring Boot STARTER annotations;
+nothing measured these, and the Temporal catalogs' whole naming argument rests on one of
+them being EMPTY — see Q10's verdict.
+
 **Two of the eight rows came back different from what M4 and M5 state, and this is the
 headline finding, not a footnote.** See the two starred verdicts (Q5, Q8) below.
 
@@ -25,12 +34,13 @@ headline finding, not a footnote.** See the two starred verdicts (Q5, Q8) below.
 class file in one of two jars. It measures the compiled `1.27.0` surface, not the Java
 source or the reference documentation. Q1–Q5 dump a method's FULL instruction body rather
 than a hand-picked excerpt, so nothing that disagreed with the brief's prediction could have
-been filtered out before a reader sees it. The fixture row Task 6 adds — the owners a
-compiled Temporal workflow/activity pair actually names at its call sites, the way CP-27's
-row 16 does for Spring Integration — is not in this probe yet; `run.sh`'s `specs` array ends
-after the two jars, with a comment marking exactly where Task 6's fixture spec goes. Nothing
-here measures the resolve-layer rules the spec specifies, or Nexus service naming beyond
-`NexusServiceImpl`'s two attributes (Q6).
+been filtered out before a reader sees it. Q9 reads `fixtures/temporal-probe`'s compiled
+classes, which is a third input beside the two jars and carries no manifest either — its cell
+is filed under the class-file version `javap -v` reports, the one identity a compiled class
+states about itself. Q10 lists what each annotation type DECLARES; it does not say what any
+use of one carries, and it does not read `AnnotationDefault`. Nothing here measures the
+resolve-layer rules the spec specifies, or Nexus service naming beyond `NexusServiceImpl`'s
+two attributes (Q6).
 
 **Version scope (§5.4).** `io.temporal:temporal-sdk` and
 `io.temporal:temporal-spring-boot-autoconfigure` at Maven coordinate **1.27.0** — the version
@@ -87,6 +97,8 @@ observation row states as "verified" for both jars. Every cell in the second tab
 | 6 | `WorkflowImpl`/`ActivityImpl`/`NexusServiceImpl`'s declared attributes | `io.temporal:temporal-spring-boot-autoconfigure` | 1.27.0 | `WorkflowImpl: public abstract java.lang.String[] workers(), public abstract java.lang.String[] taskQueues() ; ActivityImpl: public abstract java.lang.String[] workers(), public abstract java.lang.String[] taskQueues() ; NexusServiceImpl: public abstract java.lang.String[] workers(), public abstract java.lang.String[] taskQueues()` |
 | 7 | `WorkflowClient.newUntypedWorkflowStub`; `WorkflowStub.signal`/`query`/`update` | `io.temporal:temporal-sdk` | 1.27.0 | `WorkflowClient.newUntypedWorkflowStub ×4 ; newUntypedWorkflowStub(Ljava/lang/String;)Lio/temporal/client/WorkflowStub; ; newUntypedWorkflowStub(Ljava/lang/String;Lio/temporal/client/WorkflowOptions;)Lio/temporal/client/WorkflowStub; ; newUntypedWorkflowStub(Ljava/lang/String;Ljava/util/Optional;Ljava/util/Optional;)Lio/temporal/client/WorkflowStub; ; newUntypedWorkflowStub(Lio/temporal/api/common/v1/WorkflowExecution;Ljava/util/Optional;)Lio/temporal/client/WorkflowStub; ; WorkflowStub.signal(Ljava/lang/String;[Ljava/lang/Object;)V ; WorkflowStub.query(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object; ; WorkflowStub.query(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/reflect/Type;[Ljava/lang/Object;)Ljava/lang/Object; ; WorkflowStub.update(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object; ; WorkflowStub.signalWithStart(Ljava/lang/String;[Ljava/lang/Object;[Ljava/lang/Object;)Lio/temporal/api/common/v1/WorkflowExecution; (not asked; recorded for completeness) ; WorkflowStub.startUpdate(Ljava/lang/String;Lio/temporal/client/WorkflowUpdateStage;Ljava/lang/Class;[Ljava/lang/Object;)Lio/temporal/client/WorkflowUpdateHandle; (not asked; recorded for completeness) ; WorkflowStub.startUpdate(Lio/temporal/client/UpdateOptions;[Ljava/lang/Object;)Lio/temporal/client/WorkflowUpdateHandle; (not asked; recorded for completeness) ; WorkflowStub.startUpdateWithStart(Lio/temporal/client/UpdateOptions;[Ljava/lang/Object;[Ljava/lang/Object;)Lio/temporal/client/WorkflowUpdateHandle; (not asked; recorded for completeness) ; WorkflowStub.getUpdateHandle(Ljava/lang/String;Ljava/lang/Class;)Lio/temporal/client/WorkflowUpdateHandle; (not asked; recorded for completeness) ; WorkflowStub.getUpdateHandle(Ljava/lang/String;Ljava/lang/Class;Ljava/lang/reflect/Type;)Lio/temporal/client/WorkflowUpdateHandle; (not asked; recorded for completeness)` |
 | 8 | the task queue's declaration sites: `WorkerFactory.newWorker` and every `*Options$Builder` class | `io.temporal:temporal-sdk` | 1.27.0 | `scanned 21 `*Options$Builder` classes; 4 declare public setTaskQueue ; ActivityOptions$Builder: (Ljava/lang/String;)Lio/temporal/activity/ActivityOptions$Builder; ; WorkflowOptions$Builder: (Ljava/lang/String;)Lio/temporal/client/WorkflowOptions$Builder; ; ChildWorkflowOptions$Builder: (Ljava/lang/String;)Lio/temporal/workflow/ChildWorkflowOptions$Builder; ; ContinueAsNewOptions$Builder: (Ljava/lang/String;)Lio/temporal/workflow/ContinueAsNewOptions$Builder; ; WorkerFactory.newWorker ×2 ; newWorker(Ljava/lang/String;)Lio/temporal/worker/Worker; ; newWorker(Ljava/lang/String;Lio/temporal/worker/WorkerOptions;)Lio/temporal/worker/Worker;` |
+| 9 | the owners the fixture's compiled `OrderClient` names at its `io.temporal.client` call sites | `fixtures/temporal-probe` (target/classes) | class file 65 | `WorkflowClient: newUntypedWorkflowStub, newWorkflowStub ; WorkflowStub: signal` |
+| 10 | every attribute the SDK's OWN annotations declare — `@WorkflowInterface`, `@WorkflowMethod`, `@SignalMethod`, `@QueryMethod`, `@UpdateMethod`, `@ActivityInterface`, `@ActivityMethod` | `io.temporal:temporal-sdk` | 1.27.0 | `WorkflowInterface: (none) ; WorkflowMethod: public abstract java.lang.String name() ; SignalMethod: public abstract java.lang.String name(), public abstract java.lang.String description(), public abstract io.temporal.workflow.HandlerUnfinishedPolicy unfinishedPolicy() ; QueryMethod: public abstract java.lang.String name(), public abstract java.lang.String description() ; UpdateMethod: public abstract java.lang.String name(), public abstract java.lang.String description(), public abstract io.temporal.workflow.HandlerUnfinishedPolicy unfinishedPolicy() ; ActivityInterface: public abstract java.lang.String namePrefix() ; ActivityMethod: public abstract java.lang.String name()` |
 ```
 
 ## Verdicts
@@ -199,7 +211,35 @@ continue-as-new is invoked from inside the running workflow rather than dispatch
 caller the catalog models) — but the CLAIM as written ("the three") undercounts what the
 jar declares.
 
-`measured: 2026-09-22`, all eight rows, on the two archives the scope names. The fixture row
-(the owners a compiled Temporal flow actually names at its call sites, mirroring CP-27's row
-16) is **pending — Task 6 adds it** once the fixture module exists; `run.sh`'s `specs` array
-carries a comment marking exactly where that third spec line goes.
+**Q9 — the fixture names three SDK owners and no others.** `fixtures/temporal-probe`'s
+compiled `com.acme.tp.client.OrderClient` invokes `WorkflowClient.newUntypedWorkflowStub`,
+`WorkflowClient.newWorkflowStub` and `WorkflowStub.signal`, which is exactly the three call
+sites that file declares. No other `io.temporal.*` owner appears, and the reason is worth
+recording rather than reading as a gap: the workflow and activity interfaces and their
+implementations carry their naming information as class-file ATTRIBUTES, not as
+instructions, so a scan of `invoke*` targets cannot see them at all. That is the boundary
+between what `single_call` reads and what `annotation_driven` reads, measured.
+
+**Q10 — `@WorkflowInterface` declares NOTHING, and that negative is load-bearing.** Read off
+the jar: `WorkflowInterface: (none)`; `WorkflowMethod: String name()`; `SignalMethod` and
+`UpdateMethod`: `String name()`, `String description()`, `HandlerUnfinishedPolicy
+unfinishedPolicy()`; `QueryMethod`: `String name()`, `String description()`;
+`ActivityInterface: String namePrefix()`; `ActivityMethod: String name()`.
+
+Four consequences the catalogs state and this row is the evidence for. **(i)** `name()` is
+the ONLY name-bearing attribute on any member annotation, which is why every catalog's
+`path_from` is `[name]` and nothing else. **(ii)** `namePrefix()` is the only attribute on an
+INTERFACE annotation, which is what `temporal-activity.yml`'s `fallback_prefix_attr` reads.
+**(iii)** `@WorkflowInterface` carrying no attribute at all is why spec §1d's
+`<workflow type>/<member>` could not be composed by any existing vocabulary: `prefix_from`,
+`qualifier_from` and `fallback_prefix_attr` are each an ATTRIBUTE read on the type, there is
+no attribute to read, and `path_prefix` is a catalog constant that cannot vary per contract.
+That is the measured basis for the `declaring_type_scoped_name` naming word Task 5's fix
+round added — a word justified by an absence, which is precisely the kind of claim that rots
+unwatched, and which this row now re-checks on every run. **(iv)** `description()` and
+`unfinishedPolicy()` are declared and are read by nothing: the first is documentation and the
+second is a validation policy, neither of which a peer could care about (§2e's criterion), so
+no catalog names them.
+
+`measured: 2026-09-22`, all ten rows — eight on the two archives the scope names, Q9 on the
+fixture's own compiled classes, Q10 on the SDK jar.
