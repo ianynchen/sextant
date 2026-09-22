@@ -65,6 +65,7 @@ PRIMED_FIXTURES = (
     "orders-ktor-classlambdas",
     "orders-gateway",
     "orders-servlet",
+    "temporal-probe",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

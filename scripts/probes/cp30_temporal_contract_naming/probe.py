@@ -7,16 +7,21 @@ rule (Q4) and the same question asked of
 `POJOWorkflowInterfaceMetadata.validateAndQualifiedForWorkflowMethod` (Q5); the two
 attributes `WorkflowImpl`/`ActivityImpl`/`NexusServiceImpl` each declare (Q6);
 `WorkflowClient.newUntypedWorkflowStub` and `WorkflowStub.signal`/`query`/`update`'s
-argument-0 naming (Q7); and the task queue's declaration sites across `WorkerFactory` and
-every `*Options$Builder` class the SDK ships (Q8).
+argument-0 naming (Q7); the task queue's declaration sites across `WorkerFactory` and
+every `*Options$Builder` class the SDK ships (Q8); and, once Task 6 added the fixture, the
+owners its own compiled `com.acme.tp.client.OrderClient` names at its call sites (Q9,
+the CP-27 row-16 pattern applied here).
 
-Called by `run.sh`, which resolves the two jars; this script downloads nothing. Like CP-27
-it reads each jar's own identity out of its own bytes before it measures anything and
-refuses to file a cell under a version the archive did not claim (GUIDELINES §5.4) — but
-unlike every jar CP-27 measured, neither of these two states an `Implementation-Version` at
-all, so `Artifact` falls back to verifying the jar's own SHA-1 against Maven's `.jar.sha1`
-sidecar instead (see `Artifact`'s docstring, and the write-up's Version scope section, for
-why). Nothing is executed: every cell is a `javap` read of a class file.
+Called by `run.sh`, which resolves the two jars and compiles the fixture; this script
+downloads nothing. Like CP-27 it reads each jar's own identity out of its own bytes before
+it measures anything and refuses to file a cell under a version the archive did not claim
+(GUIDELINES §5.4) — but unlike every jar CP-27 measured, neither of these two states an
+`Implementation-Version` at all, so `Artifact` falls back to verifying the jar's own SHA-1
+against Maven's `.jar.sha1` sidecar instead (see `Artifact`'s docstring, and the write-up's
+Version scope section, for why). The fixture's own classes carry no manifest either: Q9's
+cell is filed under the class-file version `javap -v` reports for them, the one identity a
+compiled class states itself (CP-27's fixture row, same reasoning). Nothing is executed:
+every cell is a `javap` read of a class file.
 
 Q1-Q5 dump a method's FULL instruction body (offset, mnemonic, and `javap`'s own comment)
 rather than a curated excerpt of it — a probe that pre-selects which instructions "answer"
@@ -330,12 +335,57 @@ def q8_task_queue_sites(sdk: Path) -> str:
     return _STEP.join(cells)
 
 
+# --- Q9: the fixture's own compiled classes — CP-27's row-16 pattern -------------------
+
+# `OrderClient` is the one class task-6's fixture gives real CALL SITES into the SDK: the
+# workflow/activity interfaces and impls carry Temporal's annotations, which are class-file
+# ATTRIBUTES, not `invoke*` instructions, so they contribute nothing here — this scans the
+# class that actually calls `WorkflowClient`/`WorkflowStub`.
+_FIXTURE_CLASS = "com.acme.tp.client.OrderClient"
+
+
+def fixture_identity(classes: Path) -> str:
+    output = _javap("-v", _FIXTURE_CLASS, classpath=classes)
+    match = re.search(r"major version: (\d+)", output)
+    if match is None:
+        raise ProbeError("the fixture's class file states no major version")
+    return f"class file {match.group(1)}"
+
+
+def q9_fixture_owners(classes: Path) -> str:
+    output = _javap("-p", "-c", _FIXTURE_CLASS, classpath=classes)
+    owners: dict[str, list[str]] = {}
+    for line in output.splitlines():
+        match = re.match(r"^\s*\d+:\s+(\S+)(.*)$", line)
+        if match is None:
+            continue
+        mnemonic, operands = match.groups()
+        if not mnemonic.startswith("invoke") or "Method " not in operands:
+            continue
+        target = operands.split("Method ", 1)[1].strip()
+        owner, rest = target.split(".", 1)
+        if not owner.startswith("io/temporal/"):
+            continue
+        member = rest.split(":", 1)[0]
+        owners.setdefault(owner.rsplit("/", 1)[1], []).append(member)
+    return _STEP.join(
+        f"{owner}: {', '.join(sorted(set(members)))}" for owner, members in sorted(owners.items())
+    )
+
+
 def main(specs: list[str]) -> int:
     artifacts: dict[str, Artifact] = {}
+    classes: Path | None = None
     for spec in specs:
         key, group, name, requested, path = spec.split("|")
+        if key == "fixture":
+            classes = Path(path)
+            continue
         artifacts[key] = Artifact(key, group, name, requested, Path(path))
+    if classes is None:
+        raise ProbeError("no fixture classes directory handed in")
     sdk, boot = artifacts["sdk"], artifacts["boot"]
+    fixture = fixture_identity(classes)
 
     columns = sorted({a.observed for a in artifacts.values()})
     print("| what the run read | " + " | ".join(columns) + " |")
@@ -373,10 +423,13 @@ def main(specs: list[str]) -> int:
     print("| # | question | artifact | version | observed |")
     print("|---|---|---|---|---|")
 
-    def row(number: str, question: str, artifact: Artifact, observed: str) -> None:
-        print(
-            f"| {number} | {question} | `{artifact.group}:{artifact.name}` | {artifact.observed} | `{observed}` |"
+    def row(number: str, question: str, artifact: Artifact | None, observed: str) -> None:
+        where = (
+            f"`{artifact.group}:{artifact.name}` | {artifact.observed}"
+            if artifact is not None
+            else f"`fixtures/temporal-probe` (target/classes) | {fixture}"
         )
+        print(f"| {number} | {question} | {where} | `{observed}` |")
 
     row(
         "1",
@@ -427,6 +480,13 @@ def main(specs: list[str]) -> int:
         "`*Options$Builder` class",
         sdk,
         q8_task_queue_sites(sdk.jar),
+    )
+    row(
+        "9",
+        "the owners the fixture's compiled `OrderClient` names at its `io.temporal.client` "
+        "call sites",
+        None,
+        q9_fixture_owners(classes),
     )
     return 0
 

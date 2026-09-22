@@ -12,21 +12,22 @@
 # SHA-1 against the `.jar.sha1` sidecar `mvn dependency:get` wrote beside it, aborting on a
 # mismatch the same way — see `cp30_temporal_contract_naming.md`'s Version scope section.
 #
-# Two specs only, for now: `temporal-sdk` (the naming rules themselves) and
-# `temporal-spring-boot-autoconfigure` (the three starter annotations). Task 6 appends a
-# third spec line — the fixture's own compiled classes — the same way CP-27's last spec
-# is the fixture's `target/classes`; until then this script's `specs` array ends after the
-# two jars, and `cp30_temporal_contract_naming.md` says the fixture row is pending. Needs
-# a JDK (for `javap`) and Maven for the `dependency:get` fallback; network only if a jar is
-# missing from `~/.m2` (both are already resolved locally as of this write-up). Nothing is
-# executed — every cell is a `javap` read of a class file. Not a test: nothing in the suite
-# runs it.
+# Two jar specs (`temporal-sdk`, the naming rules themselves, and
+# `temporal-spring-boot-autoconfigure`, the three starter annotations) plus a third,
+# fixture spec line Task 6 added: `fixtures/temporal-probe`'s own compiled classes, the
+# same way CP-27's last spec is that probe's fixture `target/classes`. Needs a JDK (for
+# `javap`) and Maven (for the `dependency:get` fallback and the fixture's own offline
+# compile); network only if a jar is missing from `~/.m2` (all inputs are already
+# resolved locally as of this write-up — the fixture was primed by
+# `tests/fixture_build.py`'s `PRIMED_FIXTURES`). Nothing is executed — every cell is a
+# `javap` read of a class file. Not a test: nothing in the suite runs it.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 REPO="$(cd ../../.. && pwd)"
 M2="${HOME}/.m2/repository"
+FIXTURE="$REPO/fixtures/temporal-probe"
 
 # `<key>|<groupId>|<artifactId>|<version>`
 ARTIFACTS=(
@@ -46,9 +47,8 @@ for artifact in "${ARTIFACTS[@]}"; do
   specs+=("${key}|${group}|${name}|${version}|${jar}")
 done
 
-# Task 6 appends the fixture spec here, e.g.:
-#   (cd "$FIXTURE" && mvn -q -o compile >&2)
-#   specs+=("fixture|com.example|temporal-eventbus-probe|-|${FIXTURE}/target/classes")
+(cd "$FIXTURE" && mvn -q -o compile >&2)
+specs+=("fixture|com.acme|temporal-probe|-|${FIXTURE}/target/classes")
 
 if [ -x "$REPO/.venv/bin/python" ]; then PY="$REPO/.venv/bin/python"; else PY=python3; fi
 
