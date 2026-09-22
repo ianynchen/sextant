@@ -202,8 +202,12 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
     "apache-camel": ["Apache Camel"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
-    "temporal-cadence": ["Temporal / Cadence"],
-    "vertx-eventbus": ["Vert.x EventBus"],
+    # Surfaced 2026-09-22 when `temporal-cadence` and `vertx-eventbus` closed and the Async
+    # row's blockers emptied while §5.12 still carried two Java frameworks with no catalog
+    # at all — the definition's second clause, the same way `smallrye-reactive-messaging`
+    # surfaced on Kafka at the B/C close.
+    "quartz": ["Quartz"],
+    "akka-pekko-actors": ["Akka / Pekko actors"],
 }
 
 # Framework FAMILIES — the stack a reader picks — and the framework lines each one owns
