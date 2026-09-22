@@ -449,10 +449,11 @@ def test_shipping_activities_pair_derives_nothing(temporal: tuple[list[dict], li
     handler_members = {_member(r["handler"]) for r in endpoints if r["handler"]}
     caller_members = {_member(r["caller"]) for r in endpoints if r["caller"]}
     assert "arrangePickup" not in handler_members | caller_members
-    assert not any(
-        r["path"] and "Shipping" in str(r["path"]) or r["path"] == "arrangePickup"
-        for r in endpoints
-    )
+    # `ShippingActivities` carries no `namePrefix`, so a fabricated row for this arm would
+    # be `prefixed_capitalized_construct_name`'s output with an empty prefix: the bare
+    # capitalized member name, "ArrangePickup" — not a name containing "Shipping" or the
+    # unprefixed, uncapitalized method name.
+    assert not any(r["path"] == "ArrangePickup" for r in endpoints)
 
 
 def test_untyped_signal_call_derives_nothing(temporal: tuple[list[dict], list[dict]]):
