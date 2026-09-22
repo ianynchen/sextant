@@ -4802,7 +4802,9 @@ any other key, a missing one, or one that is not a non-empty string is refused n
 file. A `metadata_from` that is not a non-empty list is refused too — a catalog that
 declares the key and names no attribute records nothing while reading as though it did.
 **`kind` is NOT checked against a closed set**, and that is the column's own rule rather
-than a gap: `endpoint_metadata.kind`'s comment in [D01](D01-graph-schema.md) §3 says the
+than a gap: `endpoint_metadata.kind`'s comment — the one on the column itself, in
+`src/sextant/storage/duckdb/schema.sql:536`, not in D01 §3, which this paragraph cited until
+Task 9 went looking for it — says the
 vocabulary is per protocol and the catalog names it, exactly as `semantics` on a wrapper is,
 so `task_queue`, `consumer_group`, `selector`, `subscription` and `delivery` need no schema
 change and neither does the next protocol's word.
@@ -4822,6 +4824,18 @@ change and neither does the next protocol's word.
   cannot spell — a nested annotation, or a **symbol reference** (D00 §5a spells both a class
   reference and an enum reference that way), because a symbol is not a name anything puts on
   a wire.
+- **A literal that merely CONTAINS the type marker `#` is dropped with the genuine symbol
+  references, and a written value really can carry one.** The question is asked through
+  `names_a_type`, because the marker is the symbol grammar and
+  `tests/architecture/test_symbol_grammar_confinement.py` keeps every reading of it in
+  `domain/symbols.py` — and that predicate is `'#' in value`, with no attempt to tell a
+  descriptor from a string that happens to quote the character. Three of the values this key
+  reads pass through a Spring `resolve…` call that accepts SpEL, so `#{…}` is a legal
+  spelling of a consumer group or a selector (CP-32 Q6, Q7a); and a JMS selector is, of every
+  value in this vocabulary, the one most likely to quote a `#` inside its own expression
+  text. Each is a MISS rather than a wrong row, which is the direction NFR-2 asks for, and
+  each is stated in the catalog that reads the attribute rather than left for a reader to
+  discover from an absent row.
 
 **The rest of the reading rules:**
 
@@ -4875,6 +4889,18 @@ change and neither does the next protocol's word.
 handler. The consumer group, the selector, the durable subscription name and exclusivity
 qualify; `concurrency`, `ackMode`, `containerFactory`, `errorHandler` and `autoStartup` are
 tuning knobs and do not, and the catalogs say so.
+
+**The criterion decides the list; the attribute's NAME does not, and neither does §2e's own
+table.** CP-32 measured every element of every shipped listener annotation before a line was
+written, and moved three of them: Micronaut's consumer group is reachable as `value` as well
+as `groupId` (the two are `@AliasFor` one another, and javac writes whichever the source
+wrote, so a catalog naming one of them misses half the declarations); Micronaut JMS's
+selector is `messageSelector` and sits on `@Queue`/`@Topic` rather than on the class-level
+`@JMSListener`; and Micronaut JMS declares no durable-subscription element at all, so
+`subscription` belongs to `spring-jms.yml` alone. A fourth reading moved a `kind` word rather
+than the list: `delivery` + a boolean is ambiguous, so Spring AMQP's `exclusive` is
+`kind: exclusive` the same way `@ConsumeEvent`'s `local` is `kind: local`. **The probe runs
+before the catalog line, and where it disagrees the list changes, not the probe.**
 
 ## 3. Ordering
 

@@ -36,6 +36,8 @@ from sextant.application.resolve.endpoint_attributes import record_endpoint_attr
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import AnnotationFact, AnnotationUse, Document
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -495,3 +497,255 @@ def test_a_symbol_reference_is_not_published_as_a_wire_name(tmp_path: Path, writ
     type writes nothing rather than a row nobody can act on."""
     annotations = [_annotated(IMPL, IMPL_ANNOTATION, taskQueues=[written, "orders"])]
     assert _shape(_run(tmp_path, annotations)) == [("task_queue", None, "orders", "resolved")]
+
+
+# --- the five SHIPPED listener catalogs, over the REAL loaded files (spec §2e) -----------
+#
+# Everything above is invented, for the isolation reason the module docstring gives. These
+# are not: each loads `src/sextant/catalogs/` itself and hands the pass the real
+# `metadata_from` block, because GUIDELINES §10's pair rule names exactly this key's failure.
+# A `metadata_from` entry is "precise enough to be silently wrong": a fully-qualified
+# annotation name or an attribute name one character off passes `_metadata_entry`'s load
+# validation, matches nothing, and writes no row — no error, no COVERAGE line, and every
+# assertion that something is ABSENT still passes. So each shipped entry carries a positive
+# proving the row still fires beside a near-miss proving it declines, and the near-miss is
+# derived from the entry's own conjuncts: the right annotation without the attribute, and
+# the right attribute under a neighbour the catalog does not name.
+#
+# The pass is handed EVERY shipped catalog rather than the one under test, which is the other
+# half of the claim: a row belongs to the catalog that minted it (`catalog_id`), and five
+# declaring catalogs reading one workspace must not cross-write.
+
+_SHIPPED_PROTOCOLS = {
+    "spring-kafka": "kafka",
+    "spring-jms": "jms",
+    "spring-rabbit": "amqp",
+    "micronaut-kafka": "kafka",
+    "micronaut-jms": "jms",
+}
+
+
+def _shipped_run(
+    tmp_path: Path,
+    annotations: list[AnnotationFact],
+    *rows: tuple[str, str, str],
+    catalog_id: str,
+) -> list[tuple]:
+    """`(path, kind, value, resolution)` per row the SHIPPED catalogs write over these
+    facts, sorted — the endpoint rows named as `(method, path, handler)` and minted under
+    `catalog_id` at that catalog's own protocol."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    write_fact_file(tmp_path / "facts" / "Listeners.jsonl", _document(), annotations)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    workspace.derive("endpoint_metadata_reset")
+    for method, path, handler in rows:
+        workspace._connection.execute(
+            "INSERT INTO endpoints (protocol, direction, method, path, handler, caller, "
+            "catalog_id) VALUES (?, 'inbound', ?, ?, ?, NULL, ?)",
+            [_SHIPPED_PROTOCOLS[catalog_id], method, path, _MODULE + handler, catalog_id],
+        )
+    record_endpoint_attributes(workspace, list(YamlCatalogSource(catalogs_dir()).load()))
+    written = sorted(
+        (str(row["path"]), str(row["kind"]), str(row["value"]), str(row["resolution"]))
+        for row in workspace.query("endpoint_metadata")
+    )
+    workspace.close()
+    return written
+
+
+_KAFKA_LISTENER = "org.springframework.kafka.annotation.KafkaListener"
+_KAFKA_HANDLER = "org.springframework.kafka.annotation.KafkaHandler"
+_JMS_LISTENER = "org.springframework.jms.annotation.JmsListener"
+_RABBIT_LISTENER = "org.springframework.amqp.rabbit.annotation.RabbitListener"
+_MN_KAFKA_LISTENER = "io.micronaut.configuration.kafka.annotation.KafkaListener"
+_MN_TOPIC = "io.micronaut.configuration.kafka.annotation.Topic"
+_MN_JMS_LISTENER = "io.micronaut.jms.annotations.JMSListener"
+_MN_QUEUE = "io.micronaut.jms.annotations.Queue"
+_MN_JMS_TOPIC = "io.micronaut.jms.annotations.Topic"
+
+_LISTENER = "com/acme/orders/Listeners#"
+_ON_EVENT = _LISTENER + "onEvent(sig_00000010)."
+_ON_OTHER = _LISTENER + "onOther(sig_00000011)."
+
+
+def test_spring_kafka_records_the_consumer_group_and_none_of_the_tuning_knobs(tmp_path: Path):
+    """CP-32 Q1a/Q6: `groupId` past `StringUtils.hasText` IS the endpoint's consumer group,
+    so it is recorded; `concurrency`, `containerFactory`, `errorHandler`, `autoStartup`,
+    `clientIdPrefix` and `containerGroup` decide how this node runs a listener a message has
+    already reached, so they are not (§2e's criterion). The near-miss is the same annotation
+    with every one of those knobs WRITTEN and `groupId` absent: it derives nothing, because
+    CP-32 Q6 measured the absent case as the resolved `id` or the factory's group — a value
+    that is not on the declaration — and the entry therefore states no `absent_value`."""
+    annotations = [
+        _annotated(
+            _ON_EVENT,
+            _KAFKA_LISTENER,
+            topics=["order-events"],
+            groupId="orders",
+            concurrency="3",
+            containerFactory="kafkaFactory",
+            containerGroup="beans",
+        ),
+        _annotated(
+            _ON_OTHER,
+            _KAFKA_LISTENER,
+            topics=["order-audit"],
+            concurrency="3",
+            errorHandler="handler",
+            autoStartup="false",
+            clientIdPrefix="mine",
+        ),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "order-events", _ON_EVENT),
+        (None, "order-audit", _ON_OTHER),
+        catalog_id="spring-kafka",
+    ) == [("order-events", "consumer_group", "orders", "resolved")]
+
+
+def test_a_kafka_handler_takes_the_class_level_group_and_a_listener_method_keeps_its_own(
+    tmp_path: Path,
+):
+    """The nearest-wins rule against the shape it exists for. `class_level: sibling` says a
+    class-level `@KafkaListener` and a method-level one are two INDEPENDENT registrations, so
+    the class's group must not be unioned onto the method's endpoint: `onOther` is in `own`
+    and in nothing else. `@KafkaHandler` has no group of its own to state (CP-32 Q1b), so its
+    row reads the class's — which is the registration that actually serves it."""
+    annotations = [
+        _annotated(_LISTENER, _KAFKA_LISTENER, topics=["polymorphic"], groupId="class-group"),
+        _annotated(_ON_EVENT, _KAFKA_HANDLER),
+        _annotated(_ON_OTHER, _KAFKA_LISTENER, topics=["own-topic"], groupId="own"),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "polymorphic", _ON_EVENT),
+        (None, "own-topic", _ON_OTHER),
+        catalog_id="spring-kafka",
+    ) == [
+        ("own-topic", "consumer_group", "own", "resolved"),
+        ("polymorphic", "consumer_group", "class-group", "resolved"),
+    ]
+
+
+def test_spring_jms_records_the_selector_and_the_durable_subscription_name(tmp_path: Path):
+    """CP-32 Q2a/Q7a/Q7b: `processJmsListener` takes each past `StringUtils.hasText` into
+    `setSelector` and `setSubscription`, so both are recorded, and a `${…}` value is carried
+    verbatim at `unresolved` rather than guessed. The near-miss writes `concurrency` and
+    `containerFactory` — the two remaining elements the annotation declares beside the
+    destination — and derives nothing."""
+    annotations = [
+        _annotated(
+            _ON_EVENT,
+            _JMS_LISTENER,
+            destination="audit",
+            selector="JMSType = 'order'",
+            subscription="${audit.subscription}",
+        ),
+        _annotated(
+            _ON_OTHER, _JMS_LISTENER, destination="relay", concurrency="1-2", containerFactory="f"
+        ),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "audit", _ON_EVENT),
+        (None, "relay", _ON_OTHER),
+        catalog_id="spring-jms",
+    ) == [
+        ("audit", "selector", "JMSType = 'order'", "resolved"),
+        ("audit", "subscription", "${audit.subscription}", "unresolved"),
+    ]
+
+
+def test_spring_rabbit_records_exclusivity_only_where_the_declaration_writes_it(
+    tmp_path: Path,
+):
+    """CP-32 Q3a/Q8: `exclusive()` is a genuine `boolean` and `processListener` passes it
+    STRAIGHT to `setExclusive(Z)` with no gate, so both written values are recorded and
+    written lowercase. The near-miss is the measured default LEFT OUT: the catalog declares
+    no `absent_value`, because `exclusive = false` is the state of every ordinary consumer
+    and a row on every Rabbit endpoint saying so states nothing a peer acts on. `ackMode` is
+    written on every arm and recorded on none."""
+    third = _LISTENER + "onThird(sig_00000012)."
+    annotations = [
+        _annotated(_ON_EVENT, _RABBIT_LISTENER, queues=["mine"], exclusive=True, ackMode="MANUAL"),
+        _annotated(_ON_OTHER, _RABBIT_LISTENER, queues=["shared"], exclusive=False),
+        _annotated(third, _RABBIT_LISTENER, queues=["plain"], ackMode="MANUAL"),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "mine", _ON_EVENT),
+        (None, "shared", _ON_OTHER),
+        (None, "plain", third),
+        catalog_id="spring-rabbit",
+    ) == [
+        ("mine", "exclusive", "true", "resolved"),
+        ("shared", "exclusive", "false", "resolved"),
+    ]
+
+
+def test_micronaut_kafka_reads_the_group_under_either_of_the_two_names_it_has(tmp_path: Path):
+    """CP-32 Q4a is why there are two entries: `value()` and `groupId()` are `@AliasFor` one
+    another, javac writes whichever the source wrote, and Micronaut's own metadata layer
+    merges them (Q9) — so `@KafkaListener("orders")` names the consumer group exactly as
+    `@KafkaListener(groupId = "orders")` does, and a catalog naming one of them would miss
+    every declaration written the short way. Both sit on the CLASS while the row's handler is
+    the `@Topic` method, so both arrive through the enclosing-type half of the nearest-wins
+    read. The near-miss is the marker with no attribute at all: `@KafkaListener` alone
+    derives nothing, because CP-32 Q9 measured the absent case as the bean's class name,
+    which is not on the declaration."""
+    second = "com/acme/orders/Shipments#"
+    third = "com/acme/orders/Plain#"
+    annotations = [
+        _annotated(_LISTENER, _MN_KAFKA_LISTENER, groupId="orders"),
+        _annotated(_ON_EVENT, _MN_TOPIC, value=["mn.orders.placed"]),
+        _annotated(second, _MN_KAFKA_LISTENER, value="shipments"),
+        _annotated(second + "onShipped(sig_00000013).", _MN_TOPIC, value=["mn.orders.shipped"]),
+        _annotated(third, _MN_KAFKA_LISTENER),
+        _annotated(third + "onPlain(sig_00000014).", _MN_TOPIC, value=["mn.orders.plain"]),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "mn.orders.placed", _ON_EVENT),
+        (None, "mn.orders.shipped", second + "onShipped(sig_00000013)."),
+        (None, "mn.orders.plain", third + "onPlain(sig_00000014)."),
+        catalog_id="micronaut-kafka",
+    ) == [
+        ("mn.orders.placed", "consumer_group", "orders", "resolved"),
+        ("mn.orders.shipped", "consumer_group", "shipments", "resolved"),
+    ]
+
+
+def test_micronaut_jms_reads_message_selector_from_either_method_annotation(tmp_path: Path):
+    """CP-32 Q5b/Q5c/Q10 changed both halves of §2e's row for this framework. The attribute
+    is `messageSelector`, not `selector`; it sits on `@Queue` and on `@Topic` — the METHOD
+    annotations — rather than on the class-level `@JMSListener`, which declares only `value`,
+    `successHandlers` and `errorHandlers` (Q5a); and there is no durable-subscription element
+    anywhere in this framework's listener surface, so no `subscription` row can be derived
+    from it at all. The near-miss is a `@Queue` naming a destination and no selector, beside a
+    `@JMSListener` on its class: neither derives a row."""
+    second = _LISTENER + "onTopic(sig_00000015)."
+    third = _LISTENER + "onPlain(sig_00000016)."
+    annotations = [
+        _annotated(_LISTENER, _MN_JMS_LISTENER, value="orders-connection"),
+        _annotated(_ON_EVENT, _MN_QUEUE, value="mn.orders.queue", messageSelector="kind = 'new'"),
+        _annotated(second, _MN_JMS_TOPIC, value="mn.orders.topic", messageSelector="kind = 'old'"),
+        _annotated(third, _MN_QUEUE, value="mn.orders.plain", acknowledgeMode=1, transacted=False),
+    ]
+    assert _shipped_run(
+        tmp_path,
+        annotations,
+        (None, "mn.orders.queue", _ON_EVENT),
+        (None, "mn.orders.topic", second),
+        (None, "mn.orders.plain", third),
+        catalog_id="micronaut-jms",
+    ) == [
+        ("mn.orders.queue", "selector", "kind = 'new'", "resolved"),
+        ("mn.orders.topic", "selector", "kind = 'old'", "resolved"),
+    ]

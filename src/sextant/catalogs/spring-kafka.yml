@@ -23,6 +23,53 @@ matches:
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [org.springframework.kafka.support.Acknowledgment] }
+  # §2e's criterion applied to this framework: an attribute a PEER would care
+  # about — whether and how a message reaches this handler — never a knob that
+  # decides how this node runs once it has.
+  #
+  # MEASURED, CP-32 Q1a and Q6 (spring-kafka 3.1.4). `groupId()` is a `String`
+  # defaulting to `""`, and `getEndpointGroupId` — the only method in the
+  # post-processor that references it — takes it past `StringUtils.hasText`,
+  # resolves it, and returns it as the endpoint's group. So `consumer_group`
+  # names what the framework MEANS rather than what the attribute is called.
+  # BEHAVIOURAL, not routing (§1f): every consumer group on a topic receives
+  # every message, so the group qualifies the endpoint and never enters its
+  # address.
+  #
+  # A `@KafkaHandler` row reads the CLASS-level `@KafkaListener`, which is the
+  # registration that serves it — CP-32 Q1b: `@KafkaHandler` declares
+  # `isDefault()` and nothing else, so it has no group of its own to state.
+  # Where a method carries its own `@KafkaListener`, the handler's wins outright
+  # and the class-level one is NOT unioned in
+  # (`endpoint_attributes._uses_by_annotation`). That rule exists because of
+  # this exact shape: `class_level: sibling` above says the two are independent
+  # registrations, so a class on one group beside methods on another would
+  # otherwise put both groups on one endpoint — one of them a group that
+  # endpoint is not in.
+  #
+  # NO `absent_value`, and CP-32 Q6 is why that is right rather than merely
+  # unmeasured: an absent `groupId` does not mean a measured default, it means
+  # the resolved `id` (`idIsGroup()` defaults to `true`, offsets 28-54) or the
+  # container factory's own group — a value that is not on this declaration at
+  # all. Silence is the honest answer (D02 §2l).
+  #
+  # NOT RECORDED, and each is the criterion applied rather than an omission:
+  # `concurrency`, `containerFactory`, `errorHandler`, `autoStartup`,
+  # `clientIdPrefix`, `containerGroup`, `beanRef`, `batch`, `filter`,
+  # `splitIterables`, `contentTypeConverter`, `info`, `containerPostProcessor`,
+  # `properties` — the rest of the 20 elements CP-32 Q1a lists. Every one of
+  # them decides how THIS node runs a listener a message has already reached,
+  # which no peer can observe. `id` is not recorded either, for a different
+  # reason: it names a container bean, not anything on the wire.
+  #
+  # STATED BOUNDARY (CP-32 Q6): `resolveExpressionAsString` means a written
+  # value may be a `${…}` placeholder — carried verbatim at `unresolved` — or a
+  # `#{…}` SpEL expression, which this pass DROPS rather than publishes, because
+  # a string carrying the symbol grammar's type marker reads as a symbol
+  # reference (D02 §2l). A miss, never a wrong row.
+  metadata_from:
+    - { annotation: org.springframework.kafka.annotation.KafkaListener,
+        attribute: groupId, kind: consumer_group }
   mapping:
     # CHECKPOINT FACT: `@KafkaListener.topics` is always a `String[]` in
     # bytecode, even for a bare-string source declaration; `topicPattern` is
@@ -188,3 +235,11 @@ measured:
   # CP-17, which never asked about `batch` at all.
   - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4", "4.1.1"],
       identity: reported, by: scripts/probes/cp20_spring_kafka_batch.md }
+  # A FOURTH row, the same reason as the second and third: CP-32 asked what
+  # `@KafkaListener` says ABOUT the endpoint rather than what names it — every
+  # element with its own `AnnotationDefault`, and what `getEndpointGroupId` does
+  # with `groupId`. A reader chasing the `metadata_from` entry above needs the
+  # probe that asked that question. Bounded to 3.1.4: CP-32 opened one jar per
+  # framework, so the upper version of the pair above is outside it.
+  - { artifact: org.springframework.kafka:spring-kafka, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }

@@ -9,6 +9,13 @@ detect:
 measured:
   - { artifact: io.micronaut.kafka:micronaut-kafka, versions: ["5.6.0"],
       identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
+  # A SECOND row rather than a widened first one: W58 measured what NAMES the
+  # endpoint, CP-32 what `@KafkaListener` says ABOUT it — every element with its
+  # own `AnnotationDefault`, the `value`/`groupId` alias, and what
+  # `KafkaConsumerProcessor` does with the group. A reader chasing the
+  # `metadata_from` entries above needs the probe that asked that question.
+  - { artifact: io.micronaut.kafka:micronaut-kafka, versions: ["5.6.0"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }
 requires: [annotation_args]
 # One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
 # and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
@@ -20,6 +27,59 @@ matches:
   # MEASURED (`javap` on micronaut-kafka 5.6.0 `KafkaMessagingBodyBinder`): the body
   # binder keys on `@MessageBody`; an unannotated sole parameter is the message by default.
   request_body: { annotation: io.micronaut.messaging.annotation.MessageBody, fallback: sole_unannotated }
+  # §2e's criterion applied to this framework: an attribute a PEER would care
+  # about — whether and how a message reaches this handler.
+  #
+  # TWO ENTRIES FOR ONE ATTRIBUTE, AND THE PROBE IS WHY. MEASURED, CP-32 Q4a
+  # (micronaut-kafka 5.6.0): `@KafkaListener` declares `value()` and `groupId()`
+  # as `io.micronaut.context.annotation.AliasFor` ONE ANOTHER, both `String`,
+  # both defaulting to `""`. `@KafkaListener("orders")` writes `value` into the
+  # class file and `@KafkaListener(groupId = "orders")` writes `groupId`; javac
+  # writes whichever the source wrote and merges nothing. CP-32 Q9 reads
+  # `KafkaConsumerProcessor` calling `AnnotationValue.stringValue("groupId")` on
+  # Micronaut's own MERGED metadata, where the alias has already been applied —
+  # so `value` is as much the consumer group as `groupId` is, and an entry
+  # naming only `groupId` would silently miss every declaration written the
+  # short way. A declaration writes at most one of the two, so the pair below
+  # yields exactly one row.
+  #
+  # BEHAVIOURAL, not routing (§1f): every consumer group on a topic receives
+  # every message, so the group qualifies the endpoint and never enters its
+  # address.
+  #
+  # THE GROUP SITS ON THE CLASS AND THE ROW'S HANDLER IS THE METHOD, which is
+  # what makes the enclosing-type half of the nearest-wins read load-bearing
+  # here: `@KafkaListener` is this catalog's `type_annotation`, and CP-32 Q4b
+  # reads `@Topic` — the handler's own annotation — as declaring `value` and
+  # `patterns` and nothing else. `@KafkaListener` is also `@Target`-ed at
+  # METHOD, and where a method carries one its own value wins outright
+  # (`endpoint_attributes._uses_by_annotation`).
+  #
+  # NO `absent_value`: CP-32 Q9 reads the absent case as
+  # `orElseGet(() -> <the bean's class name>)`, a value that is not on the
+  # declaration at all — so there is no measured default to state, and silence
+  # is the honest answer (D02 §2l).
+  #
+  # STATED BOUNDARY (CP-32 Q9, offsets 146-167): a declaration that also writes
+  # `uniqueGroupId = true` joins `<declared>-<random UUID>` rather than
+  # `<declared>`, so the recorded value is then a PREFIX of the group the
+  # consumer really joins. Stated rather than encoded: `metadata_from` has no
+  # conditional form, and the declared value is still the group a reader would
+  # look for.
+  #
+  # NOT RECORDED, and each is the criterion applied rather than an omission:
+  # `clientId`, `producerClientId`, `producerTransactionalId`, `threads`,
+  # `threadsValue`, `pollTimeout`, `sessionTimeout`, `heartbeatInterval`,
+  # `offsetStrategy`, `offsetReset`, `isolation`, `errorStrategy`,
+  # `redelivery`, `batch`, `properties`, `autoStartup`, `uniqueGroupId` — the
+  # rest of the 21 elements CP-32 Q4a lists. Every one decides how THIS node
+  # polls, commits or retries a message that has already reached it, which no
+  # peer can observe.
+  metadata_from:
+    - { annotation: io.micronaut.configuration.kafka.annotation.KafkaListener,
+        attribute: groupId, kind: consumer_group }
+    - { annotation: io.micronaut.configuration.kafka.annotation.KafkaListener,
+        attribute: value, kind: consumer_group }
   mapping:
     path_from: [value, patterns]
     prefix_from: []
