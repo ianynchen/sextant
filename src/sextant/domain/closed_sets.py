@@ -160,6 +160,22 @@ class Protocol(StrEnum):
     # identically — and the fact that does is which handler auto-configuration
     # would register, gated on a library being present.
     RSOCKET = "rsocket"
+    # Group D (spec 2026-09-22 §1a). Two members in one edit, for the reason the
+    # 2H and 2O blocks above give: the set is closed, so a member a later task
+    # needs costs one line here and a schema change if it arrives alone.
+    #
+    # Each is its own protocol on the same DR-5 argument: linking gates on
+    # protocol equality, and a workflow type can only be answered by a worker
+    # polling for it, an event-bus address only by a consumer bound to it.
+    #
+    # `temporal` names a product, as `pulsar` and `rsocket` do, because the wire
+    # has no other name. `eventbus` does NOT name the framework that provides
+    # it: `tests/architecture/test_source_rules.py` forbids that framework's
+    # name in every source file here, so the member is named for the KIND of
+    # wire — an addressed in-process or clustered event bus — exactly as
+    # `amqp` is named for the protocol rather than for Rabbit.
+    TEMPORAL = "temporal"
+    EVENTBUS = "eventbus"
 
 
 class Direction(StrEnum):

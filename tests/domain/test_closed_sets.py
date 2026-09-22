@@ -23,3 +23,8 @@ def test_the_broker_families_are_distinct_protocols():
     # D00 §4's reason: linking gates on protocol equality (DR-5), and an AMQP
     # exchange can never be answered by a Pulsar topic.
     assert len({Protocol.AMQP, Protocol.PULSAR, Protocol.JMS, Protocol.KAFKA}) == 4
+
+
+def test_the_two_group_d_protocols_are_members():
+    assert Protocol.TEMPORAL.value == "temporal"
+    assert Protocol.EVENTBUS.value == "eventbus"

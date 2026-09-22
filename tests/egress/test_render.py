@@ -1262,3 +1262,14 @@ def test_no_fails_with_line_where_neither_half_has_anything():
     restraint `_via_entry` keeps for a row with no library to name."""
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "Fails with" not in text
+
+
+def test_a_temporal_row_renders_its_kind_and_an_eventbus_row_does_not():
+    """Asserted both ways, not just `temporal in _VERBED_PROTOCOLS`, because
+    `_VERBLESS_PROTOCOLS` is the complement over every `Protocol` member
+    (spec 2026-09-22 §1c): a member added to neither list falls silently into
+    the verbless half, and this is the one test that would notice."""
+    from sextant.egress.render.document import _VERBED_PROTOCOLS, _VERBLESS_PROTOCOLS
+
+    assert "temporal" in _VERBED_PROTOCOLS
+    assert "eventbus" in _VERBLESS_PROTOCOLS
