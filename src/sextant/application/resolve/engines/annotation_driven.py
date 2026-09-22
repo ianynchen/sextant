@@ -1500,6 +1500,23 @@ def _validate_metadata_from(catalog: Catalog, where: str) -> None:
     flip resolves to, must be inbound. The PASS then reads each row's own
     `direction` column, which is final by the time it runs.
     """
+    # The key reads an annotation's ARGUMENTS and nothing else, so a catalog that does
+    # not require the capability producing them is one whose every `args` map is empty
+    # on a scanner that does not read them. Every attribute would then read as ABSENT,
+    # and an entry declaring `absent_value` would write its measured default against
+    # every endpoint the catalog owns — a default attributed to declarations nobody
+    # looked at, which is the exact fabrication `absent_value` is fenced against (D02 §1:
+    # a catalog states what it needs, and the gate skips it VISIBLY where a scan cannot
+    # supply it). Refused here rather than left to the gate because the gate only skips a
+    # catalog that ASKED; one that never asked is the silent case.
+    if _ANNOTATION_ARGS not in catalog.requires:
+        raise CatalogError(
+            f"{where} reads annotation arguments, so the catalog must declare "
+            f"`requires: [{_ANNOTATION_ARGS}]` — without it a scanner that does not read "
+            f"arguments leaves every attribute reading as absent, and a declared "
+            f"`absent_value` would be written against every endpoint as though the default "
+            f"had been measured there"
+        )
     rule = _direction_rule(catalog)
     reachable = {catalog.direction} | ({rule[0]} if rule is not None else set())
     if Direction.INBOUND.value in reachable:
@@ -1510,6 +1527,12 @@ def _validate_metadata_from(catalog: Catalog, where: str) -> None:
         f"2026-09-22 §1f), and every attribute this key reads sits on the receiving side, so "
         f"an outbound entry would state a peer's configuration as this module's own"
     )
+
+
+# D02 §1's capability id for "the scanner reads annotation arguments". A capability name,
+# not a framework's: it names what a SCAN produces, which is why `requires` is spelled in
+# the same vocabulary on every catalog that reads an attribute at all.
+_ANNOTATION_ARGS = "annotation_args"
 
 
 def _metadata_entry(entry: object, where: str) -> dict[str, Any]:

@@ -51,7 +51,7 @@ from sextant.application.resolve.engines.annotation_driven import (
     metadata_from,
 )
 from sextant.domain.closed_sets import Direction
-from sextant.domain.symbols import bare_descriptor, owner_of
+from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 
 # The one form of value this pass refuses to answer for, spelled as
 # `engines/scheduled_work.py` spells it and for its reason: a property placeholder is
@@ -125,26 +125,45 @@ def _from_annotation_attributes(
 def _uses_by_annotation(
     annotations: dict[str, list[dict[str, Any]]], handler: str
 ) -> dict[str, list[dict[str, Any]]]:
-    """Every annotation use on the handler or on its ENCLOSING TYPE, annotation
-    descriptor -> the `args` mappings written, declaration site by declaration site.
+    """The annotation uses that qualify this handler: annotation descriptor -> the
+    `args` mappings written at the NEAREST site carrying that annotation.
 
-    Both sites, and both are required. A listener annotation carrying a consumer group
-    sits on the handler METHOD; the starter annotation carrying a task queue sits on
-    the CLASS that implements a contract interface, while the row's handler is that
-    class's own overriding method. Reading only one site would silently drop a whole
-    family of attributes, which is the quiet miss the key exists to close.
+    Both sites are looked at, and both are required. A listener annotation carrying a
+    consumer group sits on the handler METHOD; a starter annotation carrying a task
+    queue sits on the CLASS that implements a contract interface, while the row's
+    handler is that class's own overriding method. Reading only one site would silently
+    drop a whole family of attributes, which is the quiet miss the key exists to close.
 
-    The two sites are read as a UNION rather than one overriding the other: each is a
-    declaration the framework honours on its own, and the writer's insert-if-absent
-    guard collapses the identical entry two sites declare into one row.
+    **NEAREST WINS, per annotation: the enclosing type is read only where the handler
+    does not carry that annotation at all.** A union would state both values, and both
+    ways that goes are wrong rather than merely noisy. A class-level listener naming one
+    consumer group and a method-level one naming another would put BOTH groups on one
+    endpoint — one of them a group that endpoint is not in. And a class-level use with
+    the attribute unwritten, beside a method-level use that writes it, would emit the
+    entry's measured `absent_value` next to the explicit value contradicting it — a
+    fabricated default, which is the exact failure `absent_value` is fenced against.
+
+    Nearest-wins is also the only rule of the two this module can state without claiming
+    something about frameworks it has not measured. `_from_mapping_attributes` unions its
+    two sites and cites the framework method that performs the union
+    (`ParamsRequestCondition.combine`); nothing here has such a citation, and a catalog
+    whose framework really does union two sites can say so in a later key rather than
+    have this one assume it.
     """
     owner = owner_of(handler)
     uses: dict[str, list[dict[str, Any]]] = {}
-    for site in (handler, owner):
-        if site is None:
-            continue
-        for use in annotations.get(site, []):
-            uses.setdefault(str(use["annotation"]), []).append(use["args"])
+    for use in annotations.get(handler, []):
+        uses.setdefault(str(use["annotation"]), []).append(use["args"])
+    if owner is None:
+        return uses
+    # The handler's own fqns, fixed before the second site is read: `uses` grows while
+    # the enclosing type is walked, so asking `fqn not in uses` inside the loop would
+    # let a repeated class-level annotation past its own first use.
+    nearest = frozenset(uses)
+    for use in annotations.get(owner, []):
+        fqn = str(use["annotation"])
+        if fqn not in nearest:
+            uses.setdefault(fqn, []).append(use["args"])
     return uses
 
 
@@ -153,9 +172,12 @@ def _values(args: dict[str, Any], entry: dict[str, Any]) -> list[str]:
 
     An attribute written as an array is one value per element (the queue list a
     starter annotation carries); a scalar is one value. An element this pass cannot
-    spell — a nested annotation, a class reference — is dropped rather than rendered,
-    the `scheduled_work._verbatim` rule: an attribute that was written and could not be
-    read must never become a stated value with an invented one.
+    spell — a nested annotation, or a SYMBOL REFERENCE (D00 §5a's literal model spells
+    both a class reference and an enum reference as one) — is dropped rather than
+    rendered, the `scheduled_work._verbatim` rule: an attribute that was written and
+    could not be read must never become a stated value with an invented one. A symbol
+    is not a wire name: `com/acme/OrderFactory#` in a `value` column would read as the
+    queue, group or selector a peer should look for.
 
     An ABSENT attribute writes the entry's `absent_value` where the catalog declares
     one and NOTHING otherwise. A default never reaches the annotation use — the
@@ -183,11 +205,21 @@ def _text(value: object) -> str | None:
     dropped by the caller: a row whose `value` is empty states a queue, a group or a
     selector named by nothing, and the absence of a row is the statement that the
     declaration named none.
+
+    A string carrying the SYMBOL GRAMMAR's type marker is a class or enum reference the
+    scanner recorded as a symbol (D00 §5a spells both that way), not a name anything
+    puts on a wire, so it is dropped here rather than published as one. The question is
+    asked through `names_a_type` because the marker is the grammar and
+    `tests/architecture/test_symbol_grammar_confinement.py` keeps every reading of it in
+    `domain/symbols.py`. The cost is stated: a literal that merely CONTAINS the marker —
+    a selector expression quoting a `#` — is dropped with it. That is a miss rather than
+    a wrong row, which is the direction NFR-2 asks for, and no wire name in any
+    vocabulary this key serves today carries one.
     """
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return value
+        return None if names_a_type(value) else value
     if isinstance(value, int | float):
         return str(value)
     return None

@@ -15,7 +15,10 @@ reason.
 An attribute is looked for on the handler AND on the handler's enclosing type, because
 the first consumer's task queue sits on a TYPE-level annotation on the class that
 implements a contract interface while the row's `handler` is that class's own overriding
-method. A test per site, and one holding the union where both declare.
+method. Where BOTH carry the same annotation the NEAREST wins: a test per site, one for
+each of the two ways a union would go wrong (two values for one endpoint; a measured
+default beside the explicit value contradicting it), and one holding that nearest-wins is
+per annotation rather than per handler.
 
 ## Everything here is invented
 
@@ -88,10 +91,12 @@ def _catalog(
     direction: str = "inbound",
     resolves: dict[str, object] | None = None,
     metadata_from: object = ...,
+    requires: tuple[str, ...] = ("annotation_args",),
 ) -> Catalog:
     """An annotation catalog declaring `metadata_from` beside the mapping block its rows
     were derived from — the same `annotations`/`prefix_annotation` shape
-    `effective_annotation_uses` reads its synthetic rows through."""
+    `effective_annotation_uses` reads its synthetic rows through. `requires` carries the
+    capability the key reads through, which every declaring catalog must name."""
     matches: dict[str, object] = {
         "mapping": {
             "annotations": [{"fqn": MAPPING_ANNOTATION, "method": ["workflow"]}],
@@ -104,7 +109,7 @@ def _catalog(
         style="annotation_driven",
         protocol="temporal",
         direction=direction,
-        requires=(),
+        requires=requires,
         matches=matches,
         source=Path("tests/invented-workflow.yml"),
         wrappers=[],
@@ -274,20 +279,63 @@ def test_the_attribute_is_read_off_the_handlers_enclosing_type_as_well(tmp_path:
     ]
 
 
-def test_both_declaration_sites_union_rather_than_one_overriding_the_other(tmp_path: Path):
-    """An annotation on the handler and the same annotation on its class are two
-    declarations the framework honours; the pass states both rather than picking one.
-    The identical entry two sites declare collapses to one row in the writer's
-    insert-if-absent guard, which is the `endpoint_metadata` table's own set semantics."""
+def test_the_nearest_declaration_site_wins_and_the_enclosing_type_is_not_unioned_in(
+    tmp_path: Path,
+):
+    """The handler's own annotation ANSWERS, and the enclosing type's use of the same
+    annotation is not read at all. A union would put both consumer groups on one
+    endpoint — one of them a group that endpoint is not in — and there is no measurement
+    behind a claim that any framework honours both.
+
+    The assertion is an exact LIST rather than a set, deliberately: a set cannot see a
+    duplicate row, and a duplicate is one of the two failures this rule exists to
+    prevent."""
     annotations = [
-        _annotated(IMPL, IMPL_ANNOTATION, taskQueues=["orders", "shared"]),
-        _annotated(HANDLER, IMPL_ANNOTATION, taskQueues=["priority", "shared"]),
+        _annotated(IMPL, IMPL_ANNOTATION, taskQueues=["class-queue", "shared"]),
+        _annotated(HANDLER, IMPL_ANNOTATION, taskQueues=["method-queue", "shared"]),
     ]
-    assert {str(e["value"]) for e in _run(tmp_path, annotations)} == {
-        "orders",
-        "shared",
-        "priority",
-    }
+    assert _shape(_run(tmp_path, annotations)) == [
+        ("task_queue", None, "method-queue", "resolved"),
+        ("task_queue", None, "shared", "resolved"),
+    ]
+
+
+def test_the_enclosing_types_annotation_does_not_supply_an_absent_value_for_the_handlers(
+    tmp_path: Path,
+):
+    """The second failure a union would cause, and the worse one. The class carries the
+    annotation with the attribute UNWRITTEN while the handler writes it explicitly: a
+    union would emit the entry's measured `absent_value` beside the explicit value that
+    contradicts it — a default attributed to a declaration that stated the opposite,
+    which is the exact fabrication `absent_value` is fenced against. Nearest wins, so
+    the class's use is not read and the explicit value stands alone."""
+    annotations = [
+        _annotated(IMPL, LISTEN),
+        _annotated(HANDLER, LISTEN, local=False),
+    ]
+    catalog = _catalog(
+        {"annotation": LISTEN, "attribute": "local", "kind": "delivery", "absent_value": "true"}
+    )
+    assert _shape(_run(tmp_path, annotations, catalogs=[catalog])) == [
+        ("delivery", None, "false", "resolved")
+    ]
+
+
+def test_a_different_annotation_on_each_site_reads_both(tmp_path: Path):
+    """Nearest-wins is PER ANNOTATION, not per handler: a starter annotation on the class
+    and a listener annotation on the method are two different declarations, and the
+    handler carrying one of them does not hide the other."""
+    annotations = [
+        _annotated(IMPL, IMPL_ANNOTATION, taskQueues=["orders"]),
+        _annotated(HANDLER, LISTEN, selector="tenant = 'acme'"),
+    ]
+    catalog = _catalog(
+        TASK_QUEUE, {"annotation": LISTEN, "attribute": "selector", "kind": "selector"}
+    )
+    assert _shape(_run(tmp_path, annotations, catalogs=[catalog])) == [
+        ("selector", None, "tenant = 'acme'", "resolved"),
+        ("task_queue", None, "orders", "resolved"),
+    ]
 
 
 def test_a_metadata_row_names_only_an_endpoint_its_own_catalog_minted(tmp_path: Path):
@@ -299,6 +347,24 @@ def test_a_metadata_row_names_only_an_endpoint_its_own_catalog_minted(tmp_path: 
     annotations = [_annotated(IMPL, IMPL_ANNOTATION, taskQueues=["orders"])]
     assert _run(tmp_path, annotations, catalog_id="somebody-else") == []
     assert _run(tmp_path / "no-handler", annotations, ("workflow", "OrderWorkflow", None)) == []
+
+
+def test_a_catalog_not_requiring_the_argument_capability_is_refused_naming_the_file(
+    tmp_path: Path,
+):
+    """The key reads an annotation's ARGUMENTS and nothing else. A catalog that does not
+    declare the capability producing them runs on a scan where every `args` map is empty,
+    so every attribute reads as absent — and a declared `absent_value` would then be
+    written against every endpoint the catalog owns, a measured default attributed to
+    declarations nobody looked at. Refused rather than left to the capability gate: the
+    gate skips a catalog that ASKED for a capability it did not get, and one that never
+    asked is the silent case."""
+    annotations = [_annotated(IMPL, IMPL_ANNOTATION, taskQueues=["orders"])]
+    workspace = _workspace(tmp_path, annotations, ("workflow", "OrderWorkflow", HANDLER))
+    with pytest.raises(CatalogError, match=r"invented-workflow\.yml") as raised:
+        record_endpoint_attributes(workspace, [_catalog(TASK_QUEUE, requires=())])
+    workspace.close()
+    assert "annotation_args" in str(raised.value)
 
 
 def test_an_outbound_row_gets_no_entry_even_where_the_declaration_carries_one(tmp_path: Path):
@@ -401,11 +467,11 @@ def test_a_catalog_declaring_nothing_writes_nothing(tmp_path: Path):
 def test_an_attribute_written_with_a_value_this_pass_cannot_spell_writes_nothing(
     tmp_path: Path,
 ):
-    """An element that is a nested annotation or a class reference is dropped rather than
-    rendered — the `scheduled_work._verbatim` rule: an attribute that was written and
-    could not be read must never become a stated value with an invented one. An
-    explicitly EMPTY string goes the same way: a row whose `value` is empty states a
-    queue named by nothing. The well-formed sibling in the same attribute derives."""
+    """An element that is a nested annotation is dropped rather than rendered — the
+    `scheduled_work._verbatim` rule: an attribute that was written and could not be read
+    must never become a stated value with an invented one. An explicitly EMPTY string
+    goes the same way: a row whose `value` is empty states a queue named by nothing. The
+    well-formed sibling in the same attribute derives."""
     annotations = [
         _annotated(IMPL, IMPL_ANNOTATION, taskQueues=["", "orders"]),
         _annotated(HANDLER, LISTEN, selector={"annotation": "com/acme/Nested#"}),
@@ -414,3 +480,18 @@ def test_an_attribute_written_with_a_value_this_pass_cannot_spell_writes_nothing
     assert _shape(_run(tmp_path, annotations, catalogs=[catalog])) == [
         ("task_queue", None, "orders", "resolved")
     ]
+
+
+@pytest.mark.parametrize(
+    "written",
+    ["com/acme/OrderFactory#", "com/acme/AckMode#EAGER."],
+    ids=["class-reference", "enum-reference"],
+)
+def test_a_symbol_reference_is_not_published_as_a_wire_name(tmp_path: Path, written: str):
+    """D00 §5a's literal model spells a class reference AND an enum reference as a symbol
+    reference — a plain string carrying the symbol grammar's type marker. A symbol is not
+    a name anything puts on a wire: `com/acme/OrderFactory#` in a `value` column would
+    read as the queue a peer should look for. Dropped, so the declaration that named a
+    type writes nothing rather than a row nobody can act on."""
+    annotations = [_annotated(IMPL, IMPL_ANNOTATION, taskQueues=[written, "orders"])]
+    assert _shape(_run(tmp_path, annotations)) == [("task_queue", None, "orders", "resolved")]
