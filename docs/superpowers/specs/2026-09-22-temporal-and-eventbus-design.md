@@ -279,7 +279,7 @@ group, the selector, the durable subscription name and exclusivity are recorded;
 | `spring-kafka.yml`, `micronaut-kafka.yml` | `groupId` | `consumer_group` |
 | `spring-jms.yml`, `micronaut-jms.yml` | `selector`, `subscription` | `selector`, `subscription` |
 | `spring-rabbit.yml` | `exclusive` | `delivery` |
-| `quarkus-consume-event.yml` | `local` (`absent_value: true`) | `delivery` |
+| `quarkus-consume-event.yml` | `local` (`absent_value: "true"`) | `delivery` |
 
 **This moves shipped output**, which the standing requirements otherwise forbid: existing endpoints
 gain `endpoint_metadata` rows. Every attribute is measured by probe (§6) before its line is written,
@@ -362,7 +362,7 @@ publishes something false:
 - **`path_fallback: declaring_type_qualified_name`** — the default address is the declaring bean
   class's fully-qualified name (M8), not the method name and not the simple name.
 - **`metadata_from: [{annotation: …ConsumeEvent, attribute: local, kind: delivery,
-  absent_value: true}]`** — `local()` defaults to `true` (M8), so an undecorated `@ConsumeEvent` is a
+  absent_value: "true"}]`** — `local()` defaults to `true` (M8), so an undecorated `@ConsumeEvent` is a
   local-only consumer. The reverse default would publish every Quarkus consumer as cluster-reachable.
 
 A `${…}` address is carried verbatim at `unresolved`.
