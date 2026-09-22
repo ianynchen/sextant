@@ -286,3 +286,192 @@ def test_kafka_shapes_rows(derived: tuple[set[str], list[dict]]):
         ("inbound", "kafka.channelled.topic", "handleKafkaOrder", "kafkaToChannelFlow", "resolved"),
         ("inbound", None, "lambda$kafkaPatternFlow$4", "kafkaPatternFlow", "unresolved"),
     }
+
+
+# --- Temporal: fixtures/temporal-probe (spec 2026-09-22, task-6 report table) -----------
+#
+# The catalogs and the fixture already ship and the rows already derive; this section pins
+# them so a future change that breaks Temporal fails a test instead of shipping. The nine
+# endpoint rows and eight endpoint_metadata rows below are read off one real analysis of
+# `fixtures/temporal-probe`, not predicted — the task-6 report's table is the contract, and
+# task-6 report table, arms 2-4 predate the naming word that composes
+# `<workflow type>/<member>` for signals/queries/updates; the actual derived paths are
+# `OrderWorkflow/cancel`, `/status`, `/amend`, and each of those three carries a
+# `task_queue: orders` metadata row (a signal reaches the same worker as the workflow).
+
+TEMPORAL_FIXTURE = FIXTURES / "temporal-probe"
+
+
+@pytest.fixture(scope="module")
+def temporal(tmp_path_factory: pytest.TempPathFactory) -> tuple[list[dict], list[dict]]:
+    """Every `endpoints` and `endpoint_metadata` row `fixtures/temporal-probe` derives —
+    one analysis, every test below reads off it."""
+    workspace_dir = tmp_path_factory.mktemp("temporal")
+    compile_fixture(TEMPORAL_FIXTURE)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(TEMPORAL_FIXTURE), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        endpoints = [
+            dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "temporal"
+        ]
+        metadata = [
+            dict(row)
+            for row in workspace.query("endpoint_metadata")
+            if str(row["protocol"]) == "temporal"
+        ]
+        return endpoints, metadata
+    finally:
+        workspace.close()
+
+
+def _endpoint_row(row: dict) -> tuple[str, str, str, str | None, str | None]:
+    """`(protocol, direction, method, path, handler-or-caller member name)` — an inbound
+    row carries a handler, an outbound row carries a caller, never both."""
+    member = _member(row["handler"]) if row["handler"] is not None else _member(row["caller"])
+    return (str(row["protocol"]), str(row["direction"]), str(row["method"]), row["path"], member)
+
+
+def _metadata_row(row: dict) -> tuple[str, str, str, str | None, str, object, str | None]:
+    """`(protocol, direction, method, path, kind, value, member)` — `endpoint_metadata`'s
+    own `caller` column here names the symbol the metadata rides on (the implementing
+    method), not a separate call site."""
+    return (
+        str(row["protocol"]),
+        str(row["direction"]),
+        str(row["method"]),
+        row["path"],
+        str(row["kind"]),
+        row["value"],
+        _member(row["caller"]),
+    )
+
+
+def test_temporal_shapes_nine_rows(temporal: tuple[list[dict], list[dict]]):
+    """task-6 report table, arms 1-4, 6-8, 11-12: every naming branch and both partitions,
+    as rows. Workflow/signal/query/update read `declaring_type_scoped_name` off the
+    CONTRACT (`OrderWorkflow`), never the implementor; activities read
+    `prefixed_capitalized_construct_name`, prefix skipped where an explicit
+    `@ActivityMethod(name=...)` is given (`Charge`) and applied where it is not
+    (`billing_RefundCard`)."""
+    endpoints, _ = temporal
+    assert len(endpoints) == 9
+    assert {_endpoint_row(r) for r in endpoints} == {
+        ("temporal", "inbound", "workflow", "OrderWorkflow", "processOrder"),
+        ("temporal", "inbound", "signal", "OrderWorkflow/cancel", "cancel"),
+        ("temporal", "inbound", "query", "OrderWorkflow/status", "status"),
+        ("temporal", "inbound", "update", "OrderWorkflow/amend", "amend"),
+        ("temporal", "inbound", "activity", "Charge", "charge"),
+        ("temporal", "inbound", "activity", "billing_RefundCard", "refundCard"),
+        ("temporal", "outbound", "workflow", "ShipOrder", "ship"),
+        ("temporal", "outbound", "workflow", "PaymentsWorkflow", "processPayment"),
+        ("temporal", "outbound", "workflow", "OrderWorkflow", "startUntyped"),
+    }
+
+
+def test_temporal_shapes_eight_metadata_rows(temporal: tuple[list[dict], list[dict]]):
+    """task-6 report table, arms 1-4 and 7-8: `task_queue` riding on the implementing
+    class — `orders` for `OrderWorkflowImpl#processOrder` and its three signal/query/update
+    siblings (a signal reaches the same worker as the workflow it belongs to), and
+    `billing` + `billing-retry` for both of `BillingActivitiesImpl`'s methods, since its
+    `@ActivityImpl(taskQueues = {...})` names two queues per member."""
+    _, metadata = temporal
+    assert len(metadata) == 8
+    assert {_metadata_row(r) for r in metadata} == {
+        (
+            "temporal",
+            "inbound",
+            "workflow",
+            "OrderWorkflow",
+            "task_queue",
+            "orders",
+            "processOrder",
+        ),
+        ("temporal", "inbound", "signal", "OrderWorkflow/cancel", "task_queue", "orders", "cancel"),
+        ("temporal", "inbound", "query", "OrderWorkflow/status", "task_queue", "orders", "status"),
+        ("temporal", "inbound", "update", "OrderWorkflow/amend", "task_queue", "orders", "amend"),
+        ("temporal", "inbound", "activity", "Charge", "task_queue", "billing", "charge"),
+        ("temporal", "inbound", "activity", "Charge", "task_queue", "billing-retry", "charge"),
+        (
+            "temporal",
+            "inbound",
+            "activity",
+            "billing_RefundCard",
+            "task_queue",
+            "billing",
+            "refundCard",
+        ),
+        (
+            "temporal",
+            "inbound",
+            "activity",
+            "billing_RefundCard",
+            "task_queue",
+            "billing-retry",
+            "refundCard",
+        ),
+    }
+
+
+def test_workflow_interface_default_method_derives_nothing(
+    temporal: tuple[list[dict], list[dict]],
+):
+    """task-6 report table, arm 5: `OrderWorkflow.helper()` carries no Temporal annotation
+    at all, so it is not a member of any Temporal-driven catalog and no row of any kind
+    can name it."""
+    endpoints, _ = temporal
+    members = {_member(r["handler"]) for r in endpoints if r["handler"]} | {
+        _member(r["caller"]) for r in endpoints if r["caller"]
+    }
+    assert "helper" not in members
+    assert not any("helper" in str(r["path"]) for r in endpoints if r["path"])
+
+
+def test_activity_impl_only_method_derives_nothing(temporal: tuple[list[dict], list[dict]]):
+    """task-6 report table, arm 9: `BillingActivitiesImpl.reloadRates()` is declared only
+    by the implementor, never by `BillingActivities` — the `declared_on: interface` fence
+    (`declared_type_methods`) reads members the CONTRACT carries, and this one isn't among
+    them."""
+    endpoints, _ = temporal
+    handler_members = {_member(r["handler"]) for r in endpoints if r["handler"]}
+    assert "reloadRates" not in handler_members
+    assert not any(r["path"] == "billing_ReloadRates" for r in endpoints)
+
+
+def test_shipping_activities_pair_derives_nothing(temporal: tuple[list[dict], list[dict]]):
+    """task-6 report table, arm 10: `ShippingActivities`/`ShippingActivitiesImpl` is
+    implemented in this module, but the implementor carries no `@ActivityImpl` — the flip
+    to inbound DECLINES, and the outbound (SEI) fence still subtracts the interface because
+    it IS implemented here. Net zero in either direction: neither served nor called."""
+    endpoints, _ = temporal
+    handler_members = {_member(r["handler"]) for r in endpoints if r["handler"]}
+    caller_members = {_member(r["caller"]) for r in endpoints if r["caller"]}
+    assert "arrangePickup" not in handler_members | caller_members
+    assert not any(
+        r["path"] and "Shipping" in str(r["path"]) or r["path"] == "arrangePickup"
+        for r in endpoints
+    )
+
+
+def test_untyped_signal_call_derives_nothing(temporal: tuple[list[dict], list[dict]]):
+    """task-6 report table, arm 13: `stub.signal("cancel", "late")` — argument 0 is a bare
+    member name with no workflow type anywhere at the call site, so a path of just
+    "cancel" would collide with every other workflow's signal of that name. Under-reporting
+    is the honest read; this call derives no row."""
+    endpoints, _ = temporal
+    caller_members = {_member(r["caller"]) for r in endpoints if r["caller"]}
+    assert "signalUntyped" not in caller_members
+    assert not any(r["path"] == "cancel" for r in endpoints)
+
+
+def test_attach_to_running_execution_derives_nothing(
+    temporal: tuple[list[dict], list[dict]],
+):
+    """task-6 report table, arm 14: `newWorkflowStub(OrderWorkflow.class, "wf-123")`
+    addresses an already-running execution and starts nothing — no call site is read for
+    it at all, so it derives no row."""
+    endpoints, _ = temporal
+    caller_members = {_member(r["caller"]) for r in endpoints if r["caller"]}
+    assert "attachToRunning" not in caller_members
