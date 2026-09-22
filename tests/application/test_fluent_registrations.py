@@ -45,6 +45,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.facts import Parameter as DeclaredParameter
 from sextant.domain.symbols import method_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -2736,3 +2737,150 @@ def test_every_element_of_a_varargs_destination_goes_through_the_field_ladder(tm
         ("literal.q", "resolved"),
     ]
     assert {row["handler"] for row in rows} == {_MODULE + BODY}
+
+
+# --- vertx-eventbus-chain: the SHIPPED catalog, and the terminal that is its whole point
+
+
+_VERTX_BUS = "io.vertx.core.eventbus.EventBus"
+_VERTX_CONSUMER = "io.vertx.core.eventbus.MessageConsumer"
+_VERTX_CONSUMER_1 = "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;"
+_VERTX_HANDLER = "(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;"
+_VERTX_BUFFER = "(I)Lio/vertx/core/eventbus/MessageConsumer;"
+_VERTX_CALLER = _MODULE + "com/acme/eb/OrderBus#receiveOrders()."
+_VERTX_BODY = "com/acme/eb/OrderBus#lambda$receiveOrders$0(Lio/vertx/core/eventbus/Message;)V."
+
+
+def _vertx_call(
+    owner: str,
+    name: str,
+    descriptor: str,
+    ordinal: int,
+    receiver: int | None,
+    result: int | None,
+    arguments: list | None = None,
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller=_VERTX_CALLER,
+        target=CallTarget(owner=owner.replace(".", "/") + "#", name=name, descriptor=descriptor),
+        invoke_kind="interface",
+        ordinal=ordinal,
+        receiver=receiver,
+        result=result,
+        arguments=arguments or [],
+    )
+
+
+def _vertx_chain(*, with_handler: bool, owner: str = _VERTX_BUS) -> list:
+    """`bus.consumer("orders.twostep")` followed either by `.handler(lambda)` — the
+    registration — or by `.setMaxBufferedMessages(16)`, an undeclared step that passes
+    through and ends the chain short of any terminal."""
+    facts = [
+        _vertx_call(
+            owner,
+            "consumer",
+            _VERTX_CONSUMER_1,
+            0,
+            receiver=1,
+            result=5,
+            arguments=[CallArgument(kind="string", value="orders.twostep")],
+        )
+    ]
+    if with_handler:
+        facts.append(
+            _vertx_call(
+                _VERTX_CONSUMER,
+                "handler",
+                _VERTX_HANDLER,
+                1,
+                receiver=5,
+                result=6,
+                arguments=[CallArgument(kind="lambda", source=9, symbol=_VERTX_BODY)],
+            )
+        )
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + _VERTX_BODY,
+                construct_kind=ConstructKind.METHOD,
+            )
+        )
+    else:
+        facts.append(
+            _vertx_call(
+                _VERTX_CONSUMER,
+                "setMaxBufferedMessages",
+                _VERTX_BUFFER,
+                1,
+                receiver=5,
+                result=6,
+                arguments=[CallArgument(kind="int", value=16)],
+            )
+        )
+    return facts
+
+
+def _vertx_rows(tmp_path: Path, *, with_handler: bool, owner: str = _VERTX_BUS) -> list[tuple]:
+    catalog = next(
+        c for c in YamlCatalogSource(catalogs_dir()).load() if c.id == "vertx-eventbus-chain"
+    )
+    workspace = _run(tmp_path, _vertx_chain(with_handler=with_handler, owner=owner), catalog)
+    rows = sorted(
+        (
+            str(row["direction"]),
+            str(row["protocol"]),
+            str(row["path"]),
+            row["handler"] and str(row["handler"]),
+            str(row["resolution"]),
+        )
+        for row in _rows(workspace)
+    )
+    workspace.close()
+    return rows
+
+
+def test_a_vertx_consumer_given_a_handler_registers_and_carries_it(tmp_path: Path):
+    """The positive the near-miss below is measured against. `consumer(addr)` roots the
+    chain and `.handler(h)` is the declared terminal, so the row derives with the
+    address from the root and the handler the FULL symbol of the lambda's body."""
+    assert _vertx_rows(tmp_path, with_handler=True) == [
+        ("inbound", "eventbus", "orders.twostep", _MODULE + _VERTX_BODY, "resolved")
+    ]
+
+
+@pytest.mark.declines("vertx-eventbus-chain")
+@pytest.mark.pins("fluent.root-owner-is-the-declared-type")
+def test_a_vertx_consumer_on_an_applications_own_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the ROOT OWNER conjunct.
+
+    Every other conjunct holds — the method name, the erased descriptor CP-31 read off
+    both versions, a literal address at argument 0, and a real `.handler(lambda)` step
+    reaching the declared terminal. Only the type the chain roots ON differs, and a
+    module's own `consumer(String)` helper that hands back something handler-shaped is
+    the ordinary way that happens. Without the owner conjunct that helper's argument 0
+    would publish an event-bus address at `resolved`/`compiler`, on evidence about a type
+    this catalog never read."""
+    assert _vertx_rows(tmp_path, with_handler=True, owner="com.acme.eb.OwnBus") == []
+
+
+def test_a_vertx_consumer_never_given_a_handler_derives_nothing(tmp_path: Path):
+    """The TERMINAL conjunct, and the measured reason this catalog is shaped around it.
+
+    MEASURED (CP-31 Q4, vertx-core 4.5.10 and 5.0.0, byte-identical):
+    `EventBusImpl.consumer(String, Handler)` calls `consumer(String)` at offset 9 and
+    `MessageConsumer.handler` at offset 15 — the registration is inside `handler`. So a
+    `MessageConsumer` built and configured but never handed a handler receives no
+    message at all, and a row for it would publish an endpoint nothing serves at
+    `resolved`/`compiler`. Every other conjunct holds here: the root's owner, its erased
+    descriptor and its literal address are the same ones the positive above carries, and
+    the only difference is that the chain ends on an undeclared step instead of on
+    `handler`.
+
+    NOT marked `declines`, and the reason is an inventory gap rather than a judgement
+    about this input: a `declines` test must name exactly one guard from
+    `scripts/guard_check.py`, and that file has no id for `fluent`'s "a chain that never
+    reaches a terminal derives nothing" — the rule this test measures. The marked
+    near-miss above names the root-owner guard instead; this one stands beside it because
+    the terminal is what the catalog exists for, marker or no marker."""
+    assert _vertx_rows(tmp_path, with_handler=False) == []

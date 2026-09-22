@@ -257,10 +257,27 @@ def _cell(value: object) -> str:
 
 
 def main(specs: list[str]) -> int:
+    # KEYED BY `<artifactId>:<version>`, NOT BY `<artifactId>` (Group D Task 8).
+    #
+    # One artifactId may now appear at MORE THAN ONE version: `vertx-eventbus.yml`
+    # declares 4.5-only and 5.0-only overloads of `io.vertx.core.eventbus.EventBus`
+    # in one file, because an overload absent from the version a module builds
+    # against simply never matches (spec 2026-09-22 §3a). Keyed by artifactId
+    # alone, the second coordinate silently REPLACED the first: its jar dropped off
+    # the classpath, and every row whose descriptor only the dropped version
+    # declares came back `NOT DECLARED` — a measurement failure caused by the
+    # harness, not by the catalog.
+    #
+    # Each candidate gets its OWN classpath — its jar, plus every jar of a
+    # DIFFERENT artifactId — so a sibling version can never answer for it, and a
+    # row is filed against the version that actually declares its descriptor. For
+    # an artifactId resolved at one version (every other coordinate in run.sh) that
+    # classpath is the same union as before and the table is unchanged.
     jars: dict[str, Path] = {}
+    artifact_of: dict[str, str] = {}
     versions: dict[str, str] = {}
     owners_of_jar: dict[str, set[str]] = defaultdict(set)
-    index: dict[str, str] = {}
+    index: dict[str, list[str]] = defaultdict(list)
 
     for spec in specs:
         group, artifact, requested, entry, key, path = spec.split("|")
@@ -280,35 +297,65 @@ def main(specs: list[str]) -> int:
                 f"{jar.name} reports version {reported!r} at {entry}#{key}, but the coordinate "
                 f"list asked for {requested!r} — every cell filed under it would be mislabelled"
             )
-        jars[artifact] = jar
-        versions[artifact] = reported
+        candidate = f"{artifact}:{reported}"
+        if candidate in jars:
+            raise ProbeError(f"{candidate} is listed twice in run.sh's ARTIFACTS array")
+        jars[candidate] = jar
+        artifact_of[candidate] = artifact
+        versions[candidate] = reported
         for class_name in classes_of(jar):
-            index.setdefault(class_name, artifact)
+            index[class_name].append(candidate)
 
-    classpath = ":".join(str(jar) for jar in jars.values())
+    def classpath_for(candidate: str) -> str:
+        """This candidate's own jar first, then every jar of a DIFFERENT artifactId.
+
+        A sibling VERSION of the same artifact is left off entirely rather than put
+        second: `javap` answers from the first match on the classpath, so a
+        4.5-only overload would be reported `declared` while reading the 5.0 jar's
+        `EventBus` if both were present, and the version column would then name a
+        release that does not declare it. Other artifacts stay on because
+        `declared_descriptors` walks supertypes and a supertype often lives in a
+        neighbouring jar (`SqsTemplate.send` on `AbstractMessagingTemplate`).
+        """
+        return ":".join(
+            [str(jars[candidate])]
+            + [
+                str(jar)
+                for other, jar in jars.items()
+                if other != candidate and artifact_of[other] != artifact_of[candidate]
+            ]
+        )
+
     rows = catalog_descriptors()
     if not rows:
         raise ProbeError("no shipped catalog declares a `descriptor:` — nothing to measure")
 
     results = []
-    cache: dict[str, dict[str, set[str]]] = {}
+    cache: dict[tuple[str, str], dict[str, set[str]]] = {}
     for row in rows:
         owner = str(row["owner"])
-        artifact = index.get(owner)
-        if artifact is None:
+        candidates = index.get(owner)
+        if not candidates:
             raise ProbeError(
                 f"{row['catalog']} declares descriptors on {owner}, which none of the resolved "
                 f"jars carries — add its coordinate to run.sh rather than leaving it unmeasured"
             )
-        owners_of_jar[artifact].add(owner)
-        if owner not in cache:
-            cache[owner] = declared_descriptors(classpath, owner)
-        declared = cache[owner].get(str(row["name"]), set())
-        results.append({**row, "artifact": artifact, "declared": row["descriptor"] in declared})
+        chosen = candidates[0]
+        found = False
+        for candidate in candidates:
+            if (candidate, owner) not in cache:
+                cache[(candidate, owner)] = declared_descriptors(classpath_for(candidate), owner)
+            if row["descriptor"] in cache[(candidate, owner)].get(str(row["name"]), set()):
+                chosen, found = candidate, True
+                break
+        owners_of_jar[chosen].add(owner)
+        results.append({**row, "candidate": chosen, "declared": found})
 
     by_version: dict[str, list[str]] = defaultdict(list)
-    for artifact, version in versions.items():
-        by_version[version].append(artifact)
+    candidates_of_version: dict[str, list[str]] = defaultdict(list)
+    for candidate, version in versions.items():
+        by_version[version].append(artifact_of[candidate])
+        candidates_of_version[version].append(candidate)
     columns = sorted(by_version)
 
     print("| what the run read | " + " | ".join(columns) + " |")
@@ -321,7 +368,7 @@ def main(specs: list[str]) -> int:
     print(
         "| owner classes resolved out of them | "
         + " | ".join(
-            str(sum(len(owners_of_jar[artifact]) for artifact in by_version[column]))
+            str(sum(len(owners_of_jar[candidate]) for candidate in candidates_of_version[column]))
             for column in columns
         )
         + " |"
@@ -329,7 +376,7 @@ def main(specs: list[str]) -> int:
     print(
         "| catalog descriptors checked against them | "
         + " | ".join(
-            str(sum(1 for r in results if versions[str(r["artifact"])] == column))
+            str(sum(1 for r in results if versions[str(r["candidate"])] == column))
             for column in columns
         )
         + " |"
@@ -341,7 +388,7 @@ def main(specs: list[str]) -> int:
                 sum(
                     1
                     for r in results
-                    if versions[str(r["artifact"])] == column and not r["declared"]
+                    if versions[str(r["candidate"])] == column and not r["declared"]
                 )
             )
             for column in columns
@@ -352,11 +399,11 @@ def main(specs: list[str]) -> int:
     print("| # | catalog | owner | method | arity | descriptor | artifact | version | verdict |")
     print("|---|---|---|---|---|---|---|---|---|")
     for number, result in enumerate(results, start=1):
-        artifact = str(result["artifact"])
+        candidate = str(result["candidate"])
         print(
             f"| {number} | `{result['catalog']}` | `{result['owner']}` | `{result['name']}` "
-            f"| {_cell(result['arity'])} | `{result['descriptor']}` | `{artifact}` "
-            f"| {versions[artifact]} | {'declared' if result['declared'] else 'NOT DECLARED'} |"
+            f"| {_cell(result['arity'])} | `{result['descriptor']}` | `{artifact_of[candidate]}` "
+            f"| {versions[candidate]} | {'declared' if result['declared'] else 'NOT DECLARED'} |"
         )
     return 0
 

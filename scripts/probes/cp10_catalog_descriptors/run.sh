@@ -104,6 +104,18 @@ ARTIFACTS=(
   # `.jar.sha1` sidecar, which is what CP-30 does with the same two archives.
   # Pinned to the version `fixtures/temporal-probe/pom.xml` declares.
   "io.temporal|temporal-sdk|1.27.0|-|-"
+  # `vertx-eventbus.yml` (Group D Task 8), and the FIRST artifactId this harness
+  # reads at TWO versions. That is the catalog's own shape rather than an
+  # accident: spec 2026-09-22 §3a puts 4.5-only and 5.0-only overloads of
+  # `io.vertx.core.eventbus.EventBus` in one file, because an overload absent
+  # from the version a module builds against simply never matches. `descriptors.py`
+  # keys its jars by `<artifactId>:<version>` for exactly this pair and gives each
+  # candidate its own classpath, so a row is filed against the version that
+  # actually declares its descriptor and a sibling version can never answer for
+  # it. Both versions are the ones CP-31 measured; 4.5.10 is also what
+  # `fixtures/orders-eventbus/pom.xml` pins.
+  "io.vertx|vertx-core|4.5.10|META-INF/MANIFEST.MF|Implementation-Version"
+  "io.vertx|vertx-core|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

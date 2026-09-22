@@ -772,7 +772,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**82 of 97 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**85 of 100 catalogs name the artifact and versions their rules were read from. 15 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -818,6 +818,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `microprofile-rest-client` | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1, 4.0.0 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
+| `quarkus-consume-event` | `io.quarkus:quarkus-vertx` | 3.17.5 |
+|  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
 | `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
@@ -889,6 +891,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `temporal-untyped` | `io.temporal:temporal-sdk` | 1.27.0 |
 | `temporal-workflow` | `io.temporal:temporal-sdk` | 1.27.0 |
 |  | `io.temporal:temporal-spring-boot-autoconfigure` | 1.27.0 |
+| `vertx-eventbus-chain` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
+| `vertx-eventbus` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
 
 **No `measured:` block.** Not the same as unbounded, and not a claim that these do not work. Some are bounded by a library SEXTANT ITSELF ships — `grpc-schema` and `grpc-java` by `grpcio-tools>=1.83.1` and `protobuf>=7.36.1`, `graphql-schema` by `graphql-core>=3.2.6`, all declared in `pyproject.toml` — so their version bound is already determinable and merely unrecorded. Others rest on framework knowledge taken from documentation or source. **Telling those two apart per catalog is deferred, not impossible**: there is always a way to find the real version if we want it.
 

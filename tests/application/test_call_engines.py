@@ -10488,3 +10488,99 @@ def test_an_untyped_stub_for_a_running_execution_derives_nothing(tmp_path: Path)
     workspace.close()
 
     assert rows == [], "a running execution's identity was read as a workflow type"
+
+
+# --- vertx-eventbus: the one-call forms, and the two conjuncts that gate them ----------
+#
+# The catalog's rules and the bytecode behind them are CP-31's (vertx-core 4.5.10 and
+# 5.0.0). What is measured here is what the SHIPPED file does with a call site: the
+# positive it derives, and the two near-misses it must decline.
+
+_EB = "io/vertx/core/eventbus/EventBus#"
+_EB_SEND_2 = "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;"
+_EB_CONSUMER_1 = "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;"
+
+
+def _eventbus_call(
+    *, owner: str = _EB, name: str, descriptor: str, address: str = "orders.created"
+) -> CallSiteFact:
+    return CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/eb/OrderBus#placeOrder().",
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=[
+            CallArgument(kind="string", value=address),
+            CallArgument(kind="parameter", value=0),
+        ],
+    )
+
+
+def _eventbus_rows(tmp_path: Path, call: CallSiteFact) -> list[tuple]:
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("vertx-eventbus"))
+    rows = sorted(
+        (str(row["direction"]), str(row["protocol"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_an_event_bus_send_derives_the_address_it_names(tmp_path: Path):
+    """The positive both near-misses below are measured against: `send(String, Object)`
+    at the erased descriptor CP-31 read off vertx-core 4.5.10 and 5.0.0 alike, on the
+    interface the catalog names, with a literal address at argument 0.
+
+    `unresolved` is the row's honest resolution HERE and not a defect: these facts carry
+    no signature for the method whose parameter is handed to `body_arg`, so the request
+    shape is unknown and the capture is incomplete. Against the compiled fixture the same
+    call derives `resolved` with the payload's own shape —
+    `tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows` is what pins that."""
+    assert _eventbus_rows(tmp_path, _eventbus_call(name="send", descriptor=_EB_SEND_2)) == [
+        ("outbound", "eventbus", "orders.created", "unresolved")
+    ]
+
+
+@pytest.mark.declines("vertx-eventbus")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_an_event_bus_send_on_an_applications_own_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone.
+
+    Every other conjunct holds — the method name, the erased descriptor, a literal
+    string where the catalog reads an address — and only the type the call is made ON
+    differs. An application's own thin wrapper called `send` that returns the bus it
+    wraps is the ordinary way that happens, and without the owner conjunct that
+    wrapper's own argument 0 would publish an event-bus address at
+    `resolved`/`compiler`, where nothing downstream can tell it from an observation."""
+    assert (
+        _eventbus_rows(
+            tmp_path,
+            _eventbus_call(owner="com/acme/eb/OwnBus#", name="send", descriptor=_EB_SEND_2),
+        )
+        == []
+    )
+
+
+def test_a_bare_event_bus_consumer_derives_nothing_from_the_one_call_catalog(tmp_path: Path):
+    """M6's consequence, as a row that is not there rather than as a comment.
+
+    MEASURED (CP-31 Q4, both versions): `EventBusImpl.consumer(String, Handler)` calls
+    `consumer(String)` at offset 9 and `MessageConsumer.handler` at offset 15, so the
+    registration lives in `handler` and a consumer never given one receives nothing.
+    `vertx-eventbus.yml` therefore declares the two-argument overload and NOT the
+    one-argument one — the call below carries the real descriptor of the real method on
+    the real owner, and still derives nothing. `vertx-eventbus-chain.yml` is what reads
+    it, and only once a chain reaches `.handler(...)`.
+
+    Not marked `declines`: it measures a row this catalog never had rather than a
+    conjunct of one it does."""
+    assert (
+        _eventbus_rows(
+            tmp_path,
+            _eventbus_call(name="consumer", descriptor=_EB_CONSUMER_1, address="orders.unhandled"),
+        )
+        == []
+    )

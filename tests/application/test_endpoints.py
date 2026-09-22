@@ -8,6 +8,7 @@ import yaml
 from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
@@ -21,6 +22,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -9824,3 +9826,134 @@ def test_an_unimplemented_temporal_contract_still_derives_outbound(tmp_path: Pat
     assert _temporal_rows(tmp_path, catalog_id, implementor=None) == [
         ("outbound", kind, name, None, contract + "operate(sig_a).")
     ]
+
+
+# --- Quarkus @ConsumeEvent: the annotation gate, the measured default and the default
+# --- that is NOT written (Group D Task 8, CP-31 Q6/Q7) --------------------------------
+
+_QCE_MODULE = "sextant-jvm maven com.acme/orders-eventbus 1.0.0 "
+_QCE_TYPE = _QCE_MODULE + "com/acme/eb/OrderConsumers#"
+_QCE_ANNOTATION = "io/quarkus/vertx/ConsumeEvent#"
+
+
+def _consume_event_facts(root: Path, *, annotation: str, args: dict) -> None:
+    """One bean class declaring one consumer method taking one payload.
+
+    `annotation` is the fqn the method carries and `args` what it carries as arguments —
+    the two knobs this catalog's own conjuncts turn on.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/eb/OrderConsumers.java",
+        module_id="com.acme:orders-eventbus",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    member = _QCE_TYPE + "onOrderCreated(sig_a)."
+    signature = Signature(
+        parameters=[
+            Parameter(name="order", type=TypeRef(symbol="com/acme/eb/Order#", wire_type="object"))
+        ],
+        returns=TypeRef(symbol="void#", wire_type=""),
+    )
+    write_fact_file(
+        root / "OrderConsumers.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=_QCE_TYPE, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=member,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_QCE_TYPE,
+                signature=signature,
+                modifiers={"public": True},
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=member,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args=args),
+            ),
+        ],
+    )
+
+
+def _consume_event_rows(tmp_path: Path, *, annotation: str, args: dict) -> tuple[list, list]:
+    _consume_event_facts(tmp_path / "facts", annotation=annotation, args=args)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert (
+        derive_endpoints(
+            workspace,
+            [_shipped("quarkus-consume-event")],
+            capabilities=set(_TASK_7_CAPABILITIES),
+        )
+        == []
+    )
+    # `metadata_from` is written by its OWN pass, below `derive_endpoints` and below
+    # `record_request_requirements`, because an entry names its row by that row's
+    # identity columns (D02 §2l). Running it here is what makes the two assertions
+    # below one measurement rather than two halves nobody joined.
+    record_endpoint_attributes(workspace, [_shipped("quarkus-consume-event")])
+    endpoints = sorted(
+        (str(row["direction"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    metadata = sorted(
+        (str(row["path"]), str(row["kind"]), row["value"] and str(row["value"]))
+        for row in workspace.query("endpoint_metadata")
+    )
+    workspace.close()
+    return endpoints, metadata
+
+
+def test_a_consume_event_with_no_address_takes_the_beans_fully_qualified_name(tmp_path: Path):
+    """CP-31 Q6 and Q7 together, as the row they produce.
+
+    `@ConsumeEvent`'s own `AnnotationDefault` for `value()` is the EMPTY STRING, so the
+    annotation use carries no address at all; `VertxProcessor.build` then supplies one at
+    offsets 63-76 by calling `BeanInfo.getBeanClass().toString()` — the FULLY-QUALIFIED
+    class name — which is what `path_fallback: declaring_type_qualified_name` composes.
+    `local()`'s default is the boolean `true`, so the undecorated consumer is local-only
+    and `absent_value` writes it."""
+    assert _consume_event_rows(tmp_path, annotation=_QCE_ANNOTATION, args={}) == (
+        [("inbound", "com.acme.eb.OrderConsumers", "resolved")],
+        [("com.acme.eb.OrderConsumers", "delivery", "true")],
+    )
+
+
+def test_a_consume_event_declaring_local_false_is_cluster_reachable(tmp_path: Path):
+    """The other side of the measured default: an explicit `local = false` overrides it,
+    and the metadata row carries the attribute's own value rather than the default. Both
+    rows are needed, because a `metadata_from` that wrote `absent_value` unconditionally
+    would pass the test above on its own."""
+    assert _consume_event_rows(
+        tmp_path, annotation=_QCE_ANNOTATION, args={"value": "orders.cluster", "local": False}
+    ) == (
+        [("inbound", "orders.cluster", "resolved")],
+        [("orders.cluster", "delivery", "false")],
+    )
+
+
+@pytest.mark.declines("quarkus-consume-event")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+def test_a_look_alike_consume_event_annotation_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the ANNOTATION conjunct alone.
+
+    Every other conjunct holds — a public method on a class, one unannotated payload
+    parameter, and an address written exactly where `path_from: [value]` reads one. Only
+    the annotation's fqn differs, and an application's own `@ConsumeEvent` marker in its
+    own package is the ordinary way that happens. Without the fqn conjunct that
+    application's own bookkeeping annotation would publish an event-bus endpoint at
+    `resolved`/`compiler`, and the `absent_value` measured off QUARKUS's annotation would
+    be attributed to it."""
+    assert _consume_event_rows(
+        tmp_path, annotation="com/acme/eb/ConsumeEvent#", args={"value": "orders.created"}
+    ) == ([], [])

@@ -66,6 +66,7 @@ PRIMED_FIXTURES = (
     "orders-gateway",
     "orders-servlet",
     "temporal-probe",
+    "orders-eventbus",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

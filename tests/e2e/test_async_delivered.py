@@ -15,6 +15,8 @@ fixture shape, and that the questions left are exactly the unfed channels.
 **Not a document check.** Real bytecode, real pipeline, assertion on what was derived.
 """
 
+import json
+
 import pytest
 from click.testing import CliRunner
 
@@ -476,3 +478,241 @@ def test_attach_to_running_execution_derives_nothing(
     endpoints, _ = temporal
     caller_members = {_member(r["caller"]) for r in endpoints if r["caller"]}
     assert "attachToRunning" not in caller_members
+
+
+# --- The Vert.x event bus: fixtures/orders-eventbus (spec 2026-09-22 §3, §4) ------------
+#
+# Every row below was read off ONE REAL ANALYSIS of the committed fixture, not predicted:
+# `.venv/bin/sextant module analyze fixtures/orders-eventbus --workspace /tmp/eb`, then the
+# workspace queried. The sets are EXACT — every row, every column — because a subset check
+# or a count would pass for a catalog that published one address as another.
+
+EVENTBUS_FIXTURE = FIXTURES / "orders-eventbus"
+
+_ORDER = "com/acme/eb/Order#"
+
+
+@pytest.fixture(scope="module")
+def eventbus(tmp_path_factory: pytest.TempPathFactory) -> tuple[list[dict], list[dict]]:
+    """Every `endpoints` and `endpoint_metadata` row `fixtures/orders-eventbus` derives —
+    one analysis, every test below reads off it."""
+    workspace_dir = tmp_path_factory.mktemp("eventbus")
+    compile_fixture(EVENTBUS_FIXTURE)
+    result = CliRunner().invoke(
+        cli, ["module", "analyze", str(EVENTBUS_FIXTURE), "--workspace", str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    try:
+        endpoints = [
+            dict(row) for row in workspace.query("endpoints") if str(row["protocol"]) == "eventbus"
+        ]
+        metadata = [
+            dict(row)
+            for row in workspace.query("endpoint_metadata")
+            if str(row["protocol"]) == "eventbus"
+        ]
+        return endpoints, metadata
+    finally:
+        workspace.close()
+
+
+def _shape(value: str | None) -> str | None:
+    """The `shape_id` inside a `request_shape` blob, or None where the row carries none."""
+    return None if value is None else str(json.loads(value)["shape_id"])
+
+
+def _eventbus_row(row: dict) -> tuple:
+    """`(catalog, direction, path, handler, caller, resolution, request shape)` — the whole
+    row a reader would act on, per catalog, so a path that moved between catalogs or a
+    handler that became a caller fails here."""
+    return (
+        str(row["catalog_id"]),
+        str(row["direction"]),
+        row["path"],
+        _member(row["handler"]),
+        _member(row["caller"]),
+        str(row["resolution"]),
+        _shape(row["request_shape"]),
+    )
+
+
+def test_eventbus_shapes_rows(eventbus: tuple[list[dict], list[dict]]):
+    """Spec §4's second fixture, arm by arm, off a real analysis.
+
+    Thirteen rows and no more. The three catalogs partition the surface rather than
+    overlapping on it: `vertx-eventbus.yml` takes the one-call forms,
+    `vertx-eventbus-chain.yml` the two-step ones, `quarkus-consume-event.yml` the
+    declarations. Two arms of the fixture derive NOTHING and their absence is what the
+    count holds — the handler-less `consumer("orders.unhandled")` (M6/CP-31 Q4) and
+    `OrderConsumers`' own payload type, which is not an endpoint of anything.
+
+    The values worth reading twice:
+      * `com.acme.eb.OrderConsumers` — the bare `@ConsumeEvent`'s address is the declaring
+        bean class's FULLY-QUALIFIED name (CP-31 Q7), not the method name and not the
+        simple name;
+      * `${orders.address}` at `unresolved` — a placeholder carried verbatim, never a
+        guessed deployed value;
+      * `orders.headers` carrying `com/acme/eb/Order#` — the payload of a
+        `(MultiMap, Order)` method is its SECOND parameter, which is what
+        `request_body.excludes` reads;
+      * `orders.twostep`'s handler is the LAMBDA `.handler(...)` was given, while
+        `orders.inbox`'s is the enclosing method: the one-call form registers at the call
+        the catalog matched, the chain registers at its terminal.
+    """
+    endpoints, _ = eventbus
+    assert len(endpoints) == 13
+    assert {_eventbus_row(r) for r in endpoints} == {
+        # --- quarkus-consume-event: the declarations -------------------------
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "${orders.address}",
+            "onConfiguredOrder",
+            None,
+            "unresolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "com.acme.eb.OrderConsumers",
+            "onAnyOrder",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.cluster",
+            "onClusteredOrder",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.created",
+            "onOrderCreated",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        (
+            "quarkus-consume-event",
+            "inbound",
+            "orders.headers",
+            "onOrderWithHeaders",
+            None,
+            "resolved",
+            _ORDER,
+        ),
+        # --- vertx-eventbus: the one-call forms ------------------------------
+        ("vertx-eventbus", "inbound", "orders.inbox", "receiveOrders", None, "resolved", None),
+        (
+            "vertx-eventbus",
+            "inbound",
+            "orders.local",
+            "receiveLocalOrders",
+            None,
+            "resolved",
+            None,
+        ),
+        ("vertx-eventbus", "outbound", "orders.created", None, "placeOrder", "resolved", _ORDER),
+        ("vertx-eventbus", "outbound", "orders.events", None, "announceOrder", "resolved", _ORDER),
+        ("vertx-eventbus", "outbound", "orders.lookup", None, "lookupOrder", "resolved", _ORDER),
+        (
+            "vertx-eventbus",
+            "outbound",
+            "orders.priority",
+            None,
+            "placeOrderWithOptions",
+            "resolved",
+            _ORDER,
+        ),
+        # --- vertx-eventbus-chain: the two-step forms ------------------------
+        (
+            "vertx-eventbus-chain",
+            "inbound",
+            "orders.twostep",
+            "lambda$receiveOrdersInTwoSteps$2",
+            "receiveOrdersInTwoSteps",
+            "resolved",
+            None,
+        ),
+        (
+            "vertx-eventbus-chain",
+            "outbound",
+            "orders.shipments",
+            None,
+            "shipOrder",
+            "resolved",
+            _ORDER,
+        ),
+    }
+
+
+def test_every_eventbus_row_is_verbless_and_states_no_reply_shape(
+    eventbus: tuple[list[dict], list[dict]],
+):
+    """Two claims the row set above does not carry, each asserted over EVERY row rather
+    than sampled.
+
+    `method` is NULL because an event-bus address has no verb — `eventbus` is not a verbed
+    protocol and none of the three catalogs declares `all_methods`. `response_shape` is
+    NULL everywhere INCLUDING on `orders.lookup`, which is a `request(...)`: spec §3a asks
+    for the reply type to become `response_shape`, and the reply type is the call's RETURN
+    type, which `single_call`'s only response word (`response_arg`, an argument POSITION)
+    cannot name. `vertx-eventbus.yml` states that as a boundary; this is what holds it, so
+    the day an engine word closes it this test fails and the boundary is retired
+    deliberately rather than drifting."""
+    endpoints, _ = eventbus
+    assert {row["method"] for row in endpoints} == {None}
+    assert {row["response_shape"] for row in endpoints} == {None}
+
+
+def test_a_consumer_never_given_a_handler_derives_nothing(
+    eventbus: tuple[list[dict], list[dict]],
+):
+    """M6's consequence, proven by running the analysis rather than reasoned about.
+
+    `OrderBus.prepareUnhandledConsumer()` calls `bus.consumer("orders.unhandled")` and
+    then only `setMaxBufferedMessages(16)`. MEASURED (CP-31 Q4, vertx-core 4.5.10 and
+    5.0.0, byte-identical): registration happens inside `MessageConsumer.handler`, which
+    this arm never calls — so this address receives no message and a row for it would be
+    an endpoint nothing serves. Both halves are asserted: no row anywhere names the
+    address, and no row anywhere names the method that built the consumer."""
+    endpoints, metadata = eventbus
+    assert [r for r in endpoints if r["path"] == "orders.unhandled"] == []
+    assert [r for r in metadata if r["path"] == "orders.unhandled"] == []
+    members = {_member(r["handler"]) for r in endpoints} | {_member(r["caller"]) for r in endpoints}
+    assert "prepareUnhandledConsumer" not in members
+
+
+def test_eventbus_delivery_metadata_is_the_measured_default_or_the_declared_value(
+    eventbus: tuple[list[dict], list[dict]],
+):
+    """`@ConsumeEvent.local()`'s `AnnotationDefault` is the boolean `true` (CP-31 Q6), so
+    an undecorated consumer is LOCAL-ONLY and `absent_value: "true"` is what says so. The
+    set is exact and covers all five Quarkus consumers, which is what makes it a pin: a
+    `metadata_from` that wrote its `absent_value` unconditionally would still produce four
+    of these rows, and `orders.cluster`'s `false` is the one that fails it.
+
+    The value is the ATTRIBUTE's own, lowercase — `true` means local-only, `false` means
+    reachable from another node — rather than a word this project coined for it. Only
+    `orders.cluster` declares `local = false`; the other four derive the measured default.
+    No row of the five raw event-bus arms carries delivery metadata at all, because a
+    call site declares no such attribute."""
+    _, metadata = eventbus
+    assert {
+        (str(r["path"]), str(r["kind"]), str(r["value"]), _member(r["caller"]), str(r["name"]))
+        for r in metadata
+    } == {
+        ("${orders.address}", "delivery", "true", "onConfiguredOrder", "None"),
+        ("com.acme.eb.OrderConsumers", "delivery", "true", "onAnyOrder", "None"),
+        ("orders.cluster", "delivery", "false", "onClusteredOrder", "None"),
+        ("orders.created", "delivery", "true", "onOrderCreated", "None"),
+        ("orders.headers", "delivery", "true", "onOrderWithHeaders", "None"),
+    }
