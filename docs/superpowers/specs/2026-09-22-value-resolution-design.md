@@ -77,6 +77,18 @@ reading what the key's `arg` is *for*, and it costs a minute.
 | I-4 | `value_edges` was specified as a new materialised table, duplicating data three existing tables already hold | It is a **view** (§3b) |
 | I-5 | `identified_by.owner` was required; `field` named an OO concept; the fifth edge was specified as "ASM work" | All three made language-neutral (§5) |
 
+### 0d. What building the walk changed (Task 3, ruled 2026-09-23)
+
+Three answers the vocabulary could not spell, each found by implementing §1b against the
+fact grammar rather than by reading it again. Same voice, same table, because they are
+corrections of the same kind — a shape the design named in prose and had no word for.
+
+| # | Finding | Ruling |
+|---|---|---|
+| T-1 | §6's "a concatenation stays `unresolved`" read against §1b's `expression`, which exists for "a composed expression, carried verbatim". Discarding the template would also make the `produced_by` arm's fix pointless — it was re-pointed at `call_sites` precisely so a concat site is reachable | §6 refuses the **evaluation**, never the template. A concatenation is an `expression` carrying its template with the holes unfilled, and no hole is ever filled in. §6's bullet amended |
+| T-2 | An explicit `null` and a **zero-length** varargs call had no answer: §1b admits a literal, an expression or a reason, so both came back as a miss — and D00 §5 says the opposite in as many words, that "the empty list is the fact ... 'called with no values' is a different statement from 'the array could not be read'" | `Answer.kind` gains **`absent`** — *the code states there is no value here*. A RESOLVED answer, distinguishable from both a literal and every reason. Calling a known-empty call ambiguous contradicted the facts it was read from |
+| T-3 | A declaration reference (`OrderWorker.class`) IS the value and the answer must carry the symbol; carried as a `string` literal, a catalog reading a destination out of that slot publishes `com/acme/OrderWorker#` as an address — a wrong row at `resolved`, which is §7's whole risk | `literal_kind` gains **`symbol`**. The `kind` set is untouched: it is the literal vocabulary that grew, and a consumer wanting text still tests for `string` |
+
 ---
 
 ## 1. Edges, paths, and what `unresolved` is allowed to mean
@@ -118,9 +130,15 @@ An `Answer` is one of:
 
 - **`literal(value, kind)`** — a string, number or boolean the code states. `kind` is carried because
   catalogs already read non-strings (`@ConsumeEvent(local = false)`), and a stringly answer would
-  force every consumer to re-infer it.
+  force every consumer to re-infer it. **`kind` also admits `symbol`** (T-3): a declaration reference
+  is the value, and carrying its symbol as a `string` lets a destination-reading catalog publish
+  `com/acme/OrderWorker#` as an address.
 - **`expression(text)`** — a `${…}` or composed expression, carried **verbatim and never evaluated**
-  (§8.2 keeps this repository out of guessing deployed values).
+  (§8.2 keeps this repository out of guessing deployed values). A concatenation's template arrives
+  this way, holes unfilled (T-1).
+- **`absent`** — the code states there is no value: an explicit null, a zero-length varargs call
+  (T-2). A resolved answer, and distinguishable from every reason, because "called with no values"
+  is a different statement from "it could not be read" (D00 §5's own line).
 - **`unresolved(reason)`**
 
 ### 1c. Paths, not positions — and what multiplicity means
@@ -342,7 +360,10 @@ than merely discouraged.
 - **It does not change linking.** A resolved value is a value; whether two rows link stays the
   linking tier's business.
 - **It does not touch `fluent`'s chain walk** (§2b).
-- **No reflection, no dynamic proxies, no computed strings.** A concatenation stays `unresolved`.
+- **No reflection, no dynamic proxies, no computed strings.** A concatenation is never
+  **evaluated**; its template is carried verbatim as an `expression` with its holes unfilled, and no
+  hole is ever filled in (amended by T-1, §0d — the original bullet read "a concatenation stays
+  `unresolved`", which would have discarded the template the `produced_by` arm was fixed to reach).
 
 ---
 

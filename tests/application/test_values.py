@@ -367,6 +367,22 @@ def _facts() -> list[Fact]:
                 CallArgument(kind="lambda", symbol=_UNREAD + "body(sig_0).", captures=0, source=3)
             ],
         ),
+        _site(
+            _symbol(_UNREAD, "use", "()V"),
+            2,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="null")],
+        ),
+        # A zero-length varargs call: the empty element list is the FACT (D00 §5).
+        _declared(_ARRAYS, "none", "()V"),
+        _site(
+            _symbol(_ARRAYS, "none", "()V"),
+            0,
+            _MANY_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="array", elements=[])],
+        ),
         # Two methods that hand each other the same parameter.
         _declared(_LOOP, "ping", _TAKES_STRING),
         _void(_LOOP, "ping", _TAKES_STRING),
@@ -654,6 +670,25 @@ def test_a_lambda_argument_answers_not_readable_rather_than_a_body_symbol(walked
     bindings = _bindings(walked, _symbol(_UNREAD, "use", "()V"), 1)
     assert _reasons(bindings) == ["not_readable"]
     assert [b.slots[0].value for b in bindings] == [None]
+
+
+def test_a_value_the_code_states_is_not_there_is_absent_rather_than_a_miss(walked):
+    """`absent` (ruled 2026-09-23): the code STATES there is no value — an explicit null,
+    and a zero-length varargs call. D00 §5 draws this line itself for the empty element
+    list ("the empty list is the fact ... 'called with no values' is a different statement
+    from 'the array could not be read'"), so answering `non_enumerable` there would call a
+    known-empty thing ambiguous and contradict the facts it was read from.
+
+    A resolved answer, not a reason: a consumer told `not_readable` would go looking for a
+    value that is not there to be found."""
+    for method, ordinal in (
+        (_symbol(_UNREAD, "use", "()V"), 2),
+        (_symbol(_ARRAYS, "none", "()V"), 0),
+    ):
+        bindings = _bindings(walked, method, ordinal)
+        assert [(b.slots[0].kind, b.slots[0].value, b.slots[0].reason) for b in bindings] == [
+            ("absent", None, None)
+        ], f"{method}@{ordinal}"
 
 
 def test_a_walk_that_returns_to_a_position_on_its_own_path_is_unresolved_cycle(walked):

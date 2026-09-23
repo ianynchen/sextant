@@ -61,13 +61,23 @@ states that `to_index` is meaningful for `bound_to_parameter` alone), so neither
 WHICH slot it is about, and a walk resolving a slot cannot use them. The same facts are in
 the argument entry at that slot, which the walk must read anyway to answer with a literal.
 
+**A FOURTH table, stated because the edge query says three.** `value_edges.sql`'s header
+says it is normalised out of `call_sites`, `return_flows` and `call_edges`; this module
+reads `call_edges` DIRECTLY as well, for one question the edges cannot answer — whether a
+site's body was read at all. That is the whole difference between `external` (we cannot see
+the producer) and `not_readable` (we can, and nothing names its value), and it is the
+common case rather than a corner: MEASURED on `mall-admin`, 1,411 of 2,065 value-producing
+call sites are the third-party boundary, which `call_edges` records with a NULL callee.
+A reader tracing this module's inputs finds four, and this is why.
+
 **The sixth edge is missing and its absence is an answer.** `written_by` — a binding
 assigned anywhere but an initialiser — is specified as a scanner capability (§4, D00 9.19)
 and no backend reports it yet, so `value_edges` emits no such row. Every binding read
-therefore ends at `no_writer`, and `_binding` below is the one place that will follow the
-edge the day it exists. The walk does NOT re-derive it from the constructor-only
-`field_writes` fact: that would be a second spelling of an edge the design gives one home,
-which is the disease §0a records.
+therefore ends at `no_writer`, which today means *no writer edge exists to follow* and not
+*this binding is never written* — `NO_WRITER` below says so where the reason is defined.
+`_binding` is the one place that will follow the edge the day it exists. The walk does NOT
+re-derive it from the constructor-only `field_writes` fact: that would be a second spelling
+of an edge the design gives one home, which is the disease §0a records.
 
 **It names no framework and no language.** `identified_by` (§2) is catalog data that
 arrives later; until it does, a producer whose value nothing names answers with a reason
@@ -93,6 +103,11 @@ from sextant.application.ports.workspace import Workspace
 NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"
+# **What this means TODAY, said where the reason is defined.** §1d reads "a binding nothing
+# in this module writes", and that is what it will mean once capability 9.19 lands and
+# `value_edges` grows its `written_by` arm. Until then no writer edge exists at all, so the
+# answer is *nothing was found to follow* — NOT *this binding is never written*. A reader
+# acting on today's answer is reading a missing capability, not a property of the code.
 NO_WRITER = "no_writer"
 EXTERNAL = "external"
 CYCLE = "cycle"
@@ -100,18 +115,29 @@ _REASONS = (NOT_READABLE, NON_ENUMERABLE, ESCAPES, NO_WRITER, EXTERNAL, CYCLE)
 
 LITERAL = "literal"
 EXPRESSION = "expression"
+# **The code STATES there is no value here** — an explicit null, and a zero-length varargs
+# call. A resolved answer, not a miss, and it has to be tellable from both: D00 §5 draws
+# exactly this line for the empty element list ("the empty list is the FACT, and it is the
+# one place in this grammar where an empty value says something an absent key would not,
+# because 'called with no values' is a different statement from 'the array could not be
+# read'"), so answering `non_enumerable` there would call a known-empty thing ambiguous and
+# contradict the facts. Carries no value and no reason (ruled 2026-09-23).
+ABSENT = "absent"
 UNRESOLVED = "unresolved"
 
 STRING = "string"
 INT = "int"
 BOOL = "bool"
-# The fourth `literal_kind`, and it earns its place by what it PREVENTS. A declaration
-# reference (`OrderWorker.class`, a named constant, the concrete type a value was built
-# from) IS the value — `value_edges.sql`'s `names_declaration` arm says the walk stops
-# there with an answer — and the answer has to carry the symbol. Carrying it as a `string`
-# would hand `com/acme/OrderWorker#` to a catalog reading a destination out of that slot,
-# which publishes a symbol as an address: a fabrication at `resolved`, which is the one
-# failure §7 says this whole work risks. A consumer that wants text tests for `string`.
+# **The fourth `literal_kind` — and `kind` is still the set the spec pins.** §1b's answer
+# kinds are what they were; this is the `literal_kind` vocabulary gaining a member, and the
+# distinction matters to a reader checking the spec against the code. It earns its place by
+# what it PREVENTS. A declaration reference (`OrderWorker.class`, a named constant, the
+# concrete type a value was built from) IS the value — `value_edges.sql`'s
+# `names_declaration` arm says the walk stops there with an answer — and the answer has to
+# carry the symbol. Carrying it as a `string` would hand `com/acme/OrderWorker#` to a
+# catalog reading a destination out of that slot, which publishes a symbol as an address: a
+# fabrication at `resolved`, which is the one failure §7 says this whole work risks. A
+# consumer that wants text tests for `string` (approved 2026-09-23).
 SYMBOL = "symbol"
 
 # The one slot that is not an argument index (§1b: one entry point, not two — a receiver
@@ -148,13 +174,14 @@ _ELEMENT_OF = "element-of"
 class Answer:
     """What a slot holds, on one path (§1b).
 
-    `kind` is `literal`, `expression` or `unresolved`. A literal is a value the code
-    states and `literal_kind` says which sort (`string`, `int`, `bool`, or `symbol` for a
-    declaration reference — see `SYMBOL`); `value` carries it. An expression is a `${…}`
-    or a composed address, carried **verbatim and never evaluated** (§8.2 keeps this
-    repository out of guessing deployed values, and §6 keeps a computed string out of it
-    entirely — a concatenation never becomes a literal here). An `unresolved` answer
-    carries one of `_REASONS` and no value.
+    `kind` is `literal`, `expression`, `absent` or `unresolved`. A literal is a value the
+    code states and `literal_kind` says which sort (`string`, `int`, `bool`, or `symbol`
+    for a declaration reference — see `SYMBOL`); `value` carries it. An expression is a
+    `${…}` or a composed address, carried **verbatim with its holes unfilled** — §6 as
+    amended 2026-09-23 refuses to EVALUATE a concatenation, and §8.2 keeps this repository
+    out of guessing deployed values, so no hole is ever filled in and no literal is ever
+    minted from one. `absent` is the code stating there is no value (see `ABSENT`). An
+    `unresolved` answer carries one of `_REASONS` and no value.
     """
 
     kind: str
@@ -476,9 +503,12 @@ class _Walk:
         if kind == "concat":
             # W4: an address the code ASSEMBLES, whose `value` is the TEMPLATE with a hole
             # per runtime value. Carried verbatim — §1b's `expression` — and never
-            # evaluated: filling the holes would be this repository guessing a deployed
-            # string, which §6 and §8.2 both refuse. It is never a `literal`, so a
-            # consumer reading literals is unaffected by it existing.
+            # evaluated: §6 as amended 2026-09-23 refuses the EVALUATION, not the template,
+            # and no hole is ever filled in (§8.2: this repository does not guess deployed
+            # values). It is never a `literal`, so a consumer reading literals is
+            # unaffected by it existing — and discarding it would make `produced_by`'s
+            # whole reason for reading `call_sites` rather than `call_edges` pointless,
+            # since reaching the concat site is exactly what that arm was fixed to do.
             template = argument.get("value")
             if not isinstance(template, str):
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -505,13 +535,14 @@ class _Walk:
             # above, and it is left out of both on MEANING (`value_edges.sql`'s
             # `names_declaration` arm, ruled 2026-09-22): it names a body, not a value.
             return _only(trail, _unresolved(NOT_READABLE))
+        if kind == "null":
+            # The code STATES there is no value (D00 §5's `null` kind, ACONST_NULL). That
+            # is an answer and not a miss, so it is `absent` rather than a reason: a
+            # consumer told `not_readable` would look for a value that is not there to be
+            # found, which is a different and false claim about the code.
+            return _only(trail, Answer(kind=ABSENT))
         source = argument.get("source")
         if source is None:
-            # `null` lands here with every kind the grammar has that names no produced
-            # value: the code states the absence of one, and §1b's answers are a literal
-            # string, number or boolean, an expression, or a reason. There is no fourth
-            # spelling, so the walk says it could not name the value rather than minting
-            # one the vocabulary does not have.
             return _only(trail, _unresolved(NOT_READABLE))
         used_at = origin[2] if origin[0] == _SLOT else None
         return self._through(method, int(str(source)), used_at, trail, frames)
@@ -528,14 +559,18 @@ class _Walk:
         written constant yields ELEMENTS, each its own path; anything else yields one
         `non_enumerable` with no element list at all.
 
-        An empty list is a real zero-length call (D00 §5's one place an empty value says
-        something an absent one would not) and still answers here: §1b has no spelling for
-        "no value at all", and "there is no element to enumerate" is the true statement
-        closest to it.
+        **An EMPTY list is `absent`, not `non_enumerable`** (ruled 2026-09-23). D00 §5
+        draws the line itself — "the empty list is the FACT, and it is the one place in
+        this grammar where an empty value says something an absent key would not, because
+        'called with no values' is a different statement from 'the array could not be
+        read'" — so calling a known-empty call ambiguous would contradict the facts it was
+        read from. A MISSING list is the other half of that sentence and stays a reason.
         """
         elements = argument.get("elements")
-        if not isinstance(elements, list) or not elements:
+        if not isinstance(elements, list):
             return _only(trail, _unresolved(NON_ENUMERABLE))
+        if not elements:
+            return _only(trail, Answer(kind=ABSENT))
         reached: list[_Reached] = []
         for index, element in enumerate(elements):
             answers = self._entry(element, method, origin, trail, frames)
@@ -659,9 +694,13 @@ class _Walk:
         `written_by` is specified as a scanner CAPABILITY (§4, D00 9.19) rather than as
         work on any one backend; no backend reports it, so `value_edges` emits no such row
         and there is nothing to follow. `no_writer` is the reason §1d gives for exactly
-        this, and it is the only answer a binding read can get until the capability lands
-        — at which point this method follows the edge and the answer narrows to its
-        literal meaning.
+        this, and it is the only answer a binding read can get until the capability lands.
+
+        **So today it means "no writer edge exists to follow", NOT "this binding is never
+        written"** — the constant's own comment says the same, because that is where a
+        reader looks the word up. The day capability 9.19 reports binding writes, this
+        method follows the edges and the answer narrows to §1d's literal meaning; nothing
+        else here changes.
 
         The constructor-only `field_write` fact is deliberately NOT read here: it is half
         of that edge, and giving it a second home in the walk is how one answer becomes
