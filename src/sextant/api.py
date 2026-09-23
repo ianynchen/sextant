@@ -232,9 +232,11 @@ class AnalyzeResult:
 
     `value_resolutions` is spec 2026-09-22 §7a's shadow row count — how many
     candidate conversions the walk recorded. `0` on any run without `--shadow`,
-    and `None` for a REACTOR walk, which keeps no module's report. Deliberately
-    NOT on `ModuleOutcome`: that dataclass is what `modules.json` records, and a
-    published inventory is exactly what shadow mode must not move."""
+    and `None` for a REACTOR walk, where there is no single number to give: each
+    module records into its OWN workspace, and those counts go to `on_module`
+    instead, one line per module. Deliberately NOT on `ModuleOutcome`: that
+    dataclass is what `modules.json` records, and a published inventory is
+    exactly what shadow mode must not move."""
 
     modules: tuple[ModuleOutcome, ...]
     value_resolutions: int | None = None
@@ -726,7 +728,15 @@ def _analyze_reactor(
             ) from failure
         endpoints = len(stage_result.report.endpoints)
         if on_module is not None:
-            on_module(f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints")
+            # A reactor walk records shadow rows PER MODULE, into each module's own
+            # workspace, so a single number on the `AnalyzeResult` could not name them —
+            # this line can, and it is the only place a reader learns a submodule recorded
+            # anything at all. Appended ONLY under `--shadow`, so the ordinary line is
+            # exactly what it has always been.
+            recorded = f", {stage_result.report.value_resolutions} shadow rows" if shadow else ""
+            on_module(
+                f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints{recorded}"
+            )
         outcomes.append(
             ModuleOutcome(relative_dir, module.module_id, module.kind, True, None, endpoints)
         )

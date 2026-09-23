@@ -73,15 +73,18 @@ under-counted the asked surface by 20 positions.
 | a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
 | a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 26 |
 | `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
-| a node naming slots, no method of its own and a `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
+| `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
 
-*Row six is described here by the shape the reader MATCHES, not by the key it was written
-for (corrected 2026-09-23, Task 5 review). It fires on any slot-bearing node that names a
-`type` and no method — so a node naming `ResponseEntity`, `Optional` or `Call` mints an
-`<init>` ask on that type, across about thirty catalogs. A third over-match of the same
-kind as the two below, in the same conservative direction; it moves no figure in this
-document, which was re-measured after the reader moved into
-`src/sextant/application/resolve/shadow.py`.*
+*The reader these six shapes describe now lives in
+`src/sextant/application/resolve/shadow.py` and this harness imports it (Task 5): spec §3d's
+shadow table is written for exactly the positions measured here, and two copies of "what
+does a catalog ask" would be two answers the day a catalog invents a spelling. Row six's
+`_ctor_arg` key was made a REQUIREMENT of the match in the same task — a `payload_arg`
+beside a `type` is a generic type-argument index rather than a call slot, and 156 of those
+live in `wrappers` blocks. Four nodes match, in `kafka-clients`, `spring-kafka-replying`,
+`spring-kafka-template` and `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity`
+— the five slots this row counts. **Every figure in this document was re-measured after
+both changes and none moved.***
 
 **`all_strings` is the one spelling where a single catalog row asks about an unbounded
 number of positions**, and it is the only bound-free thing in the ask grammar. It adds **20

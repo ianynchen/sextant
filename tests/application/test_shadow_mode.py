@@ -4,12 +4,14 @@
 spelled the way a real scan spells it and one arm exists per rule. This file pins the
 three things that file structurally cannot:
 
-* **the flag reaches `resolve`.** `--shadow` is five hops of a defaulted keyword — CLI,
-  `api._analyze`, `_run_analyze`, `_analyzed`, the analyze stage — and a defaulted keyword
-  dropped anywhere along it fails SILENTLY: `sextant module analyze --shadow` exits 0 with
-  an empty table, and a reviewer reads "nothing would resolve" as good news. For a safety
-  mechanism that is the worst failure available. Deleting `shadow=shadow` at
-  `stages/analyze.py` left the whole of `tests/application` green before this file existed.
+* **the flag reaches `resolve`, at every hop.** `--shadow` is five hops of a defaulted
+  keyword — CLI, `api._analyze`, `_run_analyze`, `_analyzed`, the analyze stage — and a
+  defaulted keyword dropped anywhere along it fails SILENTLY: `sextant module analyze
+  --shadow` exits 0 with an empty table, and a reviewer reads "nothing would resolve" as
+  good news. For a safety mechanism that is the worst failure available. Two tests, because
+  one road does not cover the other: the stage test builds the stage itself and would stay
+  green with the facade's own hop deleted (measured, 40 passed), so the facade is driven
+  separately over a tiny fixture.
 * **every asked position is answered.** `resolve_site` returns NO binding when no path
   answers every slot of the site at once, and it requires that coherence across slots
   nobody asked about — so one unrelated slot can delete a review row with nothing saying
@@ -30,6 +32,8 @@ from typing import Any
 import pytest
 
 from conftest import CATALOGS, FIXTURE, JAR
+from fixture_build import compile_fixture
+from sextant import api
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
@@ -268,10 +272,11 @@ _ASKS_PER_CATALOG = {
 
 
 def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
-    """The baseline above, asserted over ALL the shipped catalogs and not only the fifty
-    that ask — a catalog that asks about nothing today and gains a position tomorrow is
-    exactly the case a dict of non-zero entries would miss, so the zero ones are checked
-    too."""
+    """The baseline above, asserted as an EQUALITY of dicts rather than a check of the
+    fifty entries it holds — which is what covers the fifty-one catalogs that ask about
+    nothing today, without storing a `(0, 0)` row for each of them. One that gains its
+    first position adds a key this dict does not have; one that loses its last removes a
+    key it does; either way the dicts differ and the test fails."""
     counted = {
         catalog.id: (len(asks), sum(len(ask.slots) for ask in asks))
         for catalog in YamlCatalogSource(CATALOGS).load()
@@ -279,3 +284,51 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     }
     assert counted == _ASKS_PER_CATALOG
     assert sum(asks for asks, _ in counted.values()) == 802
+
+
+# A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
+# facade. `orders-service` would prove the same thing and cost eight times as much: what
+# the test below pins is a keyword argument's journey, not a corpus.
+_FACADE_FIXTURE = FIXTURE.parent / "orders-javalin"
+
+
+def test_the_shadow_flag_survives_the_facade_and_not_only_the_stage(tmp_path: Path):
+    """**The hops ABOVE the stage, which the test at the top of this file does not reach.**
+
+    `--shadow` crosses `api._analyze` -> `_run_analyze` -> `_analyzed` -> the stage, each a
+    defaulted keyword. Deleting `shadow=shadow` at the FIRST of those left every test in
+    this file and in `test_values.py` green — 40 passed — because the stage test builds
+    the stage itself and never travels that road. The CLI's own printed count is a
+    mitigation for the same failure, not a test of it.
+
+    So this drives `api._analyze`, which is what `sextant module analyze` calls, and asserts
+    the two things a reviewer acts on: rows were recorded, and the number the run REPORTS is
+    the number it wrote. A flag lost at any hop leaves both at zero."""
+    compile_fixture(_FACADE_FIXTURE)
+    result, multi_module = api._analyze(
+        _FACADE_FIXTURE, workspace_dir=tmp_path, allow_resolve=False, shadow=True
+    )
+    assert not multi_module
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        recorded = workspace.query("value_resolutions")
+    finally:
+        workspace.close()
+    assert recorded, "the --shadow flag did not survive the facade"
+    assert result.value_resolutions == len(recorded)
+
+
+def test_the_facade_records_nothing_without_the_flag(tmp_path: Path):
+    """The other direction, and the one that makes the assertion above mean something: the
+    same call without `shadow=True` records no row and reports 0. A recorder that ran
+    unconditionally would satisfy every "it recorded rows" test in this file."""
+    compile_fixture(_FACADE_FIXTURE)
+    result, _multi_module = api._analyze(
+        _FACADE_FIXTURE, workspace_dir=tmp_path, allow_resolve=False, shadow=False
+    )
+    workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
+    try:
+        assert workspace.query("value_resolutions") == []
+    finally:
+        workspace.close()
+    assert result.value_resolutions == 0

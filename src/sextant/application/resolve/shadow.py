@@ -45,16 +45,13 @@ how the caveat came to be written down.
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists, and the one spelling where a single catalog row asks about an unbounded number of
   positions;
-* a node that names SLOTS, names no method of its own, and names a `type` — read as a
-  position on that type's CONSTRUCTOR, so the method name is `<init>`. The shape it was
-  written for is a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg`,
-  where `payload_ctor_arg: last` is a rule rather than an index and is resolved per site.
-  **It is matched by SHAPE and not by key, so it fires more widely than that**: a node
-  naming a `type` such as `ResponseEntity`, `Optional` or `Call` beside any slot key mints
-  an `<init>` ask on that type across about thirty catalogs. One row of 374 on
-  `orders-service`, in the safe direction (below), and stated here because in this
-  repository the docstring is the specification and a narrower sentence would not describe
-  this code.
+* a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg` against a wrapper
+  `type` — a position on that type's CONSTRUCTOR call, so the method name is `<init>`.
+  `payload_ctor_arg: last` is a rule rather than an index, resolved per site. The
+  `_ctor_arg` key is REQUIRED for this arm, and the branch below says why: without it a
+  `payload_arg` beside a `type` would be read as a call slot, and where such nodes live it
+  is a generic type-argument index. MEASURED: four nodes in four catalogs, five slots,
+  naming `ProducerRecord` and `HttpEntity`.
 
 **This reader is WIDER than the engines, deliberately, and that is the safe direction for
 a shadow review.** It matches on the keys the engines match on — owner where declared,
@@ -65,22 +62,32 @@ engine reaches only by following a `source` link back from a matched site is mat
 against every call site in the module. A review that sees more candidates than will ever
 be published is a review with slack in it; one that sees fewer is a review with a hole.
 Both over-matches, and what they cost, are measured in
-`docs/research/2026-09-23-value-walk-measurement.md` §1.3; the constructor shape above is
-a third of the same kind.
+`docs/research/2026-09-23-value-walk-measurement.md` §1.3.
 
-**Two places a position could hide, and neither is covered.** The reader walks
-`catalog.matches` alone. A catalog's `bean_model` block is resolved by the loader and sits
-OUTSIDE `matches`, so a slot spelled there would be invisible here; no shipped model
-carries an arg-shaped key today, and step models are merged into `matches` and so are
-seen. And the reader cannot CLASSIFY an arg-shaped key it does see: audited 2026-09-23,
-about fifty arg-shaped occurrences across the shipped catalogs are legitimately not call
-positions — `spring-cloud-stream.yml`'s `payload_arg: [0, 1]` is a generic TYPE-ARGUMENT
-index, and that same key name means a call slot under `wrappers:` and a type-argument
-index under `suffix:`. Both are latent rather than live: the same audit found **no missed
-call position in any shipped catalog**. The alarm for the day that changes is the
-per-catalog ask baseline in `tests/application/test_shadow_mode.py`; the classification
-belongs to Task 10, where the hop declarations become invalid and it has to be made
-anyway.
+## Where a position could hide from this reader
+
+**It walks `catalog.matches` and nothing else**, and three top-level blocks sit outside it.
+All three are latent rather than live — the 2026-09-23 audit of the shipped catalogs found
+**no missed call position in any of them** — but they are where the next one would be.
+
+* **`wrappers` is the big one: 156 `payload_arg` occurrences across 55 catalog files**, and
+  every one of them is invisible here. That is correct today and not a gap to close by
+  widening: a `wrappers` entry's `payload_arg` is a GENERIC TYPE-ARGUMENT index — which
+  type parameter of `ResponseEntity`, `Optional`, `Mono` carries the payload — not a slot
+  on a call. Reading them as call positions would be a wrong answer, not slack, which is
+  why the constructor arm above requires a `_ctor_arg` key.
+* **`bean_model`** is resolved by the loader and sits outside `matches` too; no shipped
+  model carries an arg-shaped key today. Step models, by contrast, ARE merged into
+  `matches` and so are seen; `shape_model` is immaterial rather than merely empty —
+  `shape-models/json.yml` carries no positional slot of any kind.
+* **The reader cannot CLASSIFY an arg-shaped key it does see.** `spring-cloud-stream.yml`'s
+  `payload_arg: [0, 1]` is silently dropped, harmlessly, because it is again a type-argument
+  index — and the same key name means a call slot under `wrappers:` and a type-argument
+  index under `suffix:`, which nothing in the shape tells apart.
+
+The alarm for the day any of this changes is the per-catalog ask baseline in
+`tests/application/test_shadow_mode.py`; the classification belongs to Task 10, where the
+hop declarations become invalid and it has to be made anyway.
 
 ## Cost, and the condition the measurement attached to it
 
@@ -261,7 +268,20 @@ def asks_of(catalog: Catalog) -> list[Ask]:
         if slots and not names:
             # A `call_wrappers`/`record_wrappers` entry: the position is on the wrapper
             # TYPE's constructor, so the owner is that type and the method is `<init>`.
-            if isinstance(node.get("type"), str):
+            #
+            # **The `_ctor_arg` key is REQUIRED, not incidental** (Task 5 review round 2).
+            # Matching on `type` plus any slot key would read a `payload_arg` beside a
+            # `type` as a constructor argument — and where such a node lives, `payload_arg`
+            # is a GENERIC TYPE-ARGUMENT index, not a call slot, so that would be a wrong
+            # answer rather than conservative slack. `_ctor_arg` is what distinguishes the
+            # two, and it is the only reason this branch can be trusted to name `<init>`.
+            # MEASURED over the 101 shipped catalogs: four nodes reach here, in
+            # `kafka-clients`, `spring-kafka-replying`, `spring-kafka-template` and
+            # `spring-resttemplate`, naming `ProducerRecord` and `HttpEntity` — five slots,
+            # which is the count the research document's §1.3 table records.
+            if isinstance(node.get("type"), str) and any(
+                str(key).endswith("_ctor_arg") for key in node
+            ):
                 names = ("<init>",)
                 owners = _owner_symbols(node["type"], f"{catalog.source}: type") or owners
             else:
