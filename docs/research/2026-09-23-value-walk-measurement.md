@@ -1,9 +1,10 @@
 # What the backward value walk costs, measured before anything consumes it
 
 Measurement date: 2026-09-23. Sextant snapshot: branch `spec/value-resolution`, **the ask
-reader as of `ad210319`** — the commit that widened it to `parse_calls`, and the last one
-that moved a figure here. Commits after it are documentation only and leave `asks_of`
-AST-identical, so they reproduce the same numbers.
+reader as of `ad210319`** — the commit that widened it to `parse_calls`, and **the last one
+that changed what the harness produces**. Commits after it are documentation only and leave
+`asks_of` AST-identical, so they reproduce the same numbers; several of them have corrected
+figures in this document, which is a different thing.
 Harness: [`scripts/measure_value_walk.py`](../../scripts/measure_value_walk.py).
 
 *The line above read `02b2fe03` until 2026-09-23 and was wrong in a way that made §7's
@@ -85,7 +86,7 @@ block, not a spelling.
 | `arg` / `<name>_arg` integer beside a method name | `single_call`, `combinator`, `interface_implementation`, `supertype_dispatch`, `config_join` | most |
 | `captures: {name: argN}` | `fluent` roots/steps/terminals | 139 |
 | a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
-| a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 26 |
+| a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 22 |
 | `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
 | `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 7 |
 | `bytes_arg`/`class_arg` in the top-level **`parse_calls`** block — shape one, outside `matches` | `spring-web` | 8 |
@@ -96,11 +97,21 @@ block, not a spelling.
 > shadow table is written for exactly the positions measured here and two copies of "what
 > does a catalog ask" would be two answers the day a catalog invents a spelling.
 >
-> * **Row six's count was wrong: 5, now 7.** Every other row counts KEY OCCURRENCES — 139
->   plain `captures`, 11 nested, 13 `all_strings`, all re-derived and matching — and on that
->   convention the four matching nodes (`kafka-clients`, `spring-kafka-replying`,
->   `spring-kafka-template`, `spring-resttemplate`, naming `ProducerRecord` and
->   `HttpEntity`) carry seven `_ctor_arg` keys between them.
+> * **Row six's count was wrong: 5, now 7.** Every row counts KEY OCCURRENCES that really
+>   become an ask — 139 plain `captures`, 11 nested, 13 `all_strings`, all re-derived and
+>   matching — and on that convention the four matching nodes (`kafka-clients`,
+>   `spring-kafka-replying`, `spring-kafka-template`, `spring-resttemplate`, naming
+>   `ProducerRecord` and `HttpEntity`) carry seven `_ctor_arg` keys between them.
+> * **Row four's count was wrong too: 26, now 22** (derived 2026-09-23, the first time any
+>   round checked it). It is **14 sub-object nodes carrying 22 arg-shaped keys** between
+>   them, in `spring-cloud-gateway` (6 nodes / 12 keys), `ktor-routing` (4 / 6),
+>   `spring-ws-template` (3 / 3) and `spring-kafka-message` (1 / 1). 26 reproduces under no
+>   reading: nodes reaching the arm are 16, keys on them 24, slots they name 24, and the
+>   emitting subsets are 14 and 22. The two excluded nodes are
+>   `spring-cloud-stream.yml`'s `suffix[].payload_arg: 0`, which the refusal list below
+>   already accounts for; counting them here would list one occurrence as both a shape found
+>   and a key refused. Rows two, three and five are unchanged by the same derivation — every
+>   one of their occurrences is on a node that emits.
 > * **Row six's match was narrowed** to require a `_ctor_arg` key: a `payload_arg` beside a
 >   `type` is a generic type-argument index, not a call slot, so matching on the shape alone
 >   would have been a wrong answer rather than slack. **No ask changed**, on any catalog.
@@ -248,7 +259,17 @@ The walk's memo is per resolve and shared across one site's slots, so the harnes
 one. The subclass that counts computed positions lives in the harness; **nothing in `src/`
 was changed for this measurement**, and the §3a grep
 (`grep -rn "resolve_site\|resolve.values import" src/sextant/ | grep -v "resolve/values.py"`)
-is empty.
+was **empty at `02b2fe03`**, the tree Task 4 measured and ruled on.
+
+**It is not empty at the header's snapshot, and that is Task 5 rather than a regression.**
+At `ad210319` it returns five lines, all in
+`src/sextant/application/resolve/shadow.py`: the import of `resolve_site` and `value_index`,
+the one call inside the recording pass, and two docstring mentions. That is spec §3d's
+shadow mode, which is the first consumer and is a RECORDER — it publishes nothing, and §3a's
+gate was that the walk ship unwired *until this document existed*, not for ever. The reader
+moved into the same file (§1.3's amendment), which is why the harness now imports from
+`src/` too. **The gate is stated as of the tree it was a gate on**, because the header moved
+and this sentence did not follow it.
 
 **`scripts/` is not type-checked by `scripts/check.sh`** — the gate runs `mypy src`, and
 `pyproject.toml` sets `files = ["src"]`. Ruff, by contrast, runs over the whole tree, so
@@ -383,14 +404,24 @@ is `Parser`, not a generated message, so production's own matcher never arrives.
 protobuf row really binds — the four accepted sites on `orders-service`, five positions —
 the same shape tops out at 3 paths, depth 2 and 9 visits.**
 
-**The maxima that survive both discounts: 3 paths, depth 3, 3 answers, 11 visits.** Measured
-by classifying all 989 positions by whether any **owner-declared, non-`all_strings`** ask
-matches them — that is exactly the negation of over-matches 1, 2 and 3 — which leaves
-**664 genuine positions**. They come from two `orders-ktor-classlambdas` positions, not one:
-paths, answers and visits from `KtorRoutesKt#mount`@5 (row 3 above), depth from
-`KtorRoutesKt#orders2`@2 slot 0 (row 4), whose callee is `RoutingBuilderKt.get`/3 against an
-ask declaring that owner and that arity. The hardest thing the widened `parse_calls` row can
-really hand the walk is smaller than all four. There is no tail on any reading.
+**The maxima that survive all three discounts: 3 paths, depth 3, 3 answers, 11 visits.**
+Measured by classifying all 989 positions by whether any **owner-declared,
+non-`all_strings`** ask matches them — exactly the negation of over-matches 1, 2 and 3 —
+which leaves **664 genuine positions**. No one position holds all four, and the four are
+spread over three:
+
+| maximum | value | held by |
+|---|---|---|
+| paths | 3 | `KtorRoutesKt#mount`@5 slots 0, 1 and 2, in **both** `orders-ktor` and `orders-ktor-classlambdas` — six positions |
+| distinct answers | 3 | `KtorRoutesKt#mount`@5 **slot 1**, in both corpora — two positions |
+| positions visited | 11 | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 **slot 0** — one |
+| hop depth | 3 | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 — one; callee `RoutingBuilderKt.get`/3, against an ask declaring that owner and that arity |
+
+Row 3 of the table above is the visits holder and carries **1** answer, not 3; the answers
+maximum is its sibling slot. The shape the widened `parse_calls` row can really hand the
+walk — `orders-service` `OrderIngest#process`@0 slot 0, 3 paths / depth 2 / 1 answer / 9
+visits — is **no larger than any of the four, and equal to the first**. There is no tail on
+any reading.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
@@ -559,9 +590,9 @@ say which is which:
    `grpc-probe`; where the row really binds the same shape gives 3 paths and 9 visits.
    **Restricted to the 664 positions an owner-declared, non-`all_strings` ask matches — the
    negation of all three over-matches — the maxima are 3 paths, depth 3 and 11 visits**, at
-   two `orders-ktor-classlambdas` `ktor-routing` positions (§3.1). Every one of those is
-   further below the crash barrier §5's closing paragraph sizes at 512 paths and 16
-   crossings than the unrestricted figures are.
+   three `ktor-routing` positions across the two Ktor corpora (§3.1 names which holds which).
+   Every one of those is further below the crash barrier this section's closing paragraph
+   sizes at 512 paths and 16 crossings than the unrestricted figures are.
 
    *Max visits was 11 and the total 1.6 ms when this was ruled; both moved when the reader
    was widened to `parse_calls` (§1.3), which is a re-measure and not a re-ruling — the
@@ -657,11 +688,18 @@ every row and `--corpus NAME` limits the run. Over all twenty-seven corpora the 
 surface takes **6.9 s** and the ceiling **9.0 s** (measured 2026-09-23), almost all of it
 loading facts.
 
-**Two figures here are not printed by either command and are derived from `--json` output**,
-so a reader reproducing them needs the definition rather than the run: §3.4's multiplicative
-count is `bindings > max(paths)` over each site's own slots, and §3.1's and §5's restricted
-maxima are over the positions matched by at least one **owner-declared, non-`all_strings`**
-ask — 664 of the 989.
+**Two figures here are not printed by either command**, so a reader reproducing them needs
+the definition, and — since the two are not obtained the same way — the data source too:
+
+* **§3.4's multiplicative count** is `bindings > max(paths)` over each site's own slots, and
+  it **is** derivable from `--json` output: join `rows` to `site_rows` on
+  `(caller, ordinal)`.
+* **§3.1's and §5's restricted maxima**, over the 664 positions matched by at least one
+  **owner-declared, non-`all_strings`** ask, are **not**. The JSON's per-position `catalogs`
+  field carries catalog NAMES, and owner-declaredness is a property of the individual `Ask`,
+  not of the catalog that holds it — `ktor-routing` has both kinds. Reproducing the 664
+  means re-running `positions_asked`'s matching loop with each match's own `Ask` in hand and
+  tagging the position from it; no function of the JSON separates them.
 
 Every deterministic figure in this document reproduces exactly across runs, **at the
 snapshot named in the header**; an older reader answers a different question, which is what

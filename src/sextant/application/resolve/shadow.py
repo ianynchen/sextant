@@ -41,7 +41,9 @@ how the caveat came to be written down.
   what to do with it afterwards (eleven rows, the `spring-integration-*` catalogs);
 * a SUB-OBJECT of a row, carrying slots while the method name stays on the parent:
   `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
-  `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` (26 occurrences);
+  `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` (count in
+  `docs/research/2026-09-23-value-walk-measurement.md` §1.3, row four, which is where
+  every per-shape count is stated);
 * `arg: all_strings` — EVERY positional argument of the call, a varargs array read as its
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists, and the one spelling where a single catalog row asks about an unbounded number of
@@ -284,8 +286,10 @@ class _Enclosing:
     catalog does not always put all four on the node carrying the slot: `ktor-routing`'s
     `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
     `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` are sub-objects of a
-    row that names the method. Twenty-six occurrences, every one of them a position on the
-    PARENT's call."""
+    row that names the method. Every occurrence is a position on the PARENT's call; how
+    many there are is counted in `docs/research/2026-09-23-value-walk-measurement.md`
+    §1.3, row four, and is not restated here — it was restated in three places and was
+    wrong in all three until 2026-09-23."""
 
     owners: tuple[str, ...] = ()
     names: tuple[str, ...] = ()

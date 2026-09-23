@@ -29,7 +29,9 @@ which is how the caveat came to be written down.
   what to do with it afterwards (eleven rows, the `spring-integration-*` catalogs);
 * a SUB-OBJECT of a row, carrying slots while the method name stays on the parent:
   `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
-  `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` (26 occurrences);
+  `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` (count in
+  `docs/research/2026-09-23-value-walk-measurement.md` §1.3, row four, which is where
+  every per-shape count is stated);
 * `arg: all_strings` — EVERY positional argument of the call, a varargs array read as its
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists. It is the one spelling where a single catalog row can ask about an unbounded
