@@ -90,7 +90,10 @@ the column that separates a genuine third-party boundary from a body we simply d
 open.
 
 **`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class` and
-`reason` — one row per distinct triple a CALL SITE names, not per method declared. The
+`reason` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
+declared and not per triple the bytecode wrote: a compiler-emitted `$default` bridge is
+re-targeted to the sibling it stands for before this is asked, so the triple here is the
+one the author's call resolves through (spec 2026-09-22 §1a). The
 reason is always present and comes from D00 §4's `method_resolution` set. Read
 `declaring_class IS NULL` with the reason beside it: three different kinds of "no body
 here" used to be one word, and one of the three was false.

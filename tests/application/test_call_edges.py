@@ -20,6 +20,8 @@ which is where it differs from `return_flows`: a row for a call that produces no
 value, a row for a call that leaves the module, and an edge into a lambda body.
 """
 
+from pathlib import Path
+
 import pytest
 from fixture_module import write_fixture_module_fact
 
@@ -595,6 +597,7 @@ def test_an_interface_method_with_its_own_body_keeps_its_single_candidate(defaul
 # steps through — so the body it names has to be the one the author's call runs.
 
 _API = "com/acme/orders/gate/Api#"
+_SUB = "com/acme/orders/gate/SubApi#"
 _API_JVM = "(Ljava/lang/String;)Ljava/lang/String;"
 _API_BRIDGE_JVM = (
     "(Lcom/acme/orders/gate/Api;Ljava/lang/String;ILjava/lang/Object;)Ljava/lang/String;"
@@ -621,13 +624,15 @@ def _string_method(owner: str, name: str, jvm: str, **keys: object) -> list[obje
     ]
 
 
-@pytest.fixture(scope="module")
-def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+def _bridged_edges(tmp_path: Path, *extra: object) -> list[dict[str, object]]:
     """`Caller#talks` makes one call and the compiler wrote it against the bridge:
     `invokestatic Api.send$default(this, "y", 0, null)`, the shape kotlinc emits for
     `api.send("y")` when `send`'s parameter has a default. Both methods have a body this
-    workspace read, so the two readings differ in WHICH body the edge reaches."""
-    tmp_path = tmp_path_factory.mktemp("call_edges_bridged")
+    workspace read, so the two readings differ in WHICH body the edge reaches.
+
+    `Api#send` is an INSTANCE method — the bridge's slot 0 is its receiver — which is
+    the reading `effective_calls._sibling` settles on, and the one that makes the site
+    `virtual` rather than `static`. `extra` is what a test adds to that world."""
     facts = tmp_path / "facts"
     write_fact_file(
         facts / "gate.jsonl",
@@ -662,6 +667,7 @@ def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]
                     CallArgument(kind="null"),
                 ],
             ),
+            *extra,
         ],
     )
     write_fixture_module_fact(facts)
@@ -671,6 +677,27 @@ def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]
     rows = workspace.query("call_edges")
     workspace.close()
     return rows
+
+
+@pytest.fixture(scope="module")
+def bridged(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """Nothing overrides the sibling: one candidate, so the edge is `resolved`."""
+    return _bridged_edges(tmp_path_factory.mktemp("call_edges_bridged"))
+
+
+@pytest.fixture(scope="module")
+def bridged_overridden(tmp_path_factory: pytest.TempPathFactory) -> list[dict[str, object]]:
+    """The same call, with a subtype of `Api` that overrides `send`."""
+    return _bridged_edges(
+        tmp_path_factory.mktemp("call_edges_bridged_overridden"),
+        SymbolFact(
+            document_id="doc_gate",
+            symbol=_MODULE + _SUB,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _API,
+        ),
+        *_string_method(_SUB, "send", _API_JVM),
+    )
 
 
 def test_a_default_bridge_call_is_an_edge_into_the_sibling_it_stands_for(bridged):
@@ -685,3 +712,25 @@ def test_a_default_bridge_call_is_an_edge_into_the_sibling_it_stands_for(bridged
         _MODULE + method_descriptor(_API, "send", _API_JVM)
     ]
     assert [str(row["resolution"]) for row in bridged] == [str(Resolution.RESOLVED)]
+
+
+def test_a_bridge_over_an_instance_sibling_dispatches_virtually_and_reaches_the_override(
+    bridged_overridden,
+):
+    """**The widest movement the projection can produce, and the one the raw reading hid
+    entirely.** The compiler wrote `invokestatic` against the bridge, and `invokestatic`
+    dispatches on nothing — so reading the raw site, `SubApi#send` is not a candidate and
+    the edge is one `resolved` row naming a synthetic method. The bridge's slot 0 is the
+    receiver, though, and what the author wrote is `api.send("y")`, which the JVM
+    dispatches virtually: the override IS reachable. `effective_calls` carries that in
+    `invoke_kind`, this table writes it into a shipped column, and `dispatch` then walks
+    the subtypes — one row becomes two, and `resolved` becomes `narrowed`.
+
+    Both are still the one bridge site's rows. What changes is that the graph stops
+    claiming a call has a single reachable body when the program says it has two."""
+    assert [str(row["invoke_kind"]) for row in bridged_overridden] == ["virtual"] * 2
+    assert [str(row["callee"]) for row in bridged_overridden] == [
+        _MODULE + method_descriptor(_API, "send", _API_JVM),
+        _MODULE + method_descriptor(_SUB, "send", _API_JVM),
+    ]
+    assert [str(row["resolution"]) for row in bridged_overridden] == [str(Resolution.NARROWED)] * 2
