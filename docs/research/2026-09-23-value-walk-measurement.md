@@ -1,23 +1,28 @@
 # What the backward value walk costs, measured before anything consumes it
 
 Measurement date: 2026-09-23. Sextant snapshot: branch `spec/value-resolution`, head
-`f27e1a3f`. Harness: [`scripts/measure_value_walk.py`](../../scripts/measure_value_walk.py).
+`02b2fe03`. Harness: [`scripts/measure_value_walk.py`](../../scripts/measure_value_walk.py).
 
-**This is spec [§3a](../superpowers/specs/2026-09-22-value-resolution-design.md)'s gate.**
-The approved ruling is *no cap in v1*, and that ruling is only safe if the measurement
-happens before anything consumes the walk — otherwise "measure first" becomes "find out in
-production". `resolve/values.py` therefore ships unwired (`fan_out` and `depth` are absent
-from the reason vocabulary by ruling, not by oversight), and this document is what §3a step
-3 rules on.
+**This was spec [§3a](../superpowers/specs/2026-09-22-value-resolution-design.md)'s gate.**
+The approved ruling was *no cap in v1*, and that ruling was only safe if the measurement
+happened before anything consumed the walk — otherwise "measure first" becomes "find out in
+production". `resolve/values.py` therefore ships unwired, and this document is what §3a
+step 3 ruled on.
 
-**Status: the numbers are in; the cap decision is the user's.** §3a makes it a ruling point
-and nothing here implements one. §5 states what the data supports and why.
+> ## RULING (2026-09-23): **no cap.**
+>
+> `fan_out` and `depth` do **not** join §1d's reason vocabulary. Two conditions are attached
+> to the ruling and are stated in full in §6:
+>
+> 1. **This harness is re-run before capability 9.19 (`written_by`) ships** — not after.
+> 2. **Tasks 5–10 thread the `ValueIndex` rather than rebuilding it per call, and report
+>    `visits` rather than wall time.**
 
 ---
 
 ## 1. How the measurement was made
 
-### 1.1 The corpora
+### 1.1 The corpora — and what was not measured
 
 Twenty-seven: every fixture that compiles, every example, and `mall-admin` — the largest
 corpus available, 48 MB of facts across 648 documents, and the one §3a names. A corpus with
@@ -27,6 +32,14 @@ a **fresh** workspace, loaded and then run through the two passes `value_edges` 
 normalised out of (`record_return_flows`, `record_call_edges`) — nothing else in the
 pipeline, because the edge query reads `call_sites`, `return_flows` and `call_edges` and the
 walk reads `method_returns` beside them.
+
+**"Twenty-seven" is a property of this working tree, not of the repository**, and the
+harness now says so on every run. A module with neither built classes nor a scan is not
+measured; today that is four — `gradle-orders`, `orders-reactor`,
+`spring-petclinic-microservices`, `mall-search` — and the harness prints them as
+`NOT MEASURED` so a later run's corpus count cannot be compared against this one's without
+noticing. Priming them is `python tests/fixture_build.py` plus an analysis run over
+`examples/`.
 
 ### 1.2 The positions — measured against real sites, never synthesised rows
 
@@ -38,93 +51,158 @@ is read out of `effective_call_sites` — the rows the engines see — through
 
 Two surfaces are measured, and the difference between them is the finding:
 
-- **The asked surface** — every position a shipped catalog actually asks about. A catalog
-  names one in three grammars, all three read: a `methods`/`entries`/`vocabulary` row
-  carrying `arg` or a `<name>_arg` integer beside a method name; a `fluent` root/step/
-  terminal carrying `captures: {name: argN}`; a `call_wrappers`/`record_wrappers` entry
-  carrying a `<name>_ctor_arg` against a wrapper `type` (a position on that type's
-  constructor, so the method is `<init>`; `payload_ctor_arg: last` is a rule rather than an
-  index and is resolved per site). A row is matched to real sites on the keys the engines
-  match on: owner where declared, method name, and the JVM `descriptor` or the `arity` where
-  the row declares either.
+- **The asked surface** — every position a shipped catalog actually asks about.
 - **The ceiling** — every argument **and the receiver** of every call site in every corpus,
   whether a catalog asks about it or not. Not what §3a asks for, and measured beside it
   rather than instead of it: a cap sized on today's asked surface alone would be
   re-litigated by the first catalog that asks somewhere new, and a ruling wants to know
   whether the corpus *holds* a pathological shape at all or merely fails to ask about one.
 
-**Where a catalog row declares no owner the match is by method name alone**, which is wider
-than the engine's own — `fluent`'s owner-free steps are really scoped to a chain the engine
-has already rooted, and `ktor-routing`'s `request_reads` reach their receiver through a
-`via` call. That is 22 of the 764 rows the shipped catalogs carry, and the names are common
-ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`). It inflates the asked surface —
-`ktor-routing`, `okhttp` and `jdk-httpclient` account for 508 of the 1,141 catalog-to-position
-matches (over 898 distinct positions), most of them sites those catalogs would never really
-claim. **The widening is deliberate and it is
-the safe direction:** this measurement sizes a ceiling, so over-counting the asks can only
-make the answer more conservative.
+### 1.3 How an "ask" is found — six shapes, audited, not derived
 
-### 1.3 What is recorded
+The shipped catalogs spell a position in **six** shapes. **They were found by auditing all
+101 files, not derived from a grammar, and that is the standing caveat on every count
+below:** a catalog that invents a seventh spelling is missed until the audit is redone. This
+is not hypothetical — the first version of this harness had three of the six and
+under-counted the asked surface by 20 positions.
 
-Per position, from the walk's own return value — a tuple of `(path, answer)` pairs:
+| shape | where | rows |
+|---|---|---|
+| `arg` / `<name>_arg` integer beside a method name | `single_call`, `combinator`, `interface_implementation`, `supertype_dispatch`, `config_join` | most |
+| `captures: {name: argN}` | `fluent` roots/steps/terminals | 139 |
+| a **nested** capture, `captures: {channel_link: {bean_via: arg0}}` | `spring-integration-*` | 11 |
+| a **sub-object** carrying slots while the method name stays on the parent — `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}`, `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` | `combinator`, `fluent` | 26 |
+| `arg: all_strings` — **every** positional argument, a varargs array read as its elements (`shapes/arguments._all_string_channels`) | `kafka-consumer`, `kafka-streams`, `pekko-connectors-kafka` | 13 |
+| `<name>_ctor_arg` against a wrapper `type` — a position on that type's **constructor**, so the method name is `<init>`; `payload_ctor_arg: last` is a rule resolved per site | `call_wrappers`, `record_wrappers` | 5 |
 
-| figure | what it is |
-|---|---|
-| **path count** | how many coherent paths reached the position |
-| **hop depth** | crossings on the longest of those paths |
-| **answer count** | **distinct** answers, which is not the path count: two callers passing the same literal are two paths and one answer |
-| **positions visited** | every `(position, path)` the walk computed on the way — the work a cap would bound |
-| **wall time** | `perf_counter` around the one call |
+**`all_strings` is the one spelling where a single catalog row asks about an unbounded
+number of positions**, and it is the only bound-free thing in the ask grammar. It adds **20
+positions across seven corpora**, and the two forms it meets show why the bound is absent:
 
-Per **site**, additionally, `resolve_site` itself is timed and its `Binding` count recorded.
-§3b's "potentially unbounded and multiplicative" is about the **combination** step, and a
-per-position measurement alone would miss it.
+- `jhipster-sample-app`'s `PublicUserResource#<clinit>`@0 calls `List.of` through its
+  **seven-argument fixed-arity overload**, so one catalog row asks about seven positions at
+  one site;
+- `UserResource#<clinit>`@0 calls the **varargs** overload, so `all_strings` asks about the
+  one array slot — and the WALK then answers **11 paths and 11 distinct answers** for it,
+  because §1c's array rule enumerates eleven written constants. That is the asked surface's
+  path-count and answer-count maximum, at a position that costs **zero** traversal.
+
+It matches nothing in `mall-admin` or `mall-mbg`, and **that is luck rather than a bound**:
+nothing there calls `List.of`, `Arrays.asList` or `Subscriptions.topics` where a catalog
+also matches.
+
+A row is matched to real call sites on the keys the engines match on: owner where declared
+(converted through the catalogs' own `catalog_symbols`), method name, and the JVM
+`descriptor` or the `arity` where the row declares either. **Where a catalog row declares no
+owner the match is by method name alone**, which is wider than the engine's own —
+`fluent`'s owner-free steps are really scoped to a chain the engine has already rooted, and
+`ktor-routing`'s `request_reads` reach their receiver through a `via` call. That is 23 of
+the 802 rows, and the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`,
+`body`): `ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,209
+catalog-to-position asks, most of them sites those catalogs would never really claim.
+**The widening is deliberate and it is the safe direction:** this measurement sizes a
+ceiling, so over-counting the asks can only make the answer more conservative.
+
+### 1.4 Two bases, which are not interchangeable
+
+| basis | asked surface | meaning |
+|---|---|---|
+| **catalog-to-position asks** | **1,209** | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
+| **distinct positions** | **948** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
+
+Both are printed per corpus and in total. **Every cost figure in §3 is per distinct
+position**; the asks number appears only where the question is "how much do catalogs ask",
+never where the question is "how much does it cost".
+
+(A third base exists and is deliberately not used: counting one catalog ROW per position
+gives 1,997, because a catalog often matches a site through more than one overload row.
+The first draft of this document printed that number in a column headed "positions asked"
+beside a headline of distinct positions, which is the mistake this section exists to
+prevent.)
+
+### 1.5 What is recorded
+
+Per position, from the walk's own return value — a tuple of `(path, answer)` pairs: **path
+count**; **hop depth** (crossings on the longest path); **distinct answer count**, which is
+not the path count — two callers passing the same literal are two paths and one answer;
+**positions visited**, every `(position, path)` the walk computed, which is the work a cap
+would bound; and wall time.
+
+Per **site**: `resolve_site` itself is timed and its `Binding` count recorded, because
+§3b's "potentially unbounded and multiplicative" is about the **combination** step.
+
+**The index fold is timed beside both.** `value_index` folds five queries, and
+`resolve_site` rebuilds it whenever a caller does not pass one — there is no cache anywhere,
+and `Workspace.once` refuses this fold because two of the five are derived. It is reported
+as a headline, not a footnote; §3.3 says why.
 
 The walk's memo is per resolve and shared across one site's slots, so the harness builds one
 `_Walk` per site and times each slot inside it — the production lifetime, not a friendlier
 one. The subclass that counts computed positions lives in the harness; **nothing in `src/`
 was changed for this measurement**, and the §3a grep
 (`grep -rn "resolve_site\|resolve.values import" src/sextant/ | grep -v "resolve/values.py"`)
-is still empty.
+is empty.
+
+**`scripts/` is not type-checked by `scripts/check.sh`** — the gate runs mypy over
+`src/` and `tests/` only. This harness is lint-clean and format-clean but unverified by
+mypy, and that is stated rather than fixed: bringing `scripts/` under the type gate is a
+change to the gate, not to this task.
+
+### 1.6 Wall time is not reproducible at these magnitudes; `visits` is
+
+**Measured across six runs of the ceiling on identical input**: the maximum per-position
+wall time was 2.1 ms, 2.1 ms, 2.3 ms, 2.3 ms, 32.4 ms and 32.7 ms — a **15× spread**, and
+the 32 ms outlier was a 128-path position that other runs resolved in about 1 ms. The worst
+*site* ranged 29–61 ms across the same runs. **In every one of those runs the maximum
+`visits` was 1,559, the maximum path count 388 and the maximum depth 8, to the row.**
+
+So: **no wall-time figure in this document is presented as a maximum.** Wall time appears
+only as a total (where the noise averages out) or explicitly labelled noisy. `visits` is the
+deterministic work figure, it is what the tail is ranked by, and it is what would be bounded
+if anything ever were.
 
 ---
 
 ## 2. Answer 1 — how many positions shipped catalogs actually ask about
 
-**898, across all twenty-seven corpora.** The ceiling on the same corpora is **98,454**. The
-asked surface is **0.9%** of it.
+**948 distinct positions (1,209 catalog-to-position asks), across all twenty-seven
+corpora.** The ceiling on the same corpora is **98,454**. The asked surface is **0.96%** of
+it.
 
 §3b's guard shape holds, and harder than it did on `orders-quarkus`:
 
-| corpus | call sites | value edges | positions asked | sites touched | asked / call sites |
-|---|---|---|---|---|---|
-| `mall-admin` | 25,057 | 59,254 | **78** | 52 | 0.3% |
-| `mall-mbg` | 21,775 | 54,157 | **0** | 0 | 0% |
-| `spring-petclinic-rest` | 3,037 | 4,032 | 71 | 44 | 2.3% |
-| `mall-portal` | 2,200 | 2,434 | 77 | 41 | 3.5% |
-| `orders-service` | 1,818 | 2,090 | 671 | 207 | 37% |
-| `jhipster-sample-app` | 1,710 | 2,058 | 376 | 39 | 22% |
-| `orders-ktor` | 471 | 584 | 137 | 49 | 29% |
-| `grpc-probe` / `orders-quarkus` / `orders-spring7` / `orders-soap-final` / `orders-soap-client` | 391 / 13 / 13 / 6 / 0 | 539 / 7 / 5 / 0 / 0 | **0** each | 0 | 0% |
+| corpus | call sites | value edges | asks | **positions** | sites | positions / call sites |
+|---|---|---|---|---|---|---|
+| `mall-admin` | 25,057 | 59,254 | 56 | **56** | 52 | 0.2% |
+| `mall-mbg` | 21,775 | 54,157 | 0 | **0** | 0 | 0% |
+| `spring-petclinic-rest` | 3,037 | 4,032 | 48 | 44 | 44 | 1.4% |
+| `mall-portal` | 2,200 | 2,434 | 43 | 42 | 42 | 1.9% |
+| `orders-service` | 1,818 | 2,090 | 373 | 279 | 209 | 15% |
+| `jhipster-sample-app` | 1,710 | 2,058 | 113 | 50 | 44 | 2.9% |
+| `orders-ktor` / `-classlambdas` | 471 / 515 | 584 / 610 | 133 | 123 | 49 | 26% / 24% |
+| `spring-integration-probe` | 198 | 183 | 90 | 52 | 52 | 26% |
+| `grpc-probe`, `orders-quarkus`, `orders-spring7`, `orders-soap-final`, `orders-soap-client` | 391 / 13 / 13 / 6 / 0 | 539 / 7 / 5 / 0 / 0 | 0 | **0** each | 0 | 0% |
 
-Six of the twenty-seven corpora ask about **nothing at all**, `mall-mbg` — 21,775 call
-sites of MyBatis-generated model code — among them. The biggest corpus in the estate asks
-about 78 positions. The fixtures ask proportionally far more because they exist to exercise
-catalogs; the real applications do not.
+Five of the twenty-seven corpora ask about **nothing at all**, and `mall-mbg` — 21,775 call
+sites of MyBatis-generated model code, which is exactly where the estate's worst shape lives
+— is a sixth. The biggest corpus in the estate asks about 56 positions. The fixtures ask
+proportionally far more because they exist to exercise catalogs; the real applications do
+not.
 
-Which catalogs ask (a position asked by two catalogs counts once for each):
+Which catalogs ask (asks, so one position once per catalog that asks about it; these sum
+to the 1,209):
 
-| engine style | asked positions matched | catalogs that name a position |
+| engine style | asks matched | catalogs that name a position |
 |---|---|---|
-| `combinator` | 452 | 5 of 5 |
-| `fluent` | 428 | 12 of 12 |
-| `single_call` | 234 | 30 of 30 |
+| `combinator` | 467 | 5 of 5 |
+| `fluent` | 441 | 12 of 12 |
+| `single_call` | 274 | 30 of 30 |
 | `supertype_dispatch` | 18 | 2 of 2 |
 | `interface_implementation` | 9 | 1 of 1 |
 
 Fifty of the 101 shipped catalogs name a call-site position at all; 47 of those matched
-something somewhere in the corpora. The other 51 — `annotation_driven` and its relatives —
-ask about annotation attributes, which this walk does not serve.
+something somewhere. The other 51 — `annotation_driven` and its relatives — ask about
+annotation attributes, which this walk does not serve.
 
 ---
 
@@ -133,83 +211,99 @@ ask about annotation attributes, which this walk does not serve.
 **No mean appears below.** A mean hides the pathological module, which is the only thing
 this measurement is for.
 
-### 3.1 The asked surface: 898 positions, 668 sites
+### 3.1 The asked surface: 948 positions, 686 sites
 
-| figure | p50 | p90 | p99 | max |
-|---|---|---|---|---|
-| paths per position | 1 | 1 | 2 | **3** |
-| hop depth | 0 | 0 | 1 | **3** |
-| distinct answers | 1 | 1 | 2 | 3 |
-| positions visited | 0 | 1 | 4 | **11** |
-| seconds per position | 0.9 µs | 3.0 µs | 15 µs | **29 µs** |
-
-`resolve_site` over the same sites: **max 6 bindings**, worst site **38 µs**.
-**Total walk time for every position every shipped catalog asks about, across all
-twenty-seven corpora: 1.5 ms.** Total `resolve_site` time: 3.9 ms.
-
-Path-count distribution: 885 positions have one path, 6 have two, 7 have three. Depth: 822
-at 0, 72 at 1, 3 at 2, 1 at 3.
-
-The worst asked positions by name:
-
-| corpus | position | catalog | paths | depth | visits |
+| figure | p50 | p90 | p99 | p99.9 | **max** |
 |---|---|---|---|---|---|
-| `orders-ktor` / `-classlambdas` | `KtorRoutesKt#mount`@5 slots 0/1/2 | `ktor-routing` | 3 | 2 | 11 |
-| `spring-petclinic-rest` | `ValidationMessageDto#putAdditionalProperty`@1 slot 0 | `okhttp` (name-only match) | 3 | 1 | 4 |
-| `orders-gateway` | `GatewayRoutes#lambda$routes$1`@2 slot 0 | `spring-cloud-gateway` | 2 | 1 | 0 |
-| `orders-service` | `StompBrokerConfig#registerStompEndpoints`@1 slot 0 | `spring-stomp-endpoint` | 2 | 1 | 0 |
+| paths per position | 1 | 1 | 2 | 3 | **11** |
+| hop depth | 0 | 0 | 1 | 2 | **3** |
+| distinct answers | 1 | 1 | 2 | 3 | **11** |
+| positions visited | 0 | 1 | 4 | 7 | **11** |
 
-The worst thing a shipped catalog asks about anywhere is a three-path, depth-2 Ktor route
-mount. There is no tail.
+`resolve_site` over the same sites: **max 11 bindings** (p99: 3).
+**Totals across all twenty-seven corpora: index fold 0.38 s, walking 1.6 ms,
+`resolve_site` 4.0 ms.**
+
+Path-count distribution: 933 positions have one path, 7 have two, 7 have three, **one has
+eleven**. Depth: 867 at 0, 77 at 1, 3 at 2, 1 at 3.
+
+The maxima come from two unrelated places, and both are worth naming:
+
+| what | position | paths | depth | answers | visits |
+|---|---|---|---|---|---|
+| most paths, most answers, most bindings | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (`kafka-consumer`, `kafka-streams`, reached via `all_strings`) | **11** | 1 | **11** | 0 |
+| most work | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`) | 3 | 2 | 1 | **11** |
+| deepest | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
+
+The eleven-path case does **no traversal at all** — `visits` is 0, because it is one varargs
+array argument holding eleven written constants and §1c's array rule enumerates them on the
+spot. The hardest thing a shipped catalog asks about anywhere is a Ktor route mount that
+costs eleven computed positions. There is no tail.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
-| figure | p50 | p90 | p99 | p99.9 | max |
+| figure | p50 | p90 | p99 | p99.9 | **max** |
 |---|---|---|---|---|---|
 | paths per position | 1 | 1 | 24 | 124 | **388** |
 | hop depth | 0 | 1 | 2 | 4 | **8** |
-| distinct answers | 1 | 1 | 5 | 78 | 386 |
+| distinct answers | 1 | 1 | 5 | 78 | **386** |
 | positions visited | 1 | 3 | 49 | 355 | **1,559** |
-| seconds per position | 1.3 µs | — | 70 µs | 417 µs | **2.3 ms** |
 
-`resolve_site` over every site: **max 388 bindings** (p99: 24), worst site **60 ms**.
-**Total walk time for every position in every corpus: 0.44 s.** Total `resolve_site` time:
-**1.04 s.** Two runs agree to within 1.5% on both totals and to the row on every maximum.
+`resolve_site` over every site: **max 388 bindings** (p99: 24).
+**Totals: index fold 0.40 s, walking 0.41–0.44 s, `resolve_site` 1.08–1.09 s** (two runs).
 
 Depth is genuinely shallow: 75,721 positions at 0, 20,708 at 1, 1,302 at 2, 618 at 3, 61 at
 4, 35 at 5, 7 at 6, 1 at 7, **1 at 8**.
 
-The single pathological shape in the estate, named:
+**The single pathological shape in the estate, stated whole rather than by its kind half.**
+It is `mall-admin`'s `com/macro/mall/model/OmsOrderExample$Criterion#<init>`@0 — MyBatis
+Generator's `…Example$Criteria` builder, whose `addCriterion(String, Object, String)` is
+called from a few hundred sibling methods in the same class, each passing its own literals.
+One site, three slots:
 
-| corpus | position | paths | depth | answers | visits | seconds |
-|---|---|---|---|---|---|---|
-| `mall-admin` | `OmsOrderExample$Criterion#<init>`@0 slot 1 | **388** | 5 | 1 | **1,559** | 2.0 ms |
-| `mall-admin` | `OmsOrderExample$GeneratedCriteria#addCriterion`@3 slot 1 | 388 | 4 | 1 | 1,557 | 1.9 ms |
-| `mall-mbg` | `OmsOrderExample$Criterion#<init>`@0 slot 1 | 386 | 3 | 1 | 1,547 | 2.3 ms |
-| `mall-admin` | `PmsProductExample$Criterion#<init>`@0 slot 1 | 337 | 5 | 3 | 1,367 | 1.8 ms |
-| `mall-admin` | `UmsAdminExample$Criterion#<init>`@0 slot 1 | 98 | **8** | 1 | 401 | 0.4 ms |
+| slot | paths | depth | **distinct answers** | visits |
+|---|---|---|---|---|
+| 0 (the condition) | 386 | 2 | **386** | 389 |
+| 1 (the value) | 388 | 5 | 1 | **1,559** |
+| 2 | 1 | 0 | 1 | 0 |
 
-It is one shape repeated per generated table: MyBatis Generator's `…Example$Criteria`
-builder, whose `addCriterion(String condition, Object value, String property)` is called
-from a few hundred sibling methods in the same class, each passing its own literal. Every
-one of those callers is a real calling context, so 388 paths is the correct answer and not
-an explosion — **and it collapses to ONE distinct answer** at slot 1, because the slot the
-walk was asked about is the same in all of them. The worst site of the estate,
-`OmsOrderExample$Criterion#<init>`@0 with three slots, resolves in 60 ms.
+**`resolve_site` returns 388 bindings for that site**, in 29–61 ms depending on the run.
+Slot 1 collapses 388 paths to one answer; **slot 0 does not — it yields 386 distinct
+answers** — and the site's binding count is what an engine would actually receive. The
+earlier draft of this document quoted slot 1 alone, which was the reassuring half; the
+ruling in §5 is made over the whole site.
 
-Wall time at this scale is dominated by measurement noise — one position with 128 paths and
-515 visits recorded 32 ms in one run and 1 ms in another, on the same input. **`visits` is
-the deterministic work figure and it is the one to rule on**; the two runs' `visits` maxima
-are identical.
+388 paths is the **correct** answer there: each is a real calling context, and the
+per-caller correlation is exactly what §1c's per-path rule exists to keep. The shape repeats
+once per generated table (`PmsProductExample` 337, `OmsOrderReturnApplyExample` 246,
+`UmsAdminExample` 98 — which is also the one position in the estate at depth 8).
 
-### 3.3 The multiplicative risk did not materialise
+### 3.3 The index fold is comparable to the walk, and is nobody's yet
+
+| | asked surface | ceiling |
+|---|---|---|
+| index fold, all corpora | **0.38 s** | 0.40 s |
+| walking | 0.0016 s | 0.41–0.44 s |
+| `resolve_site` incl. combination | 0.0040 s | 1.08–1.09 s |
+
+On `mall-admin` alone the fold is **0.16 s** — more than every walk in that corpus put
+together, by three orders of magnitude on the asked surface. It is **irrelevant to the cap**
+and it is the largest cost this measurement found on the surface that will actually be used.
+
+`resolve_site(workspace, site)` **rebuilds the whole fold** when no index is passed, and
+nothing caches it: `Workspace.once` refuses it, because `value_edges` and `call_edges` are
+derived and a derivation run after the fold would leave it stale. So an engine that calls
+`resolve_site` per site without threading an index pays 0.16 s **per call** on `mall-admin`.
+That is the shape §6's second condition exists to prevent.
+
+### 3.4 The multiplicative risk did not materialise
 
 §3b's stated danger is the **combination**: two slots with independent fan-out would
 multiply. Across all 50,112 sites, `resolve_site`'s binding count exceeds the largest
 single-slot path count at only **48 sites**, and the largest multiple anywhere is **3×**
 (`jhipster-sample-app`'s `ExceptionTranslator#buildCause`@2: 15 bindings over a 5-path
-slot). At the 388-path shape the bindings count is also 388 — the coherence rule holds it
-linear, because the slots there cross out of the same method through the same call and M-1's
+slot). At the 388-path shape the binding count is also 388 — the coherence rule holds it
+linear, because those slots cross out of the same method through the same call and M-1's
 rule makes that one choice rather than a product.
 
 No site anywhere returned **zero** bindings, so the coherence rule is not silently deleting
@@ -219,21 +313,21 @@ answers on real code either.
 
 ## 4. Answer 2 — which `unresolved` reasons fire on real code
 
-**On the asked surface (898 positions, 419 unresolved answers):**
+**On the asked surface (948 positions, 428 unresolved answers):**
 
 | reason | count | never fires? |
 |---|---|---|
-| `external` | 197 | |
+| `external` | 206 | |
 | `not_readable` | 190 | |
 | `no_writer` | 13 | |
 | `escapes` | 12 | |
 | `non_enumerable` | 7 | |
 | **`cycle`** | **0** | **never, on anything a shipped catalog asks about** |
 
-Answer kinds on the asked surface: `literal` 478, `unresolved` 419, `expression` 21,
+Answer kinds on the asked surface: `literal` 530, `unresolved` 428, `expression` 21,
 **`absent` 0**.
 
-**On the ceiling (98,454 positions):**
+**On the ceiling (98,454 positions, 91,522 unresolved answers):**
 
 | reason | count |
 |---|---|
@@ -250,12 +344,22 @@ Answer kinds: `unresolved` 91,522, `literal` 83,304, `absent` 915, `expression` 
 Two of them are only reachable outside what catalogs ask about today, and the report has to
 say which is which:
 
-- **`cycle` fires seven times in the whole estate**, all of them genuine recursion:
-  `orders-service`'s `SoleRefiner#shorten`@0 and `TraceProbe#describe`@5; and
-  `jhipster-sample-app`'s `ExceptionTranslator#buildCause`@2 slot 2, `#customizeProblem`@25
-  slot 0 and @31 slot 1, and `#getPathValue`@1 slot 0. **The word is earned and the
-  termination rule is exercised** — but nothing a shipped catalog asks about is recursive,
-  so this is a gap in the *asked surface*, not in the corpus and not in the vocabulary.
+- **`cycle` fires seven times in the whole estate, at six positions** — one position answers
+  it twice, on two different paths, which is why the two counts differ. All six are genuine
+  recursion:
+
+  | corpus | position | cycle answers |
+  |---|---|---|
+  | `orders-service` | `SoleRefiner#shorten`@0 slot 0 | 1 |
+  | `orders-service` | `TraceProbe#describe`@5 slot 0 | **2** |
+  | `jhipster-sample-app` | `ExceptionTranslator#buildCause`@2 slot 2 | 1 |
+  | `jhipster-sample-app` | `ExceptionTranslator#customizeProblem`@25 slot 0 | 1 |
+  | `jhipster-sample-app` | `ExceptionTranslator#customizeProblem`@31 slot 1 | 1 |
+  | `jhipster-sample-app` | `ExceptionTranslator#getPathValue`@1 slot 0 | 1 |
+
+  **The word is earned and the termination rule is exercised** — but nothing a shipped
+  catalog asks about is recursive, so this is a gap in the *asked surface*, not in the
+  corpus and not in the vocabulary.
 - **`absent` never appears on the asked surface** (915 times on the ceiling). Explicit
   `null` and zero-length varargs happen constantly in application code and never in the
   positions a framework catalog reads a destination or a payload out of. Ruling T-2's answer
@@ -264,68 +368,105 @@ say which is which:
   report already records why: it is reachable **only** through the array rule, because a
   loop-built or branch-merged value arrives as an unread argument and no fact says it was a
   loop. That prediction is confirmed here by the count.
-- `escapes` is 4.8% of unresolved answers on the ceiling and 2.9% on the asked surface,
+- `escapes` is 4.8% of unresolved answers on the ceiling and 2.8% on the asked surface,
   which is in line with the 13.4% the Task 3 fix round measured over the narrower
   return-crossing population.
 
 ---
 
-## 5. What the data says about the cap
+## 5. The ruling: no cap, and why the data carries it
 
-**This is §3a's ruling point and the ruling is the user's.** What the data supports:
+**Ruled 2026-09-23. `fan_out` and `depth` do not join §1d.** What the data supports:
 
-**No cap is needed for v1.**
-
-1. **The asked surface is not near any plausible cap, on any corpus.** Max 3 paths, max
-   depth 3, max 11 positions visited, 29 µs worst. Every position every shipped catalog asks
-   about, across twenty-seven corpora including the 48 MB one, resolves in **1.5 ms total**.
-   A cap would never fire.
+1. **The asked surface is not near any plausible cap, on any corpus.** Max 11 paths (one
+   varargs array of eleven written constants, enumerated on the spot at zero traversal
+   cost), max depth 3, max 11 positions visited, max 11 bindings. Every position every
+   shipped catalog asks about, across twenty-seven corpora including the 48 MB one, walks
+   in **1.6 ms total**. A cap would never fire.
 2. **The ceiling is not near one either, and it is the number that matters** because it is
    what the asked surface could grow into. Resolving **every argument and receiver of every
    call site in the estate** — 98,454 positions, 50,112 `resolve_site` calls — costs
-   **0.44 s of walking and 1.04 s including combination**. That is a whole-estate figure
-   against which the pipeline's own `call_edges_insert` pass spends 8.9 s on `mall-admin`
-   alone.
-3. **The worst shape in the estate is correct rather than pathological.** 388 paths at
-   `OmsOrderExample$Criterion` are 388 real calling contexts, and the walk answers them in
-   2 ms and collapses them to one distinct answer. A `fan_out` cap set anywhere below ~400
-   would refuse a position the walk resolves correctly and cheaply, and would refuse it with
-   a word that means "we gave up" — the precise failure §1d's six reasons exist to avoid.
+   **0.41 s of walking and 1.08 s including combination**. Against that, the pipeline's own
+   `call_edges_insert` pass spends 8.9 s on `mall-admin` alone.
+3. **The worst shape in the estate is correct rather than pathological**, and it is correct
+   at its hardest slot too: `OmsOrderExample$Criterion#<init>`@0 returns **388 bindings**,
+   386 of them carrying **distinct** answers, from 388 real calling contexts. A `fan_out`
+   cap set anywhere below ~400 would refuse a site the walk resolves correctly in tens of
+   milliseconds, and would refuse it with a word meaning "we gave up" — the precise
+   undiagnosable miss §1d's six reasons exist to abolish.
 4. **Depth is bounded by the code, not by luck.** 97.9% of positions are at depth 0 or 1;
    exactly one position in 98,454 reaches depth 8. Termination is already guaranteed by the
-   path (`cycle`), and the measurement shows the path does not get long.
+   path (`cycle`, §4), and the measurement shows the path does not get long.
 5. **The multiplicative risk §3b names is real but small**: at most 3× anywhere, and 1× at
    the fan-out extreme, because the coherence rule holds it.
 
-**If a cap is ruled in anyway**, the data names where it would have to sit to cost nothing:
+**If a cap is ever ruled in**, the data names where it would have to sit to cost nothing:
 `fan_out` at **512 paths per position** and `depth` at **16 crossings**, both well above the
 measured maxima of 388 and 8, which would make them a crash barrier rather than a policy.
-Anything tighter starts refusing answers the walk gets right today. Note that `visits`
-rather than wall time is the figure to bound if one is wanted — wall time at these
-magnitudes is noise, and `visits` reproduced exactly across runs.
-
-**What would change this answer**, stated so it can be re-checked rather than re-assumed:
-
-- A corpus whose generated code is an order of magnitude larger than `mall-mbg`'s, **and** a
-  catalog that asks about a position inside it. Today those two conditions never co-occur:
-  the corpus with the fan-out asks about nothing, and the corpora that ask have no fan-out.
-- `written_by` (capability 9.19) landing. Every binding read ends at `no_writer` today —
-  3,321 of them on the ceiling — and each is a walk that stops immediately. When the edge
-  exists, those become real traversals, and this measurement should be re-run before the
-  capability ships rather than after.
-- A catalog that asks about a **receiver**. The asked surface is arguments only; the ceiling
-  includes receivers, so the headroom is already measured, but the mix would shift towards
-  the `escapes` check.
+Anything tighter starts refusing answers the walk gets right today. And it would have to
+bound **`visits`, not wall time** — §1.6 shows wall time varying 15× run to run on identical
+input while `visits` reproduces to the row.
 
 ---
 
-## 6. Reproducing this
+## 6. The two conditions attached to the ruling
+
+**These are what makes "no cap" safe later, and they are conditions rather than notes.**
+
+### 6.1 Re-run this harness before capability 9.19 (`written_by`) ships — not after
+
+Every binding read ends at `no_writer` today: 3,321 of them on the ceiling, 13 on the asked
+surface. **Each is a walk that stops immediately** because `value_edges` emits no
+`written_by` row for anything to follow. When capability 9.19 lands and the sixth edge
+exists, every one of those becomes a real traversal into whatever writes the binding, and
+none of the numbers above constrains what that costs. A binding written from many places is
+structurally the same fan-out as `addCriterion`'s 388 callers, and nothing here has measured
+it because nothing here could.
+
+So: **9.19's own gate includes re-running `scripts/measure_value_walk.py` and re-reading
+§5.** This is not a suggestion to re-measure at some point; it is the condition under which
+the no-cap ruling continues to hold.
+
+### 6.2 Tasks 5–10 thread the index, and report `visits`
+
+Both halves follow from §3.3 and §1.6.
+
+- **Thread the `ValueIndex`.** `resolve_site(workspace, site)` with no index rebuilds the
+  whole five-query fold, which costs 0.16 s on `mall-admin` — more than every walk in that
+  corpus put together. There is no cache and there cannot be one in `Workspace.once`. An
+  engine resolving 56 sites without threading an index would pay about 9 s where the work
+  itself is under a millisecond. Each migrated engine builds `value_index(workspace)` once
+  per run and passes it to every `resolve_site` call.
+- **Report `visits`, not wall time.** A migration that claims "the walk is fast here" from a
+  wall-time reading is reading noise: §1.6 measured a 15× spread on identical input. Where
+  §3c's per-engine diff wants a cost figure, it is the positions-visited count.
+
+### 6.3 What else would reopen the ruling
+
+- A corpus whose generated code is an order of magnitude larger than `mall-mbg`'s **and** a
+  catalog that asks about a position inside it. Today those two conditions never co-occur:
+  the corpus with the fan-out asks about nothing, and the corpora that ask have no fan-out.
+- **A catalog spelling `arg: all_strings` against a method a real codebase calls with a long
+  list.** It is the only ask in the grammar with no bound on how many positions one row
+  claims, and its harmlessness here is luck (§1.3), not a property.
+- A catalog that asks about a **receiver**. The asked surface is arguments only; the ceiling
+  includes receivers, so the headroom is already measured, but the mix would shift towards
+  the `escapes` check.
+- A seventh ask spelling, which this harness would silently not see (§1.3).
+
+---
+
+## 7. Reproducing this
 
 ```bash
 JAVA_HOME=… .venv/bin/python scripts/measure_value_walk.py            # the asked surface
 JAVA_HOME=… .venv/bin/python scripts/measure_value_walk.py --all-slots # the ceiling
 ```
 
-Both print the per-corpus tables, the worst positions by name and the reason distribution;
-`--json OUT` writes every row. A run over all twenty-seven corpora takes about 8 s, almost
-all of it loading facts.
+Both print which modules were **not** measured, the per-corpus tables on both bases, the
+worst positions and worst sites by name, and the reason distribution; `--json OUT` writes
+every row. A run over all twenty-seven corpora takes about 8 s, almost all of it loading
+facts.
+
+Every deterministic figure in this document reproduces exactly across runs. Wall time does
+not, and is labelled wherever it appears.

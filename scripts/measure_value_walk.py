@@ -15,16 +15,36 @@ because no catalog owned a row there. So the denominator is not "every argument 
 call site" — it is **every position a shipped catalog actually asks about**, and finding
 those is half the measurement.
 
-A shipped catalog names a position in one of three grammars, and all three are read here:
+The shipped catalogs spell a position in six shapes, **found by auditing all 101 files
+rather than derived from a grammar**, which is the standing caveat on every count this
+prints: a catalog that invents a seventh spelling is missed until this list is re-audited.
+The first version of this harness had three of the six and under-counted by 20 positions,
+which is how the caveat came to be written down.
 
 * a `methods`/`entries`/`vocabulary` row carrying `arg` or a `<name>_arg` integer beside a
   method name (`single_call`, `combinator`, `interface_implementation`,
   `supertype_dispatch`, `config_join`);
 * a `fluent` root/step/terminal carrying `captures: {name: argN}`;
+* a NESTED capture, `captures: {channel_link: {bean_via: arg0}}` — the same position, with
+  what to do with it afterwards (eleven rows, the `spring-integration-*` catalogs);
+* a SUB-OBJECT of a row, carrying slots while the method name stays on the parent:
+  `ktor-routing`'s `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
+  `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` (26 occurrences);
+* `arg: all_strings` — EVERY positional argument of the call, a varargs array read as its
+  own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
+  lists. It is the one spelling where a single catalog row can ask about an unbounded
+  number of positions, and it matches **zero** sites in the large corpora by luck rather
+  than by bound — nothing there calls one of those three where a catalog also matches;
 * a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg` against a wrapper
   `type` — a position on that type's CONSTRUCTOR call, so the method name is `<init>`.
   `payload_ctor_arg: last` is not an index but a rule, and it is resolved per site against
   that site's own argument count.
+
+**Two bases, and they differ by about a quarter.** An ASK is a distinct (catalog, position)
+pair; a POSITION is a distinct `(site, slot)`, which is what the walk is actually run on —
+two catalogs asking about one slot is two asks and one walk. Both are printed, per corpus
+and in total, because quoting one against the other is the easy mistake here. Every COST
+figure is per position.
 
 A row is matched to real call sites by the same three keys the engines match on — the
 owner (where the row or an enclosing node declares one, converted through the catalogs'
@@ -56,6 +76,12 @@ Per SITE, additionally, `resolve_site` itself is timed and its `Binding` count r
 because §3b's "potentially unbounded and multiplicative" is about the COMBINATION step, and
 a per-position measurement alone would miss it.
 
+**The INDEX FOLD is timed beside both, and printed as a headline rather than a footnote.**
+`value_index` folds five queries; `resolve_site` rebuilds it whenever a caller does not
+pass one, and there is no cache — `Workspace.once` refuses this fold, because two of the
+five are derived. On `mall-admin` the fold costs more than walking every position in the
+corpus, so a report that timed only the walk would describe the cheap half.
+
 The walk's memo is per resolve and shared across one site's slots, so the harness builds one
 `_Walk` per site and times each slot inside it. That is the production lifetime, not a
 friendlier one.
@@ -64,9 +90,15 @@ friendlier one.
 
 **Distribution, maximum and tail — never the mean** (§3a step 2). A mean hides the
 pathological module, which is the only thing this measurement is for. The script prints
-percentiles, the worst individual positions BY NAME, and the `unresolved` reason
-distribution — a reason nothing produces on real code is either dead vocabulary or a gap in
-the corpus, and the report has to say which.
+percentiles, the worst individual positions BY NAME, the worst SITES by binding count, and
+the `unresolved` reason distribution — a reason nothing produces on real code is either
+dead vocabulary or a gap in the corpus, and the report has to say which.
+
+**Wall time is printed and is never a maximum.** At these magnitudes one position varies by
+more than 10x between runs on identical input (measured: a 128-path position read 33 ms
+once and 1 ms the next time). **`visits` — the `(position, path)` pairs computed — is
+identical to the row across runs**, and it is the figure to compare, to rank the tail by,
+and to bound if anything is ever bounded. Every wall-time column here is labelled noisy.
 
 Run:  `.venv/bin/python scripts/measure_value_walk.py [--json OUT] [--corpus NAME ...]`
 """
@@ -120,21 +152,33 @@ _CLASSES = Path("target") / "classes"
 _ARG_CAPTURE = re.compile(r"^arg(\d+)$")
 # `payload_ctor_arg: last` — a rule, not an index. Resolved per site below.
 _LAST = "last"
+# `arg: all_strings` — EVERY positional argument, a varargs array read as its elements.
+# Also a rule rather than an index, and also resolved per site.
+_ALL_STRINGS = "all_strings"
 
 
-def corpora() -> list[tuple[str, Path]]:
+def corpora() -> tuple[list[tuple[str, Path]], list[str]]:
     """Every fixture that compiles, plus every example with a scan — `mall-admin` among
-    them. Sorted by name so a run's order is stable (NFR-1's habit, in a script)."""
+    them. Sorted by name so a run's order is stable (NFR-1's habit, in a script).
+
+    **The set depends on what is BUILT, so the skipped ones are returned beside it and
+    printed.** A module with no `target/classes` and no `.sextant/facts` is silently not
+    measured otherwise, and a reader comparing a later run's corpus count against this
+    one's would be comparing two different estates without being told. Priming them is
+    `python tests/fixture_build.py` and an analysis run over `examples/`."""
     found: list[tuple[str, Path]] = []
+    skipped: list[str] = []
     for parent in (REPO / "fixtures", REPO / "examples", REPO / "examples" / "mall"):
         if not parent.is_dir():
             continue
         for root in sorted(parent.iterdir()):
-            if not root.is_dir():
+            if not root.is_dir() or root.name == "mall":
                 continue
             if (root / _FACTS).is_dir() or (root / _CLASSES).is_dir():
                 found.append((root.name, root))
-    return found
+            elif any(root.glob("*.gradle*")) or (root / "pom.xml").is_file():
+                skipped.append(root.name)
+    return found, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -165,20 +209,48 @@ def _names_of(node: dict[str, Any]) -> tuple[str, ...]:
     return ()
 
 
+def _captured(value: Any, into: list[int | str]) -> None:
+    """One `captures` entry's slots. A capture is usually `argN`, and sometimes a NESTED
+    dict that says how to reach the value — `channel_link: {bean_via: arg0}`, eleven rows
+    across the `spring-integration-*` catalogs. Both name the same position on the same
+    call; the nested form only adds what to do with it afterwards."""
+    matched = _ARG_CAPTURE.match(value) if isinstance(value, str) else None
+    if matched is not None:
+        into.append(int(matched.group(1)))
+    elif isinstance(value, dict):
+        for nested in value.values():
+            _captured(nested, into)
+
+
 def _slots_of(node: dict[str, Any]) -> tuple[int | str, ...]:
+    """The positions THIS node names — not its children's.
+
+    Three spellings beyond the plain integer, each of which was missed by the first
+    version of this reader and each of which is a real ask:
+
+    * `arg: all_strings` — EVERY positional argument of the call, with a varargs array
+      read as its own elements (`shapes/arguments._all_string_channels`). Thirteen rows,
+      all of them `List.of`/`Arrays.asList`/`Subscriptions.topics` topic lists.
+    * `<name>_ctor_arg: last` — the last argument, resolved per site below.
+    * a nested `captures` dict (see `_captured`).
+    """
     slots: list[int | str] = []
     for key, value in node.items():
         name = str(key)
-        if (name == "arg" or name.endswith("_arg")) and isinstance(value, int):
+        if not (name == "arg" or name.endswith("_arg")):
+            continue
+        if isinstance(value, bool):  # `parses_true` and friends are not positions
+            continue
+        if isinstance(value, int):
             slots.append(value)
+        elif value == _ALL_STRINGS:
+            slots.append(_ALL_STRINGS)
         elif name.endswith("_ctor_arg") and value == _LAST:
             slots.append(_LAST)
     captures = node.get("captures")
     if isinstance(captures, dict):
         for value in captures.values():
-            matched = _ARG_CAPTURE.match(value) if isinstance(value, str) else None
-            if matched is not None:
-                slots.append(int(matched.group(1)))
+            _captured(value, slots)
     return tuple(dict.fromkeys(slots))
 
 
@@ -194,47 +266,84 @@ def _owner_symbols(declared: Any, where: str) -> tuple[str, ...]:
     return tuple(catalog_symbols(declared, where))
 
 
+@dataclass(frozen=True)
+class _Enclosing:
+    """What a nested node inherits when it names slots and no method of its own.
+
+    A call is identified by an owner, a method name and an arity or descriptor, and a
+    catalog does not always put all four on the node carrying the slot: `ktor-routing`'s
+    `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
+    `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` are sub-objects of a
+    row that names the method. Twenty-six occurrences, every one of them a position on the
+    PARENT's call, and the first version of this reader dropped all of them."""
+
+    owners: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()
+    arity: int | None = None
+    descriptor: str | None = None
+
+
 def asks_of(catalog: Catalog) -> list[Ask]:
-    """Every position `catalog` asks about, read off the loaded file rather than off a
-    per-style list — a style-by-style reader would miss the next catalog that spells a
-    position somewhere new, and silently."""
+    """Every position `catalog` asks about, read off the loaded file by SHAPE rather than
+    by style — one reader for every catalog, so a style that spells a position somewhere
+    new is picked up rather than silently skipped.
+
+    **It is a reader of shapes and not of the engines**, and that is the standing caveat:
+    it finds a position wherever a catalog spells one in a shape seen below, and every
+    shape here was found by auditing the 101 shipped files. A future catalog that invents a
+    fourth spelling would be missed until this is re-audited, which is why the document
+    that quotes these counts quotes them as *measured today* rather than as a property of
+    the grammar."""
     found: list[Ask] = []
 
-    def walk(node: Any, owners: tuple[str, ...]) -> None:
+    def walk(node: Any, enclosing: _Enclosing) -> None:
         if isinstance(node, list):
             for entry in node:
-                walk(entry, owners)
+                walk(entry, enclosing)
             return
         if not isinstance(node, dict):
             return
-        here = _owner_symbols(node.get("owner"), f"{catalog.source}: owner") or owners
+        owners = _owner_symbols(node.get("owner"), f"{catalog.source}: owner") or enclosing.owners
+        names = _names_of(node)
+        arity = node.get("arity") if isinstance(node.get("arity"), int) else None
+        descriptor = node["descriptor"] if isinstance(node.get("descriptor"), str) else None
         slots = _slots_of(node)
-        if slots:
-            names = _names_of(node)
+        if slots and not names:
             # A `call_wrappers`/`record_wrappers` entry: the position is on the wrapper
             # TYPE's constructor, so the owner is that type and the method is `<init>`.
-            if not names and isinstance(node.get("type"), str):
+            if isinstance(node.get("type"), str):
                 names = ("<init>",)
-                here = _owner_symbols(node["type"], f"{catalog.source}: type") or here
-            if names:
-                found.append(
-                    Ask(
-                        catalog=catalog.id,
-                        owners=here,
-                        names=names,
-                        arity=node.get("arity") if isinstance(node.get("arity"), int) else None,
-                        descriptor=(
-                            node["descriptor"] if isinstance(node.get("descriptor"), str) else None
-                        ),
-                        slots=slots,
-                    )
+                owners = _owner_symbols(node["type"], f"{catalog.source}: type") or owners
+            else:
+                # A sub-object of the row that names the call (see `_Enclosing`). The
+                # arity and descriptor come with the name, because they describe the same
+                # call and this node carries neither.
+                names, arity, descriptor = enclosing.names, enclosing.arity, enclosing.descriptor
+        if slots and names:
+            found.append(
+                Ask(
+                    catalog=catalog.id,
+                    owners=owners,
+                    names=names,
+                    arity=arity,
+                    descriptor=descriptor,
+                    slots=slots,
                 )
+            )
+        # Only a node that names a method replaces what its children inherit: a row's
+        # `via: {owner, method}` filter would otherwise re-parent the row's own sub-objects
+        # onto the method the filter names.
+        inherited = (
+            _Enclosing(owners, names, arity, descriptor)
+            if names
+            else _Enclosing(owners, enclosing.names, enclosing.arity, enclosing.descriptor)
+        )
         for key, value in node.items():
             if str(key) == "captures":
                 continue
-            walk(value, here)
+            walk(value, inherited)
 
-    walk(catalog.matches, ())
+    walk(catalog.matches, _Enclosing())
     return found
 
 
@@ -271,13 +380,28 @@ def positions_asked(sites: list[dict[str, Any]], asks: list[Ask]) -> list[Positi
             if ask.descriptor is None and ask.arity is not None and ask.arity != len(arguments):
                 continue
             for slot in ask.slots:
-                index = len(arguments) - 1 if slot == _LAST else slot
-                if not isinstance(index, int) or not 0 <= index < len(arguments):
-                    continue
-                found.append(
-                    Position(ask.catalog, str(site["caller"]), int(str(site["ordinal"])), index)
-                )
+                for index in _indices(slot, len(arguments)):
+                    found.append(
+                        Position(ask.catalog, str(site["caller"]), int(str(site["ordinal"])), index)
+                    )
     return found
+
+
+def _indices(slot: int | str, arity: int) -> tuple[int, ...]:
+    """The argument indices one declared slot resolves to AT THIS SITE.
+
+    `all_strings` is the whole positional list, so this is the one place a single ask can
+    cost more than one position. **It costs none on the large corpora, and that is luck
+    rather than a bound**: all thirteen rows that spell it name `List.of`,
+    `Arrays.asList` or `Subscriptions.topics`, which no example calls where a catalog
+    also matches. A codebase that did call one with a long topic list would ask about
+    every one of its arguments from a single catalog row."""
+    if slot == _ALL_STRINGS:
+        return tuple(range(arity))
+    index = arity - 1 if slot == _LAST else slot
+    if not isinstance(index, int) or not 0 <= index < arity:
+        return ()
+    return (index,)
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +432,14 @@ class Measured:
     call_sites: int
     value_edges: int
     asks: int
+    # TWO bases, because they are different numbers and a reader comparing one against the
+    # other would be wrong by roughly a factor of two. `pairs` counts distinct (catalog,
+    # position): two catalogs asking about one slot are two asks, and it is the number the
+    # per-catalog and per-style tables add up to. `positions` counts distinct (site, slot)
+    # — the walks that actually run, since the walk is asked once per position whoever
+    # asked. Every cost figure is per position; `pairs` answers "how much do catalogs ask"
+    # and never "how much does it cost".
+    pairs: int
     positions: int
     sites: int
     index_seconds: float
@@ -358,7 +490,8 @@ def measure(
         call_sites=len(sites),
         value_edges=len(workspace.query("value_edges")),
         asks=len(asks),
-        positions=len(positions),
+        pairs=len(set(positions)),
+        positions=len({(p.caller, p.ordinal, p.slot) for p in positions}),
         sites=len(by_site),
         index_seconds=index_seconds,
     )
@@ -454,29 +587,45 @@ def _distribution(values: list[float]) -> dict[str, float]:
 
 
 def report(measured: list[Measured]) -> str:
+    """The per-corpus tables.
+
+    **`index s` is a headline column and not a footnote.** `value_index` folds five
+    queries, and `resolve_site` rebuilds it whenever a caller does not pass one — there is
+    no cache anywhere, and `Workspace.once` refuses this fold because two of the five are
+    derived. On `mall-admin` it costs more than every walk in the corpus put together, so
+    a report that showed only the walking would describe the cheap half.
+
+    **Wall time is printed but never called a maximum.** At these magnitudes a single
+    position varies by more than 10x between runs on identical input; `visits` — the
+    `(position, path)` pairs computed — is the same to the row every time, and is the
+    figure to compare or to bound."""
     lines: list[str] = []
     lines.append(
-        "| corpus | call sites | value edges | positions asked | sites | index s | walk s |"
+        "| corpus | call sites | value edges | asks | positions | sites | "
+        "index fold s | walk s | resolve_site s |"
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for one in measured:
         total = sum(row["seconds"] for row in one.rows)
+        resolved = sum(row["seconds"] for row in one.site_rows)
         lines.append(
-            f"| `{one.corpus}` | {one.call_sites:,} | {one.value_edges:,} | "
-            f"{one.positions:,} | {one.sites:,} | {one.index_seconds:.2f} | {total:.3f} |"
+            f"| `{one.corpus}` | {one.call_sites:,} | {one.value_edges:,} | {one.pairs:,} | "
+            f"{one.positions:,} | {one.sites:,} | {one.index_seconds:.3f} | "
+            f"{total:.3f} | {resolved:.3f} |"
         )
     lines.append("")
     lines.append(
         "| corpus | paths p50/p90/p99/max | depth p50/p90/p99/max | "
-        "visits p99/max | seconds p99/max | bindings max |"
+        "answers p99/max | visits p99/max | bindings max | slowest position s (noisy) |"
     )
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|")
     for one in measured:
         if not one.rows:
-            lines.append(f"| `{one.corpus}` | — | — | — | — | — |")
+            lines.append(f"| `{one.corpus}` | — | — | — | — | — | — |")
             continue
         paths = _distribution([row["paths"] for row in one.rows])
         depth = _distribution([row["depth"] for row in one.rows])
+        answers = _distribution([row["answers"] for row in one.rows])
         visits = _distribution([row["visits"] for row in one.rows])
         seconds = _distribution([row["seconds"] for row in one.rows])
         bindings = max((row["bindings"] for row in one.site_rows), default=0)
@@ -484,8 +633,8 @@ def report(measured: list[Measured]) -> str:
             f"| `{one.corpus}` | {paths['p50']:.0f}/{paths['p90']:.0f}/"
             f"{paths['p99']:.0f}/{paths['max']:.0f} | "
             f"{depth['p50']:.0f}/{depth['p90']:.0f}/{depth['p99']:.0f}/{depth['max']:.0f} | "
-            f"{visits['p99']:.0f}/{visits['max']:.0f} | "
-            f"{seconds['p99']:.4f}/{seconds['max']:.4f} | {bindings} |"
+            f"{answers['p99']:.0f}/{answers['max']:.0f} | "
+            f"{visits['p99']:.0f}/{visits['max']:.0f} | {bindings} | {seconds['max']:.4f} |"
         )
     return "\n".join(lines)
 
@@ -507,6 +656,24 @@ def worst(measured: list[Measured], key: str, count: int = 12) -> str:
     return "\n".join(lines)
 
 
+def worst_sites(measured: list[Measured], count: int = 8) -> str:
+    """The sites `resolve_site` returns the most bindings for — the number an engine
+    actually receives, and the one the combination can inflate."""
+    rows = [(one.corpus, row) for one in measured for row in one.site_rows]
+    rows.sort(key=lambda entry: entry[1]["bindings"], reverse=True)
+    lines = [
+        "| corpus | site | slots | bindings | seconds (noisy) |",
+        "|---|---|---|---|---|",
+    ]
+    for corpus, row in rows[:count]:
+        caller = str(row["caller"]).rsplit(" ", 1)[-1]
+        lines.append(
+            f"| `{corpus}` | `{caller}`@{row['ordinal']} | {row['slots']} | "
+            f"{row['bindings']} | {row['seconds']:.4f} |"
+        )
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", type=Path, default=None, help="write every row here")
@@ -519,11 +686,18 @@ def main() -> int:
     arguments = parser.parse_args()
 
     catalogs = YamlCatalogSource(CATALOGS).load()
+    available, skipped = corpora()
     chosen = [
         (name, root)
-        for name, root in corpora()
+        for name, root in available
         if arguments.corpus is None or name in arguments.corpus
     ]
+    if skipped:
+        print(
+            f"NOT MEASURED — {len(skipped)} module(s) with no built classes and no scan: "
+            + ", ".join(skipped),
+            file=sys.stderr,
+        )
     measured: list[Measured] = []
     for name, root in chosen:
         started = time.perf_counter()
@@ -533,7 +707,8 @@ def main() -> int:
             workspace.close()
         measured.append(one)
         print(
-            f"{name:34s} sites={one.call_sites:6,d} asked={one.positions:5,d} "
+            f"{name:34s} sites={one.call_sites:6,d} positions={one.positions:6,d} "
+            f"fold={one.index_seconds:6.3f}s "
             f"walk={sum(row['seconds'] for row in one.rows):7.3f}s "
             f"total={time.perf_counter() - started:6.1f}s",
             file=sys.stderr,
@@ -542,11 +717,26 @@ def main() -> int:
 
     print(report(measured))
     print()
+    asked = sum(one.pairs for one in measured)
+    positions = sum(one.positions for one in measured)
+    print(
+        "**Totals.** index fold "
+        f"{sum(one.index_seconds for one in measured):.2f}s, "
+        f"walk {sum(row['seconds'] for one in measured for row in one.rows):.2f}s, "
+        f"`resolve_site` {sum(row['seconds'] for one in measured for row in one.site_rows):.2f}s "
+        f"over {positions:,} distinct positions"
+        + (f" ({asked:,} catalog-to-position asks)" if asked != positions else "")
+        + f" at {sum(one.sites for one in measured):,} sites."
+    )
+    print()
     print("### Worst positions by path count\n")
     print(worst(measured, "paths"))
     print()
-    print("### Worst positions by wall time\n")
-    print(worst(measured, "seconds"))
+    print("### Worst positions by positions visited (the deterministic work figure)\n")
+    print(worst(measured, "visits"))
+    print()
+    print("### Worst sites by binding count — the combination, which is what an engine pays\n")
+    print(worst_sites(measured))
     print()
     print("### `unresolved` reasons\n")
     reasons: Counter[str] = Counter()
@@ -569,6 +759,7 @@ def main() -> int:
                         "call_sites": one.call_sites,
                         "value_edges": one.value_edges,
                         "asks": one.asks,
+                        "pairs": one.pairs,
                         "positions": one.positions,
                         "sites": one.sites,
                         "index_seconds": one.index_seconds,
