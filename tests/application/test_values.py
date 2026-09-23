@@ -25,8 +25,11 @@ from typing import Any
 import pytest
 from fixture_module import write_fixture_module_fact
 
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.call_edges import record_call_edges
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.values import (
     _REASONS,
     RECEIVER,
@@ -1116,3 +1119,136 @@ def test_the_fixture_is_loaded_at_all(walked: DuckDbWorkspace, tmp_path: Path):
         "bound_to_parameter",
         "names_declaration",
     }
+
+
+# ---------------------------------------------------------------------------
+# Shadow mode (spec §7a) and the `value_resolutions` table (§3d)
+# ---------------------------------------------------------------------------
+
+# One catalog, asking about one slot of one method — the smallest thing that is a real
+# ask. `Registry#one` is called from eight of the fixture's arms above, and between them
+# they answer a literal, several literals on several paths, and four of §1d's six reasons,
+# so the shadow rows this produces exercise both outcomes without a catalog invented to
+# produce each.
+_ASKING = Catalog(
+    id="values-probe",
+    style="single_call",
+    protocol="jms",
+    direction="outbound",
+    requires=(),
+    matches={"methods": [{"owner": "com.acme.orders.values.Registry", "method": "one", "arg": 0}]},
+    source=Path("values-probe.yml"),
+)
+
+# The three tables §3c diffs, and the three §7a promises shadow mode does not move.
+_PUBLISHED = ("endpoints", "endpoint_metadata", "shapes")
+
+
+def _shadow_rows(workspace: DuckDbWorkspace) -> list[dict[str, Any]]:
+    record_value_resolutions(workspace, [_ASKING], shadow=True)
+    return [dict(row) for row in workspace.query("value_resolutions")]
+
+
+def test_shadow_mode_records_what_it_would_resolve_and_publishes_nothing(walked):
+    """**Spec §7a, and the test that is the point of the task.** The whole risk of this
+    work is that a conversion is a new ASSERTION — §3c's diff catches movement and not
+    wrongness, because a wrong address looks exactly like a right one in a diff. Shadow
+    mode makes every candidate reviewable as data before a row changes, which is worth
+    nothing unless it is true that no row changes.
+
+    Both halves are asserted together deliberately. A recorder that wrote its rows by
+    deriving them would pass the first assertion and fail the second, and a recorder that
+    ran nothing would pass the second and fail the first.
+    """
+    before = {name: walked.query(name) for name in _PUBLISHED}
+    rows = _shadow_rows(walked)
+    assert {row["outcome"] for row in rows} == {"would_resolve", "unresolved"}
+    for name in _PUBLISHED:
+        assert walked.query(name) == before[name], name
+
+
+def test_a_would_resolve_row_carries_the_value_it_would_publish(walked):
+    """§7a's "reviewable as data" is the whole deliverable, and a row saying only THAT a
+    position would resolve is not reviewable: the reviewer's question is whether the
+    address is right. `Publisher#publish`@1 reads a value returned by a callee with two
+    `return` statements, so it is two paths and two candidate claims — the multiplicity
+    §1c keeps rather than picking one of."""
+    rows = [
+        row
+        for row in _shadow_rows(walked)
+        if row["caller"] == _symbol(_PUBLISHER, "publish", "()V") and row["ordinal"] == 1
+    ]
+    assert [(row["outcome"], row["answer_kind"], row["value"]) for row in rows] == [
+        ("would_resolve", "literal", "orders"),
+        ("would_resolve", "literal", "orders-fast"),
+    ]
+    assert {row["literal_kind"] for row in rows} == {"string"}
+    assert [row["path"] for row in rows] == [
+        f"{_symbol(_NAMES, 'pick', _MAKES_STRING)} returns 0",
+        f"{_symbol(_NAMES, 'pick', _MAKES_STRING)} returns 1",
+    ]
+
+
+def test_an_unresolved_row_carries_the_reason_and_no_value(walked):
+    """§1d's vocabulary is decoration unless something records it (§3d), and this table is
+    the something. Four of the six reasons are reachable from this one catalog's ask, each
+    naming a different thing a reader can act on: "we cannot see the jar" is not "the code
+    branches", and today both collapse into one word."""
+    rows = [row for row in _shadow_rows(walked) if row["outcome"] == "unresolved"]
+    assert {row["reason"] for row in rows} >= {"external", "not_readable", "escapes", "no_writer"}
+    assert {row["value"] for row in rows} == {None}
+    assert {row["answer_kind"] for row in rows} == {"unresolved"}
+
+
+def test_the_table_is_bounded_by_what_catalogs_ask_not_by_the_facts(walked):
+    """**§3d's bound, and the thing that makes the table readable at all.** Measured
+    estate-wide (Task 4): 948 positions asked against a ceiling of 98,454. Here the one
+    catalog asks about slot 0 of `Registry#one` and nothing else, so every row names that
+    method — a writer that had lost the bound and emitted a row per fact would fail this
+    on the fixture's other sixty-odd argument positions."""
+    rows = _shadow_rows(walked)
+    assert rows
+    assert {row["slot"] for row in rows} == {"0"}
+    assert {row["catalog"] for row in rows} == {"values-probe"}
+    asked = {
+        (str(site["caller"]), int(str(site["ordinal"])))
+        for site in effective_call_sites(walked)
+        if str(site["owner"]) == _REGISTRY and str(site["name"]) == "one"
+    }
+    assert {(row["caller"], row["ordinal"]) for row in rows} == asked
+
+
+def test_shadow_rows_do_not_survive_an_ordinary_analysis(walked):
+    """The reset is unconditional, and that is not tidiness. A workspace analysed once
+    with `--shadow` and again without it would otherwise keep the first run's review list
+    — rows describing a walk this analysis did not run, against sites it may have moved.
+    `reachability` shipped without its reset and doubled every row on a second analyze;
+    this is the same defect, caught before it shipped."""
+    assert _shadow_rows(walked)
+    record_value_resolutions(walked, [_ASKING], shadow=False)
+    assert walked.query("value_resolutions") == []
+
+
+def test_shadow_mode_asks_about_a_position_no_catalog_names_and_records_nothing(walked):
+    """The bound, from the other side: a catalog that asks about nothing this workspace
+    calls writes no row at all. An empty table is the honest answer, not a defect — the
+    same shape §3b names as its precedent (eight catalogs declared `metadata_from` on
+    `orders-quarkus` and zero annotation walks ran)."""
+    record_value_resolutions(
+        walked,
+        [
+            Catalog(
+                id="asks-nothing",
+                style="single_call",
+                protocol="jms",
+                direction="outbound",
+                requires=(),
+                matches={
+                    "methods": [{"owner": "com.acme.nowhere.Absent", "method": "gone", "arg": 0}]
+                },
+                source=Path("asks-nothing.yml"),
+            )
+        ],
+        shadow=True,
+    )
+    assert walked.query("value_resolutions") == []

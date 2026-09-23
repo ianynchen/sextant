@@ -103,8 +103,19 @@ of an edge the design gives one home, which is the disease §0a records.
 arrives later; until it does, a producer whose value nothing names answers with a reason
 rather than with framework knowledge this layer is not allowed to hold.
 
-**Nothing consumes this yet, deliberately** (§3a step 1): the walk ships unwired, and
-Task 4's measurement is the gate before any engine calls it.
+**No ENGINE consumes this, deliberately** (§3a step 1): the walk derives no row, and
+Task 4's measurement was the gate before any engine calls it. One caller exists, and it
+is the one §7a requires before a migration may start — `resolve/shadow.py` runs the walk
+over every position a catalog asks about and writes what it WOULD resolve into
+`value_resolutions`, publishing nothing. It is a RECORDER rather than a consumer: nothing
+reads its answers back, so the first row this walk moves anywhere is still Tasks 7-9's.
+
+**A caller resolving many sites builds `value_index` ONCE and threads it** — the condition
+attached to Task 4's no-cap ruling (`docs/research/2026-09-23-value-walk-measurement.md`
+§6.2). `resolve_site` rebuilds the whole five-query fold whenever it is handed none, which
+costs 0.16 s on `mall-admin` — more than walking every position in that corpus put
+together — so an engine resolving its 52 asked sites without one would pay about 8 s for
+work that takes under a millisecond.
 """
 
 import json

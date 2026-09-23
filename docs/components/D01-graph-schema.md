@@ -928,6 +928,38 @@ the walk asks — which method, how deep, where it stops — is identical for a 
 a clock. So the walk takes a row from here and branches on the kind nowhere at all, which
 is also what makes the third kind free the day it gains a producer.
 
+### Value resolutions — a review list, and the only table nothing derives from
+
+Spec [2026-09-22](../superpowers/specs/2026-09-22-value-resolution-design.md) §3d and §7a.
+
+| Table | Holds |
+|---|---|
+| `value_resolutions` | One row per (catalog, position, path): what the backward value walk WOULD resolve at a position a catalog asked about, or the §1d reason it could not |
+
+**Written by `application/resolve/shadow.py`, and only when the analysis asked for it**
+(`sextant module analyze --shadow`). Every other analysis empties the table and leaves it
+empty — rows describing a walk this run did not perform would be a review list about
+another workspace.
+
+**Its whole purpose is that nothing reads it.** This project's standing rule is *misses are
+acceptable, fabrications are not*, and the value-resolution work inverts the usual risk: it
+converts misses into ANSWERS, so every conversion is a new assertion, across fourteen
+shipped catalogs at once. A before/after diff of `endpoints` catches MOVEMENT and not
+WRONGNESS — a wrong address looks exactly like a right one in a diff — so the walk runs in
+shadow first, writes its candidate conversions here, and publishes none of them. Each
+engine is then migrated with its diff already read.
+
+**Bounded by what catalogs ASK, never by the facts**, which is what makes it a list a person
+can read rather than a second copy of the argument grammar. Measured 2026-09-23 across
+twenty-seven corpora including the 48 MB one: 948 distinct positions asked, against 98,454
+if every argument and receiver of every call site were resolved
+(`docs/research/2026-09-23-value-walk-measurement.md`).
+
+**`value` masks by the ADDRESS map on export**, not by the argument-grammar one: a
+`would_resolve` row carries the string an engine WOULD publish as `endpoints.path`, so it is
+the same value one table along, and a bundle that masked the two by different rules would
+spell one address two ways.
+
 ---
 
 ## 4. Search

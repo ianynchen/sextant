@@ -116,7 +116,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import tempfile
 import time
@@ -134,7 +133,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.return_flow import record_return_flows
-from sextant.application.resolve.shapes.rooting import catalog_symbols, names_a_type
+from sextant.application.resolve.shadow import Position, asks_of, positions_asked
 from sextant.application.resolve.values import (
     RECEIVER,
     UNRESOLVED,
@@ -157,13 +156,6 @@ CATALOGS = REPO / "src" / "sextant" / "catalogs"
 # names as the largest available.
 _FACTS = Path(".sextant") / "facts"
 _CLASSES = Path("target") / "classes"
-
-_ARG_CAPTURE = re.compile(r"^arg(\d+)$")
-# `payload_ctor_arg: last` — a rule, not an index. Resolved per site below.
-_LAST = "last"
-# `arg: all_strings` — EVERY positional argument, a varargs array read as its elements.
-# Also a rule rather than an index, and also resolved per site.
-_ALL_STRINGS = "all_strings"
 
 
 def corpora() -> tuple[list[tuple[str, Path]], list[str]]:
@@ -193,238 +185,16 @@ def corpora() -> tuple[list[tuple[str, Path]], list[str]]:
 # ---------------------------------------------------------------------------
 # What a catalog asks about
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Ask:
-    """One catalog row's question: these slots, of this method, on these owners."""
-
-    catalog: str
-    owners: tuple[str, ...]
-    names: tuple[str, ...]
-    arity: int | None
-    descriptor: str | None
-    slots: tuple[int | str, ...]
-
-
-def _names_of(node: dict[str, Any]) -> tuple[str, ...]:
-    for key in ("method", "name"):
-        value = node.get(key)
-        if isinstance(value, str):
-            return (value,)
-    value = node.get("methods")
-    if isinstance(value, list) and all(isinstance(entry, str) for entry in value):
-        return tuple(value)
-    return ()
-
-
-def _captured(value: Any, into: list[int | str]) -> None:
-    """One `captures` entry's slots. A capture is usually `argN`, and sometimes a NESTED
-    dict that says how to reach the value — `channel_link: {bean_via: arg0}`, eleven rows
-    across the `spring-integration-*` catalogs. Both name the same position on the same
-    call; the nested form only adds what to do with it afterwards."""
-    matched = _ARG_CAPTURE.match(value) if isinstance(value, str) else None
-    if matched is not None:
-        into.append(int(matched.group(1)))
-    elif isinstance(value, dict):
-        for nested in value.values():
-            _captured(nested, into)
-
-
-def _slots_of(node: dict[str, Any]) -> tuple[int | str, ...]:
-    """The positions THIS node names — not its children's.
-
-    Three spellings beyond the plain integer, each of which was missed by the first
-    version of this reader and each of which is a real ask:
-
-    * `arg: all_strings` — EVERY positional argument of the call, with a varargs array
-      read as its own elements (`shapes/arguments._all_string_channels`). Thirteen rows,
-      all of them `List.of`/`Arrays.asList`/`Subscriptions.topics` topic lists.
-    * `<name>_ctor_arg: last` — the last argument, resolved per site below.
-    * a nested `captures` dict (see `_captured`).
-    """
-    slots: list[int | str] = []
-    for key, value in node.items():
-        name = str(key)
-        if not (name == "arg" or name.endswith("_arg")):
-            continue
-        if isinstance(value, bool):  # `parses_true` and friends are not positions
-            continue
-        if isinstance(value, int):
-            slots.append(value)
-        elif value == _ALL_STRINGS:
-            slots.append(_ALL_STRINGS)
-        elif name.endswith("_ctor_arg") and value == _LAST:
-            slots.append(_LAST)
-    captures = node.get("captures")
-    if isinstance(captures, dict):
-        for value in captures.values():
-            _captured(value, slots)
-    return tuple(dict.fromkeys(slots))
-
-
-def _owner_symbols(declared: Any, where: str) -> tuple[str, ...]:
-    """The owners a node declares, converted the way every engine converts them.
-
-    `names_a_type` first, which is the seam's own "does this convert" test: the recursive
-    reader below hands it whatever sits under an `owner` key anywhere in a catalog, and
-    `via: {owner: …}` nests one under a node that is not an owner declaration. A node that
-    does not name a type leaves the match to widen by method name rather than raise."""
-    if not names_a_type(declared):
-        return ()
-    return tuple(catalog_symbols(declared, where))
-
-
-@dataclass(frozen=True)
-class _Enclosing:
-    """What a nested node inherits when it names slots and no method of its own.
-
-    A call is identified by an owner, a method name and an arity or descriptor, and a
-    catalog does not always put all four on the node carrying the slot: `ktor-routing`'s
-    `request_requirement: {kind: header, name_arg: 1, value_arg: 2}` and
-    `spring-kafka-message`'s `when: {arg: 0, equals: "kafka_topic"}` are sub-objects of a
-    row that names the method. Twenty-six occurrences, every one of them a position on the
-    PARENT's call, and the first version of this reader dropped all of them."""
-
-    owners: tuple[str, ...] = ()
-    names: tuple[str, ...] = ()
-    arity: int | None = None
-    descriptor: str | None = None
-
-
-def asks_of(catalog: Catalog) -> list[Ask]:
-    """Every position `catalog` asks about, read off the loaded file by SHAPE rather than
-    by style — one reader for every catalog, so a style that spells a position somewhere
-    new is picked up rather than silently skipped.
-
-    **It is a reader of shapes and not of the engines**, and that is the standing caveat,
-    in both directions. It finds a position wherever a catalog spells one in a shape seen
-    below, and every shape here was found by auditing the 101 shipped files — a future
-    catalog that invents a SEVENTH spelling is missed until this is re-audited, which is
-    why the document that quotes these counts quotes them as *measured today* rather than
-    as a property of the grammar. And it does not model the engines' REACHABILITY: a row an
-    engine only ever reaches by following a link from an already-matched site is matched
-    here against every call site in the estate. `_indices` states what that costs."""
-    found: list[Ask] = []
-
-    def walk(node: Any, enclosing: _Enclosing) -> None:
-        if isinstance(node, list):
-            for entry in node:
-                walk(entry, enclosing)
-            return
-        if not isinstance(node, dict):
-            return
-        owners = _owner_symbols(node.get("owner"), f"{catalog.source}: owner") or enclosing.owners
-        names = _names_of(node)
-        arity = node.get("arity") if isinstance(node.get("arity"), int) else None
-        descriptor = node["descriptor"] if isinstance(node.get("descriptor"), str) else None
-        slots = _slots_of(node)
-        if slots and not names:
-            # A `call_wrappers`/`record_wrappers` entry: the position is on the wrapper
-            # TYPE's constructor, so the owner is that type and the method is `<init>`.
-            if isinstance(node.get("type"), str):
-                names = ("<init>",)
-                owners = _owner_symbols(node["type"], f"{catalog.source}: type") or owners
-            else:
-                # A sub-object of the row that names the call (see `_Enclosing`). The
-                # arity and descriptor come with the name, because they describe the same
-                # call and this node carries neither.
-                names, arity, descriptor = enclosing.names, enclosing.arity, enclosing.descriptor
-        if slots and names:
-            found.append(
-                Ask(
-                    catalog=catalog.id,
-                    owners=owners,
-                    names=names,
-                    arity=arity,
-                    descriptor=descriptor,
-                    slots=slots,
-                )
-            )
-        # Only a node that names a method replaces what its children inherit: a row's
-        # `via: {owner, method}` filter would otherwise re-parent the row's own sub-objects
-        # onto the method the filter names.
-        inherited = (
-            _Enclosing(owners, names, arity, descriptor)
-            if names
-            else _Enclosing(owners, enclosing.names, enclosing.arity, enclosing.descriptor)
-        )
-        for key, value in node.items():
-            if str(key) == "captures":
-                continue
-            walk(value, inherited)
-
-    walk(catalog.matches, _Enclosing())
-    return found
-
-
-@dataclass(frozen=True)
-class Position:
-    """One position a catalog asks about, at a REAL site of this corpus."""
-
-    catalog: str
-    caller: str
-    ordinal: int
-    slot: int | str
-
-
-def positions_asked(sites: list[dict[str, Any]], asks: list[Ask]) -> list[Position]:
-    """Every `(site, slot)` a shipped catalog asks about, matched on the keys the engines
-    match on: owner (where declared), method name, and descriptor or arity where the row
-    declares either."""
-    by_name: dict[str, list[Ask]] = {}
-    for ask in asks:
-        for name in ask.names:
-            by_name.setdefault(name, []).append(ask)
-    found: list[Position] = []
-    for site in sites:
-        candidates = by_name.get(str(site["name"]))
-        if not candidates:
-            continue
-        arguments = site["arguments"] or []
-        owner, descriptor = str(site["owner"]), site["descriptor"]
-        for ask in candidates:
-            if ask.owners and owner not in ask.owners:
-                continue
-            if ask.descriptor is not None and str(descriptor) != ask.descriptor:
-                continue
-            if ask.descriptor is None and ask.arity is not None and ask.arity != len(arguments):
-                continue
-            for slot in ask.slots:
-                for index in _indices(slot, len(arguments)):
-                    found.append(
-                        Position(ask.catalog, str(site["caller"]), int(str(site["ordinal"])), index)
-                    )
-    return found
-
-
-def _indices(slot: int | str, arity: int) -> tuple[int, ...]:
-    """The argument indices one declared slot resolves to AT THIS SITE.
-
-    `all_strings` is the whole positional list, so this is the one place a single ask can
-    cost more than one position: a `List.of` with seven arguments is seven positions from
-    one catalog row, and a codebase calling one with a long topic list would be more.
-
-    **These thirteen rows are also the harness's widest over-match, and it is the one that
-    carries the asked surface's path maximum, so it is stated here rather than inferred.**
-    Every `all_strings` row lives inside a `channel_via` (`fluent.py`: "`all_strings` is
-    `channel_via`'s alone"), which an engine reaches ONLY by following a `source` link
-    back from a site it has already matched. This harness has no reachability model — it
-    matches owner plus method against every call site in the estate — so it asks about
-    `List.of` and `Arrays.asList` calls in modules that use no Kafka at all. MEASURED:
-    20 positions added across seven corpora, 11 of them in `jhipster-sample-app`, which
-    contains no Kafka and which production would therefore never ask. Restricted to the
-    three corpora where a `channel_via` parent really matches — `orders-service`,
-    `orders-streams`, `orders-pekko` — the same positions top out at 2 paths and 2
-    answers. The over-match is the conservative direction (see the module docstring), and
-    what it conceals is that the real asked surface is FURTHER from needing a cap."""
-    if slot == _ALL_STRINGS:
-        return tuple(range(arity))
-    index = arity - 1 if slot == _LAST else slot
-    if not isinstance(index, int) or not 0 <= index < arity:
-        return ()
-    return (index,)
-
+#
+# **Read by `resolve/shadow.py`, not by this file.** It was written here for Task 4,
+# when nothing in `src/` was allowed to change — §3a's gate is that the walk ships
+# unwired and the measurement happens first. Task 5's shadow mode needs exactly the
+# same question answered (§3d: the table is written only for positions a catalog asked
+# about), so the reader moved into the package and this harness imports it. Two copies
+# of "what does a catalog ask" would be two answers the day a catalog invents a seventh
+# spelling, which is the disease §0a records. Behaviour is unchanged: the module there
+# carries the same six shapes, the same two over-matches and the same caveat, and this
+# script's numbers are what they were.
 
 # ---------------------------------------------------------------------------
 # The measurement

@@ -583,6 +583,7 @@ def _run_analyze(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     ignore_root: Path | None = None,
+    shadow: bool = False,
 ) -> _StageAnalyzeResult:
     """One module, analyzed into one workspace, and its `metadata.json`
     written — the body every `analyze` invocation shares, whether `path` is
@@ -610,6 +611,7 @@ def _run_analyze(
                 [_KnownModuleDetector(module, notes)],
                 allow_resolve=allow_resolve,
                 ignore_root=ignore_root or path,
+                shadow=shadow,
             )
         write_metadata(
             workspace_dir / "metadata.json",
@@ -637,6 +639,7 @@ def _analyzed(
     detectors: Sequence[Detector],
     allow_resolve: bool = False,
     ignore_root: Path | None = None,
+    shadow: bool = False,
 ) -> _StageAnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message
     a user reads: a malformed `.sextant.yml` is Sextant's own input written
@@ -654,6 +657,7 @@ def _analyzed(
             interpret=_JvmDescriptorInterpreter(),
             allow_resolve=allow_resolve,
             ignore_root=ignore_root,
+            shadow=shadow,
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
@@ -665,6 +669,7 @@ def _analyze_reactor(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     on_module: Callable[[str], None] | None,
+    shadow: bool = False,
 ) -> tuple[ModuleOutcome, ...]:
     """Every module a just-walked reactor named that is not KNOWN not to be
     a service, each analyzed into its own `<module-dir>/.sextant` workspace
@@ -702,6 +707,7 @@ def _analyze_reactor(
                 # THAT root" — and loading at `module.root` meant a
                 # reactor-root `.sextantignore` reached no submodule at all.
                 ignore_root=path,
+                shadow=shadow,
             )
         except Exception as failure:  # deliberately broad, see below
             # A batch run's own failure must name WHICH module failed — left
@@ -734,6 +740,10 @@ def _analyze(
     allow_resolve: bool,
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None = None,
     on_module: Callable[[str], None] | None = None,
+    # Spec 2026-09-22 §7a: the CLI's `--shadow`, carried to `resolve` and read
+    # nowhere else. It adds one pass that writes one table nothing reads, and
+    # moves no row in `endpoints`, `endpoint_metadata` or `shapes`.
+    shadow: bool = False,
 ) -> tuple[AnalyzeResult, bool]:
     """`analyze`'s own composition, shared by the public `analyze()` and
     `cli/app.py`'s `module_analyze`. Returns `(result, multi_module)` —
@@ -759,13 +769,21 @@ def _analyze(
                 f"{path} is a multi-module root — --workspace is refused there; it names "
                 "one module's workspace, and every module here gets its own"
             )
-        modules = _analyze_reactor(path, model, allow_resolve, progress_factory, on_module)
+        modules = _analyze_reactor(
+            path, model, allow_resolve, progress_factory, on_module, shadow=shadow
+        )
         return AnalyzeResult(modules=modules), True
 
     module = model.modules[0]
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
     stage_result = _run_analyze(
-        path, module, model.notes, resolved_workspace_dir, allow_resolve, progress_factory
+        path,
+        module,
+        model.notes,
+        resolved_workspace_dir,
+        allow_resolve,
+        progress_factory,
+        shadow=shadow,
     )
     outcome = ModuleOutcome(
         dir=_root_relative(path, module.root),

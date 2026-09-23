@@ -22,6 +22,7 @@ from sextant.application.resolve.roots import record_roots
 from sextant.application.resolve.routing_conflicts import record_routing_conflicts
 from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
 
@@ -109,6 +110,12 @@ def resolve(
     fact_root: Path,
     catalogs: CatalogSource,
     capabilities: set[str],
+    # Spec 2026-09-22 §7a. Defaulted OFF, so every existing caller — every test
+    # that builds this pipeline by hand, and every ordinary `analyze` — resolves
+    # exactly what it resolved before this parameter existed. On, one extra pass
+    # runs at the very bottom and writes one table nothing reads; it publishes
+    # nothing and moves no row anywhere else.
+    shadow: bool = False,
 ) -> ResolveReport:
     """Facts in, graph out. Language-blind: it branches on capabilities, never
     on names (M04)."""
@@ -289,6 +296,18 @@ def resolve(
     # kept rather than thrown away.
     with _timed("record_reachability"):
         record_reachability(workspace)
+    # Spec 2026-09-22 §7a, and LAST — below even the pass that calls itself last —
+    # because nothing reads what it writes and nothing it writes may be read. Its
+    # position is therefore not a dependency but a STATEMENT: a pass that recorded
+    # a candidate conversion higher up would sit above passes that could act on it,
+    # and the one guarantee this pass makes is that none of them can. It reads facts
+    # and the two tables the edge view is built from, all final long before here.
+    #
+    # Called UNCONDITIONALLY with the flag rather than guarded by it: the reset
+    # inside it must run on an ordinary analysis too, or a workspace analysed once
+    # with `--shadow` keeps that run's review list for ever (the pass says why).
+    with _timed("record_value_resolutions"):
+        record_value_resolutions(workspace, declared, shadow=shadow)
     return ResolveReport(
         facts_loaded=loaded,
         endpoints=workspace.query("endpoints"),

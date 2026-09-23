@@ -670,6 +670,87 @@ CREATE TABLE IF NOT EXISTS call_edges (
     target_kind   TEXT
 );
 
+-- Spec 2026-09-22 §3d and §7a: what the backward value walk WOULD resolve, and
+-- what it could not, at every position a catalog asked about.
+--
+-- **It is a review list, and nothing reads it to derive a row.** §7 states the
+-- risk this whole work carries: converting misses into answers means every
+-- conversion is a new assertion, across fourteen shipped catalogs, and a
+-- migration diff shows MOVEMENT rather than WRONGNESS — a wrong address looks
+-- exactly like a right one in a diff. So the walk runs in shadow mode, writes
+-- here, and publishes nothing; each migration then flips one engine with its
+-- diff already read.
+--
+-- **Bounded by what catalogs ASK, never by the facts.** MEASURED (Task 4,
+-- 2026-09-23, twenty-seven corpora including `mall-admin`'s 48 MB): 948
+-- distinct positions asked, against a ceiling of 98,454 — every argument and
+-- receiver of every call site. A row per fact would be a second copy of the
+-- argument grammar; a row per ask is a list a person can read.
+--
+-- **Empty unless the analysis was run in shadow mode** (`--shadow`), and
+-- emptied at the start of every resolve either way: rows describing a walk
+-- THIS analysis did not run would be a review list about another workspace.
+-- Replaced whole through reset_value_resolutions.sql +
+-- insert_value_resolutions.sql, both run from the one pass that writes here
+-- (`resolve/shadow.py`) — the reset_roots.sql discipline, since there is
+-- exactly one writer.
+CREATE TABLE IF NOT EXISTS value_resolutions (
+    -- Which catalog asked. It is what BOUNDS this table, so a row that could
+    -- not name it would not be able to say why it is here — and it is how
+    -- Tasks 7-9 read their own engine's candidate conversions before changing
+    -- it, and how COVERAGE's boundary statements are generated per framework
+    -- rather than hand-written (§3d). Two catalogs asking about one position
+    -- are two rows, because they are two questions that will be migrated at
+    -- two different times.
+    catalog      TEXT,
+    -- The position, spelled the way D01 spells one everywhere else: the
+    -- method containing the call site, module-prefixed exactly as
+    -- `call_sites.caller` does (D00 §5a), its control-flow `ordinal` within
+    -- that method, and the slot on that call.
+    caller       TEXT,
+    ordinal      INTEGER,
+    -- TEXT rather than INTEGER because a slot is an argument index OR the
+    -- receiver (§1b: one entry point, not two — a receiver is a slot like any
+    -- other). No shipped catalog asks about a receiver today; a column that
+    -- could not spell one would have to be migrated the day one does.
+    slot         TEXT,
+    -- The crossings the walk made to reach this answer, outermost first,
+    -- joined with ` -> `. **The unit of resolution is the PATH, not the
+    -- position** (§1c, ruling M-1): a helper called from two sites with
+    -- different values is two rows here, never the four combinations a
+    -- per-position reading would mint. The EMPTY STRING is the answer for a
+    -- position the walk read without crossing anything, which is most of them.
+    path         TEXT,
+    -- The review question, and the only one a reader of this table is asking:
+    -- `would_resolve` — a value an engine does not publish today and would
+    -- once it is migrated, so a NEW CLAIM to be read — or `unresolved`, a miss
+    -- that stays a miss and is what COVERAGE reports.
+    outcome      TEXT,
+    -- §1b's answer kinds, carried beside the outcome because they are not the
+    -- same question. `literal`, `expression` (a `${…}` or a composed address,
+    -- verbatim with its holes unfilled), `absent` (the code STATES there is no
+    -- value — an explicit null, a zero-length varargs call, which is an answer
+    -- and not a miss) or `unresolved`.
+    answer_kind  TEXT,
+    -- `string`, `int`, `bool`, or `symbol` for a declaration reference. **It
+    -- is load-bearing rather than decoration**: a `symbol` answer carries
+    -- `com/acme/OrderWorker#`, and a catalog reading a destination out of that
+    -- slot would publish a symbol as an address — a fabrication at `resolved`,
+    -- which is the one failure §7 says this work risks. A reviewer reading a
+    -- `would_resolve` row checks this column first.
+    literal_kind TEXT,
+    -- What the walk read, verbatim. NULL for `absent` and for every
+    -- `unresolved` row, which carry no value by construction.
+    value        TEXT,
+    -- §1d's closed reason set on an `unresolved` row, NULL otherwise:
+    -- `not_readable`, `non_enumerable`, `escapes`, `no_writer`, `external`,
+    -- `cycle`. Today every miss in this project collapses into one word, so
+    -- COVERAGE can say only "unresolved" and a reader cannot tell "we cannot
+    -- see the jar" from "the code branches". This column is the place that
+    -- vocabulary is recorded; without it §1d is decoration.
+    reason       TEXT
+);
+
 CREATE OR REPLACE VIEW documents AS
 SELECT document_id,
        payload ->> 'relative_path'   AS relative_path,

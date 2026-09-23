@@ -180,6 +180,12 @@ def analyze(
     # reactor's for a submodule and the module's own for a single-module
     # repository.
     ignore_root: Path | None = None,
+    # Spec 2026-09-22 §7a, threaded to `resolve` and nowhere else: the CLI's
+    # `--shadow` reaches it (`cli/app.py` -> `api.py` -> here) so a reviewer can
+    # ask one analysis what the backward value walk WOULD resolve, without a
+    # single row of `endpoints`, `endpoint_metadata` or `shapes` moving.
+    # Defaulted off, so every existing caller analyses exactly as before.
+    shadow: bool = False,
 ) -> AnalyzeResult:
     progress.define("detect", "detect")
     progress.define("scan", "scan")
@@ -414,7 +420,7 @@ def analyze(
     progress.finish("interpret", f"{len(descriptors_not_interpreted)} not interpreted")
 
     progress.start("resolve")
-    report = resolve(workspace, fact_root, catalogs, scanner.capabilities())
+    report = resolve(workspace, fact_root, catalogs, scanner.capabilities(), shadow=shadow)
     progress.finish("resolve", f"{len(report.endpoints)} endpoints")
 
     # The detector always writes the module document, so it is always a
