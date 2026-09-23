@@ -1270,7 +1270,10 @@ def test_gateway_property_routes_derive_their_inbound_and_outbound_rows(gateway_
 # --- §5b `request_params`: what each framework's binder enforces (CP-25 rows 2–12) ------
 
 
-def _handler_of(rows: list[dict], method: str, path: str) -> str:
+def _handler_of(rows: list[dict], method: str | None, path: str) -> str:
+    # `method` is NULLABLE because a verbless row really has none: a Kafka listener's
+    # endpoint carries `method: None`, and asking for it by `None` is asking the question
+    # the column answers rather than working around a type.
     return next(str(r["handler"]) for r in rows if r["path"] == path and r["method"] == method)
 
 
@@ -1427,9 +1430,22 @@ def test_micronaut_binds_required_unless_the_argument_is_nullable(micronaut_tabl
     `NameUtils.hyphenate` of the parameter's own name — so a request carrying either
     spelling is served, and `query pageSize required` would state a name the framework
     does not require by itself. `tenant` hyphenates to itself and keeps its name; the
-    WRITTEN `X-Tenant` is never respelled."""
+    WRITTEN `X-Tenant` is never respelled.
+
+    **The fifth row is not a requirement at all, and it is here because this assertion
+    pins the fixture's WHOLE `endpoint_metadata` table rather than the route's share of
+    it.** `micronaut-kafka.yml`'s `metadata_from` (spec 2026-09-22 §2e, CP-32 Q4a/Q9)
+    reads `@KafkaListener(groupId = "orders")` off `OrderMessaging$KafkaConsumer` — the
+    CLASS, while the row's handler is `onPlaced`, so it arrives through the
+    enclosing-type half of the nearest-wins read — and writes it against the listener's
+    own `kafka` endpoint. `requirement` is NULL because a qualifying attribute states
+    nothing about what the framework demands of a request, `name` is NULL because the
+    `kind` is the name of the thing, and `method` is NULL because a listener is verbless.
+    It is the only row §2e moves anywhere in this repository (CP-32 Q11a/Q11b: no other
+    shipped declaration writes a qualifying attribute at all)."""
     rows = micronaut_tables["endpoints"]
     handler = bare_descriptor(_handler_of(rows, "GET", "/mn/orders/search"))
+    listener = bare_descriptor(_handler_of(rows, None, "mn.orders.placed"))
     requirements = _requirements(micronaut_tables["endpoint_metadata"])
     assert _at(requirements, "/mn/orders/search") == {
         ("GET", handler, "query", "q", None, "optional", "resolved"),
@@ -1437,7 +1453,10 @@ def test_micronaut_binds_required_unless_the_argument_is_nullable(micronaut_tabl
         ("GET", handler, "query", None, None, "required", "unresolved"),
         ("GET", handler, "header", "X-Tenant", None, "required", "resolved"),
     }
-    assert len(requirements) == 4, sorted(requirements, key=str)
+    assert _at(requirements, "mn.orders.placed") == {
+        (None, listener, "consumer_group", None, "orders", None, "resolved"),
+    }
+    assert len(requirements) == 5, sorted(requirements, key=str)
 
 
 @pytest.fixture(scope="module")

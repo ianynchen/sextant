@@ -223,6 +223,23 @@ def params_for(workspace: Workspace, catalog: Catalog) -> dict[str, Any]:
         # unannotated exposed member (`$members`). Empty where the catalog
         # declares no fallback at all, and empty for `construct_name`.
         "path_fallback_prefixes": list(_PATH_FALLBACKS.get(str(mapping.get("path_fallback")), ())),
+        # Spec 2026-09-22 §2b: WHICH attribute of the declaring type's own
+        # `type_annotation` use carries the prefix
+        # `prefixed_capitalized_construct_name` composes. NULL for every
+        # catalog that declares no such word — which is every catalog written
+        # before it — so the derivation's own prefix read finds no row and the
+        # composition is inert. `_validate_fallback_prefix_attr` above refuses
+        # the word without the attribute and the attribute without the word, so
+        # this is never NULL on a catalog whose fallback reads it.
+        "fallback_prefix_attr": mapping.get(_FALLBACK_PREFIX_ATTR),
+        # Spec 2026-09-22 §1d: the punctuation `declaring_type_scoped_name`
+        # puts between the declaring type's simple name and the name that won.
+        # NULL for every catalog that declares no such word, so the
+        # derivation's branch is unreachable for them and their addresses are
+        # byte-identical. `_validate_fallback_scope_separator` refuses the word
+        # without it and it without the word, so this is never NULL on a
+        # catalog whose fallback composes with it.
+        "fallback_scope_separator": mapping.get(_FALLBACK_SCOPE_SEPARATOR),
         "qualifier_from": list(mapping.get("qualifier_from", [])),
         "qualifier_separator": mapping.get("qualifier_separator"),
         # 2I design §2's two QName forms, both optional and both inert unless
@@ -557,11 +574,101 @@ def _corroboration(catalog: Catalog) -> list[str] | None:
 # `derive_endpoints.sql`, because that is where the construct's own name is
 # read. `getURL -> uRL` is the edge that tells this rule apart from every
 # plausible paraphrase of it, and it is asserted.
+#
+# **THE FOUR DECLARING-TYPE WORDS** (spec 2026-09-22 §2b and §1d, CP-30 rows
+# 1-3 and row 10) bind an EMPTY tuple, and the empty tuple says something
+# different for them than it does for `construct_name`: they do not read the
+# construct's own name the way the accessor words do, so there is no prefix to
+# strip off it. The derivation branches on the WORD for all four, which is why
+# they live in this mapping rather than in a second one beside it — a second
+# vocabulary would let a typo be refused by one check and read as "no fallback"
+# by the other, and the refusal is the whole reason this is a closed set.
+#
+# Three of them are reached only by a declaration that named NOTHING itself.
+# The fourth, `declaring_type_scoped_name`, is not, and its own block below the
+# dict says why that asymmetry is the rule rather than an inconsistency.
+#
+# `declaring_type_simple_name` — the simple name of the type that DECLARED the
+# annotated member, which is NOT the handler's own class. Under the inheritance
+# walk the declaration sits on the interface while the row's handler is the
+# implementor's override, and the two coming apart is the whole of the rule:
+# CP-30 Q1 disassembles the constructor that takes `getSimpleName()` of the
+# INTERFACE on one branch (offset 101) and the reflected method's own name on
+# every other (offset 122). Reading the handler's class instead would publish
+# the implementor's name, which is a type no caller ever names.
+#
+# `declaring_type_qualified_name` — the same type, fully qualified, nothing
+# stripped (CP-30's row 3 framework has no simple-name step at all).
+#
+# `prefixed_capitalized_construct_name` — the declaring type's own prefix
+# attribute (named by `mapping.fallback_prefix_attr`, read off that type's
+# `type_annotation` use) in front of the construct name with its first
+# character upper-cased. Both halves are measured: CP-30 Q2 shows the
+# empty-name test at offset 50 GUARDING the prefix composition at offset 66,
+# and Q3 shows the default name is `substring(0, 1).toUpperCase()` appended to
+# `substring(1)`. Composing the prefix INSIDE the fallback is what makes the
+# named-member edge free — a member carrying its own name never reaches a
+# fallback, so it skips the prefix BY CONSTRUCTION rather than by a flag, and a
+# member named `Charge` under the prefix `billing_` is `Charge` and never
+# `billing_Charge`. That edge is what tells this rule from every paraphrase of
+# it, and it is asserted.
+#
+# What a misread costs here is the accessor words' cost one step worse: read as
+# `construct_name`, a declaring-type word publishes a MEMBER name where a TYPE
+# name belongs — an identity nothing answers, at `resolved`/`compiler` where
+# nothing downstream can tell it from an observation.
+# `declaring_type_scoped_name` — the declaring type's simple name, a
+# catalog-stated separator, and THE NAME THAT WON: the declaration's own name
+# where it wrote one, the construct's name where it did not.
+#
+# **IT IS THE ONE ENTRY IN THIS VOCABULARY THAT ALSO COMPOSES AROUND A NAME THE
+# DECLARATION DID WRITE**, and that is the rule rather than an inconsistency.
+# Every other word answers "what is the name when the annotation carries none";
+# this one answers a different question, because the SCOPE is not a framework
+# default at all. Temporal's own name for a signal IS the bare member name
+# (CP-30 Q1, offset 122) or the annotation's own (`Optional.orElse`, offset 81)
+# — the workflow type in front of it is spec 2026-09-22 §1d's IDENTITY rule,
+# which exists so that two workflows' `cancel` are two endpoints. A scope
+# applied only to the members that named nothing would leave
+# `@SignalMethod(name = "Abort")` publishing a bare `Abort` — the colliding
+# identity §2f refuses for `WorkflowStub.signal("cancel", …)`, reached by the
+# other route. So the word composes either way and the derivation hoists it out
+# of the named-nothing branch; the composition is still written INSIDE the
+# fallback expression, so every catalog that does not declare it derives
+# byte-identically.
+#
+# The separator is CATALOG DATA (`mapping.fallback_scope_separator`), never a
+# literal in the engine, for the reason `$path_separator` and
+# `$qualifier_separator` already state: which punctuation joins two halves of an
+# address is a framework's convention, and an engine that picked one would be
+# naming a framework in code. `_validate_fallback_scope_separator` refuses the
+# word without it and it without the word.
+_SCOPED_FALLBACK = "declaring_type_scoped_name"
+_FALLBACK_SCOPE_SEPARATOR = "fallback_scope_separator"
+
 _PATH_FALLBACKS: dict[str, tuple[str, ...]] = {
     "construct_name": (),
     "read_accessor_property": ("get", "is"),
     "write_accessor_property": ("set",),
+    "declaring_type_simple_name": (),
+    "declaring_type_qualified_name": (),
+    "prefixed_capitalized_construct_name": (),
+    _SCOPED_FALLBACK: (),
 }
+
+# The one word above that composes a prefix, and the mapping key naming WHICH
+# attribute of the declaring type's `type_annotation` use carries it.
+#
+# A key of its own rather than `mapping.prefix_from`, and the two must not be
+# conflated: `derive_endpoints.sql` feeds a `prefix_from` value into
+# `type_prefix`, which joins the FRONT of every address the catalog composes —
+# so a catalog naming the prefix there would compose it a SECOND time onto
+# every row, including the explicitly-named member that must not carry it at
+# all. A catalog reaching for this word therefore leaves the ordinary prefix
+# machinery inert (`prefix_from: []`, no `path_prefix`/`path_separator`) and
+# states the attribute here instead.
+_PREFIXED_FALLBACK = "prefixed_capitalized_construct_name"
+_FALLBACK_PREFIX_ATTR = "fallback_prefix_attr"
 
 
 # F2 §3.5. How a class-level annotation relates to the methods inside it.
@@ -808,7 +915,29 @@ _NAMESPACE_DEFAULTS = {"reversed_package": "http://%s/"}
 # one here: this is the only word in the mapping vocabulary that derives rows
 # for declarations carrying NO annotation at all, so a word read as something
 # it is not mints endpoints out of ordinary methods.
-_MEMBER_RULES = frozenset({"public_methods"})
+#
+# `declared_type_methods` is the second word (spec 2026-09-22 §2c, M-3), and it
+# exists because `public_methods` is WRONG for a framework whose contract lives
+# on a type the implementor inherits. The gate annotation is inherited onto the
+# implementing class — that is what makes the class a gate type at all — so
+# `public_methods` enumerates the implementor's OWN declarations too, and a
+# public helper beside the contract methods publishes as an operation nothing
+# calls. §2c's example is a class implementing a two-method contract and
+# declaring a `reloadRates()` of its own: `public_methods` publishes it.
+#
+# The new word is `public_methods` plus one conjunct — the member's DECLARING
+# type must carry the gate as a REAL annotation row, never the synthetic one
+# the inheritance walk wrote — so only members declared where the contract is
+# declared are enumerated. CP-30 Q4 is why such a catalog needs a member rule
+# at all: the qualification predicate returns true at offset 73 for an
+# UNANNOTATED non-static, non-synthetic method, so the contract's members are
+# operations whether or not anything marks them.
+#
+# Read as `public_methods` this word costs exactly what M-3 costs: one endpoint
+# per helper method on every implementing class, at `resolved`/`compiler`.
+# Read as "no member rule" it costs the whole contract — every member of it,
+# silently, because none of them carries an annotation to derive from.
+_MEMBER_RULES = frozenset({"public_methods", "declared_type_methods"})
 
 # Whether the inheritance walk carries a catalog's declared SIBLINGS along
 # with an inherited mapping (spec 2026-09-18 §3b word 3, amended after the
@@ -1259,6 +1388,14 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         _validate_unless(catalog, entry)
         _validate_entry_fallback(catalog, entry)
         _validate_container(catalog, entry)
+    # AFTER the entry loop, and the order is the rule rather than a placement:
+    # this check READS every entry's own fallback word, so a misspelled one
+    # reaches it as an unrecognised word and would be reported as "the
+    # attribute names a rule nothing runs" — a refusal naming the wrong key,
+    # which sends a catalog author to fix a line that is correct. The
+    # closed-set check above says what is actually wrong, so it runs first.
+    _validate_fallback_prefix_attr(catalog, mapping)
+    _validate_fallback_scope_separator(catalog, mapping)
     _sibling_sources(catalog, mapping)
     inherit_siblings = mapping.get("inherit_siblings")
     if inherit_siblings is not None and inherit_siblings not in _INHERIT_SIBLINGS:
@@ -1361,6 +1498,136 @@ def _validate_naming(catalog: Catalog, mapping: dict[str, Any]) -> None:
         )
 
 
+def metadata_from(catalog: Catalog) -> list[dict[str, Any]]:
+    """The catalog's `metadata_from` entries, validated and converted to the
+    descriptor form the `annotations` view spells, or empty where it declares
+    none (spec 2026-09-22 §1f).
+
+    Read here rather than in `endpoint_attributes.py` because the key is this
+    engine's — a `metadata_from` entry names an ANNOTATION and one of its
+    attributes, which is the same vocabulary `mapping.annotations` is written
+    in — and because the one check that needs the catalog's direction rule
+    (`_direction_rule`) lives in this module.
+    """
+    declared = catalog.matches.get("metadata_from")
+    if declared is None:
+        return []
+    where = f"loading catalog {catalog.source}: `metadata_from`"
+    if not isinstance(declared, list) or not declared:
+        raise CatalogError(
+            f"{where} must be a non-empty list of entries, got {declared!r} — a catalog that "
+            f"declares the key and names no attribute records nothing while reading as though "
+            f"it did"
+        )
+    _validate_metadata_from(catalog, where)
+    return [_metadata_entry(entry, where) for entry in declared]
+
+
+def _validate_metadata_from(catalog: Catalog, where: str) -> None:
+    """Refuses `metadata_from` on a catalog whose rows can only ever be
+    OUTBOUND, and that is a claim rather than a limit nobody has lifted yet.
+
+    Spec 2026-09-22 §1f rules that a qualifying attribute belongs to the side
+    of the wire that DECLARES it. Every attribute this key reads sits on a
+    listener or on an implementation — the receiving side — so an outbound
+    catalog declaring it would be stating a peer's configuration as its own:
+    a row saying "this call is made under consumer group X" when X is a fact
+    about whoever answers.
+
+    A catalog's DECLARED direction is not the test, because one of the first
+    consumers declares `outbound` and reaches `inbound` through a
+    `resolves.direction` flip (the flip is what keeps a contract's own
+    declaration as the row while rebinding the handler to the implementor's
+    override). So the question asked here is the honest one: can this catalog
+    own an inbound row at all? Its declared direction, or the direction its
+    flip resolves to, must be inbound. The PASS then reads each row's own
+    `direction` column, which is final by the time it runs.
+    """
+    # The key reads an annotation's ARGUMENTS and nothing else, so a catalog that does
+    # not require the capability producing them is one whose every `args` map is empty
+    # on a scanner that does not read them. Every attribute would then read as ABSENT,
+    # and an entry declaring `absent_value` would write its measured default against
+    # every endpoint the catalog owns — a default attributed to declarations nobody
+    # looked at, which is the exact fabrication `absent_value` is fenced against (D02 §1:
+    # a catalog states what it needs, and the gate skips it VISIBLY where a scan cannot
+    # supply it). Refused here rather than left to the gate because the gate only skips a
+    # catalog that ASKED; one that never asked is the silent case.
+    if _ANNOTATION_ARGS not in catalog.requires:
+        raise CatalogError(
+            f"{where} reads annotation arguments, so the catalog must declare "
+            f"`requires: [{_ANNOTATION_ARGS}]` — without it a scanner that does not read "
+            f"arguments leaves every attribute reading as absent, and a declared "
+            f"`absent_value` would be written against every endpoint as though the default "
+            f"had been measured there"
+        )
+    rule = _direction_rule(catalog)
+    reachable = {catalog.direction} | ({rule[0]} if rule is not None else set())
+    if Direction.INBOUND.value in reachable:
+        return
+    raise CatalogError(
+        f"{where} is declared on a catalog whose rows are {'/'.join(sorted(reachable))} — a "
+        f"qualifying attribute belongs to the side of the wire that declares it (spec "
+        f"2026-09-22 §1f), and every attribute this key reads sits on the receiving side, so "
+        f"an outbound entry would state a peer's configuration as this module's own"
+    )
+
+
+# D02 §1's capability id for "the scanner reads annotation arguments". A capability name,
+# not a framework's: it names what a SCAN produces, which is why `requires` is spelled in
+# the same vocabulary on every catalog that reads an attribute at all.
+_ANNOTATION_ARGS = "annotation_args"
+
+
+def _metadata_entry(entry: object, where: str) -> dict[str, Any]:
+    """One `{annotation, attribute, kind}` triple, with an optional
+    `absent_value`.
+
+    The SHAPE is checked and the vocabulary is not: `endpoint_metadata.kind`'s
+    own comment says the set of kinds is per protocol and the catalog names it,
+    exactly as `semantics` on a wrapper is — so `task_queue`,
+    `consumer_group`, `selector` are the catalog's words and this engine has no
+    list to check them against. What IS checked is that each is a non-empty
+    string, because an empty `kind` or `attribute` read as written would put a
+    nameless row in a published table.
+
+    `absent_value` is a STRING and a YAML boolean is refused rather than
+    coerced: the value lands in a TEXT column beside values read off the class
+    file, where `true` is the text a JSON boolean reads back as (`_unless_equals`
+    states the same rule), and `str(True)` is `'True'` — a spelling nothing
+    else in this repository writes. Quoting it in the catalog is one character
+    and removes the question.
+    """
+    if not isinstance(entry, dict) or not set(entry) <= _METADATA_FROM_KEYS:
+        raise CatalogError(
+            f"{where} entries carry only {'/'.join(sorted(_METADATA_FROM_KEYS))}, got {entry!r}"
+        )
+    for key in ("annotation", "attribute", "kind"):
+        value = entry.get(key)
+        if not isinstance(value, str) or not value:
+            raise CatalogError(f"{where} `{key}` must be a non-empty string: {entry!r}")
+    absent = entry.get("absent_value")
+    if absent is not None and (not isinstance(absent, str) or not absent):
+        raise CatalogError(
+            f"{where} `absent_value` must be a non-empty string — quoted, so a YAML `true` is "
+            f"the text the value reads back as rather than a boolean: {entry!r}"
+        )
+    return {
+        "annotation": _catalog_symbol(str(entry["annotation"])),
+        "attribute": str(entry["attribute"]),
+        "kind": str(entry["kind"]),
+        "absent_value": None if absent is None else str(absent),
+    }
+
+
+# Every key a `metadata_from` entry may carry (spec 2026-09-22 §1f). `absent_value` is
+# the one optional: an attribute the declaration did not write reaches the class file
+# nowhere at all, so a catalog that has MEASURED the annotation's own `AnnotationDefault`
+# states it here and cites the probe beside the line. A catalog that has not measured one
+# writes nothing for an absent attribute — silence is the honest answer, and a default
+# nobody measured must never be invented (GUIDELINES §8.2).
+_METADATA_FROM_KEYS = frozenset({"annotation", "attribute", "kind", "absent_value"})
+
+
 def _validate_unless(catalog: Catalog, entry: dict[str, Any]) -> None:
     """Refuses an `unless` filter whose shape the derivation cannot honour.
 
@@ -1403,6 +1670,120 @@ def _validate_entry_fallback(catalog: Catalog, entry: dict[str, Any]) -> None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `path_fallback: {declared}` on "
             f"`{entry.get('fqn')}` is not one of {', '.join(sorted(_PATH_FALLBACKS))} (`OI-5`)"
+        )
+
+
+def _validate_fallback_prefix_attr(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping that declares the prefix-composing fallback word
+    without naming the attribute carrying the prefix or without the type gate
+    that attribute is read off, and one that names the attribute with no word
+    reading it (spec 2026-09-22 §2b).
+
+    None of the three is symmetry for its own sake. WITHOUT the attribute, or
+    without a `type_annotation` to read it off, the word composes an empty
+    prefix onto every row it names — an address that is a fragment of the one
+    the framework serves, published at `resolved`/`compiler`, which is the
+    confidently-wrong-address failure the whole naming vocabulary is checked
+    for. WITH the attribute and no word reading it, the catalog states a rule
+    nothing runs, and a reader of the file believes the prefix is composed
+    somewhere: the `_RESOLVES` discipline, and the one this engine applies to
+    every key it would otherwise ignore.
+
+    Both LEVELS are consulted, because either can name the word (`OI-5`): the
+    attribute belongs to the FILE, since the type it is read off is the file's
+    own gate, but the word that needs it may sit on one annotation entry.
+    """
+    declared = {mapping.get("path_fallback")}
+    declared |= {
+        entry.get("path_fallback") for entry in mapping["annotations"] if isinstance(entry, dict)
+    }
+    attribute = mapping.get(_FALLBACK_PREFIX_ATTR)
+    if _PREFIXED_FALLBACK in declared:
+        # A non-string scalar or an empty name is refused rather than read as
+        # absent, the `path_prefix` precedent: `str()` of a YAML int is an
+        # attribute name nobody wrote, and an empty one reads every row's
+        # prefix as absent while looking like a file that states one.
+        if not isinstance(attribute, str) or attribute == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_PREFIXED_FALLBACK}` is "
+                f"declared with no `mapping.{_FALLBACK_PREFIX_ATTR}` naming a non-empty "
+                f"attribute — got {attribute!r}. The word composes the declaring type's own "
+                f"prefix, and with nothing to read it from every row would carry the bare "
+                f"member name the framework does not serve (spec 2026-09-22 §2b)"
+            )
+        # AND THE TYPE GATE, the `members` class-gate check's shape one key
+        # over. The attribute is read off the declaring type's
+        # `type_annotation` USE and nowhere else, so a catalog that declares no
+        # `type_annotation` has no annotation row to read it from — every
+        # address the word composes is then the bare member name, which is a
+        # FRAGMENT of the one the framework serves and exactly what the two
+        # refusals above exist to prevent. It is refused rather than left
+        # inert, because a fragment published at `resolved`/`compiler` is
+        # indistinguishable downstream from an address that was observed.
+        if catalog.matches.get("type_annotation") is None:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_PREFIXED_FALLBACK}` is "
+                f"declared with no `type_annotation` — `mapping.{_FALLBACK_PREFIX_ATTR}: "
+                f"{attribute}` is read off the declaring type's own `type_annotation` use, so "
+                f"with no such gate every row would compose the bare member name without the "
+                f"prefix in front of it (spec 2026-09-22 §2b)"
+            )
+    elif attribute is not None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{_FALLBACK_PREFIX_ATTR}: {attribute}` is "
+            f"declared with no `path_fallback: {_PREFIXED_FALLBACK}` to read it — no other word "
+            f"composes a prefix, so the attribute names a rule nothing runs "
+            f"(spec 2026-09-22 §2b)"
+        )
+
+
+def _validate_fallback_scope_separator(catalog: Catalog, mapping: dict[str, Any]) -> None:
+    """Refuses a mapping that declares the type-scoping fallback word without
+    the separator it composes with, and one that names the separator with no
+    word reading it (spec 2026-09-22 §1d).
+
+    `_validate_fallback_prefix_attr`'s two refusals, one key over, and they are
+    the same two failures rather than symmetry. WITHOUT the separator the word
+    composes `OrderWorkflowcancel` — one token that is neither half, published
+    at `resolved`/`compiler` where nothing downstream can tell it from an
+    address somebody observed. WITH the separator and no word reading it, the
+    catalog states a punctuation rule nothing runs, and a reader of the file
+    believes the scope is composed somewhere.
+
+    There is no third refusal here, and the absence is deliberate: unlike
+    `prefixed_capitalized_construct_name`, this word reads no ANNOTATION at all
+    — the declaring type comes off the declaration's own symbol — so there is
+    no `type_annotation` for it to be missing.
+
+    Both LEVELS are consulted for the word, because either can name it
+    (`OI-5`), while the separator belongs to the FILE: a catalog whose
+    operations are scoped by their declaring type scopes all of them the same
+    way, and a per-entry separator would let one annotation's rows carry a
+    punctuation the others do not.
+    """
+    declared = {mapping.get("path_fallback")}
+    declared |= {
+        entry.get("path_fallback") for entry in mapping["annotations"] if isinstance(entry, dict)
+    }
+    separator = mapping.get(_FALLBACK_SCOPE_SEPARATOR)
+    if _SCOPED_FALLBACK in declared:
+        # A non-string scalar and an empty string are refused rather than read
+        # as absent, `_validate_fallback_prefix_attr`'s own reading: an empty
+        # separator composes the two halves into one token that is neither.
+        if not isinstance(separator, str) or separator == "":
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `path_fallback: {_SCOPED_FALLBACK}` is "
+                f"declared with no `mapping.{_FALLBACK_SCOPE_SEPARATOR}` naming a non-empty "
+                f"separator — got {separator!r}. The word joins the declaring type's simple "
+                f"name to the declared name, and with nothing between them every row would "
+                f"carry one token that is neither half (spec 2026-09-22 §1d)"
+            )
+    elif separator is not None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{_FALLBACK_SCOPE_SEPARATOR}: "
+            f"{separator!r}` is declared with no `path_fallback: {_SCOPED_FALLBACK}` to read "
+            f"it — no other word composes a scope, so the separator names a rule nothing runs "
+            f"(spec 2026-09-22 §1d)"
         )
 
 
@@ -1456,7 +1837,7 @@ def _synthetic_annotations(
     mapping_annotations: list[dict[str, object]],
     prefix_fqns: list[str] | None,
     type_annotation_fqns: list[str] | None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """The bound-parameter form `derive_endpoints.sql`'s `annotations_effective`
     CTE expects (D02 §2, §3): every row `folded_rows`, `composed_mapping_rows`
     and, where `run_inheritance`, `inherited_rows` derive, `args` re-serialized
@@ -1554,9 +1935,23 @@ def _synthetic_annotations(
         if run_inheritance
         else []
     )
+    # `inherited` says WHICH pass wrote a row, and it is carried because one
+    # rule has to tell them apart (spec 2026-09-22 §2c): a gate carried across
+    # a type boundary by the INHERITANCE walk is a gate the type does not
+    # declare, while a folded or composed row is the very annotation the author
+    # wrote on that type, read out of the shape javac stored it in (`OI-36`) or
+    # through the stereotype it was composed into (`A-C7`). `catalog_id` cannot
+    # answer this: all three passes write it. Every consumer but the one that
+    # asks reads this column not at all, so the other rules are unchanged.
     return [
-        {"target": row["target"], "annotation": row["annotation"], "args": json.dumps(row["args"])}
-        for row in (*folded, *composed, *inherited)
+        {
+            "target": row["target"],
+            "annotation": row["annotation"],
+            "args": json.dumps(row["args"]),
+            "inherited": inherited_pass,
+        }
+        for rows, inherited_pass in ((folded, False), (composed, False), (inherited, True))
+        for row in rows
     ]
 
 
@@ -1848,7 +2243,7 @@ def effective_annotation_uses(
         for row in workspace.query("annotations")
     ]
     mapping = catalog.matches.get("mapping")
-    synthetic: list[dict[str, str]] = []
+    synthetic: list[dict[str, Any]] = []
     if mapping is not None:
         type_annotation = catalog.matches.get("type_annotation")
         synthetic = _synthetic_annotations(

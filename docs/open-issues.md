@@ -2080,7 +2080,446 @@ bean, String method)` where the bean is the module's and the lambda flow form; t
 one slot, folded by `_fold` last-wins. **Closes** with `OI-115`: the chain's handlers as a LIST in
 walk order, the first after a link its reader and each later one the previous one's consumer.
 
+### OI-122 — the linking tier's metadata refinement rule is stated twice and built nowhere
+**Minor · logged 2026-09-22, found at Group D Task 10 · `docs/components/D02-catalog-schema.md` §2l (line ~4798), spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md` §1f, `GAP-2`**
+
+§1f splits a qualifying attribute into **routing** (it changes which endpoint a message arrives at
+— a Temporal task queue: a worker on `orders` never sees `orders-staging` work) and
+**behavioural** (it changes what happens once the message has arrived — a Kafka `groupId`, a JMS
+`selector`). A routing fact enters the PATH only when both sides of the wire can read it; where
+only one side can, it is an `endpoint_metadata` entry, and — quoting D02 §2l — *"the linking tier
+uses it as a refinement (two rows whose stated values differ do not link; a row that states
+nothing links as before)"*. **Nothing implements that sentence**, because the tier it names does
+not exist (`GAP-2`, FR-8/M05/M06, phase L, never started). Eight shipped catalogs now write
+`task_queue`, `consumer_group`, `selector`, `subscription`, `exclusive` and `local` entries with no
+reader at all.
+
+This is filed rather than left to the tier's own design because the rule is not obvious from the
+rows: a `task_queue` entry looks exactly like a `consumer_group` entry in the table, and the two
+must be used differently — `orders` against `orders-staging` is NOT a wire and must not be linked,
+while two consumer groups on one topic ARE both real consumers of it and must both link. A tier
+written without this rule links the first pair.
+
+**What happens today:** nothing links anything, so nothing is wrong yet.
+
+**Real triggering input:** the first linking tier — two modules, one declaring
+`@WorkflowImpl(taskQueues = "orders")` and the other `@WorkflowImpl(taskQueues = "orders-staging")`
+over the same `@WorkflowInterface`, which would be reported as one wire.
+
+**Verify:** `grep -rn "linking tier uses it as a refinement" docs/components/D02-catalog-schema.md`
+— the rule; `grep -rn "linking tier" src/` — no implementation. **Closes** with `GAP-2`, by that
+tier reading `endpoint_metadata` and distinguishing routing kinds from behavioural ones, which
+needs one more column or one declared list: **the kinds are catalog data and nothing today says
+which of them is routing.**
+
+### OI-123 — Cadence is excluded by fqn, and nobody has measured whether it is one protocol or two
+**Minor · logged 2026-09-22, found at Group D Task 5 · `src/sextant/catalogs/temporal-workflow.yml` (the `CADENCE` boundary bullet), `temporal-activity.yml`, spec §1b**
+
+`temporal-workflow.yml` states it plainly: *"CADENCE (`com.uber.cadence`) gets no rows: every fqn
+here is `io.temporal.*`, and folding Cadence under this protocol would let a Cadence worker answer
+a Temporal caller (§1b)."* Cadence declares annotations with the **same simple names** —
+`@WorkflowInterface`, `@ActivityInterface`, `@WorkflowMethod` — under a different package, and
+speaks a different wire to a different cluster. Excluding it by fully-qualified name is the
+no-false-link choice and it is the right one; what is unmeasured is the question underneath it.
+
+**The unmeasured question, stated so the next reader does not re-derive it:** is Cadence a second
+set of catalogs under a `cadence` protocol member of its own, or the same catalogs widened to a
+second `io`/`com.uber` owner pair? Nothing here can answer that from a Temporal jar — it needs a
+`com.uber.cadence-client` archive, its own probe (do the annotations declare the same elements? is
+there a `namePrefix`? does the default workflow type follow the same rule?) and its own fixture.
+**The two must not be the same `Protocol` member either way**, which is the part that IS settled.
+
+**What happens today:** a Cadence module derives **nothing** — no inbound row, no outbound row, no
+metadata. It is a total miss, not a partial one, and the catalogs say so.
+
+**Real triggering input:** a module on `com.uber.cadence`. Uber's own fork is in maintenance and
+this estate has left it, which is why this is Minor rather than Major.
+
+**Re-measure when** such a module appears, or when a `Protocol` member is added for any other
+workflow engine — whichever comes first, the same probe answers both. **Verify:**
+`grep -n "CADENCE" src/sextant/catalogs/temporal-workflow.yml`.
+
+### OI-124 — the programmatic Temporal worker derives nothing, and the mechanism that would fix it does not exist
+**Minor · logged 2026-09-22, found at Group D Task 5 · `src/sextant/catalogs/temporal-workflow.yml` (the `THE PROGRAMMATIC WORKER` boundary bullet, lines ~207–214), `temporal-activity.yml`, `scripts/probes/cp30_temporal_contract_naming.md` Q8**
+
+**On the grade, because Minor will read as wrong beside the size of the miss.** No row this
+produces is incorrect — the module simply has fewer of them, and the alternative was measured and
+is worse (an implementation nobody registered, published as a live served endpoint). That is the
+definition of a stated boundary rather than a defect, which is why it is graded here the way
+`OI-110` and `OI-126` are and why the magnitude is written out below instead of being carried by
+the word.
+
+**This is the sharpest boundary Group D shipped, and it costs a whole module rather than an
+attribute.** The catalog states it: *"`WorkerFactory.newWorker("orders")` +
+`registerWorkflowImplementationTypes(…)` is read by nothing here: CP-30 Q8 confirms the queue a
+worker POLLS is named on `WorkerFactory` at argument 0, and this catalog reads the queue only off
+the starter annotation. A module that registers its workers programmatically therefore derives no
+`task_queue` entry — and, since the flip is keyed on the starter annotation, no INBOUND row for
+its own implementations either."*
+
+Both halves matter and the second is the larger. A module that wires its workers in code rather
+than through `temporal-spring-boot-starter`:
+
+* records no `task_queue` for anything, and
+* records **no inbound row at all** — its `@WorkflowInterface` and `@ActivityInterface` contracts
+  are subtracted by the SEI fence (the module implements them) and never flipped to inbound (no
+  `@WorkflowImpl`/`@ActivityImpl` on the implementor), so its workflows and activities are neither
+  served nor called in the export. Measured on the fixture: `ShippingActivities`, implemented
+  in-module by a class carrying no `@ActivityImpl`, derives nothing in either direction.
+
+That is a deliberate under-report chosen over the alternative — publishing an implementation
+nobody registered as a live served endpoint — and Task 3's ruling priced it. It is recorded here
+because a stated miss of this size is still a miss.
+
+**The mechanism it needs, named rather than hand-waved:** one engine attaching metadata read at a
+CALL SITE (`WorkerFactory.newWorker(String)`, a `single_call`- or `fluent`-shaped read) to rows
+another engine derived from a DECLARATION (`annotation_driven`'s contract rows), and joining the
+two by the implementation types the registration call names. **No such cross-engine attachment
+exists.** `endpoint_metadata` is written by `endpoint_attributes.py` from annotation arguments
+only; `channel_via` joins within one `single_call` catalog; `bean_via` joins within one `fluent`
+walk. Nothing crosses from a call site to an annotation-derived row. The same absence would also
+close the inbound half, by making a registration call evidence for the flip the way the starter
+annotation is.
+
+**What happens today:** a Spring Boot Temporal module (the fixture's shape, and the common one)
+derives everything; a plain-SDK module derives nothing.
+
+**Real triggering input:** ordinary — any Temporal module not on the Spring Boot starter. That is
+the criterion that makes this worth logging at all, and it is why the magnitude is stated in words
+above rather than left to be inferred from the grade.
+
+**Verify:** `grep -n "PROGRAMMATIC WORKER" -A 8 src/sextant/catalogs/temporal-workflow.yml`.
+**Closes** with the cross-engine attachment above, which is a spec of its own.
+
+### OI-125 — `request(...)` derives no reply shape, because the reply type is the call's RETURN type
+**Minor · logged 2026-09-22, found at Group D Task 8 (concern C2) · `src/sextant/catalogs/vertx-eventbus.yml` (the `A REPLY'S SHAPE` boundary bullet), `vertx-eventbus-mutiny.yml`, `src/sextant/application/resolve/engines/single_call.py`**
+
+`response_shape` is NULL on every event-bus row, `orders.lookup` included. The catalog states why:
+*"`request(...)`'s reply type is the call's return type, and no `single_call` word reads one."*
+Concretely — the core interface's `request` returns `Future<Message<T>>` and the Mutiny facade's
+returns `Uni<Message<T>>`; `single_call`'s only response word is **`response_arg`, an argument
+POSITION**, and no argument of a `request` call carries the reply type: there is no `Class`
+literal and no `ParameterizedTypeReference` to read. Reading argument 1 would publish the
+REQUEST's shape as the reply's, which is a wrong row rather than a missing one.
+
+**What happens today:** a request/reply event-bus call publishes its request body's shape and
+states no reply shape. The request half is right; the reply half is absent, not wrong.
+
+**Real triggering input:** ordinary — any `bus.request(...)`. It is Minor because the row is
+correct as far as it goes and the absence is stated on the catalog and in COVERAGE §5.12.
+
+**This boundary retires deliberately rather than quietly**, which is the part worth recording:
+`tests/e2e/test_async_delivered.py::test_every_eventbus_row_is_verbless_and_states_no_reply_shape`
+asserts `response_shape is None` over **every** row, so the day an engine word for "the declared
+return type" lands, that test FAILS and somebody has to come back to this issue and to the
+COVERAGE line rather than leaving both stale.
+
+**Verify:** `grep -n "A REPLY'S SHAPE" -A 2 src/sextant/catalogs/vertx-eventbus.yml`. **Closes**
+by a `single_call` word naming the declared return type (and, for it to be useful, an unwrap of
+`Future`/`Uni` and `Message` to reach `T`) — an engine change with its own measurement.
+
+### OI-126 — a `MessageConsumer` or `MessageProducer` handed to another method before its terminal derives nothing
+**Minor · logged 2026-09-22, found at Group D Task 8 · `src/sextant/catalogs/vertx-eventbus-chain.yml` (the first boundary bullet), `src/sextant/application/resolve/engines/fluent.py`**
+
+The catalog states it: *"`MessageConsumer<T> c = bus.consumer("a"); register(c);` — the chain walk
+is per method body (value ids are per method; a cross-body `source` read is a fabrication path),
+so the registration inside `register` is not joined to this root and the row is never written."*
+Both halves are lost, not one: the root names the address but never reaches a terminal, and the
+`handler` call in the other method has no root to attach to, so **no row is written for either**.
+
+`OI-110`'s shape one framework over — there a Spring Integration container built two beans away is
+unresolved; here a consumer passed one method along is invisible. The cause is the same and it is
+a deliberate one: value ids are per method body, and reading a `source` across bodies is how a
+chain walk starts fabricating chains that were never written.
+
+**What happens today:** `fixtures/orders-eventbus` builds its consumers and their handlers in one
+body, so every row derives. The cross-method form derives nothing and is not exercised.
+
+**Real triggering input:** a registration helper — `void register(MessageConsumer<?> c)` called
+from several places — which is a real idiom in Vert.x verticles, though the one-body form is the
+common one.
+
+**Verify:** `grep -n "HANDED TO ANOTHER METHOD" -A 6 src/sextant/catalogs/vertx-eventbus-chain.yml`.
+**Closes** with `OI-110`, by whatever cross-method value tracking that issue settles on — one
+mechanism answers both, and answering them separately would be two.
+
+### OI-127 — `registerWorkflowImplementationFactory` and the SDK's own start-up validations are reproduced by nothing
+**Major · logged 2026-09-22 as Minor, REGRADED at the branch review 2026-09-22 · `src/sextant/catalogs/temporal-workflow.yml` (the `THE SDK'S OWN VALIDATIONS` boundary bullet), `temporal-activity.yml`**
+
+> **Why the regrade.** Severity follows measurement, and the measurement is in this
+> entry's own text: the factory arm produces a row of the WRONG DIRECTION — a contract
+> the module SERVES read as one it calls — where every other Group D Minor is a miss. A
+> wrong-direction row links a caller to a caller and is the false-positive class the
+> group's standing requirement forbids; a miss is honest under-reporting. And the arm
+> clears the real-input bar: `registerWorkflowImplementationFactory` exists for
+> implementations that need constructor injection the SDK cannot do, which is ordinary
+> code rather than a module nobody runs. The VALIDATIONS half of this entry stays what it
+> was — reproducing them needs a module the SDK would refuse to start — and the grade
+> here is set by the factory arm.
+
+The catalog states it: *"THE SDK'S OWN VALIDATIONS are not reproduced — duplicate workflow-type
+names, a `@WorkflowInterface` with more than one `@WorkflowMethod`, `DynamicWorkflow`,
+`registerWorkflowImplementationFactory` and Nexus services. A module the SDK would refuse to start
+still produces rows here."*
+
+`registerWorkflowImplementationFactory` is the one worth naming on its own, because it is not a
+validation but a **registration form**: it registers a workflow implementation by FACTORY rather
+than by type, so there is no implementation class for the SEI fence or the direction flip to find
+even in a Spring Boot module. A contract registered that way therefore reads as an **outbound**
+row — a workflow this module calls — when the module actually serves it. That is the one arm of
+this bullet that produces a row of the WRONG DIRECTION rather than a missing one, and it is why
+this is filed rather than left as prose.
+
+**What happens today:** `fixtures/temporal-probe` uses neither the factory form nor any invalid
+declaration, so nothing is measured either way.
+
+**Real triggering input:** uncommon — the factory form exists for workflows whose implementation
+needs constructor injection the SDK cannot do itself. The validations proper (duplicate names, two
+`@WorkflowMethod`s on one interface) need a module the SDK would refuse to start, which is a
+module nobody runs.
+
+**Verify:** `grep -n "SDK'S OWN VALIDATIONS" -A 4 src/sextant/catalogs/temporal-workflow.yml`.
+**Closes** for the factory arm by reading `Worker.registerWorkflowImplementationFactory(Class, …)`
+as evidence for the flip — the same cross-engine attachment `OI-124` needs, and it should be built
+once for both. The validations proper close by a conformance pass that is not this project's job.
+
+### OI-128 — CP-10 files a descriptor two versions both declare under the FIRST version alone
+**Minor · logged 2026-09-22, found at Group D Task 8 · `scripts/probes/cp10_catalog_descriptors/descriptors.py` (the candidate loop, lines ~343–351), `scripts/probes/cp10_catalog_descriptors.md`**
+
+Since Task 8 keyed CP-10's jars by `<artifactId>:<version>`, one artifactId can be resolved at two
+versions at once — `io.vertx:vertx-core` at 4.5.10 and 5.0.0, which is what spec §3a's
+one-file/two-versions rule requires. The candidate loop then does this:
+
+```python
+chosen = candidates[0]
+for candidate in candidates:
+    ...
+    if row["descriptor"] in cache[(candidate, owner)].get(str(row["name"]), set()):
+        chosen, found = candidate, True
+        break
+```
+
+It stops at the **first** candidate that declares the descriptor. So a descriptor both releases
+declare — which is most of them; CP-31 measured every descriptor the core catalogs read as
+byte-identical across 4.5.10 and 5.0.0 — is filed under 4.5.10's column only, and 5.0.0's column
+does not show it. The column heading says *"checked against"*, and what the column actually means
+is *"the first resolved version that declares it"*. The two readings differ exactly where a
+version is resolved twice.
+
+**What happens today:** no descriptor is reported wrong — `NOT declared` is 0 in every column, and
+a descriptor NO candidate declares still fails, because `found` stays `False`. What is lost is
+COVERAGE: 5.0.0's column under-counts, so a reader cannot tell from the table which of the two
+releases a shared descriptor was actually verified against, and a descriptor that 5.0.0 drops
+would keep passing on 4.5.10's evidence alone.
+
+**Real triggering input:** a version bump — the next `vertx-core` release that removes a method
+the catalog declares. The harness would go on reporting it `declared`, off the older jar.
+
+**Verify:** `grep -n "chosen, found = candidate, True" -B 4
+scripts/probes/cp10_catalog_descriptors/descriptors.py`. **Closes** by checking every candidate
+rather than breaking at the first, and reporting per candidate — one cell per `(descriptor,
+version)` — with the caption corrected to match whichever it ends up meaning.
+
+### OI-129 — the descriptor gate reads `matches.methods` only, so a `fluent` catalog's roots and steps are outside it entirely
+**Minor · logged 2026-09-22, found at Group D Task 8 · `scripts/probes/cp10_catalog_descriptors/descriptors.py::catalog_descriptors` (line ~154), `tests/architecture/test_catalog_descriptors.py` (line ~114)**
+
+Both halves of the two-direction agreement read the same one key:
+
+```python
+for method in matches.get("methods") or []:
+```
+
+A `fluent` catalog declares its descriptors on `roots:`, `steps:` and `beans:`, none of which that
+loop reaches — so **every one of them is outside the gate**, not merely unpinned. In
+`vertx-eventbus-chain.yml` alone that is **seven erased descriptors** (four roots, three steps).
+`OI-119` logs the missing mechanical PIN between those descriptors and the probe tables; this is
+the wider statement of the same absence, and the one that says the descriptors are not measured at
+all rather than measured and unpinned. **It affects every `fluent` catalog** — the three Spring
+Integration broker catalogs and the step model carry some seventy more — and it is
+**pre-existing**, not something Group D introduced; Group D is where somebody read the loop.
+
+**What happens today:** every declared descriptor was copied from a probe row, and each catalog's
+positive tests fail if one is wrong (a wrong descriptor matches nothing). That is real evidence
+and it is why this is Minor. It is also per-fixture: a root or step no fixture exercises is
+checked by nothing at all.
+
+**Real triggering input:** a version bump that changes a return type inside a root's or a step's
+descriptor, on an overload no fixture happens to call.
+
+**Verify:** `grep -n '"methods"' scripts/probes/cp10_catalog_descriptors/descriptors.py
+tests/architecture/test_catalog_descriptors.py` — one key, read twice. **Closes** with `OI-119`,
+by widening `catalog_descriptors()` and the architecture test to `roots`, `steps` and `beans` (and
+the step-model files), which is the same two-direction agreement over more rows.
+
+### OI-130 — `@KafkaListener(value = "a", groupId = "b")` writes two contradicting consumer groups where Micronaut resolves one
+**Minor · logged 2026-09-22, found at Group D Task 9 fix round 1 · `src/sextant/catalogs/micronaut-kafka.yml` (the both-written paragraph beside the two `metadata_from` entries), `scripts/probes/cp32_listener_attributes.md` Q12, Q13**
+
+`value()` and `groupId()` are `@AliasFor` **one another** (CP-32 Q4a), and the alias is applied by
+Micronaut's annotation-metadata layer, not by javac — so `micronaut-kafka.yml` must carry BOTH
+names or miss every `@KafkaListener("orders")`, the ordinary short spelling. Two measurements
+then bound the cost:
+
+* **Q12 — javac accepts a declaration that writes both, and writes both.** `AliasProbe$Both`,
+  compiled with `-proc:none` so what lands is javac's own output, carries
+  `KafkaListener(value="by-value" groupId="by-group-id")` in one `RuntimeVisibleAnnotations` entry
+  with both elements intact.
+* **Q13 — Micronaut does not refuse such a declaration; it overwrites.** In
+  `AbstractAnnotationMetadataBuilder.processAnnotationAlias` (micronaut-core-processor 4.7.6), a
+  WITHIN-annotation alias — which `value`↔`groupId` is — reaches offsets 164–195, and that whole
+  branch is a `Map.put(aliasedMemberName, value)` into the same members map. A `put` overwrites;
+  nothing compares, warns or refuses.
+
+So such a declaration resolves to exactly ONE group at runtime, and we write **two contradicting
+`consumer_group` rows** on one endpoint. Pinned as behaviour by
+`test_micronaut_kafka_writes_both_groups_where_one_declaration_names_two`, so a later rule changes
+it visibly.
+
+**What happens today:** bounded. It needs a module that already contradicts itself, and both
+elements written with the SAME value yield one row through the insert-if-absent guard. **Dropping
+the `value` entry would not be safer** — it would turn a bounded self-contradictory case into a
+silent miss on the common spelling.
+
+**Real triggering input:** rare — a `@KafkaListener` naming two different groups under the two
+alias names, which a developer writes by accident and Micronaut then silently collapses.
+
+**What closes it is a MEASUREMENT, and naming it is the point of this entry.** The missing fact is
+**which of the two the `put` lands on** — that is, the order in which Micronaut's metadata builder
+processes an annotation's elements, and whether that order is the class file's element order, a
+sorted order, or the alias declaration's. One probe question against
+`AbstractAnnotationMetadataBuilder` answers it, and the answer is a rule
+`metadata_from` could then encode.
+
+**A first-present-wins rule invented here would be wrong even if it happened to be right.** DR-6
+is the standing rule — *predict the framework's error handling exactly, never our own* — and
+picking a winner because it is the first entry in our list is our tie-break, not Micronaut's. The
+framework's behaviour is knowable from its own bytecode, so guessing at it is the one thing not
+allowed.
+
+**Three options, and the measurement still decides between them** — added at the branch review,
+because this entry had argued against one option without recording that it has a precedent here
+and without recording the third option at all:
+
+1. **Write both rows** (what ships). Over-reports on a self-contradictory declaration; never
+   misses the ordinary short spelling.
+2. **First-present-wins.** This entry called that machinery "`path_from`'s, one key over" as
+   though it were foreign. It is not foreign, it is this engine's OWN PRECEDENT — and it is
+   declared two lines below the `metadata_from` block **in this same catalog** — the key
+   at line 112, its two entries ending at 116, `path_from` at 118:
+   `path_from: [value, patterns]`, first present wins. So adopting it here would be reusing a
+   rule the file already applies to the address, not inventing one. DR-6's objection still
+   stands and is unchanged: the rule would pick a winner by OUR list order rather than by the
+   order Micronaut's metadata builder puts the elements in.
+3. **Write NO row for that endpoint's group.** Neither of the two, on the grounds that the
+   standing requirement says *every ambiguity is an unresolved column or an absent row, never a
+   guess* — and two aliased entries disagreeing on one endpoint is exactly an ambiguity. Neither
+   the catalog nor this entry had considered it. It costs the group on a declaration that has
+   one, which is why it is not obviously right either.
+
+**The shipped behaviour does not change on this entry.** What closes it is still the
+measurement named above — WHICH of the two the `put` lands on — and that answer picks among the
+three rather than being one of them.
+
+**Verify:** `grep -n "both" src/sextant/catalogs/micronaut-kafka.yml`, the `path_from` line
+two lines below the `metadata_from` block in the same file (line 118 against 112-116),
+and CP-32 Q12/Q13.
+
+### OI-131 — `uniqueGroupId = true` makes the recorded consumer group a PREFIX of the one joined
+**Minor · logged 2026-09-22 at the Group D branch review · `src/sextant/catalogs/micronaut-kafka.yml`
+(the `STATED BOUNDARY` paragraph above `metadata_from`), `docs/COVERAGE.md` §5.8**
+
+`@KafkaListener` declares `uniqueGroupId(): boolean`, default `false`. CP-32 Q9 (offsets
+146-167, micronaut-kafka 5.6.0) reads the processor composing `<declared>-<random UUID>`
+when it is `true`, and joining `<declared>` when it is not. We record the declared value
+either way, so under `uniqueGroupId = true` the `consumer_group` row states a **prefix** of
+the group the consumer is actually in.
+
+**Filed rather than left as prose, and that is the whole point of this entry.** Two
+documents already say it — the catalog paragraph and COVERAGE §5.8 — and neither is the
+register. `OI-130` files the both-written alias case from the same annotation, the same
+probe and the same review; this is the same class of defect (a `consumer_group` value that
+is not the group) and was the only one of the two living in prose alone.
+
+**What happens today:** a peer reading the row looks for a group nobody is in. The
+direction is not the dangerous one — linking gates on the value, so a prefix under-links
+rather than mis-links, and the declared value is still the name a human would search for —
+but it is a value stated as the group when it is not the group.
+
+**Real triggering input:** ordinary, unlike `OI-130`'s. `uniqueGroupId = true` is the
+supported way to make every instance of a service its own consumer group, which is what a
+broadcast-to-all-replicas listener needs; a repository using it is not contradicting
+itself.
+
+**Why it is not encoded:** `metadata_from` has no conditional form — an entry names one
+annotation, one attribute and one `kind`, and cannot read a SECOND attribute to decide what
+to do with the first. Nor could it spell the value: the suffix is a UUID minted at startup.
+
+**Closes** either by a `metadata_from` entry that may be gated on a sibling attribute — the
+`annotation_driven` conditional machinery B/C already built for `wrappers[].when`, one key
+over — recording the group at `unresolved` where the gate fires, or by recording
+`uniqueGroupId` as a `kind` of its own beside the group so a reader sees both facts. Both
+are catalog-shaped; neither is written.
+
+**Verify:** `grep -n "uniqueGroupId" src/sextant/catalogs/micronaut-kafka.yml docs/COVERAGE.md`
+and CP-32 Q9.
+
 ## CLOSED
+
+### OI-132 — `request_requirements` wrote its `endpoint_metadata` values UNREDACTED into the export
+**Major · found and CLOSED 2026-09-22 by the Group D branch re-review ·
+`src/sextant/application/resolve/request_requirements.py`,
+`src/sextant/storage/duckdb/insert_endpoint_metadata.sql`,
+`src/sextant/storage/duckdb/workspace.py` (the export map's `endpoint_metadata` entry)**
+
+`_entry` wrote `"value": value` verbatim, with no redactor anywhere in the module. Three
+documents state the opposite invariant — `schema.sql`'s `value` column ("redacted at the
+ORIGIN, never at export"), `insert_endpoint_metadata.sql`'s header ("already redacted by
+the pass that read it"), and `workspace.py`'s export map, which exports the table **whole
+and unmasked on exactly that stated ground**.
+
+**Reproduced on the shipped test, not argued from the code.** Running
+`tests/application/test_request_requirements.py`'s mapping-attribute case with
+`headers=["X-Api-Key=s3cret-literal"]`:
+
+```
+('GET', '/orders', …, 'header', 'X-Api-Key', 's3cret-literal', 'required', 'resolved')
+```
+
+`spring-mvc.yml:140` and `spring-web.yml:136` both declare
+`request_requirement_attrs: {params: param, headers: header}`, so
+`@GetMapping(headers = "X-Api-Key=…")` is ORDINARY Spring input — this is not a shape a
+repository has to contrive. The row reached `graph/*.parquet` in the clear, and the bundle
+is the trust boundary.
+
+**Cost while it stood:** every literal a route predicate carried left in the clear in every
+exported bundle. Bounded only by how often a credential is written into a routing
+predicate, which is a real if uncommon way to gate an internal endpoint.
+
+**Pre-existing**, not introduced by Group D — this branch found it, because the sibling
+fix at the other origin (`endpoint_attributes`, same commit group) shipped a comment
+claiming it was the last one. That claim is corrected in place rather than deleted: a
+wrong rationale is what stops the next reader looking.
+
+**Closed** by the same rule the other two origins apply: `Redactor.from_rules()` in
+`_entry`, which every one of the four mechanisms funnels through. It is the name/value pair
+`redaction.py`'s `redact_json` docstring calls *how a credential actually reaches this
+grammar*, and here there is a real header or parameter NAME to key on, so `redact_value`
+does the work directly. A value whose name could not be read — the combinator reads both
+literals off a call argument and writes `name` NULL where the name was not one — is masked
+WHOLE, `engines/fluent.py`'s rule for `fluent`'s own reason.
+
+**No existing assertion moved**, which was the stop condition: the whole suite is green at
+3979 passed, 8 skipped, 4 xfailed, and the two new tests both fail — and only those two —
+with the redaction removed. Nothing reads `endpoint_metadata.value` downstream, so no
+derived row could move: the table's only consumer is the export map.
+
+**And the cause is removed, not only the instance.** The invariant was stated in three
+documents and tied to no writer, which is how two of the three origins came to violate it.
+`tests/architecture/test_source_rules.py::test_every_origin_writing_endpoint_metadata_holds_a_redactor`
+now requires a module reaching `endpoint_metadata_insert` to build a `Redactor`, so a
+fourth origin cannot be written without meeting it.
+
+**Verify:** `grep -rn "endpoint_metadata_insert" src/sextant | grep -v workspace.py` names
+the three origins; each holds a `Redactor`.
 
 ### OI-40 — `@SqsListener` grew a class-level, polymorphic form and the catalog said it had none
 **Major · found and CLOSED 2026-09-06 by Stage 4 batch 2 ·

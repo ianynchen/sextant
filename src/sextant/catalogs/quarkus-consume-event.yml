@@ -1,0 +1,250 @@
+id: quarkus-consume-event
+displayName: Quarkus event-bus consumers (@ConsumeEvent)
+style: annotation_driven
+protocol: eventbus
+direction: inbound
+
+# `quarkus-vertx` is the runtime module that DECLARES `@ConsumeEvent`, so it is
+# what a module using it depends on. `quarkus-vertx-deployment` — whose
+# `VertxProcessor` is what actually fills the default address — is a build-time
+# extension nobody declares directly; it is cited in `measured:` below because
+# that is where the rule was READ OUT OF, which is not always the coordinate
+# `detect` names (D02 §1a's own example).
+detect:
+  coordinates: ["io.quarkus:quarkus-vertx"]
+
+# §5.4. Two artifacts because the file rests on two facts that live in two jars:
+# the annotation's own `AnnotationDefault` values (runtime module) and the
+# processor's default-address call (deployment module). Both state an
+# `Implementation-Version` in their own manifest and CP-31 aborts on a mismatch
+# — `identity: reported`.
+measured:
+  - { artifact: io.quarkus:quarkus-vertx, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+  - { artifact: io.quarkus:quarkus-vertx-deployment, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+
+# `annotation_args` is not optional here and D02 §2l says why: `metadata_from`
+# reads an annotation's arguments and nothing else, so on a scan that does not
+# produce them every attribute would read as ABSENT — and the measured
+# `absent_value` below would then be written against every consumer this
+# catalog owns, a framework default attributed to declarations nobody looked at.
+requires: [annotation_args, typed_signatures]
+
+matches:
+  # THE PAYLOAD, AND QUARKUS'S OWN HEADERS/BODY SPLIT.
+  #
+  # No payload marker annotation exists — Quarkus reads the consumer's payload
+  # off the signature — so this block declares the fallback alone. `excludes`
+  # is what implements the split spec §3c states: a consumer may declare
+  # `(MultiMap headers, Order body)`, which is Quarkus's own two-parameter form,
+  # and without the exclusion the `sole_unannotated` fallback would honestly
+  # find TWO bare parameters and report no payload at all. Naming `MultiMap`
+  # leaves exactly one, which is the body — the same shape
+  # `spring-kafka.yml` uses to exclude `Acknowledgment`.
+  #
+  # BOTH `MultiMap` TYPES, and that is measured rather than defensive breadth.
+  # MEASURED (CP-31 Q11, quarkus-vertx-deployment 3.17.5):
+  # `VertxConstants.isMessageHeaders(DotName)` — the predicate `VertxProcessor`
+  # asks of a two-parameter consumer's FIRST parameter — returns true when the
+  # name equals `MESSAGE_HEADERS` **or** `MUTINY_MESSAGE_HEADERS`, and the
+  # static initializer names those two by `ldc class` at offsets 11 and 33:
+  # `io/vertx/core/MultiMap` and `io/vertx/mutiny/core/MultiMap`. Quarkus cannot
+  # tell the two spellings apart, so this list must not either. Naming only the
+  # core one left the Mutiny spelling with TWO bare parameters and no payload at
+  # all — and that spelling is the mainstream case rather than an exotic one,
+  # since a Quarkus service injects the Mutiny facade (which is why
+  # `vertx-eventbus-mutiny.yml` exists) and `io.vertx.mutiny.core.MultiMap` is
+  # what `io.vertx.mutiny.core.eventbus.Message.headers()` returns (CP-31 Q10c).
+  #
+  # The fixture's `onOrderWithHeaders(MultiMap, Order)` and
+  # `onMutinyHeaderOrder(io.vertx.mutiny.core.MultiMap, Order)` are the two arms
+  # that prove the exclusion fires on each, one arm per entry.
+  request_body:
+    { fallback: sole_unannotated,
+      excludes: [io.vertx.core.MultiMap, io.vertx.mutiny.core.MultiMap] }
+  mapping:
+    # `@ConsumeEvent` declares five elements (CP-31 Q6) and exactly one of them
+    # is an address: `value()`. `path_from` is a single-alias list for that
+    # reason rather than a list that happens to hold one name.
+    path_from: [value]
+    # No type-level gate and no prefix. MEASURED (CP-31 Q6): `@ConsumeEvent` is
+    # `@Target(METHOD)` — it cannot be written on a class at all — so there is
+    # no class-level use to compose with, no `class_level` question to answer,
+    # and a `prefix_annotation` would name an annotation that can never appear
+    # where a prefix would be read.
+    prefix_from: []
+    prefix_annotation: null
+    # Verbless: an event-bus address has no verb, and `eventbus` is not in
+    # `_VERBED_PROTOCOLS`. The `spring-kafka.yml` spelling, one protocol over.
+    method_from: method
+    all_methods: []
+    annotations:
+      # THE DEFAULT ADDRESS, AND WHY IT IS THE FULLY-QUALIFIED NAME.
+      #
+      # MEASURED (CP-31 Q7, quarkus-vertx-deployment 3.17.5).
+      # `VertxProcessor.build(...)` builds an annotation proxy for
+      # `io.quarkus.vertx.ConsumeEvent` (offset 60) and then, at offsets 63-76,
+      # pushes the literal `"value"` (63), takes the consumer's `BeanInfo`
+      # (67), calls `BeanInfo.getBeanClass()` (70) — a Jandex `DotName` —
+      # calls `DotName.toString()` (73), and hands the pair to
+      # `AnnotationProxyBuilder.withDefaultValue(String, Object)` (76).
+      # `DotName.toString()` is the FULLY-QUALIFIED class name.
+      #
+      # So a bare `@ConsumeEvent` on `com.acme.eb.OrderConsumers` listens on
+      # `com.acme.eb.OrderConsumers` — NOT on the method's name, and NOT on the
+      # simple name. Either of those would be an address no sender ever writes,
+      # published at `resolved`/`compiler` and indistinguishable from an
+      # observation. `declaring_type_qualified_name` is the word that composes
+      # it, and it reads the DECLARING type off the declaration's own symbol
+      # rather than the handler's class, which is what keeps an inherited
+      # member composing against the type that declared it.
+      #
+      # CP-31 Q6 is the second half of the same fact: `value()`'s own
+      # `AnnotationDefault` is the EMPTY STRING, so the annotation use itself
+      # never carries an address for the processor to find, and the fallback is
+      # the only thing that can name one.
+      - { fqn: io.quarkus.vertx.ConsumeEvent,
+          path_fallback: declaring_type_qualified_name }
+  # WHAT THE DECLARATION SAYS ABOUT THE ENDPOINT — `local()`, and the default
+  # that decides it (D02 §2l, spec §1f).
+  #
+  # `local()` scopes REACHABILITY: a local consumer receives only messages sent
+  # from its own node, a non-local one receives clustered traffic too. Under
+  # §1f's test that is BEHAVIOURAL, not routing — it does not re-address the
+  # message, it decides whether one that is already addressed here arrives — so
+  # it is an `endpoint_metadata` entry rather than part of the path. It is an
+  # attribute a PEER would care about, which is §2e's criterion for belonging
+  # here at all: whether a message from another node can reach this handler.
+  #
+  # `absent_value: "true"` IS THE MEASUREMENT, and getting it backwards
+  # publishes something false. MEASURED (CP-31 Q6, quarkus-vertx 3.17.5):
+  # `local()`'s `AnnotationDefault` on the annotation TYPE is the boolean
+  # `true` (constant-pool tag `Z`, value 1). A framework default never reaches
+  # the annotation USE — it lives on the annotation type (JVMS 4.7.22) — so a
+  # bare `@ConsumeEvent` carries no `local` argument at all and this key is
+  # what supplies it. The REVERSE default would publish every undecorated
+  # Quarkus consumer as cluster-reachable, which is a claim about what other
+  # nodes can reach and is exactly the kind of row a peer would act on.
+  #
+  # QUOTED, and that is a loader rule rather than a style: `absent_value: true`
+  # unquoted is a YAML boolean and is REFUSED, not coerced — the value lands in
+  # a TEXT column beside values read off the class file, where a JSON boolean
+  # reads back as the lowercase text `true` while `str(True)` would be `'True'`,
+  # a spelling nothing else here writes.
+  #
+  # THE VALUE WRITTEN IS THE ATTRIBUTE'S OWN, lowercase: `true` for a
+  # local-only consumer (declared or defaulted), `false` for `local = false`.
+  #
+  # `kind: local` rather than `kind: delivery`, and the difference is whether a
+  # reader can act on the pair without going back to the annotation. `delivery`
+  # + `true` is ambiguous — true of WHAT? — while `local` + `true` states the
+  # fact the attribute states: this consumer is local-only. The value stays the
+  # boolean the declaration carries, which is the only thing `metadata_from`
+  # writes and what D02 §2l documents; naming the KIND after the attribute is
+  # what makes that honest rather than cryptic. (D02 §2l's worked example spells
+  # `delivery`; spec §1e is being amended to `local`, and the example with it.)
+  #
+  # `blocking()`, `ordered()` and `codec()` are NOT read, and that is §2e's
+  # criterion applied rather than an omission: each decides how this node
+  # executes or decodes a message that has already arrived, which no peer can
+  # observe. They are tuning knobs, the same class as `concurrency` and
+  # `containerFactory` on a Spring listener.
+  metadata_from:
+    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: local,
+        absent_value: "true" }
+
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, the same discipline every catalog here keeps — see
+# `spring-kafka.yml`'s own copy for the full rationale, including why a
+# disagreeing copy would make a shared type's answer depend on catalog sort
+# order). The last two are the bus's own envelope, and THIS is the file where
+# leaving them out produced a wrong row rather than a missing one.
+#
+# WHAT WENT WRONG WITHOUT THEM. `request_body.fallback: sole_unannotated` above
+# reads the consumer's one bare parameter, so
+#
+#     @ConsumeEvent("orders.created") void handle(Message<Order> m) { … }
+#     @ConsumeEvent("orders.created") void handle(Order o)          { … }
+#
+# — two spellings of ONE wire contract — recorded two different payload shapes,
+# `Message` for the first and `Order` for the second. The consumer answering a
+# request replies `m.reply(order)`, an `Order`, so the envelope row would not
+# link to the other half of its own request/reply pair.
+#
+# THE SPELLING IS ORDINARY INPUT, MEASURED (CP-31 Q12, quarkus-vertx-deployment
+# 3.17.5). `VertxProcessor` holds the rule in its own words: *"An event consumer
+# business method that accepts io.vertx.core.eventbus.Message or
+# io.vertx.mutiny.core.eventbus.Message must return void"*. Quarkus permits the
+# envelope parameter outright and attaches a RETURN-TYPE condition to it. Two
+# more of its constants bound where the envelope can sit: a consumer *"must
+# accept exactly one parameter"* unless the first is a `MultiMap`, and a
+# two-parameter consumer *"must not accept"* either `Message`. So an envelope
+# parameter is always the SOLE parameter — exactly the position
+# `sole_unannotated` reads, and never the second slot the headers/body split
+# uses.
+#
+# BOTH TYPES, and that is measured too rather than defensive breadth. CP-31 Q11:
+# `VertxConstants.isMessage(DotName)` returns true for `MESSAGE` **or**
+# `MUTINY_MESSAGE`, and its static initializer loads those two by `ldc class` at
+# offsets 0 and 22 — `io/vertx/core/eventbus/Message` and
+# `io/vertx/mutiny/core/eventbus/Message`. Quarkus cannot tell the two apart, so
+# a Quarkus consumer may spell its envelope either way and this file has to read
+# both. They are genuinely different types (CP-31 Q10a/Q10c: a class with a
+# `delegate` field versus the interface, and a `headers()` returning a different
+# `MultiMap`), which is why this is two rows and not one.
+#
+# `payload_arg: 0` on both: `Message<T>` takes one type argument and `body()` is
+# what returns it. `semantics: envelope` from the existing closed set —
+# `spring-kafka.yml` already spells a broker's own envelope (`ConsumerRecord`)
+# that way and this is the same thing one bus over. Not `http_envelope` (no
+# HTTP) and not `optional`, which is the one member the engine acts on
+# (`expansion.py` derives `required` from it) and would publish every event-bus
+# payload as nullable.
+#
+# A RAW `Message` — a consumer declaring `void handle(Message m)` — carries NO
+# payload shape at all, which is the answer this file wants and is worth naming
+# the mechanism for, since it is not the one the `unmatched_wrapper` flag
+# suggests. `root_type` has no type argument to descend into, so the walk stops
+# on the envelope itself; `contracts.py`'s `_payload_descriptor` then asks
+# `_matching_wrapper` about the type it stopped on and returns None when a
+# wrapper claims it — a declared envelope is never described as a payload. The
+# `unmatched_wrapper` flag rooting also sets is branched on by `error_advice.py`
+# alone and decides nothing here. Either way the envelope's own type is not
+# published as the wire's, and nothing is guessed past.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
+  - { type: io.vertx.mutiny.core.eventbus.Message, payload_arg: 0, semantics: envelope }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered (spec §3d, COVERAGE):
+#
+#   * A `${…}` ADDRESS is carried VERBATIM at `resolution: unresolved`. Quarkus
+#     resolves the placeholder out of configuration at startup, which this
+#     repository cannot see, and never guesses a deployed value. The address is
+#     present and unresolved rather than absent, so the endpoint is visible and
+#     the unknown is stated.
+#   * NO REPLY ROW. A `@ConsumeEvent` handler may return a value, which Quarkus
+#     sends back to the message's own reply-to address — an address the SENDER
+#     generated at request time, on no declaration here. `spring-kafka.yml`
+#     derives an unresolved reply row because `@SendTo` gives it a declaration
+#     shape to hang one on; there is no such annotation here, and a reply row
+#     naming the consumer's own address would claim this endpoint answers
+#     itself.
+#   * THE FAILURE CODES. `ConsumeEvent.FAILURE_CODE` and
+#     `EXPLICIT_FAILURE_CODE` are constants on the annotation type, not
+#     attributes of a use, and name nothing on a wire.
+#   * A CONSUMER REGISTERED PROGRAMMATICALLY. A Quarkus bean that calls
+#     `eventBus.consumer(...)` itself is read by `vertx-eventbus.yml` and
+#     `vertx-eventbus-chain.yml`, not here — this file reads declarations, and
+#     those two read calls.
+#   * QUARKUS OTHER THAN 3.17.5 is unmeasured. Both facts this file rests on are
+#     version-scoped: an `AnnotationDefault` is a property of the annotation's
+#     own class file, and the default-address call is a property of one
+#     processor's bytecode. Re-running
+#     `scripts/probes/cp31_eventbus_surface/run.sh` is the check.

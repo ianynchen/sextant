@@ -1,0 +1,173 @@
+id: vertx-eventbus-chain
+displayName: Vert.x event bus (two-step consumer and producer chains)
+style: fluent
+protocol: eventbus
+direction: inbound
+
+# WHY THIS FILE EXISTS AT ALL, AND WHY ITS TERMINAL IS THE WHOLE POINT.
+#
+# MEASURED (CP-31 Q4, vertx-core 4.5.10 AND 5.0.0, byte-identical in both):
+# `EventBusImpl.consumer(String, Handler)` calls
+# `consumer:(Ljava/lang/String;)` at offset 9 and
+# `MessageConsumer.handler:(Lio/vertx/core/Handler;)` at offset 15. The
+# two-argument form IS the one-argument form followed by `handler(h)`.
+# Registration therefore happens inside `handler`, not inside `consumer` — and
+# the consequence is the one this catalog is shaped around: **a
+# `consumer(addr)` never given a handler receives nothing and must derive
+# nothing.** `fluent`'s existing rule already says it ("a builder that never
+# reaches a terminal derives nothing"), so the judgement costs no engine word
+# here; it is the same judgement `interface_implementation` records as
+# `registration.started_by` (`OI-64`, D02 §1b-i) one engine over — construction
+# is not subscription.
+#
+# The one-call forms live in `vertx-eventbus.yml`, which declares
+# `consumer(String, Handler)`/`localConsumer(String, Handler)` and deliberately
+# does NOT declare the bare `consumer(String)`; this file declares the bare form
+# as a chain ROOT and nothing else, so the two catalogs partition the surface
+# rather than both claiming a call.
+
+detect:
+  coordinates: ["io.vertx:vertx-core"]
+
+# §5.4. Both major versions, for `vertx-eventbus.yml`'s reason: the producer
+# terminal below has a 4.5-only overload, and a block naming one version would
+# claim a rule for a jar nobody opened. Every archive states its own
+# `Implementation-Version`; CP-31 aborts on a mismatch.
+measured:
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0"],
+      identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+
+requires: [call_site, string_constants, chain_reconstruction]
+
+matches:
+  # EVERY ROOT AND EVERY STEP DECLARES ITS OWN ERASED DESCRIPTOR, the same rule
+  # `vertx-eventbus.yml` states and for the same measured reason: `consumer`
+  # overloads on argument type at arity 1 (a `String` at 4.5 and 5.0, a
+  # `MessageConsumerOptions` at 5.0) and `write` overloads at arity 1 and 2. A
+  # root matched by owner and name alone would read whichever slot the first row
+  # happened to name. `fluent` compares the PARAMETER portion of a descriptor
+  # (`_same_overload`), so a return type that moves between releases does not
+  # break the match while a re-typed parameter does — which is what a catalog
+  # wants of an overload gate.
+  roots:
+    # --- inbound: the bare consumer, which registers NOTHING on its own -------
+    - { owner: io.vertx.core.eventbus.EventBus, method: consumer,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;",
+        captures: { channel: arg0 } }
+    - { owner: io.vertx.core.eventbus.EventBus, method: localConsumer,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;",
+        captures: { channel: arg0 } }
+    # --- outbound: the producer, which sends nothing until `write` ------------
+    #
+    # `direction: outbound` on the root overrides the file's, the shape
+    # `spring-integration-kafka.yml`'s sink roots already use. An outbound
+    # fluent row carries no `handler` by construction, which is right: a
+    # producer has no consumer to name.
+    - { owner: io.vertx.core.eventbus.EventBus, method: sender,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer;",
+        captures: { channel: arg0 }, direction: outbound }
+    - { owner: io.vertx.core.eventbus.EventBus, method: publisher,
+        descriptor: "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer;",
+        captures: { channel: arg0 }, direction: outbound }
+  steps:
+    # THE REGISTRATION STEP. `handler`'s own argument 0 is the consumer — a
+    # lambda's body symbol where the call site passes one, NULL (and still
+    # `resolved`) where it passes a bean or a method reference, which is
+    # `fluent`'s stated rule: the handler never moves the row's resolution.
+    # MEASURED (CP-31 Q2): this descriptor is byte-identical at 4.5.10 and
+    # 5.0.0, so one entry covers both releases.
+    - { method: handler, owner: io.vertx.core.eventbus.MessageConsumer,
+        descriptor: "(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;",
+        captures: { handler: arg0 } }
+    # THE SEND STEP, in both of its declared overloads. MEASURED (CP-31 Q3):
+    # `write(T)` returning `io.vertx.core.Future` exists at 4.5.10 and 5.0.0;
+    # `write(T, Handler)` returning void exists ONLY at 4.5.10 — the same
+    # per-version split `vertx-eventbus.yml`'s `request` rows carry, and the
+    # 4.5-only entry simply never matches a 5.0 module's call sites.
+    - { method: write, owner: io.vertx.core.eventbus.MessageProducer,
+        descriptor: "(Ljava/lang/Object;)Lio/vertx/core/Future;",
+        captures: { body: arg0 } }
+    - { method: write, owner: io.vertx.core.eventbus.MessageProducer,
+        descriptor: "(Ljava/lang/Object;Lio/vertx/core/Handler;)V",
+        captures: { body: arg0 } }
+  # The two terminals, one per direction. A chain that reaches neither derives
+  # nothing — which is exactly the handler-less consumer, and the row this
+  # catalog exists to NOT write. `deliveryOptions(...)`, `pause()`, `resume()`,
+  # `fetch(long)`, `setMaxBufferedMessages(int)` and the rest of both interfaces
+  # are undeclared and pass through uncaptured (D02 §2's `fluent` rule): none of
+  # them names an address or registers anything, so nothing is lost by their
+  # silence and no `poisons:` entry is warranted.
+  terminal: [handler, write]
+
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, the same discipline every fluent catalog here keeps). The third
+# is the bus's own envelope, and `vertx-eventbus.yml`'s own comment carries the
+# full reasoning and the measurement; what follows is what is different HERE.
+#
+# THIS FILE'S INBOUND ROWS CARRY NO PAYLOAD SHAPE AT ALL, so the envelope cannot
+# reach them. The consumer terminal captures `handler: arg0` — the handler
+# itself, which becomes the row's HANDLER column, never a shape — and no root or
+# step declares a `body` capture on the inbound side. `orders.twostep`'s shipped
+# row carries `request_shape` NULL for that reason, and it still does. The
+# envelope defect `quarkus-consume-event.yml` had is therefore NOT present on
+# these rows: there is no shape to get wrong, only a shape that is missing, and
+# that miss is the same one `vertx-eventbus.yml` states for its own inbound
+# rows (`fluent` has no word for "the type argument of the handler's own
+# parameter" any more than `single_call` does).
+#
+# It is declared anyway, and for ONE reason rather than two. No row here has
+# been measured to reach a `Message`, and no fixture arm exercises this entry:
+# the only position that could is `write`'s `body: arg0`, the value handed to
+# the producer, and what the bus does with an envelope handed back to it is
+# UNMEASURED — the same open question `vertx-eventbus.yml`'s own block states,
+# and this file makes no claim about it either. What is declared here is
+# AGREEMENT: shape expansion is a global, insert-if-absent pass keyed on the
+# type symbol, so a file left without the rule could be the one that reaches a
+# `Message` first and inserts the envelope as a shape for every catalog after
+# it (measured on `fixtures/orders-eventbus` with the entries removed — see
+# `vertx-eventbus.yml`). MEASURED (CP-31 Q10a, Q10b): `body()` is the one
+# descriptor of the five that names what crossed the wire, byte-identical at
+# 4.5.10 and 5.0.0.
+#
+# The CORE `Message`, not the facade's: every root and step above is owned by
+# `io.vertx.core.eventbus.*`, and CP-31 Q10c measured the facade's as a
+# different type in a different artifact.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered (spec §3d, COVERAGE):
+#
+#   * A CONSUMER OR PRODUCER HANDED TO ANOTHER METHOD before its terminal.
+#     `MessageConsumer<T> c = bus.consumer("a"); register(c);` — the chain walk
+#     is per method body (value ids are per method; a cross-body `source` read
+#     is a fabrication path), so the registration inside `register` is not
+#     joined to this root and the row is never written. Group E's cross-method
+#     limit, an open issue of the same shape as `OI-110`.
+#   * `bodyStream().handler(h)`. `MessageConsumer.bodyStream()` returns an
+#     `io.vertx.core.streams.ReadStream`, and the `handler` called on THAT owner
+#     is a different declaration from the one declared above. The step is
+#     owner-gated deliberately — an owner-free `handler` step would fold any
+#     same-named call on any type into this chain — so this idiom derives
+#     nothing. A stated miss, not a wrong row.
+#   * THE `DeliveryOptions` PRODUCER OVERLOADS. `sender(String,
+#     DeliveryOptions)` and `publisher(String, DeliveryOptions)` are declared by
+#     both versions (CP-31 Q1) and are NOT roots here: spec §3b names the
+#     one-argument forms, and adding the others is a scope decision rather than
+#     a measurement. A module using them derives nothing.
+#   * THE 5.0 OPTIONS-ROOTED CHAIN. `consumer(MessageConsumerOptions)` (5.0
+#     only) is not a root here either. Its handler-less form registers nothing
+#     (CP-31 Q4c) exactly as the `String` form does, so the chain shape would
+#     apply — but spec §3b names only the `String` roots, and
+#     `vertx-eventbus.yml` already carries the one-call options form.
+#   * THE MUTINY FACADE. `io.vertx.mutiny.core.eventbus.MessageConsumer.handler`
+#     takes a `java.util.function.Consumer`, and `MessageProducer` declares
+#     `write`, `writeAndAwait` and `writeAndForget` — a disjoint surface
+#     measured by CP-31 Q8 and modelled by nothing here, the same boundary
+#     `vertx-eventbus.yml` states at its own `owner:` list.
+#   * VERT.X 3.x, unmeasured and unmatched by every descriptor above.

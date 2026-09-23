@@ -202,8 +202,12 @@ ITEM_FRAMEWORKS: dict[str, list[str]] = {
     "conditional-controllers": ["Spring MVC / WebFlux (annotations)"],
     "apache-camel": ["Apache Camel"],
     "smallrye-reactive-messaging": ["SmallRye Reactive Messaging (Quarkus)"],
-    "temporal-cadence": ["Temporal / Cadence"],
-    "vertx-eventbus": ["Vert.x EventBus"],
+    # Surfaced 2026-09-22 when `temporal-cadence` and `vertx-eventbus` closed and the Async
+    # row's blockers emptied while §5.12 still carried two Java frameworks with no catalog
+    # at all — the definition's second clause, the same way `smallrye-reactive-messaging`
+    # surfaced on Kafka at the B/C close.
+    "quartz": ["Quartz"],
+    "akka-pekko-actors": ["Akka / Pekko actors"],
 }
 
 # Framework FAMILIES — the stack a reader picks — and the framework lines each one owns
@@ -257,6 +261,12 @@ FAMILIES: dict[str, list[str]] = {
         "MicroProfile GraphQL",
         "Quarkus gRPC",
         "SmallRye Reactive Messaging (Quarkus)",
+        # The Vert.x EventBus line is Quarkus's too, the way the JAX-RS line is
+        # Helidon's: `quarkus-consume-event.yml` ships `@ConsumeEvent` and §5.12
+        # bills it under this line, because Quarkus's event bus IS Vert.x's. Left
+        # out, the grid's Quarkus/Async cell read `—` — *this family declares no
+        # line here* — of a family with a shipped async entry point.
+        "Vert.x EventBus",
     ],
     "Micronaut": [
         "Micronaut HTTP",

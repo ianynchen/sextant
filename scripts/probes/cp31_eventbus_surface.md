@@ -1,0 +1,375 @@
+# CP-31 — the Vert.x event bus's own surface: every descriptor per major version, what `EventBusImpl.consumer(String, Handler)` delegates to, `MessageConsumerOptions`, `@ConsumeEvent`'s own defaults, the address Quarkus fills in, the Mutiny facade, and the bus's own `Message<T>` envelope
+
+**Question.** `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md` §0 states four
+framework facts (M6–M9) that the three event-bus catalogs Task 8 ships are built on, each
+asserted from a `javap` read the spec's own table cites by offset but that no probe in this
+repository had yet reproduced as a generated, re-runnable table (GUIDELINES §5.4, §8.1 rule 1
+— "measured before it is built on", not taken from a table someone typed by hand).
+`.superpowers/sdd/2026-09-22-temporal-and-eventbus/task-8-brief.md` asks this probe to answer
+these and no others: Q1–Q3 every descriptor `EventBus`, `MessageConsumer` and
+`MessageProducer` declare **per version**, which is what tells 4.5 and 5.0 apart (M7); Q4 the
+delegation inside `EventBusImpl.consumer(String, Handler)` (M6); Q5 `MessageConsumerOptions`
+and its `setAddress` (M7); Q6 `@ConsumeEvent`'s own `AnnotationDefault` values (M8); Q7 the
+default-address call inside Quarkus's `VertxProcessor` (M8); Q8 the Mutiny facade's own
+descriptors (M9). Q9 is this probe's fixture row, the CP-27 row-16 / CP-30 Q9 pattern applied
+here: the owners and members `fixtures/orders-eventbus`'s own compiled classes name at their
+event-bus call sites.
+
+**Q10–Q12 were added on 2026-09-22, after the catalogs shipped, and they answer a question
+nobody had asked.** Q1–Q9 measured every type the four catalogs name as an OWNER and none of
+the type a consumer's parameter is DECLARED as, so when the catalogs were written there was
+nothing measured to declare a bus envelope from — and three of the four shipped with only the
+`ResponseEntity`/`Optional` wrappers copied from the REST catalogs, one of them stating in a
+comment that "no bus-specific wrapper is added". That comment was a claim about the framework
+made without a probe row behind it. Q10 reads every descriptor `io.vertx.core.eventbus.
+Message` declares at BOTH vertx-core versions and every descriptor the facade's own
+`io.vertx.mutiny.core.eventbus.Message` declares at 3.16.0 — two different types, read
+separately, never merged. Q11 reads `VertxConstants.isMessage`/`isMessageHeaders` and the
+static initializer that fills the `DotName`s they compare against, which is where Quarkus
+says WHICH types it treats as an envelope. Q12 dumps every `String` constant
+`VertxProcessor` holds, four of which are the validation rules Quarkus enforces on a
+consumer's signature — including the one that permits a `Message` parameter outright.
+
+**ONE ROW CAME BACK DIFFERENT FROM WHAT THE SPEC STATES, AND IT IS THE HEADLINE, NOT A
+FOOTNOTE.** M9 says the Mutiny facade "declares **no `sender`/`publisher` at all**".
+`io.vertx.mutiny.core.eventbus.EventBus` at smallrye-mutiny-vertx-core 3.16.0 declares
+**four** of them — `sender(String)`, `sender(String, DeliveryOptions)`, `publisher(String)`
+and `publisher(String, DeliveryOptions)`, each returning
+`io.vertx.mutiny.core.eventbus.MessageProducer`. See Q8's starred verdict. **The probe
+changes the spec, never the reverse (GUIDELINES §1.1).**
+
+**What this probe does not settle.** Nothing was run; every cell is a `javap` read of a class
+file in one of five jars, or of the committed fixture's own compiled classes. It measures the
+compiled surface of the versions named below, not the Java source, the reference
+documentation or any other release. Q4, Q7 and Q11 dump a method's FULL instruction body
+rather than a hand-picked excerpt, so nothing that disagreed with a prediction could have been
+filtered out before a reader sees it. Q1–Q3, Q5, Q8 and Q10 list EVERY method descriptor the
+named type declares rather than the handful the catalogs read, so an overload appearing or
+disappearing in a later release shows up in the cell the next time this runs. Q12 dumps every
+`String` constant in one class's constant pool rather than the four that mention `Message`: a
+read that grepped for the sentence it expected could only ever confirm it. Q6 reads the
+`AnnotationDefault` attribute recorded on the annotation TYPE; it says nothing about what any
+particular USE of the annotation carries. Nothing here measures the resolve-layer rules the
+spec specifies, the SockJS/TCP event-bus bridge, Vert.x 3.x, or any version of Quarkus other
+than 3.17.5.
+
+**Version scope (§5.4).** `io.vertx:vertx-core` at **4.5.10** and at **5.0.0** (both, and
+separately — the per-version split IS the question M7 asks);
+`io.smallrye.reactive:smallrye-mutiny-vertx-core` at **3.16.0**; `io.quarkus:quarkus-vertx`
+and `io.quarkus:quarkus-vertx-deployment` at **3.17.5**. Every one of those five archives
+states an `Implementation-Version` in its own manifest, and `probe.py` reads that value out
+of the archive it opened and ABORTS when it disagrees with the coordinate `run.sh` requested
+— so unlike CP-30's two Temporal jars, no SHA-1 fallback is reached here and no column is
+labelled with a parameter. `fixtures/orders-eventbus`'s own compiled classes carry no
+manifest at all: Q9's cell is filed under the class-file version `javap -v` reports for them,
+the one identity a compiled class states about itself (CP-27's and CP-30's fixture rows, same
+reasoning). Every verdict below is bounded by those five archives and that fixture.
+
+**How to run.** `JAVA_HOME=<jdk> PATH=$JAVA_HOME/bin:$PATH bash
+scripts/probes/cp31_eventbus_surface/run.sh`. It resolves the five jars into `~/.m2` (Maven
+and network only if one is missing — all five were already present), compiles
+`fixtures/orders-eventbus` offline, then runs `probe.py`, which reads each jar's
+`Implementation-Version` off its own manifest and prints the table below. Needs a JDK for
+`javap` and Maven for the `dependency:get` fallback and the fixture's compile. Not a test:
+nothing in the suite runs it.
+
+## Observations
+
+Verbatim from `run.sh`'s generated table (`probe.py` prints it; nothing here is typed by
+hand). **Each column header is the version the ARCHIVE ITSELF reported** out of its own
+manifest `Implementation-Version` entry — not the version `run.sh`'s `ARTIFACTS` array asked
+for, which the run compares against it and aborts on a mismatch rather than filing a cell
+under a label the jar never claimed. The two vertx-core columns are two separate archives,
+read separately and never merged: that separation is what M7's question is. Every cell in the
+second table is a `javap -s -p`, `javap -c -p` or `javap -v -p` read of the named class in
+the named artifact.
+
+```
+| what the run read | 3.16.0 | 3.17.5 | 4.5.10 | 5.0.0 |
+|---|---|---|---|---|
+| artifacts reporting this version | io.smallrye.reactive:smallrye-mutiny-vertx-core | io.quarkus:quarkus-vertx, io.quarkus:quarkus-vertx-deployment | io.vertx:vertx-core | io.vertx:vertx-core |
+| identity read from the archive itself (`Implementation-Version`) | yes | yes | yes | yes |
+
+| # | question | artifact | version | observed |
+|---|---|---|---|---|
+| 1a | every descriptor `io.vertx.core.eventbus.EventBus` declares | `io.vertx:vertx-core` | 4.5.10 | `×27 ; send(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus; ; send(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus; ; request(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; request(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/Future; ; request(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; request(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future; ; publish(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus; ; publish(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus; ; consumer(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; consumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; localConsumer(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; localConsumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; sender(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer; ; sender(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; publisher(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer; ; publisher(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; registerCodec(Lio/vertx/core/eventbus/MessageCodec;)Lio/vertx/core/eventbus/EventBus; ; unregisterCodec(Ljava/lang/String;)Lio/vertx/core/eventbus/EventBus; ; registerDefaultCodec(Ljava/lang/Class;Lio/vertx/core/eventbus/MessageCodec;)Lio/vertx/core/eventbus/EventBus; ; unregisterDefaultCodec(Ljava/lang/Class;)Lio/vertx/core/eventbus/EventBus; ; codecSelector(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus; ; addOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; removeOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; addInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; removeInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; clusterSerializableChecker(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus; ; serializableChecker(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus;` |
+| 1b | every descriptor `io.vertx.core.eventbus.EventBus` declares | `io.vertx:vertx-core` | 5.0.0 | `×27 ; send(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus; ; send(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus; ; request(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/Future; ; request(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future; ; publish(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus; ; publish(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus; ; consumer(Lio/vertx/core/eventbus/MessageConsumerOptions;)Lio/vertx/core/eventbus/MessageConsumer; ; consumer(Lio/vertx/core/eventbus/MessageConsumerOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; consumer(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; consumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; localConsumer(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; localConsumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; sender(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer; ; sender(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; publisher(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer; ; publisher(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; registerCodec(Lio/vertx/core/eventbus/MessageCodec;)Lio/vertx/core/eventbus/EventBus; ; unregisterCodec(Ljava/lang/String;)Lio/vertx/core/eventbus/EventBus; ; registerDefaultCodec(Ljava/lang/Class;Lio/vertx/core/eventbus/MessageCodec;)Lio/vertx/core/eventbus/EventBus; ; unregisterDefaultCodec(Ljava/lang/Class;)Lio/vertx/core/eventbus/EventBus; ; codecSelector(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus; ; addOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; removeOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; addInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; removeInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus; ; clusterSerializableChecker(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus; ; serializableChecker(Ljava/util/function/Function;)Lio/vertx/core/eventbus/EventBus;` |
+| 2a | every descriptor `io.vertx.core.eventbus.MessageConsumer` declares | `io.vertx:vertx-core` | 4.5.10 | `×21 ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; handler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; pause()Lio/vertx/core/eventbus/MessageConsumer; ; resume()Lio/vertx/core/eventbus/MessageConsumer; ; fetch(J)Lio/vertx/core/eventbus/MessageConsumer; ; endHandler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; bodyStream()Lio/vertx/core/streams/ReadStream; ; isRegistered()Z ; address()Ljava/lang/String; ; setMaxBufferedMessages(I)Lio/vertx/core/eventbus/MessageConsumer; ; getMaxBufferedMessages()I ; completionHandler(Lio/vertx/core/Handler;)V ; unregister()Lio/vertx/core/Future; ; unregister(Lio/vertx/core/Handler;)V ; endHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; fetch(J)Lio/vertx/core/streams/ReadStream; ; resume()Lio/vertx/core/streams/ReadStream; ; pause()Lio/vertx/core/streams/ReadStream; ; handler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/StreamBase;` |
+| 2b | every descriptor `io.vertx.core.eventbus.MessageConsumer` declares | `io.vertx:vertx-core` | 5.0.0 | `×18 ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; handler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; pause()Lio/vertx/core/eventbus/MessageConsumer; ; resume()Lio/vertx/core/eventbus/MessageConsumer; ; fetch(J)Lio/vertx/core/eventbus/MessageConsumer; ; endHandler(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; bodyStream()Lio/vertx/core/streams/ReadStream; ; isRegistered()Z ; address()Ljava/lang/String; ; completion()Lio/vertx/core/Future; ; unregister()Lio/vertx/core/Future; ; endHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; fetch(J)Lio/vertx/core/streams/ReadStream; ; resume()Lio/vertx/core/streams/ReadStream; ; pause()Lio/vertx/core/streams/ReadStream; ; handler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/ReadStream; ; exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/core/streams/StreamBase;` |
+| 3a | every descriptor `io.vertx.core.eventbus.MessageProducer` declares | `io.vertx:vertx-core` | 4.5.10 | `×6 ; deliveryOptions(Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; address()Ljava/lang/String; ; write(Ljava/lang/Object;Lio/vertx/core/Handler;)V ; write(Ljava/lang/Object;)Lio/vertx/core/Future; ; close()Lio/vertx/core/Future; ; close(Lio/vertx/core/Handler;)V` |
+| 3b | every descriptor `io.vertx.core.eventbus.MessageProducer` declares | `io.vertx:vertx-core` | 5.0.0 | `×4 ; deliveryOptions(Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/MessageProducer; ; address()Ljava/lang/String; ; write(Ljava/lang/Object;)Lio/vertx/core/Future; ; close()Lio/vertx/core/Future;` |
+| 4a | `EventBusImpl.consumer(String, Handler)`'s whole body — what it delegates to | `io.vertx:vertx-core` | 4.5.10 | `0: aload_2 ; 1: ldc String handler ; 3: invokestatic Method java/util/Objects.requireNonNull:(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object; ; 6: pop ; 7: aload_0 ; 8: aload_1 ; 9: invokevirtual Method consumer:(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; 12: astore_3 ; 13: aload_3 ; 14: aload_2 ; 15: invokeinterface InterfaceMethod io/vertx/core/eventbus/MessageConsumer.handler:(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; 20: pop ; 21: aload_3 ; 22: areturn` |
+| 4b | `EventBusImpl.consumer(String, Handler)`'s whole body — what it delegates to | `io.vertx:vertx-core` | 5.0.0 | `0: aload_2 ; 1: ldc String handler ; 3: invokestatic Method java/util/Objects.requireNonNull:(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object; ; 6: pop ; 7: aload_0 ; 8: aload_1 ; 9: invokevirtual Method consumer:(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer; ; 12: astore_3 ; 13: aload_3 ; 14: aload_2 ; 15: invokeinterface InterfaceMethod io/vertx/core/eventbus/MessageConsumer.handler:(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; 20: pop ; 21: aload_3 ; 22: areturn` |
+| 4c | the same question asked of 5.0.0's `consumer(MessageConsumerOptions[, Handler])` pair — whole bodies, both overloads | `io.vertx:vertx-core` | 5.0.0 | `--- consumer(MessageConsumerOptions) --- ; 0: aload_0 ; 1: invokevirtual Method checkStarted:()V ; 4: aload_1 ; 5: invokevirtual Method io/vertx/core/eventbus/MessageConsumerOptions.getAddress:()Ljava/lang/String; ; 8: astore_2 ; 9: aload_1 ; 10: invokevirtual Method io/vertx/core/eventbus/MessageConsumerOptions.getAddress:()Ljava/lang/String; ; 13: ifnull 20 ; 16: iconst_1 ; 17: goto 21 ; 20: iconst_0 ; 21: ldc String Consumer address must not be null ; 23: invokestatic Method io/vertx/core/impl/Arguments.require:(ZLjava/lang/String;)V ; 26: new class io/vertx/core/eventbus/impl/MessageConsumerImpl ; 29: dup ; 30: aload_0 ; 31: getfield Field vertx:Lio/vertx/core/internal/VertxInternal; ; 34: invokeinterface InterfaceMethod io/vertx/core/internal/VertxInternal.getOrCreateContext:()Lio/vertx/core/internal/ContextInternal; ; 39: aload_0 ; 40: aload_2 ; 41: aload_1 ; 42: invokevirtual Method io/vertx/core/eventbus/MessageConsumerOptions.isLocalOnly:()Z ; 45: aload_1 ; 46: invokevirtual Method io/vertx/core/eventbus/MessageConsumerOptions.getMaxBufferedMessages:()I ; 49: invokespecial Method io/vertx/core/eventbus/impl/MessageConsumerImpl."<init>":(Lio/vertx/core/internal/ContextInternal;Lio/vertx/core/eventbus/impl/EventBusImpl;Ljava/lang/String;ZI)V ; 52: areturn ; --- consumer(MessageConsumerOptions, Handler) --- ; 0: aload_2 ; 1: ldc String handler ; 3: invokestatic Method java/util/Objects.requireNonNull:(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object; ; 6: pop ; 7: aload_0 ; 8: aload_1 ; 9: invokevirtual Method consumer:(Lio/vertx/core/eventbus/MessageConsumerOptions;)Lio/vertx/core/eventbus/MessageConsumer; ; 12: astore_3 ; 13: aload_3 ; 14: aload_2 ; 15: invokeinterface InterfaceMethod io/vertx/core/eventbus/MessageConsumer.handler:(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer; ; 20: pop ; 21: aload_3 ; 22: areturn` |
+| 5a | `io.vertx.core.eventbus.MessageConsumerOptions` and its `setAddress` | `io.vertx:vertx-core` | 4.5.10 | `javap finds no io.vertx.core.eventbus.MessageConsumerOptions in this artifact at all (class not declared)` |
+| 5b | `io.vertx.core.eventbus.MessageConsumerOptions` and its `setAddress` | `io.vertx:vertx-core` | 5.0.0 | `×10 ; MessageConsumerOptions()V ; MessageConsumerOptions(Lio/vertx/core/eventbus/MessageConsumerOptions;)V ; MessageConsumerOptions(Lio/vertx/core/json/JsonObject;)V ; getAddress()Ljava/lang/String; ; setAddress(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumerOptions; ; isLocalOnly()Z ; setLocalOnly(Z)Lio/vertx/core/eventbus/MessageConsumerOptions; ; getMaxBufferedMessages()I ; setMaxBufferedMessages(I)Lio/vertx/core/eventbus/MessageConsumerOptions; ; toJson()Lio/vertx/core/json/JsonObject;` |
+| 6 | every element `@ConsumeEvent` declares, with its own `AnnotationDefault` | `io.quarkus:quarkus-vertx` | 3.17.5 | `value: default_value: s#16 -> "" ; local: default_value: Z#19 -> true ; blocking: default_value: Z#21 -> false ; ordered: default_value: Z#21 -> false ; codec: default_value: c#25 -> class Lio/quarkus/vertx/LocalEventBusCodec; ; java.lang.annotation.Target ; value=[Ljava/lang/annotation/ElementType;.METHOD] ; java.lang.annotation.Retention ; value=Ljava/lang/annotation/RetentionPolicy;.RUNTIME` |
+| 7 | the whole body of the `VertxProcessor` method that calls `withDefaultValue` | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 | `in `io.quarkus.vertx.deployment.VertxBuildItem build(io.quarkus.vertx.core.deployment.CoreVertxBuildItem, io.quarkus.vertx.runtime.VertxEventBusConsumerRecorder, java.util.List<io.quarkus.vertx.deployment.EventConsumerBusinessMethodItem>, io.quarkus.deployment.annotations.BuildProducer<io.quarkus.deployment.builditem.GeneratedClassBuildItem>, io.quarkus.deployment.builditem.AnnotationProxyBuildItem, io.quarkus.deployment.builditem.LaunchModeBuildItem, io.quarkus.deployment.builditem.ShutdownContextBuildItem, io.quarkus.deployment.annotations.BuildProducer<io.quarkus.deployment.builditem.ServiceStartBuildItem>, java.util.List<io.quarkus.vertx.deployment.MessageCodecBuildItem>, io.quarkus.vertx.deployment.LocalCodecSelectorTypesBuildItem, io.quarkus.deployment.recording.RecorderContext)` ; 0: new class java/util/ArrayList ; 3: dup ; 4: invokespecial Method java/util/ArrayList."<init>":()V ; 7: astore 12 ; 9: new class io/quarkus/deployment/GeneratedClassGizmoAdaptor ; 12: dup ; 13: aload 4 ; 15: iconst_1 ; 16: invokespecial Method io/quarkus/deployment/GeneratedClassGizmoAdaptor."<init>":(Lio/quarkus/deployment/annotations/BuildProducer;Z)V ; 19: astore 13 ; 21: aload_3 ; 22: invokeinterface InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator; ; 27: astore 14 ; 29: aload 14 ; 31: invokeinterface InterfaceMethod java/util/Iterator.hasNext:()Z ; 36: ifeq 139 ; 39: aload 14 ; 41: invokeinterface InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object; ; 46: checkcast class io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem ; 49: astore 15 ; 51: aload 5 ; 53: aload 15 ; 55: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.getConsumeEvent:()Lorg/jboss/jandex/AnnotationInstance; ; 58: ldc class io/quarkus/vertx/ConsumeEvent ; 60: invokevirtual Method io/quarkus/deployment/builditem/AnnotationProxyBuildItem.builder:(Lorg/jboss/jandex/AnnotationInstance;Ljava/lang/Class;)Lio/quarkus/deployment/recording/AnnotationProxyProvider$AnnotationProxyBuilder; ; 63: ldc String value ; 65: aload 15 ; 67: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.getBean:()Lio/quarkus/arc/processor/BeanInfo; ; 70: invokevirtual Method io/quarkus/arc/processor/BeanInfo.getBeanClass:()Lorg/jboss/jandex/DotName; ; 73: invokevirtual Method org/jboss/jandex/DotName.toString:()Ljava/lang/String; ; 76: invokevirtual Method io/quarkus/deployment/recording/AnnotationProxyProvider$AnnotationProxyBuilder.withDefaultValue:(Ljava/lang/String;Ljava/lang/Object;)Lio/quarkus/deployment/recording/AnnotationProxyProvider$AnnotationProxyBuilder; ; 79: aload 13 ; 81: invokevirtual Method io/quarkus/deployment/recording/AnnotationProxyProvider$AnnotationProxyBuilder.build:(Lio/quarkus/gizmo/ClassOutput;)Ljava/lang/Object; ; 84: checkcast class io/quarkus/vertx/ConsumeEvent ; 87: astore 16 ; 89: aload 12 ; 91: new class io/quarkus/vertx/runtime/EventConsumerInfo ; 94: dup ; 95: aload 16 ; 97: aload 15 ; 99: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.isBlockingAnnotation:()Z ; 102: aload 15 ; 104: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.isRunOnVirtualThreadAnnotation:()Z ; 107: aload 15 ; 109: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.isSplitHeadersBodyParams:()Z ; 112: aload 11 ; 114: aload 15 ; 116: invokevirtual Method io/quarkus/vertx/deployment/EventConsumerBusinessMethodItem.getInvoker:()Lio/quarkus/arc/processor/InvokerInfo; ; 119: invokevirtual Method io/quarkus/arc/processor/InvokerInfo.getClassName:()Ljava/lang/String; ; 122: invokeinterface InterfaceMethod io/quarkus/deployment/recording/RecorderContext.newInstance:(Ljava/lang/String;)Lio/quarkus/runtime/RuntimeValue; ; 127: invokespecial Method io/quarkus/vertx/runtime/EventConsumerInfo."<init>":(Lio/quarkus/vertx/ConsumeEvent;ZZZLio/quarkus/runtime/RuntimeValue;)V ; 130: invokeinterface InterfaceMethod java/util/List.add:(Ljava/lang/Object;)Z ; 135: pop ; 136: goto 29 ; 139: invokestatic Method java/lang/Thread.currentThread:()Ljava/lang/Thread; ; 142: invokevirtual Method java/lang/Thread.getContextClassLoader:()Ljava/lang/ClassLoader; ; 145: astore 14 ; 147: new class java/util/HashMap ; 150: dup ; 151: invokespecial Method java/util/HashMap."<init>":()V ; 154: astore 15 ; 156: aload 9 ; 158: invokeinterface InterfaceMethod java/util/List.iterator:()Ljava/util/Iterator; ; 163: astore 16 ; 165: aload 16 ; 167: invokeinterface InterfaceMethod java/util/Iterator.hasNext:()Z ; 172: ifeq 220 ; 175: aload 16 ; 177: invokeinterface InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object; ; 182: checkcast class io/quarkus/vertx/deployment/MessageCodecBuildItem ; 185: astore 17 ; 187: aload 15 ; 189: aload_0 ; 190: aload 17 ; 192: invokevirtual Method io/quarkus/vertx/deployment/MessageCodecBuildItem.getType:()Ljava/lang/String; ; 195: aload 14 ; 197: invokevirtual Method tryLoad:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class; ; 200: aload_0 ; 201: aload 17 ; 203: invokevirtual Method io/quarkus/vertx/deployment/MessageCodecBuildItem.getCodec:()Ljava/lang/String; ; 206: aload 14 ; 208: invokevirtual Method tryLoad:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class; ; 211: invokeinterface InterfaceMethod java/util/Map.put:(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object; ; 216: pop ; 217: goto 165 ; 220: new class java/util/ArrayList ; 223: dup ; 224: invokespecial Method java/util/ArrayList."<init>":()V ; 227: astore 16 ; 229: aload 10 ; 231: invokevirtual Method io/quarkus/vertx/deployment/LocalCodecSelectorTypesBuildItem.getTypes:()Ljava/util/Set; ; 234: invokeinterface InterfaceMethod java/util/Set.iterator:()Ljava/util/Iterator; ; 239: astore 17 ; 241: aload 17 ; 243: invokeinterface InterfaceMethod java/util/Iterator.hasNext:()Z ; 248: ifeq 282 ; 251: aload 17 ; 253: invokeinterface InterfaceMethod java/util/Iterator.next:()Ljava/lang/Object; ; 258: checkcast class java/lang/String ; 261: astore 18 ; 263: aload 16 ; 265: aload_0 ; 266: aload 18 ; 268: aload 14 ; 270: invokevirtual Method tryLoad:(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class; ; 273: invokeinterface InterfaceMethod java/util/List.add:(Ljava/lang/Object;)Z ; 278: pop ; 279: goto 241 ; 282: aload_2 ; 283: aload_1 ; 284: invokevirtual Method io/quarkus/vertx/core/deployment/CoreVertxBuildItem.getVertx:()Ljava/util/function/Supplier; ; 287: aload 12 ; 289: aload 6 ; 291: invokevirtual Method io/quarkus/deployment/builditem/LaunchModeBuildItem.getLaunchMode:()Lio/quarkus/runtime/LaunchMode; ; 294: aload 7 ; 296: aload 15 ; 298: aload 16 ; 300: invokevirtual Method io/quarkus/vertx/runtime/VertxEventBusConsumerRecorder.configureVertx:(Ljava/util/function/Supplier;Ljava/util/List;Lio/quarkus/runtime/LaunchMode;Lio/quarkus/runtime/ShutdownContext;Ljava/util/Map;Ljava/util/List;)V ; 303: aload 8 ; 305: new class io/quarkus/deployment/builditem/ServiceStartBuildItem ; 308: dup ; 309: ldc String vertx ; 311: invokespecial Method io/quarkus/deployment/builditem/ServiceStartBuildItem."<init>":(Ljava/lang/String;)V ; 314: invokeinterface InterfaceMethod io/quarkus/deployment/annotations/BuildProducer.produce:(Lio/quarkus/builder/item/BuildItem;)V ; 319: new class io/quarkus/vertx/deployment/VertxBuildItem ; 322: dup ; 323: aload_2 ; 324: aload_1 ; 325: invokevirtual Method io/quarkus/vertx/core/deployment/CoreVertxBuildItem.getVertx:()Ljava/util/function/Supplier; ; 328: invokevirtual Method io/quarkus/vertx/runtime/VertxEventBusConsumerRecorder.forceStart:(Ljava/util/function/Supplier;)Lio/quarkus/runtime/RuntimeValue; ; 331: invokespecial Method io/quarkus/vertx/deployment/VertxBuildItem."<init>":(Lio/quarkus/runtime/RuntimeValue;)V ; 334: areturn` |
+| 8 | every descriptor the Mutiny facade's `EventBus`, `MessageConsumer` and `MessageProducer` declare | `io.smallrye.reactive:smallrye-mutiny-vertx-core` | 3.16.0 | `EventBus ×56 ; EventBus.EventBus(Lio/vertx/core/eventbus/EventBus;)V ; EventBus.EventBus(Ljava/lang/Object;)V ; EventBus.EventBus()V ; EventBus.getDelegate()Lio/vertx/core/eventbus/EventBus; ; EventBus.toString()Ljava/lang/String; ; EventBus.equals(Ljava/lang/Object;)Z ; EventBus.hashCode()I ; EventBus.isMetricsEnabled()Z ; EventBus.send(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.send(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.request(Ljava/lang/String;Ljava/lang/Object;)Lio/smallrye/mutiny/Uni; ; EventBus.requestAndAwait(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.requestAndForget(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.request(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/smallrye/mutiny/Uni; ; EventBus.requestAndAwait(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.requestAndForget(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.publish(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.publish(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.consumer(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.__consumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.consumer(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.localConsumer(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.__localConsumer(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.localConsumer(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; EventBus.sender(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; EventBus.sender(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; EventBus.publisher(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; EventBus.publisher(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; EventBus.codecSelector(Ljava/util/function/Function;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.__addOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.addOutboundInterceptor(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.__removeOutboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.removeOutboundInterceptor(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.__addInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.addInboundInterceptor(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.__removeInboundInterceptor(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.removeInboundInterceptor(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.clusterSerializableChecker(Ljava/util/function/Function;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.serializableChecker(Ljava/util/function/Function;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.registerCodec(Lio/vertx/core/eventbus/MessageCodec;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.unregisterCodec(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.newInstance(Lio/vertx/core/eventbus/EventBus;)Lio/vertx/mutiny/core/eventbus/EventBus; ; EventBus.getDelegate()Lio/vertx/core/metrics/Measured; ; EventBus.lambda$__removeInboundInterceptor$12(Lio/vertx/core/eventbus/DeliveryContext;)Lio/vertx/mutiny/core/eventbus/DeliveryContext; ; EventBus.lambda$__addInboundInterceptor$11(Lio/vertx/core/eventbus/DeliveryContext;)Lio/vertx/mutiny/core/eventbus/DeliveryContext; ; EventBus.lambda$__removeOutboundInterceptor$10(Lio/vertx/core/eventbus/DeliveryContext;)Lio/vertx/mutiny/core/eventbus/DeliveryContext; ; EventBus.lambda$__addOutboundInterceptor$9(Lio/vertx/core/eventbus/DeliveryContext;)Lio/vertx/mutiny/core/eventbus/DeliveryContext; ; EventBus.lambda$__localConsumer$8(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.lambda$__consumer$7(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.lambda$request$6(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)V ; EventBus.lambda$request$5(Lio/vertx/core/AsyncResult;)Lio/vertx/core/AsyncResult; ; EventBus.lambda$request$4(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.lambda$request$3(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/Handler;)V ; EventBus.lambda$request$2(Lio/vertx/core/AsyncResult;)Lio/vertx/core/AsyncResult; ; EventBus.lambda$request$1(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; EventBus.lambda$static$0(Ljava/lang/Object;)Ljava/lang/Object; ; MessageConsumer ×54 ; MessageConsumer.MessageConsumer(Lio/vertx/core/eventbus/MessageConsumer;)V ; MessageConsumer.MessageConsumer(Ljava/lang/Object;Lio/smallrye/mutiny/vertx/TypeArg;)V ; MessageConsumer.MessageConsumer(Lio/vertx/core/eventbus/MessageConsumer;Lio/smallrye/mutiny/vertx/TypeArg;)V ; MessageConsumer.MessageConsumer()V ; MessageConsumer.getDelegate()Lio/vertx/core/eventbus/MessageConsumer; ; MessageConsumer.toString()Ljava/lang/String; ; MessageConsumer.equals(Ljava/lang/Object;)Z ; MessageConsumer.hashCode()I ; MessageConsumer.pipe()Lio/vertx/mutiny/core/streams/Pipe; ; MessageConsumer.pipeTo(Lio/vertx/mutiny/core/streams/WriteStream;)Lio/smallrye/mutiny/Uni; ; MessageConsumer.pipeToAndAwait(Lio/vertx/mutiny/core/streams/WriteStream;)Ljava/lang/Void; ; MessageConsumer.pipeToAndForget(Lio/vertx/mutiny/core/streams/WriteStream;)V ; MessageConsumer.__exceptionHandler(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.exceptionHandler(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.__handler(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.handler(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.pause()Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.resume()Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.fetch(J)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.__endHandler(Lio/vertx/core/Handler;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.endHandler(Ljava/lang/Runnable;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.bodyStream()Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.isRegistered()Z ; MessageConsumer.address()Ljava/lang/String; ; MessageConsumer.setMaxBufferedMessages(I)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.getMaxBufferedMessages()I ; MessageConsumer.completionHandler()Lio/smallrye/mutiny/Uni; ; MessageConsumer.completionHandlerAndAwait()Ljava/lang/Void; ; MessageConsumer.completionHandlerAndForget()V ; MessageConsumer.unregister()Lio/smallrye/mutiny/Uni; ; MessageConsumer.unregisterAndAwait()Ljava/lang/Void; ; MessageConsumer.unregisterAndForget()V ; MessageConsumer.toMulti()Lio/smallrye/mutiny/Multi; ; MessageConsumer.toBlockingIterable()Ljava/lang/Iterable; ; MessageConsumer.toBlockingStream()Ljava/util/stream/Stream; ; MessageConsumer.newInstance(Lio/vertx/core/eventbus/MessageConsumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.newInstance(Lio/vertx/core/eventbus/MessageConsumer;Lio/smallrye/mutiny/vertx/TypeArg;)Lio/vertx/mutiny/core/eventbus/MessageConsumer; ; MessageConsumer.endHandler(Ljava/lang/Runnable;)Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.fetch(J)Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.resume()Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.pause()Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.handler(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.exceptionHandler(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/streams/ReadStream; ; MessageConsumer.getDelegate()Lio/vertx/core/streams/ReadStream; ; MessageConsumer.exceptionHandler(Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/streams/StreamBase; ; MessageConsumer.getDelegate()Lio/vertx/core/streams/StreamBase; ; MessageConsumer.lambda$unregister$7(Lio/vertx/core/Handler;)V ; MessageConsumer.lambda$completionHandler$6(Lio/vertx/core/Handler;)V ; MessageConsumer.lambda$endHandler$5(Ljava/lang/Runnable;Ljava/lang/Void;)V ; MessageConsumer.lambda$__handler$4(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; MessageConsumer.lambda$pipeTo$3(Lio/vertx/mutiny/core/streams/WriteStream;Lio/vertx/core/Handler;)V ; MessageConsumer.lambda$pipe$2(Lio/vertx/mutiny/core/eventbus/Message;)Ljava/lang/Object; ; MessageConsumer.lambda$pipe$1(Ljava/lang/Object;)Ljava/lang/Object; ; MessageConsumer.lambda$static$0(Ljava/lang/Object;)Ljava/lang/Object; ; MessageProducer ×21 ; MessageProducer.MessageProducer(Lio/vertx/core/eventbus/MessageProducer;)V ; MessageProducer.MessageProducer(Ljava/lang/Object;Lio/smallrye/mutiny/vertx/TypeArg;)V ; MessageProducer.MessageProducer(Lio/vertx/core/eventbus/MessageProducer;Lio/smallrye/mutiny/vertx/TypeArg;)V ; MessageProducer.MessageProducer()V ; MessageProducer.getDelegate()Lio/vertx/core/eventbus/MessageProducer; ; MessageProducer.toString()Ljava/lang/String; ; MessageProducer.equals(Ljava/lang/Object;)Z ; MessageProducer.hashCode()I ; MessageProducer.deliveryOptions(Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; MessageProducer.address()Ljava/lang/String; ; MessageProducer.write(Ljava/lang/Object;)Lio/smallrye/mutiny/Uni; ; MessageProducer.writeAndAwait(Ljava/lang/Object;)Ljava/lang/Void; ; MessageProducer.writeAndForget(Ljava/lang/Object;)V ; MessageProducer.close()Lio/smallrye/mutiny/Uni; ; MessageProducer.closeAndAwait()Ljava/lang/Void; ; MessageProducer.closeAndForget()V ; MessageProducer.newInstance(Lio/vertx/core/eventbus/MessageProducer;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; MessageProducer.newInstance(Lio/vertx/core/eventbus/MessageProducer;Lio/smallrye/mutiny/vertx/TypeArg;)Lio/vertx/mutiny/core/eventbus/MessageProducer; ; MessageProducer.lambda$close$2(Lio/vertx/core/Handler;)V ; MessageProducer.lambda$write$1(Ljava/lang/Object;Lio/vertx/core/Handler;)V ; MessageProducer.lambda$static$0(Ljava/lang/Object;)Ljava/lang/Object;` |
+| 9 | the owners and members the fixture's own compiled classes name at their `io.vertx`/`io.quarkus` call sites | `fixtures/orders-eventbus` (target/classes) | class file 65 | `com.acme.eb.MutinyOrderBus: io/vertx/mutiny/core/Vertx[eventBus:()Lio/vertx/mutiny/core/eventbus/EventBus;], io/vertx/mutiny/core/eventbus/EventBus[consumer:(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;, publish:(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;, request:(Ljava/lang/String;Ljava/lang/Object;)Lio/smallrye/mutiny/Uni;, send:(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;], io/vertx/mutiny/core/eventbus/Message[body:()Ljava/lang/Object;] ; com.acme.eb.Order: (no event-bus call site) ; com.acme.eb.OrderBus: io/vertx/core/Vertx[eventBus:()Lio/vertx/core/eventbus/EventBus;], io/vertx/core/eventbus/DeliveryOptions["<init>":()V, setSendTimeout:(J)Lio/vertx/core/eventbus/DeliveryOptions;], io/vertx/core/eventbus/EventBus[consumer:(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;, consumer:(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;, localConsumer:(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;, publish:(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;, request:(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/Future;, send:(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;, send:(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus;, sender:(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageProducer;], io/vertx/core/eventbus/Message[body:()Ljava/lang/Object;], io/vertx/core/eventbus/MessageConsumer[handler:(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;, setMaxBufferedMessages:(I)Lio/vertx/core/eventbus/MessageConsumer;], io/vertx/core/eventbus/MessageProducer[write:(Ljava/lang/Object;)Lio/vertx/core/Future;] ; com.acme.eb.OrderConsumers: io/vertx/core/MultiMap[get:(Ljava/lang/String;)Ljava/lang/String;], io/vertx/core/eventbus/Message[body:()Ljava/lang/Object;], io/vertx/mutiny/core/MultiMap[get:(Ljava/lang/String;)Ljava/lang/String;], io/vertx/mutiny/core/eventbus/Message[body:()Ljava/lang/Object;]` |
+| 10a | every descriptor `io.vertx.core.eventbus.Message` declares — the bus's own envelope | `io.vertx:vertx-core` | 4.5.10 | `×12 ; address()Ljava/lang/String; ; headers()Lio/vertx/core/MultiMap; ; body()Ljava/lang/Object; ; replyAddress()Ljava/lang/String; ; isSend()Z ; reply(Ljava/lang/Object;)V ; reply(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)V ; replyAndRequest(Ljava/lang/Object;Lio/vertx/core/Handler;)V ; replyAndRequest(Ljava/lang/Object;)Lio/vertx/core/Future; ; replyAndRequest(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)V ; replyAndRequest(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future; ; fail(ILjava/lang/String;)V` |
+| 10b | every descriptor `io.vertx.core.eventbus.Message` declares — the bus's own envelope | `io.vertx:vertx-core` | 5.0.0 | `×10 ; address()Ljava/lang/String; ; headers()Lio/vertx/core/MultiMap; ; body()Ljava/lang/Object; ; replyAddress()Ljava/lang/String; ; isSend()Z ; reply(Ljava/lang/Object;)V ; reply(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)V ; replyAndRequest(Ljava/lang/Object;)Lio/vertx/core/Future; ; replyAndRequest(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future; ; fail(ILjava/lang/String;)V` |
+| 10c | every descriptor `io.vertx.mutiny.core.eventbus.Message` declares — the bus's own envelope | `io.smallrye.reactive:smallrye-mutiny-vertx-core` | 3.16.0 | `×31 ; Message(Lio/vertx/core/eventbus/Message;)V ; Message(Ljava/lang/Object;Lio/smallrye/mutiny/vertx/TypeArg;)V ; Message(Lio/vertx/core/eventbus/Message;Lio/smallrye/mutiny/vertx/TypeArg;)V ; Message()V ; getDelegate()Lio/vertx/core/eventbus/Message; ; toString()Ljava/lang/String; ; equals(Ljava/lang/Object;)Z ; hashCode()I ; address()Ljava/lang/String; ; headers()Lio/vertx/mutiny/core/MultiMap; ; body()Ljava/lang/Object; ; replyAddress()Ljava/lang/String; ; isSend()Z ; reply(Ljava/lang/Object;)V ; reply(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)V ; replyAndRequest(Ljava/lang/Object;)Lio/smallrye/mutiny/Uni; ; replyAndRequestAndAwait(Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/Message; ; replyAndRequestAndForget(Ljava/lang/Object;)V ; replyAndRequest(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/smallrye/mutiny/Uni; ; replyAndRequestAndAwait(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/Message; ; replyAndRequestAndForget(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)V ; fail(ILjava/lang/String;)V ; newInstance(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; newInstance(Lio/vertx/core/eventbus/Message;Lio/smallrye/mutiny/vertx/TypeArg;)Lio/vertx/mutiny/core/eventbus/Message; ; lambda$replyAndRequest$6(Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)V ; lambda$replyAndRequest$5(Lio/vertx/core/AsyncResult;)Lio/vertx/core/AsyncResult; ; lambda$replyAndRequest$4(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; lambda$replyAndRequest$3(Ljava/lang/Object;Lio/vertx/core/Handler;)V ; lambda$replyAndRequest$2(Lio/vertx/core/AsyncResult;)Lio/vertx/core/AsyncResult; ; lambda$replyAndRequest$1(Lio/vertx/core/eventbus/Message;)Lio/vertx/mutiny/core/eventbus/Message; ; lambda$static$0(Ljava/lang/Object;)Ljava/lang/Object;` |
+| 11 | `VertxConstants.isMessage`, `isMessageHeaders` and `<clinit>` — whole bodies, and the class names they compare against | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 | `--- isMessage --- ; 0: getstatic Field MESSAGE:Lorg/jboss/jandex/DotName; ; 3: aload_0 ; 4: invokevirtual Method org/jboss/jandex/DotName.equals:(Ljava/lang/Object;)Z ; 7: ifne 20 ; 10: getstatic Field MUTINY_MESSAGE:Lorg/jboss/jandex/DotName; ; 13: aload_0 ; 14: invokevirtual Method org/jboss/jandex/DotName.equals:(Ljava/lang/Object;)Z ; 17: ifeq 24 ; 20: iconst_1 ; 21: goto 25 ; 24: iconst_0 ; 25: ireturn ; --- isMessageHeaders --- ; 0: getstatic Field MESSAGE_HEADERS:Lorg/jboss/jandex/DotName; ; 3: aload_0 ; 4: invokevirtual Method org/jboss/jandex/DotName.equals:(Ljava/lang/Object;)Z ; 7: ifne 20 ; 10: getstatic Field MUTINY_MESSAGE_HEADERS:Lorg/jboss/jandex/DotName; ; 13: aload_0 ; 14: invokevirtual Method org/jboss/jandex/DotName.equals:(Ljava/lang/Object;)Z ; 17: ifeq 24 ; 20: iconst_1 ; 21: goto 25 ; 24: iconst_0 ; 25: ireturn ; --- static {} --- ; 0: ldc class io/vertx/core/eventbus/Message ; 2: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 5: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 8: putstatic Field MESSAGE:Lorg/jboss/jandex/DotName; ; 11: ldc class io/vertx/core/MultiMap ; 13: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 16: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 19: putstatic Field MESSAGE_HEADERS:Lorg/jboss/jandex/DotName; ; 22: ldc class io/vertx/mutiny/core/eventbus/Message ; 24: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 27: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 30: putstatic Field MUTINY_MESSAGE:Lorg/jboss/jandex/DotName; ; 33: ldc class io/vertx/mutiny/core/MultiMap ; 35: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 38: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 41: putstatic Field MUTINY_MESSAGE_HEADERS:Lorg/jboss/jandex/DotName; ; 44: ldc class java/util/concurrent/CompletionStage ; 46: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 49: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 52: putstatic Field COMPLETION_STAGE:Lorg/jboss/jandex/DotName; ; 55: ldc class io/smallrye/mutiny/Uni ; 57: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 60: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 63: putstatic Field UNI:Lorg/jboss/jandex/DotName; ; 66: ldc class io/quarkus/vertx/LocalEventBusCodec ; 68: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 71: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 74: putstatic Field LOCAL_EVENT_BUS_CODEC:Lorg/jboss/jandex/DotName; ; 77: ldc class io/quarkus/vertx/ConsumeEvent ; 79: invokevirtual Method java/lang/Class.getName:()Ljava/lang/String; ; 82: invokestatic Method org/jboss/jandex/DotName.createSimple:(Ljava/lang/String;)Lorg/jboss/jandex/DotName; ; 85: putstatic Field CONSUME_EVENT:Lorg/jboss/jandex/DotName; ; 88: return` |
+| 12 | every `String` constant `VertxProcessor` holds — Quarkus's own rules about a consumer's signature, in its own words | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 | `×26 ; value ; vertx ; An event consumer business method with two parameters must have MultiMap as the first parameter: %s [method: %s, bean:%s] ; An event consumer business method with two parameters must not accept io.vertx.core.eventbus.Message or io.vertx.mutiny.core.eventbus.Message: %s [method: %s, bean:%s] ; An event consumer business method must accept exactly one parameter: %s [method: %s, bean:%s] ; An event consumer business method that accepts io.vertx.core.eventbus.Message or io.vertx.mutiny.core.eventbus.Message must return void [method: %s, bean:%s] ; ordered ; An event consumer business method that cannot use @RunOnVirtualThread and set the ordered attribute to true [method: %s, bean:%s] ; newInstance ; body ; subscribeAsCompletionStage ; Found event consumer business method %s declared on %s ; Found event consumer business methods ; io.quarkus.smallrye.faulttolerance ; io.smallrye.faulttolerance.core.event.loop.EventLoop ; io.smallrye.faulttolerance.vertx.VertxEventLoop ; io.vertx.core.http.impl.Http1xServerResponse ; io.vertx.core.parsetools.impl.RecordParserImpl ; io.vertx.ext.web.client.impl.MultipartFormUpload ; META-INF/services/io.vertx.core.spi.VertxServiceProvider ; META-INF/services/io.vertx.core.spi.VerticleFactory ; java.lang.Thread$Builder$OfVirtual ; name ; java.lang.Thread$Builder ; factory ; Unable to load type: \u0001` |
+```
+
+## Verdicts
+
+**Q1 ★ (partly) / M7 — the per-version `EventBus` split is confirmed exactly, and the cell
+carries more than M7 claims.** vertx-core 4.5.10 declares **27** methods on
+`io.vertx.core.eventbus.EventBus`, 5.0.0 declares **26**, and the difference is not a single
+net one:
+
+- **4.5.10 only** — `request(String, Object, Handler)` and
+  `request(String, Object, DeliveryOptions, Handler)`, the two callback forms, both returning
+  `EventBus`. Neither exists at 5.0.0. M7, confirmed.
+- **5.0.0 only** — `consumer(MessageConsumerOptions)` and
+  `consumer(MessageConsumerOptions, Handler)`. Neither exists at 4.5.10. M7, confirmed.
+- **Unchanged across both** — `send` ×2, `publish` ×2, the two `Future`-returning `request`
+  overloads, `consumer(String)`, `consumer(String, Handler)`, `localConsumer(String)`,
+  `localConsumer(String, Handler)`, `sender(String)`, `sender(String, DeliveryOptions)`,
+  `publisher(String)` and `publisher(String, DeliveryOptions)`, each with a byte-identical
+  erased descriptor. **This is the fact `vertx-eventbus.yml`'s single-file, two-version shape
+  rests on**: a row whose descriptor is one of these matches a call site built against either
+  release, and a row whose descriptor is version-specific matches only the one that declares
+  it.
+
+**Q2 — `MessageConsumer` differs across the two releases, and one of the differences touches
+the terminal the chain catalog declares.** 4.5.10 declares 21 methods, 5.0.0 declares 18.
+`handler(Handler)` — the registration step M6 is about — carries the **identical** erased
+descriptor `(Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;` in both, which
+is why one terminal entry covers both releases. What moved is the completion/unregistration
+surface: 4.5.10 has `completionHandler(Handler)V`, `unregister(Handler)V`,
+`setMaxBufferedMessages(I)` and `getMaxBufferedMessages()I`; 5.0.0 replaces the first two
+with `completion()Lio/vertx/core/Future;` and drops the buffered-message pair. None of those
+is read by any catalog here, and the cell records them so that a later release moving
+`handler` itself is visible rather than assumed away.
+
+**Q3 — `MessageProducer`, and M7's third claim confirmed exactly.** 4.5.10 declares six
+methods, 5.0.0 four. `write(T, Handler)` — `(Ljava/lang/Object;Lio/vertx/core/Handler;)V` —
+exists at 4.5.10 and **does not exist at 5.0.0**, exactly as M7 states; `close(Handler)V`
+goes with it. `write(T)` — `(Ljava/lang/Object;)Lio/vertx/core/Future;` — is identical in
+both. So the outbound chain's terminal needs two entries to cover 4.5 and one of them is
+4.5-only, which is the same shape as Q1's `request` pair one type over.
+
+**Q4 — confirmed exactly (M6), in BOTH releases.** `EventBusImpl.consumer(String, Handler)`
+is, byte for byte and offset for offset, the same method at 4.5.10 and at 5.0.0: it
+null-checks the handler (offsets 0–6), calls **`consumer:(Ljava/lang/String;)` at offset 9**,
+stores the returned consumer, calls **`MessageConsumer.handler:(Lio/vertx/core/Handler;)` at
+offset 15**, and returns that same consumer. The two-argument overload IS the one-argument
+overload followed by `handler(h)` — M6's claim, and its consequence is the one the catalogs
+turn on: **registration happens inside `handler`, so a `consumer(addr)` never given a handler
+registers nothing and must derive nothing.** That is not an inference from the API's shape;
+it is what the implementation's own instructions do.
+
+**Q4c ★ — the same delegation holds for 5.0.0's options pair, which spec §3a does not say
+and which SUBTRACTS a row it lists.** `EventBusImpl.consumer(MessageConsumerOptions, Handler)`
+is structurally identical to Q4's: null-check the handler, call
+`consumer:(Lio/vertx/core/eventbus/MessageConsumerOptions;)` at offset 9, call
+`MessageConsumer.handler` at offset 15, return the same consumer. And the handler-less
+`consumer(MessageConsumerOptions)` it delegates to only reads the address off the options
+(`getAddress()` at offsets 5 and 10), refuses a null one, and **constructs a
+`MessageConsumerImpl`** — it registers nothing, exactly as `consumer(String)` does not.
+**So `consumer(MessageConsumerOptions)` with no handler receives no message**, and
+`vertx-eventbus.yml` declares only the two-argument options overload as an inbound row.
+Spec §3a's `consumer(MessageConsumerOptions[, Handler])` reads as though both forms derive;
+by the framework's own bytecode the bracketed one must not, for exactly the reason M6 gives
+for the `String` pair.
+
+**Q5 — confirmed exactly (M7), and the ABSENCE is measured rather than assumed.** `javap`
+finds no `io.vertx.core.eventbus.MessageConsumerOptions` in vertx-core 4.5.10 at all — the
+class is not declared by that artifact. At 5.0.0 the type declares ten members including
+`setAddress(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumerOptions;`, the one the
+5.0-only `consumer(MessageConsumerOptions[, Handler])` rows read their address through, plus
+`setLocalOnly(Z)` and `setMaxBufferedMessages(I)`, both of which return the same options type.
+**That the two setters return the options object is what makes spec §3d's builder-tail
+boundary real**: `new MessageConsumerOptions().setAddress("a").setOrdered(true)` reaches
+`consumer(...)` as the result of the LAST setter, and `channel_via` reads the argument's
+producing call, so the address is unresolved. (The spec's example names `setOrdered`;
+`MessageConsumerOptions` declares no such method — `setLocalOnly` and
+`setMaxBufferedMessages` are the two setters that actually exist, and either one after
+`setAddress` produces the boundary the spec describes. The boundary stands; only the example
+method name in the prose is wrong.)
+
+**Q6 — confirmed exactly (M8), and two elements the spec does not mention are recorded.**
+`@ConsumeEvent` declares five elements, each with an `AnnotationDefault` on the annotation
+TYPE: `value()` defaults to **`""`** (the empty string, constant-pool tag `s`), `local()`
+defaults to **`true`** (tag `Z`), `blocking()` to `false`, `ordered()` to `false`, and
+`codec()` to `io.quarkus.vertx.LocalEventBusCodec`. M8's two claims — `value` is `""` and
+`local` is `true` — are confirmed offset-free and tag-checked. **`local()`'s true default is
+the one that decides a shipped row**: an undecorated `@ConsumeEvent` is a LOCAL-ONLY
+consumer, so `metadata_from`'s `absent_value: "true"` is a measurement; the reverse default
+would publish every Quarkus consumer as cluster-reachable. `value()`'s `""` default is why
+the empty string writes no metadata row at all (D02 §2l) and why the address has to come from
+somewhere else, which is Q7. Also recorded, because it decides a question a catalog would
+otherwise have to guess at: `@ConsumeEvent` is `@Target(METHOD)` — **there is no class-level
+use of it to compose with**, so `class_level` is moot for this catalog — and
+`@Retention(RUNTIME)`.
+
+**Q7 — confirmed exactly (M8), at the offsets the spec cites.** The method is
+`VertxProcessor.build(...)`, found by searching the class's bodies for the call rather than by
+name. Inside the loop over each `EventConsumerBusinessMethodItem` it builds an annotation
+proxy for `io.quarkus.vertx.ConsumeEvent` (offset 60) and then, at offsets **63–76**, pushes
+the literal string `value` (63), takes the item's `BeanInfo` (67), calls
+`BeanInfo.getBeanClass()` (70) — which returns a Jandex `DotName` — calls `DotName.toString()`
+(73), and hands the pair to `AnnotationProxyBuilder.withDefaultValue(String, Object)` (76).
+`DotName.toString()` is the **fully-qualified** class name. So the default address of a bare
+`@ConsumeEvent` is the declaring bean class's fully-qualified name — not the method name and
+not the simple name — which is exactly what `path_fallback: declaring_type_qualified_name`
+composes.
+
+**Q8 ★ — M9's negative is FALSE: the Mutiny facade declares `sender` and `publisher`.**
+`io.vertx.mutiny.core.eventbus.EventBus` at smallrye-mutiny-vertx-core 3.16.0 declares 56
+methods, among them:
+
+- `sender(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`
+- `sender(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`
+- `publisher(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`
+- `publisher(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`
+
+M9's positive half is confirmed: the facade does declare `send`, `publish`, `request`,
+`consumer` and `localConsumer` **with its own descriptors** — `request` returns
+`io.smallrye.mutiny.Uni`, `consumer`/`localConsumer` take a
+`java.util.function.Consumer` rather than an `io.vertx.core.Handler`, and every
+`send`/`publish` returns the *mutiny* `EventBus`. It also declares an `*AndAwait`/`*AndForget`
+family the spec does not mention at all (`requestAndAwait`, `requestAndForget`,
+`writeAndAwait`, `writeAndForget` on `MessageProducer`), and its `MessageConsumer.handler`
+takes a `java.util.function.Consumer` too. **Not one descriptor on the facade is shared with
+`io.vertx.core.eventbus.EventBus`** — every return type or parameter type differs — which is
+the fact that decides how a catalog could model it: a second `owner:` on a `single_call`
+catalog shares the file's `methods:` rows, and here there is no row the two owners could
+share. `src/sextant/catalogs/vertx-eventbus.yml` states the consequence as a boundary beside
+its own `owner:` list, and **`src/sextant/catalogs/vertx-eventbus-mutiny.yml` is what reads
+the facade** (fix round 1): a fourth file with this artifact's own coordinate and this
+version's own provenance, scoped to the five CALL forms, with the facade's own two-step
+surface stated as a boundary because it is a different shape — three send terminals
+(`write` returning `Uni`, `writeAndAwait`, `writeAndForget`) where the core interface has
+one or two, and a `handler` taking a `java.util.function.Consumer` at two erased
+descriptors.
+
+**Q9 — the fixture's own call sites, recorded so the catalogs' rows can be read against real
+bytecode rather than against the source.** `com.acme.eb.OrderBus` names, on
+`io.vertx.core.eventbus.EventBus`: `send` at both declared descriptors, `publish`, the
+`Future`-returning `request(String, Object)`, `consumer(String)` (twice — the two-step arm and
+the handler-less one), `consumer(String, Handler)`, `localConsumer(String, Handler)` and
+`sender(String)`; on `MessageConsumer`: `handler(Handler)` and `setMaxBufferedMessages(int)`;
+on `MessageProducer`: `write(Object)` at the `Future`-returning descriptor. `com.acme.eb.Order`
+names no event-bus call site at all, and `com.acme.eb.OrderConsumers` names four types and
+one member of each: `io/vertx/core/MultiMap.get`, `io/vertx/core/eventbus/Message.body`,
+`io/vertx/mutiny/core/MultiMap.get` and `io/vertx/mutiny/core/eventbus/Message.body`. Its
+eight `@ConsumeEvent` declarations are class-file ATTRIBUTES, not `invoke*` instructions,
+so they contribute nothing to this row by construction (CP-30 Q9's own note, same reason);
+what appears here is what the bodies CALL.
+
+**Two things about this row moved on 2026-09-22 and neither is a framework change.** The
+`Message`/mutiny-`Message` entries are the envelope arms the wrapper fix added, and they
+appear because those bodies read `body()`. And the owners are now bucketed by their FULL
+internal name rather than by the simple name: `Message` and `Message` were two different
+types collapsing into one cell entry with the same erased descriptor beside them, which
+hid the exact distinction Q10a and Q10c exist to draw, and the same was true of the two
+`MultiMap`s once the fixture named both. Row 9 is the only row of 1–9 that moved either
+time; rows 1–8 came back byte-identical on both re-runs.
+
+**Q10 — both `Message` types declare `body()`, and they are two DIFFERENT types that
+never meet.** `io.vertx.core.eventbus.Message<T>` declares 12 methods at 4.5.10 and 10 at
+5.0.0 (the two callback `replyAndRequest` overloads are what 5.0.0 drops). The five that
+matter to a catalog are byte-identical in both: `address()Ljava/lang/String;`,
+`headers()Lio/vertx/core/MultiMap;`, `body()Ljava/lang/Object;`,
+`replyAddress()Ljava/lang/String;` and `isSend()Z`. **Four of those five are framing the
+bus itself adds and strips — an address, a reply-to address, a send/publish flag and the
+delivery headers — and the fifth, `body()`, is the only one that names what crossed the
+wire.** That is the same shape `ResponseEntity<T>` has, which this repository already
+unwraps as `semantics: http_envelope`, and `ConsumerRecord<K,V>`, which `spring-kafka.yml`
+already unwraps as `semantics: envelope`.
+
+The facade's `io.vertx.mutiny.core.eventbus.Message<T>` declares 31 methods at 3.16.0 and
+is **a class, not the interface** — it holds `io.vertx.core.eventbus.Message` in a private
+`delegate` field and exposes it through `getDelegate()`. Its `headers()` returns
+`io.vertx.mutiny.core.MultiMap`, not the core one, and its `replyAndRequest` family returns
+`io.smallrye.mutiny.Uni`. It shares the erased descriptor `body()Ljava/lang/Object;` with
+the core interface and is nonetheless a different type at a different coordinate: **a
+catalog that reads the facade must name the facade's `Message`, and naming the core one
+there would declare a wrapper for a type that catalog's owner never hands anybody.**
+
+**Q11 ★ — Quarkus itself treats BOTH `Message` types as one thing, and both `MultiMap`
+types as one thing.** `VertxConstants.isMessage(DotName)` returns true when the name equals
+`MESSAGE` **or** `MUTINY_MESSAGE`, and `isMessageHeaders(DotName)` when it equals
+`MESSAGE_HEADERS` **or** `MUTINY_MESSAGE_HEADERS`. The static initializer says which four
+classes those are, by `ldc class` at offsets 0, 11, 22 and 33: `io/vertx/core/eventbus/
+Message`, `io/vertx/core/MultiMap`, `io/vertx/mutiny/core/eventbus/Message` and
+`io/vertx/mutiny/core/MultiMap`. So a Quarkus consumer may spell its envelope parameter
+either way, and its headers parameter either way, and the processor cannot tell the
+difference.
+
+**Q12 ★ — the `Message<T>` parameter is a form Quarkus EXPLICITLY permits, and the rule it
+attaches is a return-type rule.** `VertxProcessor` holds 26 `String` constants; four of
+them are the validation rules it enforces on a consumer's signature, and they are the
+framework's own words:
+
+- *"An event consumer business method that accepts io.vertx.core.eventbus.Message or
+  io.vertx.mutiny.core.eventbus.Message **must return void**"* — the envelope parameter is
+  legal; what it forbids is returning a reply from such a method.
+- *"An event consumer business method must accept **exactly one** parameter"*.
+- *"An event consumer business method with two parameters must have **MultiMap as the first
+  parameter**"*.
+- *"An event consumer business method with two parameters **must not accept**
+  io.vertx.core.eventbus.Message or io.vertx.mutiny.core.eventbus.Message"*.
+
+Read together: an envelope parameter is only ever the SOLE parameter, which is exactly the
+position `quarkus-consume-event.yml`'s `request_body.fallback: sole_unannotated` reads. **A
+`@ConsumeEvent` handler taking `Message<Order>` is ordinary input, not an exotic shape**,
+and a catalog that read it without a wrapper would record the envelope's own type as the
+payload of a wire whose other half — `msg.reply(order)` — carries an `Order`.
+
+**The headers half of Q11 is the same finding one predicate over, and it was closed with
+the envelope.** `isMessageHeaders` accepts `io.vertx.mutiny.core.MultiMap` as well as
+`io.vertx.core.MultiMap`, while `quarkus-consume-event.yml`'s `request_body.excludes`
+named only the core one — so a consumer declaring
+`(io.vertx.mutiny.core.MultiMap headers, Order body)` had two bare parameters as far as
+`sole_unannotated` was concerned and derived NO payload at all. It was briefly recorded
+here as a stated boundary on the grounds that a missing shape is milder than a wrong one;
+that is a severity argument, and the criterion is the TRIGGERING INPUT. This input is not
+exotic — a Quarkus service injects the Mutiny facade throughout, which is why
+`vertx-eventbus-mutiny.yml` exists at all, and `io.vertx.mutiny.core.eventbus.Message.
+headers()` returns exactly this type (Q10c). `excludes` now names both, and the fixture
+carries one arm per name.
+
+## What this changes in the spec
+
+All four amendments are changes to what the spec claims; the third also subtracts a row the
+spec lists, and the fourth is the plan owner's ruling rather than a probe finding:
+
+1. **§0 M9 and §3a's "second owner" sentence — FALSIFIED, and here is the correction the
+   spec should carry.** M9 reads: the facade "declares **no `sender`/`publisher` at all**".
+   It declares **four**, measured at smallrye-mutiny-vertx-core 3.16.0 (Q8):
+   `sender(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`,
+   `sender(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`,
+   `publisher(Ljava/lang/String;)Lio/vertx/mutiny/core/eventbus/MessageProducer;` and
+   `publisher(Ljava/lang/String;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/MessageProducer;`.
+   **The sentence M9 should carry instead:** *the Mutiny facade
+   `io.vertx.mutiny.core.eventbus.EventBus` declares `send`/`publish`/`request`/`consumer`/
+   `localConsumer`/`sender`/`publisher` with its own descriptors — `request` returns
+   `io.smallrye.mutiny.Uni`, `consumer`'s handler is a `java.util.function.Consumer` — and
+   shares NOT ONE descriptor with `io.vertx.core.eventbus.EventBus`.* The last clause is the
+   load-bearing one and it is what M9 was reaching for: it is why the facade is a catalog of
+   its own (`vertx-eventbus-mutiny.yml`) rather than a second `owner:` on
+   `vertx-eventbus.yml`, since one `single_call` file's `methods:` rows apply to every owner
+   it names and here there is no row the two owners could share.
+2. **§3d's builder-tail example.** `MessageConsumerOptions` declares no `setOrdered` (Q5).
+   The boundary is real and the example needs a setter that exists — `setLocalOnly` or
+   `setMaxBufferedMessages`.
+3. **§3a's `consumer(MessageConsumerOptions[, Handler])` row.** The handler-less form
+   registers nothing (Q4c), the same way `consumer(String)` does not, so only the
+   two-argument overload can be an inbound row. The spec's bracket reads as though both
+   derive.
+4. **§1e's event-bus metadata kind is `local`, not `delivery`.** The plan owner's fix-round-1
+   ruling: `kind: delivery` beside `value: "true"` is ambiguous — true of what? — while
+   `kind: local` states what the attribute states, and the value stays the boolean the
+   declaration carries, which is the only thing `metadata_from` writes. D02 §2l's worked
+   example moves with it. This is a naming ruling rather than something Q6 measured; Q6's
+   measurement — `local()`'s `AnnotationDefault` is the boolean `true` — is unchanged and is
+   what the entry's `absent_value` states.
+
+All four are recorded in `.superpowers/sdd/2026-09-22-temporal-and-eventbus/task-8-report.md`
+for the spec's owner to carry into the spec itself, in the same shape CP-30's `p-1` row took.

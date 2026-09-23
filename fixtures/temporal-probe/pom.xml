@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>temporal-probe</artifactId>
+  <version>1.0.0</version>
+  <!-- Temporal workflows/activities and their Spring Boot starter annotations
+       (CP-30, `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`
+       §4). API jars only, every dependency blanket-excluded so nothing
+       transitive resolves — the `orders-pekko` shape. This module never runs;
+       it exists to be `javap`'d (CP-30's fixture row) and, once Task 5 lands
+       the catalogs, to be scanned by them. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>io.temporal</groupId><artifactId>temporal-sdk</artifactId><version>1.27.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <dependency>
+      <groupId>io.temporal</groupId><artifactId>temporal-spring-boot-autoconfigure</artifactId><version>1.27.0</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

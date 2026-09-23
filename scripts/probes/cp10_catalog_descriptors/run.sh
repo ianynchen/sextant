@@ -94,6 +94,34 @@ ARTIFACTS=(
   # (measured with `unzip -l`), and the manifest is read here. Pinned to the version
   # `fixtures/orders-gateway/pom.xml` declares.
   "org.springframework.cloud|spring-cloud-gateway-server-webflux|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `temporal-untyped.yml` (Group D Task 5). `WorkflowClient.newUntypedWorkflowStub`
+  # lives here. THE SELF-REPORT ENTRY IS `-`/`-`, and that is a measurement rather
+  # than a shortcut: this archive states no version anywhere in its own bytes — its
+  # manifest carries only `Manifest-Version` and `Multi-Release`, it ships no
+  # `META-INF/maven/*/pom.properties`, and no class constant pool holds the literal
+  # `1.27.0` (CP-30's Version scope section checked all three exhaustively). The
+  # sentinel routes `descriptors.py` to the SHA-1 check against Maven's own
+  # `.jar.sha1` sidecar, which is what CP-30 does with the same two archives.
+  # Pinned to the version `fixtures/temporal-probe/pom.xml` declares.
+  "io.temporal|temporal-sdk|1.27.0|-|-"
+  # `vertx-eventbus.yml` (Group D Task 8), and the FIRST artifactId this harness
+  # reads at TWO versions. That is the catalog's own shape rather than an
+  # accident: spec 2026-09-22 §3a puts 4.5-only and 5.0-only overloads of
+  # `io.vertx.core.eventbus.EventBus` in one file, because an overload absent
+  # from the version a module builds against simply never matches. `descriptors.py`
+  # keys its jars by `<artifactId>:<version>` for exactly this pair and gives each
+  # candidate its own classpath, so a row is filed against the version that
+  # actually declares its descriptor and a sibling version can never answer for
+  # it. Both versions are the ones CP-31 measured; 4.5.10 is also what
+  # `fixtures/orders-eventbus/pom.xml` pins.
+  "io.vertx|vertx-core|4.5.10|META-INF/MANIFEST.MF|Implementation-Version"
+  "io.vertx|vertx-core|5.0.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # `vertx-eventbus-mutiny.yml` (Group D Task 8 fix round 1). The Mutiny facade a
+  # Quarkus service injects is a DIFFERENT artifact from the interface it wraps and
+  # shares no descriptor with it (CP-31 Q8), which is why it is a catalog of its own
+  # and why its coordinate is one of its own here. Pinned to the version CP-31
+  # measured and `fixtures/orders-eventbus/pom.xml` declares.
+  "io.smallrye.reactive|smallrye-mutiny-vertx-core|3.16.0|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

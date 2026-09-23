@@ -23,6 +23,65 @@ matches:
   request_body: { annotation: org.springframework.messaging.handler.annotation.Payload,
                   fallback: sole_unannotated,
                   excludes: [com.rabbitmq.client.Channel] }
+  # §2e's criterion applied to this framework: an attribute a PEER would care
+  # about — whether and how a message reaches this handler — never a knob that
+  # decides how this node runs once it has.
+  #
+  # MEASURED, CP-32 Q3a and Q8 (spring-rabbit 3.1.4). `exclusive()` is a genuine
+  # `boolean` with `AnnotationDefault` `false`, and `processListener` — the one
+  # method referencing it — passes it STRAIGHT to
+  # `MethodRabbitListenerEndpoint.setExclusive(Z)` at offsets 256/261, with no
+  # `hasText` gate and no expression resolution, because a boolean has no empty
+  # form. So the value a declaration writes IS what the framework acts on: this
+  # consumer claims the queue exclusively, and no other consumer may attach.
+  # A peer's message reaching this handler depends on it, which is why it
+  # qualifies under the criterion where `ackMode` does not.
+  #
+  # `kind: exclusive`, NOT `delivery`, and that is the framework's meaning
+  # rather than a rename. `delivery` + `true` is ambiguous — true of WHAT? —
+  # while `exclusive` + `true` states the fact the attribute states, and a
+  # reader can act on the pair without going back to the annotation. Spec §2e's
+  # own table says `delivery`; `quarkus-consume-event.yml` already departed from
+  # that same column for the same reason (`kind: local`), and this is the second
+  # half of that one amendment.
+  #
+  # BEHAVIOURAL, not routing (§1f): the message arrives at the queue either way.
+  # Exclusivity decides who may consume from it, not where it is addressed.
+  #
+  # NAMING THE ANNOTATION IS LOAD-BEARING HERE, not boilerplate. CP-32 Q3c:
+  # the NESTED `org.springframework.amqp.rabbit.annotation.Queue` declares an
+  # `exclusive()` of its own — a `String` defaulting to `"false"` — meaning
+  # something else entirely (the queue being DECLARED is exclusive to its
+  # connection, not this consumer's claim on it). An entry that named only the
+  # attribute would conflate the two.
+  #
+  # NO `absent_value`, and it is a distinction rather than an omission. The
+  # default WAS measured (`Z#18 = false`) and could be stated; it is not,
+  # because `exclusive = false` is the state of every ordinary consumer on every
+  # queue, and a row on every Rabbit endpoint saying so states nothing a peer
+  # acts on. `quarkus-consume-event.yml` DOES declare its `absent_value`,
+  # because there the default is the peer-relevant value — a local-only consumer
+  # is invisible to the rest of the cluster — and silence would have hidden it.
+  # State the default when the DEFAULT is what a peer would act on.
+  #
+  # NOT RECORDED, and each is the criterion applied: `ackMode`, `concurrency`,
+  # `containerFactory`, `errorHandler`, `autoStartup`, `executor`, `priority`,
+  # `admin`, `batch`, `returnExceptions`, `replyPostProcessor`,
+  # `messageConverter`, `replyContentType`, `converterWinsContentType` — the
+  # rest of the 20 elements CP-32 Q3a lists. `id` and `group` are not recorded
+  # either, for a different reason: each names a container bean or a bean
+  # grouping, not anything on the wire.
+  #
+  # A `@RabbitHandler` row reads the CLASS-level `@RabbitListener`, which is the
+  # registration that serves it — CP-32 Q3b: `@RabbitHandler` declares
+  # `isDefault()` and nothing else. Where a method carries its own
+  # `@RabbitListener`, the handler's wins outright and the class-level one is
+  # NOT unioned in (`endpoint_attributes._uses_by_annotation`), which is the
+  # rule `class_level: sibling` above needs: two independent registrations must
+  # not have one's exclusivity stated about the other's endpoint.
+  metadata_from:
+    - { annotation: org.springframework.amqp.rabbit.annotation.RabbitListener,
+        attribute: exclusive, kind: exclusive }
   mapping:
     # CHECKPOINT FACT (javap, spring-rabbit 3.1.4): `@RabbitListener` declares
     # `queues()` as `String[]`, `queuesToDeclare()` as `Queue[]` and
@@ -141,3 +200,11 @@ measured:
   # reader of a `by:` needs the probe that asked the question.
   - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4", "4.1.1"],
       identity: reported, by: scripts/probes/cp17_containers_and_class_level.md }
+  # A THIRD row, the same reason as the second: CP-16 measured what NAMES the
+  # endpoint and CP-17 the handler, while CP-32 asked what the annotation says
+  # ABOUT the endpoint — every element with its own `AnnotationDefault`, the two
+  # different `exclusive()`s, and `processListener`'s unconditional
+  # `setExclusive`. Bounded to 3.1.4: CP-32 opened one jar per framework, so
+  # 4.1.1 is outside it.
+  - { artifact: org.springframework.amqp:spring-rabbit, versions: ["3.1.4"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }

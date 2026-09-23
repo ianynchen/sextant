@@ -1262,3 +1262,20 @@ def test_no_fails_with_line_where_neither_half_has_anything():
     restraint `_via_entry` keeps for a row with no library to name."""
     text = render_module_document(MODULE, REPORT, "a3f91c")
     assert "Fails with" not in text
+
+
+def test_a_temporal_row_renders_its_kind_and_an_eventbus_row_does_not():
+    """`_VERBLESS_PROTOCOLS` is COMPUTED as the complement of `_VERBED_PROTOCOLS` over
+    every `Protocol` member (spec 2026-09-22 §1c), and that is what this test notices —
+    exactly one thing, not two.
+
+    The rationale here used to read the other way round, as though the eventbus half
+    guarded something. It cannot: a member in neither list is in the verbless half by
+    construction, so `"eventbus" in _VERBLESS_PROTOCOLS` passes whether or not anyone ever
+    classified it. `"temporal" in _VERBED_PROTOCOLS` is the whole assertion — the eventbus
+    line is documentation of the pair, kept because deleting it would read as a claim that
+    eventbus was never considered."""
+    from sextant.egress.render.document import _VERBED_PROTOCOLS, _VERBLESS_PROTOCOLS
+
+    assert "temporal" in _VERBED_PROTOCOLS
+    assert "eventbus" in _VERBLESS_PROTOCOLS

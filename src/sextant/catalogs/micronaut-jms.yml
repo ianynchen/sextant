@@ -11,6 +11,13 @@ measured:
       identity: reported, by: scripts/probes/w58_micronaut_quarkus_annotations.md }
   - { artifact: io.micronaut.jms:micronaut-jms-sqs, versions: ["4.2.0"],
       identity: reported, by: scripts/probes/cp21_micronaut_jms_sqs.md }
+  # A THIRD row rather than a widened first one: W58 measured what NAMES the
+  # endpoint and CP-21 the connection-factory constant, while CP-32 asked what
+  # these annotations say ABOUT the endpoint — every element with its own
+  # `AnnotationDefault`, which is how `messageSelector`'s name and the absence
+  # of any durable-subscription element were found at all.
+  - { artifact: io.micronaut.jms:micronaut-jms-core, versions: ["4.2.0"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }
 requires: [annotation_args]
 # One of a PAIR, split by direction on the type annotation exactly as `micronaut-http.yml`
 # and `micronaut-http-client.yml` are, and for the same reason: Micronaut uses ONE method
@@ -22,6 +29,57 @@ matches:
   # MEASURED (`javap` on micronaut-jms-core 4.2.0 `DefaultBodyArgumentBinder`): the body
   # binder keys on `@MessageBody`; an unannotated sole parameter is the message by default.
   request_body: { annotation: io.micronaut.messaging.annotation.MessageBody, fallback: sole_unannotated }
+  # §2e's criterion applied to this framework: an attribute a PEER would care
+  # about — whether and how a message reaches this handler.
+  #
+  # THE ATTRIBUTE IS NOT CALLED `selector` AND IT IS NOT ON `@JMSListener`, AND
+  # THE PROBE IS WHY BOTH ARE KNOWN. MEASURED, CP-32 Q5a/Q5b/Q5c
+  # (micronaut-jms-core 4.2.0): the class-level `@JMSListener` declares exactly
+  # `value`, `successHandlers` and `errorHandlers` — nothing a peer would care
+  # about beyond the connection-factory bean name `protocol_hint` below already
+  # reads — while `@Queue` and `@Topic`, the METHOD annotations, each declare
+  # `messageSelector(): String` defaulting to `""`. CP-32 Q10 reads
+  # `AbstractJMSListenerMethodProcessor` calling
+  # `AnnotationValue.get("messageSelector", String.class)` and carrying the
+  # result into the listener registration. So the framework means a JMS message
+  # selector, and `kind: selector` is the SAME word `spring-jms.yml` uses for
+  # the same wire fact under a different attribute name — which is the whole
+  # point of naming the kind after the meaning rather than after the attribute.
+  #
+  # BEHAVIOURAL, not routing (§1f): the message arrives at the destination and
+  # is then filtered, so the selector qualifies the endpoint and never enters
+  # its address.
+  #
+  # TWO ENTRIES BECAUSE THERE ARE TWO ANNOTATIONS, not because there are two
+  # attributes: `@Queue` and `@Topic` declare identical element lists (CP-32
+  # Q5b, Q5c), and a handler carries one or the other. Both sit on the HANDLER,
+  # so the nearest-wins read finds them at the first site and never reaches the
+  # enclosing type.
+  #
+  # NO `subscription` ENTRY, AND THAT IS A MEASURED ABSENCE RATHER THAN AN
+  # OMISSION. Spec §2e's table pairs `selector` with `subscription` for both JMS
+  # catalogs. CP-32 Q5a/Q5b/Q5c list every element of all three annotations:
+  # there is no `subscription`, no `durable` and no `sharedSubscription`
+  # anywhere in this framework's listener surface, so a module that runs a
+  # durable subscription under Micronaut JMS states it somewhere this catalog
+  # cannot read. The row belongs to `spring-jms.yml` alone.
+  #
+  # NO `absent_value`: the default is `""`, and an attribute written as the
+  # empty string writes no row at all (D02 §2l) — a selector named by nothing is
+  # not a selector, and the absence of a row is the statement that the
+  # declaration named none.
+  #
+  # NOT RECORDED, and each is the criterion applied: `acknowledgeMode`,
+  # `transacted`, `serializer`, `successHandlers`, `errorHandlers` on the method
+  # annotations, and `successHandlers`/`errorHandlers` on `@JMSListener` — every
+  # remaining element CP-32 Q5a-Q5c list. Each decides how THIS node
+  # acknowledges, decodes or recovers from a message that has already reached
+  # it, which no peer can observe.
+  metadata_from:
+    - { annotation: io.micronaut.jms.annotations.Queue,
+        attribute: messageSelector, kind: selector }
+    - { annotation: io.micronaut.jms.annotations.Topic,
+        attribute: messageSelector, kind: selector }
   mapping:
     path_from: [value]
     prefix_from: []

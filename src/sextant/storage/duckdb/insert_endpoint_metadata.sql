@@ -3,6 +3,14 @@
 -- Since spec 2026-09-19 §5a also one row per entry an inbound endpoint's framework
 -- enforces, `requirement` saying what (NULL on every outbound row).
 --
+-- THREE passes reach this statement, and the sentence above is a claim about all three:
+-- `resolve/engines/fluent.py`, `resolve/request_requirements.py` and
+-- `resolve/endpoint_attributes.py`. Two of them were writing `value` in the clear until
+-- 2026-09-22 — the claim was here the whole time and nothing tied it to a writer, which is
+-- how it went unmet. `tests/architecture/test_source_rules.py::
+-- test_every_origin_writing_endpoint_metadata_holds_a_redactor` is that tie now: a fourth
+-- origin cannot be added without a redactor.
+--
 -- INSERT-IF-ABSENT ON THE FULL ROW (A8): two catalogs can describe one handler — the two
 -- Spring web catalogs both match a `@RestController` class — and the identical entry each
 -- derives is one entry, exactly as their identical `endpoints` rows already meet

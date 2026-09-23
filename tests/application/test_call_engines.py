@@ -10340,3 +10340,386 @@ def test_a_programmatic_registration_on_somebody_elses_builder_derives_nothing(t
     workspace.close()
 
     assert rows == [], "matched `create(Class, String)` on a type that is not the Builder"
+
+
+# --- temporal-untyped: the workflow type at argument 0, and only there -----
+
+_WORKFLOW_CLIENT = "io/temporal/client/WorkflowClient#"
+_NEW_UNTYPED = "(Ljava/lang/String;)Lio/temporal/client/WorkflowStub;"
+
+
+def test_an_untyped_workflow_stub_names_the_workflow_type_it_starts(tmp_path: Path):
+    """The positive the near-miss below is measured against (§2f, CP-30 Q7).
+
+    `WorkflowClient.newUntypedWorkflowStub(String)` takes the workflow TYPE at
+    argument 0 — measured, with no workflow type anywhere else in the descriptor —
+    so the derived path is the same identity `temporal-workflow.yml` derives from
+    the `@WorkflowInterface` declaration itself. That agreement is the whole
+    reason the untyped stub is worth reading."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#startUntyped().",
+        target=CallTarget(
+            owner=_WORKFLOW_CLIENT, name="newUntypedWorkflowStub", descriptor=_NEW_UNTYPED
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=[CallArgument(kind="string", value="OrderWorkflow")],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = [
+        (str(row["protocol"]), str(row["direction"]), str(row["method"]), str(row["path"]))
+        for row in workspace.query("endpoints")
+    ]
+    workspace.close()
+
+    assert rows == [("temporal", "outbound", "workflow", "OrderWorkflow")]
+
+
+@pytest.mark.declines("temporal-untyped")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_new_untyped_workflow_stub_on_somebody_elses_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone.
+
+    Every other conjunct of the row holds — the method name, the erased descriptor
+    CP-10 read off `temporal-sdk` 1.27.0, and a plain string in the position the
+    catalog reads as a workflow type. Only the type the call is made ON differs,
+    and an application's own thin wrapper named `newUntypedWorkflowStub` around the
+    real client is the ordinary way that happens. Without the owner conjunct that
+    wrapper's own argument would publish a Temporal workflow type at
+    `resolved`/`compiler`, where nothing downstream can tell it from an
+    observation."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/app/Clients#start().",
+        target=CallTarget(
+            owner="com/acme/app/OwnWorkflowClients#",
+            name="newUntypedWorkflowStub",
+            descriptor=_NEW_UNTYPED,
+        ),
+        invoke_kind="virtual",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=[CallArgument(kind="string", value="OrderWorkflow")],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "matched `newUntypedWorkflowStub` on a type that is not the client"
+
+
+def test_a_stub_signal_names_a_member_and_derives_nothing(tmp_path: Path):
+    """§2f's refusal, as a row that is not there rather than as a comment.
+
+    `WorkflowStub.signal(String, Object...)` names a MEMBER at argument 0 with no
+    workflow type anywhere in the descriptor (CP-30 Q7), so a row read off it would
+    publish the bare path `cancel` — an identity colliding with every other
+    workflow's signal of that name. The catalog declares no row for it, and this is
+    what holds that: the same shape as the positive above, on the method §2f names,
+    deriving nothing.
+
+    **Two calls, because the real one alone pinned the wrong conjunct.**
+    `WorkflowStub.signal` is declared on `WorkflowStub` while the catalog's `owner:` is
+    `WorkflowClient`, so the OWNER gate rejects it first and a verbatim `signal` row added
+    to `temporal-untyped.yml` left this green — it measured the owner, not the decision.
+    The second call is a CONSTRUCTED shape, and constructed on purpose: `signal` on the
+    catalog's own owner, which the SDK does not declare there. Holding the owner constant
+    is what isolates §2f's actual decision — that no `signal` row exists — so adding one
+    turns this red.
+
+    Not marked `declines`: it measures a row this catalog never had rather than a
+    conjunct of one it does, so no guard's removal makes it fire."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#signalUntyped().",
+        target=CallTarget(
+            owner="io/temporal/client/WorkflowStub#",
+            name="signal",
+            descriptor="(Ljava/lang/String;[Ljava/lang/Object;)V",
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="string", value="cancel"),
+            CallArgument(kind="array", elements=[]),
+        ],
+    )
+    on_the_declared_owner = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#signalUntyped().",
+        target=CallTarget(
+            owner="io/temporal/client/WorkflowClient#",
+            name="signal",
+            descriptor="(Ljava/lang/String;[Ljava/lang/Object;)V",
+        ),
+        invoke_kind="interface",
+        ordinal=1,
+        receiver=1,
+        result=None,
+        arguments=[
+            CallArgument(kind="string", value="cancel"),
+            CallArgument(kind="array", elements=[]),
+        ],
+    )
+    workspace = _resolve(
+        tmp_path, [call, on_the_declared_owner], _catalog_by_id("temporal-untyped")
+    )
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "a bare member name was published as a workflow identity"
+
+
+@pytest.mark.declines("temporal-untyped")
+@pytest.mark.pins("single_call.claimed-arity")
+def test_an_untyped_stub_for_a_running_execution_derives_nothing(tmp_path: Path):
+    """§10 near-miss for the DESCRIPTOR conjunct, and the one false positive the
+    three-row shape was chosen to prevent (§2g).
+
+    CP-30 Q7 measured four `newUntypedWorkflowStub` overloads. Three take the
+    workflow TYPE as a bare `String` at argument 0 and are declared; the fourth,
+    `(WorkflowExecution, Optional<String>)`, takes a RUNNING EXECUTION's identity
+    there instead — and it shares its arity with `(String, WorkflowOptions)`, so
+    name and arity cannot tell the two apart. Every conjunct holds here except the
+    erased descriptor: same owner, same name, same argument count.
+
+    Without the claimed-arity rule this call falls through to a sibling row and
+    argument 0 is read positionally as a workflow type — a running execution's
+    identity published as the name of a workflow, which is the fabrication class
+    descriptors were added to this engine for."""
+    call = CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/tp/client/OrderClient#attachToRunning().",
+        target=CallTarget(
+            owner=_WORKFLOW_CLIENT,
+            name="newUntypedWorkflowStub",
+            descriptor="(Lio/temporal/api/common/v1/WorkflowExecution;Ljava/util/Optional;)"
+            "Lio/temporal/client/WorkflowStub;",
+        ),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=3,
+        arguments=[
+            CallArgument(kind="instance", symbol="io/temporal/api/common/v1/WorkflowExecution#"),
+            CallArgument(kind="instance", symbol="java/util/Optional#"),
+        ],
+    )
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("temporal-untyped"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert rows == [], "a running execution's identity was read as a workflow type"
+
+
+# --- vertx-eventbus: the one-call forms, and the two conjuncts that gate them ----------
+#
+# The catalog's rules and the bytecode behind them are CP-31's (vertx-core 4.5.10 and
+# 5.0.0). What is measured here is what the SHIPPED file does with a call site: the
+# positive it derives, and the two near-misses it must decline.
+
+_EB = "io/vertx/core/eventbus/EventBus#"
+_EB_SEND_2 = "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;"
+_EB_CONSUMER_1 = "(Ljava/lang/String;)Lio/vertx/core/eventbus/MessageConsumer;"
+
+
+def _eventbus_call(
+    *,
+    owner: str = _EB,
+    name: str,
+    descriptor: str,
+    address: str = "orders.created",
+    body: bool = True,
+) -> CallSiteFact:
+    """`body=False` drops the payload argument, which is what a ONE-argument event-bus
+    call carries — `consumer(String)`. The default two-element list would be rejected on
+    ARITY before any catalog rule was consulted, so a near-miss about a missing row and
+    not about arity has to be able to say so."""
+    arguments = [CallArgument(kind="string", value=address)]
+    if body:
+        arguments.append(CallArgument(kind="parameter", value=0))
+    return CallSiteFact(
+        document_id="doc_1",
+        caller="com/acme/eb/OrderBus#placeOrder().",
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="interface",
+        ordinal=0,
+        receiver=1,
+        result=2,
+        arguments=arguments,
+    )
+
+
+def _eventbus_rows(tmp_path: Path, call: CallSiteFact) -> list[tuple]:
+    workspace = _resolve(tmp_path, [call], _catalog_by_id("vertx-eventbus"))
+    rows = sorted(
+        (str(row["direction"]), str(row["protocol"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_an_event_bus_send_derives_the_address_it_names(tmp_path: Path):
+    """The positive both near-misses below are measured against: `send(String, Object)`
+    at the erased descriptor CP-31 read off vertx-core 4.5.10 and 5.0.0 alike, on the
+    interface the catalog names, with a literal address at argument 0.
+
+    `unresolved` is the row's honest resolution HERE and not a defect: these facts carry
+    no signature for the method whose parameter is handed to `body_arg`, so the request
+    shape is unknown and the capture is incomplete. Against the compiled fixture the same
+    call derives `resolved` with the payload's own shape —
+    `tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows` is what pins that."""
+    assert _eventbus_rows(tmp_path, _eventbus_call(name="send", descriptor=_EB_SEND_2)) == [
+        ("outbound", "eventbus", "orders.created", "unresolved")
+    ]
+
+
+@pytest.mark.declines("vertx-eventbus")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_an_event_bus_send_on_an_applications_own_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone.
+
+    Every other conjunct holds — the method name, the erased descriptor, a literal
+    string where the catalog reads an address — and only the type the call is made ON
+    differs. An application's own thin wrapper called `send` that returns the bus it
+    wraps is the ordinary way that happens, and without the owner conjunct that
+    wrapper's own argument 0 would publish an event-bus address at
+    `resolved`/`compiler`, where nothing downstream can tell it from an observation."""
+    assert (
+        _eventbus_rows(
+            tmp_path,
+            _eventbus_call(owner="com/acme/eb/OwnBus#", name="send", descriptor=_EB_SEND_2),
+        )
+        == []
+    )
+
+
+def test_a_bare_event_bus_consumer_derives_nothing_from_the_one_call_catalog(tmp_path: Path):
+    """M6's consequence, as a row that is not there rather than as a comment.
+
+    MEASURED (CP-31 Q4, both versions): `EventBusImpl.consumer(String, Handler)` calls
+    `consumer(String)` at offset 9 and `MessageConsumer.handler` at offset 15, so the
+    registration lives in `handler` and a consumer never given one receives nothing.
+    `vertx-eventbus.yml` therefore declares the two-argument overload and NOT the
+    one-argument one — the call below carries the real descriptor of the real method on
+    the real owner AND the one argument that method takes, and still derives nothing.
+    `vertx-eventbus-chain.yml` is what reads it, and only once a chain reaches
+    `.handler(...)`.
+
+    **The argument list is the load-bearing part and this test did not have it right.**
+    Written with the helper's default two-element list the site was rejected on ARITY
+    before any catalog rule was consulted, so declaring a verbatim `consumer(String)` row
+    in `vertx-eventbus.yml` left it green — it pinned the helper, not the catalog. With
+    one argument, as the method really has, adding that row turns it red.
+
+    Not marked `declines`: it measures a row this catalog never had rather than a
+    conjunct of one it does."""
+    assert (
+        _eventbus_rows(
+            tmp_path,
+            _eventbus_call(
+                name="consumer",
+                descriptor=_EB_CONSUMER_1,
+                address="orders.unhandled",
+                body=False,
+            ),
+        )
+        == []
+    )
+
+
+# --- vertx-eventbus-mutiny: the facade, and the descriptors that keep it apart ---------
+
+_MUTINY_EB = "io/vertx/mutiny/core/eventbus/EventBus#"
+_MUTINY_SEND_2 = "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;"
+
+
+def _mutiny_rows(tmp_path: Path, call: CallSiteFact, catalog_id: str) -> list[tuple]:
+    workspace = _resolve(tmp_path, [call], _catalog_by_id(catalog_id))
+    rows = sorted(
+        (str(row["direction"]), str(row["protocol"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def test_a_mutiny_event_bus_send_derives_the_address_it_names(tmp_path: Path):
+    """The positive both near-misses below are measured against: `send(String, Object)` at
+    the erased descriptor CP-31 Q8 read off smallrye-mutiny-vertx-core 3.16.0, on the
+    facade type a Quarkus service injects.
+
+    `unresolved` for the reason the core catalog's own positive states: these facts carry
+    no signature for the parameter handed to `body_arg`. The compiled fixture derives
+    `resolved` and `test_eventbus_shapes_rows` pins that."""
+    assert _mutiny_rows(
+        tmp_path,
+        _eventbus_call(
+            owner=_MUTINY_EB,
+            name="send",
+            descriptor=_MUTINY_SEND_2,
+            address="mutiny.orders.created",
+        ),
+        "vertx-eventbus-mutiny",
+    ) == [("outbound", "eventbus", "mutiny.orders.created", "unresolved")]
+
+
+@pytest.mark.declines("vertx-eventbus-mutiny")
+@pytest.mark.pins("single_call.call-site-owner")
+def test_a_mutiny_send_on_an_applications_own_type_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the OWNER conjunct alone: the facade's own erased
+    descriptor on a module's own wrapper type. Without the owner conjunct that wrapper's
+    argument 0 would publish an event-bus address at `resolved`/`compiler`."""
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(
+                owner="com/acme/eb/OwnMutinyBus#",
+                name="send",
+                descriptor=_MUTINY_SEND_2,
+                address="mutiny.orders.created",
+            ),
+            "vertx-eventbus-mutiny",
+        )
+        == []
+    )
+
+
+def test_the_core_catalog_declines_the_facades_descriptor_and_the_facade_the_cores(
+    tmp_path: Path,
+):
+    """The two files partition the surface, and the DESCRIPTORS are what do it.
+
+    MEASURED (CP-31 Q8): not one of the facade's 56 descriptors equals one on
+    `io.vertx.core.eventbus.EventBus` — every `send`/`publish` returns the mutiny
+    `EventBus`, `request` returns `io.smallrye.mutiny.Uni`, `consumer` takes a
+    `java.util.function.Consumer`. So a call on the facade must derive nothing from
+    `vertx-eventbus.yml` and a call on the core interface nothing from
+    `vertx-eventbus-mutiny.yml`. Both directions are asserted, because a catalog whose
+    rows leaked onto the other owner would double every send this fixture makes.
+
+    Not marked `declines`: it measures the boundary BETWEEN two catalogs rather than a
+    conjunct of a row either one has."""
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(owner=_MUTINY_EB, name="send", descriptor=_MUTINY_SEND_2),
+            "vertx-eventbus",
+        )
+        == []
+    )
+    assert (
+        _mutiny_rows(
+            tmp_path,
+            _eventbus_call(name="send", descriptor=_EB_SEND_2),
+            "vertx-eventbus-mutiny",
+        )
+        == []
+    )

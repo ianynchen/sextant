@@ -1,0 +1,271 @@
+id: vertx-eventbus
+displayName: Vert.x event bus (one-call forms)
+style: single_call
+protocol: eventbus
+direction: outbound
+
+# The event bus is Vert.x core's own, so this coordinate is what any module using
+# it declares. A weak discriminator while catalog-module matching is
+# unimplemented (the `temporal-workflow.yml` note, same situation); the owner and
+# descriptor match are what actually gate.
+detect:
+  coordinates: ["io.vertx:vertx-core"]
+
+# §5.4. BOTH major versions in scope, and that is the point rather than
+# thoroughness: the rows below include overloads that exist at 4.5.10 and not at
+# 5.0.0 and vice versa, so a `measured:` block naming one of them would claim a
+# rule for a jar nobody opened. Every one of these archives states an
+# `Implementation-Version` in its own manifest and CP-31 aborts on a mismatch —
+# `identity: reported`, unlike the Temporal catalogs' `assumed`.
+measured:
+  - { artifact: io.vertx:vertx-core, versions: ["4.5.10", "5.0.0"],
+      identity: reported, by: scripts/probes/cp31_eventbus_surface.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # ONE OWNER, and the Mutiny facade's absence from this list is a MEASURED
+  # boundary rather than an oversight.
+  #
+  # Spec §3a names `io.vertx.mutiny.core.eventbus.EventBus` — what a Quarkus
+  # service injects — as a second owner of these rows. CP-31 Q8 measured it and
+  # found two things. First, spec §0's M9 is wrong about it: the facade DOES
+  # declare `sender` and `publisher`, four overloads of them, returning the
+  # mutiny `MessageProducer`. Second, and this is what decides the file: NOT ONE
+  # descriptor on the facade equals a descriptor on `io.vertx.core.eventbus.
+  # EventBus`. Every `send`/`publish` returns the mutiny `EventBus`, `request`
+  # returns `io.smallrye.mutiny.Uni` rather than `io.vertx.core.Future`, and
+  # `consumer`/`localConsumer` take a `java.util.function.Consumer` rather than
+  # an `io.vertx.core.Handler`.
+  #
+  # `matches.owner` is a catalog-level list and every `methods:` row applies to
+  # every owner in it, so a second owner here would claim each row below on a
+  # type that declares no such method — the row would match nothing on the
+  # facade while the facade's own overloads matched nothing at all. A module on
+  # the Mutiny API therefore derives NOTHING here, which is a stated miss rather
+  # than a wrong row, and closing it is a file of its own rather than a line in
+  # this one.
+  #
+  # SCALAR, not a one-element list: §3.1's list form is for more than one
+  # spelling of ONE owner, never a wrapper around a single name
+  # (`pekko-connectors-kafka.yml`'s own note, and
+  # `test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol` is what
+  # holds it).
+  owner: io.vertx.core.eventbus.EventBus
+  # THE OVERLOAD RULE, restated from `spring-rabbit-template.yml` because the
+  # cost is the same one. Every method below overloads on argument TYPE:
+  # `send`/`publish` at arity 2 and 3, `request` at arity 2, 3 and 4, `consumer`
+  # at arity 1 and 2 on two different first-parameter types. Matching on name
+  # and argument COUNT is not a rule Java has — the language identifies a method
+  # by name and parameter types in order — and the last time this catalog family
+  # relied on arity, a `MessagePostProcessor` sitting where `channel_arg`
+  # pointed published a message BODY as an AMQP destination at
+  # `resolved`/`compiler`, indistinguishable from an observation. So EVERY row
+  # states its own erased JVM `descriptor`, which `_matching_method` compares
+  # verbatim against the call site's own `target.descriptor`.
+  #
+  # THE CONSEQUENCE, stated: once any row for a name+arity declares a
+  # descriptor, that arity is CLAIMED, so a call to an undeclared overload at a
+  # claimed arity derives nothing rather than an `unresolved` row. Under-
+  # reporting a stated boundary is honest; publishing a payload as a destination
+  # is not.
+  #
+  # BOTH MAJOR VERSIONS LIVE IN THIS ONE FILE, which is the "undeclared arity"
+  # rule turned around. An overload absent from the version a module builds
+  # against never appears at a call site in that module, so its row simply never
+  # matches — there is nothing to gate on and no second file to keep in step.
+  # MEASURED (CP-31 Q1, Q3): 4.5.10 declares the two callback `request`
+  # overloads and `MessageProducer.write(T, Handler)`, none of which exists at
+  # 5.0.0; 5.0.0 declares `consumer(MessageConsumerOptions[, Handler])`, which
+  # does not exist at 4.5.10; every other descriptor below is byte-identical
+  # across the two.
+  #
+  # `address_separator` is NOT declared and there is no second address argument:
+  # an event-bus address is ONE opaque string (§1e), never a pair like AMQP's
+  # exchange+routing key.
+  methods:
+    # --- outbound, point-to-point (CP-31 Q1, both versions) -------------------
+    - { name: send, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: send, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    # --- outbound, fan-out ----------------------------------------------------
+    - { name: publish, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: publish, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    # --- outbound, request/reply ----------------------------------------------
+    #
+    # `response_shape` STAYS NULL on all four, and that is a stated boundary
+    # rather than an omission. Spec §3a asks for the reply type to become
+    # `response_shape`; the reply type is the call's RETURN type
+    # (`Future<Message<T>>`) or the type argument of a callback `Handler`, and
+    # `single_call`'s only response word is `response_arg`, which names an
+    # ARGUMENT POSITION. There is no argument here carrying the reply type — no
+    # `Class` literal, no `ParameterizedTypeReference` — so nothing this engine
+    # can read names it. Reading argument 1 (the REQUEST body) into
+    # `response_shape` would publish the request's shape as the reply's, which
+    # is a wrong row rather than a missing one. Closing this needs an engine
+    # word for "the declared return type", which is a change this catalog does
+    # not get to make.
+    - { name: request, arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/Future;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: request, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future;",
+        channel_arg: 0, body_arg: 1 }
+    # 4.5 ONLY (CP-31 Q1a/Q1b): the two callback forms, removed at 5.0.0. A
+    # module on 5.0 never writes them, so these two rows match nothing there.
+    - { name: request, arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    - { name: request, arity: 4,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus;",
+        channel_arg: 0, body_arg: 1 }
+    # --- inbound: the forms that REGISTER in one call -------------------------
+    #
+    # `consumer(String, Handler)` IS `consumer(String).handler(h)` — CP-31 Q4,
+    # offsets 9 and 15, identical at 4.5.10 and 5.0.0 — so the registration is
+    # complete at this one call and the row belongs here. The handler-LESS
+    # `consumer(String)` is NOT declared in this file at all: it registers
+    # nothing on its own, and `vertx-eventbus-chain.yml` derives it only once a
+    # chain reaches `.handler(...)`.
+    #
+    # `body_arg` is NOT declared on these two. The payload's type lives in the
+    # HANDLER's own parameter (`Message<Order>`), not in an argument of this
+    # call; argument 1 is the handler itself, and reading it as a body would
+    # publish a lambda where a payload shape belongs. `request_shape` therefore
+    # stays NULL on an inbound row here — the same stated miss `jakarta-jms.yml`
+    # records for an opaque envelope.
+    - { name: consumer, arity: 2,
+        descriptor: "(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;",
+        channel_arg: 0, direction: inbound }
+    - { name: localConsumer, arity: 2,
+        descriptor: "(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;",
+        channel_arg: 0, direction: inbound }
+    # 5.0 ONLY (CP-31 Q1b, Q5b): the options-taking registration. The address is
+    # not an argument of this call — it sits inside the options object — so
+    # `channel_arg` names the options slot and `channel_via` follows the
+    # argument's own producing call to `MessageConsumerOptions.setAddress`,
+    # which is the ladder `single_call` already uses for
+    # `jakarta-jms.yml`'s `createQueue` and `kafka-consumer.yml`'s `List.of`.
+    #
+    # ONLY the two-argument overload is declared, and the one-argument form's
+    # absence is MEASURED (CP-31 Q4c): `consumer(MessageConsumerOptions,
+    # Handler)` delegates to `consumer(MessageConsumerOptions)` then
+    # `MessageConsumer.handler`, exactly as the `String` pair does, and the
+    # handler-less form only reads the address, refuses a null one and
+    # constructs a `MessageConsumerImpl`. It registers nothing. Spec §3a's
+    # bracketed `[, Handler]` reads as though both forms derive; the framework's
+    # own bytecode says the bracketed one must not, and a row for it would
+    # publish an endpoint no message reaches.
+    - { name: consumer, arity: 2,
+        descriptor: "(Lio/vertx/core/eventbus/MessageConsumerOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;",
+        channel_arg: 0, direction: inbound,
+        channel_via: [{ owner: io.vertx.core.eventbus.MessageConsumerOptions,
+                        method: setAddress, arg: 0 }] }
+
+# The first two rows are copied verbatim from spring-resttemplate.yml (harvest
+# compatibility, same discipline as spring-kafka-template.yml — see its own
+# comment for the full rationale). The third is this bus's own envelope, added
+# to the event-bus files only, the way `spring-kafka.yml` adds `ConsumerRecord`
+# to itself alone.
+#
+# THE BUS'S OWN ENVELOPE, and the sentence that used to stand here instead.
+#
+# This block read "No bus-specific wrapper is added: a `send`/`publish`/`request`
+# payload is read directly off its declared position, never through an envelope
+# type a `wrappers` rule would need to unwrap." The first half is true and the
+# word "never" was a claim about the FRAMEWORK made with no probe row behind it
+# — CP-31 Q1-Q9 measured every type this file names as an OWNER and not one of
+# them is `Message`, so at the time nothing had been measured that could have
+# contradicted it. Q10 has now measured it, and the claim does not hold.
+#
+# MEASURED (CP-31 Q10a/Q10b, vertx-core 4.5.10 AND 5.0.0).
+# `io.vertx.core.eventbus.Message<T>` declares five descriptors byte-identically
+# in both releases: `address()`, `headers()`, `body()`, `replyAddress()` and
+# `isSend()`. FOUR of the five are framing the bus itself adds on delivery and
+# strips on receipt — where it came from, where a reply goes, whether it was
+# sent or published, and the delivery headers. Only `body()` names what crossed
+# the wire. That is the same relationship `ResponseEntity<T>` has to its body,
+# which the row above already unwraps.
+#
+# `semantics: envelope`, from the existing closed set and not a new member:
+# `spring-kafka.yml` already spells a BROKER's own envelope
+# (`ConsumerRecord<K,V>`) that way, which is exactly what this is. It is not
+# `http_envelope` — there is no HTTP here — and not `optional`, which is the one
+# value the engine acts on (`expansion.py` derives `required` from it) and would
+# publish every event-bus payload as nullable.
+#
+# WHY IT IS DECLARED HERE, AND WHAT THAT REASON IS NOT. No row in this file has
+# been measured to reach a `Message` at a payload position, and no fixture arm
+# exercises this entry. The inbound rows above carry no `body_arg` at all, so
+# the only position this file reads a payload at is `body_arg: 1` on
+# `send`/`publish`/`request` — the VALUE a call site hands the bus — and a
+# forwarding call site (`bus.send("out", msg)` inside a consumer) is the one
+# spelling that could put an envelope there. **What such a call actually puts on
+# the wire is UNMEASURED.** `send` hands the object to a codec, and whether a
+# forwarded `Message` crosses as the envelope or as its body is a framework
+# question no probe in this repository answers; CP-31 Q10 measured the type's
+# shape, not the codec's behaviour. This entry is therefore NOT declared on a
+# claim about that call, and the day such a call site turns up, what its wire
+# carries is a question for CP-31 rather than something this file has settled.
+#
+# It is declared so that every event-bus catalog gives ONE answer for this type,
+# which is the reason the copied block above already states for the
+# `ResponseEntity` row: shape expansion is a GLOBAL, insert-if-absent pass keyed
+# on the type symbol, so the first catalog to reach a type is the one that
+# describes it for everyone. MEASURED on `fixtures/orders-eventbus` by running
+# the analysis with these entries removed: `quarkus-consume-event.yml`'s
+# envelope consumer produced `io/vertx/core/eventbus/Message#<com/acme/eb/
+# Order#>` as its `request_shape` AND the envelope was expanded as a second
+# entry in `shapes`. A file left without the rule is a file that could insert
+# that entry first and decide the answer for the catalog that comes after it.
+# Agreement across the four files is what removes sort order from the question.
+#
+# The FACADE's `io.vertx.mutiny.core.eventbus.Message` is NOT named here, and
+# that is the same boundary `owner:` states: it is a different type in a
+# different artifact (CP-31 Q10c — a class holding the core interface in a
+# private `delegate` field, whose `headers()` returns the MUTINY `MultiMap`),
+# and this file's owner hands nobody one. `vertx-eventbus-mutiny.yml` declares
+# it, against its own 3.16.0 measurement.
+wrappers:
+  - { type: org.springframework.http.ResponseEntity, payload_arg: 0, semantics: http_envelope }
+  - { type: java.util.Optional, payload_arg: 0, semantics: optional }
+  - { type: io.vertx.core.eventbus.Message, payload_arg: 0, semantics: envelope }
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES, stated rather than discovered (spec §3d, COVERAGE):
+#
+#   * THE MUTINY FACADE. `io.vertx.mutiny.core.eventbus.EventBus` — what a
+#     Quarkus service injects — derives nothing here, for the reason stated at
+#     `owner:` above: it shares no descriptor with the core interface, and one
+#     `single_call` file cannot carry two owners whose rows disjoint. CP-31 Q8
+#     measured its whole surface, including the `sender`/`publisher` overloads
+#     spec §0's M9 says it does not have.
+#   * `Message.reply(...)`. The reply goes to a reply-to address the SENDER
+#     generated at send time; no declaration in the module names it, so there is
+#     nothing to publish. The same reasoning `spring-rabbit-template.yml`'s
+#     `receiveAndReply` states.
+#   * THE EVENT-BUS BRIDGE (SockJS/TCP). A `PermittedOptions().setAddressRegex(…)`
+#     is a POLICY — which addresses may cross the bridge — and a regex is not an
+#     address. A row for one would publish a pattern as an endpoint.
+#   * VERT.X 3.x, whose `send` carried a reply handler at a position neither 4.x
+#     nor 5.x has. Nothing here is measured against it and no descriptor below
+#     would match it.
+#   * A REPLY'S SHAPE. `request(...)`'s reply type is the call's return type, and
+#     no `single_call` word reads one (the `request` rows above say so).
+#   * THE 5.0 OPTIONS BUILDER TAIL.
+#     `new MessageConsumerOptions().setAddress("a").setLocalOnly(true)` reaches
+#     `consumer(...)` as the result of the LAST setter, so `channel_via`'s
+#     producing-call read finds `setLocalOnly` and the address is unresolved
+#     (spec §3d m-1). MEASURED (CP-31 Q5b): `setLocalOnly` and
+#     `setMaxBufferedMessages` both return the options object, so the tail is
+#     reachable in real code.

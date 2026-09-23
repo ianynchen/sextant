@@ -987,7 +987,8 @@ mapping:
 ```
 
 - **`members` says what a gated class exposes on its own, with no member-level annotation
-  anywhere.** Today's one word is `public_methods`. It is the only word in the mapping
+  anywhere.** Two words, `public_methods` and `declared_type_methods` (below). It is the
+  only word in the mapping
   block that derives rows for declarations carrying **no annotation at all**, which is why
   it is the most tightly fenced. **A member-level rule overrides it for the member it
   names** — one row per member, never two — and the override is keyed on the member
@@ -1020,6 +1021,104 @@ mapping:
   written out withdraws anything. The comparison happens on the text `json ->>` reads every scalar
   back as, so a YAML `equals: true` matches a real JSON boolean in the bytecode without
   either side guessing at the other's type.
+
+**Phase D adds the second member word, `declared_type_methods`** (spec 2026-09-22 §0a M-3,
+`temporal-activity.yml`):
+
+```yaml
+mapping:
+  members: declared_type_methods      # only members of a type carrying the gate DIRECTLY
+```
+
+- **It is `public_methods` plus one conjunct: the member's declaring type must carry the
+  gate as a REAL annotation row, never the synthetic one the inheritance walk wrote.** The
+  word exists because `public_methods` enumerates the *gated class's* members while the
+  gate itself is inherited onto implementations — so a framework that exposes the
+  **contract's** members, not the implementor's, publishes every public helper on every
+  implementing class as an operation nothing polls for, at `resolved`/`compiler`. JAX-WS
+  does not have that problem (the framework really does expose every public method of the
+  annotated class), which is why one word could not serve both.
+- **The two costs of misreading it are not symmetrical, which is why it is a closed
+  vocabulary and not a flag.** Read as `public_methods` it costs one endpoint per helper
+  method on every implementing class. Read as "no member rule" it costs the whole
+  contract — every member of it, silently, because none of them carries an annotation to
+  derive from.
+- **It needs the gate in three places** on a catalog whose contract is an interface: in
+  `type_annotation` (which is what runs the inheritance walk at all), as a
+  `mapping.annotations` entry found on a TYPE (which is what gives the member rule a class
+  to enumerate), and as `prefix_annotation` (which is what carries the gate onto the
+  implementor). A catalog reaching for the word while leaving the ordinary prefix
+  machinery inert declares `prefix_from: []` beside it.
+- **Inherited members keep `A-M15`'s attribution**, which these words inherit rather than
+  introduce: a member is attributed to the gate the walk started from, not to the base
+  class that declares it, so a gated subclass of a gated base publishes the base's member
+  once under each gate. `declared_type_methods` narrows WHICH members survive — every one
+  of them is declared by a type carrying the gate directly — but it does not change WHICH
+  GATE a surviving member is attributed to. So the base's own member still publishes once
+  under each gate, and under the subclass's gate the attributed type is the SUBCLASS while
+  the declaring type is the base. *(This bullet used to end "so for those rows the
+  attributed type is the declaring type", which the sentence before it contradicts. The
+  two coincide only where a gated type has no gated base.)*
+
+**Phase D also adds four naming words and the two keys they read** (spec 2026-09-22 §2b and
+§1d, measured by CP-30). All four join `path_fallback`'s closed vocabulary, at either level.
+**The first three are reached only by a declaration that named nothing itself; the fourth is
+not**, and the bullet below the table says why that asymmetry is the rule rather than an
+inconsistency:
+
+| word | composes | measured |
+|---|---|---|
+| `declaring_type_simple_name` | the simple name of the type the ANNOTATION sat on — the innermost name after the last package or nested-type separator | CP-30 Q1: the constructor takes the *interface's* `getSimpleName()` on the workflow branch and the reflected method's own name on every other |
+| `declaring_type_qualified_name` | that type's fully-qualified name, `$` kept for a nested type — it is the qualified name, not a source spelling | M8: the default address is the declaring bean class's `toString()` |
+| `prefixed_capitalized_construct_name` | `fallback_prefix_attr`'s value + the member name with its FIRST character upper-cased and the remainder untouched | CP-30 Q2–Q3: `substring(0,1).toUpperCase() + substring(1)`, and the prefix branch is the one an explicitly named member never reaches |
+| `declaring_type_scoped_name` | that simple name + `fallback_scope_separator` + **the name that won** — the declaration's own where it wrote one, the construct's where it did not | CP-30 Q1: every branch but `WORKFLOW` falls to `Method.getName()` at offset 122, and CP-30 Q10: `@WorkflowInterface` declares no attribute at all, so no attribute-reading key can supply the scope |
+
+- **`declaring_type_scoped_name` is the one word here that also composes around a name the
+  declaration DID write, and the asymmetry is the rule rather than an inconsistency.** Every
+  other word answers "what is the name when the annotation carried none", which is why
+  skipping a named declaration makes `prefixed_capitalized_construct_name`'s edge free. This
+  one answers a different question, because the scope in front of the name is **not a
+  framework default**. Temporal's own name for a signal is the bare member name, or the
+  annotation's own where it wrote one; the workflow type in front of it is spec 2026-09-22
+  §1d's *identity* rule, and it exists so that two workflows' `cancel` are two endpoints. A
+  scope applied only to the members that named nothing would leave `@SignalMethod(name =
+  "Abort")` publishing a bare `Abort` — the colliding identity §2f refuses when the same
+  string arrives from `WorkflowStub.signal("cancel", …)`. So the derivation hoists this one
+  arm ahead of the named-nothing test; the composition still lives inside the fallback
+  expression, so every catalog that does not declare the word derives byte-identically.
+- **`fallback_scope_separator` is catalog data, never a literal in the engine**, for the
+  reason `path_separator` and `qualifier_separator` already give: which punctuation joins two
+  halves of an address is a framework's convention, and an engine that picked one would be
+  naming a framework in code. Unlike `path_separator` it is **not** constrained to one
+  character — nothing here trims a character set — and unlike `qualifier_separator` it joins
+  a scope the declaration never states rather than one an attribute carries.
+- **Two refusals**, `fallback_prefix_attr`'s own one key over: the word with no
+  `fallback_scope_separator` that is a non-empty string composes `OrderWorkflowcancel`, one
+  token that is neither half; the separator with no word reading it states a punctuation rule
+  nothing runs. There is no third refusal, and the absence is deliberate — this word reads no
+  annotation at all, so there is no `type_annotation` for it to be missing.
+- **The attributed type is not the handler**, and the two come apart exactly where these
+  words are needed: the declaration sits on the contract type while `handler` may be
+  rebound to the implementor's own override (`resolves.direction`, §2c). Reading the
+  handler's class would publish the implementor's name — a type no caller ever names.
+- **`fallback_prefix_attr` names which attribute of the declaring type's `type_annotation`
+  use carries the prefix**, and it is a key of its own rather than `prefix_from` on
+  purpose: `prefix_from` feeds the prefix that joins the FRONT of every address the catalog
+  composes, so a catalog naming it there would compose the prefix a second time onto every
+  row — **including the explicitly named member that must not carry it at all**. Putting
+  the prefix INSIDE the fallback branch is what makes that edge free rather than a flag:
+  `chargeCard` under `namePrefix: "billing_"` is `billing_ChargeCard`, while
+  `@ActivityMethod(name = "Charge")` under the same prefix is `Charge`.
+- **Three refusals, none of them symmetry.** `prefixed_capitalized_construct_name` with no
+  `fallback_prefix_attr`, or with one that is not a non-empty string, composes an empty
+  prefix onto every row it names — an address that is a fragment of the one the framework
+  serves. The same word with no `type_annotation` has no annotation row to read the
+  attribute off, with the same result. And `fallback_prefix_attr` declared with no word
+  reading it states a rule nothing runs, which a reader of the file would believe.
+- **A declaration with no declaring type at all** — a free function ([D00](D00-fact-schema.md) §4) —
+  composes NULL rather than an invented name. It is unreachable for any catalog that can
+  sensibly declare one of these words, since the gate filter already drops a row whose
+  enclosing type is NULL.
 
 **Phase 2I generalises it once more, at `matches` level rather than inside `mapping`,
 because the question is about the DECLARATION SITE rather than about naming:**
@@ -4667,6 +4766,152 @@ refused naming the file. **Boundaries, stated:** the handler body only, never a 
 delegates to; and a `single_call` row's handler is the REGISTERING method, not the `Handler`
 lambda it passes, so a Javalin flat `app.get("/x", ctx -> ctx.queryParam("q"))` writes
 nothing — the `ApiBuilder` rows carry the lambda body as `handler` and read fully.
+
+## 2l. What an annotation says ABOUT an inbound endpoint — `metadata_from`
+
+Spec 2026-09-22 §1f. §2k records what an inbound endpoint demands of a **request**; this
+key records what a declaration says about the **endpoint** — a fact that qualifies it
+without being part of its identity. One `endpoint_metadata` row per attribute value,
+written by `resolve/endpoint_attributes.py::record_endpoint_attributes`, below
+`record_request_requirements` and for the same reason (an entry names its row by the row's
+identity columns, and `protocol` is final only below `apply_protocol_hints`). Optional and
+inert unless declared; **no shipped catalog declared it when it landed, so no existing row
+moved.**
+
+```yaml
+matches:
+  metadata_from:
+    - { annotation: io.temporal.spring.boot.WorkflowImpl, attribute: taskQueues,
+        kind: task_queue }
+    - { annotation: io.quarkus.vertx.ConsumeEvent, attribute: local, kind: local,
+        absent_value: "true" }        # …the measured AnnotationDefault, quoted
+```
+
+The second line's `kind` is `local` and not §2e's table's `delivery`, which this example
+followed until Task 9 swept the section: `delivery` + a boolean is ambiguous (true of
+what?) while `local` + `true` states the fact the attribute states. The closing paragraph
+of this section has the rest of that reading.
+
+**Why a key rather than a path segment.** §1f splits a qualifying attribute into two
+classes. A **routing** attribute changes which endpoint a message arrives at (a Temporal
+task queue: a worker on `orders` never sees `orders-staging` work); a **behavioural** one
+changes what happens once it has arrived (a Kafka `groupId` — every consumer group on a
+topic receives every message; a JMS `selector` — the message arrives and is then filtered).
+The rule §1f states is that **a routing fact enters the path only when BOTH sides of the
+wire can read it**; where only one side can, it is an `endpoint_metadata` entry and the
+linking tier uses it as a refinement (two rows whose stated values differ do not link; a row
+that states nothing links as before). The task queue fails the both-sides test structurally:
+an outbound row comes from the interface declaration, so the caller's side can never read
+`setTaskQueue` at all, and a queue in the path would make the inbound row
+`{orders}OrderWorkflow` against an outbound `OrderWorkflow` — two halves of one wire that
+never match. **An identity half only one side can spell is not an identity.**
+
+**The entry.** Exactly `annotation`, `attribute`, `kind`, and optionally `absent_value`;
+any other key, a missing one, or one that is not a non-empty string is refused naming the
+file. A `metadata_from` that is not a non-empty list is refused too — a catalog that
+declares the key and names no attribute records nothing while reading as though it did.
+**`kind` is NOT checked against a closed set**, and that is the column's own rule rather
+than a gap: `endpoint_metadata.kind`'s comment — the one on the column itself, in
+`src/sextant/storage/duckdb/schema.sql:536`, not in D01 §3, which this paragraph cited until
+Task 9 went looking for it — says the
+vocabulary is per protocol and the catalog names it, exactly as `semantics` on a wrapper is,
+so the six words the shipped catalogs use — `task_queue`, `consumer_group`, `selector`,
+`subscription`, and `exclusive` and `local` where an earlier draft of §2e's table said
+`delivery` for both (see the closing paragraph below) — need no schema change, and neither
+does the next protocol's word.
+
+**Two rules a catalog author cannot otherwise discover:**
+
+- **`absent_value` must be a QUOTED non-empty string.** A YAML `absent_value: true` is a
+  boolean and is refused, not coerced. The value lands in a TEXT column beside values read
+  off the class file, where a JSON boolean reads back as the lowercase text `true` (the
+  same spelling `unless.equals` compares against) while `str(True)` would be `'True'` — a
+  spelling nothing else in this repository writes. Quoting it is one character and removes
+  the question.
+- **An attribute written as the EMPTY STRING writes no row.** A `value` column holding `""`
+  states a queue, a group or a selector named by nothing, and the absence of a row is the
+  statement that the declaration named none. This is not hypothetical: `@ConsumeEvent`'s own
+  `AnnotationDefault` for `value()` is `""` (M8). The same drop applies to a value the pass
+  cannot spell — a nested annotation, or a **symbol reference** (D00 §5a spells both a class
+  reference and an enum reference that way), because a symbol is not a name anything puts on
+  a wire.
+- **A literal that merely CONTAINS the type marker `#` is dropped with the genuine symbol
+  references, and a written value really can carry one.** The question is asked through
+  `names_a_type`, because the marker is the symbol grammar and
+  `tests/architecture/test_symbol_grammar_confinement.py` keeps every reading of it in
+  `domain/symbols.py` — and that predicate is `'#' in value`, with no attempt to tell a
+  descriptor from a string that happens to quote the character. Three of the values this key
+  reads pass through a Spring `resolve…` call that accepts SpEL, so `#{…}` is a legal
+  spelling of a consumer group or a selector (CP-32 Q6, Q7a); and a JMS selector is, of every
+  value in this vocabulary, the one most likely to quote a `#` inside its own expression
+  text. Each is a MISS rather than a wrong row, which is the direction NFR-2 asks for, and
+  each is stated in the catalog that reads the attribute rather than left for a reader to
+  discover from an absent row.
+
+**The rest of the reading rules:**
+
+- **Inbound only, and that is a claim rather than an unlifted limit.** §1f's rule is that a
+  qualifying attribute belongs to the side that DECLARES it, and every attribute this key
+  reads sits on a listener or an implementation — the receiving side. An outbound entry
+  would state a peer's configuration as this module's own. The catalog's *declared*
+  direction is not the test, because a catalog may reach `inbound` through a
+  `resolves.direction` flip (§2c) — what is refused is a catalog that can never own an
+  inbound row at all, and the pass then reads each ROW's own `direction`, final by then.
+- **The catalog must declare `requires: [annotation_args]`**, and a catalog declaring the
+  key without it is refused. The key reads an annotation's arguments and nothing else, so on
+  a scan that does not produce them every attribute would read as absent — and a declared
+  `absent_value` would be written against every endpoint the catalog owns, a measured
+  default attributed to declarations nobody looked at. The capability gate cannot catch this
+  on its own: it skips a catalog that ASKED for a capability it did not get, and one that
+  never asked is the silent case.
+- **Two declaration sites, NEAREST WINS per annotation.** The annotation is looked for on
+  the handler and on the handler's enclosing type, because a listener annotation carrying a
+  consumer group sits on the METHOD while a starter annotation carrying a task queue sits on
+  the CLASS whose overriding method is the row's handler. Where both carry the same
+  annotation only the handler's is read. A union would state both values, and both ways it
+  goes are wrong: two consumer groups on one endpoint, one of them a group that endpoint is
+  not in; or a measured `absent_value` emitted beside the explicit value contradicting it.
+  (§2k's mapping attributes DO union their two sites, and cite the framework method that
+  performs the union — `ParamsRequestCondition.combine`. Nothing here has such a citation,
+  so a framework that really does union can say so in a later key rather than have this one
+  assume it.)
+- **An array attribute is one row per element**; a scalar is one row; a boolean is written
+  lowercase.
+- **A `${…}` value is carried VERBATIM at `resolution: unresolved`.** A placeholder is
+  resolved by the framework at startup out of configuration a repository cannot see, and
+  this repository never guesses a deployed value.
+- **An ABSENT attribute writes `absent_value` where declared and NOTHING otherwise.** A
+  framework default never reaches the annotation use — it lives on the annotation TYPE
+  (JVMS 4.7.22 `AnnotationDefault`), the same fact `path_fallback` exists for — so a catalog
+  that has MEASURED it states it and cites the probe beside the line, and one that has not
+  says nothing. Silence is the honest answer where nobody measured the default. `absent_value`
+  states what the framework does when an attribute of a *written* annotation was left out; it
+  says nothing about a declaration that never carried the annotation, which writes nothing.
+- **Each row carries `name` NULL** (a qualifying attribute has a kind and a value and no
+  name of its own — the `kind` is the name of the thing), **`requirement` NULL** (it states
+  nothing about what the framework demands of a request), `caller` the handler and
+  `evidence: compiler`. Rows go through the same insert-if-absent guard §2k's do, so the
+  identical entry two catalogs derive is one row.
+- **An entry names only an endpoint its OWN catalog minted** (`catalog_id`), and a row
+  naming no handler is skipped — there is nothing to read an annotation off.
+
+**The criterion for which attributes belong here is stated so the list is not open-ended**
+(§2e): *an attribute a peer would care about* — whether and how a message reaches this
+handler. The consumer group, the selector, the durable subscription name and exclusivity
+qualify; `concurrency`, `ackMode`, `containerFactory`, `errorHandler` and `autoStartup` are
+tuning knobs and do not, and the catalogs say so.
+
+**The criterion decides the list; the attribute's NAME does not, and neither does §2e's own
+table.** CP-32 measured every element of every shipped listener annotation before a line was
+written, and moved three of them: Micronaut's consumer group is reachable as `value` as well
+as `groupId` (the two are `@AliasFor` one another, and javac writes whichever the source
+wrote, so a catalog naming one of them misses half the declarations); Micronaut JMS's
+selector is `messageSelector` and sits on `@Queue`/`@Topic` rather than on the class-level
+`@JMSListener`; and Micronaut JMS declares no durable-subscription element at all, so
+`subscription` belongs to `spring-jms.yml` alone. A fourth reading moved a `kind` word rather
+than the list: `delivery` + a boolean is ambiguous, so Spring AMQP's `exclusive` is
+`kind: exclusive` the same way `@ConsumeEvent`'s `local` is `kind: local`. **The probe runs
+before the catalog line, and where it disagrees the list changes, not the probe.**
 
 ## 3. Ordering
 

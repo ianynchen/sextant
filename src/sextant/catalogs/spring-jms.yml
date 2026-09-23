@@ -39,6 +39,54 @@ matches:
                   fallback: sole_unannotated,
                   excludes: [jakarta.jms.Session, jakarta.jms.Message,
                              javax.jms.Session, javax.jms.Message] }
+  # §2e's criterion applied to this framework: an attribute a PEER would care
+  # about — whether and how a message reaches this handler — never a knob that
+  # decides how this node runs once it has.
+  #
+  # MEASURED, CP-32 Q2a and Q7a/Q7b (spring-jms 6.1.6 — NOT 3.1.4: `spring-jms`
+  # is versioned with Spring Framework, and the `measured:` rows below already
+  # say so). `@JmsListener` declares six elements; `selector()` and
+  # `subscription()` are both `String` defaulting to `""`. `processJmsListener`
+  # — the one method referencing either — takes each past `StringUtils.hasText`
+  # and through `resolve(…)` into `MethodJmsListenerEndpoint.setSelector` and
+  # `setSubscription`. So the framework means by `selector` a JMS message
+  # selector applied at the consumer, and by `subscription` the NAME of a
+  # durable subscription; the kinds name those meanings, which here coincide
+  # with the attributes' own names.
+  #
+  # BEHAVIOURAL, not routing, and for two different reasons (§1f): a selector
+  # filters a message that has already ARRIVED at the destination, and a
+  # subscription names a durable subscription's state rather than the
+  # destination itself. Neither changes the address, so neither enters the path.
+  #
+  # ONE declaration site here, not two: CP-32 Q2a reads
+  # `@Target({METHOD, ANNOTATION_TYPE})`, so no class-level `@JmsListener` can
+  # exist and the enclosing-type half of the nearest-wins read can never fire
+  # for this catalog — the same measured fact `prefix_annotation: null` above
+  # already rests on.
+  #
+  # NO `absent_value`: both defaults are `""`, and an attribute written as the
+  # empty string writes no row at all (D02 §2l) — a selector named by nothing is
+  # not a selector, and the absence of a row is the statement that the
+  # declaration named none.
+  #
+  # NOT RECORDED, and each is the criterion applied rather than an omission:
+  # `concurrency` and `containerFactory` are tuning knobs invisible to a peer,
+  # and `id` names a container bean rather than anything on the wire. That is
+  # every remaining element CP-32 Q2a lists beside `destination`, which
+  # `path_from` above already reads.
+  #
+  # STATED BOUNDARY (CP-32 Q7a): `resolve(…)` means a written value may be a
+  # `${…}` placeholder — carried verbatim at `unresolved` — or a `#{…}` SpEL
+  # expression. A value carrying the symbol grammar's type marker is DROPPED
+  # rather than published (D02 §2l), and a JMS selector is the value in this
+  # whole vocabulary most likely to quote a `#` in its own expression text. A
+  # miss, never a wrong row.
+  metadata_from:
+    - { annotation: org.springframework.jms.annotation.JmsListener,
+        attribute: selector, kind: selector }
+    - { annotation: org.springframework.jms.annotation.JmsListener,
+        attribute: subscription, kind: subscription }
   mapping:
     # CHECKPOINT FACT: `@JmsListener.destination` is genuinely scalar in
     # bytecode (unlike Kafka's `topics`).
@@ -112,3 +160,11 @@ shape_model: json
 measured:
   - { artifact: org.springframework:spring-jms, versions: ["6.1.6", "7.0.9"],
       identity: reported, by: scripts/probes/cp16_listener_destinations.md }
+  # A SECOND row rather than a widened first one: CP-16 measured what NAMES the
+  # endpoint, CP-32 what the annotation says ABOUT it — every element with its
+  # own `AnnotationDefault`, and the post-processor's reads of `selector` and
+  # `subscription`. A reader chasing the `metadata_from` entries above needs the
+  # probe that asked that question. Bounded to 6.1.6: CP-32 opened one jar per
+  # framework, so 7.0.9 is outside it.
+  - { artifact: org.springframework:spring-jms, versions: ["6.1.6"],
+      identity: reported, by: scripts/probes/cp32_listener_attributes.md }

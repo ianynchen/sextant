@@ -1,0 +1,170 @@
+id: temporal-activity
+displayName: Temporal activities
+style: annotation_driven
+protocol: temporal
+direction: outbound
+
+# `temporal-workflow.yml`'s coordinate, for its reason: the SDK jar ships the
+# `@ActivityInterface`/`@ActivityMethod` package, and the Spring Boot starter is
+# deliberately not named — its annotations are read below and simply find
+# nothing where it is absent.
+detect:
+  coordinates: ["io.temporal:temporal-sdk"]
+
+# `identity: assumed` for `temporal-workflow.yml`'s measured reason: neither
+# Temporal archive states a version in its own bytes, so the number below is the
+# coordinate CP-30's harness requested, not something either jar reports. CP-30
+# aborts on a SHA-1 mismatch against Maven's own `.jar.sha1` sidecar instead.
+measured:
+  - { artifact: io.temporal:temporal-sdk, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp30_temporal_contract_naming.md }
+  - { artifact: io.temporal:temporal-spring-boot-autoconfigure, versions: ["1.27.0"],
+      identity: assumed, by: scripts/probes/cp30_temporal_contract_naming.md }
+
+requires: [annotation_args, typed_signatures]
+
+# `temporal-workflow.yml`'s rule, one annotation over — see that file for the
+# whole argument. CP-30 Q6 measured `io.temporal.spring.boot.ActivityImpl`
+# declaring exactly `String[] workers()` and `String[] taskQueues()`, the same
+# two attributes as `@WorkflowImpl`: it is the starter's REGISTRATION marker,
+# and registration is the evidence. An activity implementation carrying no
+# `@ActivityImpl` is polled for by nothing, so the flip declines and the SEI
+# fence subtracts the outbound row — net zero rather than an inbound row for a
+# worker nobody registered.
+resolves:
+  direction:
+    - when:
+        owner_implemented_by_type_annotated:
+          - io.temporal.spring.boot.ActivityImpl
+      then: inbound
+
+matches:
+  # `temporal-workflow.yml`'s partition and its fence, unchanged: the contract
+  # is the interface, so the naming words read the contract's own declaration
+  # and the fence subtracts every interface this module implements — yielding
+  # to the flip where the implementor is registered (ruling R12).
+  declared_on: interface
+  type_annotation: io.temporal.activity.ActivityInterface
+  # §1f and D02 §2l, `temporal-workflow.yml`'s entry one annotation over. An
+  # ARRAY attribute is one row per element, which is what
+  # `@ActivityImpl(taskQueues = {"billing", "billing-retry"})` states: two
+  # queues, two `endpoint_metadata` rows, not one row holding a list.
+  metadata_from:
+    - { annotation: io.temporal.spring.boot.ActivityImpl, attribute: taskQueues,
+        kind: task_queue }
+  mapping:
+    # MEASURED (CP-30 Q4, temporal-sdk 1.27.0), and the whole reason this file
+    # carries a member rule while `temporal-workflow.yml` does not:
+    # `POJOActivityInterfaceMetadata.validateAndQualifiedForActivityMethod`
+    # returns `true` at offset 73 for an UNANNOTATED, non-static, non-synthetic
+    # method — every declared method of an `@ActivityInterface` is an activity,
+    # whether or not `@ActivityMethod` marks it — and there is no later
+    # `getType() == NONE` filter of the kind `getWorkflowInterfaceMethods`
+    # applies to workflow methods (CP-30 Q5). A catalog reading only the
+    # annotated members would report an activity contract missing its own
+    # operations.
+    #
+    # `declared_type_methods` RATHER THAN `public_methods` (spec §2c, M-3):
+    # enumerate only members whose declaring type carries the gate DIRECTLY,
+    # never the synthetic row the inheritance walk wrote. MEASURED, because
+    # `declared_on: interface` above already excludes the case the spec's own
+    # example names — `BillingActivitiesImpl.reloadRates()`, a helper declared
+    # on the IMPLEMENTING CLASS, is enclosed by a class and so is gated out
+    # before any member rule runs, and `fixtures/temporal-probe` derives the
+    # same two activity rows under either word. The case the gate does NOT
+    # cover is one interface up: an `interface Sub extends
+    # @ActivityInterface Base` carries the gate SYNTHETICALLY, is an interface,
+    # and under `public_methods` publishes its own members as activities of
+    # Base's contract, under Base's `namePrefix`. `fixtures/temporal-probe`
+    # carries that shape as `AuditedLedgerActivities extends LedgerActivities`,
+    # measured both ways against this shipped catalog: `public_methods` derives
+    # `outbound activity "ledger_Audit"` on `AuditedLedgerActivities#audit` and
+    # `declared_type_methods` derives nothing
+    # (`tests/e2e/test_async_delivered.py`). The word stays — and until that arm
+    # was committed nothing measured it: the swap left the whole suite green.
+    members: declared_type_methods
+    # MEASURED (CP-30 Q2, offsets 45-58): `POJOActivityMethodMetadata`'s
+    # constructor reads `ActivityMethod.name()`, tests `.isEmpty()` at offset 50
+    # and returns the annotation's own value verbatim at offset 58 when it is
+    # not empty. `name` is the only attribute `@ActivityMethod` declares at all
+    # — CP-30 Q10, which lists every element of all seven SDK annotations, so a
+    # release adding a second name source shows up in that row rather than
+    # silently going unread here.
+    path_from: [name]
+    # MEASURED (CP-30 Q2 and Q3). The `ifne 66` at offset 53 jumps to the
+    # prefix-composition branch ONLY when `name()` was empty, and that branch is
+    # `ActivityInterface.namePrefix()` (offset 74) concatenated with
+    # `getActivityNameFromMethod(...)` (offset 83), which is
+    # `substring(0,1).toUpperCase()` appended to `substring(1)` (offsets 15-26).
+    #
+    # THE EDGE THAT TELLS THIS RULE FROM EVERY PARAPHRASE OF IT: under
+    # `@ActivityInterface(namePrefix = "billing_")`, `chargeCard` is
+    # `billing_ChargeCard` and `@ActivityMethod(name = "Charge")` is `Charge` —
+    # never `billing_Charge`. `namePrefix` is the only attribute
+    # `@ActivityInterface` declares (CP-30 Q10), and it is the only attribute
+    # any of the SDK's two INTERFACE annotations declares: `@WorkflowInterface`
+    # declares none, which is why `temporal-workflow.yml` needs a naming word
+    # where this file needs only an attribute name.
+    # The prefix lives INSIDE this word rather than in
+    # the type-level prefix machinery precisely so that a member which named
+    # itself skips it by construction instead of by a flag; a `prefix_from`
+    # naming `namePrefix` would compose it onto every row including that one.
+    path_fallback: prefixed_capitalized_construct_name
+    fallback_prefix_attr: namePrefix
+    # The ordinary prefix machinery stays inert, as the word's own contract
+    # requires: `namePrefix` is read through `fallback_prefix_attr` above, and
+    # naming it here as well would compose it twice.
+    prefix_from: []
+    # `members` needs the gate in three places on a catalog whose contract is an
+    # interface (D02 §2): in `type_annotation` (which runs the inheritance walk
+    # at all), as a `mapping.annotations` entry found on a TYPE (which gives the
+    # member rule a class to enumerate), and as `prefix_annotation` (which
+    # carries the gate onto the implementor). All three name the same one
+    # annotation here — there is no `javax`/`jakarta` split in this family.
+    prefix_annotation: io.temporal.activity.ActivityInterface
+    # §1c: every Temporal row carries its kind in `method`. An UNANNOTATED
+    # member has no annotation to read a kind off, and `all_methods` is what a
+    # member row takes — so it is `[activity]` here rather than `[]`, which is
+    # the honest statement that every member of an activity contract is an
+    # activity (CP-30 Q4 again). `temporal-workflow.yml` declares `[]` because
+    # it has no member rule and each of its annotations states its own kind.
+    method_from: method
+    all_methods: [activity]
+    annotations:
+      # The TYPE-level gate entry, present for the member rule's sake (above).
+      # It mints no row of its own: the derivation admits only methods and
+      # functions, so a type target reaches no row.
+      - { fqn: io.temporal.activity.ActivityInterface }
+      - { fqn: io.temporal.activity.ActivityMethod, method: [activity] }
+
+# §1d: an activity's row carries the activity type ALONE. The interface name is
+# not on the wire (CP-30 Q2/Q3 compose `namePrefix` + the member name and
+# nothing else), so putting it in the path would publish an identity no worker
+# polls for. That is why this file declares no `qualifier_from` and no
+# `path_separator`.
+
+# Deliberately NO `wrappers` block, for `temporal-workflow.yml`'s reason: the
+# SDK's data converter marshals what an activity returns, and it unwraps no
+# envelope this project models.
+
+# D02 §1b — the payload-type blocks, declared once in
+# `shape-models/json.yml` rather than copied into this file.
+shape_model: json
+
+# BOUNDARIES (§2g, COVERAGE). Every one of `temporal-workflow.yml`'s applies
+# here unchanged — the programmatic worker's unread queue, a contract that lives
+# in a dependency jar, Cadence, and the SDK validations this reproduces none of
+# (a duplicate activity name across two contracts is refused by the SDK at
+# startup and produces two rows here). Two more are this file's own:
+#
+#   * `@ActivityOptions`/`ActivityOptions.Builder.setTaskQueue(String)` — CP-30
+#     Q8 found it on four `*Options$Builder` classes, one more than spec §0 M5
+#     counted. None is read: that queue is stated by the CALLER, at a call site
+#     inside a workflow body, and this catalog derives from declarations.
+#   * A DYNAMIC activity (`DynamicActivity`) names its activity type at
+#     runtime and declares nothing this file can read.
+#   * A NESTED `@ActivityImpl` CLASS TAKES THE OUTER CLASS'S QUEUE, exactly as
+#     `temporal-workflow.yml`'s own bullet states for `@WorkflowImpl`: the
+#     enclosing type the `metadata_from` read looks at is `owner_of`'s answer,
+#     which cuts the symbol at its FIRST type marker and so names the OUTERMOST
+#     type rather than the immediately enclosing one.

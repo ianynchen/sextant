@@ -21,8 +21,42 @@ jakarta.jms-api 3.1.0, javax.jms-api 2.0.1, spring-cloud-aws-sqs 3.1.1, spring-k
 spring-rabbit 3.1.4, kafka-clients 3.6.2, kafka-streams 3.6.2, spring-ws-core 4.1.4,
 spring-cloud-gcp-pubsub 5.1.2, spring-jms 6.1.6, spring-messaging 6.1.6,
 spring-web 6.1.6, spring-websocket 6.1.6, jakarta.websocket-client-api 2.2.0,
-jakarta.websocket-api 2.1.1, javalin 6.4.0, pekko-connectors-kafka_2.13 1.1.0 and
-spring-cloud-gateway-server-webflux 5.0.0** (`spring-cloud-gateway-server-webflux`
+jakarta.websocket-api 2.1.1, javalin 6.4.0, pekko-connectors-kafka_2.13 1.1.0,
+spring-cloud-gateway-server-webflux 5.0.0, temporal-sdk 1.27.0, vertx-core at BOTH
+4.5.10 and 5.0.0, and smallrye-mutiny-vertx-core 3.16.0**
+(`smallrye-mutiny-vertx-core` added 2026-09-22 for `vertx-eventbus-mutiny.yml`, Group D
+Task 8 fix round 1 — the Mutiny event-bus facade a Quarkus service injects ships in this
+artifact rather than in `vertx-core`, and CP-31 Q8 measured that it shares NOT ONE
+descriptor with `io.vertx.core.eventbus.EventBus`, which is why it is a catalog of its own
+with a coordinate of its own; the jar states an `Implementation-Version` in its manifest and
+the ordinary abort-on-mismatch check applies;
+`vertx-core` added 2026-09-22 for `vertx-eventbus.yml`, Group D Task 8, and it is the
+FIRST artifactId this harness reads at TWO versions — spec 2026-09-22 §3a puts 4.5-only
+and 5.0-only overloads of `io.vertx.core.eventbus.EventBus` in one catalog file, because
+an overload absent from the version a module builds against simply never matches, so a
+harness that could hold only one version of an artifactId reported the other version's
+rows as `NOT DECLARED`. `descriptors.py` now keys its jars by `<artifactId>:<version>`
+and gives each candidate its own classpath — its jar plus every jar of a DIFFERENT
+artifactId, never a sibling version — so each row is filed against the version that
+actually declares its descriptor and `javap` can never answer from the wrong release.
+Both jars state an `Implementation-Version` in their own manifests and the ordinary
+abort-on-mismatch check applies to each; for every artifactId resolved at one version the
+classpath is the same union as before and those rows are unchanged, which the regenerated
+table above shows (`of those, NOT declared by the jar` is 0 in every column);
+`temporal-sdk` added 2026-09-22 for `temporal-untyped.yml`, Group D Task 5, and it
+is the FIRST artifact this harness reads that states no version anywhere in its own
+bytes at all — no manifest `Implementation-Version`, no `META-INF/maven/*/
+pom.properties`, and no class constant-pool entry holding the literal `1.27.0`,
+all three checked exhaustively by
+`scripts/probes/cp30_temporal_contract_naming.md`'s own Version scope section. Its
+coordinate therefore declares the `-`/`-` self-report sentinel, which routes
+`descriptors.py` to recompute the jar's SHA-1 and abort on a mismatch against the
+`.jar.sha1` sidecar Maven wrote beside it — CP-30's fallback, applied here rather
+than reinvented. **So `1.27.0` in the column header below is the coordinate this
+run requested, not something the archive states**, and that is a departure from
+every other column, which is read out of the jar's own bytes; the abort-on-mismatch
+property §5.4 asks for survives, the self-report does not exist to be read;
+`spring-cloud-gateway-server-webflux`
 added 2026-09-13 for `G-30-outbound`, A2 Task 7 — it writes both a `pom.properties`
 and a manifest `Implementation-Version:`, measured with `unzip -l`, and the manifest
 is read; `pekko-connectors-kafka_2.13` added 2026-09-12 for `alpakka-pekko`, w62 — it writes
@@ -120,12 +154,12 @@ the run found the owner class in, discovered by indexing the archives rather tha
 by a hand-written owner→artifact map.
 
 <!-- table:start -->
-| what the run read | 1.1.0 | 1.129.3 | 2.0.1 | 2.1.1 | 2.2.0 | 3.1.0 | 3.1.1 | 3.1.4 | 3.6.2 | 4.1.4 | 5.0.0 | 5.1.2 | 6.1.6 | 6.4.0 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| artifacts reporting this version | pekko-connectors-kafka_2.13 | google-cloud-pubsub | javax.jms-api | jakarta.websocket-api | jakarta.websocket-client-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | kafka-clients, kafka-streams | spring-ws-core | spring-cloud-gateway-server-webflux | spring-cloud-gcp-pubsub | spring-jms, spring-messaging, spring-web, spring-websocket | javalin |
-| owner classes resolved out of them | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 5 | 7 | 1 | 1 | 1 | 10 | 3 |
-| catalog descriptors checked against them | 5 | 1 | 12 | 1 | 4 | 12 | 16 | 48 | 33 | 3 | 2 | 12 | 104 | 42 |
-| of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| what the run read | 1.1.0 | 1.129.3 | 1.27.0 | 2.0.1 | 2.1.1 | 2.2.0 | 3.1.0 | 3.1.1 | 3.1.4 | 3.16.0 | 3.6.2 | 4.1.4 | 4.5.10 | 5.0.0 | 5.1.2 | 6.1.6 | 6.4.0 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| artifacts reporting this version | pekko-connectors-kafka_2.13 | google-cloud-pubsub | temporal-sdk | javax.jms-api | jakarta.websocket-api | jakarta.websocket-client-api | jakarta.jms-api | spring-cloud-aws-sqs | spring-amqp, spring-kafka, spring-rabbit | smallrye-mutiny-vertx-core | kafka-clients, kafka-streams | spring-ws-core | vertx-core | spring-cloud-gateway-server-webflux, vertx-core | spring-cloud-gcp-pubsub | spring-jms, spring-messaging, spring-web, spring-websocket | javalin |
+| owner classes resolved out of them | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 5 | 1 | 7 | 1 | 1 | 2 | 1 | 10 | 3 |
+| catalog descriptors checked against them | 5 | 1 | 3 | 12 | 1 | 4 | 12 | 16 | 48 | 8 | 33 | 3 | 10 | 3 | 12 | 104 | 42 |
+| of those, NOT declared by the jar | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 
 | # | catalog | owner | method | arity | descriptor | artifact | version | verdict |
 |---|---|---|---|---|---|---|---|---|
@@ -424,6 +458,28 @@ by a hand-written owner→artifact map.
 | 293 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 1 | `(Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 294 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
 | 295 | `spring-ws-template` | `org.springframework.ws.client.core.WebServiceTemplate` | `marshalSendAndReceive` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lorg/springframework/ws/client/core/WebServiceMessageCallback;)Ljava/lang/Object;` | `spring-ws-core` | 4.1.4 | declared |
+| 296 | `temporal-untyped` | `io.temporal.client.WorkflowClient` | `newUntypedWorkflowStub` | 1 | `(Ljava/lang/String;)Lio/temporal/client/WorkflowStub;` | `temporal-sdk` | 1.27.0 | declared |
+| 297 | `temporal-untyped` | `io.temporal.client.WorkflowClient` | `newUntypedWorkflowStub` | 2 | `(Ljava/lang/String;Lio/temporal/client/WorkflowOptions;)Lio/temporal/client/WorkflowStub;` | `temporal-sdk` | 1.27.0 | declared |
+| 298 | `temporal-untyped` | `io.temporal.client.WorkflowClient` | `newUntypedWorkflowStub` | 3 | `(Ljava/lang/String;Ljava/util/Optional;Ljava/util/Optional;)Lio/temporal/client/WorkflowStub;` | `temporal-sdk` | 1.27.0 | declared |
+| 299 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 300 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 301 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `publish` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/mutiny/core/eventbus/EventBus;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 302 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `publish` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/mutiny/core/eventbus/EventBus;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 303 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `request` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/smallrye/mutiny/Uni;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 304 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `request` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/smallrye/mutiny/Uni;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 305 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `consumer` | 2 | `(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 306 | `vertx-eventbus-mutiny` | `io.vertx.mutiny.core.eventbus.EventBus` | `localConsumer` | 2 | `(Ljava/lang/String;Ljava/util/function/Consumer;)Lio/vertx/mutiny/core/eventbus/MessageConsumer;` | `smallrye-mutiny-vertx-core` | 3.16.0 | declared |
+| 307 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `send` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 308 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `send` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 309 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `publish` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 310 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `publish` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 311 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `request` | 2 | `(Ljava/lang/String;Ljava/lang/Object;)Lio/vertx/core/Future;` | `vertx-core` | 4.5.10 | declared |
+| 312 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `request` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;)Lio/vertx/core/Future;` | `vertx-core` | 4.5.10 | declared |
+| 313 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `request` | 3 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 314 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `request` | 4 | `(Ljava/lang/String;Ljava/lang/Object;Lio/vertx/core/eventbus/DeliveryOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/EventBus;` | `vertx-core` | 4.5.10 | declared |
+| 315 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `consumer` | 2 | `(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;` | `vertx-core` | 4.5.10 | declared |
+| 316 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `localConsumer` | 2 | `(Ljava/lang/String;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;` | `vertx-core` | 4.5.10 | declared |
+| 317 | `vertx-eventbus` | `io.vertx.core.eventbus.EventBus` | `consumer` | 2 | `(Lio/vertx/core/eventbus/MessageConsumerOptions;Lio/vertx/core/Handler;)Lio/vertx/core/eventbus/MessageConsumer;` | `vertx-core` | 5.0.0 | declared |
 <!-- table:end -->
 
 ## Verdict

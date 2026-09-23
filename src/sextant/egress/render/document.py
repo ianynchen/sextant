@@ -202,7 +202,10 @@ _PROTOCOL_QUALIFIED = frozenset({"graphql", "sse"})
 # be added to one list and silently fall out of the other — a GET route
 # reclassified into the verbless half renders `sse /events/stream` and drops
 # the verb it does have.
-_VERBED_PROTOCOLS = frozenset({"http", "grpc"}) | _PROTOCOL_QUALIFIED
+# `temporal` joins verbed rather than qualified: its `method` carries the row's
+# operation kind (`workflow`/`signal`/`query`/`update`/`activity`), the same
+# role GraphQL's `query`/`mutation` play in this column.
+_VERBED_PROTOCOLS = frozenset({"http", "grpc", "temporal"}) | _PROTOCOL_QUALIFIED
 _VERBLESS_PROTOCOLS = frozenset(p.value for p in Protocol) - _VERBED_PROTOCOLS
 
 # The verbed protocols whose rows may legitimately carry NO verb. A GraphQL

@@ -8,6 +8,7 @@ import yaml
 from fixture_module import FIXTURE_CAPABILITIES, write_fixture_module_fact_with
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
@@ -21,6 +22,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     CallTarget,
     Document,
+    Parameter,
     Signature,
     SymbolFact,
     TypeRef,
@@ -2645,6 +2647,776 @@ def test_a_malformed_withdrawal_filter_is_refused_by_file(tmp_path: Path, declar
 
     assert "unless" in str(raised.value)
     assert "invented-members.yml" in str(raised.value)
+
+
+# --- The declaring-type words, and the member fence beside them -----------
+#
+# Spec 2026-09-22 §2b/§2c, measured by CP-30 rows 1-4. Deliberately an invented
+# framework again, for the reason every section above is invented: these are
+# engine words, and a test spelled with the annotations that motivated them
+# would pin a framework rather than the mechanism.
+#
+# The shape none of the sections above can express: a CONTRACT type whose
+# members are operations whether or not anything marks them, a name that
+# defaults to the CONTRACT's own rather than to the member's, and a class that
+# implements the contract and inherits its gate — the last being what makes
+# `members: public_methods` wrong for such a framework.
+
+# Spelled here rather than borrowed from the flip section below, which defines
+# its own copy further down the file: the declaring type is read off the
+# module-PREFIXED symbol (D00 §1), and a fixture spelled bare could not tell a
+# correct read from one that never strips the prefix at all.
+_CONTRACT_MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
+_CONTRACT_GATE = "com.acme.contract.annotation.Contract"
+_CONTRACT_GATE_FQN = "com/acme/contract/annotation/Contract#"
+_CONTRACT_OP = "com.acme.contract.annotation.Op"
+_CONTRACT_OP_FQN = "com/acme/contract/annotation/Op#"
+# The marker the flip's own condition tests the implementing class for — the
+# invented stand-in for whatever annotation a framework uses to say "this bean
+# is the one that runs". It is catalog data, never engine data.
+_CONTRACT_BEAN = "com.acme.contract.annotation.Worker"
+_CONTRACT_BEAN_FQN = "com/acme/contract/annotation/Worker#"
+
+
+def _contract_type(name: str) -> str:
+    return f"{_CONTRACT_MODULE}com/acme/orders/{name}#"
+
+
+def _contract_member(name: str, member: str, disambiguator: str = "sig_0a1") -> str:
+    return f"{_contract_type(name)}{member}({disambiguator})."
+
+
+_VOID = Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type=""))
+
+
+def _contract_catalog(**mapping: object) -> Catalog:
+    """A gated catalog over the invented contract annotation, with whatever
+    naming or member vocabulary a test layers on.
+
+    The gate is BOTH `type_annotation` and a `mapping.annotations` entry, which
+    is the `jakarta-jws.yml` shape one axis over: the first is what runs the
+    inheritance walk at all, the second is what `gate_types` reads the member
+    rule's class through. A type target mints no row of its own, so the one
+    annotation plays both roles without the two colliding.
+
+    `kafka` rather than `http` for `_seam_catalog`'s reason: a composed address
+    is canonicalized into the URL a framework serves only for an inbound HTTP
+    catalog, and these words compose a NAME rather than a URL.
+    """
+    return Catalog(
+        id="invented-contract",
+        style="annotation_driven",
+        protocol="kafka",
+        direction="inbound",
+        requires=("annotation_args",),
+        source=Path("tests/invented-contract.yml"),
+        matches={
+            "type_annotation": _CONTRACT_GATE,
+            "mapping": {
+                "path_from": ["name"],
+                "prefix_from": [],
+                "method_from": "method",
+                "all_methods": [],
+                "prefix_annotation": None,
+                "annotations": [{"fqn": _CONTRACT_GATE}, {"fqn": _CONTRACT_OP}],
+                **mapping,
+            },
+        },
+    )
+
+
+def _contract_facts(
+    root: Path,
+    *,
+    name: str = "OrderWorkflow",
+    member: str = "run",
+    kind: ConstructKind = ConstructKind.INTERFACE,
+    gate_args: dict | None = None,
+    op_args: dict | None = None,
+    implementor: bool = False,
+) -> None:
+    """One gate-carrying contract type declaring one ANNOTATED member, and —
+    where `implementor` — a local class that implements it, overrides that
+    member without annotating its own override, and carries the marker the
+    flip's condition tests for.
+
+    The override is the whole of M1: the declaration stays on the contract type
+    while the row's handler becomes the implementor's method, so a rule reading
+    the handler's own class and a rule reading the declaring type answer
+    differently — and only one of them answers what the framework does.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path=f"com/acme/orders/{name}.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=_contract_type(name), construct_kind=kind),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_contract_type(name),
+            retention="runtime",
+            use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args=dict(gate_args or {})),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_contract_member(name, member),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_contract_type(name),
+            visibility="public",
+            signature=_VOID,
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_contract_member(name, member),
+            retention="runtime",
+            use=AnnotationUse(annotation=_CONTRACT_OP_FQN, args=dict(op_args or {})),
+        ),
+    ]
+    if implementor:
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_type(f"{name}Impl"),
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[_contract_type(name)],
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=_contract_type(f"{name}Impl"),
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_BEAN_FQN, args={}),
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_member(f"{name}Impl", member),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_contract_type(f"{name}Impl"),
+                visibility="public",
+                signature=_VOID,
+            ),
+        ]
+    write_fact_file(root / f"{name}.jsonl", document, facts)
+
+
+def _contract_rows(tmp_path: Path, catalog: Catalog, **facts: object) -> list[tuple[str, str]]:
+    """Each derived endpoint as `(path, handler)` — the pair, because the two
+    coming apart is what these words are for."""
+    _contract_facts(tmp_path / "facts", **facts)  # type: ignore[arg-type]
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    rows = sorted(
+        (str(row["path"]), row["handler"] and str(row["handler"]))
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+def _contract_paths(tmp_path: Path, catalog: Catalog, **facts: object) -> list[str]:
+    return [path for path, _ in _contract_rows(tmp_path, catalog, **facts)]
+
+
+def test_declaring_type_simple_name_names_the_interface_not_the_implementor(tmp_path: Path):
+    """M1, CP-30 Q1. The default name of this operation is the ANNOTATED
+    TYPE's simple name, not the member's — the constructor the probe
+    disassembles takes `getSimpleName()` of the interface at offset 101 on the
+    one branch and the reflected method's own name at offset 122 on every
+    other.
+
+    The row's HANDLER is the implementor's override, because that is the method
+    the container runs. So the two answers differ, and reading the handler's
+    own class would publish `OrderWorkflowImpl` — a type no caller ever names.
+    That is the whole of the rule, and one row states it."""
+    catalog = _contract_catalog(path_fallback="declaring_type_simple_name")
+    # The flip is what makes the handler the implementor's while the
+    # declaration stays on the contract type — the one shipped mechanism that
+    # pulls the two apart, so the word is measured against it rather than
+    # against a fixture where they happen to agree.
+    catalog = replace(
+        catalog,
+        direction="outbound",
+        resolves={
+            "direction": [
+                {
+                    "when": {"owner_implemented_by_type_annotated": [_CONTRACT_BEAN]},
+                    "then": "inbound",
+                }
+            ]
+        },
+    )
+
+    assert _contract_rows(tmp_path, catalog, implementor=True) == [
+        ("OrderWorkflow", _contract_member("OrderWorkflowImpl", "run"))
+    ]
+
+
+def test_prefixed_capitalized_construct_name_composes_the_prefix_and_capitalizes(
+    tmp_path: Path,
+):
+    """M2, M3 — CP-30 Q2/Q3, offset for offset: the prefix is read off the
+    DECLARING type's own gate annotation and the member name takes
+    `substring(0, 1).toUpperCase()` in front of `substring(1)`.
+
+    `chargeCard` under the prefix `billing_` is `billing_ChargeCard`. Only the
+    FIRST character is raised — a rule that title-cased the whole name would
+    agree here and disagree on every all-caps member."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="prefixed_capitalized_construct_name",
+            fallback_prefix_attr="namePrefix",
+        ),
+        member="chargeCard",
+        gate_args={"namePrefix": "billing_"},
+    )
+
+    assert paths == ["billing_ChargeCard"]
+
+
+def test_an_explicitly_named_member_never_reaches_the_prefix(tmp_path: Path):
+    """M2, and the edge that tells this rule from every paraphrase of it. The
+    prefix is composed INSIDE the fallback, so a member carrying its own name
+    skips it by construction rather than by a flag — CP-30 Q2 reads the
+    empty-name test at offset 50 jumping PAST the annotation's own value and
+    into the prefix branch at offset 66, so the two are exclusive in the
+    framework itself.
+
+    The same declaration, the same prefix, one attribute different: `Charge`,
+    never `billing_Charge`."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="prefixed_capitalized_construct_name",
+            fallback_prefix_attr="namePrefix",
+        ),
+        member="chargeCard",
+        gate_args={"namePrefix": "billing_"},
+        op_args={"name": "Charge"},
+    )
+
+    assert paths == ["Charge"]
+
+
+def test_declaring_type_qualified_name_keeps_the_package(tmp_path: Path):
+    """M8: the third word's framework defaults the address to the declaring
+    class's FULLY-QUALIFIED name, so nothing is stripped — the package is the
+    address, and a word that published the simple name would collide two
+    classes of one name in different packages into one identity."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(path_fallback="declaring_type_qualified_name"),
+        name="OrderConsumer",
+        member="onOrder",
+        kind=ConstructKind.CLASS,
+    )
+
+    assert paths == ["com.acme.orders.OrderConsumer"]
+
+
+def test_declaring_type_scoped_name_puts_the_contract_in_front_of_the_member(tmp_path: Path):
+    """Spec 2026-09-22 §1d's identity for the kinds CP-30 Q1 names at offset
+    122 — a signal, a query, an update — and the fourth declaring-type word.
+
+    The framework's own name for such a member is the member's own name and
+    nothing else, so `cancel` is what the wire carries; the CONTRACT in front
+    of it is our identity rule, and it is what keeps two workflows' `cancel`
+    apart. Both halves are asserted at once, because either alone is a name
+    something else already answers for."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        member="cancel",
+    )
+
+    assert paths == ["OrderWorkflow/cancel"]
+
+
+def test_an_explicitly_named_member_is_still_scoped_by_its_declaring_type(tmp_path: Path):
+    """The composition edge, and the one place this word parts company with
+    every other in the vocabulary.
+
+    CP-30 Q1 reads `getNameFromAnnotation()` at offset 81, BEFORE either
+    branch, and wraps both in `Optional.orElse` — so an explicit
+    `@SignalMethod(name = "Abort")` wins outright and a pure fallback would
+    never fire for it. That would publish a bare `Abort`, which is the
+    colliding identity §2f refuses for `WorkflowStub.signal("cancel", …)`
+    reached by the other route: the SCOPE is not the framework's default, it is
+    §1d's identity, so it belongs on the declared name as much as on the
+    defaulted one.
+
+    The same declaration as above, one attribute different, and the scope
+    survives."""
+    paths = _contract_paths(
+        tmp_path,
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        member="cancel",
+        op_args={"name": "Abort"},
+    )
+
+    assert paths == ["OrderWorkflow/Abort"]
+
+
+def test_the_scoped_word_names_the_declaring_type_and_not_the_handlers_class(tmp_path: Path):
+    """The word reads the DECLARING type, the same one
+    `declaring_type_simple_name` reads, measured against the one shipped
+    mechanism that pulls the declaring type and the handler apart.
+
+    Under the flip the declaration stays on the contract while the handler
+    becomes the implementor's override, so a word reading the handler's own
+    class would publish `OrderWorkflowImpl/cancel` — a type no caller ever
+    names, in front of a member name that is otherwise right, which is the
+    hardest kind of wrong address to notice."""
+    catalog = replace(
+        _contract_catalog(
+            path_fallback="declaring_type_scoped_name",
+            fallback_scope_separator="/",
+        ),
+        direction="outbound",
+        resolves={
+            "direction": [
+                {
+                    "when": {"owner_implemented_by_type_annotated": [_CONTRACT_BEAN]},
+                    "then": "inbound",
+                }
+            ]
+        },
+    )
+
+    assert _contract_rows(tmp_path, catalog, member="cancel", implementor=True) == [
+        ("OrderWorkflow/cancel", _contract_member("OrderWorkflowImpl", "cancel"))
+    ]
+
+
+def test_the_scope_separator_is_refused_without_the_word_that_reads_it(tmp_path: Path):
+    """`fallback_prefix_attr`'s own refusal, one key over, and the `_RESOLVES`
+    discipline: no other word composes a scope, so a separator declared beside
+    one of them states a punctuation rule that never runs — and a reader of the
+    file believes the scope is composed somewhere."""
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(
+            tmp_path,
+            _contract_catalog(path_fallback="construct_name", fallback_scope_separator="/"),
+        )
+
+    assert "fallback_scope_separator" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize("separator", [None, "", 5])
+def test_the_scoping_word_is_refused_without_a_separator_to_compose_with(
+    tmp_path: Path, separator: object
+):
+    """The dangerous half. With nothing between them the two halves compose one
+    token that is neither — `OrderWorkflowcancel`, published at
+    `resolved`/`compiler`, where nothing downstream can tell it from an address
+    somebody observed. An empty string and a non-string scalar are refused
+    beside an absent key for the reason `path_prefix` already states."""
+    mapping: dict[str, object] = {"path_fallback": "declaring_type_scoped_name"}
+    if separator is not None:
+        mapping["fallback_scope_separator"] = separator
+
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(tmp_path, _contract_catalog(**mapping))
+
+    assert "fallback_scope_separator" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+def _contract_member_facts(root: Path) -> None:
+    """A contract type declaring one UNANNOTATED member, and a class that
+    implements it, overrides that member, and declares a public helper of its
+    own — M-3's shape, and the whole reason the second member word exists.
+
+    Nothing annotates the implementing class: its gate is INHERITED from the
+    contract by the walk, which is exactly what makes it a gate type and
+    exactly what makes `public_methods` publish `reloadRates` as an operation
+    nothing calls.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/BillingActivities.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    contract = _contract_type("BillingActivities")
+    implementor = _contract_type("BillingActivitiesImpl")
+    facts: list[object] = [
+        SymbolFact(document_id="doc_1", symbol=contract, construct_kind=ConstructKind.INTERFACE),
+        AnnotationFact(
+            document_id="doc_1",
+            target=contract,
+            retention="runtime",
+            use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={}),
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_contract_member("BillingActivities", "chargeCard"),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=contract,
+            visibility="public",
+            signature=_VOID,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=implementor,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[contract],
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_contract_member("BillingActivitiesImpl", "chargeCard"),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=implementor,
+            visibility="public",
+            signature=_VOID,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_contract_member("BillingActivitiesImpl", "reloadRates", "sig_0b2"),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=implementor,
+            visibility="public",
+            signature=_VOID,
+        ),
+    ]
+    write_fact_file(root / "BillingActivities.jsonl", document, facts)
+
+
+def _contract_member_paths(tmp_path: Path, members: str) -> set[str]:
+    """The addresses one member word derives over M-3's shape. The gate is
+    declared as `prefix_annotation` as well, which is what carries it onto the
+    implementing class — without that inheritance the implementor is not a gate
+    type at all and there is nothing for the new word to fence."""
+    _contract_member_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _contract_catalog(
+        members=members,
+        prefix_annotation=_CONTRACT_GATE,
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+    return paths
+
+
+def test_declared_type_methods_skips_a_member_the_gate_class_declares_itself(tmp_path: Path):
+    """M-3, and the NEGATIVE half is the point of the word.
+
+    `public_methods` is measured here first, because the fence is only worth
+    anything if the thing it fences really happens: the gate is inherited onto
+    the implementing class, so that class is gated, so its own `reloadRates`
+    publishes as an operation — an endpoint nothing calls, at
+    `resolved`/`compiler` where nothing downstream can tell it from an
+    observation.
+
+    `declared_type_methods` enumerates only members whose DECLARING type
+    carries the gate directly, which is the contract type and never the
+    implementor. `chargeCard` survives; `reloadRates` does not.
+
+    CP-30 Q4 is why such a catalog needs a member rule at all rather than
+    annotating each operation: the qualification predicate returns true at
+    offset 73 for an unannotated, non-static, non-synthetic method."""
+    assert _contract_member_paths(tmp_path / "a", "public_methods") == {
+        "ChargeCard",
+        "ReloadRates",
+    }
+
+    assert _contract_member_paths(tmp_path / "b", "declared_type_methods") == {"ChargeCard"}
+
+
+def _composed_gate_facts(root: Path) -> None:
+    """The gate reaching a contract type through a MODULE-LOCAL STEREOTYPE
+    rather than written on it directly: `@BillingContract` is an annotation
+    type of this module's own, meta-annotated with the catalog's gate, and the
+    contract wears the stereotype.
+
+    The pre-pass reads that back to the gate itself (`A-C7`), so the contract
+    type carries a SYNTHETIC gate row — and telling that row apart from one the
+    inheritance walk carried across a type boundary is the whole of what
+    `annotations_effective.inherited` exists for. Read as "any synthetic row",
+    the fence drops this contract's every member silently.
+
+    An annotation type is an interface in bytecode, which is what puts it in
+    `interface_symbols` and makes the composition pre-pass follow it.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/BillingActivities.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    stereotype = _contract_type("BillingContract")
+    # The same type as a USE site names it: an annotation fact records its
+    # annotation as a BARE fqn descriptor and its target as a module-prefixed
+    # symbol (D00 §5a), so the stereotype appears under both spellings at once.
+    stereotype_fqn = "com/acme/orders/BillingContract#"
+    contract = _contract_type("BillingActivities")
+    write_fact_file(
+        root / "BillingActivities.jsonl",
+        document,
+        [
+            SymbolFact(
+                document_id="doc_1", symbol=stereotype, construct_kind=ConstructKind.INTERFACE
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=stereotype,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "billing_"}),
+            ),
+            SymbolFact(
+                document_id="doc_1", symbol=contract, construct_kind=ConstructKind.INTERFACE
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=contract,
+                retention="runtime",
+                use=AnnotationUse(annotation=stereotype_fqn, args={}),
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_member("BillingActivities", "chargeCard"),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=contract,
+                visibility="public",
+                signature=_VOID,
+            ),
+        ],
+    )
+
+
+@pytest.mark.parametrize("members", ["public_methods", "declared_type_methods"])
+def test_a_gate_reaching_the_contract_through_a_composed_stereotype_still_gates_it(
+    tmp_path: Path, members: str
+):
+    """The fence excludes an INHERITED gate and nothing else.
+
+    `annotations_effective` marks three different pre-passes' rows, and only
+    the inheritance walk carries an annotation across a type boundary: folding
+    reads a repeated annotation out of the container javac stored it in, and
+    composition reads a module-local stereotype back to the annotation it was
+    built from. In both, the author really did write that annotation on THIS
+    type. A fence keyed on "synthetic" rather than on "inherited" drops the
+    composed case, and drops it silently — the contract's whole surface, from
+    ordinary scanned input, which is the same loss this engine already records
+    as having deleted a controller's entire surface one rule over.
+
+    Both words answer the same here, and the parametrisation is the point:
+    `public_methods` is the control, and the new word must not differ from it
+    on a gate the contract type genuinely carries."""
+    _composed_gate_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _contract_catalog(
+        members=members,
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"billing_ChargeCard"}
+
+
+def _gated_ancestry_facts(root: Path) -> None:
+    """A gated class extending a gated base, where only the BASE declares the
+    member — `A-M15`'s own shape, with a gate and a prefix on each level."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/orders/BillingBase.java",
+        module_id="com.acme:orders-service",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    base = _contract_type("BillingBase")
+    sub = _contract_type("BillingSub")
+    write_fact_file(
+        root / "BillingBase.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=base, construct_kind=ConstructKind.CLASS),
+            AnnotationFact(
+                document_id="doc_1",
+                target=base,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "base_"}),
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_contract_member("BillingBase", "op"),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=base,
+                visibility="public",
+                signature=_VOID,
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=sub,
+                construct_kind=ConstructKind.CLASS,
+                superclass=base,
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=sub,
+                retention="runtime",
+                use=AnnotationUse(annotation=_CONTRACT_GATE_FQN, args={"namePrefix": "sub_"}),
+            ),
+        ],
+    )
+
+
+def test_an_inherited_member_takes_the_name_of_the_gate_it_is_attributed_to(tmp_path: Path):
+    """WHICH type the new words name, on the one shape where "the declaring
+    type" and "the type this row is attributed to" are different types.
+
+    `A-M15` already attributes an INHERITED member to the gate the walk started
+    from rather than to the base class that declares it — `member_declarations`
+    says so in as many words — and the walk starts from every gate in the
+    chain. So one declaration of `op()` on a gated base, under a gated
+    subclass, is TWO endpoints, each named and prefixed by the gate it is
+    attributed to.
+
+    That double-derivation is `A-M15`/w63 behaviour these words inherit rather
+    than introduce, and it is not this vocabulary's to change. What IS this
+    vocabulary's is which type supplies the name, and the two prefixes make the
+    answer visible: `base_Op` from the base's own gate, `sub_Op` from the
+    subclass's. Pinned so the next reader finds it stated rather than
+    discovering it."""
+    _gated_ancestry_facts(tmp_path / "facts")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    catalog = _contract_catalog(
+        members="declared_type_methods",
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    assert derive_endpoints(workspace, [catalog], capabilities={"annotation_args"}) == []
+    paths = {str(row["path"]) for row in workspace.query("endpoints")}
+    workspace.close()
+
+    assert paths == {"base_Op", "sub_Op"}
+
+
+def test_the_prefix_composing_word_is_refused_without_a_type_gate_to_read(tmp_path: Path):
+    """The attribute is read off the declaring type's own `type_annotation`
+    use and nowhere else, so a catalog declaring no such gate has no row to
+    read it from — and the word would then compose every address WITHOUT its
+    prefix. A fragment of the address the framework serves is the same
+    confidently-wrong answer an empty prefix attribute gives, reached by a
+    third route, so it is refused at load the same way (the `members` class
+    gate's own shape)."""
+    catalog = _contract_catalog(
+        path_fallback="prefixed_capitalized_construct_name",
+        fallback_prefix_attr="namePrefix",
+    )
+    del catalog.matches["type_annotation"]
+
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(tmp_path, catalog)
+
+    assert "type_annotation" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+def test_a_misspelled_entry_word_is_refused_as_a_typo_and_not_as_an_unread_key(tmp_path: Path):
+    """Which refusal a file gets is part of the refusal. A catalog whose
+    ANNOTATION ENTRY misspells the prefix-composing word, with the attribute
+    declared beside it, has exactly one thing wrong — the word — and a refusal
+    naming `fallback_prefix_attr` would send its author to correct the line
+    that is right. So the closed-set check runs first and this one reads every
+    entry's word after it has been vouched for."""
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(
+            tmp_path,
+            _contract_catalog(
+                path_fallback="construct_name",
+                fallback_prefix_attr="namePrefix",
+                annotations=[
+                    {"fqn": _CONTRACT_GATE},
+                    {"fqn": _CONTRACT_OP, "path_fallback": "prefixed_capitalised_construct_name"},
+                ],
+            ),
+        )
+
+    assert "prefixed_capitalised_construct_name" in str(raised.value)
+    assert "is not one of" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+def test_the_prefix_attribute_is_refused_without_the_word_that_reads_it(tmp_path: Path):
+    """The `_RESOLVES` discipline: a key nothing reads is a rule the author
+    believes is being applied. No other fallback word composes a prefix, so an
+    attribute declared beside one of them states a composition that never
+    happens."""
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(
+            tmp_path,
+            _contract_catalog(path_fallback="construct_name", fallback_prefix_attr="namePrefix"),
+        )
+
+    assert "fallback_prefix_attr" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize("attribute", [None, "", 5])
+def test_the_prefix_composing_word_is_refused_without_an_attribute_to_read(
+    tmp_path: Path, attribute: object
+):
+    """The other half, and the dangerous one. With nothing to read the prefix
+    from, the word composes an empty prefix onto every row it names — an
+    address that is a FRAGMENT of the one the framework serves, published at
+    `resolved`/`compiler`. A non-string scalar and an empty name are refused
+    beside an absent key for `path_prefix`'s reason: `str()` of a YAML integer
+    is an attribute name nobody wrote."""
+    mapping: dict[str, object] = {"path_fallback": "prefixed_capitalized_construct_name"}
+    if attribute is not None:
+        mapping["fallback_prefix_attr"] = attribute
+
+    with pytest.raises(CatalogError) as raised:
+        _contract_paths(tmp_path, _contract_catalog(**mapping))
+
+    assert "fallback_prefix_attr" in str(raised.value)
+    assert "invented-contract.yml" in str(raised.value)
 
 
 # --- The prefix seam: `mapping.path_separator` ----------------------------
@@ -8875,3 +9647,313 @@ def test_a_method_inherited_from_a_plain_base_is_not_an_operation_of_the_subclas
         )
         == []
     )
+
+
+# --- Temporal: registration is the evidence (Group D, spec §2d + ruling R12) ---
+
+_TP_MODULE = "sextant-jvm maven com.acme/temporal-probe 1.0.0 "
+_TP_CONTRACTS = {
+    "temporal-workflow": (
+        _TP_MODULE + "com/acme/tp/OrderWorkflow#",
+        "io/temporal/workflow/WorkflowInterface#",
+        "io/temporal/workflow/WorkflowMethod#",
+        "io/temporal/spring/boot/WorkflowImpl#",
+        "workflow",
+        "OrderWorkflow",
+    ),
+    "temporal-activity": (
+        _TP_MODULE + "com/acme/tp/BillingActivities#",
+        "io/temporal/activity/ActivityInterface#",
+        "io/temporal/activity/ActivityMethod#",
+        "io/temporal/spring/boot/ActivityImpl#",
+        "activity",
+        "Charge",
+    ),
+}
+_TP_IMPL = _TP_MODULE + "com/acme/tp/ContractImpl#"
+
+
+def _temporal_facts(root: Path, catalog_id: str, *, implementor: str | None) -> None:
+    """One Temporal contract interface declaring one named operation, and
+    optionally a local class implementing it.
+
+    `implementor` is the fqn of the annotation that class carries, or None for no
+    implementing class at all — the two knobs that are the flip's own conjuncts.
+    The operation carries an EXPLICIT name so the row's identity does not depend
+    on which naming word the catalog happens to declare; the naming words are
+    measured end to end against the compiled fixture instead.
+    """
+    contract, gate, member_annotation, _starter, _kind, name = _TP_CONTRACTS[catalog_id]
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/tp/Contract.java",
+        module_id="com.acme:temporal-probe",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    void = Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type=""))
+    member = contract + "operate(sig_a)."
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=contract, construct_kind=ConstructKind.INTERFACE),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=member,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=contract,
+            signature=void,
+            modifiers={"public": True},
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=contract,
+            retention="runtime",
+            use=AnnotationUse(annotation=gate, args={}),
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=member,
+            retention="runtime",
+            use=AnnotationUse(annotation=member_annotation, args={"name": name}),
+        ),
+    ]
+    if implementor is not None:
+        facts += [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_TP_IMPL,
+                construct_kind=ConstructKind.CLASS,
+                interfaces=[contract],
+            ),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_TP_IMPL + "operate(sig_a).",
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_TP_IMPL,
+                signature=void,
+                modifiers={"public": True},
+            ),
+        ]
+        if implementor:
+            facts.append(
+                AnnotationFact(
+                    document_id="doc_1",
+                    target=_TP_IMPL,
+                    retention="runtime",
+                    use=AnnotationUse(annotation=implementor, args={"taskQueues": ["orders"]}),
+                )
+            )
+    write_fact_file(root / "Contract.jsonl", document, facts)
+
+
+def _temporal_rows(tmp_path: Path, catalog_id: str, *, implementor: str | None) -> list[tuple]:
+    _temporal_facts(tmp_path / "facts", catalog_id, implementor=implementor)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert (
+        derive_endpoints(workspace, [_shipped(catalog_id)], capabilities=set(_TASK_7_CAPABILITIES))
+        == []
+    )
+    rows = sorted(
+        (
+            str(row["direction"]),
+            row["method"] and str(row["method"]),
+            str(row["path"]),
+            row["handler"] and str(row["handler"]),
+            row["caller"] and str(row["caller"]),
+        )
+        for row in workspace.query("endpoints")
+    )
+    workspace.close()
+    return rows
+
+
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_a_temporal_contract_a_registered_implementation_serves_is_inbound(
+    tmp_path: Path, catalog_id: str
+):
+    """The positive both near-misses below are measured against.
+
+    The Spring Boot starter's `@WorkflowImpl`/`@ActivityImpl` is what puts an
+    implementation on a worker (CP-30 Q6: each declares `String[] workers()` and
+    `String[] taskQueues()` and nothing else), so where it is present the contract
+    is one this module SERVES. The row flips to inbound, keeps the CONTRACT's own
+    name — the whole point of gating on the interface — and rebinds `handler` to
+    the implementor's override."""
+    _contract, _gate, _member, starter, kind, name = _TP_CONTRACTS[catalog_id]
+    assert _temporal_rows(tmp_path, catalog_id, implementor=starter) == [
+        ("inbound", kind, name, _TP_IMPL + "operate(sig_a).", None)
+    ]
+
+
+@pytest.mark.declines("temporal-workflow")
+@pytest.mark.declines("temporal-activity")
+@pytest.mark.pins("annotation_driven.flip-implementer-is-a-controller")
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_a_temporal_contract_an_unregistered_class_implements_derives_nothing(
+    tmp_path: Path, catalog_id: str
+):
+    """§10 near-miss for the flip's SECOND conjunct, and the reason the shape is
+    keyed on the starter annotation rather than on `owner_implemented_in_module`.
+
+    One annotation different from the positive above and the module neither serves
+    the contract nor calls it. A Temporal worker polls a task queue for the types
+    a `Worker` was told about, so an implementation nothing registered answers no
+    poll: an inbound row here would invent an endpoint (§8.1 rule 4). The outbound
+    row the SEI fence subtracts stays subtracted, because a module does not call
+    what it implements. Net: nothing, in either direction — which is the whole
+    reason registration is the condition."""
+    assert _temporal_rows(tmp_path, catalog_id, implementor="") == []
+
+
+@pytest.mark.pins("derive_endpoints.direction-flip-is-owner-scoped")
+@pytest.mark.parametrize("catalog_id", sorted(_TP_CONTRACTS))
+def test_an_unimplemented_temporal_contract_still_derives_outbound(tmp_path: Path, catalog_id: str):
+    """§10 near-miss for the flip's FIRST conjunct: the same contract with no local
+    implementation at all is an ordinary client-side declaration and must keep
+    deriving exactly the outbound row it always did — caller intact, handler
+    absent.
+
+    A flip keyed on the catalog's rule rather than on the OWNER would rewrite every
+    workflow and activity contract a caller-only module declares into an endpoint
+    that module serves, which is the largest fabrication available here."""
+    contract, _gate, _member, _starter, kind, name = _TP_CONTRACTS[catalog_id]
+    assert _temporal_rows(tmp_path, catalog_id, implementor=None) == [
+        ("outbound", kind, name, None, contract + "operate(sig_a).")
+    ]
+
+
+# --- Quarkus @ConsumeEvent: the annotation gate, the measured default and the default
+# --- that is NOT written (Group D Task 8, CP-31 Q6/Q7) --------------------------------
+
+_QCE_MODULE = "sextant-jvm maven com.acme/orders-eventbus 1.0.0 "
+_QCE_TYPE = _QCE_MODULE + "com/acme/eb/OrderConsumers#"
+_QCE_ANNOTATION = "io/quarkus/vertx/ConsumeEvent#"
+
+
+def _consume_event_facts(root: Path, *, annotation: str, args: dict) -> None:
+    """One bean class declaring one consumer method taking one payload.
+
+    `annotation` is the fqn the method carries and `args` what it carries as arguments —
+    the two knobs this catalog's own conjuncts turn on.
+    """
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/eb/OrderConsumers.java",
+        module_id="com.acme:orders-eventbus",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    member = _QCE_TYPE + "onOrderCreated(sig_a)."
+    signature = Signature(
+        parameters=[
+            Parameter(name="order", type=TypeRef(symbol="com/acme/eb/Order#", wire_type="object"))
+        ],
+        returns=TypeRef(symbol="void#", wire_type=""),
+    )
+    write_fact_file(
+        root / "OrderConsumers.jsonl",
+        document,
+        [
+            SymbolFact(document_id="doc_1", symbol=_QCE_TYPE, construct_kind=ConstructKind.CLASS),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=member,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_QCE_TYPE,
+                signature=signature,
+                modifiers={"public": True},
+            ),
+            AnnotationFact(
+                document_id="doc_1",
+                target=member,
+                retention="runtime",
+                use=AnnotationUse(annotation=annotation, args=args),
+            ),
+        ],
+    )
+
+
+def _consume_event_rows(tmp_path: Path, *, annotation: str, args: dict) -> tuple[list, list]:
+    _consume_event_facts(tmp_path / "facts", annotation=annotation, args=args)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert (
+        derive_endpoints(
+            workspace,
+            [_shipped("quarkus-consume-event")],
+            capabilities=set(_TASK_7_CAPABILITIES),
+        )
+        == []
+    )
+    # `metadata_from` is written by its OWN pass, below `derive_endpoints` and below
+    # `record_request_requirements`, because an entry names its row by that row's
+    # identity columns (D02 §2l). Running it here is what makes the two assertions
+    # below one measurement rather than two halves nobody joined.
+    record_endpoint_attributes(workspace, [_shipped("quarkus-consume-event")])
+    endpoints = sorted(
+        (str(row["direction"]), str(row["path"]), str(row["resolution"]))
+        for row in workspace.query("endpoints")
+    )
+    metadata = sorted(
+        (str(row["path"]), str(row["kind"]), row["value"] and str(row["value"]))
+        for row in workspace.query("endpoint_metadata")
+    )
+    workspace.close()
+    return endpoints, metadata
+
+
+def test_a_consume_event_with_no_address_takes_the_beans_fully_qualified_name(tmp_path: Path):
+    """CP-31 Q6 and Q7 together, as the row they produce.
+
+    `@ConsumeEvent`'s own `AnnotationDefault` for `value()` is the EMPTY STRING, so the
+    annotation use carries no address at all; `VertxProcessor.build` then supplies one at
+    offsets 63-76 by calling `BeanInfo.getBeanClass().toString()` — the FULLY-QUALIFIED
+    class name — which is what `path_fallback: declaring_type_qualified_name` composes.
+    `local()`'s default is the boolean `true`, so the undecorated consumer is local-only
+    and `absent_value` writes it."""
+    assert _consume_event_rows(tmp_path, annotation=_QCE_ANNOTATION, args={}) == (
+        [("inbound", "com.acme.eb.OrderConsumers", "resolved")],
+        [("com.acme.eb.OrderConsumers", "local", "true")],
+    )
+
+
+def test_a_consume_event_declaring_local_false_is_cluster_reachable(tmp_path: Path):
+    """The other side of the measured default: an explicit `local = false` overrides it,
+    and the metadata row carries the attribute's own value rather than the default. Both
+    rows are needed, because a `metadata_from` that wrote `absent_value` unconditionally
+    would pass the test above on its own."""
+    assert _consume_event_rows(
+        tmp_path, annotation=_QCE_ANNOTATION, args={"value": "orders.cluster", "local": False}
+    ) == (
+        [("inbound", "orders.cluster", "resolved")],
+        [("orders.cluster", "local", "false")],
+    )
+
+
+@pytest.mark.declines("quarkus-consume-event")
+@pytest.mark.pins("derive_endpoints.mapping-annotation-fqn")
+def test_a_look_alike_consume_event_annotation_derives_nothing(tmp_path: Path):
+    """§10 near-miss, measuring the ANNOTATION conjunct alone.
+
+    Every other conjunct holds — a public method on a class, one unannotated payload
+    parameter, and an address written exactly where `path_from: [value]` reads one. Only
+    the annotation's fqn differs, and an application's own `@ConsumeEvent` marker in its
+    own package is the ordinary way that happens. Without the fqn conjunct that
+    application's own bookkeeping annotation would publish an event-bus endpoint at
+    `resolved`/`compiler`, and the `absent_value` measured off QUARKUS's annotation would
+    be attributed to it."""
+    assert _consume_event_rows(
+        tmp_path, annotation="com/acme/eb/ConsumeEvent#", args={"value": "orders.created"}
+    ) == ([], [])

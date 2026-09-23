@@ -55,7 +55,7 @@ JMS and AMQP       | JMS / AMQP |
 AWS SQS            | SQS        |
 Google Pub/Sub     | Pub/Sub    |
 Meridian           | —          | FR-21 FR-22 FR-23 FR-24
-Async              | Async      | temporal-cadence vertx-eventbus
+Async              | Async      | quartz akka-pekko-actors
 ```
 
 **Delivered in Java/Kotlin, matrix cell stays `◐`** — because §2 scores every language and
@@ -249,6 +249,30 @@ annotation. And no member of the closed `Protocol` set fits a workflow engine; a
 is a schema decision with its own precedent (`RSOCKET`, stated in `closed_sets.py`). Three
 engine words and a schema member is a spec, not a catalog.
 
+**Where it landed, 2026-09-22.** That spec is
+`docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md` (Group D of §4's order
+table, with `vertx-eventbus`), and it shipped: `temporal` and `eventbus` joined the
+`Protocol` set, and the naming rules took **four** new `path_fallback` words, not fewer
+than this paragraph predicted. *(Corrected at the branch review: this said the two rules
+"turned out to be ONE engine word rather than three", and that `construct_name` and
+`prefixed_capitalized_construct_name` "already said both" of the
+`@WorkflowMethod`/`@ActivityMethod` defaults. Both halves were false —
+`prefixed_capitalized_construct_name` is itself one of the words this group added, in
+`146ad01`, and `@WorkflowMethod`'s default is the workflow INTERFACE's simple name, which
+took `declaring_type_simple_name`, another of them. D02 and COVERAGE both had it right; the
+register was the outlier, and it is the project's delivery record.)* What shipped:
+`declaring_type_simple_name`, `declaring_type_qualified_name`,
+`prefixed_capitalized_construct_name` and `declaring_type_scoped_name` — the last composing
+the declaring type's simple name, a separator the catalog states, and the name that won, so
+`@SignalMethod cancel` on `OrderWorkflow` addresses `OrderWorkflow/cancel` — beside one
+`members` word, `declared_type_methods`, and three catalog keys: `metadata_from`,
+`fallback_prefix_attr` and `fallback_scope_separator`. **The task queue was read, but not
+from where this paragraph expected it** — `WorkerFactory.newWorker(String)` and the four
+`setTaskQueue(String)` builders are all still unread, and the queue comes off the Spring
+Boot starter's `@WorkflowImpl(taskQueues = …)` / `@ActivityImpl(taskQueues = …)` instead;
+a module that registers its workers programmatically therefore derives nothing at all here,
+which is the group's sharpest boundary (COVERAGE §5.12, `OI-124`).
+
 **Also moved to spec work, 2026-09-12 — measured off the direct list:**
 `sqs-template-receive`, the SQS quarter of `G-44`, carried on the SQS row above under its
 own name so `G-44` can close on its three delivered quarters without losing the fourth.
@@ -306,6 +330,8 @@ The three rows at the head of the block (`pubsub-channel-adapter`, `dsl-media-ro
 run that closed them.
 
 ```closed
+temporal-cadence | tests/e2e/test_async_delivered.py::test_temporal_shapes_nine_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
+vertx-eventbus | tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows | https://github.com/ianynchen/sextant/actions/runs/<pending PR CI>
 pubsub-channel-adapter | tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows | https://github.com/ianynchen/sextant/actions/runs/35663682722
 dsl-media-route | tests/e2e/test_rest_inbound_delivered.py::test_a_kotlin_dsl_route_declared_under_a_media_guard_alone_derives_its_any_path_row | https://github.com/ianynchen/sextant/actions/runs/35663682722
 gateway-properties-routes | tests/e2e/test_rest_inbound_delivered.py::test_gateway_property_routes_derive_their_inbound_and_outbound_rows | https://github.com/ianynchen/sextant/actions/runs/35663682722
@@ -500,13 +526,24 @@ the name is out of ```intention-test-missing.
 |---|---|
 | `pubsub-channel-adapter` | **closed** (Group E spec 2026-09-21 §3–§6, commits `2a07658`..`c100aab`; pinned by `tests/e2e/test_async_delivered.py::test_pubsub_shape_four_rows` — `orders-sub` and `${probe.subscription}` each joined to `handlePubSubOrder` through `pubsubInputChannel`, the outbound `orders-topic` from the `PubSubMessageHandler` bean, the ambiguous-bean adapter keeping its row with `handler` NULL — beside `test_a_fed_channel_is_a_row_not_a_question` and `test_the_remaining_questions_are_exactly_the_unfed_channels`; **closed** on CI run 35663682722, PR #34, merged 2026-09-21) — `spring-integration-pubsub.yml` on `fluent`: the adapter's constructor is the root, its subscription the captured destination (through the field ladder — the `@Value` parameter derives its `${…}` expression), `setOutputChannelName`/`setOutputChannel` the channel it feeds (a bean reference resolved by `resolve/beans.py` through `bean-models/spring.yml`), and the `channel_bindings` join pass mints one row per `@ServiceActivator` reading that channel. The same words read the AMQP container hop and the Kafka/AMQP DSL flows (COVERAGE §5.8, §5.9, §5.12). Was: `PubSubInboundChannelAdapter` + `@ServiceActivator` — the subscription name is a constructor argument of the adapter, and `config_join` reads configuration files, never call-site arguments. The one Java row COVERAGE §5.11 still tiers `B`; one spec with the AMQP and Kafka adapters (§0, "Named 2026-09-12") |
 
-### Async and internal boundaries — NOT DELIVERED
+### Async and internal boundaries — NOT DELIVERED (both of the row's own blockers closed 2026-09-22; two uncatalogued frameworks surfaced in their place)
+
+**Read the first two rows and the last two together.** Group D closed everything this row
+was waiting on — Temporal and the Vert.x event bus both ship, with seven catalogs, two
+fixtures and exact e2e pins between them. The row did NOT close, and the reason is the
+definition at the top of this file rather than anything Group D left undone: §5.12 carries a
+Quartz row and an Akka/Pekko actors row that no catalog reads, and *"every Java/Kotlin
+library catalogued"* is the first clause of delivered. Both were there before Group D
+started and neither was in its scope; they were invisible while two other ids held the row
+open. Naming them is what the Kafka row did when `kafka-batch-generics` closed.
 
 | # | issue |
 |---|---|
 | `G-47` | Spring Integration read **2 of 11** channel-declaring annotations; **closed** — five more (`@Aggregator`, `@Filter`, `@Router`, `@Splitter`, `@Transformer`) derive since `6f088be`, 7 of 11 now, proven in CI run 34669970510; `@BridgeFrom`/`@BridgeTo` carry their channel in a bare `value()` and stay a stated boundary (COVERAGE §5.12) |
-| `temporal-cadence` | spec work (§0, "Moved to spec work"): two naming rules the `path_fallback` vocabulary cannot say, a task queue named on `WorkerFactory.newWorker` rather than any annotation, and no `Protocol` member for a workflow engine |
-| `vertx-eventbus` | `EventBus.consumer(String, Handler)` / `send`, `publish`, `request(String, Object[, DeliveryOptions])` are `single_call` shapes exactly, but an event-bus address is none of the closed `Protocol` set's members; the same schema decision as `temporal-cadence`, Category C |
+| `temporal-cadence` | **closed** — implemented and pinned by `tests/e2e/test_async_delivered.py::test_temporal_shapes_nine_rows` and `::test_temporal_shapes_eight_metadata_rows` (Group D, spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`; run pending). **Three catalogs**, not the one this row imagined: `temporal-workflow.yml` and `temporal-activity.yml` are contract catalogs on `annotation_driven` with `declared_on: interface`, direction declared `outbound` and flipped to `inbound` by `resolves.direction` on the Spring Boot starter annotation (`io.temporal.spring.boot.WorkflowImpl`/`ActivityImpl`), whose `taskQueues()` is the row's `task_queue` metadata; `temporal-untyped.yml` reads `newUntypedWorkflowStub`. The `Protocol` member is `temporal`, and the naming rules took FOUR new `path_fallback` words — `declaring_type_simple_name`, `declaring_type_qualified_name`, `prefixed_capitalized_construct_name` and `declaring_type_scoped_name` (`<declaring type>` + a catalog-stated separator + the member name), the last being what addresses a signal, query or update as `OrderWorkflow/cancel` — beside one `members` word, `declared_type_methods`, and three catalog keys. *(Corrected at the branch review: this said "the two naming rules became one new engine word", which §0's own paragraph above also said and which was false twice over.)* **The task queue this row called "the half of the wire identity a client actually addresses" is read off the starter annotation and off nothing else** — the programmatic `WorkerFactory.newWorker` form derives nothing at all, in either direction (COVERAGE §5.12, `OI-124`). Was: spec work (§0, "Moved to spec work") |
+| `vertx-eventbus` | **closed** — implemented and pinned by `tests/e2e/test_async_delivered.py::test_eventbus_shapes_rows` (Group D, same spec; run pending). **Four catalogs**: `vertx-eventbus.yml` (`single_call`, both major versions in one file, every row pinned to its own erased descriptor), `vertx-eventbus-chain.yml` (`fluent` — registration lives in the terminal, so `bus.consumer("a")` never given a handler derives nothing), `vertx-eventbus-mutiny.yml` (its own file because `io.vertx.mutiny.core.eventbus.EventBus` shares not one descriptor with the core interface) and `quarkus-consume-event.yml` (`@ConsumeEvent`). The `Protocol` member is `eventbus`. 17 rows on `fixtures/orders-eventbus`. `request(...)` derives no reply shape (`OI-125`). Was: `EventBus.consumer(String, Handler)` / `send`, `publish`, `request(String, Object[, DeliveryOptions])` are `single_call` shapes exactly, but an event-bus address is none of the closed `Protocol` set's members; the same schema decision as `temporal-cadence`, Category C |
+| `quartz` | **named 2026-09-22 (Group D register close)** — Quartz has no catalog at all: `@DisallowConcurrentExecution`, `Job` implementations and `JobDetail` builders are a second scheduler writing to the same `scheduled_work` table, COVERAGE §5.12, tier **A** for the annotation half and **B** for the builder half. Surfaced because the Async ```delivery row emptied when `temporal-cadence` and `vertx-eventbus` closed while §5.12 still carried this row uncatalogued — the definition's second clause, exactly as `smallrye-reactive-messaging` surfaced on Kafka at the B/C close. Costs a Quartz-scheduled module every scheduled entry point it has |
+| `akka-pekko-actors` | **named 2026-09-22 (Group D register close)**, same cause — `ref ! msg` / `ref.tell(msg)`, where the receiver comes from an `ActorRef` created elsewhere. COVERAGE §5.12 tiers it **C, possibly permanent** (§7): an actor reference is a value passed between methods and the address it carries is not named at the send site. **Costs an actor-based module every message boundary it has** — each `tell`/`!` send and each `receive` is invisible, so a module whose components talk through actors exports the HTTP or broker edges at its rim and nothing at all in between. It is on this row rather than scoped away because it is a Java/Kotlin library on the target list; if it is genuinely unreadable it belongs in ```out-of-scope``` with that measurement behind it, and nobody has made it |
 
 ### Meridian integration — NOT DELIVERED, and asked for four times
 
@@ -677,16 +714,28 @@ constructor argument, not a receiver-chain walk — and stays out of this list f
 reason. *(2026-09-21: it closed on `fluent`'s walk after all — a constructor root with
 void setters IS a receiver chain — see §4 row 3.)*
 
-### Category C — needs a spec of its own · **SPEC THEN PLAN**
+### Category C — needs a spec of its own · **ONE ITEM LEFT, and it is its own group**
+
+**Emptied 2026-09-22 but for one row.** `kotlin-null-handler` closed on group G,
+`micronaut-jms-over-sqs` on groups B/C, `jdk-httpclient` on group A, and **`temporal-cadence`
+and `vertx-eventbus` on group D, 2026-09-22** — the two this category was named for, and the
+two Async was waiting on. The only bullet below that is still open work is
+`conditional-controllers`, which is §4's own group F and the last spec in the order table;
+every other bullet is kept as the record of what the item was and how it closed. **This
+category no longer sequences anything** — the one live item is sequenced by that table, not
+by this list.
 
 - **Kotlin routes with a NULL handler** (`kotlin-null-handler`). A resolve-layer question
   about what counts as a handler and a root when the handler is a compiler-generated
   lambda class. Short spec. **Closed 2026-09-20** with the four Kotlin/Ktor Majors on spec
   `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`
   (§1's row); awaiting the PR's CI run.
-- **JDK / Apache `HttpClient`** (`jdk-httpclient`, REST outbound, tier B). A builder
-  chain; may fall out of Category B's mechanism, which the spec should establish before
-  assuming it.
+- **JDK / Apache `HttpClient`** (`jdk-httpclient`, REST outbound, tier B). **CLOSED on CI
+  run 34793215476** (group A, pinned by
+  `tests/e2e/test_rest_outbound_delivered.py::test_the_jdk_http_client_derives_every_request_it_builds_and_sends`;
+  the ```closed row above). It did fall out of Category B's mechanism, which is what this
+  bullet asked somebody to establish rather than assume. Was: a builder chain; may fall out
+  of Category B's mechanism, which the spec should establish before assuming it.
 - **`@ConditionalOnProperty` / `@Profile` controllers** (`conditional-controllers`, tier
   C). No mechanism exists; a route's existence becomes conditional on configuration.
   Largest design question here.
@@ -697,10 +746,14 @@ void setters IS a receiver chain — see §4 row 3.)*
   (§5.10's DR-5 boundary note). **Closed on CI run 35416301779 (Groups B and C, PR
   #30)** — `protocol_hint.hint_when` closed it, on both `@JMSListener` and `@JMSProducer`
   (§1's SQS row).
-- **`temporal-cadence` and `vertx-eventbus`.** Both need a `Protocol` member that does
-  not exist — a schema decision with its own precedent (`RSOCKET`, stated in
-  `closed_sets.py`) — and Temporal needs two naming rules besides (§0, "Moved to spec
-  work").
+- **`temporal-cadence` and `vertx-eventbus`.** **DONE 2026-09-22** (spec
+  `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`, group D of the order
+  table below; CI run pending). Both `Protocol` members landed — `temporal` and `eventbus` —
+  and Temporal's "two naming rules" turned out to be one engine word,
+  `declaring_type_scoped_name`. Seven catalogs between them, two fixtures, exact e2e row
+  sets. Was: both need a `Protocol` member that does not exist — a schema decision with its
+  own precedent (`RSOCKET`, stated in `closed_sets.py`) — and Temporal needs two naming rules
+  besides (§0, "Moved to spec work").
 
 ### Category D — measure first, then decide · **NOTHING OPEN**
 
@@ -731,7 +784,7 @@ with the spec already written first.
 | 2 | **B. Sibling-annotation reads** — `annotation_driven` reads an attribute off a sibling annotation of the same method — **DONE — closed on CI run 35416301779, PR #30** (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, B/C Tasks 1–10b) | `quarkus-jaxrs` `jaxrs-sse` (2) | **SSE closes**; REST inbound −1 |
 | 2 | **C. Rules conditional on an annotation attribute** — one plan with B, both grow `annotation_driven` by one word — **DONE — closed on CI run 35416301779, PR #30** (spec `docs/superpowers/specs/2026-09-18-sibling-reads-and-attribute-conditions-design.md`, B/C Tasks 11–12) | `kafka-batch-generics` `micronaut-jms-over-sqs` (2) | **SQS closed**; Kafka did NOT close — §5.8 still carried SmallRye Reactive Messaging uncatalogued (tier B), now the register item `smallrye-reactive-messaging` |
 | 3 | **E. Adapter destination as a constructor argument** — `config_join` reads a call-site argument — **DONE 2026-09-21** (spec `docs/superpowers/specs/2026-09-21-spring-integration-adapters-and-flows-design.md`: not a `config_join` extension after all but `fluent` extended with registration words and a bean fold, which also closed `dsl-media-route` and `gateway-properties-routes` as ride-alongs; CI run 35663682722, PR #34) | `pubsub-channel-adapter` (1) | **Pub/Sub closes** — and REST inbound −2: the row now holds `conditional-controllers` alone |
-| 4 | **D. New `Protocol` members and two naming words** | `temporal-cadence` `vertx-eventbus` (2) | **Async closes** |
+| 4 | **D. New `Protocol` members and two naming words** — **DONE 2026-09-22** (spec `docs/superpowers/specs/2026-09-22-temporal-and-eventbus-design.md`; CI run pending). Two members, `temporal` and `eventbus`; **four** naming words where this table predicted two — `declaring_type_simple_name`, `declaring_type_qualified_name`, `prefixed_capitalized_construct_name` and `declaring_type_scoped_name` — plus one `members` word and three catalog keys (*corrected at the branch review; this row said "one naming word, not two"*) | `temporal-cadence` `vertx-eventbus` (2) | **Async did NOT close.** Both ids closed and the row's blockers emptied — and §5.12 then showed two Java frameworks with no catalog at all, `quartz` and `akka-pekko-actors`, which are now the row's blockers. The `smallrye-reactive-messaging` shape: a row cannot close while its own COVERAGE section carries an uncatalogued library, and the two new ids are what that clause was hiding behind the two old ones |
 | 5 | **G. Kotlin routes with a NULL handler** — short spec — **DONE 2026-09-20** (spec `docs/superpowers/specs/2026-09-19-kotlin-majors-and-inbound-request-requirements-design.md`, which also closed `ktor-route-extensions`, `ktor-selector-blocks`, `kotlin-class-lambdas`, `kotlin-default-bridge-calls`, `ktor-route-with-verb` and the new `inbound-request-requirements`; CI run 35541934750) | `kotlin-null-handler` (1) | REST inbound −1 — and −4 more: the row now holds `conditional-controllers`, `dsl-media-route`, `gateway-properties-routes` |
 | 6 | **F. Conditional controllers** — the hardest design question | `conditional-controllers` (1) | **REST inbound closes** |
 | 7 | **H. Meridian** | `FR-21` `FR-22` `FR-23` `FR-24` (4) | **Meridian closes** — every row empty |
@@ -769,10 +822,13 @@ same 22 items sorted by mechanism; this table is the same items sorted by what t
    `gateway-properties-routes` and the CI run. 2026-09-21: `dsl-media-route` and
    `gateway-properties-routes` are implemented and pinned too (row 3 of §4's table), closed on
    CI run 35663682722 (PR #34); REST in waits on `conditional-controllers` alone.*
-4. **Category C** — the remaining items that need their own design, `temporal-cadence` and
-   `vertx-eventbus` among them; Async waits on those two. `micronaut-jms-over-sqs` moved to
-   row 2 above — SQS no longer waits on Category C.
-5. **`pubsub-channel-adapter`** — its own `config_join` extension; Pub/Sub's one open item.
+4. **Category C** — the remaining items that need their own design. `micronaut-jms-over-sqs`
+   moved to row 2 above — SQS no longer waits on Category C. *2026-09-22: `temporal-cadence`
+   and `vertx-eventbus` are implemented and pinned (row 4 of §4's table), which empties this
+   category of everything but `conditional-controllers`. **Async still does not read `✅`**,
+   and the reason is not those two: §5.12 carries a Quartz row and an Akka/Pekko actors row
+   that no catalog reads, so the row's blockers are now `quartz` and `akka-pekko-actors` —
+   the first clause of delivered, surfaced the moment the older ids stopped hiding it.*5. **`pubsub-channel-adapter`** — its own `config_join` extension; Pub/Sub's one open item.
    *2026-09-21: implemented and pinned on `fluent`, not `config_join` (row 3 of §4's table);
    Pub/Sub's row is empty (CI run 35663682722, PR #34) and REST in waits on
    `conditional-controllers` alone.*

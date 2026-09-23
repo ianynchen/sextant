@@ -34,7 +34,22 @@ from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
 from sextant.application.resolve.routing_conflicts import _discriminators
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor
+
+# The redactor every ORIGIN writer of `endpoint_metadata` holds, built as
+# `engines/fluent.py` and `resolve/endpoint_attributes.py` build theirs: the built-ins
+# alone, because no redactor reaches a resolve pass from the composition root (`OI-71`,
+# stated on `fluent`).
+#
+# `storage/duckdb/schema.sql`'s `value` column states the invariant — a metadata value is
+# masked AT THE ORIGIN, because nothing downstream masks one and `endpoint_metadata` is in
+# `workspace.py`'s export map, which exports it whole on exactly that stated ground.
+# `insert_endpoint_metadata.sql`'s own header repeats the claim. This pass was violating
+# it: `@GetMapping(headers = "X-Api-Key=s3cret")` is ordinary Spring input — `spring-mvc.yml`
+# and `spring-web.yml` both declare `request_requirement_attrs: {params: param, headers:
+# header}` — and its value reached `graph/*.parquet` verbatim.
+_REDACTOR = Redactor.from_rules()
 
 
 def record_request_requirements(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -66,7 +81,32 @@ def _entry(
     evidence: object,
 ) -> dict[str, Any]:
     """One `endpoint_metadata` row against an inbound endpoint: the row's own identity
-    columns as they stand now, `caller` the handler (§5a)."""
+    columns as they stand now, `caller` the handler (§5a).
+
+    **The value is REDACTED here, and here is the only place it can be** — the column's own
+    invariant, stated above. All four mechanisms funnel through this one function, so one
+    call covers the stash, the parameter annotations, the mapping attributes and the body
+    reads; two of the four pass `value=None` and are untouched by construction.
+
+    This is the NAME/VALUE PAIR `redaction.py`'s `redact_json` docstring calls *how a
+    credential actually reaches this grammar*, and unlike `endpoint_attributes` there is a
+    real name to key on — a header name, a query-parameter name — which is precisely what
+    `redact_value` was written for. `X-Api-Key` normalizes to `xapikey`, which carries the
+    built-in `apikey`, so the value masks whole.
+
+    **A value whose NAME could not be read is masked WHOLE**, `engines/fluent.py`'s rule
+    verbatim and for its reason, which holds here for the same mechanical cause: the
+    combinator's stash reads both literals off a CALL ARGUMENT (`_Requirement`: `name` NULL
+    where the name was not a literal), so an unread name is an unanswerable question, and
+    `redact_value("", literal)` would answer it *not a secret*. A header assembled from a
+    constant field beside a literal credential is exactly that shape. This differs from
+    `endpoint_attributes`, where the name is absent BY CONSTRUCTION on every row and
+    masking whole would destroy the whole key — there the `kind` stands in as the name.
+
+    `resolution` is the caller's and is untouched: it is read off the value as WRITTEN, and
+    a masked value is still a value that was there.
+    """
+    literal = value if isinstance(value, str) else None
     return {
         "protocol": endpoint["protocol"],
         "direction": "inbound",
@@ -75,7 +115,9 @@ def _entry(
         "caller": endpoint["handler"],
         "kind": kind,
         "name": name,
-        "value": value,
+        "value": value
+        if literal is None
+        else (REDACTED if not isinstance(name, str) else _REDACTOR.redact_value(name, literal)),
         "resolution": resolution,
         "evidence": evidence,
         "requirement": requirement,
