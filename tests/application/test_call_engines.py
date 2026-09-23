@@ -1527,22 +1527,42 @@ def _record_wrappers_catalog(catalog_id: str = "invented-record-wrappers") -> Ca
     matches = {
         "owner": "com.acme.messaging.Producer",
         "methods": [{"name": "send", "record_arg": 0}],
+        # The shipped shape since CP-34: two overloads named by `descriptor` with the
+        # value's own measured index, then the undiscriminated `last` row for the rest.
         "record_wrappers": [
+            {
+                "type": "org.apache.kafka.clients.producer.ProducerRecord",
+                "descriptor": HEADERS_CTOR,
+                "channel_ctor_arg": 0,
+                "payload_ctor_arg": 3,
+            },
             {
                 "type": "org.apache.kafka.clients.producer.ProducerRecord",
                 "channel_ctor_arg": 0,
                 "payload_ctor_arg": "last",
-            }
+            },
         ],
     }
     return _single_call_catalog(matches, catalog_id)
 
 
-def _record_ctor(caller: str, ordinal: int, receiver: int, arguments: list) -> CallSiteFact:
+# `ProducerRecord(String, Integer, K, V, Iterable<Header>)` as the JVM spells it — the
+# five-argument overload whose LAST argument is the record's headers, measured in
+# `scripts/probes/cp34_producer_record_ctors.md`.
+HEADERS_CTOR = (
+    "(Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/Object;"
+    "Ljava/lang/Object;Ljava/lang/Iterable;)V"
+)
+RECORD_HEADERS = "org/apache/kafka/common/header/internals/RecordHeaders#"
+
+
+def _record_ctor(
+    caller: str, ordinal: int, receiver: int, arguments: list, descriptor: str = "()V"
+) -> CallSiteFact:
     return CallSiteFact(
         document_id="doc_1",
         caller=caller,
-        target=CallTarget(owner=PRODUCER_RECORD, name="<init>", descriptor="()V"),
+        target=CallTarget(owner=PRODUCER_RECORD, name="<init>", descriptor=descriptor),
         invoke_kind="special",
         ordinal=ordinal,
         receiver=receiver,
@@ -1589,8 +1609,15 @@ def test_a_two_arg_producer_record_derives_the_topic_and_the_payload(tmp_path: P
 def test_a_three_arg_producer_record_still_lands_the_payload_on_last(tmp_path: Path):
     """The 3-arg overload (`topic, key, value`) proves `payload_ctor_arg:
     "last"` is a rule about the constructor's own shape, not a fixed index —
-    it holds across every `ProducerRecord` overload (design doc), landing on
-    the value even though the value has moved from position 1 to position 2."""
+    landing on the value even though the value has moved from position 1 to
+    position 2.
+
+    *This docstring used to add "it holds across every `ProducerRecord` overload (design
+    doc)". It does not, and nothing had measured it: CP-34 reads all six constructors and
+    two of them put `Iterable<Header>` last. The overloads it DOES hold for are the four
+    that probe enumerates, this one among them; the two it does not are discriminated by
+    `descriptor` in the catalog and pinned in
+    `test_a_record_built_with_headers_reads_the_value_and_not_the_headers`.*"""
     caller = "com/acme/orders/messaging/EventProducers#publishRaw()."
     facts = [
         _record_ctor(
@@ -1612,6 +1639,84 @@ def test_a_three_arg_producer_record_still_lands_the_payload_on_last(tmp_path: P
     assert endpoint["path"] == "order-raw"
     assert endpoint["resolution"] == "resolved"
     assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_EVENT
+
+
+def test_a_record_built_with_headers_reads_the_value_and_not_the_headers(tmp_path: Path):
+    """CP-34, measured at kafka-clients 3.6.2. `new ProducerRecord<>(topic, partition,
+    key, value, headers)` puts the record's HEADERS last, so `payload_ctor_arg: "last"`
+    published a `RecordHeaders` as the request payload — a fabricated payload on ordinary
+    input, the documented way to send a record with headers.
+
+    The catalog now names that overload by `descriptor` with the value's own measured
+    index (3), and the undiscriminated `last` row behind it still answers the four
+    overloads where `last` IS the value. Arity cannot separate them: `(String, Integer,
+    Long, K, V)` and `(String, Integer, K, V, Iterable)` both take five arguments and
+    disagree, which is why the discriminator is the descriptor."""
+    caller = "com/acme/orders/messaging/EventProducers#publishWithHeaders()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            14,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="unresolved"),
+                CallArgument(kind="string", value="order-42"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+                CallArgument(kind="instance", symbol=RECORD_HEADERS),
+            ],
+            descriptor=HEADERS_CTOR,
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=14, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(tmp_path, facts, _record_wrappers_catalog())
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] == "order-audit"
+    assert json.loads(endpoint["request_shape"])["shape_id"] == ORDER_EVENT
+
+
+def test_a_record_ctor_no_declared_overload_reaches_derives_no_payload(tmp_path: Path):
+    """An entry is chosen by descriptor AFTER the constructor is found, and a catalog may
+    declare only discriminated entries. A linked constructor none of them matches derives
+    the honest `(None, None)` a type naming no entry at all derives — an overload nobody
+    measured is not read through a rule written for a different one (§8.1)."""
+    matches = {
+        "owner": "com.acme.messaging.Producer",
+        "methods": [{"name": "send", "record_arg": 0}],
+        "record_wrappers": [
+            {
+                "type": "org.apache.kafka.clients.producer.ProducerRecord",
+                "descriptor": HEADERS_CTOR,
+                "channel_ctor_arg": 0,
+                "payload_ctor_arg": 3,
+            }
+        ],
+    }
+    caller = "com/acme/orders/messaging/EventProducers#publishUnmeasured()."
+    facts = [
+        _record_ctor(
+            caller,
+            0,
+            15,
+            [
+                CallArgument(kind="string", value="order-audit"),
+                CallArgument(kind="instance", symbol=ORDER_EVENT),
+            ],
+            descriptor="(Ljava/lang/String;Ljava/lang/Object;)V",
+        ),
+        _send_call(caller, 1, [CallArgument(kind="instance", source=15, symbol=PRODUCER_RECORD)]),
+    ]
+    workspace = _resolve(
+        tmp_path, facts, _single_call_catalog(matches, "invented-record-descriptors")
+    )
+    [endpoint] = [e for e in workspace.query("endpoints") if e["caller"] == caller]
+    workspace.close()
+
+    assert endpoint["path"] is None
+    assert endpoint["request_shape"] is None
+    assert endpoint["resolution"] == "unresolved"
 
 
 def test_an_unlinked_record_argument_derives_unresolved_with_a_null_path(tmp_path: Path):

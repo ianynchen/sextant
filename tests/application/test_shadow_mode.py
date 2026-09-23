@@ -230,6 +230,15 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # its example was false. Such a rule would need a hand-maintained allowlist, which is the
 # re-audit wearing a test's clothes. Classifying the keys belongs to Task 10, where the hop
 # declarations become invalid and the classification has to be made anyway.
+#
+# **Three entries moved on 2026-09-23, and the alarm is what said so.** `kafka-clients`
+# (3, 4) -> (5, 8), `spring-kafka-replying` (2, 3) -> (4, 7) and `spring-kafka-template`
+# (11, 16) -> (13, 20): each gained two `record_wrappers` rows naming one `ProducerRecord`
+# constructor by `descriptor`, and each row is a node with two `_ctor_arg` positions
+# (+2 asks, +4 slots). Nothing was re-spelled and no reader learned anything new — the
+# `<init>` arm already read this shape. The rows exist because `payload_ctor_arg: "last"`
+# read the record's HEADERS on the two overloads whose final parameter is
+# `Iterable<Header>` (`scripts/probes/cp34_producer_record_ctors.md`, kafka-clients 3.6.2).
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -245,7 +254,7 @@ _ASKS_PER_CATALOG = {
     "javax-jms": (36, 36),
     "javax-servlet": (2, 2),
     "jdk-httpclient": (9, 10),
-    "kafka-clients": (3, 4),
+    "kafka-clients": (5, 8),
     "kafka-consumer": (12, 12),
     "kafka-streams": (22, 22),
     "kafka-streams-sink": (2, 2),
@@ -260,8 +269,8 @@ _ASKS_PER_CATALOG = {
     "spring-integration-pubsub": (25, 25),
     "spring-jms-template": (8, 11),
     "spring-kafka-message": (3, 3),
-    "spring-kafka-replying": (2, 3),
-    "spring-kafka-template": (11, 16),
+    "spring-kafka-replying": (4, 7),
+    "spring-kafka-template": (13, 20),
     "spring-mvc-router": (99, 167),
     "spring-pubsub": (12, 17),
     "spring-rabbit-template": (12, 16),
@@ -299,7 +308,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
         if (asks := asks_of(catalog))
     }
     assert counted == _ASKS_PER_CATALOG
-    assert sum(asks for asks, _ in counted.values()) == 807
+    # 807 until 2026-09-23; +6 for the six `record_wrappers` rows the comment above
+    # accounts for, three catalogs at two rows each.
+    assert sum(asks for asks, _ in counted.values()) == 813
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

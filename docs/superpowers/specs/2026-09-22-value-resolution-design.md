@@ -44,8 +44,16 @@ shipped catalogs for the four keys, which reproduces every other figure in the r
 undercount was already contradicted inside this document**: §3c's migration table gives `single_call`
 **13 catalogs**, and that 13 only reaches 13 because it counts the three that declare
 `record_wrappers`. Ruled 2026-09-23 (Task 6): `record_wrappers` is hoisted with the other three, and
-Task 10 deletes and refuses four keys, not three. §7's "fourteen" is a DIFFERENT quantity — the
-tasks 7 and 8 migration surface, 1 + 13 — and is untouched by this correction.*
+Task 10 deletes and refuses four keys, not three.*
+
+*§7's **"fourteen"** was corrected to **nineteen** one round later. The first round left it alone,
+reading it as the tasks 7 and 8 migration surface (1 + 13), which §3c's table does make
+self-consistent. That reading lost, and the reason is worth keeping: §7's own sentences scope the
+figure to the WHOLE work — "this work's entire purpose is to convert misses into answers … across
+fourteen shipped catalogs", and §7a's "review fourteen catalogs' worth of new claims" — and the whole
+work migrates all three engines, which is 1 + 13 + `fluent`'s 5. A figure that silently excludes
+`fluent` is not what those sentences say, whatever arithmetic reproduces it.
+`resolve/shadow.py`'s copy of the sentence is corrected with them.*
 
 **The conclusion those numbers force:** there is no operation in this codebase that answers *what is
 this value?* There is only *follow exactly one hop, in the direction a catalog named.*
@@ -402,10 +410,10 @@ than merely discouraged.
 
 Everything this project does rests on *misses are acceptable, fabrications are not*. **This work's
 entire purpose is to convert misses into answers** — so every conversion is a new assertion, made at
-scale, across fourteen shipped catalogs.
+scale, across nineteen shipped catalogs.
 
 That is inverted from every other change in this repository. Group D's risk was *"we might not derive
-something."* This one's is *"we might now derive something wrong, in fourteen places, and the tests
+something."* This one's is *"we might now derive something wrong, in nineteen places, and the tests
 will go green because the rows are new."*
 
 §3c's diff catches **movement**. It does not catch **wrongness** — a wrong address looks exactly like
@@ -417,7 +425,7 @@ The walk runs and writes what it *would* resolve into §3d's `value_resolutions`
 publishing it**. Every candidate conversion is reviewable as data, on the real corpus, before a single
 row changes; then each migration flips one engine and its diff is already known.
 
-It costs one flag, and it converts *"review fourteen catalogs' worth of new claims under time
+It costs one flag, and it converts *"review nineteen catalogs' worth of new claims under time
 pressure"* into *"read a table."* **This work should not proceed without it.**
 
 ### 7b. The second risk

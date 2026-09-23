@@ -300,7 +300,26 @@ def test_a_call_wrapper_is_hoisted_as_a_constructor_identity(tmp_path: Path):
 
     model = YamlCatalogSource(tmp_path).value_model()
 
-    assert model == [{"owner": "com/acme/Entity#", "method": "<init>", "arg": 0}]
+    assert model == [{"owner": "com/acme/Entity#", "method": "<init>", "role": "payload", "arg": 0}]
+
+
+def test_two_value_models_declaring_one_producer_are_refused_by_file(tmp_path: Path):
+    """One producer is declared once. Deduplication would otherwise keep whichever file
+    `sorted(glob)` reaches first and drop the other's `by` with it — the citation is the
+    whole justification for the entry (§7b), so losing one silently is the dumping ground
+    arriving through a duplicate rather than through an omission."""
+    _write_value_model(tmp_path, _IDENTITIES)
+    (tmp_path / "value-models" / "second.yml").write_text(
+        "id: second\nidentified_by:\n"
+        "  - { owner: com.acme.Session, method: queue, arg: 0, by: scripts/probes/cp2_data_rest.md }\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).value_model()
+
+    assert "second.yml" in str(raised.value)
+    assert "invented" in str(raised.value)
 
 
 def test_a_record_wrapper_hoists_one_entry_per_declared_position(tmp_path: Path):
@@ -319,8 +338,8 @@ def test_a_record_wrapper_hoists_one_entry_per_declared_position(tmp_path: Path)
     )
 
     assert YamlCatalogSource(tmp_path).value_model() == [
-        {"owner": "com/acme/Record#", "method": "<init>", "arg": 0},
-        {"owner": "com/acme/Record#", "method": "<init>", "arg": "last"},
+        {"owner": "com/acme/Record#", "method": "<init>", "role": "channel", "arg": 0},
+        {"owner": "com/acme/Record#", "method": "<init>", "role": "payload", "arg": "last"},
     ]
 
 
@@ -335,15 +354,19 @@ def test_the_shipped_record_wrappers_collapse_to_one_producer():
         if entry.get("owner") == "org/apache/kafka/clients/producer/ProducerRecord#"
     ]
 
-    assert record == [
+    undiscriminated = [entry for entry in record if "descriptor" not in entry]
+
+    assert undiscriminated == [
         {
             "owner": "org/apache/kafka/clients/producer/ProducerRecord#",
             "method": "<init>",
+            "role": "channel",
             "arg": 0,
         },
         {
             "owner": "org/apache/kafka/clients/producer/ProducerRecord#",
             "method": "<init>",
+            "role": "payload",
             "arg": "last",
         },
     ]

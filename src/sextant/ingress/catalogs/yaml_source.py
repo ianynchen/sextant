@@ -70,12 +70,18 @@ class YamlCatalogSource:
         Two declaration sites, one table. The entries `value-models/*.yml` declares come
         first, then every hop declaration already written on a catalog (`_HOP_KEYS`, four
         of them), HOISTED — the same three fields saying the same thing, so no catalog
-        edit is forced and nothing changes behaviour (§2a step 1). Declared first because a
-        producer whose measured form disagrees with an older per-consumer spelling is then
-        answered by the measured one under any first-match read. The shipped estate has
-        exactly one such disagreement and `value-models/jdk.yml` names it: an overload
-        discriminator two consuming catalogs declared and three did not, where the entry
-        without it also matches overloads whose argument 0 is something else entirely.
+        edit is forced and nothing changes behaviour (§2a step 1).
+
+        **Declared first, and that ordering is a reading convenience rather than a safety
+        property.** It decides which entry a reader meets first and which `by` travels
+        beside it. It excludes nothing: `_matching_keys` includes `arity` and `descriptor`,
+        so a discriminated entry and a bare one COEXIST, and a site the discriminated one
+        turns away still matches the bare one. The estate HAD one such disagreement — an
+        overload discriminator two consuming catalogs declared and three did not, where the
+        bare entry also matched overloads whose argument 0 is something else entirely — and
+        what closed it was editing those three catalogs so the bare spelling no longer
+        exists, not the order of this list. `value-models/jdk.yml` records the measurement
+        that settled it.
 
         Deduplicated by what an entry MATCHES on (`_matching_keys`, so a declared entry and
         the hoisted catalog spelling of the same producer are one entry, the declared one),
@@ -90,12 +96,26 @@ class YamlCatalogSource:
         migrations (spec §3c), and the tasks that wire it decide how it is threaded.
         """
         model: list[dict[str, Any]] = []
+        # Which file declared each entry, kept so two files claiming one producer are
+        # refused by name below rather than resolved by `sorted(glob)`: the loser would
+        # vanish silently, and with it the `by` that was its whole justification (§7b).
+        declared_in: dict[tuple[tuple[str, Any], ...], tuple[str, Path]] = {}
         for path in sorted((self._directory / "value-models").glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading value model {path}: not a YAML mapping")
-            _required(raw, "id", path)
-            model.extend(_identities(raw, path))
+            model_id = str(_required(raw, "id", path))
+            for entry in _identities(raw, path):
+                seen_in = declared_in.get(_matching_keys(entry))
+                if seen_in is not None:
+                    raise CatalogError(
+                        f"loading value model {path}: `{model_id}` declares the identity "
+                        f"{_matching_keys(entry)} that `{seen_in[0]}` ({seen_in[1].name}) "
+                        f"already declares — one producer is declared once, and two entries "
+                        f"citing two probes would leave whichever file sorts first (D02 §1f)"
+                    )
+                declared_in[_matching_keys(entry)] = (model_id, path)
+                model.append(entry)
         for path in sorted(self._directory.glob("*.yml")):
             raw = _load(path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
@@ -339,6 +359,30 @@ def _constructor_identities(entry: dict[str, Any], key: str, path: Path) -> list
     verbatim, as `all_strings` is — a rule resolved per site, never an index this layer
     could evaluate. Sorted by key name so an entry declaring two positions hoists in one
     order on every run.
+
+    **EACH CARRIES ITS ROLE, and the role is read off the key's own prefix.** Two
+    positions of one constructor are not interchangeable — one is the destination and one
+    is the payload — and a pair of role-free entries cannot say which is which. The
+    prefix before `_ctor_arg` already IS the role in every shipped spelling, so no
+    vocabulary is invented here, no framework is named, and a wrapper that one day
+    declares a third role works without touching this function. It matters because Task 10
+    deletes these blocks: after that, the table is the only record of the pairing, and a
+    table with no field for it would lose the distinction at exactly the moment the
+    declaration that carried it goes.
+
+    **The `_via` keys deliberately get NO role**, and the difference is not an omission.
+    A `channel_via`/`url_via` entry names ONE position, and the consuming row already
+    declares what that position means — the loader refuses a `channel_via` without a
+    `channel_arg`/`url_arg` beside it, and Task 10 deletes the `_via` entry while leaving
+    that meaning where it is. Stamping a role on those entries would also put the
+    CONSUMER's meaning on the PRODUCER, which §1e forbids in as many words: one shipped
+    producer's argument 0 is read as an address by two catalogs and as a destination by
+    three, so a role there would split one producer into two entries and make the
+    once-per-producer declaration impossible to write.
+
+    `descriptor` is carried through where the entry declares one (CP-34): it is the only
+    thing that tells two constructors of one type apart, so dropping it would merge
+    measured overloads that disagree about where the payload is.
     """
     wrapper = entry.get("type")
     positions = sorted(name for name in entry if str(name).endswith(_CTOR_ARG))
@@ -347,8 +391,17 @@ def _constructor_identities(entry: dict[str, Any], key: str, path: Path) -> list
             f"loading catalog {path}: a `{key}` entry names a `type` and at least one "
             f"`<name>{_CTOR_ARG}` — got {entry!r}"
         )
+    declared = (
+        {"descriptor": entry["descriptor"]} if isinstance(entry.get("descriptor"), str) else {}
+    )
     return [
-        {"owner": type_descriptor(wrapper), "method": "<init>", "arg": entry[position]}
+        {
+            "owner": type_descriptor(wrapper),
+            "method": "<init>",
+            **declared,
+            "role": str(position)[: -len(_CTOR_ARG)],
+            "arg": entry[position],
+        }
         for position in positions
     ]
 

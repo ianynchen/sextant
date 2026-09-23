@@ -551,9 +551,20 @@ declaration site differs — so no catalog edit is forced and nothing changes be
 §2a step 1). The two WRAPPER keys name a type and an argument of its constructor, so they
 hoist as that type's `<init>`, one entry per `<name>_ctor_arg` the block declares: a
 `record_wrappers` block declares two, and they are two claims about two arguments of one
-constructor. Declared entries
-come first in the table and hoisted ones after, deduplicated by value, so a producer whose
-measured form disagrees with an older per-consumer spelling is answered by the measured one.
+constructor — and each carries its **role**, read off that key's own prefix (`channel`,
+`payload`), because two positions of one constructor are not interchangeable and a pair of
+role-free entries cannot say which is the destination and which the payload. A `_via` entry
+carries no role: it names one position, and the consuming row's own `channel_arg`/`url_arg`
+already says what that position means. Putting a role there would also put the consumer's
+meaning on the producer, which §1e forbids — one shipped producer's argument 0 is read as an
+address by two catalogs and as a destination by three.
+
+Declared entries come first in the table and hoisted ones after, deduplicated by what an
+entry MATCHES on (everything but `by`). **That ordering is a reading convenience, not a
+safety property**: `arity` and `descriptor` are part of the match, so a discriminated entry
+and a bare one coexist, and a site the discriminated one turns away still matches the bare
+one. Where a measured form and an older per-consumer spelling disagreed, what settled it was
+editing the catalogs that carried the bare spelling.
 The loader exposes it as `YamlCatalogSource.value_model()`; there is no `Catalog.value_model`
 field, because the table belongs to no catalog.
 
@@ -1653,10 +1664,25 @@ deriving method lands in `handler`, not `caller`: it is the consumer, not the ca
 **`record_arg` names an argument whose linked constructor carries both identity and
 payload** — `send(ProducerRecord)`'s one argument names the record, not the topic or the
 value directly. It resolves through the catalog-level block `record_wrappers: [{type,
-channel_ctor_arg, payload_ctor_arg}]`, where `payload_ctor_arg` is an integer position or
-the string `last`. **Every entry is also hoisted into §1f's identity table**, as the record
-type's `<init>` with each declared position — the same thing `call_wrappers` (§2h) does,
-and the three shipped blocks are byte-identical, which is the duplication §1f ends.
+channel_ctor_arg, payload_ctor_arg, descriptor?}]`, where `payload_ctor_arg` is an integer
+position or the string `last`.
+
+**`descriptor` names the one overload an entry is about, and a type may declare several
+entries**: the constructor is found first, then the first entry whose `descriptor` matches
+it answers, and an entry declaring none matches any — the first-match rule `channel_via`
+already uses. It exists because `last` is a claim about a type's WHOLE constructor set and
+one measured set disagrees with it: `ProducerRecord` declares six constructors and two of
+them — the ones whose final parameter is `Iterable<Header>` — put the record's headers
+last, so `last` published the headers as the payload there
+(`scripts/probes/cp34_producer_record_ctors.md`, kafka-clients 3.6.2). Arity cannot
+separate them: two five-argument overloads answer differently. A linked constructor no
+entry matches derives no channel and no payload, which is the honest answer for an overload
+nobody measured.
+
+**Every entry is also hoisted into §1f's identity table**, as the record type's `<init>`
+with each declared position, its role and its `descriptor` where it declares one — the same
+thing `call_wrappers` (§2h) does, and the three shipped blocks are byte-identical, which is
+the duplication §1f ends.
 
 **`path_from_argument_type` names the operation off the PAYLOAD rather than the address**
 (2I design §4). Some protocols address every operation at one URL and distinguish them by

@@ -2,8 +2,10 @@
 
 **Why this exists, in one sentence.** Everything this project does rests on *misses are
 acceptable, fabrications are not* — and this work's whole purpose is to convert misses
-into ANSWERS, so every conversion is a new assertion, made at scale, across fourteen
-shipped catalogs. §3c's per-engine diff catches MOVEMENT; it does not catch WRONGNESS,
+into ANSWERS, so every conversion is a new assertion, made at scale, across nineteen
+shipped catalogs — every catalog that carries a hop declaration, which is what the whole
+work migrates (spec §0's corrected hop-declaration row; the sentence read "fourteen" until
+2026-09-23, on a count that omitted one of the four keys). §3c's per-engine diff catches MOVEMENT; it does not catch WRONGNESS,
 because a wrong address looks exactly like a right one in a diff. Shadow mode is the
 mitigation the design names: the walk runs, writes down what it WOULD resolve, and
 **publishes nothing**. Every candidate conversion is reviewable as data, on the real

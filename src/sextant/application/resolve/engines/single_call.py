@@ -328,13 +328,24 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             for wrapper in matches.get("call_wrappers", [])
         },
     )
-    # `record_arg`'s own lookup (D02 §2, Task 7): the record's type keys a
-    # `(channel_ctor_arg, payload_ctor_arg)` pair, converted once here rather
-    # than per call site, exactly as `call_wrappers` above is.
-    record_wrapper_args = {
-        _catalog_symbol(wrapper["type"]): (wrapper["channel_ctor_arg"], wrapper["payload_ctor_arg"])
-        for wrapper in record_wrappers
-    }
+    # `record_arg`'s own lookup (D02 §2, Task 7): the record's type keys its
+    # `(descriptor, channel_ctor_arg, payload_ctor_arg)` entries, converted once here
+    # rather than per call site, exactly as `call_wrappers` above is.
+    #
+    # A LIST per type, not one pair (CP-34, 2026-09-23). One type declares several
+    # constructors and they do not agree about where the payload is: the entry that
+    # answers is the first whose `descriptor` matches the linked constructor's own, and an
+    # entry declaring none matches any — the first-match-wins rule `_matching_row` and
+    # `linked_channels` already use for a declared overload discriminator.
+    record_wrapper_args: dict[str, list[tuple[str | None, int, int | str]]] = {}
+    for wrapper in record_wrappers:
+        record_wrapper_args.setdefault(_catalog_symbol(wrapper["type"]), []).append(
+            (
+                wrapper.get("descriptor"),
+                wrapper["channel_ctor_arg"],
+                wrapper["payload_ctor_arg"],
+            )
+        )
     supertypes = supertypes_of(workspace)
     # Read once per run, the same `_rules_of`/`_enum_symbols` precedent (2F
     # design §4) — None for a catalog declaring no `field_sources` block, in
@@ -1443,29 +1454,39 @@ def _validate_record_wrappers(rows: list[dict[str, Any]], catalog: Catalog) -> N
     """Refuses a broken `record_wrappers` block before any call site is
     matched — the same `_validate_methods` discipline, applied to the
     catalog-level block a `record_arg` row's lookup depends on. Each entry
-    must be `{type, channel_ctor_arg, payload_ctor_arg}`: `type` a string,
-    `channel_ctor_arg` an int, and `payload_ctor_arg` either an int or the
-    literal string `"last"` (the constructor's own final argument) —
-    anything else is a broken catalog, never a silent no-op once a call site
-    reaches it."""
+    must be `{type, channel_ctor_arg, payload_ctor_arg, descriptor?}`: `type` a
+    string, `channel_ctor_arg` an int, `payload_ctor_arg` either an int or the
+    literal string `"last"` (the constructor's own final argument), and
+    `descriptor` — optional — the JVM descriptor of the one overload this entry
+    is about — anything else is a broken catalog, never a silent no-op once a
+    call site reaches it.
+
+    `descriptor` exists because `"last"` is a claim about a type's WHOLE
+    constructor set and one measured set disagrees with it (CP-34): two of
+    `ProducerRecord`'s six put `Iterable<Header>` last, so `"last"` read the
+    headers as the payload there. Arity cannot separate those two from the
+    correct ones — two five-argument overloads answer differently — so the
+    discriminator is the descriptor."""
     for wrapper in rows:
         payload_ctor_arg = wrapper.get("payload_ctor_arg")
+        descriptor = wrapper.get("descriptor")
         valid = (
             isinstance(wrapper.get("type"), str)
             and isinstance(wrapper.get("channel_ctor_arg"), int)
             and (isinstance(payload_ctor_arg, int) or payload_ctor_arg == "last")
+            and (descriptor is None or (isinstance(descriptor, str) and ")" in descriptor))
         )
         if not valid:
             raise CatalogError(
                 f"loading catalog {catalog.source}: a `record_wrappers` entry must be "
-                f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last"}}`, got '
-                f"{wrapper!r}"
+                f'`{{type, channel_ctor_arg: int, payload_ctor_arg: int|"last", '
+                f"descriptor?: str}}`, got {wrapper!r}"
             )
 
 
 def _record_arguments(
     record: dict[str, Any] | None,
-    record_wrapper_args: dict[str, tuple[int, int | str]],
+    record_wrapper_args: dict[str, list[tuple[str | None, int, int | str]]],
     facts: CallFacts,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """A `record_arg` row's channel and payload arguments (D02 §2's
@@ -1492,17 +1513,35 @@ def _record_arguments(
     the payload would be silently wrong rather than an honest capture
     failure; the channel argument itself is untouched by this guard, so
     `path` still carries whatever it read (I1: only the declared payload
-    capture failed)."""
+    capture failed).
+
+    **The entry is chosen AFTER the constructor is found, by descriptor** (CP-34): a type
+    declares several constructors and they need not agree about where the payload is, so
+    the catalog may declare one entry per overload. First match wins, and an entry
+    declaring no `descriptor` matches any — the rule `_matching_row` and `linked_channels`
+    already use. A linked constructor no entry matches is the same honest `(None, None)`
+    as a type naming no entry at all: an overload nobody measured derives nothing rather
+    than being read through a rule written for a different one."""
     if record is None or record.get("kind") != "instance" or record.get("symbol") is None:
         return None, None
     symbol = str(record["symbol"])
-    wrapper = record_wrapper_args.get(symbol)
-    if wrapper is None:
+    entries = record_wrapper_args.get(symbol)
+    if not entries:
         return None, None
-    channel_ctor_arg, payload_ctor_arg = wrapper
     constructor = _linked_constructor(symbol, record.get("source"), facts)
     if constructor is None:
         return None, None
+    wrapper = next(
+        (
+            entry
+            for entry in entries
+            if entry[0] is None or entry[0] == str(constructor.get("descriptor"))
+        ),
+        None,
+    )
+    if wrapper is None:
+        return None, None
+    _, channel_ctor_arg, payload_ctor_arg = wrapper
     ctor_arguments = constructor.get("arguments") or []
     channel_argument = _arg_at(ctor_arguments, channel_ctor_arg)
     if isinstance(payload_ctor_arg, int):
