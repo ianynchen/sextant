@@ -463,8 +463,17 @@ def _indices_of(slot: int | str, arity: int) -> tuple[int, ...]:
 
 def _every_identity(catalogs: Sequence[Catalog]) -> list[dict[str, Any]]:
     """§2's table across every SOURCE the analysis loaded, in catalog order, deduplicated
-    by what an entry matches on — `by` is provenance and not part of the claim, which is
-    the same key `yaml_source._matching_keys` deduplicates one source's table with.
+    by what an entry matches on — `by` is provenance and not part of the claim.
+
+    **That key is `yaml_source._matching_keys`' rule, written out again here rather than
+    imported, and the reason is the layering** (ARCHITECTURE §7, `tests/architecture`'s
+    import contracts): `ingress` is an outer group and `application` may not import it, so
+    the one place that could share the helper is a layer neither belongs to. Two spellings
+    of one rule is what this design exists to remove, so the copy is pinned instead —
+    `test_two_sources_contribute_one_table_and_a_shared_producer_once` asserts the shape the
+    loader's own dedup produces, and
+    `test_the_recorder_resolves_through_EVERY_sources_identities` pins the CALL SITE, which
+    reverting to `catalogs[0].value_model` otherwise passes every test in this repository.
 
     One source hands every catalog it builds the same list object, so this is one pass over
     a handful of tables and not one per catalog."""

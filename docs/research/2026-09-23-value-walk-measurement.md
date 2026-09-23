@@ -29,11 +29,18 @@ adds is bounded by the number of identified producers a corpus actually calls. T
 condition below (re-run this harness before capability 9.19) is what keeps that a measurement
 rather than a standing claim.*
 
-*What it moves, on the same surface, is **16 of 1,053 answers**: **13 conversions**, a miss
-becoming an answer, and **3 corrections**, where a value built by an identified initialiser
-answered with the symbol of the type it was built from and now answers with the value. The
-count of RESOLVED answers therefore rises by 13 and not by 16 (552 → 565) — a correction was
-already a resolved answer, and a wrong one.*
+*What it moves, on the same surface, is **16 of 1,026 answers**, at 16 of §2's **989** asked
+positions: **13 conversions**, a miss becoming an answer, and **3 corrections**, where a
+value built by an identified initialiser answered with the symbol of the type it was built
+from and now answers with the value. The count of RESOLVED answers therefore rises by 13 and
+not by 16 (552 → 565) — a correction was already a resolved answer, and a wrong one.*
+
+*Round 1 of the Task 7 report gave the denominator as 1,053 and it does not reproduce. It
+counted `(position, path)` keys off `resolve_site`, which COMBINES a site's slots — a
+two-slot site with two paths each yields up to four bindings — where 552 and every other
+figure in this document count `_Walk.at(site, slot)`, one per slot. Re-derived on that
+basis: **989 positions, 1,026 answers (474 unresolved + 552 resolved), 16 moved**, which
+agrees with §2's position count and with this document's own 552.*
 
 > ## RULING (2026-09-23): **no cap.**
 >
@@ -571,6 +578,13 @@ unreachable.*
 
 Answer kinds: `unresolved` 91,522, `literal` 83,304, `absent` 915, `expression` 528.
 
+*The `escapes` row reads **3,706** since Task 7 opened the mutation window at a value's
+CONSTRUCTION rather than before it — the §6.3 bullet below has the measurement and the
+reason. It is left at the snapshot's own figure here, because this table is what the walk
+answered at `ad210319` and a table half re-measured is worse than one that is not.*
+**This table counts ANSWERS; a position may hold several.** On a POSITION basis the same
+`escapes` population is 4,338 → 3,664, which is the same movement of 674 counted twice.
+
 **So no reason is dead vocabulary** — all six are produced by real code, and so is `absent`.
 Two of them are only reachable outside what catalogs ask about today, and the report has to
 say which is which:
@@ -719,10 +733,20 @@ Both halves follow from §3.3 and §1.6.
 - **A corpus that CONSTRUCTS the values its catalogs read**, rather than obtaining them from
   static factories. Reaching an initialiser also moved `escapes` to where it belongs: an
   initialiser produces no value of its own, so `produced_by` carries no edge for it and the
-  mutation window used to open before the construction itself. MEASURED over the ceiling
-  (every slot of all 27 corpora), that false `escapes` was **719 of 208,430** positions and
-  **none** of them a position any catalog asks about — so no figure in this document moves,
-  and the reason vocabulary is more truthful than it was.
+  mutation window used to open before the construction itself. MEASURED over the ceiling —
+  §3.2's own **98,454 positions**, all 27 corpora — **707 positions move**: **674** where the
+  window now opens at the construction and **33** where an identity entry reaches one.
+  Counted a second way and independently, positions answering `escapes` fall **4,338 →
+  3,664**: the same 674. (§5's reason table counts ANSWERS rather than positions, where the
+  same population reads 4,380 → 3,706 — a note beside that row says so.) **None** of the 707
+  is a position any catalog asks about, so no figure above moves and the reason vocabulary is
+  more truthful than it was.
+
+  *Round 1 of the Task 7 report gave "719 of 208,430", which contradicted §3.2 by 2.1× and
+  does not reproduce. Same cause as the asked-surface denominator above: it counted
+  `(position, path)` keys off `resolve_site` rather than positions. Re-derived on §3.2's own
+  basis, twice and independently — by diffing per-position answers and by counting `escapes`
+  answers before and after.*
 
 ---
 

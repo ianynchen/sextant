@@ -631,9 +631,9 @@ class _Walk:
             # implementing class, a payload's declared type — read types nobody has
             # declared an identity for, and a roled entry (`HttpEntity#<init>`,
             # `ProducerRecord#<init>`) is passed over by `_identified` in any case.
-            constructed = self._identified_construction(argument, method)
-            if constructed is not None:
-                return self._through(method, constructed[0], _used_at(origin), trail, frames)
+            built = self._identified_construction(argument, method)
+            if built is not None:
+                return self._through(method, built, _used_at(origin), trail, frames)
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
@@ -749,26 +749,44 @@ class _Walk:
         nothing in this method did.
 
         The facts say it without this module naming a language's constructor spelling, and
-        the three conjuncts are each load-bearing:
+        **it is an APPROXIMATION of one — stated as such, because it over-accepts and the
+        size of that is measured** (review round 2). Three conjuncts:
 
         * **no `produced_by` edge.** A value a call handed back is that edge's business, and
           its earliest receiver-site is an ordinary call ON it (`x = foo(); x.bar()`).
+          MEASURED: dropping this conjunct changes **0 of 98,454** ceiling positions across
+          all 27 corpora, so it is a boundary against `produced_by` rather than something
+          this estate exercises.
         * **the site is the EARLIEST the value is the receiver of.** Nothing can be invoked
           on a value before it exists, so if it was constructed here that call is first. A
           later one is a call on an already-built value and says nothing about what it is.
         * **that site produced no value of its own** — D00 §5's "result is null for a void
-          one", which is exactly why `produced_by` carries no edge for a construction and
-          why `_linked_constructor` has always joined an initialiser on `receiver` instead.
+          one", which is why `produced_by` carries no edge for a construction and why
+          `_linked_constructor` has always joined an initialiser on `receiver` instead.
 
-        **The third conjunct is what stops a fabrication, and it was found by measuring
-        rather than by reading** (review round 1, second pass). Without it,
+        **What the third conjunct excludes is a call that HANDS SOMETHING BACK, and that is
+        narrower than "is an initialiser".** It is what stops a fabrication, found by
+        measuring rather than by reading: without it,
         `session.createProducer(session.createQueue("raw-audit"))` — where `session` is a
         FIELD, so it has no producer edge either — made `createQueue` the "construction" of
-        the SESSION, and the identity entry for `Session.createQueue` then answered
-        `raw-audit` as what the session is. A queue name published as the identity of a
-        connection: a wrong answer at `resolved`, which is §7's one failure. `createQueue`
-        hands back a `Queue`, so its `result` is not null and it is not a construction of
-        anything.
+        the SESSION, and the identity entry for `Session.createQueue` answered `raw-audit`
+        as what the session is. A queue name published as the identity of a connection: a
+        wrong answer at `resolved`, which is §7's one failure. `createQueue` hands back a
+        `Queue`, so it is excluded.
+
+        **A VOID ORDINARY METHOD is not excluded, and that is an open gap** (`OI-136`). A
+        field- or parameter-held value whose first call happens to return nothing —
+        a logger call, a cache clear, a repository delete, a void setter — is read here as a
+        construction. MEASURED over all 27 corpora: of **3,283** values this rule names,
+        **395 are not initialisers** (`clear` 159, `debug` 65, `info` 22, `remove`, `error`,
+        `warn`, `delete`, `persist`, `save`, `convertAndSend`...). Nothing acts on them TODAY
+        and the whole of why is the catalog side: every shipped non-initialiser identity
+        entry has a non-null result at every site it matches in every corpus, and the one
+        entry naming a setter matches no site at all. MEASURED both ways — answering only an
+        initialiser here changes **0 of 98,454** ceiling positions, so neither an identity
+        answer nor the `escapes` window below moves for any of the 395. The day a
+        `channel_via` is hoisted onto a void sender or setter, it does: `OI-136` carries the
+        demonstration and the measurement that closes it.
         """
         if self._index.producers.get((method, value)):
             return None
@@ -778,14 +796,15 @@ class _Walk:
         site = self._index.sites.get((method, min(ordinals)))
         return None if site is None or site.get("result") is not None else min(ordinals)
 
-    def _identified_construction(
-        self, argument: Mapping[str, Any], method: str
-    ) -> tuple[int, int] | None:
-        """`(the value id, the construction's ordinal)` where this argument is a value
-        built here by a producer the identity table names, and None otherwise.
+    def _identified_construction(self, argument: Mapping[str, Any], method: str) -> int | None:
+        """The VALUE ID where this argument is one built here by a producer the identity
+        table names, and None otherwise.
 
-        None is the common answer and the one that keeps `_entry`'s declaration branch
-        exactly as it was: no `source`, no construction, or no entry claiming it."""
+        The value id and not the construction's ordinal, because that is all the caller
+        needs: it hands the id to `_through`, which finds the construction again for the
+        `escapes` window it has to compute anyway. None is the common answer and the one
+        that keeps `_entry`'s declaration branch exactly as it was: no `source`, no
+        construction, or no entry claiming it."""
         source = argument.get("source")
         if source is None:
             return None
@@ -793,7 +812,7 @@ class _Walk:
         constructed = self._construction(method, value)
         if constructed is None or self._identified((method, constructed)) is None:
             return None
-        return value, constructed
+        return value
 
     def _value(
         self, method: str, value: int, trail: _Trail, frames: "_Frames"

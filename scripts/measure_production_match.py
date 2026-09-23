@@ -325,10 +325,12 @@ def main() -> int:
     answered = sum(row.sites for one in measured for row in one.rows if row.matcher)
     accepted = sum(row.accepted for one in measured for row in one.rows)
     print(
-        f"**Totals.** {asked:,} asked sites across {len(measured)} corpora. "
-        f"{answered:,} were put to a production matcher and {accepted:,} accepted "
-        f"({answered - accepted:,} refused); {asked - answered:,} have no reachable "
-        f"matcher and are UNANSWERED, never counted as either."
+        f"**Totals.** {asked:,} (catalog, asked site) PAIRS across {len(measured)} corpora "
+        f"— a site two catalogs ask about counts twice, because a verdict is per matcher "
+        f"and the two may disagree. {answered:,} were put to a production matcher and "
+        f"{accepted:,} accepted ({answered - accepted:,} refused BY THAT MATCHER, which is "
+        f"not the same as unconsumed); {asked - answered:,} have no reachable matcher and "
+        f"are UNANSWERED, never counted as either."
     )
     print()
     print("### Answered by a production matcher\n")

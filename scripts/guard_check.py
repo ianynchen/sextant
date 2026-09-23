@@ -166,16 +166,19 @@ _VALUES = "sextant/application/resolve/values.py"
 GUARDS: dict[str, Guard] = {
     # --- the backward value walk and what it is allowed to answer ----------
     "values.a-construction-hands-nothing-back": Guard(
-        what="a call site is the CONSTRUCTION of a value only when it produced no value of "
-        "its own — a call that hands something back is `produced_by`'s business and is "
-        "never read as what the receiver is",
+        what="a call site is read as the CONSTRUCTION of a value only when it produced no "
+        "value of its own — a call that hands something back is `produced_by`'s business "
+        "and is never read as what the receiver is",
         why='`session.createProducer(session.createQueue("raw-audit"))` holds its '
         "`Session` in a field, so that value has no producer edge and the first call it is "
         "the receiver of is `createQueue` — which an `identified_by` entry names. Without "
         "this conjunct the walk read that as the session's construction and answered "
         "`raw-audit` as what the SESSION is: a queue name published as the identity of a "
         "connection, at `resolved`, where nothing downstream can tell it from an "
-        "observation. MEASURED on `orders-service`, which is where it was found",
+        "observation. MEASURED on `orders-service`, which is where it was found. **It "
+        'excludes a call that hands something back, which is narrower than "is an '
+        'initialiser"** — a VOID ordinary method still passes, and `OI-136` carries that '
+        "gap with its own measurement; this guard is the half that is closed",
         edits=(
             Edit(
                 path=_VALUES,

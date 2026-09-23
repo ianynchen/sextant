@@ -33,12 +33,23 @@ import pytest
 
 from fixture_build import compile_fixture
 from sextant import api
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
-from sextant.application.resolve.shadow import asks_of, positions_asked
+from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.shadow import (
+    _every_identity,
+    asks_of,
+    positions_asked,
+    record_value_resolutions,
+)
 from sextant.application.stages.analyze import analyze
+from sextant.domain.closed_sets import OriginTier
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import catalogs_dir, extractor_jar
@@ -424,3 +435,142 @@ def test_a_reactor_walk_says_nothing_about_shadow_without_the_flag(tmp_path: Pat
     lines, _root = _reactor_lines(tmp_path, shadow=False)
     assert lines
     assert not any("shadow" in line for line in lines)
+
+
+# --- §2's identity table, which the shadow walk resolves through (Task 7) ----------------
+# The step-1 path for Tasks 8 and 9: they read this table before touching an engine, so what
+# the recorder resolves through has to be the same thing a migrated engine resolves through.
+
+
+_MODULE = "sextant-jvm maven com.acme/two-sources 1.0.0 "
+
+
+def _two_source_document() -> Document:
+    return Document(
+        document_id="doc_two_sources",
+        relative_path="com/acme/Helper.java",
+        module_id="com.acme:two-sources",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+
+
+def _sourced(value_model: list[dict[str, Any]], identifier: str = "src") -> Catalog:
+    """A catalog as ONE SOURCE builds it — every catalog of a source carries that source's
+    whole table, which is what `Catalog.value_model` means (D02 §1f)."""
+    return Catalog(
+        id=identifier,
+        style="single_call",
+        protocol="kafka",
+        direction="inbound",
+        requires=(),
+        matches={},
+        source=Path(f"{identifier}.yml"),
+        value_model=value_model,
+    )
+
+
+def test_two_sources_contribute_one_table_and_a_shared_producer_once():
+    """**D02 §6 loads two catalog sets together and privileges neither**, and each hands its
+    own catalogs its own identity table. Reading the FIRST catalog's would shadow one
+    source's engines against another source's identities — silently, because every shipped
+    analysis today has one source and nothing would fail.
+
+    Deduplicated on what an entry MATCHES on, which is the loader's own rule
+    (`yaml_source._matching_keys`): `by` is provenance, not part of the claim, so one
+    producer declared by both sources is one entry and the first source's `by` travels with
+    it. An entry the two sources DISCRIMINATE differently — one naming an `arity`, one not —
+    is two claims and stays two, exactly as it does inside one source's table.
+    """
+    shared = {"owner": "a/B#", "method": "of", "arg": 0, "by": "probes/first.md"}
+    shipped = _sourced([shared, {"owner": "c/D#", "method": "make", "arg": 1, "by": "p.md"}])
+    theirs = _sourced(
+        [
+            {"owner": "a/B#", "method": "of", "arg": 0, "by": "probes/theirs.md"},
+            {"owner": "a/B#", "method": "of", "arg": 0, "arity": 2, "by": "probes/theirs.md"},
+            {"method": "connect", "arg": 0, "by": "probes/theirs.md"},
+        ],
+        "theirs",
+    )
+
+    table = _every_identity([shipped, shipped, theirs])
+
+    assert table == [
+        shared,
+        {"owner": "c/D#", "method": "make", "arg": 1, "by": "p.md"},
+        {"owner": "a/B#", "method": "of", "arg": 0, "arity": 2, "by": "probes/theirs.md"},
+        {"method": "connect", "arg": 0, "by": "probes/theirs.md"},
+    ]
+
+
+def test_the_recorder_resolves_through_EVERY_sources_identities(tmp_path: Path):
+    """The same rule at the CALL SITE, which the unit test above cannot reach: reverting
+    `_every_identity(catalogs)` to `catalogs[0].value_model` passes every other test in this
+    repository, because every shipped analysis loads one source.
+
+    Here the catalog that ASKS carries an empty table and the identity that answers its
+    question belongs to a SECOND source — D02 §6's shape, one repository's own catalogs
+    beside the shipped ones. Read from the first catalog alone, the position stays a miss.
+    """
+    facts = [
+        CallSiteFact(
+            document_id="doc_two_sources",
+            caller=_MODULE + "com/acme/Helper#use().",
+            target=CallTarget(owner="com/acme/Name#", name="of", descriptor="(...)V"),
+            invoke_kind="static",
+            ordinal=0,
+            result=1,
+            arguments=[CallArgument(kind="string", value="from-the-second-source")],
+        ),
+        CallSiteFact(
+            document_id="doc_two_sources",
+            caller=_MODULE + "com/acme/Helper#use().",
+            target=CallTarget(owner="com/acme/Sink#", name="take", descriptor="(...)V"),
+            invoke_kind="static",
+            ordinal=1,
+            arguments=[CallArgument(kind="unresolved", source=1)],
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "two.jsonl", _two_source_document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.load_facts(tmp_path / "facts")
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        asking = _sourced([], "asks-and-knows-nothing")
+        asking.matches["methods"] = [{"owner": "com.acme.Sink", "method": "take", "arg": 0}]
+        knowing = _sourced(
+            [{"owner": "com/acme/Name#", "method": "of", "arg": 0, "by": "p.md"}], "theirs"
+        )
+        assert record_value_resolutions(workspace, [asking, knowing], shadow=True) == 1
+        [row] = workspace.query("value_resolutions")
+    finally:
+        workspace.close()
+
+    assert (str(row["outcome"]), str(row["value"])) == ("would_resolve", "from-the-second-source")
+
+
+def test_the_shadow_walk_resolves_through_the_identity_table(analyzed):
+    """**The recorder resolves through §2's table, and this is the only test that says so.**
+    Shadow mode is what Tasks 8 and 9 read before they change an engine, and a preview built
+    without the identities would under-report by exactly the conversions those tasks are
+    reviewing — the `external`-at-an-opaque-producer rows, which is every position a catalog
+    wrote a hop declaration for.
+
+    Asserted against the fixture's own destinations rather than a count: the raw JMS bridge
+    reaches both of its queues through `Session.createQueue`, whose identity the loader
+    hoists out of `jakarta-jms.yml`'s own `channel_via`.
+    """
+    resolved = {
+        str(row["value"])
+        for row in analyzed[True].rows
+        if str(row["outcome"]) == "would_resolve" and str(row["catalog"]) == "jakarta-jms"
+    }
+
+    assert {"raw-audit", "raw-intake"} <= resolved

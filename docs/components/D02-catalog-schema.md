@@ -584,16 +584,26 @@ and would answer one value twice, and an entry whose `arg` is a rule (`all_strin
 rather than a slot, which resolves per site and is not a position a slot-resolving walk can
 turn into one. Both remain the consuming engines' to read, exactly as they are today.
 
-**An entry naming a CONSTRUCTOR is reached too, and finding one is a rule of its own.** Four
-of the shipped entries name `<init>` — the two hoisted from `call_wrappers`/`record_wrappers`
-and the two `_via` entries whose producer is a constructor — and a constructed value is
-recognised by three conjuncts together: it has no `produced_by` edge, the site is the
-EARLIEST one the value is the receiver of, and that site produced no value of its own (D00
-§5's "result is null for a void one"). The third is not tidiness. Without it, a value merely
-HELD somewhere and called here — a `Session` read from a field, whose first call is the
-`createQueue` an entry names — was read as having been constructed by that call, and the
-queue's name was answered as the identity of the connection. Pinned by
-`values.a-construction-hands-nothing-back`.
+**An entry naming a CONSTRUCTOR is reached too, and finding one is an APPROXIMATION with a
+measured edge.** Four of the shipped entries name `<init>` — the two hoisted from
+`call_wrappers`/`record_wrappers` and the two `_via` entries whose producer is a constructor.
+A constructed value is recognised by three conjuncts together: it has no `produced_by` edge,
+the site is the EARLIEST one the value is the receiver of, and that site produced no value of
+its own (D00 §5's "result is null for a void one").
+
+The third is not tidiness. Without it, a value merely HELD somewhere and called here — a
+`Session` read from a field, whose first call is the `createQueue` an entry names — was read
+as having been constructed by that call, and the queue's name was answered as the identity of
+the connection. Pinned by `values.a-construction-hands-nothing-back`.
+
+**What it excludes is a call that hands something back, which is narrower than "is an
+initialiser", and the difference is an open gap** (`OI-136`). A void ordinary method also
+produces no value, so a field- or parameter-held value whose first call happens to return
+nothing is read here as a construction — measured at **395 of the 3,283** values the rule
+names, across all 27 corpora. Nothing acts on them today, and the reason is on the catalog
+side rather than in the rule: every shipped non-`<init>` entry has a non-null result at every
+site it matches. **A new entry naming a void sender or setter would reopen it**, so an author
+adding one must check that the producer it names really hands something back.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other three directories: it is knowledge a run was produced with.
