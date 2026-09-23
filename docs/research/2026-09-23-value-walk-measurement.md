@@ -232,7 +232,14 @@ below may be quoted as a *production* maximum without that discount applied.
 | **catalog-to-position asks** | **1,250** | a distinct (catalog, position) pair. Two catalogs asking about one slot is two asks, and this is what the per-catalog and per-style tables add up to |
 | **distinct positions** | **989** | a distinct `(site, slot)` — a walk that actually runs, whoever asked |
 
-Both are printed per corpus and in total. **Every cost figure in §3 is per distinct
+A **site** is a distinct `(caller, ordinal)` — one call, whatever slots are asked about on
+it; the asked surface has **726**. Both rows above are defined in terms of it, and
+`resolve_site` is called once per site (§1.5). It is deliberately not a basis for cost: a
+maximum held at three sites may be held by any number of positions, so §3.1 and §5 each name
+the unit they are counting in. Substituting the site count for the position count is an
+error this document has made and corrected more than once.
+
+Both bases are printed per corpus and in total. **Every cost figure in §3 is per distinct
 position**; the asks number appears only where the question is "how much do catalogs ask",
 never where the question is "how much does it cost".
 
