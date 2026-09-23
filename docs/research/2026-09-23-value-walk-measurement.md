@@ -88,20 +88,50 @@ positions across seven corpora**, and the two forms it meets show why the bound 
   path-count and answer-count maximum, at a position that costs **zero** traversal.
 
 It matches nothing in `mall-admin` or `mall-mbg`, and **that is luck rather than a bound**:
-nothing there calls `List.of`, `Arrays.asList` or `Subscriptions.topics` where a catalog
-also matches.
+nothing there calls `List.of`, `Arrays.asList` or `Subscriptions.topics`.
+
+### The two over-matches, and what the wider of them conceals
 
 A row is matched to real call sites on the keys the engines match on: owner where declared
 (converted through the catalogs' own `catalog_symbols`), method name, and the JVM
-`descriptor` or the `arity` where the row declares either. **Where a catalog row declares no
-owner the match is by method name alone**, which is wider than the engine's own —
-`fluent`'s owner-free steps are really scoped to a chain the engine has already rooted, and
-`ktor-routing`'s `request_reads` reach their receiver through a `via` call. That is 23 of
-the 802 rows, and the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`,
-`body`): `ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,209
+`descriptor` or the `arity` where the row declares either. **What this harness does not
+model is the engines' *reachability*** — whether an engine would ever arrive at that row for
+that site — and two classes of row are over-matched as a result.
+
+**1. Rows declaring no owner are matched by method name alone.** `fluent`'s owner-free steps
+are really scoped to a chain the engine has already rooted, and `ktor-routing`'s
+`request_reads` reach their receiver through a `via` call. That is 23 of the 802 rows, and
+the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`):
+`ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,209
 catalog-to-position asks, most of them sites those catalogs would never really claim.
-**The widening is deliberate and it is the safe direction:** this measurement sizes a
-ceiling, so over-counting the asks can only make the answer more conservative.
+
+**2. Every `all_strings` row is a `channel_via`, which an engine reaches only by following a
+`source` link back from a site it has already matched.** All thirteen of them
+(`fluent.py`: *"`all_strings` is `channel_via`'s alone"*). This harness matches them by
+owner plus method against every call site in the estate, so it asks about `List.of` and
+`Arrays.asList` calls in modules that use no Kafka at all — and **this is the over-match that
+produces the asked surface's headline maximum.** Measured:
+
+| corpus | positions `all_strings` adds | max paths / answers | would production ask? |
+|---|---|---|---|
+| `jhipster-sample-app` | **11** | **11 / 11** | **no** — the module contains no Kafka |
+| `orders-pekko` | 2 | **2 / 2** | yes (`Subscriptions.topics`) |
+| `orders-service` | 2 | 1 / 1 | yes |
+| `orders-streams` | 2 | 1 / 1 | yes |
+| `spring-integration-probe`, `mall-demo`, `mall-portal` | 1 each | 1 / 1 | no |
+
+So §3.1's eleven-path maximum is attributed to `kafka-consumer` and `kafka-streams` at a
+`jhipster-sample-app` site **those catalogs would never be asked about in production**.
+**Restricted to the three corpora where a `channel_via` parent really matches —
+`orders-service`, `orders-streams`, `orders-pekko` — these positions top out at 2 paths and
+2 answers.**
+
+**Both over-matches are deliberate and both are the safe direction:** this measurement sizes
+a ceiling, so over-counting the asks can only make the answer more conservative. But the
+second one is worth saying out loud rather than leaving for a reader to find, because of
+what it conceals: **the asked surface production will really present is further from needing
+a cap than this document's own headline suggests.** Every figure below is an upper bound on
+the asked surface, not an estimate of it.
 
 ### 1.4 Two bases, which are not interchangeable
 
@@ -143,8 +173,9 @@ was changed for this measurement**, and the §3a grep
 (`grep -rn "resolve_site\|resolve.values import" src/sextant/ | grep -v "resolve/values.py"`)
 is empty.
 
-**`scripts/` is not type-checked by `scripts/check.sh`** — the gate runs mypy over
-`src/` and `tests/` only. This harness is lint-clean and format-clean but unverified by
+**`scripts/` is not type-checked by `scripts/check.sh`** — the gate runs `mypy src`, and
+`pyproject.toml` sets `files = ["src"]`. Ruff, by contrast, runs over the whole tree, so
+this harness is lint-clean and format-clean but unverified by
 mypy, and that is stated rather than fixed: bringing `scripts/` under the type gate is a
 change to the gate, not to this task.
 
@@ -231,14 +262,17 @@ The maxima come from two unrelated places, and both are worth naming:
 
 | what | position | paths | depth | answers | visits |
 |---|---|---|---|---|---|
-| most paths, most answers, most bindings | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (`kafka-consumer`, `kafka-streams`, reached via `all_strings`) | **11** | 1 | **11** | 0 |
+| most paths, most answers, most bindings — **over-matched, see §1.3** | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (attributed to `kafka-consumer`, `kafka-streams` via `all_strings`; the module has no Kafka, so production never asks) | **11** | 1 | **11** | 0 |
 | most work | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`) | 3 | 2 | 1 | **11** |
 | deepest | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
 
 The eleven-path case does **no traversal at all** — `visits` is 0, because it is one varargs
 array argument holding eleven written constants and §1c's array rule enumerates them on the
-spot. The hardest thing a shipped catalog asks about anywhere is a Ktor route mount that
-costs eleven computed positions. There is no tail.
+spot. It is also the over-match §1.3 describes: on the corpora where that catalog row is
+genuinely reachable the same shape gives **2 paths**. So the highest path count a shipped
+catalog can really be handed is lower than this table's own maximum, and the hardest thing
+one asks about anywhere is a Ktor route mount costing eleven computed positions. There is no
+tail either way.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
@@ -382,7 +416,10 @@ say which is which:
    varargs array of eleven written constants, enumerated on the spot at zero traversal
    cost), max depth 3, max 11 positions visited, max 11 bindings. Every position every
    shipped catalog asks about, across twenty-seven corpora including the 48 MB one, walks
-   in **1.6 ms total**. A cap would never fire.
+   in **1.6 ms total**. A cap would never fire — and the margin is **larger** than these
+   figures say, because the 11 is an artefact of §1.3's `channel_via` over-match: where
+   that catalog row is genuinely reachable the same shape gives 2 paths, so the real
+   asked-surface maximum is 3 paths at a Ktor route mount.
 2. **The ceiling is not near one either, and it is the number that matters** because it is
    what the asked surface could grow into. Resolving **every argument and receiver of every
    call site in the estate** — 98,454 positions, 50,112 `resolve_site` calls — costs
@@ -434,9 +471,10 @@ Both halves follow from §3.3 and §1.6.
 - **Thread the `ValueIndex`.** `resolve_site(workspace, site)` with no index rebuilds the
   whole five-query fold, which costs 0.16 s on `mall-admin` — more than every walk in that
   corpus put together. There is no cache and there cannot be one in `Workspace.once`. An
-  engine resolving 56 sites without threading an index would pay about 9 s where the work
-  itself is under a millisecond. Each migrated engine builds `value_index(workspace)` once
-  per run and passes it to every `resolve_site` call.
+  engine resolving `mall-admin`'s **52 asked sites** (56 positions — §1.4's two bases)
+  without threading an index would pay about 8 s where the work itself is under a
+  millisecond. Each migrated engine builds `value_index(workspace)` once per run and passes
+  it to every `resolve_site` call.
 - **Report `visits`, not wall time.** A migration that claims "the walk is fast here" from a
   wall-time reading is reading noise: §1.6 measured a 15× spread on identical input. Where
   §3c's per-engine diff wants a cost figure, it is the positions-visited count.
@@ -446,9 +484,11 @@ Both halves follow from §3.3 and §1.6.
 - A corpus whose generated code is an order of magnitude larger than `mall-mbg`'s **and** a
   catalog that asks about a position inside it. Today those two conditions never co-occur:
   the corpus with the fan-out asks about nothing, and the corpora that ask have no fan-out.
-- **A catalog spelling `arg: all_strings` against a method a real codebase calls with a long
-  list.** It is the only ask in the grammar with no bound on how many positions one row
-  claims, and its harmlessness here is luck (§1.3), not a property.
+- **A codebase whose Kafka topic list is long**, reached through a `channel_via` spelling
+  `arg: all_strings`. It is the only ask in the grammar with no bound on how many positions
+  one row claims. Nothing here measures that case: the corpora where such a row is genuinely
+  reachable hold short lists (max 2), and the eleven-element list this harness found is in a
+  module with no Kafka, so it is the over-match rather than the case (§1.3).
 - A catalog that asks about a **receiver**. The asked surface is arguments only; the ceiling
   includes receivers, so the headroom is already measured, but the mix would shift towards
   the `escapes` check.

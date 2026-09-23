@@ -33,8 +33,8 @@ which is how the caveat came to be written down.
 * `arg: all_strings` — EVERY positional argument of the call, a varargs array read as its
   own elements. Thirteen rows, all `List.of`/`Arrays.asList`/`Subscriptions.topics` topic
   lists. It is the one spelling where a single catalog row can ask about an unbounded
-  number of positions, and it matches **zero** sites in the large corpora by luck rather
-  than by bound — nothing there calls one of those three where a catalog also matches;
+  number of positions, and it is also this harness's widest over-match — `_indices` has
+  the measurement and the reason;
 * a `call_wrappers`/`record_wrappers` entry carrying a `<name>_ctor_arg` against a wrapper
   `type` — a position on that type's CONSTRUCTOR call, so the method name is `<init>`.
   `payload_ctor_arg: last` is not an index but a rule, and it is resolved per site against
@@ -46,14 +46,23 @@ two catalogs asking about one slot is two asks and one walk. Both are printed, p
 and in total, because quoting one against the other is the easy mistake here. Every COST
 figure is per position.
 
-A row is matched to real call sites by the same three keys the engines match on — the
-owner (where the row or an enclosing node declares one, converted through the catalogs'
-own `catalog_symbols`), the method name, and the JVM `descriptor` or the `arity` where the
-row declares either. Where a row declares NO owner (`fluent`'s owner-free steps, whose real
-scope is a chain the engine has already rooted; `ktor-routing`'s `request_reads`, whose
-receiver comes through a `via` call) the match is by method name alone, which is WIDER than
-the engine's own. That is deliberate and it is the safe direction: this measurement is
-sizing a ceiling, so over-counting the asks can only make the answer more conservative.
+A row is matched to real call sites on the keys the engines match on — the owner (where the
+row or an enclosing node declares one, converted through the catalogs' own
+`catalog_symbols`), the method name, and the JVM `descriptor` or the `arity` where the row
+declares either. **What it does NOT model is the engines' REACHABILITY**, and two classes of
+row are therefore over-matched:
+
+1. a row declaring NO owner (`fluent`'s owner-free steps, whose real scope is a chain the
+   engine has already rooted; `ktor-routing`'s `request_reads`, whose receiver comes through
+   a `via` call) is matched by method name alone — 23 of 802 rows;
+2. a `channel_via` row, which an engine reaches only by following a `source` link back from
+   a site it has already matched, is matched here against every call site in the estate —
+   the 13 `all_strings` rows, and `_indices` has the measurement.
+
+Both are WIDER than the engine's own, deliberately, and both are the safe direction: this
+measurement sizes a ceiling, so over-counting the asks can only make the answer more
+conservative. It also means the asked surface reported here is an upper bound on the one
+production will present, not an estimate of it.
 
 ## What is measured, and against what
 
@@ -288,12 +297,14 @@ def asks_of(catalog: Catalog) -> list[Ask]:
     by style — one reader for every catalog, so a style that spells a position somewhere
     new is picked up rather than silently skipped.
 
-    **It is a reader of shapes and not of the engines**, and that is the standing caveat:
-    it finds a position wherever a catalog spells one in a shape seen below, and every
-    shape here was found by auditing the 101 shipped files. A future catalog that invents a
-    fourth spelling would be missed until this is re-audited, which is why the document
-    that quotes these counts quotes them as *measured today* rather than as a property of
-    the grammar."""
+    **It is a reader of shapes and not of the engines**, and that is the standing caveat,
+    in both directions. It finds a position wherever a catalog spells one in a shape seen
+    below, and every shape here was found by auditing the 101 shipped files — a future
+    catalog that invents a SEVENTH spelling is missed until this is re-audited, which is
+    why the document that quotes these counts quotes them as *measured today* rather than
+    as a property of the grammar. And it does not model the engines' REACHABILITY: a row an
+    engine only ever reaches by following a link from an already-matched site is matched
+    here against every call site in the estate. `_indices` states what that costs."""
     found: list[Ask] = []
 
     def walk(node: Any, enclosing: _Enclosing) -> None:
@@ -391,11 +402,22 @@ def _indices(slot: int | str, arity: int) -> tuple[int, ...]:
     """The argument indices one declared slot resolves to AT THIS SITE.
 
     `all_strings` is the whole positional list, so this is the one place a single ask can
-    cost more than one position. **It costs none on the large corpora, and that is luck
-    rather than a bound**: all thirteen rows that spell it name `List.of`,
-    `Arrays.asList` or `Subscriptions.topics`, which no example calls where a catalog
-    also matches. A codebase that did call one with a long topic list would ask about
-    every one of its arguments from a single catalog row."""
+    cost more than one position: a `List.of` with seven arguments is seven positions from
+    one catalog row, and a codebase calling one with a long topic list would be more.
+
+    **These thirteen rows are also the harness's widest over-match, and it is the one that
+    carries the asked surface's path maximum, so it is stated here rather than inferred.**
+    Every `all_strings` row lives inside a `channel_via` (`fluent.py`: "`all_strings` is
+    `channel_via`'s alone"), which an engine reaches ONLY by following a `source` link
+    back from a site it has already matched. This harness has no reachability model — it
+    matches owner plus method against every call site in the estate — so it asks about
+    `List.of` and `Arrays.asList` calls in modules that use no Kafka at all. MEASURED:
+    20 positions added across seven corpora, 11 of them in `jhipster-sample-app`, which
+    contains no Kafka and which production would therefore never ask. Restricted to the
+    three corpora where a `channel_via` parent really matches — `orders-service`,
+    `orders-streams`, `orders-pekko` — the same positions top out at 2 paths and 2
+    answers. The over-match is the conservative direction (see the module docstring), and
+    what it conceals is that the real asked surface is FURTHER from needing a cap."""
     if slot == _ALL_STRINGS:
         return tuple(range(arity))
     index = arity - 1 if slot == _LAST else slot
