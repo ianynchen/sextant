@@ -681,11 +681,13 @@ CREATE TABLE IF NOT EXISTS call_edges (
 -- here, and publishes nothing; each migration then flips one engine with its
 -- diff already read.
 --
--- **Bounded by what catalogs ASK, never by the facts.** MEASURED (Task 4,
--- 2026-09-23, twenty-seven corpora including `mall-admin`'s 48 MB): 948
--- distinct positions asked, against a ceiling of 98,454 — every argument and
--- receiver of every call site. A row per fact would be a second copy of the
--- argument grammar; a row per ask is a list a person can read.
+-- **Bounded by what catalogs ASK, never by the facts.** How narrow that bound
+-- is was measured estate-wide by Task 4 and is stated in ONE place —
+-- `docs/research/2026-09-23-value-walk-measurement.md` §2, where the asked
+-- surface is reported beside the ceiling it is a fraction of. This comment
+-- cites it rather than carrying a copy: the figure moved once and four copies
+-- of it did not. A row per fact would be a second copy of the argument
+-- grammar; a row per ask is a list a person can read.
 --
 -- **Empty unless the analysis was run in shadow mode** (`--shadow`), and
 -- emptied at the start of every resolve either way: rows describing a walk

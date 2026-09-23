@@ -17,13 +17,13 @@ rather than by changing code.
 ## What bounds the table, and why the bound is the point
 
 §3d is explicit: the rows are written **only for positions a catalog asked about** —
-bounded by what catalogs ASK, not by the facts. Measured (2026-09-23, twenty-seven corpora
-including `mall-admin`'s 48 MB of facts, re-run after this reader was widened to
-`parse_calls`): **989 distinct positions asked, against a ceiling of 98,454** — every
-argument and receiver of every call site — so the asked surface is 1.0% of what a
-row-per-fact table would hold. A writer that found itself
-emitting a row per fact would have lost the bound, and the table would be a second copy of
-the argument grammar rather than a review list.
+bounded by what catalogs ASK, not by the facts. How narrow that bound is, estate-wide, is a
+measured figure and is **not restated here**: it lives in
+`docs/research/2026-09-23-value-walk-measurement.md` §2, beside the ceiling it is a fraction
+of, and every other site in this repository cites that section rather than carrying its own
+copy. Four copies of one number went stale across three fix rounds; one source cannot. A
+writer that found itself emitting a row per fact would have lost the bound, and the table
+would be a second copy of the argument grammar rather than a review list.
 
 ## How an ask is found — six shapes, audited, not derived
 
@@ -86,8 +86,9 @@ Measured over the 101 shipped catalogs, 2026-09-23.
 * **`parse_calls`** — `bytes_arg` x4 and `class_arg` x4, all in `spring-web.yml`'s
   `parse_calls.calls`, spelled exactly as shape one. `shapes/parse_binding.py` reads them as
   CALL-ARGUMENT indices: `_argument_at(site, entry.bytes_arg)` at `:264`,
-  `_argument_at(site, entry.class_arg)` at `:329`, and `_argument_at` itself indexes
-  `site["arguments"]` at `:345`. Eight real call positions, invisible here until 2026-09-23.
+  `_argument_at(site, entry.class_arg)` at `:329`, and `_argument_at` itself reads
+  `site["arguments"]` at `:349` and indexes it at `:352`. Eight real call positions,
+  invisible here until 2026-09-23.
 
 **Refused, each with the line that settles it:**
 
@@ -106,8 +107,17 @@ Measured over the 101 shipped catalogs, 2026-09-23.
 * **`suffix[].payload_arg` — 3 occurrences, inside `matches`** (`spring-cloud-stream.yml`), so
   this reader DOES see the key and drops it. It is refused for the same reason as `wrappers`,
   one level along: `engines/config_join.py:677-679` indexes `returns["arguments"]`, the
-  functional type's type arguments. It is dropped today because its value is a list rather
-  than an integer; the justification is the line above, not that accident.
+  functional type's type arguments.
+
+  **What actually drops them is the method name, not the value's type** — measured, because
+  the sentence that stood here named the wrong mechanism for two of the three. Two are
+  `payload_arg: 0` (`spring-cloud-stream.yml:62` and `:64`) and `_slots_of` returns `(0,)`
+  for each; they are dropped by `if slots and names` below, because `_names_of` is `()` at
+  the `suffix[]` node and at every ancestor it could inherit from — `binding`,
+  `address_from_config` and `matches` — and the node carries no `type`, so the `<init>` arm
+  does not fire either. Only the third (`:72`, `payload_arg: [0, 1]`) is dropped for being a
+  list. Either way the justification is the consuming line above and never the accident, and
+  now the stated accident is the one that happens.
 
 **`bean_model`** sits outside `matches` too and carries no arg-shaped key in any shipped
 model. Step models ARE merged into `matches` and so are seen. `shape_model` is immaterial
@@ -116,10 +126,18 @@ rather than merely empty: `shape-models/json.yml` carries no positional slot of 
 **What remains latent.** This reader is an audit of the shipped files, not a grammar, so a
 catalog that spells a position a seventh way — or puts one in a block not named above — is
 silently not shadowed. The alarm is the per-catalog ask baseline in
-`tests/application/test_shadow_mode.py`. Telling a call slot from a type-argument index by
-its key NAME remains impossible (`payload_arg` is both, two lines apart in one file), and
-that classification belongs to Task 10, where the hop declarations become invalid and it
-has to be made anyway.
+`tests/application/test_shadow_mode.py`.
+
+Telling a call slot from a type-argument index by its key NAME remains impossible, and that
+classification belongs to Task 10, where the hop declarations become invalid and it has to
+be made anyway. **The example this paragraph used to give was wrong twice over and is
+withdrawn:** it said `payload_arg` is a call slot under `wrappers:` and a type-argument
+index under `suffix:`, "two lines apart in one file". No `payload_arg` in the 101 shipped
+catalogs is a call slot — both spellings are type-argument indices, which is the whole
+reason both are refused above — and in `spring-cloud-stream.yml` the two blocks are not
+adjacent: `suffix[]` at `:62`, `:64`, `:72` and `wrappers[]` at `:110`, `:111`, in different
+top-level blocks. What is really impossible is deciding from the NAME alone, which the
+refusals above settle from each key's consuming line instead.
 
 ## Cost, and the condition the measurement attached to it
 
@@ -352,15 +370,23 @@ def asks_of(catalog: Catalog) -> list[Ask]:
     # block rather than part of `matches`, and every entry in it is shape one of the six
     # above — an `_arg` integer beside a method name with an owner —  read by
     # `shapes/parse_binding.py` as a real CALL-ARGUMENT index: `_argument_at(site,
-    # entry.bytes_arg)` at `:264` and `_argument_at(site, entry.class_arg)` at `:329`, both
-    # indexing `site["arguments"]` at `:345`. Eight positions in `spring-web.yml`, and the
-    # reader's own contract is that a style spelling a position somewhere new is picked up
-    # rather than silently skipped — so a miss here is a hole in the review, not slack.
+    # entry.bytes_arg)` at `:264` and `_argument_at(site, entry.class_arg)` at `:329`, with
+    # `_argument_at` reading `site["arguments"]` at `:349` and indexing it at `:352`. Eight
+    # positions in `spring-web.yml`, and the reader's own contract is that a style spelling
+    # a position somewhere new is picked up rather than silently skipped — so a miss here is
+    # a hole in the review, not slack.
     #
     # An entry that names `owner_hierarchy` instead of `owner` is matched by method name
-    # alone here: `_matches` (`parse_binding.py:272`) resolves it through the type's
+    # alone here: `_matches` (`parse_binding.py:273`) resolves it through the type's
     # ancestry, which this reader does not model. That is the same widening it already
-    # takes for an owner-free `fluent` step, and the same safe direction.
+    # takes for an owner-free `fluent` step, and the same safe direction — but it is WIDE,
+    # and a reader of this table must not take a protobuf row for a production candidate
+    # without checking. MEASURED by running every matched site through production's own
+    # `_vocabulary` + `_matches` + `_facts`: on `orders-service` 24 of the 28 sites this
+    # reader asks about are refused there, and on `grpc-probe` all 12 are, because the
+    # callee's receiver is `com.google.protobuf.Parser`, which has no ancestry fact at all.
+    # The counts and what survives them are in
+    # `docs/research/2026-09-23-value-walk-measurement.md` §1.3, over-match 3.
     walk(catalog.parse_calls, _Enclosing())
     return found
 
@@ -400,8 +426,9 @@ def positions_asked(sites: Sequence[dict[str, Any]], asks: Sequence[Ask]) -> lis
                     )
     # Deduped, because one catalog matching a site through two overload rows asks one
     # question twice and a table holding it twice would count it twice. The two BASES
-    # differ by about a quarter and the distinction matters to a reader: 1,209 distinct
-    # (catalog, position) asks over 948 distinct positions, estate-wide.
+    # differ by about a quarter and the distinction matters to a reader; both are measured
+    # estate-wide in `docs/research/2026-09-23-value-walk-measurement.md` §1.4, which is
+    # where they are stated and the only place they are.
     return list(dict.fromkeys(found))
 
 

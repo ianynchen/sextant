@@ -47,9 +47,10 @@ which is how the caveat came to be written down.
 **A sixth BLOCK, not a seventh shape** (widened 2026-09-23): `parse_calls` is a top-level
 catalog block rather than part of `matches`, and its entries spell shape one exactly — an
 `_arg` integer beside a method name with an owner. `shapes/parse_binding.py` reads them as
-real call-argument indices (`_argument_at` at `:264`, `:329`, `:345`), so they are eight
-positions this harness measured as zero until now. The reader's own docstring lists every
-other block and the line that refuses it.
+real call-argument indices (`_argument_at` called at `:264` and `:329`, indexing
+`site["arguments"]` at `:349`/`:352`), so they are eight positions this harness measured as
+zero until now. The reader's own docstring lists every other block and the line that refuses
+it, and over-match 3 below is what they cost in slack.
 
 **The reader itself now lives in `src/sextant/application/resolve/shadow.py`** and this
 harness imports it (Task 5): §3d's shadow table is written for exactly the positions
@@ -70,15 +71,21 @@ row are therefore over-matched:
 
 1. a row declaring NO owner (`fluent`'s owner-free steps, whose real scope is a chain the
    engine has already rooted; `ktor-routing`'s `request_reads`, whose receiver comes through
-   a `via` call) is matched by method name alone — 23 of 802 rows;
+   a `via` call) is matched by method name alone;
 2. a `channel_via` row, which an engine reaches only by following a `source` link back from
    a site it has already matched, is matched here against every call site in the estate —
-   the 13 `all_strings` rows, and `_indices` has the measurement.
+   the `all_strings` rows, and `_indices_of` has the reason;
+3. `spring-web`'s protobuf `parse_calls` row, which declares `owner_hierarchy` rather than
+   `owner`, so it too is matched by method name alone — while production resolves the
+   receiver's ancestry and refuses most of what this matches.
 
-Both are WIDER than the engine's own, deliberately, and both are the safe direction: this
-measurement sizes a ceiling, so over-counting the asks can only make the answer more
-conservative. It also means the asked surface reported here is an upper bound on the one
-production will present, not an estimate of it.
+All three are WIDER than the engine's own, deliberately, and all three are the safe
+direction: this measurement sizes a ceiling, so over-counting the asks can only make the
+answer more conservative. It also means the asked surface reported here is an upper bound on
+the one production will present, not an estimate of it — **how much of an upper bound is
+measured, per over-match, in `docs/research/2026-09-23-value-walk-measurement.md` §1.3**,
+which is where the counts live; this docstring names the shapes and cites the numbers rather
+than carrying a second copy of them.
 
 ## What is measured, and against what
 

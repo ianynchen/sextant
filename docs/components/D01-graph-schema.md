@@ -950,10 +950,12 @@ shadow first, writes its candidate conversions here, and publishes none of them.
 engine is then migrated with its diff already read.
 
 **Bounded by what catalogs ASK, never by the facts**, which is what makes it a list a person
-can read rather than a second copy of the argument grammar. Measured 2026-09-23 across
-twenty-seven corpora including the 48 MB one: 948 distinct positions asked, against 98,454
-if every argument and receiver of every call site were resolved
-(`docs/research/2026-09-23-value-walk-measurement.md`).
+can read rather than a second copy of the argument grammar. How narrow that bound is —
+positions asked, against the ceiling of every argument and receiver of every call site — was
+measured across twenty-seven corpora including the 48 MB one, and is reported in
+[the value-walk measurement](../research/2026-09-23-value-walk-measurement.md) §2. It is
+cited here rather than restated: that figure has moved once already, and the copies of it
+did not move with it.
 
 **`value` masks by the ADDRESS map on export**, not by the argument-grammar one: a
 `would_resolve` row carries the string an engine WOULD publish as `endpoints.path`, so it is

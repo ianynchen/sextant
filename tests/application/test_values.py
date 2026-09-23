@@ -1201,11 +1201,13 @@ def test_an_unresolved_row_carries_the_reason_and_no_value(walked):
 
 
 def test_the_table_is_bounded_by_what_catalogs_ask_not_by_the_facts(walked):
-    """**§3d's bound, and the thing that makes the table readable at all.** Measured
-    estate-wide (Task 4): 948 positions asked against a ceiling of 98,454. Here the one
-    catalog asks about slot 0 of `Registry#one` and nothing else, so every row names that
-    method — a writer that had lost the bound and emitted a row per fact would fail this
-    on the fixture's other sixty-odd argument positions."""
+    """**§3d's bound, and the thing that makes the table readable at all.** What the bound
+    is worth estate-wide is measured in
+    `docs/research/2026-09-23-value-walk-measurement.md` §2 and is cited rather than
+    repeated here — this test asserts the bound's SHAPE, not its estate-wide size. Here the
+    one catalog asks about slot 0 of `Registry#one` and nothing else, so every row names
+    that method — a writer that had lost the bound and emitted a row per fact would fail
+    this on the fixture's other sixty-odd argument positions."""
     rows = _shadow_rows(walked)
     assert rows
     assert {row["slot"] for row in rows} == {"0"}

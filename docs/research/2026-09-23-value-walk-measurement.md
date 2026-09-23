@@ -58,13 +58,18 @@ Two surfaces are measured, and the difference between them is the finding:
   re-litigated by the first catalog that asks somewhere new, and a ruling wants to know
   whether the corpus *holds* a pathological shape at all or merely fails to ask about one.
 
-### 1.3 How an "ask" is found — six shapes, audited, not derived
+### 1.3 How an "ask" is found — six shapes in two blocks, audited, not derived
 
-The shipped catalogs spell a position in **six** shapes. **They were found by auditing all
-101 files, not derived from a grammar, and that is the standing caveat on every count
-below:** a catalog that invents a seventh spelling is missed until the audit is redone. This
-is not hypothetical — the first version of this harness had three of the six and
-under-counted the asked surface by 20 positions.
+The shipped catalogs spell a position in **six** shapes, in **two** catalog blocks. **They
+were found by auditing all 101 files, not derived from a grammar, and that is the standing
+caveat on every count below:** a catalog that invents a seventh spelling is missed until the
+audit is redone. This is not hypothetical — the first version of this harness had three of
+the six and under-counted the asked surface by 20 positions.
+
+The table below has **seven rows for six shapes**: its last row is shape one again, spelled
+in `parse_calls` rather than in `matches`. A second BLOCK is not a seventh shape, and the
+distinction is the one the amendment below turns on: what was missed for three rounds was a
+block, not a spelling.
 
 | shape | where | rows |
 |---|---|---|
@@ -92,12 +97,16 @@ under-counted the asked surface by 20 positions.
 >   would have been a wrong answer rather than slack. **No ask changed**, on any catalog.
 > * **Row seven is new.** `parse_calls` is a top-level catalog block outside `matches`, and
 >   its entries spell shape one exactly; `shapes/parse_binding.py` reads them as real
->   call-argument indices (`_argument_at` at `:264`, `:329`, `:345`). Eight positions this
->   harness previously measured as zero. **This is what moved the figures below**, and the
->   moves are recorded where they occur: the asked surface goes from 948 positions / 1,209
->   asks / 686 sites to **989 / 1,250 / 726**, `orders-service` and `grpc-probe` are the two
->   corpora affected, and the maximum `visits` on the asked surface goes from 11 to **15**.
->   The §5 ruling is unchanged and the margins it rests on are unchanged.
+>   call-argument indices — `_argument_at(site, entry.bytes_arg)` at `:264`,
+>   `_argument_at(site, entry.class_arg)` at `:329`, and `_argument_at` itself indexing
+>   `site["arguments"]` at `:349`/`:352`. Eight positions this harness previously measured as
+>   zero. **This is what moved the figures below**, and the moves are recorded where they
+>   occur: the asked surface goes from 948 positions / 1,209 asks / 686 sites to
+>   **989 / 1,250 / 726**, `orders-service` and `grpc-probe` are the two corpora affected,
+>   and the maximum `visits` on the asked surface goes from 11 to **15**. The §5 ruling is
+>   unchanged and the margins it rests on are unchanged. **What the widening added is very
+>   largely SLACK rather than production reach** — the third over-match below measures how
+>   much.
 >
 > `wrappers` (`payload_arg` x151 across 55 files), `serialization` (`arg` x70),
 > `protocol_hint` and `wrappers[].when` (`annotation_arg` x2 and x1) are all read and
@@ -119,18 +128,18 @@ positions across seven corpora**, and the two forms it meets show why the bound 
 It matches nothing in `mall-admin` or `mall-mbg`, and **that is luck rather than a bound**:
 nothing there calls `List.of`, `Arrays.asList` or `Subscriptions.topics`.
 
-### The two over-matches, and what the wider of them conceals
+### The three over-matches, and what they conceal
 
 A row is matched to real call sites on the keys the engines match on: owner where declared
 (converted through the catalogs' own `catalog_symbols`), method name, and the JVM
 `descriptor` or the `arity` where the row declares either. **What this harness does not
 model is the engines' *reachability*** — whether an engine would ever arrive at that row for
-that site — and two classes of row are over-matched as a result.
+that site — and three classes of row are over-matched as a result.
 
 **1. Rows declaring no owner are matched by method name alone.** `fluent`'s owner-free steps
 are really scoped to a chain the engine has already rooted, and `ktor-routing`'s
-`request_reads` reach their receiver through a `via` call. That is 23 of the 802 rows, and
-the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`):
+`request_reads` reach their receiver through a `via` call. That is **24 of the 807 rows**,
+and the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`):
 `ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,250
 catalog-to-position asks, most of them sites those catalogs would never really claim.
 
@@ -139,7 +148,9 @@ catalog-to-position asks, most of them sites those catalogs would never really c
 (`fluent.py`: *"`all_strings` is `channel_via`'s alone"*). This harness matches them by
 owner plus method against every call site in the estate, so it asks about `List.of` and
 `Arrays.asList` calls in modules that use no Kafka at all — and **this is the over-match that
-produces the asked surface's headline maximum.** Measured:
+produces the asked surface's path-count and answer-count maxima** (over-match 3 produces its
+visit-count one; the depth maximum of 3 is reached by a genuine `ktor-routing` position as
+well, so it is not an over-match's). Measured:
 
 | corpus | positions `all_strings` adds | max paths / answers | would production ask? |
 |---|---|---|---|
@@ -155,12 +166,34 @@ So §3.1's eleven-path maximum is attributed to `kafka-consumer` and `kafka-stre
 `orders-service`, `orders-streams`, `orders-pekko` — these positions top out at 2 paths and
 2 answers.**
 
-**Both over-matches are deliberate and both are the safe direction:** this measurement sizes
-a ceiling, so over-counting the asks can only make the answer more conservative. But the
-second one is worth saying out loud rather than leaving for a reader to find, because of
-what it conceals: **the asked surface production will really present is further from needing
-a cap than this document's own headline suggests.** Every figure below is an upper bound on
-the asked surface, not an estimate of it.
+**3. `spring-web`'s protobuf `parse_calls` row declares `owner_hierarchy` and not `owner`,
+so this harness matches `parseFrom` by method name alone** — it is one of the 24 owner-free
+rows of over-match 1, and it is the one the widening added. Production does not match that
+way: `shapes/parse_binding.py`'s `_matches` (`:273`) falls through to `_reaches` (`:287`),
+which walks the receiver type's *declared ancestry* for one of the four protobuf markers
+(`MessageOrBuilder`, `GeneratedMessage`, `GeneratedMessageV3`, `GeneratedMessageLite`).
+**Measured by running every site this harness matched through `_vocabulary` + `_matches` +
+`_facts` themselves:**
+
+| corpus | sites this harness asks about | production's matcher accepts | refuses |
+|---|---|---|---|
+| `orders-service` | 28 | **4** | 24 |
+| `grpc-probe` | 12 | **0** | 12 |
+
+Every refusal is the same one: the call's receiver is `com.google.protobuf.Parser`, a
+library type with no ancestry fact in the module at all, so `_reaches` ends its walk
+immediately. The four production really accepts are three `OrderProtos$OrderRequest#parseFrom`
+receivers and one `JsonMapper#readValue` — **5 positions**, topping out at 3 paths, depth 2
+and 9 visits. So the whole of `grpc-probe`'s new ask and 24 of `orders-service`'s 28 new
+sites are slack, and **§3.1's fifteen-visit maximum is one of the refused ones**.
+
+**All three over-matches are deliberate and all three are the safe direction:** this
+measurement sizes a ceiling, so over-counting the asks can only make the answer more
+conservative. But the second and third are worth saying out loud rather than leaving for a
+reader to find, because of what they conceal: **the asked surface production will really
+present is further from needing a cap than this document's own headline suggests.** Every
+figure below is an upper bound on the asked surface, not an estimate of it — and no figure
+below may be quoted as a *production* maximum without that discount applied.
 
 ### 1.4 Two bases, which are not interchangeable
 
@@ -174,10 +207,10 @@ position**; the asks number appears only where the question is "how much do cata
 never where the question is "how much does it cost".
 
 (A third base exists and is deliberately not used: counting one catalog ROW per position
-gives 1,997 as first measured, because a catalog often matches a site through more than one overload row.
-The first draft of this document printed that number in a column headed "positions asked"
-beside a headline of distinct positions, which is the mistake this section exists to
-prevent.)
+gives **2,038**, because a catalog often matches a site through more than one overload row.
+The first draft of this document printed that number — 1,997, on the reader as it then was —
+in a column headed "positions asked" beside a headline of distinct positions, which is the
+mistake this section exists to prevent.)
 
 ### 1.5 What is recorded
 
@@ -244,12 +277,15 @@ it. *(948 / 1,209 / 0.96% before the reader was widened to `parse_calls` — see
 | `grpc-probe` | 391 | 539 | 12 | 12 | 12 | 3.1% |
 | `orders-quarkus`, `orders-spring7`, `orders-soap-final`, `orders-soap-client` | 13 / 13 / 6 / 0 | 7 / 5 / 0 / 0 | 0 | **0** each | 0 | 0% |
 
-Four of the twenty-seven corpora ask about **nothing at all** (five until `parse_calls` was
-read: `grpc-probe`'s protobuf `parseFrom` calls are asked about now), and `mall-mbg` — 21,775 call
+Four of the twenty-seven corpora ask about **nothing at all**, and `mall-mbg` — 21,775 call
 sites of MyBatis-generated model code, which is exactly where the estate's worst shape lives
-— is a sixth. The biggest corpus in the estate asks about 56 positions. The fixtures ask
-proportionally far more because they exist to exercise catalogs; the real applications do
-not.
+— is a **fifth**. It was five plus `mall-mbg` until `parse_calls` was read, and that move is
+one the reader made and production did not: **`grpc-probe`'s twelve protobuf `parseFrom`
+positions are asked about by this harness and by shadow mode, and refused by production's
+own matcher — all twelve** (§1.3, over-match 3). On the engines' own terms `grpc-probe`
+still asks about nothing. The biggest corpus in the estate asks about 56 positions. The
+fixtures ask proportionally far more because they exist to exercise catalogs; the real
+applications do not.
 
 Which catalogs ask (asks, so one position once per catalog that asks about it; these sum
 to the 1,250):
@@ -264,11 +300,20 @@ to the 1,250):
 | `interface_implementation` | 9 | 1 of 1 |
 
 Fifty-one of the 101 shipped catalogs name a call-site position at all; 48 of those matched
-something somewhere. The other 50 ask about annotation attributes alone, which this walk
-does not serve. **The one `annotation_driven` catalog on that list is `spring-web`**, and it
-is there only through `parse_calls` — its `matches` block names no position. That row was
-absent until the reader was widened (§1.3); before it, the line read "Fifty ... 47 ... the
-other 51 — `annotation_driven` and its relatives".
+something somewhere. **The other 50 name no call-site position**, and 37 of them are
+`annotation_driven` — they ask about annotation attributes alone, which this walk does not
+serve. The remaining **13 are not**: `graphql-schema`, `grpc-java`, `grpc-net-devh`,
+`grpc-schema`, `spring-advice`, `spring-cloud-gateway-properties`, `spring-cloud-stream`,
+`spring-data-rest`, `spring-integration`, `spring-kafka-media`, `spring-scheduling`,
+`spring-stomp-advice` and `wsdl-schema` — three `schema_operations`, four `config_join`, two
+`error_advice`, and one each of `supertype_derived`, `injected_client`, `derived_resource`
+and `scheduled_work`. What each of those reads instead is not measured here; what is
+measured is that they are not annotation catalogs, so saying "the other 50 ask about
+annotation attributes" was wrong in thirteen cases.
+**The one `annotation_driven` catalog that does name a position is
+`spring-web`**, and it is there only through `parse_calls` — its `matches` block names none.
+That row was absent until the reader was widened (§1.3); before it, the line read
+"Fifty ... 47 ... the other 51 — `annotation_driven` and its relatives".
 
 ---
 
@@ -280,14 +325,20 @@ this measurement is for.
 ### 3.1 The asked surface: 989 positions, 726 sites
 
 *(948 / 686 before the reader was widened to `parse_calls` — §1.3. Every figure in this
-section was re-measured after the widening; the two that moved are marked.)*
+section was re-measured after the widening; the five cells that moved are marked.)*
+
+**Percentiles are the harness's own** — `percentile()` is `ordered[round(f * (n - 1))]`, a
+nearest-rank-on-the-interior rule, and this table reports the instrument rather than
+restating it under a different convention. On 989 values p99.9 is therefore the second
+largest, not the largest; a nearest-rank-**ceiling** reading would put the maximum in the
+p99.9 column and did, in this table's previous revision.
 
 | figure | p50 | p90 | p99 | p99.9 | **max** |
 |---|---|---|---|---|---|
-| paths per position | 1 | 1 | 3 | 11 | **11** |
-| hop depth | 0 | 0 | 1 | 3 | **3** |
-| distinct answers | 1 | 1 | 2 | 11 | **11** |
-| positions visited | 0 | 1 | 5 | 15 | **15** *(was 11)* |
+| paths per position | 1 | 1 | 2 | 5 *(was 3)* | **11** |
+| hop depth | 0 | 0 | 1 | 3 *(was 2)* | **3** |
+| distinct answers | 1 | 1 | 2 | 3 | **11** |
+| positions visited | 0 | 1 | 5 *(was 4)* | 11 *(was 7)* | **15** *(was 11)* |
 
 `resolve_site` over the same sites: **max 11 bindings** (p99: 3).
 **Totals across all twenty-seven corpora: index fold 0.38 s, walking 1.7 ms,
@@ -296,22 +347,30 @@ section was re-measured after the widening; the two that moved are marked.)*
 Path-count distribution: 972 positions have one path, 7 have two, 8 have three, one has
 five, **one has eleven**. Depth: 906 at 0, 77 at 1, 4 at 2, 2 at 3.
 
-The maxima come from two unrelated places, and both are worth naming:
+**Both maxima are over-matches, and the third row is the figure production can really be
+handed.** The table names each row's status rather than leaving it to §1.3:
 
 | what | position | paths | depth | answers | visits |
 |---|---|---|---|---|---|
-| most paths, most answers, most bindings — **over-matched, see §1.3** | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (attributed to `kafka-consumer`, `kafka-streams` via `all_strings`; the module has no Kafka, so production never asks) | **11** | 1 | **11** | 0 |
-| most work | `orders-service` `OrderProtos$OrderRequest#parseFrom`@0 slot 0 (`spring-web`, through `parse_calls`) | 5 | **3** | 1 | **15** |
-| most work before the widening | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`) | 3 | 2 | 1 | 11 |
-| deepest, and it ties the new maximum | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
+| most paths, most answers, most bindings — **over-matched (§1.3, no. 2)** | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (attributed to `kafka-consumer`, `kafka-streams` via `all_strings`; the module has no Kafka, so production never asks) | **11** | 1 | **11** | 0 |
+| most work — **also over-matched (§1.3, no. 3)** | `orders-service` `OrderProtos$OrderRequest#parseFrom`@0 slot 0 (`spring-web`, through `parse_calls`). Its callee is `com.google.protobuf.Parser#parseFrom`, a library type with no ancestry fact, and production's `_matches` refuses it | 5 | **3** | 1 | **15** |
+| **the most work at a position production really asks about** | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`, on `RoutingBuilderKt.route` — owner declared, arity 3 matched, so no over-match applies) | 3 | 2 | 1 | 11 |
+| deepest, and it ties the depth maximum | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
 
 The eleven-path case does **no traversal at all** — `visits` is 0, because it is one varargs
 array argument holding eleven written constants and §1c's array rule enumerates them on the
-spot. It is also the over-match §1.3 describes: on the corpora where that catalog row is
-genuinely reachable the same shape gives **2 paths**. So the highest path count a shipped
-catalog can really be handed is lower than this table's own maximum, and the hardest thing
-one asks about anywhere is a protobuf `parseFrom` argument costing fifteen computed
-positions. There is no tail either way.
+spot. On the corpora where that catalog row is genuinely reachable the same shape gives
+**2 paths**.
+
+The fifteen-visit case is the one the `parse_calls` widening added, and §1.3's third
+over-match is the reason it cannot be read as a production figure: at that site the callee
+is `Parser`, not a generated message, so production's own matcher never arrives. **Where the
+protobuf row really binds — the four accepted sites on `orders-service`, five positions —
+the same shape tops out at 3 paths, depth 2 and 9 visits.**
+
+**So the hardest position production can really be handed is 3 paths, depth 2 and 11
+computed positions, at the Ktor route mount**, and the hardest it can be handed by the
+widened row is smaller than that. There is no tail on any reading.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
@@ -401,10 +460,11 @@ Answer kinds on the asked surface: `literal` 531, `unresolved` 474, `expression`
 **`absent` 0**.
 
 *Before the reader was widened to `parse_calls` (§1.3): 948 positions, 428 unresolved,
-`external` 206, `literal` 530. **Every one of the 46 answers the widening added is
-`external`, bar one literal** — a `parseFrom` or `readValue` argument mostly comes from
-outside what was scanned, which is the boundary `external` exists to name. No reason
-changed rank and none became reachable or unreachable.*
+`external` 206, `literal` 530. **The widening added 47 answers — 46 `external` and one
+`literal`**, which is what this section's own 206 → 252 and 530 → 531 say. A `parseFrom` or
+`readValue` argument mostly comes from outside what was scanned, which is the boundary
+`external` exists to name. No reason changed rank and none became reachable or
+unreachable.*
 
 **On the ceiling (98,454 positions, 91,522 unresolved answers):**
 
@@ -447,7 +507,8 @@ say which is which:
   report already records why: it is reachable **only** through the array rule, because a
   loop-built or branch-merged value arrives as an unread argument and no fact says it was a
   loop. That prediction is confirmed here by the count.
-- `escapes` is 4.8% of unresolved answers on the ceiling and 2.8% on the asked surface,
+- `escapes` is 4.8% of unresolved answers on the ceiling and 2.5% on the asked surface
+  (12 of 474; it was 2.8% of the narrower 428 before the widening),
   which is in line with the 13.4% the Task 3 fix round measured over the narrower
   return-crossing population.
 
@@ -462,9 +523,15 @@ say which is which:
    cost), max depth 3, max 15 positions visited, max 11 bindings. Every position every
    shipped catalog asks about, across twenty-seven corpora including the 48 MB one, walks
    in **1.7 ms total**. A cap would never fire — and the margin is **larger** than these
-   figures say, because the 11 is an artefact of §1.3's `channel_via` over-match: where
-   that catalog row is genuinely reachable the same shape gives 2 paths, so the real
-   asked-surface maximum is 5 paths at a protobuf `parseFrom` argument.
+   figures say, because **both of those maxima are over-matches** (§1.3). The 11 paths is
+   §1.3's `channel_via` artefact: where that row is genuinely reachable the same shape gives
+   2 paths. The 15 visits is §1.3's third over-match: the `spring-web` protobuf row declares
+   `owner_hierarchy`, this harness matches `parseFrom` by name alone, and production's own
+   matcher refuses that site along with 23 others on `orders-service` and all 12 on
+   `grpc-probe`; where the row really binds the same shape gives 3 paths and 9 visits. **The
+   hardest position production can really be handed anywhere in the estate is 3 paths, depth
+   2 and 11 visits, at `orders-ktor-classlambdas`'s Ktor route mount** — an owner-declared,
+   arity-matched `ktor-routing` row with no over-match in it.
 
    *Max visits was 11 and the total 1.6 ms when this was ruled; both moved when the reader
    was widened to `parse_calls` (§1.3), which is a re-measure and not a re-ruling — the

@@ -221,13 +221,15 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # whether the reader needs to learn the spelling or the number needs updating.
 #
 # It deliberately does NOT assert that every `*_arg`-shaped key is a position this reader
-# sees. Audited 2026-09-23: about fifty arg-shaped occurrences are legitimately not call
-# positions — `spring-cloud-stream.yml`'s `payload_arg: [0, 1]` is a GENERIC TYPE-ARGUMENT
-# index, and the same key name means a call slot under `wrappers:` and a type-argument
-# index under `suffix:`, which the reader cannot tell apart. Such a rule would need a
-# hand-maintained allowlist, which is the re-audit wearing a test's clothes. Classifying
-# the keys belongs to Task 10, where the hop declarations become invalid and the
-# classification has to be made anyway.
+# sees. Most of them are not call positions at all — `wrappers[].payload_arg` and
+# `suffix[].payload_arg` are GENERIC TYPE-ARGUMENT indices, `serialization.name_from[].arg`
+# and `annotation_arg` are attribute NAMES — and `resolve/shadow.py`'s own
+# *Which blocks are read, and which are refused* section enumerates every one of them with
+# the consuming line that settles it. That section is where those counts live; this comment
+# cites it rather than keeping a second copy, because the copy it used to keep was stale and
+# its example was false. Such a rule would need a hand-maintained allowlist, which is the
+# re-audit wearing a test's clothes. Classifying the keys belongs to Task 10, where the hop
+# declarations become invalid and the classification has to be made anyway.
 _ASKS_PER_CATALOG = {
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
@@ -287,7 +289,7 @@ _ASKS_PER_CATALOG = {
 
 def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     """The baseline above, asserted as an EQUALITY of dicts rather than a check of the
-    fifty entries it holds — which is what covers the fifty-one catalogs that ask about
+    fifty-one entries it holds — which is what covers the FIFTY catalogs that ask about
     nothing today, without storing a `(0, 0)` row for each of them. One that gains its
     first position adds a key this dict does not have; one that loses its last removes a
     key it does; either way the dicts differ and the test fails."""
