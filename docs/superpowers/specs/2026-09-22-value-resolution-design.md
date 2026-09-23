@@ -2,15 +2,21 @@
 
 **Status:** design. Brainstormed and approved section by section, 2026-09-22, after the Group D
 branch (PR #36) closed and its post-merge audit found the cause behind six of its own recorded
-boundaries. Not yet planned.
+boundaries. **Rewritten after an adversarial self-review** whose two Major findings the user ruled
+on (§0c). Not yet planned.
 
 **What it closes:** `OI-124` (a Temporal module that registers its workers in code derives nothing),
 `OI-126` (a consumer handed across methods), `OI-110` (a container built two beans away), the
 Vert.x 5 builder tail, Quartz's two-chain join, and — with the fifth edge — `akka-pekko-actors`,
 which COVERAGE tiers **C, possibly permanent** for exactly this reason.
 
-**What it is not:** a new subsystem. Four of the five edges it walks are already emitted as facts,
+**What it is not:** a new subsystem. Five of the six edges it walks are already emitted as facts,
 and one of them, `return_flows`, is already computed into a table that **no engine reads**.
+
+**Standing requirements.** **No false positives** (user rule): every ambiguity is an `unresolved`
+answer with a stated reason, never a guess. The resolve layer names no framework and no language.
+**This design must hold when a second language backend and a tenth framework arrive** — §5 is where
+that is enforced rather than hoped for.
 
 ---
 
@@ -20,7 +26,7 @@ Run on the repository as it stood at `50d3f6e`. Every number is a count, not an 
 
 | finding | count |
 |---|---|
-| modules that follow a `source` id (the "this value came from that call" fact) | **6**, in 20 places |
+| modules that follow a `source` id ("this value came from that call") | **6**, in 20 places |
 | modules that state **"one hop"** as an explicit cap | **7**, in 18 places |
 | `return_flows` rows on `mall-admin` — built, populated, read by no engine | **552 call sites / 566 returns** |
 | multi-hop follows in the whole resolve layer | **1** — `fluent`'s chain walk, and it runs *forward* from a declared root to a declared terminal |
@@ -34,15 +40,15 @@ this value?* There is only *follow exactly one hop, in the direction a catalog n
 Every framework that put a value one hop further away than a catalog could reach was answered with a
 **new catalog word**, not a new hop: `channel_via`, then `url_via`, then `type_carriers`, then
 `call_wrappers`, then `getters`, then `indexed`, then `compose`. Group D nearly added two more —
-`contract` and `argument_chain` — and both were cut in review, which is the only reason the count
-is seven and not nine.
+`contract` and `argument_chain` — and both were cut in review, which is the only reason the count is
+seven and not nine.
 
-Each of those was a correct local decision. Together they are the disease: distance is described
-per catalog, so it is re-described every time, and capped every time.
+Each was a correct local decision. Together they are the disease: distance is described per catalog,
+so it is re-described every time, and capped every time.
 
 ### 0b. A correction this design is built on, made three times before it stuck
 
-**`channel_via` is not pure distance, and two earlier drafts of this argument claimed it was.**
+**`channel_via` is not pure distance, and two earlier drafts claimed it was.**
 
 ```yaml
 channel_arg: 0
@@ -54,105 +60,134 @@ reaches the `createQueue` call and is then **stuck**: the value is a `Queue` obj
 the facts says what string identifies a `Queue`. Only framework knowledge does.
 
 So `channel_via` welds two statements together — *"it is over there"* (distance; the walk replaces
-this) and *"and argument 0 of that call is what identifies it"* (**meaning; DR-6 says this stays
-catalog data**).
+this) and *"and argument 0 of that call identifies it"* (**meaning; DR-6 says this stays catalog
+data**).
 
-The general lesson, recorded because it was learned expensively: measuring a key's **syntax** —
-that it is repeated across catalogs — does not establish its **semantics**. The check that catches
-it is reading what the key's `arg` is *for*, and it costs a minute.
+The general lesson, recorded because it was learned expensively: measuring a key's **syntax** — that
+it is repeated across catalogs — does not establish its **semantics**. The check that catches it is
+reading what the key's `arg` is *for*, and it costs a minute.
+
+### 0c. What the adversarial review changed
+
+| # | Finding | Ruling |
+|---|---|---|
+| M-1 | Resolving positions **independently** across a method boundary mints combinations no code path produces: a helper called as `register("orders", OrderImpl)` and `register("billing", BillingImpl)` yielded 2×2 = four rows, two of them fabricated at `resolved` | **The unit of resolution is the PATH, not the position.** The user's correction: *"it's not 2×2, it's 2 paths — record two paths, because that's the reality."* §1c rebuilt around it; incoherent combinations become structurally impossible rather than contractually forbidden |
+| M-2 | §2 deleted 16 declarations across 14 shipped catalogs, putting all their output in a new walk's blast radius — where the existing declarations already contain exactly what the new model needs | **Hoist, then delete, then refuse.** The loader reads existing hop declarations as identity entries (no catalog edit forced, nothing breaks); the declarations are then deleted and the keys made invalid. Chosen on the "which design holds when the tenth framework arrives" test: leaving two ways to say one thing guarantees new catalogs copy the old one |
+| I-3 | `return_flow.py` and `call_edges.py` read **raw** `call_sites`, bypassing the projection that re-targets `$default` bridges and class-compiled lambdas | §1a names the projection each edge is built over; `effective_call_sites` is the only one the walk rides |
+| I-4 | `value_edges` was specified as a new materialised table, duplicating data three existing tables already hold | It is a **view** (§3b) |
+| I-5 | `identified_by.owner` was required; `field` named an OO concept; the fifth edge was specified as "ASM work" | All three made language-neutral (§5) |
 
 ---
 
-## 1. Edges, answers, and what `unresolved` is allowed to mean
+## 1. Edges, paths, and what `unresolved` is allowed to mean
 
-### 1a. The edge table
+### 1a. The edges
 
-One pass builds `value_edges` once per resolve, linear in the facts. An edge says only *where a
-value came from*:
+Six kinds. Each names the fact behind it **and the projection it is built over** — I-3's finding is
+that this was unstated and the existing tables disagree:
 
-| kind | from | to | fact behind it |
-|---|---|---|---|
-| `produced_by` | (method, value id) | a call site in that method | `source` — **exists** |
-| `returned_by` | (method, value id) | a callee symbol; read its returns | `return_flows` — **exists, unread** |
-| `read_from_field` | (method, value id) | a field symbol | field-kind arguments — **exists** |
-| `written_by` | a field symbol | (method, value id) | `field_write` — **exists for constructors only; §4 extends it** |
-| `bound_to_parameter` | (method, value id) | (method, parameter index) | `call_edges` — **exists** |
-| `names_declaration` | (method, value id) | a declaration symbol | class literals, bean references — **exists** |
+| kind | from | to | fact | projection |
+|---|---|---|---|---|
+| `produced_by` | (method, value id) | a call site in that method | `source` ✅ | `effective_call_sites` |
+| `returned_by` | (method, value id) | a callee symbol; read its returns | `return_flows` ✅ *(unread)* | **must move to** `effective_call_sites` |
+| `read_from_binding` | (method, value id) | a binding symbol | binding-kind arguments ✅ | `effective_call_sites` |
+| `written_by` | a binding symbol | (method, value id) | `field_write` ✅ *(constructors only — §4 extends)* | extractor |
+| `bound_to_parameter` | (method, value id) | (method, parameter index) | `call_edges` ✅ | **must move to** `effective_call_sites` |
+| `names_declaration` | (method, value id) | a declaration symbol | type and binding references ✅ | `effective_call_sites` |
 
-Six kinds. Five need no extractor work at all.
+Five of six need no extractor work. Two existing tables must be re-pointed at the projection before
+the walk can trust them — a fix they need on their own merits, since a Kotlin `$default` bridge is
+already invisible to both.
 
-### 1b. The answer
+### 1b. The primitive is a site, resolved per path
 
 ```
-resolve_argument(site, index) -> list[Answer]
-resolve_receiver(site)        -> list[Answer]
+resolve_site(site) -> list[Binding]
+
+Binding = { path, slots: {slot_index: Answer} }
 ```
+
+One `Binding` per distinct **path** — the chain of calling contexts that reaches the enclosing
+method. An engine reads whichever slots it cares about **out of each binding**; it never sees a loose
+per-slot set, so it cannot combine across paths.
+
+A `slot` is any position on the call: an argument index or the receiver. **One entry point, not two**
+— a receiver is a slot like any other, and splitting them is how a third form gets added later.
 
 An `Answer` is one of:
 
-- **`literal(text)`** — a string the code states
+- **`literal(value, kind)`** — a string, number or boolean the code states. `kind` is carried because
+  catalogs already read non-strings (`@ConsumeEvent(local = false)`), and a stringly answer would
+  force every consumer to re-infer it.
 - **`expression(text)`** — a `${…}` or composed expression, carried **verbatim and never evaluated**
-  (§8.2 keeps this repository out of guessing deployed values)
+  (§8.2 keeps this repository out of guessing deployed values).
 - **`unresolved(reason)`**
 
-### 1c. Multiplicity — one row per real answer
+### 1c. Paths, not positions — and what multiplicity means
 
-**Approved ruling.** A position with several *enumerable* answers returns several, and each becomes
-its own row:
+**Approved ruling, as corrected by M-1.** The naive design resolves each position independently and
+lets the consumer recombine. That fabricates:
 
 ```java
-String queue() {
-    if (highPriority) return "orders-fast";
-    return "orders";
+void register(String queue, Class<?> type) {
+    factory.newWorker(queue).registerWorkflowImplementationTypes(type);
 }
-factory.newWorker(queue());          // two answers, two rows
+register("orders",  OrderWorkflowImpl.class);     // path A
+register("billing", BillingWorkflowImpl.class);   // path B
 ```
 
-This follows the facts layer rather than departing from it: `method_return` already keeps several
-returns as several facts, on the stated ground that *"picking one would be a fact about code that
-may never run"*, and varargs already yield one row per element.
+Per-position: `queue ∈ {orders, billing}`, `type ∈ {OrderImpl, BillingImpl}` → four rows, two of
+which **no code path can produce**, at `resolved`, indistinguishable from an observation.
 
-**The line it draws:** *enumerable multiplicity* yields several answers; *non-enumerable ambiguity*
-yields one `unresolved`. That is D00's array rule generalised — an array whose every index is a
-distinct written constant yields its elements; one built in a loop, populated on a branch, left
-partly unwritten, or handed to another method first is `unresolved` with no element list at all.
+Per-path: **two bindings, two rows.** The 2×2 was never reality; it was an artifact of recombination.
+
+So multiplicity has exactly one rule, and it is about paths:
+
+- **Several paths give several bindings** — several callers, several returns in a callee, several
+  enumerable array elements. Each is real code, each becomes its own row. This is what
+  `method_return` already does by keeping several returns as several facts on the stated ground that
+  *"picking one would be a fact about code that may never run."*
+- **A single path whose value cannot be enumerated gives one `unresolved`** — a loop, a branch-merged
+  value, a partly-written array. That is D00's array rule generalised: every index a distinct written
+  constant yields elements; built in a loop, populated on a branch, left partly unwritten, or handed
+  to another method first yields `unresolved` with no element list at all.
+
+**Memoisation is per (position, path), never per position.** Memoising per position is precisely what
+discards the correlation and reintroduces M-1.
 
 ### 1d. The `unresolved` reasons
 
-A closed set. Each names a different thing a reader can act on:
+A closed set; each names a different thing a reader can act on:
 
 | reason | means |
 |---|---|
 | `not_readable` | the producer is there; its value cannot be named (today's bare `unresolved`) |
 | `non_enumerable` | a loop, a branch-merged value, a partly-written array |
 | `escapes` | the value reached a method that might mutate it before use |
-| `no_writer` | a field nothing in this module writes |
+| `no_writer` | a binding nothing in this module writes |
 | `external` | the producer is outside what was scanned — a dependency jar |
-| `cycle` | the walk returned to a position it had already visited |
+| `cycle` | the walk returned to a position it had already visited on this path |
 
 `fan_out` and `depth` are **deliberately absent** — §3a decides whether they are ever needed.
 
-Today every one of these collapses into one word, so COVERAGE can say only *"unresolved"* and a
-reader cannot tell *"we cannot see the jar"* from *"the code branches"*. Six reasons make a miss
-diagnosable, which is what turns a boundary into a work item — **but only if something records
-them**, which §3d requires.
+Today every one collapses into one word, so COVERAGE can say only *"unresolved"* and a reader cannot
+tell *"we cannot see the jar"* from *"the code branches"*. Six reasons make a miss diagnosable —
+**but only if something records them**, which §3d requires.
 
 ### 1e. The line that does not move
 
 **The walk answers what a value is. The catalog still says what it means.** `channel_arg: 0`
-continues to say *this position carries the destination*; the walk simply stops needing
-`channel_via` to add *and it is one hop that way*. DR-6 is untouched.
+continues to say *this position carries the destination*; the walk simply stops needing `channel_via`
+to add *and it is one hop that way*. DR-6 is untouched. `evidence` stays `compiler` at any depth —
+a value five hops away was still read off the code, and depth is not a confidence signal.
 
 ---
 
-## 2. What the hop keys become
+## 2. What the hop keys become: hoist, delete, refuse
 
-Hop declarations do not vanish. They **deduplicate and relocate**, for §0b's reason: the identity
-half is framework knowledge.
-
-Today each consuming catalog re-declares how to identify a producer's value. Instead, one shared
-model — `value-models/`, beside the shipped `bean-models/` and `step-models/` — declares it once per
-producing method:
+Hop declarations do not vanish. The identity half is framework knowledge (§0b), so it **relocates**
+from once-per-consumer to once-per-producer, in a shared model beside the shipped `bean-models/` and
+`step-models/`:
 
 ```yaml
 # value-models/jms.yml
@@ -161,24 +196,30 @@ identified_by:
   - { owner: jakarta.jms.Session, method: createTopic, arg: 0 }
 ```
 
-and every consuming catalog says only `channel_arg: 0`. The walk follows as many hops as it takes,
-consulting the model whenever it lands on a produced value.
+and a consuming catalog says only `channel_arg: 0`.
 
-**The honest accounting:**
+### 2a. Three steps, in this order
 
-- **deleted** — 16 per-catalog hop declarations, the one-hop cap, the `*_via` shape validation in
-  three engines; and `argument_chain`/`contract` are never written
-- **relocated** — the identity statements, declared once each instead of once per consumer
-- **gained** — unbounded hops, and a framework whose value hides N hops away needs **no new word**,
-  only an `identified_by` entry if its producer is novel
+1. **Hoist.** The loader reads every existing `channel_via` / `url_via` / `call_wrappers` entry as an
+   `identified_by` entry. They are the same three fields saying the same thing; only the declaration
+   site differs. **No catalog edit is forced and no behaviour changes.**
+2. **Delete.** Once the walk is proven on a catalog (§3c), its now-redundant hop declarations go.
+3. **Refuse.** The loader rejects the removed keys outright, the way every closed vocabulary here is
+   enforced.
 
-### 2a. What each engine keeps
+**Step 3 is the one that makes the design hold.** A design that merely *recommends* the new way
+decays: a new catalog author copies the nearest example, and the nearest example is whatever thirteen
+other catalogs do. That is the exact mechanism that produced §0a's seven words — `bean_via` already
+existed as a general-ish hop when `contract` and `argument_chain` were proposed. One way, enforced by
+the loader, is the only version that survives the tenth framework.
+
+### 2b. What each engine keeps
 
 | engine | today | after |
 |---|---|---|
-| `single_call` | `channel_of`, then `linked_channels` if unresolved, capped at one hop | `resolve_argument` |
-| `interface_implementation` | its own copy of the same | `resolve_argument` |
-| `fluent` | chain walk **plus** `_address_read`, `_literal_of`, the bean-chain fold | chain walk **stays**; value reads inside it call `resolve_argument` |
+| `single_call` | `channel_of`, then `linked_channels` if unresolved, capped at one hop | `resolve_site` |
+| `interface_implementation` | its own copy of the same | `resolve_site` |
+| `fluent` | chain walk **plus** `_address_read`, `_literal_of`, the bean-chain fold | chain walk **stays**; value reads inside it call `resolve_site` |
 | `annotation_driven` | declaration-side; reads no call values | unchanged |
 
 **`fluent` keeping its chain walk is the point.** The walk answers *what is this value*; the chain
@@ -194,29 +235,25 @@ produced `bean_via`.
 **Approved ruling: no cap in v1.** This is the task that makes that safe, and **nothing consumes the
 walk until it passes**:
 
-1. Build `value_edges` and the walk. **No engine calls it.**
+1. Build the edge view and the walk. **No engine calls it.**
 2. Measure on the largest corpus available (`mall-admin` — 48 MB of facts, 648 documents) plus every
-   fixture: for every position a shipped catalog actually asks about — hop count, answer count, wall
-   time. Report the **distribution, the maximum and the tail**, never the mean.
+   fixture: for every position a shipped catalog actually asks about — path count, hop depth, answer
+   count, wall time. Report the **distribution, the maximum and the tail**, never the mean.
 3. **Ruling point.** The data either says no cap is needed or names the cap and its reason. If it
    names one, `fan_out` and `depth` join §1d then and not before.
 4. Only then does migration begin.
 
-### 3b. Where it runs
+### 3b. Where it runs, and why nothing is materialised
 
-Beside the tier that already exists for derived edges, before `derive_endpoints`:
+`value_edges` is a **view**, not a table (I-4). Every edge but `written_by` is already held by
+`call_sites`, `return_flows` or `call_edges`; a materialised copy would add a writer, a reset, schema
+growth and a second version that can drift from the first. The view normalises three shapes into one
+without storing anything.
 
-```
-facts → call_edges, return_flows → value_edges → derive_endpoints (engines resolve) → …
-```
-
-Reset ahead of any writer, on the `endpoint_metadata_reset` discipline. The walk builds an index
-over the table once per resolve and memoises answers per position (`Workspace.once`).
-
-**Why the edges are materialised and the closure is not:** under §1c and §3a the closure is
-potentially unbounded and multiplicative, and materialising it is the one thing that could make a
-resolve unusable. The edge table cannot explode — it is linear in the facts — and the on-demand walk
-explores only what a catalog asks about. On `orders-quarkus`, eight catalogs declared
+The transitive walk runs **on demand**, memoised per (position, path) for one resolve. Under §1c and
+§3a the closure is potentially unbounded and multiplicative, and materialising *that* is the one
+thing that could make a resolve unusable. The edge view cannot explode — it is linear in the facts —
+and the walk explores only what a catalog asks about. On `orders-quarkus`, eight catalogs declared
 `metadata_from` and **zero** annotation walks ran; the same guard shape applies here.
 
 ### 3c. Migration, one engine at a time, each measured alone
@@ -236,108 +273,149 @@ wrong.
 ### 3d. Where the `unresolved` reasons live
 
 §1d's vocabulary is decoration unless something records it. A small `value_resolutions` table is
-written **only** for positions a catalog asked about and failed to resolve — bounded by what
-catalogs ask, not by the facts. COVERAGE's boundary statements are generated from it rather than
-hand-written, and a catalog author debugging a NULL address can query *why*.
+written **only** for positions a catalog asked about and failed to resolve — bounded by what catalogs
+ask, not by the facts. COVERAGE's boundary statements are generated from it rather than hand-written,
+and a catalog author debugging a NULL address can query *why*.
 
 ---
 
-## 4. The fifth edge, which is extractor work
+## 4. The sixth edge is a capability, not a backend's work
 
-`written_by` beyond constructors — a field assigned anywhere but `<init>` — is the only edge with no
-fact behind it. D00 states the current limit plainly: `field_write` is *"constructors only, direct
-traces only"*, and setter injection is *"a named gap, not an omission"*.
+`written_by` beyond a constructor — a binding assigned anywhere but the initialiser — is the only
+edge with no fact behind it. D00 states the current limit plainly: `field_write` is *"constructors
+only, direct traces only"*, and setter injection is *"a named gap, not an omission."*
 
-It is ASM work in `extractor-jvm/`, with its own capability number, its own probe and its own
-fixture, and it **must land and be measured before the edge it feeds is wired**. A wrong field-write
-fact fabricates silently everywhere, which is why it runs on its own track rather than inside a
-resolve-layer migration.
+**It is specified as D00 capability 9.19, not as ASM work** (I-5). Any backend may or may not report
+it; the walk degrades **visibly** where it is absent, the way `nested_annotation_args` makes a
+scanner's limitation skip a catalog loudly instead of under-reporting silently. The JVM backend's
+implementation is one consumer of that capability, with its own probe and fixture, and it **must land
+and be measured before the edge it feeds is wired** — a wrong binding-write fact fabricates silently
+everywhere, which is why it runs on its own track.
 
-It is what closes `akka-pekko-actors`: an `ActorRef` obtained in one method and told in another is
-the shape, and COVERAGE's *"possibly permanent"* tier is a statement about this missing fact rather
+It is what closes `akka-pekko-actors`: a reference obtained in one method and used in another is the
+shape, and COVERAGE's *"possibly permanent"* tier is a statement about this missing capability rather
 than about actors.
 
 ---
 
-## 5. Scope boundaries
+## 5. Holding for the next language, and the next framework
 
-Stated so nothing is assumed:
+This section exists because the first draft failed both tests and the failures were cheap to fix
+then and expensive later.
+
+### 5a. Language neutrality
+
+- **`identified_by.owner` is OPTIONAL.** Go's `nats.Connect(url)` and Python's `boto3.client("sqs")`
+  are free functions. The fact grammar already admits them — `owner_of` documents that *"an ownerless
+  symbol is an answer here, never an exception"* — so requiring `owner` would bake OO into a model
+  the facts do not.
+- **`binding`, never `field`.** A named mutable location is a field in one language, a module-level
+  variable in another, a package var or a closure cell elsewhere. The edge kinds say `binding`.
+- **The sixth edge is a capability** (§4), so a backend that cannot see binding writes says so rather
+  than the design assuming every backend is ASM.
+- **`arg` is positional**, and a backend whose language has keyword-only arguments normalises to
+  positions in the facts. Stated, not solved — no such backend exists yet.
+- **No construct in §1 names a language feature.** `produced_by`, `returned_by`, `read_from_binding`,
+  `written_by`, `bound_to_parameter`, `names_declaration` are statements about values and callables,
+  all six of which exist in every imperative language this project targets.
+
+### 5b. Framework extension
+
+A new framework needs **no new word**. It declares which slot carries its address (`channel_arg: 0`,
+as today), and — only if its producer is novel — one `identified_by` entry with a probe row behind it.
+Distance is never described again.
+
+The enforcement is §2a step 3: the old keys are invalid, so the cheap wrong path is closed rather
+than merely discouraged.
+
+---
+
+## 6. Scope boundaries
 
 - **It does not decide what a value means.** `identified_by` is framework knowledge with a probe
   behind every entry.
 - **It is not a points-to analysis.** No heap modelling, no collection contents, no dynamically
-  indexed array elements. It follows *declared* edges; everything else is `unresolved`.
-- **It does not cross the module boundary.** A producer in an unscanned jar is `external`.
+  indexed elements. It follows *declared* edges; everything else is `unresolved`.
+- **It does not cross the module boundary.** A producer in an unscanned dependency is `external`.
 - **It does not resolve configuration.** `${…}` is carried verbatim; `resolved_config` still owns
   substitution.
 - **It does not change linking.** A resolved value is a value; whether two rows link stays the
   linking tier's business.
-- **It does not touch `fluent`'s chain walk** (§2a).
+- **It does not touch `fluent`'s chain walk** (§2b).
 - **No reflection, no dynamic proxies, no computed strings.** A concatenation stays `unresolved`.
 
 ---
 
-## 6. The risk, and the mitigation that is part of the design
+## 7. The risk, and the mitigation that is part of the design
 
 Everything this project does rests on *misses are acceptable, fabrications are not*. **This work's
 entire purpose is to convert misses into answers** — so every conversion is a new assertion, made at
-scale, across fourteen shipped catalogs at once.
+scale, across fourteen shipped catalogs.
 
 That is inverted from every other change in this repository. Group D's risk was *"we might not derive
-something"*. This one's is *"we might now derive something wrong, in fourteen places, and the tests
+something."* This one's is *"we might now derive something wrong, in fourteen places, and the tests
 will go green because the rows are new."*
 
 §3c's diff catches **movement**. It does not catch **wrongness** — a wrong address looks exactly like
 a right one in a diff.
 
-### 6a. Shadow mode
+### 7a. Shadow mode
 
 The walk runs and writes what it *would* resolve into §3d's `value_resolutions` table **without
-publishing it**. Every candidate conversion is reviewable as data, on the real corpus, before a
-single row changes; then each migration flips one engine and its diff is already known.
+publishing it**. Every candidate conversion is reviewable as data, on the real corpus, before a single
+row changes; then each migration flips one engine and its diff is already known.
 
 It costs one flag, and it converts *"review fourteen catalogs' worth of new claims under time
 pressure"* into *"read a table."* **This work should not proceed without it.**
 
-### 6b. The second risk
+### 7b. The second risk
 
 `value-models/` becomes a dumping ground — entries accumulate because adding one is easy, and nobody
-measures whether the framework really identifies that value that way. The mitigation is the rule
-this codebase already enforces everywhere else: **every `identified_by` entry carries its probe
-row**, checked by the architecture suite exactly as `measured:` blocks are.
+measures whether the framework really identifies that value that way. The mitigation is the rule this
+codebase already enforces everywhere else: **every `identified_by` entry carries its probe row**,
+checked by the architecture suite exactly as `measured:` blocks are.
 
 ---
 
-## 7. Testing
+## 8. Testing
 
-- A fixture arm **per edge kind** and **per `unresolved` reason** — including the negative ones,
-  which are the point: a loop-built array, a branch-merged value, a field with no writer, a value
-  from an unscanned jar, a cycle.
-- **Mutation guards on the two rules that carry the whole design**: termination, and
-  enumerable-versus-ambiguous. If either can be broken without a test failing, the
-  no-false-positives guarantee is unpinned.
-- The migration diffs of §3c are the real test of correctness; the unit tests are the test of the
-  walk.
+- A fixture arm **per edge kind** and **per `unresolved` reason** — including the negative ones, which
+  are the point: a loop-built array, a branch-merged value, a binding with no writer, a value from an
+  unscanned jar, a cycle.
+- **A fixture arm for M-1 specifically**: a helper called from two sites with different values, pinning
+  **two** rows and not four. That case is why the primitive is a path, and nothing else in the suite
+  would catch a regression to per-position resolution.
+- **Mutation guards on the three rules that carry the design**: termination, enumerable-versus-
+  ambiguous, and path-coherence. If any can be broken without a test failing, the no-false-positives
+  guarantee is unpinned.
+- The migration diffs of §3c are the test of correctness; the unit tests are the test of the walk.
 
 ---
 
-## 8. Self-review
+## 9. Self-review
 
-**Placeholder scan.** None. Every count in §0 is measured at `50d3f6e`; every edge in §1a names the
-fact behind it; the one edge without a fact is §4 and says so.
+**Placeholders.** None. Every count in §0 is measured at `50d3f6e`; every edge in §1a names its fact
+and its projection; the one edge without a fact is §4 and says so.
 
-**Internal consistency.** §1c's multiplicity ruling is what forces §3b's "materialise edges, not the
-closure" and §3a's measurement gate — checked in both directions. §1d's reason vocabulary is used by
-§3d and by nothing else, which is why §3d exists. §2's accounting matches §0's count of 16
-declarations.
+**Internal consistency.** §1c's path primitive forces §3b's memoisation key and §8's M-1 fixture —
+checked in both directions. §1d's vocabulary is used by §3d and nothing else, which is why §3d exists.
+§2a's three steps are what §5b's enforcement argument rests on. §1e's `evidence` rule answers a
+question §3c would otherwise raise.
 
-**Ambiguity.** The one term that could be read two ways is *enumerable*, so §1c defines it against
-D00's array rule rather than leaving it to judgement.
+**Ambiguity.** Two terms could be read two ways and are defined against existing rules rather than
+left to judgement: *enumerable* (against D00's array rule, §1c) and *path* (the chain of calling
+contexts, §1b).
 
-**Scope.** This is one subsystem with one new fact. §4 is separable and explicitly on its own track;
-if it slipped, §§1–3 still close five of the six boundaries.
+**Generic over specific.** The six edge kinds name no language feature and no framework; the one
+framework-specific thing, `identified_by`, is data with a probe behind it. §5a lists what was
+JVM-shaped in the first draft and is not now.
 
-**What the review did not settle, and the plan must.** The order in which `value-models/` entries are
-written for the 14 migrating catalogs — whether each migration writes its own, or whether they are
-extracted up front from the existing `channel_via` declarations. The second is mechanical and
-probably right, but it is a plan decision, not a design one.
+**Complements rather than breaks.** §2a's hoist means no catalog edit is forced and no behaviour
+changes on day one; the walk can only add until a migration deliberately flips an engine. The one
+place this design does break something is §2a step 3, and §5b is the argument for why that break is
+necessary rather than convenient.
+
+**What the review did not settle, and the plan must.** Whether `return_flows` and `call_edges` are
+re-pointed at `effective_call_sites` as a prerequisite task of this work or as a separate fix first.
+They need it on their own merits — a Kotlin `$default` bridge is invisible to both today — so doing it
+first, measured alone, is probably right; but that is a sequencing decision, not a design one.
