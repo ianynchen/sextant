@@ -1,7 +1,16 @@
 # What the backward value walk costs, measured before anything consumes it
 
-Measurement date: 2026-09-23. Sextant snapshot: branch `spec/value-resolution`, head
-`02b2fe03`. Harness: [`scripts/measure_value_walk.py`](../../scripts/measure_value_walk.py).
+Measurement date: 2026-09-23. Sextant snapshot: branch `spec/value-resolution`, **the ask
+reader as of `ad210319`** — the commit that widened it to `parse_calls`, and the last one
+that moved a figure here. Commits after it are documentation only and leave `asks_of`
+AST-identical, so they reproduce the same numbers.
+Harness: [`scripts/measure_value_walk.py`](../../scripts/measure_value_walk.py).
+
+*The line above read `02b2fe03` until 2026-09-23 and was wrong in a way that made §7's
+closing sentence false: `src/sextant/application/resolve/shadow.py` does not exist at that
+commit, the reader there does not open `parse_calls`, and running §7's own command on it
+yields 948 / 1,209 / 686 rather than the 989 / 1,250 / 726 reported below. A provenance line
+a reader cannot check out is worse than none.*
 
 **This was spec [§3a](../superpowers/specs/2026-09-22-value-resolution-design.md)'s gate.**
 The approved ruling was *no cap in v1*, and that ruling was only safe if the measurement
@@ -141,7 +150,13 @@ are really scoped to a chain the engine has already rooted, and `ktor-routing`'s
 `request_reads` reach their receiver through a `via` call. That is **24 of the 807 rows**,
 and the names are common ones (`get`, `url`, `method`, `uri`, `post`, `put`, `body`):
 `ktor-routing`, `okhttp` and `jdk-httpclient` alone account for 520 of the 1,250
-catalog-to-position asks, most of them sites those catalogs would never really claim.
+catalog-to-position asks. **Of those 520, an owner-free row is the only thing that produced
+258 — 49.6%** (`ktor-routing` 77 of 313, `okhttp` 136 of 136, `jdk-httpclient` 45 of 71);
+the rest were also reached by a row that does declare its owner. Estate-wide the figure is
+**402 of 1,250**. *(This sentence said "most of them" until 2026-09-23. The mechanism it is
+attached to supports the measurement above and not that quantifier — under half, not most —
+and how many of the 258 an engine would really refuse is a further question this harness
+does not answer.)*
 
 **2. Every `all_strings` row is a `channel_via`, which an engine reaches only by following a
 `source` link back from a site it has already matched.** All thirteen of them
@@ -347,15 +362,15 @@ p99.9 column and did, in this table's previous revision.
 Path-count distribution: 972 positions have one path, 7 have two, 8 have three, one has
 five, **one has eleven**. Depth: 906 at 0, 77 at 1, 4 at 2, 2 at 3.
 
-**Both maxima are over-matches, and the third row is the figure production can really be
-handed.** The table names each row's status rather than leaving it to §1.3:
+**Both maxima are over-matches; rows three and four are the figures production can really
+be handed.** The table names each row's status rather than leaving it to §1.3:
 
 | what | position | paths | depth | answers | visits |
 |---|---|---|---|---|---|
 | most paths, most answers, most bindings — **over-matched (§1.3, no. 2)** | `jhipster-sample-app` `UserResource#<clinit>`@0 slot 0 (attributed to `kafka-consumer`, `kafka-streams` via `all_strings`; the module has no Kafka, so production never asks) | **11** | 1 | **11** | 0 |
 | most work — **also over-matched (§1.3, no. 3)** | `orders-service` `OrderProtos$OrderRequest#parseFrom`@0 slot 0 (`spring-web`, through `parse_calls`). Its callee is `com.google.protobuf.Parser#parseFrom`, a library type with no ancestry fact, and production's `_matches` refuses it | 5 | **3** | 1 | **15** |
 | **the most work at a position production really asks about** | `orders-ktor-classlambdas` `KtorRoutesKt#mount`@5 slot 0 (`ktor-routing`, on `RoutingBuilderKt.route` — owner declared, arity 3 matched, so no over-match applies) | 3 | 2 | 1 | 11 |
-| deepest, and it ties the depth maximum | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`) | 1 | **3** | 1 | 7 |
+| deepest — and **production really asks about this one too**, so depth 3 is not an over-match's | `orders-ktor-classlambdas` `KtorRoutesKt#orders2`@2 slot 0 (`ktor-routing`, on `RoutingBuilderKt.get` — owner declared, arity 3 matched) | 1 | **3** | 1 | 7 |
 
 The eleven-path case does **no traversal at all** — `visits` is 0, because it is one varargs
 array argument holding eleven written constants and §1c's array rule enumerates them on the
@@ -368,9 +383,14 @@ is `Parser`, not a generated message, so production's own matcher never arrives.
 protobuf row really binds — the four accepted sites on `orders-service`, five positions —
 the same shape tops out at 3 paths, depth 2 and 9 visits.**
 
-**So the hardest position production can really be handed is 3 paths, depth 2 and 11
-computed positions, at the Ktor route mount**, and the hardest it can be handed by the
-widened row is smaller than that. There is no tail on any reading.
+**The maxima that survive both discounts: 3 paths, depth 3, 3 answers, 11 visits.** Measured
+by classifying all 989 positions by whether any **owner-declared, non-`all_strings`** ask
+matches them — that is exactly the negation of over-matches 1, 2 and 3 — which leaves
+**664 genuine positions**. They come from two `orders-ktor-classlambdas` positions, not one:
+paths, answers and visits from `KtorRoutesKt#mount`@5 (row 3 above), depth from
+`KtorRoutesKt#orders2`@2 slot 0 (row 4), whose callee is `RoutingBuilderKt.get`/3 against an
+ask declaring that owner and that arity. The hardest thing the widened `parse_calls` row can
+really hand the walk is smaller than all four. There is no tail on any reading.
 
 ### 3.2 The ceiling: 98,454 positions, 50,112 sites
 
@@ -431,12 +451,20 @@ That is the shape §6's second condition exists to prevent.
 ### 3.4 The multiplicative risk did not materialise
 
 §3b's stated danger is the **combination**: two slots with independent fan-out would
-multiply. Across all 50,112 sites, `resolve_site`'s binding count exceeds the largest
-single-slot path count at only **48 sites**, and the largest multiple anywhere is **3×**
-(`jhipster-sample-app`'s `ExceptionTranslator#buildCause`@2: 15 bindings over a 5-path
-slot). At the 388-path shape the binding count is also 388 — the coherence rule holds it
+multiply. **The test is `bindings > max(paths) over that site's slots`** — stated here
+rather than left implicit, because it is the one figure in this document that did not
+reproduce when it was checked, and the next reader should not have to guess the reading.
+Across all 50,112 sites of the ceiling run it is true at **11 sites**, and the largest
+multiple anywhere is **3×** (`jhipster-sample-app`'s `ExceptionTranslator#buildCause`@2: 15
+bindings over a 5-path slot; the next is 2×, at ten sites, nine of them a generated
+`equals`). At the 388-path shape the binding count is also 388 — the coherence rule holds it
 linear, because those slots cross out of the same method through the same call and M-1's
 rule makes that one choice rather than a product.
+
+*Corrected 2026-09-23: this sentence said **48 sites**, and 48 does not reproduce under that
+reading or under any of `>=`, ratio > 1, multi-slot only, against max answers, against min or
+sum or product of slot paths. The measured value is 11, and the conclusion is the one it
+already drew, more strongly.*
 
 No site anywhere returned **zero** bindings, so the coherence rule is not silently deleting
 answers on real code either.
@@ -528,10 +556,12 @@ say which is which:
    2 paths. The 15 visits is §1.3's third over-match: the `spring-web` protobuf row declares
    `owner_hierarchy`, this harness matches `parseFrom` by name alone, and production's own
    matcher refuses that site along with 23 others on `orders-service` and all 12 on
-   `grpc-probe`; where the row really binds the same shape gives 3 paths and 9 visits. **The
-   hardest position production can really be handed anywhere in the estate is 3 paths, depth
-   2 and 11 visits, at `orders-ktor-classlambdas`'s Ktor route mount** — an owner-declared,
-   arity-matched `ktor-routing` row with no over-match in it.
+   `grpc-probe`; where the row really binds the same shape gives 3 paths and 9 visits.
+   **Restricted to the 664 positions an owner-declared, non-`all_strings` ask matches — the
+   negation of all three over-matches — the maxima are 3 paths, depth 3 and 11 visits**, at
+   two `orders-ktor-classlambdas` `ktor-routing` positions (§3.1). Every one of those is
+   further below the crash barrier §5's closing paragraph sizes at 512 paths and 16
+   crossings than the unrestricted figures are.
 
    *Max visits was 11 and the total 1.6 ms when this was ruled; both moved when the reader
    was widened to `parse_calls` (§1.3), which is a re-measure and not a re-ruling — the
@@ -623,8 +653,17 @@ JAVA_HOME=… .venv/bin/python scripts/measure_value_walk.py --all-slots # the c
 
 Both print which modules were **not** measured, the per-corpus tables on both bases, the
 worst positions and worst sites by name, and the reason distribution; `--json OUT` writes
-every row. A run over all twenty-seven corpora takes about 8 s, almost all of it loading
-facts.
+every row and `--corpus NAME` limits the run. Over all twenty-seven corpora the asked
+surface takes **6.9 s** and the ceiling **9.0 s** (measured 2026-09-23), almost all of it
+loading facts.
 
-Every deterministic figure in this document reproduces exactly across runs. Wall time does
-not, and is labelled wherever it appears.
+**Two figures here are not printed by either command and are derived from `--json` output**,
+so a reader reproducing them needs the definition rather than the run: §3.4's multiplicative
+count is `bindings > max(paths)` over each site's own slots, and §3.1's and §5's restricted
+maxima are over the positions matched by at least one **owner-declared, non-`all_strings`**
+ask — 664 of the 989.
+
+Every deterministic figure in this document reproduces exactly across runs, **at the
+snapshot named in the header**; an older reader answers a different question, which is what
+the corrected provenance line is for. Wall time does not reproduce, and is labelled wherever
+it appears.
